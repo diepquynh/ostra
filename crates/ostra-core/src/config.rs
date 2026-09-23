@@ -5,7 +5,7 @@
 use crate::agent::{AgentName, JUDGE_ROUTE, route_keys};
 use crate::executor::{ExecutorKind, HarnessKind};
 use crate::model::{Complexity, Tier};
-use crate::slug::is_project_key;
+use crate::slug::{is_project_key, is_stack_name, stack_issue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -347,6 +347,30 @@ impl Default for WorkspaceSettings {
     }
 }
 
+/// Dotted keys of [`WorkspaceSettings`] as serialized, each with a one-line description, for
+/// search. A test checks that every key names a field.
+pub const SETTING_KEYS: &[(&str, &str)] = &[
+    ("name", "Workspace name"),
+    ("projects", "Projects in this workspace"),
+    ("routing.executor", "Which executor runs each agent"),
+    ("routing.executor.byAgent", "Executor per agent"),
+    ("routing.executor.byPhaseComplexity", "Executor per agent and phase complexity"),
+    ("routing.model", "Which model or tier each agent uses"),
+    ("routing.model.byAgent", "Model or tier per agent"),
+    ("routing.model.byPhaseComplexity", "Model or tier per agent and phase complexity"),
+    ("routing.effort", "Reasoning effort per agent"),
+    ("instructions.all", "Instructions every agent receives"),
+    ("instructions.agents", "Instructions per agent"),
+    ("yolo.default", "Start new sessions in YOLO mode"),
+    ("permissions.mode", "Permission mode for tool calls"),
+    ("permissions.allow", "Tool calls allowed without asking"),
+    ("permissions.ask", "Tool calls that always ask"),
+    ("permissions.deny", "Tool calls that are always denied"),
+    ("notifications.push", "Push notifications for gates and finished sessions"),
+    ("limits.max_parallel_executions", "Executions that may run at once"),
+    ("limits.session_budget_usd", "Dollars one session may spend before it pauses"),
+];
+
 impl WorkspaceSettings {
     /// Seeded defaults for a new workspace (handover section 7.2). Every agent has a route.
     pub fn seeded(name: &str) -> Self {
@@ -598,6 +622,9 @@ pub fn validate_workspace(
         if !p.path.is_absolute() {
             issues.push(issue(format!("projects[{i}].path"), "Project paths must be absolute.".into()));
         }
+        if let Some(stack) = p.stack.as_deref().filter(|s| !s.is_empty() && !is_stack_name(s)) {
+            issues.push(issue(format!("projects[{i}].stack"), stack_issue(stack)));
+        }
     }
 
     for key in ws.routing.executor.by_agent.keys() {
@@ -846,6 +873,15 @@ pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigError
 mod tests {
     use super::*;
 
+    #[test]
+    fn setting_keys_name_fields() {
+        let json = serde_json::to_value(WorkspaceSettings::seeded("x")).unwrap();
+        for (key, _) in SETTING_KEYS {
+            let found = key.split('.').try_fold(&json, |v, part| v.get(part));
+            assert!(found.is_some(), "{key} is not a settings field");
+        }
+    }
+
     const SAMPLE: &str = r#"
 name = "shop"
 
@@ -924,6 +960,18 @@ deny = ["Bash(git push *)"]
         let qa = resolve_route(&g, &ws, RouteQuery::new("quick-answer", Tier::Balanced)).unwrap();
         assert_eq!(qa.model, "anthropic:claude-sonnet-5");
         assert_eq!(ws.instructions_for(AgentName::Implementer).len(), 2);
+    }
+
+    #[test]
+    fn project_stacks_follow_the_key_rule() {
+        let mut ws = WorkspaceSettings::seeded("x");
+        for (key, stack) in [("a", Some("rust-axum")), ("b", Some("")), ("c", None), ("d", Some("Type Script"))] {
+            ws.projects.push(ProjectEntry { key: key.into(), path: PathBuf::from(format!("/code/{key}")), stack: stack.map(str::to_string) });
+        }
+        let env = Environment { installed_harnesses: vec![], providers_with_keys: vec!["anthropic".into()] };
+        let issues = validate_workspace(&GlobalConfig::default(), &ws, &env, tier);
+        assert_eq!(issues.iter().map(|i| i.path.as_str()).collect::<Vec<_>>(), ["projects[3].stack"]);
+        assert!(issues[0].message.starts_with("`Type Script` is not a stack name."));
     }
 
     #[test]

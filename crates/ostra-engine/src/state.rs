@@ -3,7 +3,7 @@
 
 use crate::judge::{
     AnswerRoute, ClassifyOut, OptsIn, RescueAction, RescueOut, ResolveAction, ResolveReviewOut, RouteAnswerOut,
-    StakesOut, SufficiencyOut,
+    StakesOut, SufficiencyOut, clean_title,
 };
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
@@ -229,6 +229,8 @@ pub struct WorkLoop {
     pub announced_block: bool,
     pub block_gate_answered: bool,
     pub work_count: u32,
+    /// The stage command ran and exited 0 for this loop's changed files.
+    pub staged: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +267,7 @@ impl WorkLoop {
             announced_block: false,
             block_gate_answered: false,
             work_count: 0,
+            staged: false,
         }
     }
 
@@ -517,6 +520,8 @@ pub struct SessionState {
     pub failed: Option<String>,
     pub notes: Vec<String>,
     pub last_seq: i64,
+    /// The session's short label: from the Classify decision, or fixed for an init session.
+    pub title: Option<String>,
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: &Option<Value>) -> Option<T> {
@@ -607,6 +612,7 @@ impl SessionState {
             failed: None,
             notes: vec![],
             last_seq: 0,
+            title: None,
         }
     }
 
@@ -712,6 +718,7 @@ impl SessionState {
                 self.session_root = session_root.clone();
                 if let SessionKind::Init { project } = kind {
                     self.scope = vec![project.clone()];
+                    self.title = Some(format!("Initialize {project}"));
                     self.init = Some(InitTrack { project: project.clone(), ..Default::default() });
                 }
             }
@@ -836,6 +843,7 @@ impl SessionState {
                         && let Some(l) = self.loop_mut(key)
                     {
                         l.next = LoopNext::Done;
+                        l.staged = *exit_code == Some(0);
                     }
                 }
                 CommandPurpose::Autofix => {}
@@ -933,6 +941,9 @@ impl SessionState {
 
     fn apply_classify(&mut self, out: &ClassifyOut) {
         self.category = Some(out.category);
+        if let Some(t) = clean_title(&out.title) {
+            self.title = Some(t);
+        }
         let mut scope: Vec<String> = out.projects.iter().filter(|p| self.valid_project(p)).cloned().collect();
         scope.dedup();
         if scope.is_empty()

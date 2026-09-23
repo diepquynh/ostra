@@ -1,7 +1,6 @@
 import type {
   ActivityItem,
   AnswerGate,
-  Artifact,
   AskQuestion,
   AskStarted,
   CostReport,
@@ -25,7 +24,17 @@ import type {
   WorkspaceSettings,
   WorkspaceSummary,
 } from "./types";
-import type { DiffFile } from "./extra";
+import type { DiffFile } from "./gen/DiffFile";
+import type { EnvironmentStatus } from "./gen/EnvironmentStatus";
+import type { FileDiff } from "./gen/FileDiff";
+import type { FileIndex } from "./gen/FileIndex";
+import type { FsBrowse } from "./gen/FsBrowse";
+import type { OnboardingState } from "./gen/OnboardingState";
+import type { ProjectChange } from "./gen/ProjectChange";
+import type { ProjectFile } from "./gen/ProjectFile";
+import type { ProjectTree } from "./gen/ProjectTree";
+import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
+import type { ArtifactWithHeadings, SearchResults, WorkspaceActivity, WorkspaceTree } from "./nav";
 
 /** An HTTP error from the server, with validation issues when the server sent them. */
 export class HttpError extends Error {
@@ -47,9 +56,10 @@ export function onUnauthorized(fn: Listener): () => void {
   return () => unauthorizedListeners.delete(fn);
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method,
+    signal,
     credentials: "same-origin",
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -110,6 +120,7 @@ export const httpApi = {
   setYolo: (id: string, enabled: boolean) =>
     request<SessionSummary>("POST", `/api/sessions/${enc(id)}/yolo`, { enabled }),
   amend: (id: string, text: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/amend`, { text }),
+  stopSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/stop`),
 
   answerGate: (id: string, body: AnswerGate) => request<GateView>("POST", `/api/gates/${enc(id)}/answer`, body),
   overrideDecision: (id: string, body: OverrideDecision) =>
@@ -121,7 +132,7 @@ export const httpApi = {
   cancelExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/cancel`),
   resumeExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/resume`),
 
-  artifact: (path: string) => request<Artifact>("GET", `/api/artifacts${q({ path })}`),
+  artifact: (path: string) => request<ArtifactWithHeadings>("GET", `/api/artifacts${q({ path })}`),
   diff: (session: string, project: string, phase: string) =>
     request<DiffFile[]>("GET", `/api/sessions/${enc(session)}/diff${q({ project, phase })}`),
 
@@ -132,10 +143,33 @@ export const httpApi = {
   deleteLesson: (ws: string, key: string, id: number) =>
     request<void>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/memory${q({ id })}`),
 
-  cost: (ws: string) => request<CostReport>("GET", `/api/workspaces/${enc(ws)}/cost`),
+  /** `since` (RFC 3339) limits the report to executions that started at or after it. */
+  cost: (ws: string, since?: string | null) => request<CostReport>("GET", `/api/workspaces/${enc(ws)}/cost${q({ since })}`),
   ask: (ws: string, body: AskQuestion) => request<AskStarted>("POST", `/api/workspaces/${enc(ws)}/ask`, body),
   pushSubscribe: (body: PushSubscription) => request<void>("POST", "/api/push/subscribe", body),
   listDir: (path?: string) => request<FsListing>("GET", `/api/fs/list${q({ path })}`),
+  fsBrowse: (opts: { path?: string; prefix?: string; limit?: number } = {}, init: { signal?: AbortSignal } = {}) =>
+    request<FsBrowse>("GET", `/api/fs${q(opts)}`, undefined, init.signal),
+
+  environment: () => request<EnvironmentStatus>("GET", "/api/environment"),
+  validateNewWorkspace: (body: CreateWorkspace) => request<ValidationIssue[]>("POST", "/api/workspaces/validate", body),
+  onboarding: () => request<OnboardingState>("GET", "/api/onboarding"),
+  completeOnboarding: () => request<OnboardingState>("POST", "/api/onboarding/complete"),
+  uiState: (ws: string) => request<WorkspaceUiState>("GET", `/api/workspaces/${enc(ws)}/ui`),
+  patchUiState: (ws: string, patch: Partial<WorkspaceUiState>) => request<WorkspaceUiState>("PATCH", `/api/workspaces/${enc(ws)}/ui`, patch),
+
+  projectTree: (ws: string, key: string, opts: { path?: string; depth?: number; hidden?: boolean } = {}) =>
+    request<ProjectTree>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/tree${q({ path: opts.path, depth: opts.depth, hidden: opts.hidden ? "true" : undefined })}`),
+  projectFile: (ws: string, key: string, path: string) =>
+    request<ProjectFile>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/file${q({ path })}`),
+  projectFiles: (ws: string, key: string) => request<FileIndex>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/files`),
+  projectDiff: (ws: string, key: string, path: string, base?: string) =>
+    request<FileDiff>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/diff${q({ path, base })}`),
+  projectChanges: (ws: string, key: string) => request<ProjectChange[]>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/changes`),
+
+  tree: (ws: string) => request<WorkspaceTree>("GET", `/api/workspaces/${enc(ws)}/tree`),
+  search: (ws: string, query: string, limit = 30) => request<SearchResults>("GET", `/api/workspaces/${enc(ws)}/search${q({ q: query, limit })}`),
+  workspaceActivity: (ws: string) => request<WorkspaceActivity>("GET", `/api/workspaces/${enc(ws)}/activity`),
 };
 
 export type Api = typeof httpApi;

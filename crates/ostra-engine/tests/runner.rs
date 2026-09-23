@@ -51,7 +51,7 @@ impl Services for Fake {
     }
     async fn judge(&self, _route: &ResolvedRoute, system: &str, user: &str, schema: Value, _e: Effort) -> Result<(Value, Usage), String> {
         let out = if system.contains("\"category\"") || user.contains("# Toggles from the New task form") {
-            json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "research"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code."})
+            json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "research"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code.", "title": "Greeting"})
         } else if schema["properties"].get("stakes").is_some() {
             json!({"stakes": "high", "reason": "Touches two layers."})
         } else if schema["properties"].get("report_markdown").is_some() {
@@ -86,6 +86,10 @@ struct Scripted {
 impl Executor for Scripted {
     async fn run(&self, spec: ExecutionSpec, host: Arc<dyn ExecutionHost>, _cancel: CancellationToken) -> ExecutionResult {
         host.emit(ExecutionDelta::Text { text: format!("{} running", spec.agent) });
+        host.emit(ExecutionDelta::ToolCall {
+            call_id: "c1".into(),
+            call: ostra_core::policy::ToolCall::new("Read", json!({"file_path": spec.ctx.repo_root.join("src.txt")})),
+        });
         let sess = spec.ctx.session_dir.clone();
         let purpose = self.runs.lock().unwrap().len();
         let _ = purpose;
@@ -200,6 +204,21 @@ async fn implement_session_runs_to_completion_under_yolo() {
     assert_eq!(summary.status, SessionStatus::Completed);
     assert!(summary.cost_usd > 0.0);
     let detail = engine.detail(&summary.id).unwrap();
+    assert_eq!(summary.title.as_deref(), Some("Greeting"));
+    assert_eq!(detail.summary.title.as_deref(), Some("Greeting"));
+    let imp = detail.executions.iter().find(|e| e.agent == AgentName::Implementer).unwrap();
+    assert_eq!(imp.group, "implementer:app");
+    assert_eq!(imp.run_label, "Phase 1");
+    assert_eq!(imp.stream, ostra_core::executor::ExecStream::Activity);
+    assert_eq!(imp.summary.as_deref(), Some("Read src.txt"));
+    assert!(!imp.has_transcript);
+    let checks: Vec<&str> = detail.executions.iter().filter(|e| e.agent == AgentName::FactCheck).map(|e| e.run_label.as_str()).collect();
+    assert_eq!(checks, ["Spec check", "Plan check"]);
+    let groups: Vec<&str> = detail.execution_groups.iter().map(|g| g.group.as_str()).collect();
+    assert_eq!(groups, ["explore:app", "generate-spec:app", "fact-check:app", "plan:app", "implementer:app", "code-reviewer:app"]);
+    assert_eq!(detail.execution_groups[2].executions.len(), 2);
+    assert!(detail.execution_groups.iter().all(|g| g.status == ExecutionStatus::Ok));
+    assert_eq!(engine.execution(&imp.id).unwrap().run_label, "Phase 1");
     assert!(detail.completion.unwrap().contains("Everything ran"));
     assert!(services.notices.lock().unwrap().iter().any(|n| n.title == "Session complete"));
     let _ = EngineNotice::Terminal { execution: ostra_core::ids::ExecutionId::new(), bytes: vec![] };

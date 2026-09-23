@@ -2,8 +2,10 @@
 
 use crate::auth::Auth;
 use crate::env::EnvStatus;
+use crate::files::Files;
 use crate::workspace::WorkspaceRt;
 use anyhow::Context;
+use ostra_core::api::ServerMsg;
 use ostra_core::config::{GlobalConfig, load_toml, save_toml};
 use ostra_core::ids::WorkspaceId;
 use ostra_core::paths;
@@ -96,12 +98,24 @@ pub struct HubMsg {
     pub notice: EngineNotice,
 }
 
+/// A message the server itself originates for the browser, with the channels it goes to.
+#[derive(Clone, Debug)]
+pub struct Pushed {
+    pub channels: Vec<String>,
+    pub msg: ServerMsg,
+}
+
 pub struct App {
     pub shared: Arc<Shared>,
     pub workspaces: RwLock<HashMap<WorkspaceId, Arc<WorkspaceRt>>>,
     pub hub: broadcast::Sender<HubMsg>,
     pub auth: Auth,
     pub dev: bool,
+    /// Project file trees, reads, diffs, the file name index, and write tracking.
+    pub files: Arc<Files>,
+    pub push: broadcast::Sender<Pushed>,
+    /// The Sessions tree, search, and workspace activity.
+    pub nav: Arc<crate::nav::Nav>,
 }
 
 /// `ostra stop`: end a session while no server holds it.
@@ -168,14 +182,21 @@ impl App {
         rt.engine.recover().map_err(|e| anyhow::anyhow!("recovering {}: {e}", root.display()))?;
         let mut rx = rt.engine.subscribe();
         let hub = self.hub.clone();
+        let files = self.files.clone();
+        let nav = self.nav.clone();
         let wid = id.clone();
         tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(notice) => {
+                        files.observe(&wid, &notice);
+                        nav.observe(&wid, &notice);
                         let _ = hub.send(HubMsg { workspace: wid.clone(), notice });
                     }
-                    Err(broadcast::error::RecvError::Lagged(n)) => tracing::warn!("hub lagged by {n} notices"),
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("hub lagged by {n} notices");
+                        nav.lagged(&wid);
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -205,6 +226,8 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         SocketAddr::new(access.bind, port).to_string()
     };
     let harness = crate::bridge::HarnessRuntime::new(opts.exe.clone(), callback);
+    let (touches, touch_rx) = tokio::sync::mpsc::unbounded_channel();
+    harness.set_write_sink(touches.clone());
     let shared = Arc::new(Shared {
         global_path,
         global_cache: RwLock::new(global),
@@ -218,13 +241,19 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         port,
     });
     let (hub, _) = broadcast::channel(8192);
+    let (push, _) = broadcast::channel(1024);
     let app = Arc::new(App {
         auth: Auth::new(shared.registry.clone(), &access),
         shared,
         workspaces: RwLock::new(HashMap::new()),
         hub,
         dev: opts.dev,
+        files: Arc::new(Files::new(touches)),
+        push,
+        nav: Default::default(),
     });
+    tokio::spawn(crate::files::run_touches(Arc::downgrade(&app), touch_rx));
+    tokio::spawn(crate::nav::run(Arc::downgrade(&app)));
     for record in app.shared.registry.list_workspaces()? {
         if !paths::workspace_toml(&record.root).exists() {
             tracing::warn!("workspace {} is missing at {}", record.name, record.root.display());

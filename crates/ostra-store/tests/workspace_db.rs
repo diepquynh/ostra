@@ -84,6 +84,55 @@ fn sessions_create_update_list() {
 }
 
 #[test]
+fn session_title_is_stored() {
+    let (_d, db) = db();
+    let id = new_session(&db);
+    assert_eq!(db.get_session(&id).unwrap().unwrap().title, None);
+    let s = db.update_session(&id, &SessionUpdate { title: Some(Some("Order cancellation".into())), ..Default::default() }).unwrap();
+    assert_eq!(s.title.as_deref(), Some("Order cancellation"));
+    let s = db.update_session(&id, &SessionUpdate { cost_usd: Some(1.0), ..Default::default() }).unwrap();
+    assert_eq!(s.title.as_deref(), Some("Order cancellation"), "an update without a title keeps it");
+    assert_eq!(db.list_sessions().unwrap()[0].title.as_deref(), Some("Order cancellation"));
+}
+
+#[test]
+fn execution_view_carries_group_stream_and_summary() {
+    let (_d, db) = db();
+    let s = new_session(&db);
+    let native = new_exec(&db, Some(&s), ExecutorKind::Native);
+    let harness = new_exec(&db, Some(&s), ExecutorKind::Harness(HarnessKind::Claude));
+    let v = db.get_execution(&native).unwrap().unwrap();
+    assert_eq!(v.group, "implementer:backend");
+    assert_eq!(v.run_label, "Phase 1");
+    assert_eq!(v.stream, ostra_core::executor::ExecStream::Activity);
+    assert_eq!(v.summary, None);
+    assert!(!v.has_transcript);
+    db.set_execution_summary(&native, "Edit src/lib.rs").unwrap();
+    assert_eq!(db.get_execution(&native).unwrap().unwrap().summary.as_deref(), Some("Edit src/lib.rs"));
+    let h = db.get_execution(&harness).unwrap().unwrap();
+    assert_eq!(h.stream, ostra_core::executor::ExecStream::Terminal);
+    assert_eq!(db.list_executions(&s).unwrap()[0].summary.as_deref(), Some("Edit src/lib.rs"));
+}
+
+#[test]
+fn a_version_one_database_gains_the_new_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE sessions (id TEXT PRIMARY KEY, kind TEXT NOT NULL, request TEXT NOT NULL, category TEXT, status TEXT NOT NULL, lane TEXT NOT NULL, stage_label TEXT NOT NULL, projects TEXT NOT NULL, yolo INTEGER NOT NULL, cost_usd REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE executions (id TEXT PRIMARY KEY); CREATE TABLE gates (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, answer TEXT); PRAGMA user_version = 1;").unwrap();
+        conn.execute(
+            "INSERT INTO sessions VALUES ('s_old', '{\"kind\":\"pipeline\"}', 'r', NULL, 'running', 'research', 'Intake', '[]', 0, 0, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    }
+    let db = WorkspaceDb::open(&path).unwrap();
+    let s = db.get_session(&SessionId::from("s_old")).unwrap().unwrap();
+    assert_eq!(s.title, None);
+}
+
+#[test]
 fn events_are_sequenced_per_session() {
     let (_d, db) = db();
     let a = new_session(&db);
@@ -287,8 +336,15 @@ fn cost_report_groups() {
         .unwrap();
     }
     new_exec(&db, None, ExecutorKind::Harness(HarnessKind::Claude));
-    let r = db.cost_report().unwrap();
+    let r = db.cost_report(None).unwrap();
+    assert_eq!(r.since, None);
     assert_eq!(r.total.executions, 3);
+    let hour = chrono::Duration::hours(1);
+    let recent = db.cost_report(Some(chrono::Utc::now() - hour)).unwrap();
+    assert_eq!((recent.total.executions, recent.by_agent.len()), (3, 1));
+    let later = db.cost_report(Some(chrono::Utc::now() + hour)).unwrap();
+    assert_eq!((later.total.executions, later.total.usage.cost_usd), (0, 0.0));
+    assert!(later.by_session.is_empty() && later.since.is_some());
     assert_eq!(r.total.usage.cost_usd, 3.0);
     assert_eq!(r.total.cache_reads_per_tool_call, 200.0);
     assert_eq!(r.by_session[0].key, s.as_str());
@@ -338,4 +394,81 @@ fn registry_workspaces_push_kv() {
     assert!(reg.kv_delete("vapid").unwrap());
     assert_eq!(reg.kv_get("vapid").unwrap(), None);
     assert!(reg.remove_workspace(&id).unwrap());
+}
+
+#[test]
+fn registry_onboarding_keeps_the_first_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("registry.db");
+    let first = {
+        let reg = RegistryDb::open(&path).unwrap();
+        assert_eq!(reg.onboarded_at().unwrap(), None);
+        let first = reg.mark_onboarded().unwrap();
+        assert_eq!(reg.onboarded_at().unwrap(), Some(first));
+        first
+    };
+    let reg = RegistryDb::open(&path).unwrap();
+    assert_eq!(reg.onboarded_at().unwrap(), Some(first));
+    assert_eq!(reg.mark_onboarded().unwrap(), first);
+}
+
+#[test]
+fn meta_values_round_trip() {
+    let (_dir, db) = db();
+    assert_eq!(db.meta_get("ui_state").unwrap(), None);
+    db.meta_set("ui_state", "{\"a\":1}").unwrap();
+    db.meta_set("ui_state", "{\"a\":2}").unwrap();
+    assert_eq!(db.meta_get("ui_state").unwrap().as_deref(), Some("{\"a\":2}"));
+}
+
+#[test]
+fn text_search_over_sessions_and_artifacts() {
+    let (_d, db) = db();
+    let id = new_session(&db);
+    let hits = db.search_text("canc", 10).unwrap();
+    assert_eq!(hits.iter().map(|h| (h.kind.as_str(), h.reference.as_str())).collect::<Vec<_>>(), [("session", id.as_str())]);
+    assert!(db.search_text("order", 10).unwrap().is_empty());
+
+    db.update_session(&id, &SessionUpdate { title: Some(Some("Order cancellation".into())), ..Default::default() }).unwrap();
+    let hits = db.search_text("ord canc", 10).unwrap();
+    assert_eq!(hits.len(), 1, "every word must match, as a prefix");
+    assert_eq!(hits[0].label, "Order cancellation");
+    assert_eq!(hits[0].body, "add cancel");
+
+    db.index_artifact(&id, "/s/ostra-spec-1.md", "Spec", "Requirements\nRefund rules", 10).unwrap();
+    db.index_artifact(&id, "/s/ostra-spec-1.md", "Spec", "Requirements\nRefund policy", 20).unwrap();
+    let hits = db.search_text("refund", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!((hits[0].kind.as_str(), hits[0].reference.as_str(), hits[0].session.clone()), ("artifact", "/s/ostra-spec-1.md", id.clone()));
+    assert!(db.search_text("rules", 10).unwrap().is_empty(), "a reindex replaces the old text");
+    let indexed = db.indexed_artifacts(&id).unwrap();
+    assert_eq!(indexed.get("/s/ostra-spec-1.md"), Some(&("Spec".to_string(), 20)));
+    assert!(db.search_text("\"zz*) OR (", 10).unwrap().is_empty(), "query syntax in the text is quoted away");
+}
+
+#[test]
+fn search_index_backfills_sessions_from_before_the_migration() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.db");
+    {
+        let db = WorkspaceDb::open(&path).unwrap();
+        db.set_workspace_id(&WorkspaceId::from("ws_1")).unwrap();
+        new_session(&db);
+    }
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch("DROP TABLE search_fts; DROP TABLE search_docs; DROP TRIGGER sessions_search_ai; DROP TRIGGER sessions_search_au; PRAGMA user_version = 2;").unwrap();
+    drop(conn);
+    let db = WorkspaceDb::open(&path).unwrap();
+    assert_eq!(db.search_text("cancel", 10).unwrap().len(), 1);
+}
+
+#[test]
+fn spend_since_sums_executions_started_in_the_window() {
+    let (_d, db) = db();
+    let s = new_session(&db);
+    let e = new_exec(&db, Some(&s), ExecutorKind::Native);
+    db.update_execution_usage(&e, &Usage { cost_usd: 1.25, ..Default::default() }).unwrap();
+    let hour = chrono::Duration::hours(1);
+    assert_eq!(db.spend_since(chrono::Utc::now() - hour).unwrap(), 1.25);
+    assert_eq!(db.spend_since(chrono::Utc::now() + hour).unwrap(), 0.0);
 }

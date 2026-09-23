@@ -3,8 +3,8 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { isMock } from "./api";
 import { exchangeTokenFromUrl, watchForTokens } from "./auth";
+import "./design/index.css";
 import { registerServiceWorker } from "./lib/push";
-import "./styles.css";
 
 async function boot() {
   const exchangeError = isMock ? null : await exchangeTokenFromUrl();

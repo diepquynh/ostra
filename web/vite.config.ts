@@ -18,6 +18,20 @@ export default defineConfig({
     emptyOutDir: true,
     sourcemap: false,
     chunkSizeWarningLimit: 4000,
+    rolldownOptions: {
+      output: {
+        // Libraries that change less often than the app get their own chunks, so a UI change keeps them cached.
+        // Monaco and xterm are not listed: they load with lazy() and stay in their own chunks.
+        codeSplitting: {
+          groups: [
+            { name: "react", test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/, priority: 40 },
+            { name: "router", test: /node_modules[\\/]react-router[\\/]/, priority: 30 },
+            { name: "icons", test: /node_modules[\\/]lucide-react[\\/]/, priority: 20 },
+            { name: "markdown-lib", test: /node_modules[\\/](react-markdown|remark-gfm)[\\/]/, priority: 10 },
+          ],
+        },
+      },
+    },
   },
   test: {
     environment: "jsdom",

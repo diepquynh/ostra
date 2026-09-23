@@ -6,6 +6,8 @@ import type { HarnessStatus } from "./HarnessStatus";
 import type { SessionEvent } from "./SessionEvent";
 import type { SessionId } from "./SessionId";
 import type { SessionSummary } from "./SessionSummary";
+import type { TreeSession } from "./TreeSession";
+import type { WorkspaceActivity } from "./WorkspaceActivity";
 import type { WorkspaceId } from "./WorkspaceId";
 
-export type ServerMsg = { "type": "session_event", session: SessionId, seq: number, at: string, event: SessionEvent, } | { "type": "execution_delta", execution: ExecutionId, seq: number, at: string, delta: ExecutionDelta, } | { "type": "execution_status", execution: ExecutionId, status: ExecutionStatus, } | { "type": "session_updated", summary: SessionSummary, } | { "type": "workspace_updated", workspace: WorkspaceId, } | { "type": "harness_status", statuses: Array<HarnessStatus>, } | { "type": "subscribed", channel: string, } | { "type": "error", message: string, };
+export type ServerMsg = { "type": "session_event", session: SessionId, seq: number, at: string, event: SessionEvent, } | { "type": "execution_delta", execution: ExecutionId, seq: number, at: string, delta: ExecutionDelta, } | { "type": "execution_status", execution: ExecutionId, status: ExecutionStatus, } | { "type": "session_updated", summary: SessionSummary, } | { "type": "workspace_updated", workspace: WorkspaceId, } | { "type": "harness_status", statuses: Array<HarnessStatus>, } | { "type": "subscribed", channel: string, } | { "type": "error", message: string, } | { "type": "project_fs_changed", workspace: WorkspaceId, key: string, paths: Array<string>, } | { "type": "tree_patch", workspace: WorkspaceId, session: TreeSession, } | { "type": "activity", workspace: WorkspaceId, activity: WorkspaceActivity, };

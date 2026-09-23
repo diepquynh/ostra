@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { socket } from "../api";
-import type { ServerMsg } from "../api/types";
+import type { WireMsg } from "../api/socket";
 
 export type Async<T> = { data: T | null; error: Error | null; loading: boolean; reload: () => void; set: (v: T) => void };
 
@@ -43,7 +43,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T> {
 }
 
 /** Subscribe to a WebSocket channel for the component's lifetime. */
-export function useChannel(channel: string | null, handler: (msg: ServerMsg) => void): void {
+export function useChannel(channel: string | null, handler: (msg: WireMsg) => void): void {
   const ref = useRef(handler);
   ref.current = handler;
   useEffect(() => {

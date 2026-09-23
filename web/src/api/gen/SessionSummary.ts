@@ -10,4 +10,9 @@ export type SessionSummary = { id: SessionId, workspace: WorkspaceId, kind: Sess
 /**
  * Current lane and a short stage label (the hub's inferred stage).
  */
-lane: Lane, stage_label: string, yolo: boolean, open_gates: number, projects: Array<string>, cost_usd: number, created_at: string, updated_at: string, };
+lane: Lane, stage_label: string, yolo: boolean, open_gates: number, projects: Array<string>, cost_usd: number, created_at: string, updated_at: string, 
+/**
+ * A 2 to 5 word label from the Classify judge, or `Initialize <project>` for an init
+ * session. `None` until the request is classified.
+ */
+title: string | null, };

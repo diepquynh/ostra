@@ -1,0 +1,29 @@
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--surface-editor);
+  color: var(--text-primary);
+  font: var(--type-ui);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a { color: var(--text-link); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
+code, kbd, pre, samp { font-family: var(--font-mono); font-size: var(--text-code); }
+:not(pre) > code { background: var(--code-bg); border: 1px solid var(--border-subtle); padding: 0 4px; border-radius: var(--radius-xs); }
+pre { background: var(--code-bg); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 8px 10px; margin: 0; overflow: auto; line-height: var(--leading-normal); }
+::selection { background: color-mix(in oklab, var(--accent) 35%, transparent); }
+:focus-visible { outline: none; box-shadow: var(--ring-focus); }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--border-strong); }
+::-webkit-scrollbar-track { background: transparent; }
+@keyframes os-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes os-spin { to { transform: rotate(360deg); } }
+@keyframes os-fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes os-scrim-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes os-dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.985); } to { opacity: 1; transform: none; } }
+@keyframes os-slide-in-right { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: none; } }
+@keyframes os-slide-in-left { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
+@keyframes os-rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 1ms !important; animation-delay: 0ms !important; transition-duration: 1ms !important; } }

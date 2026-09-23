@@ -1,0 +1,33 @@
+import { describe, expect, it } from "vitest";
+import { shortcutOf } from "./keys";
+
+const key = (k: string, mods: { meta?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean } = {}) => ({
+  key: k,
+  metaKey: !!mods.meta,
+  ctrlKey: !!mods.ctrl,
+  shiftKey: !!mods.shift,
+  altKey: !!mods.alt,
+});
+
+describe("console shortcuts", () => {
+  it("uses ⌘ on a Mac", () => {
+    expect(shortcutOf(key("k", { meta: true }), true)).toBe("palette");
+    expect(shortcutOf(key("/", { meta: true }), true)).toBe("dock");
+    expect(shortcutOf(key("b", { meta: true }), true)).toBe("sidebar");
+    expect(shortcutOf(key("E", { meta: true, shift: true }), true)).toBe("files");
+    expect(shortcutOf(key("k", { ctrl: true }), true)).toBeNull();
+  });
+
+  it("uses Ctrl elsewhere", () => {
+    expect(shortcutOf(key("K", { ctrl: true }), false)).toBe("palette");
+    expect(shortcutOf(key("e", { ctrl: true, shift: true }), false)).toBe("files");
+    expect(shortcutOf(key("k", { meta: true }), false)).toBeNull();
+  });
+
+  it("ignores other keys and Alt combinations", () => {
+    expect(shortcutOf(key("k"), true)).toBeNull();
+    expect(shortcutOf(key("k", { meta: true, alt: true }), true)).toBeNull();
+    expect(shortcutOf(key("b", { meta: true, shift: true }), true)).toBeNull();
+    expect(shortcutOf(key("x", { meta: true }), true)).toBeNull();
+  });
+});

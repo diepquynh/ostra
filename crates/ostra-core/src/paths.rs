@@ -59,6 +59,16 @@ pub fn session_state_dir(session_root: &Path) -> PathBuf {
     session_root.join(".state")
 }
 
+/// Per-execution harness dir: hook config, MCP registration, and the terminal transcript.
+pub fn harness_execution_dir(session_root: &Path, execution: &str) -> PathBuf {
+    session_state_dir(session_root).join("harness").join(execution)
+}
+
+/// Raw PTY bytes of a harness execution, kept so an ended run can be replayed.
+pub fn terminal_transcript(session_root: &Path, execution: &str) -> PathBuf {
+    harness_execution_dir(session_root, execution).join("terminal.log")
+}
+
 pub fn project_runtime(project: &Path) -> PathBuf {
     project.join(RUNTIME_DIR)
 }

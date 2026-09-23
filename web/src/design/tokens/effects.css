@@ -1,0 +1,25 @@
+:root {
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-pill: 999px;
+
+  /* Elevation is borders first. Shadows appear only on floating layers. */
+  --shadow-none: none;
+  --shadow-popover: 0 0 0 1px var(--border-strong), 0 10px 28px rgba(0, 0, 0, 0.45);
+  --shadow-dialog: 0 0 0 1px var(--border-strong), 0 24px 60px rgba(0, 0, 0, 0.55);
+  --ring-focus: 0 0 0 1px var(--border-focus), 0 0 0 3px color-mix(in oklab, var(--border-focus) 28%, transparent);
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1); /* @kind other */
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1); /* @kind other */
+  --dur-instant: 60ms; /* @kind other */
+  --dur-fast: 100ms; /* @kind other */
+  --dur-base: 160ms; /* @kind other */
+  --dur-slow: 240ms; /* @kind other */
+}
+
+[data-theme="light"] {
+  --shadow-popover: 0 0 0 1px var(--border-default), 0 10px 28px rgba(0, 0, 0, 0.12);
+  --shadow-dialog: 0 0 0 1px var(--border-default), 0 24px 60px rgba(0, 0, 0, 0.18);
+}

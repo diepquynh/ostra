@@ -1,7 +1,12 @@
 import type { ClientMsg, ServerMsg } from "./types";
 import type { PtyFrame, SocketState } from "./extra";
 
-type MsgHandler = (msg: ServerMsg) => void;
+// Dynamic, so the fixtures stay out of the production bundle (see `api/index.ts`).
+const mockSocket: SocketFactory | null = import.meta.env.VITE_MOCK === "1" ? (await import("./mock/mockSocket")).mockSocket : null;
+/** Every message the server can send. */
+export type WireMsg = ServerMsg;
+
+type MsgHandler = (msg: WireMsg) => void;
 type PtyHandler = (data: Uint8Array) => void;
 
 /** The subset of the browser WebSocket the manager uses, so tests can pass a fake. */
@@ -31,7 +36,7 @@ export function decodePtyFrame(buf: ArrayBuffer | Uint8Array): PtyFrame | null {
 }
 
 /** Which channel a server message belongs to, so the manager can route it. */
-export function channelsFor(msg: ServerMsg): string[] {
+export function channelsFor(msg: WireMsg): string[] {
   switch (msg.type) {
     case "session_event":
       return [`session:${msg.session}`];
@@ -44,6 +49,10 @@ export function channelsFor(msg: ServerMsg): string[] {
       return [`workspace:${msg.workspace}`, "home"];
     case "harness_status":
       return ["home"];
+    case "project_fs_changed":
+    case "tree_patch":
+    case "activity":
+      return [`workspace:${msg.workspace}`];
     default:
       return [];
   }
@@ -184,9 +193,9 @@ export class SocketManager {
 
   private dispatch(data: unknown) {
     if (typeof data === "string") {
-      let msg: ServerMsg;
+      let msg: WireMsg;
       try {
-        msg = JSON.parse(data) as ServerMsg;
+        msg = JSON.parse(data) as WireMsg;
       } catch {
         return;
       }
@@ -213,19 +222,7 @@ let shared: SocketManager | null = null;
 /** The app-wide socket. In mock mode it never connects. */
 export function socket(): SocketManager {
   if (!shared) {
-    const mock = import.meta.env.VITE_MOCK === "1";
-    const factory: SocketFactory = mock
-      ? () => ({
-          binaryType: "arraybuffer",
-          readyState: 0,
-          onopen: null,
-          onclose: null,
-          onerror: null,
-          onmessage: null,
-          send() {},
-          close() {},
-        })
-      : (url) => new WebSocket(url) as unknown as SocketLike;
+    const factory: SocketFactory = mockSocket ?? ((url) => new WebSocket(url) as unknown as SocketLike);
     shared = new SocketManager(defaultUrl(), factory);
     shared.start();
   }

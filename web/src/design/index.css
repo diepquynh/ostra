@@ -1,0 +1,10 @@
+/* Ostra design system. Dark is the default theme; set data-theme="light" on <html> for light.
+   The files under tokens/ are copied verbatim from the Claude Design project, except fonts.css,
+   which loads bundled fonts instead of Google Fonts. */
+@import "./tokens/fonts.css";
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/effects.css";
+@import "./tokens/base.css";
+@import "./tokens/components.css";

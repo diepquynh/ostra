@@ -152,6 +152,7 @@ fn judges_and_references_resolve() {
         assert!(!text.contains("{{"), "{r} has an unresolved token");
     }
     assert!(reference_names().contains(&"java-spring".to_string()));
+    assert_eq!(stack_names(), ["go", "java-spring", "python", "typescript-node"]);
     let meta = embedded_skill("meta-author").unwrap();
     assert!(!meta.contains("{{"));
 }

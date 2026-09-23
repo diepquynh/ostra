@@ -197,6 +197,18 @@ pub fn reference_names() -> Vec<String> {
         .collect()
 }
 
+/// Stacks with a seed reference, sorted: every reference headed `# Stack Reference:` except the
+/// `_generic` fallback. An empty project stack lets the initializer detect it instead.
+pub fn stack_names() -> Vec<String> {
+    let mut names: Vec<String> = reference_names()
+        .into_iter()
+        .filter(|n| !n.starts_with('_'))
+        .filter(|n| asset_text(&format!("refs/{n}.md")).is_ok_and(|t| t.starts_with("# Stack Reference:")))
+        .collect();
+    names.sort();
+    names
+}
+
 /// A skill that ships with Ostra (`assets/skills/<name>/SKILL.md`), with `{{assets_dir}}` filled in.
 pub fn embedded_skill(name: &str) -> Option<&'static str> {
     static CACHE: OnceLock<BTreeMap<String, &'static str>> = OnceLock::new();

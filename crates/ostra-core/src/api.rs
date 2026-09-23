@@ -5,17 +5,22 @@
 //! frames: one byte holding the execution id length `n`, then `n` bytes of execution id, then raw
 //! terminal bytes. The browser sends terminal input as [`ClientMsg::TermInput`].
 
-use crate::agent::AgentName;
-use crate::config::{ProjectProfile, ValidationIssue, WorkspaceSettings};
+use crate::agent::{AgentName, Capability};
+use crate::config::{
+    ExecutorRouting, PermissionMode, PermissionRules, ProjectProfile, ResolvedRoute, Routing, ValidationIssue, WorkspaceSettings,
+};
 use crate::event::{
     AnswerSource, ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind, SessionOptions,
 };
 use crate::exec::{ExecutionDelta, ExecutionStatus, Usage};
-use crate::executor::{ExecutorKind, HarnessKind};
+use crate::executor::{ExecStream, ExecutorKind, HarnessKind};
 use crate::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
+use crate::model::{Effort, Tier};
 use crate::pipeline::{Category, Lane, PhaseInfo, StageKind};
+use crate::policy::ToolCall;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -36,12 +41,32 @@ pub struct WorkspaceSummary {
     pub available: bool,
 }
 
+/// `POST /api/workspaces` and `POST /api/workspaces/validate`. Only `name` and `root` are needed;
+/// the rest is what the setup wizard collects. Enum values arrive as strings so an unknown one
+/// becomes a validation issue on its field instead of a parse error.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CreateWorkspace {
+    #[serde(default)]
     pub name: String,
+    #[serde(default)]
     #[ts(type = "string")]
     pub root: PathBuf,
+    #[serde(default)]
+    #[ts(optional)]
+    pub projects: Option<Vec<ImportProject>>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub permissions: Option<CreatePermissions>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub yolo: Option<CreateYolo>,
+    #[serde(default)]
+    #[ts(as = "Option<RoutingPreset>", optional)]
+    pub routing_preset: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub notifications: Option<CreateNotifications>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -56,6 +81,35 @@ pub struct WorkspaceDetail {
     pub providers: Vec<ProviderStatus>,
     /// Problems with the current settings. Saving refuses settings with problems.
     pub validation: Vec<ValidationIssue>,
+    /// Every agent's definition from `agent.toml`, with its routes under the current settings.
+    pub agents: Vec<AgentInfo>,
+    /// Stacks with a seed reference, the values a project's `stack` offers besides detection.
+    pub stacks: Vec<String>,
+    /// Permission rules from `[permissions]` in the global config, merged under the workspace's.
+    pub global_permissions: PermissionRules,
+}
+
+/// One agent's definition and where it runs under the current settings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentInfo {
+    pub name: AgentName,
+    /// Sentence-case display name, for example `Code reviewer`.
+    pub label: String,
+    pub description: String,
+    /// The tier `Agent default` means.
+    pub default_tier: Tier,
+    /// Reasoning effort per executor tier table (`native`, `claude`, `codex`, `grok`, `agy`).
+    pub effort: BTreeMap<String, Effort>,
+    /// The effort `Agent default` means on the executor the agent is routed to.
+    pub default_effort: Effort,
+    pub capabilities: Vec<Capability>,
+    pub timeout_secs: u64,
+    /// The agent's route under the current settings, for work with no phase file. Null when it
+    /// does not resolve; `validation` then names the problem.
+    pub resolved: Option<ResolvedRoute>,
+    /// What `Agent default` resolves to on the executor the agent is routed to.
+    pub default_route: Option<ResolvedRoute>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -80,6 +134,9 @@ pub struct ProjectView {
     /// `.ultracode/` holds a complete Ultracode bootstrap that could be migrated.
     pub ultracode_bootstrap: bool,
     pub is_git: bool,
+    /// The checked-out branch from `.git/HEAD`; a detached HEAD shows its short commit id. Null
+    /// when the project is not a git repository or HEAD cannot be read.
+    pub git_branch: Option<String>,
     pub stack: Option<String>,
     pub profile: Option<ProjectProfile>,
 }
@@ -111,6 +168,122 @@ pub struct ProviderStatus {
     pub has_key: bool,
     /// Where the key came from: `env:NAME`, `keychain`, or `none`.
     pub source: String,
+}
+
+/// `GET /api/environment`: what this machine offers, checked before any workspace exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct EnvironmentStatus {
+    pub providers: Vec<ProviderStatus>,
+    pub harnesses: Vec<HarnessStatus>,
+    /// Stacks with a seed reference, the values a project's `stack` offers besides detection.
+    pub stacks: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CreatePermissions {
+    #[serde(default)]
+    #[ts(as = "Option<PermissionMode>", optional)]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CreateYolo {
+    #[serde(default)]
+    #[ts(optional)]
+    pub default: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CreateNotifications {
+    #[serde(default)]
+    #[ts(optional)]
+    pub push: Option<bool>,
+}
+
+/// Where implementers run, as the setup wizard offers it. Every other agent stays native.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RoutingPreset {
+    /// Every agent on the native loop.
+    #[default]
+    Native,
+    /// `implementer` and `write-test` on `harness:codex`.
+    Codex,
+    /// `implementer` and `write-test` on `harness:claude`.
+    Claude,
+}
+
+impl RoutingPreset {
+    /// Agents a harness preset moves off the native loop.
+    pub const HARNESS_AGENTS: [&'static str; 2] = ["implementer", "write-test"];
+
+    pub fn harness(self) -> Option<HarnessKind> {
+        match self {
+            RoutingPreset::Native => None,
+            RoutingPreset::Codex => Some(HarnessKind::Codex),
+            RoutingPreset::Claude => Some(HarnessKind::Claude),
+        }
+    }
+
+    /// Replace the executor routes with this preset's. Model routes stay: tiers resolve per executor.
+    pub fn apply(self, routing: &mut Routing) {
+        routing.executor = ExecutorRouting::default();
+        if let Some(h) = self.harness() {
+            for agent in Self::HARNESS_AGENTS {
+                routing.executor.by_agent.insert(agent.to_string(), ExecutorKind::Harness(h));
+            }
+        }
+    }
+}
+
+/// `GET /api/onboarding`: whether the first-run setup was finished on this machine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OnboardingState {
+    pub onboarded_at: Option<DateTime<Utc>>,
+    /// Registered workspaces. Zero with no `onboarded_at` means first run.
+    pub workspaces: u32,
+}
+
+/// The largest UI state document the server stores, in bytes of JSON.
+pub const UI_STATE_MAX_BYTES: usize = 64 * 1024;
+
+/// `GET/PATCH /api/workspaces/:ws/ui`: the console layout, so another browser restores it.
+/// PATCH merges top-level fields; unknown fields are dropped.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct WorkspaceUiState {
+    /// Open editor tabs in order.
+    pub tabs: Vec<UiTab>,
+    /// Id of the focused tab.
+    pub active: Option<String>,
+    /// Left dock tab: `sessions` or `files`.
+    pub left_tab: Option<String>,
+    /// Project key the Files tab shows.
+    pub files_project: Option<String>,
+    /// Null means the UI's default.
+    pub sidebar_open: Option<bool>,
+    /// The quick-question dock.
+    pub dock_open: bool,
+    /// `light` or `dark`. Null follows the system.
+    pub theme: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct UiTab {
+    /// The UI's resource id, for example `session:<id>` or `file:<project>:<path>`.
+    pub id: String,
+    pub pinned: bool,
+    /// The single preview tab that the next preview open replaces.
+    pub preview: bool,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -159,6 +332,9 @@ pub struct SessionSummary {
     pub cost_usd: f64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// A 2 to 5 word label from the Classify judge, or `Initialize <project>` for an init
+    /// session. `None` until the request is classified.
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -238,6 +414,32 @@ pub struct ExecutionView {
     pub can_resume: bool,
     /// A live PTY exists for this execution.
     pub has_terminal: bool,
+    /// `<agent>:<project key>`, the key of this execution's entry in `SessionDetail::execution_groups`.
+    pub group: String,
+    /// The run within its group, for example `Phase 2`, `Phase 1 · fix pass`, or `Spec · pass 2`.
+    pub run_label: String,
+    /// The live view this execution streams, taken from its executor.
+    pub stream: ExecStream,
+    /// One line about the last tool call or status message, at most 120 characters.
+    pub summary: Option<String>,
+    /// A stored terminal transcript exists, so the Terminal tab can replay the run.
+    pub has_transcript: bool,
+    /// The latest open gate whose payload names this execution, for example the permission ask
+    /// that holds its tool call.
+    pub pending_gate: Option<PendingGate>,
+    /// The project folder the execution works in, so tool paths can be shown relative to it.
+    /// Null for a side-panel answer, which has no session.
+    #[ts(type = "string | null")]
+    pub repo_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PendingGate {
+    pub id: GateId,
+    /// The gate payload's kind, for example `permission` or `execution_failed`.
+    pub kind: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -296,6 +498,8 @@ pub struct SessionDetail {
     pub completion: Option<String>,
     #[ts(type = "string")]
     pub session_root: PathBuf,
+    /// Executions grouped by agent and project, ordered by their first start.
+    pub execution_groups: Vec<ExecutionGroupView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -339,6 +543,196 @@ pub struct Artifact {
     #[ts(type = "string")]
     pub path: PathBuf,
     pub content: String,
+    /// The markdown outline, in document order.
+    pub headings: Vec<Heading>,
+}
+
+/// One markdown heading of an artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Heading {
+    /// GitHub-style anchor slug, unique within the document (`reqs`, `reqs-1`).
+    pub id: String,
+    /// 1 to 6.
+    pub level: u8,
+    pub title: String,
+}
+
+/// The runs of one agent on one project within a session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ExecutionGroupView {
+    /// `<agent>:<project key>`.
+    pub group: String,
+    pub agent: AgentName,
+    pub project: String,
+    /// `running` while any run is running, else the status of the latest run.
+    pub status: ExecutionStatus,
+    pub cost_usd: f64,
+    /// Oldest first.
+    pub executions: Vec<ExecutionId>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Navigation: the Sessions tree, search, and workspace activity
+// ---------------------------------------------------------------------------------------------
+
+/// `GET /api/workspaces/:ws/tree`: every session of the workspace, most recently updated first.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceTree {
+    pub sessions: Vec<TreeSession>,
+}
+
+/// One session node of the Sessions tree. `tree_patch` messages carry a whole node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TreeSession {
+    pub id: SessionId,
+    pub title: Option<String>,
+    pub request: String,
+    pub kind: SessionKind,
+    pub status: SessionStatus,
+    pub open_gates: u32,
+    pub cost_usd: f64,
+    pub updated_at: DateTime<Utc>,
+    /// In order of each group's first start.
+    pub groups: Vec<TreeGroup>,
+    pub artifacts: Vec<ArtifactRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TreeGroup {
+    /// `<agent>:<project key>`.
+    pub group: String,
+    pub agent: AgentName,
+    pub project: String,
+    /// `running` while any run is running, else the status of the latest run.
+    pub status: ExecutionStatus,
+    pub cost_usd: f64,
+    /// Oldest first.
+    pub runs: Vec<TreeRun>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TreeRun {
+    pub id: ExecutionId,
+    pub run_label: String,
+    pub status: ExecutionStatus,
+    pub stream: ExecStream,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SearchKind {
+    Session,
+    Execution,
+    Artifact,
+    File,
+    Project,
+    Lesson,
+    Setting,
+}
+
+/// `GET /api/workspaces/:ws/search?q=&limit=`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SearchResults {
+    /// Best match first.
+    pub items: Vec<SearchHit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SearchHit {
+    pub kind: SearchKind,
+    /// The UI resource id: `session:<id>`, `exec:<id>`, `artifact:<absolute path>`,
+    /// `file:<project key>:<relative path>`, `project:<key>`, `lesson:<project key>:<lesson id>`,
+    /// or `setting:<dotted key>`.
+    pub id: String,
+    pub label: String,
+    pub hint: Option<String>,
+    /// Higher is better; comparable across kinds within one response.
+    pub score: f64,
+}
+
+/// `GET /api/workspaces/:ws/activity`: counts for the status bar and the workspace menu.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceActivity {
+    /// Oldest start first. Includes side-panel answers, which have no session.
+    pub running: Vec<RunningExecution>,
+    /// Oldest first.
+    pub open_gates: Vec<OpenGateRef>,
+    /// Execution spend since local midnight on the server.
+    pub spend_today_usd: f64,
+    /// Execution spend since local midnight six days ago: today and the six days before it.
+    pub spend_week_usd: f64,
+    /// Start of the `spend_today_usd` window.
+    pub today_since: DateTime<Utc>,
+    /// Start of the `spend_week_usd` window. Pass it as `since` to the cost report for the same week.
+    pub week_since: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RunningExecution {
+    pub id: ExecutionId,
+    pub session: Option<SessionId>,
+    pub agent: AgentName,
+    pub project: String,
+    pub run_label: String,
+    pub stream: ExecStream,
+    pub summary: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OpenGateRef {
+    pub id: GateId,
+    pub session: SessionId,
+    pub session_title: Option<String>,
+    pub title: String,
+    /// The gate payload's kind, for example `plan_approval` or `permission`.
+    pub kind: String,
+    pub opened_at: DateTime<Utc>,
+}
+
+/// Group key of an execution: `<agent>:<project key>`.
+pub fn execution_group(agent: AgentName, project: &str) -> String {
+    format!("{agent}:{project}")
+}
+
+/// Longest [`ExecutionView::summary`], in characters.
+pub const SUMMARY_CHARS: usize = 120;
+
+/// `text` on one line with whitespace collapsed, cut to [`SUMMARY_CHARS`] with an ellipsis.
+pub fn summary_line(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= SUMMARY_CHARS {
+        return line;
+    }
+    let mut cut: String = line.chars().take(SUMMARY_CHARS - 1).collect();
+    cut.push('…');
+    cut
+}
+
+/// The summary line of a tool call: its tool and main argument, for example `Edit src/lib.rs` or
+/// `Bash npm test`. Paths under `root` are shown relative to it.
+pub fn tool_summary(call: &ToolCall, root: Option<&std::path::Path>) -> String {
+    const KEYS: [&str; 8] = ["file_path", "command", "pattern", "url", "path", "query", "skill", "notebook_path"];
+    let Some(arg) = KEYS.iter().find_map(|k| call.str_field(k)) else {
+        return summary_line(&call.tool);
+    };
+    let arg = match root.map(|r| format!("{}/", r.display())) {
+        Some(prefix) if prefix.len() > 1 => arg.replace(&prefix, ""),
+        _ => arg.to_string(),
+    };
+    summary_line(&format!("{} {arg}", call.tool))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -377,6 +771,8 @@ pub struct CostRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CostReport {
+    /// Only executions that started at or after this instant count. Null means all time.
+    pub since: Option<DateTime<Utc>>,
     pub by_session: Vec<CostRow>,
     pub by_stage: Vec<CostRow>,
     pub by_agent: Vec<CostRow>,
@@ -443,6 +839,48 @@ pub struct FsEntry {
     pub is_ostra_project: bool,
 }
 
+/// Type-to-browse folder listing (`GET /api/fs`). A missing or unreadable `path` is not an error:
+/// `exists` or `readable` is false, `entries` is empty, and `nearest` names the deepest existing
+/// ancestor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FsBrowse {
+    /// The requested folder with `~` expanded; canonical when it exists.
+    #[ts(type = "string")]
+    pub path: PathBuf,
+    #[ts(type = "string | null")]
+    pub parent: Option<PathBuf>,
+    /// The user's home folder, so the client can show and expand `~`.
+    #[ts(type = "string")]
+    pub home: PathBuf,
+    pub exists: bool,
+    pub readable: bool,
+    /// `path` itself when it is a readable folder, else its deepest existing ancestor.
+    #[ts(type = "string")]
+    pub nearest: PathBuf,
+    /// Folders only. Filtered by `prefix` (starts-with matches first, then contains), capped by `limit`.
+    pub entries: Vec<FsEntry>,
+    /// More folders matched than `limit` allowed.
+    pub truncated: bool,
+    /// `path` itself holds `.git`.
+    pub is_git: bool,
+    /// `path` itself holds `.ostra/INVENTORY.md`.
+    pub is_ostra_project: bool,
+}
+
+/// One changed file of a review loop, for the ledger's diff view
+/// (`GET /api/sessions/:id/diff?project=&phase=`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DiffFile {
+    /// Project-relative.
+    pub path: String,
+    /// The file at HEAD; empty when it is new.
+    pub original: String,
+    /// The file in the working tree; empty when it was deleted.
+    pub modified: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct AuthExchange {
@@ -455,6 +893,169 @@ pub struct ApiError {
     pub error: String,
     #[serde(default)]
     pub issues: Vec<ValidationIssue>,
+}
+
+// ---------------------------------------------------------------------------------------------
+// Project files (read-only)
+// ---------------------------------------------------------------------------------------------
+
+/// A file's state in git, from `git status --porcelain=v2`: modified (also type changes and
+/// conflicts), added, deleted, renamed or copied, or untracked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum GitMark {
+    #[serde(rename = "M")]
+    Modified,
+    #[serde(rename = "A")]
+    Added,
+    #[serde(rename = "D")]
+    Deleted,
+    #[serde(rename = "R")]
+    Renamed,
+    #[serde(rename = "?")]
+    Untracked,
+}
+
+/// The session execution that last changed a file, from the work pass's `changed_files` or,
+/// while it runs, from its Edit and Write tool results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ChangedBy {
+    pub session: SessionId,
+    pub execution: ExecutionId,
+    pub agent: AgentName,
+    pub phase: Option<u32>,
+    /// The change came from the closing test loop (`Phase: N-tests`).
+    pub tests: bool,
+    /// The engine's stage step ran `git add` for this change and it succeeded.
+    pub staged: bool,
+    /// The execution is still running.
+    pub running: bool,
+    pub at: DateTime<Utc>,
+}
+
+/// One entry of `GET /api/workspaces/:ws/projects/:key/tree`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProjectTreeEntry {
+    pub name: String,
+    /// Project-relative, `/`-separated.
+    pub path: String,
+    pub is_dir: bool,
+    pub is_symlink: bool,
+    /// Bytes; 0 for folders.
+    pub size: u64,
+    pub modified: Option<DateTime<Utc>>,
+    /// Matched by `.gitignore`, `.git/info/exclude`, or the global excludes file.
+    pub ignored: bool,
+    /// Files only. Folders carry `has_changes` instead, except an untracked folder, which is `?`.
+    pub git: Option<GitMark>,
+    /// The index holds a change for this file.
+    pub staged: bool,
+    /// A file with a git mark, or a folder holding one.
+    pub has_changes: bool,
+    pub changed_by: Option<ChangedBy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProjectTree {
+    pub project: String,
+    /// The listed folder, project-relative; empty for the project root.
+    pub path: String,
+    /// Depth-first: each folder is followed by its entries when `depth` reaches them.
+    pub entries: Vec<ProjectTreeEntry>,
+    pub is_git: bool,
+    /// The entry cap was reached.
+    pub truncated: bool,
+}
+
+/// `GET /api/workspaces/:ws/projects/:key/file?path=`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProjectFile {
+    pub path: String,
+    /// UTF-8 text (invalid sequences replaced), or null for a binary file.
+    pub content: Option<String>,
+    pub binary: bool,
+    pub size: u64,
+    /// The text was cut at the size cap.
+    pub truncated: bool,
+    pub modified: Option<DateTime<Utc>>,
+    pub git: Option<GitMark>,
+    pub staged: bool,
+    pub changed_by: Option<ChangedBy>,
+}
+
+/// Every non-ignored file of a project, for "Find a file" and search.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FileIndex {
+    /// Project-relative, `/`-separated, sorted.
+    pub paths: Vec<String>,
+    /// The path cap was reached.
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum DiffLineKind {
+    Context,
+    Add,
+    Del,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DiffLine {
+    #[serde(rename = "type")]
+    pub kind: DiffLineKind,
+    /// The line without its `+`, `-`, or space prefix and without the newline.
+    pub text: String,
+    pub old_no: Option<u32>,
+    pub new_no: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DiffHunk {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    /// Text after the closing `@@`, usually the enclosing function.
+    pub header: String,
+    pub lines: Vec<DiffLine>,
+}
+
+/// `GET /api/workspaces/:ws/projects/:key/diff?path=&base=HEAD`: the working tree against `base`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FileDiff {
+    pub path: String,
+    pub base: String,
+    pub hunks: Vec<DiffHunk>,
+    pub added: u32,
+    pub removed: u32,
+    pub binary: bool,
+    /// The diff was cut at the size cap.
+    pub truncated: bool,
+    pub git: Option<GitMark>,
+    pub changed_by: Option<ChangedBy>,
+}
+
+/// One row of `GET /api/workspaces/:ws/projects/:key/changes`: a file a session changed that
+/// still differs from HEAD (every attributed file when the project is not a git repository).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProjectChange {
+    pub path: String,
+    pub git: Option<GitMark>,
+    pub staged: bool,
+    pub added: u32,
+    pub removed: u32,
+    pub changed_by: ChangedBy,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -486,6 +1087,15 @@ pub enum ServerMsg {
     HarnessStatus { statuses: Vec<HarnessStatus> },
     Subscribed { channel: String },
     Error { message: String },
+    /// Files an execution wrote in a project, on `workspace:<id>`. Paths are project-relative;
+    /// changes are coalesced over a short window.
+    ProjectFsChanged { workspace: WorkspaceId, key: String, paths: Vec<String> },
+    /// A session node of the Sessions tree changed or appeared, on `workspace:<id>`. Replace the
+    /// node with the same id. At most four per second per session.
+    TreePatch { workspace: WorkspaceId, session: TreeSession },
+    /// The workspace's running executions, open gates, or spend changed, on `workspace:<id>`. At
+    /// most two per second.
+    Activity { workspace: WorkspaceId, activity: WorkspaceActivity },
 }
 
 #[cfg(test)]
@@ -494,5 +1104,70 @@ mod tests {
     fn export_bindings() {
         // ts-rs writes every `#[ts(export)]` type when its generated tests run; this test exists so
         // `cargo test -p ostra-core export_bindings` is a stable command to regenerate them.
+    }
+
+    use super::*;
+    use crate::config::{GlobalConfig, RouteQuery, resolve_executor, resolve_route};
+    use crate::model::{Complexity, Tier};
+
+    #[test]
+    fn routing_presets_move_only_implementers() {
+        let mut ws = WorkspaceSettings::seeded("x");
+        ws.routing.executor.by_agent.insert("plan".into(), ExecutorKind::Harness(HarnessKind::Grok));
+        RoutingPreset::Codex.apply(&mut ws.routing);
+        let codex = ExecutorKind::Harness(HarnessKind::Codex);
+        for c in Complexity::ALL {
+            assert_eq!(resolve_executor(&ws, "implementer", Some(c)), codex);
+            assert_eq!(resolve_executor(&ws, "write-test", Some(c)), codex);
+        }
+        assert_eq!(resolve_executor(&ws, "plan", None), ExecutorKind::Native);
+        assert_eq!(resolve_executor(&ws, "code-reviewer", None), ExecutorKind::Native);
+        let route = resolve_route(&GlobalConfig::default(), &ws, RouteQuery::new("implementer", Tier::Balanced)).unwrap();
+        assert_eq!(route.model, "gpt-5.6-luna");
+
+        RoutingPreset::Claude.apply(&mut ws.routing);
+        assert_eq!(resolve_executor(&ws, "implementer", None), ExecutorKind::Harness(HarnessKind::Claude));
+        assert_eq!(ws.routing.executor.by_agent.len(), 2);
+
+        RoutingPreset::Native.apply(&mut ws.routing);
+        assert!(ws.routing.executor.by_agent.is_empty());
+        assert_eq!(ws.routing.model, WorkspaceSettings::seeded("x").routing.model);
+    }
+
+    #[test]
+    fn agent_labels_and_gate_executions() {
+        assert_eq!(AgentName::CodeReviewer.label(), "Code reviewer");
+        assert_eq!(AgentName::Explore.label(), "Explore");
+        let x = ExecutionId::from("x_1");
+        let failed = GatePayload::ExecutionFailed { execution: x.clone(), agent: AgentName::Plan, project: "a".into(), error: "e".into() };
+        assert_eq!(failed.execution(), Some(&x));
+        assert_eq!(GatePayload::BudgetReached { spent_usd: 1.0, budget_usd: 1.0 }.execution(), None);
+    }
+
+    #[test]
+    fn create_body_accepts_the_old_shape() {
+        let body: CreateWorkspace = serde_json::from_str(r#"{"name": "a", "root": "/tmp/a"}"#).unwrap();
+        assert_eq!(body.projects, None);
+        assert_eq!(body.routing_preset, None);
+        let full: CreateWorkspace = serde_json::from_str(
+            r#"{"name": "a", "root": "/tmp/a", "projects": [{"path": "/x", "key": "x"}], "permissions": {"mode": "plan"},
+               "yolo": {"default": true}, "routing_preset": "codex", "notifications": {"push": false}}"#,
+        )
+        .unwrap();
+        assert_eq!(full.projects.unwrap()[0].stack, None);
+        assert_eq!(full.permissions.unwrap().mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn summary_lines() {
+        let edit = ToolCall::new("Edit", serde_json::json!({"file_path": "/code/app/src/orders/state.rs", "old_string": "a"}));
+        assert_eq!(tool_summary(&edit, Some(std::path::Path::new("/code/app"))), "Edit src/orders/state.rs");
+        assert_eq!(tool_summary(&edit, None), "Edit /code/app/src/orders/state.rs");
+        let bash = ToolCall::new("Bash", serde_json::json!({"command": "npm run\n  test"}));
+        assert_eq!(tool_summary(&bash, None), "Bash npm run test");
+        assert_eq!(tool_summary(&ToolCall::new("TodoWrite", serde_json::json!({})), None), "TodoWrite");
+        let long = summary_line(&"x".repeat(500));
+        assert_eq!(long.chars().count(), SUMMARY_CHARS);
+        assert!(long.ends_with('…'));
     }
 }

@@ -78,6 +78,23 @@ impl ExecutorKind {
         v.extend(HarnessKind::ALL.into_iter().map(ExecutorKind::Harness));
         v
     }
+
+    /// The live view an execution on this executor streams.
+    pub fn stream(self) -> ExecStream {
+        match self {
+            ExecutorKind::Native => ExecStream::Activity,
+            ExecutorKind::Harness(_) => ExecStream::Terminal,
+        }
+    }
+}
+
+/// What the browser shows for a running execution: the Activity feed or a terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ExecStream {
+    Activity,
+    Terminal,
 }
 
 impl fmt::Display for ExecutorKind {
@@ -126,5 +143,14 @@ mod tests {
             assert_eq!(e.to_string().parse::<ExecutorKind>().unwrap(), e);
         }
         assert!("harness:vim".parse::<ExecutorKind>().is_err());
+    }
+
+    #[test]
+    fn stream_follows_the_executor() {
+        assert_eq!(ExecutorKind::Native.stream(), ExecStream::Activity);
+        for h in HarnessKind::ALL {
+            assert_eq!(ExecutorKind::Harness(h).stream(), ExecStream::Terminal);
+        }
+        assert_eq!(serde_json::to_string(&ExecStream::Terminal).unwrap(), "\"terminal\"");
     }
 }

@@ -9,7 +9,8 @@ pub mod workspace;
 pub use memory::MemoryStore;
 pub use registry::{RegistryDb, StoredPushSubscription, WorkspaceRecord};
 pub use workspace::{
-    ExecutionOutput, NewExecution, NewSession, ProjectRow, SessionUpdate, StoredMessage, ToolCallRecord, WorkspaceDb,
+    ExecutionOutput, NewExecution, NewSession, ProjectRow, SessionUpdate, StoredMessage, TextHit, ToolCallRecord, WorkspaceDb,
+    fts_prefix_query,
 };
 
 #[derive(Debug, thiserror::Error)]

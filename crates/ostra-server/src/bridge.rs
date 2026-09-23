@@ -3,6 +3,7 @@
 //! input, resize, and snapshots for the Terminal tab.
 
 use crate::app::App;
+use crate::files::watch::{Touch, call_cwd, write_targets};
 use axum::Json;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -33,12 +34,15 @@ struct Running {
     env: ToolEnv,
     host: Arc<dyn ExecutionHost>,
     memory_db: PathBuf,
+    repo: PathBuf,
 }
 
 #[derive(Default)]
 struct Registry {
     running: Mutex<HashMap<ExecutionId, Arc<Running>>>,
     calls: AtomicU64,
+    /// Where successful harness writes are reported for live file updates.
+    write_sink: OnceLock<tokio::sync::mpsc::UnboundedSender<Touch>>,
 }
 
 pub struct HarnessRuntime {
@@ -66,6 +70,10 @@ impl HarnessRuntime {
         let registry = Arc::new(Registry::default());
         let bridge = HarnessBridge::new(Arc::new(ServerBridge { registry: registry.clone() }), live.clone());
         HarnessRuntime { exe, callback, live, executor: OnceLock::new(), registry, bridge }
+    }
+
+    pub fn set_write_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<Touch>) {
+        let _ = self.registry.write_sink.set(sink);
     }
 
     fn inner(&self, global: &GlobalConfig) -> Arc<HarnessExecutor> {
@@ -141,6 +149,7 @@ impl Executor for Wrapped {
             }),
             host: host.clone(),
             memory_db: ctx.memory_db.clone(),
+            repo: ctx.repo_root.clone(),
         });
         self.registry.running.lock().insert(spec.id.clone(), running);
         let id = spec.id.clone();
@@ -213,6 +222,15 @@ impl BridgeServices for ServerBridge {
 
     fn policy_observe(&self, execution: &ExecutionId, call: &ToolCall, outcome: &ToolOutcome) -> Vec<String> {
         let Some(r) = self.get(execution) else { return vec![] };
+        if !outcome.is_error
+            && let Some(sink) = self.registry.write_sink.get()
+        {
+            let paths = write_targets(call);
+            if !paths.is_empty() {
+                let base = call_cwd(call).unwrap_or_else(|| r.repo.clone());
+                let _ = sink.send(Touch { workspace: None, execution: execution.clone(), paths, base: Some(base) });
+            }
+        }
         let mut notes = vec![];
         for o in r.policy.observe(call, outcome) {
             match o {

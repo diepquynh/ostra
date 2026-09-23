@@ -33,11 +33,6 @@ export function relativeTime(iso: string, nowMs: number = Date.now()): string {
   return `${Math.round(diff / 86400)} d ago`;
 }
 
-export function elapsed(startIso: string, endIso: string | null): string {
-  const end = endIso ? new Date(endIso).getTime() : Date.now();
-  return formatDuration(end - new Date(startIso).getTime());
-}
-
 /** Last path component, for compact labels. */
 export function basename(path: string): string {
   const parts = path.split("/").filter(Boolean);

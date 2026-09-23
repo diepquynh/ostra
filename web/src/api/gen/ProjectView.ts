@@ -6,4 +6,9 @@ export type ProjectView = { key: string, path: string, init_status: InitStatus,
 /**
  * `.ultracode/` holds a complete Ultracode bootstrap that could be migrated.
  */
-ultracode_bootstrap: boolean, is_git: boolean, stack: string | null, profile: ProjectProfile | null, };
+ultracode_bootstrap: boolean, is_git: boolean, 
+/**
+ * The checked-out branch from `.git/HEAD`; a detached HEAD shows its short commit id. Null
+ * when the project is not a git repository or HEAD cannot be read.
+ */
+git_branch: string | null, stack: string | null, profile: ProjectProfile | null, };

@@ -1,0 +1,441 @@
+//! Read-only project files for the Files dock: folder trees with ignore and git marks, capped file
+//! reads, the file name index, per-file diffs, change attribution to session executions, and live
+//! `project_fs_changed` messages. Nothing here writes to a project.
+
+pub mod browse;
+pub mod git;
+pub mod tree;
+pub mod watch;
+
+use crate::api::ApiErr;
+use crate::app::{App, Pushed};
+use crate::workspace::WorkspaceRt;
+use axum::http::StatusCode;
+use chrono::{DateTime, Utc};
+use git::GitStatus;
+use ostra_core::api::{
+    ChangedBy, FileDiff, FileIndex, GitMark, ProjectChange, ProjectFile, ProjectTree, ProjectTreeEntry, ServerMsg,
+};
+use ostra_core::event::ExecPurpose;
+use ostra_core::exec::ExecutionStatus;
+use ostra_core::ids::{ExecutionId, WorkspaceId};
+use ostra_core::paths;
+use ostra_engine::EngineNotice;
+use parking_lot::Mutex;
+use serde::Deserialize;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
+use watch::Touch;
+
+/// Text files are served up to this many bytes.
+pub const TEXT_CAP: usize = 1024 * 1024;
+/// The file name index holds at most this many paths.
+pub const INDEX_CAP: usize = 50_000;
+const TREE_CAP: usize = 5_000;
+const MAX_DEPTH: u32 = 4;
+const DIFF_CAP: usize = 4 * 1024 * 1024;
+const CHANGES_CAP: usize = 500;
+/// Sessions read for attribution, most recently updated first.
+const ATTRIBUTION_SESSIONS: usize = 20;
+const MAX_LIVE: usize = 5_000;
+const MAX_PUSHED_PATHS: usize = 500;
+/// Changes outside Ostra's tools (an editor, a shell) show up within these windows.
+const INDEX_TTL: Duration = Duration::from_secs(30);
+const GIT_TTL: Duration = Duration::from_secs(5);
+const ATTRIBUTION_TTL: Duration = Duration::from_secs(3);
+const DEBOUNCE: Duration = Duration::from_millis(150);
+
+type ProjectId = (WorkspaceId, String);
+/// Project-relative path to the execution that last wrote it, and when.
+type LiveWrites = HashMap<String, (ExecutionId, DateTime<Utc>)>;
+
+struct Cached<T> {
+    at: Instant,
+    root: PathBuf,
+    ttl: Duration,
+    value: Arc<T>,
+}
+
+fn cached<T>(map: &Mutex<HashMap<ProjectId, Cached<T>>>, id: &ProjectId, root: &Path) -> Option<Arc<T>> {
+    map.lock().get(id).filter(|c| c.root == root && c.at.elapsed() < c.ttl).map(|c| c.value.clone())
+}
+
+fn store<T>(map: &Mutex<HashMap<ProjectId, Cached<T>>>, id: ProjectId, root: PathBuf, ttl: Duration, value: T) -> Arc<T> {
+    let value = Arc::new(value);
+    map.lock().insert(id, Cached { at: Instant::now(), root, ttl, value: value.clone() });
+    value
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TreeQuery {
+    pub path: Option<String>,
+    pub depth: Option<u32>,
+    pub hidden: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FileQuery {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiffQuery {
+    pub path: String,
+    pub base: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BrowseQuery {
+    pub path: Option<String>,
+    pub prefix: Option<String>,
+    pub limit: Option<usize>,
+}
+
+fn not_found(m: impl Into<String>) -> ApiErr {
+    ApiErr::new(StatusCode::NOT_FOUND, m)
+}
+
+fn bad(m: impl Into<String>) -> ApiErr {
+    ApiErr::new(StatusCode::BAD_REQUEST, m)
+}
+
+fn internal(e: impl std::fmt::Display) -> ApiErr {
+    ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+/// The canonical root of a workspace project.
+fn project_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr> {
+    let path = w.project_path(key).ok_or_else(|| not_found(format!("No project `{key}` in this workspace.")))?;
+    std::fs::canonicalize(&path).map_err(|_| not_found(format!("The folder of project `{key}` is missing: {}.", path.display())))
+}
+
+fn contain(root: &Path, raw: &str) -> Result<tree::Contained, ApiErr> {
+    tree::contain(root, raw).map_err(|m| ApiErr::new(StatusCode::FORBIDDEN, m))
+}
+
+fn phase_of(purpose: Option<&ExecPurpose>) -> (Option<u32>, bool) {
+    match purpose {
+        Some(ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } | ExecPurpose::Review { phase, tests: false, .. }) => {
+            (Some(*phase), false)
+        }
+        Some(ExecPurpose::WriteTest { phase, .. } | ExecPurpose::Review { phase, tests: true, .. }) => (Some(*phase), true),
+        _ => (None, false),
+    }
+}
+
+fn mark_fields(git: &GitStatus, rel: &str) -> (Option<GitMark>, bool) {
+    match git.file(rel) {
+        Some((m, staged)) => (Some(m), staged),
+        None => (None, false),
+    }
+}
+
+pub struct Files {
+    index: Mutex<HashMap<ProjectId, Cached<FileIndex>>>,
+    git: Mutex<HashMap<ProjectId, Cached<GitStatus>>>,
+    attribution: Mutex<HashMap<ProjectId, Cached<BTreeMap<String, ChangedBy>>>>,
+    /// Files running executions wrote, before their submit reports them.
+    live: Mutex<HashMap<ProjectId, LiveWrites>>,
+    watch: watch::ToolWatch,
+    pub browse: browse::BrowseCache,
+    touches: mpsc::UnboundedSender<Touch>,
+}
+
+impl Files {
+    pub fn new(touches: mpsc::UnboundedSender<Touch>) -> Self {
+        Files {
+            index: Default::default(),
+            git: Default::default(),
+            attribution: Default::default(),
+            live: Default::default(),
+            watch: Default::default(),
+            browse: Default::default(),
+            touches,
+        }
+    }
+
+    /// Watch one engine notice for native write tool results.
+    pub fn observe(&self, workspace: &WorkspaceId, notice: &EngineNotice) {
+        if let Some(t) = self.watch.observe(workspace, notice) {
+            let _ = self.touches.send(t);
+        }
+    }
+
+    /// Drop every cached fact about a project, so the next request reads the disk and git again.
+    pub fn invalidate(&self, workspace: &WorkspaceId, key: &str) {
+        let id = (workspace.clone(), key.to_string());
+        self.index.lock().remove(&id);
+        self.git.lock().remove(&id);
+        self.attribution.lock().remove(&id);
+    }
+
+    fn record_live(&self, id: &ProjectId, rel: &str, execution: &ExecutionId) {
+        let mut live = self.live.lock();
+        let files = live.entry(id.clone()).or_default();
+        if files.len() >= MAX_LIVE {
+            files.clear();
+        }
+        files.insert(rel.to_string(), (execution.clone(), Utc::now()));
+    }
+
+    /// Every non-ignored file of a project, cached until a write lands or 30 seconds pass. This is
+    /// the index "Find a file" and search read.
+    pub async fn index(&self, w: &WorkspaceRt, key: &str) -> Result<Arc<FileIndex>, ApiErr> {
+        let root = project_root(w, key)?;
+        let id = (w.id.clone(), key.to_string());
+        if let Some(v) = cached(&self.index, &id, &root) {
+            return Ok(v);
+        }
+        let walk_root = root.clone();
+        let (paths, truncated) = tokio::task::spawn_blocking(move || tree::index(&walk_root, INDEX_CAP)).await.map_err(internal)?;
+        Ok(store(&self.index, id, root, INDEX_TTL, FileIndex { paths, truncated }))
+    }
+
+    async fn git_status(&self, w: &WorkspaceRt, key: &str, root: &Path) -> Arc<GitStatus> {
+        let id = (w.id.clone(), key.to_string());
+        if let Some(v) = cached(&self.git, &id, root) {
+            return v;
+        }
+        let st = git::status(root).await;
+        store(&self.git, id, root.to_path_buf(), GIT_TTL, st)
+    }
+
+    /// Which session execution last changed each file of a project: finished work passes from the
+    /// session fold, then newer writes of running executions.
+    pub fn attribution(&self, w: &WorkspaceRt, key: &str, root: &Path) -> Arc<BTreeMap<String, ChangedBy>> {
+        let id = (w.id.clone(), key.to_string());
+        if let Some(v) = cached(&self.attribution, &id, root) {
+            return v;
+        }
+        let mut map: BTreeMap<String, ChangedBy> = BTreeMap::new();
+        let mut sessions: Vec<_> = w.db.list_sessions().unwrap_or_default().into_iter().filter(|s| s.projects.iter().any(|p| p == key)).collect();
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
+        for s in sessions.into_iter().take(ATTRIBUTION_SESSIONS) {
+            let Ok(st) = w.engine.state(&s.id) else { continue };
+            for (path, by) in ostra_engine::view::file_changes(&st, key) {
+                if map.get(&path).is_none_or(|c| c.at < by.at) {
+                    map.insert(path, by);
+                }
+            }
+        }
+        let live = self.live.lock().get(&id).cloned().unwrap_or_default();
+        let mut views = HashMap::new();
+        for (path, (exec, at)) in live {
+            if map.get(&path).is_some_and(|c| c.at >= at) {
+                continue;
+            }
+            let view = views.entry(exec.clone()).or_insert_with(|| w.db.get_execution(&exec).ok().flatten());
+            let Some(v) = view.as_ref() else { continue };
+            let Some(session) = v.session.clone() else { continue };
+            let (phase, tests) = phase_of(v.purpose.as_ref());
+            let by = ChangedBy { session, execution: exec, agent: v.agent, phase, tests, staged: false, running: v.status == ExecutionStatus::Running, at };
+            map.insert(path, by);
+        }
+        store(&self.attribution, id, root.to_path_buf(), ATTRIBUTION_TTL, map)
+    }
+
+    pub async fn tree(&self, w: &WorkspaceRt, key: &str, q: TreeQuery) -> Result<ProjectTree, ApiErr> {
+        let root = project_root(w, key)?;
+        let dir = contain(&root, q.path.as_deref().unwrap_or(""))?;
+        if !dir.real.exists() {
+            return Err(not_found(format!("{} does not exist in project `{key}`.", dir.rel)));
+        }
+        let depth = q.depth.unwrap_or(1).clamp(1, MAX_DEPTH);
+        let hidden = q.hidden.unwrap_or(false);
+        let (list_root, list_dir) = (root.clone(), dir.clone());
+        let listing = tokio::task::spawn_blocking(move || tree::list(&list_root, &list_dir, depth, hidden, TREE_CAP)).await.map_err(internal)?.map_err(bad)?;
+        let git = self.git_status(w, key, &root).await;
+        let by = self.attribution(w, key, &root);
+        let entries = listing
+            .entries
+            .into_iter()
+            .map(|e| {
+                let (git_mark, staged, has_changes) = if e.is_dir {
+                    let (m, has) = git.dir(&e.rel);
+                    (m, false, has)
+                } else {
+                    let (m, staged) = mark_fields(&git, &e.rel);
+                    (m, staged, m.is_some())
+                };
+                ProjectTreeEntry {
+                    changed_by: if e.is_dir { None } else { by.get(&e.rel).cloned() },
+                    name: e.name,
+                    path: e.rel,
+                    is_dir: e.is_dir,
+                    is_symlink: e.is_symlink,
+                    size: e.size,
+                    modified: e.modified,
+                    ignored: e.ignored,
+                    git: git_mark,
+                    staged,
+                    has_changes,
+                }
+            })
+            .collect();
+        Ok(ProjectTree { project: key.to_string(), path: dir.rel, entries, is_git: git.repo, truncated: listing.truncated })
+    }
+
+    pub async fn file(&self, w: &WorkspaceRt, key: &str, raw: &str) -> Result<ProjectFile, ApiErr> {
+        let root = project_root(w, key)?;
+        let file = contain(&root, raw)?;
+        if !file.real.exists() {
+            return Err(not_found(format!("{} does not exist in project `{key}`.", file.rel)));
+        }
+        let target = file.clone();
+        let read = tokio::task::spawn_blocking(move || tree::read(&target, TEXT_CAP)).await.map_err(internal)?.map_err(bad)?;
+        let git = self.git_status(w, key, &root).await;
+        let (mark, staged) = mark_fields(&git, &file.rel);
+        let changed_by = self.attribution(w, key, &root).get(&file.rel).cloned();
+        Ok(ProjectFile {
+            path: file.rel,
+            content: read.content,
+            binary: read.binary,
+            size: read.size,
+            truncated: read.truncated,
+            modified: read.modified,
+            git: mark,
+            staged,
+            changed_by,
+        })
+    }
+
+    pub async fn diff(&self, w: &WorkspaceRt, key: &str, q: DiffQuery) -> Result<FileDiff, ApiErr> {
+        let base = q.base.as_deref().map(str::trim).filter(|b| !b.is_empty()).unwrap_or("HEAD").to_string();
+        if !git::valid_base(&base) {
+            return Err(bad("Use a commit, branch, or tag name for base, such as HEAD or main."));
+        }
+        let root = project_root(w, key)?;
+        let file = contain(&root, &q.path)?;
+        if file.rel.is_empty() || file.real.is_dir() {
+            return Err(bad("Name a file with path. Folders have no diff."));
+        }
+        let git = self.git_status(w, key, &root).await;
+        let (mark, _) = mark_fields(&git, &file.rel);
+        let changed_by = self.attribution(w, key, &root).get(&file.rel).cloned();
+        let mut out = FileDiff { path: file.rel.clone(), base: base.clone(), hunks: vec![], added: 0, removed: 0, binary: false, truncated: false, git: mark, changed_by };
+        if !git.repo {
+            return Ok(out);
+        }
+        let untracked = mark == Some(GitMark::Untracked);
+        let commit = if untracked { String::new() } else { git::resolve_base(&root, &base).await.map_err(bad)? };
+        if let Some((d, truncated)) = git::diff_file(&root, &file.rel, &commit, untracked, DIFF_CAP).await {
+            out.hunks = d.hunks;
+            out.added = d.added;
+            out.removed = d.removed;
+            out.binary = d.binary;
+            out.truncated = truncated;
+        }
+        Ok(out)
+    }
+
+    /// Files sessions changed that still differ from HEAD, with line counts.
+    pub async fn changes(&self, w: &WorkspaceRt, key: &str) -> Result<Vec<ProjectChange>, ApiErr> {
+        let root = project_root(w, key)?;
+        let git = self.git_status(w, key, &root).await;
+        let by = self.attribution(w, key, &root);
+        let rows: Vec<(String, ChangedBy, Option<GitMark>, bool)> = by
+            .iter()
+            .filter_map(|(path, c)| {
+                let (mark, staged) = mark_fields(&git, path);
+                (!git.repo || mark.is_some()).then(|| (path.clone(), c.clone(), mark, staged))
+            })
+            .take(CHANGES_CAP)
+            .collect();
+        let mut counts = BTreeMap::new();
+        if git.repo {
+            let tracked: Vec<String> = rows.iter().filter(|r| r.2 != Some(GitMark::Untracked)).map(|r| r.0.clone()).collect();
+            if !tracked.is_empty()
+                && let Ok(commit) = git::resolve_base(&root, "HEAD").await
+            {
+                counts = git::numstat(&root, &commit, &tracked, &git.prefix).await;
+            }
+            for (path, _, mark, _) in &rows {
+                if *mark == Some(GitMark::Untracked)
+                    && let Ok(f) = tree::contain(&root, path)
+                {
+                    let lines = tokio::task::spawn_blocking(move || tree::read(&f, TEXT_CAP).ok().and_then(|r| r.content).map(|c| c.lines().count() as u32))
+                        .await
+                        .ok()
+                        .flatten()
+                        .unwrap_or(0);
+                    counts.insert(path.clone(), (lines, 0));
+                }
+            }
+        }
+        Ok(rows
+            .into_iter()
+            .map(|(path, changed_by, git, staged)| {
+                let (added, removed) = counts.get(&path).copied().unwrap_or((0, 0));
+                ProjectChange { path, git, staged, added, removed, changed_by }
+            })
+            .collect())
+    }
+}
+
+/// Map an absolute path to the workspace project holding it: the deepest project root wins.
+fn locate(workspaces: &[Arc<WorkspaceRt>], real: &Path) -> Option<(ProjectId, String)> {
+    let mut best: Option<(usize, ProjectId, String)> = None;
+    for w in workspaces {
+        for p in w.settings().projects {
+            let Ok(root) = std::fs::canonicalize(&p.path) else { continue };
+            if !paths::is_inside(&root, real) {
+                continue;
+            }
+            let Ok(rel) = real.strip_prefix(&root) else { continue };
+            let rel = rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+            let len = root.as_os_str().len();
+            if !rel.is_empty() && best.as_ref().is_none_or(|b| b.0 < len) {
+                best = Some((len, (w.id.clone(), p.key.clone()), rel));
+            }
+        }
+    }
+    best.map(|(_, id, rel)| (id, rel))
+}
+
+fn execution_root(workspaces: &[Arc<WorkspaceRt>], execution: &ExecutionId) -> Option<PathBuf> {
+    workspaces.iter().find_map(|w| w.db.get_execution(execution).ok().flatten().and_then(|v| w.project_path(&v.project)))
+}
+
+fn absorb(app: &App, t: Touch, batch: &mut BTreeMap<ProjectId, BTreeSet<String>>) {
+    let workspaces = match &t.workspace {
+        Some(id) => app.workspace(id).into_iter().collect(),
+        None => app.all_workspaces(),
+    };
+    let base = t.base.clone().or_else(|| execution_root(&workspaces, &t.execution));
+    for raw in &t.paths {
+        let abs = if raw.is_absolute() {
+            raw.clone()
+        } else {
+            match &base {
+                Some(b) => b.join(raw),
+                None => continue,
+            }
+        };
+        let real = paths::resolve(Path::new("/"), &abs);
+        let Some((id, rel)) = locate(&workspaces, &real) else { continue };
+        app.files.invalidate(&id.0, &id.1);
+        app.files.record_live(&id, &rel, &t.execution);
+        batch.entry(id).or_default().insert(rel);
+    }
+}
+
+/// Turn write touches into cache invalidation and `project_fs_changed` messages, coalescing the
+/// touches that arrive within a short window into one message per project.
+pub async fn run_touches(app: Weak<App>, mut rx: mpsc::UnboundedReceiver<Touch>) {
+    while let Some(first) = rx.recv().await {
+        let Some(app) = app.upgrade() else { break };
+        let mut batch = BTreeMap::new();
+        absorb(&app, first, &mut batch);
+        let deadline = tokio::time::Instant::now() + DEBOUNCE;
+        while let Ok(Some(t)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            absorb(&app, t, &mut batch);
+        }
+        for ((workspace, key), paths) in batch {
+            let msg = ServerMsg::ProjectFsChanged { workspace: workspace.clone(), key, paths: paths.into_iter().take(MAX_PUSHED_PATHS).collect() };
+            let _ = app.push.send(Pushed { channels: vec![format!("workspace:{workspace}")], msg });
+        }
+    }
+}

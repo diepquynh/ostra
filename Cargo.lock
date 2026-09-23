@@ -2376,6 +2376,7 @@ dependencies = [
  "hex",
  "http",
  "if-addrs",
+ "ignore",
  "mime_guess",
  "open",
  "ostra-agents",

@@ -1,0 +1,173 @@
+/* Ostra color tokens. Dark is the default theme; light is opt-in via [data-theme="light"].
+   Neutrals are a warm gray lifted from the source web app (#151514 / #1d1d1c / #363633 …).
+   Accent is the Ostra blue from the mark (#2459c9) and its dark-mode tint (#7ea3ff). */
+:root {
+  /* Base: warm grays */
+  --gray-950: #0d0d0c;
+  --gray-900: #121211;
+  --gray-850: #151514;
+  --gray-800: #1a1a19;
+  --gray-750: #1f1f1d;
+  --gray-700: #252523;
+  --gray-650: #2e2e2c;
+  --gray-600: #363633;
+  --gray-500: #4a4a46;
+  --gray-400: #6e6e68;
+  --gray-300: #8a8a83;
+  --gray-200: #a0a098;
+  --gray-100: #c9c9c2;
+  --gray-50: #e8e8e3;
+  --gray-25: #f1f1ee;
+  --gray-10: #f7f7f5;
+  --white: #ffffff;
+
+  /* Base: Ostra blue */
+  --blue-200: #c3d4ff;
+  --blue-300: #a3bcff;
+  --blue-400: #7ea3ff;
+  --blue-500: #4f7fe8;
+  --blue-600: #2459c9;
+  --blue-700: #1c469f;
+  --blue-900: #1f2c4a;
+  --blue-950: #172036;
+
+  /* Base: status hues (from the source light/dark pairs) */
+  --green-400: #6fcf8f;
+  --green-700: #1f7a3f;
+  --green-900: #173222;
+  --green-50: #e1f2e6;
+  --amber-400: #f0b458;
+  --amber-700: #9a5b00;
+  --amber-900: #3a2a10;
+  --amber-50: #fbefd9;
+  --red-400: #ff8a80;
+  --red-700: #b3261e;
+  --red-900: #3d1a17;
+  --red-50: #fbe3e1;
+  --violet-400: #b3a6ff;
+  --violet-700: #5b4bb7;
+  --violet-900: #2a2447;
+  --violet-50: #ebe7fa;
+
+  /* Semantic: surfaces (dark) */
+  --surface-chrome: var(--gray-900);     /* title bar, status bar, docks */
+  --surface-panel: var(--gray-850);      /* sidebar, side dock */
+  --surface-editor: var(--gray-800);     /* the center pane */
+  --surface-raised: var(--gray-750);     /* cards inside the editor */
+  --surface-sunken: var(--gray-850);     /* code blocks, inputs */
+  --surface-overlay: var(--gray-750);    /* popovers, palette, dialogs */
+  --surface-terminal: var(--gray-950);
+  --surface-hover: rgba(255, 255, 255, 0.045);
+  --surface-active: rgba(255, 255, 255, 0.075);
+  --surface-selected: rgba(126, 163, 255, 0.13);
+  --surface-scrim: rgba(0, 0, 0, 0.5);
+
+  /* Semantic: borders */
+  --border-subtle: #242422;
+  --border-default: var(--gray-650);
+  --border-strong: var(--gray-600);
+  --border-focus: var(--blue-400);
+
+  /* Semantic: text */
+  --text-primary: var(--gray-50);
+  --text-secondary: var(--gray-200);
+  --text-muted: var(--gray-400);
+  --text-disabled: var(--gray-500);
+  --text-on-accent: #10131c;
+  --text-link: var(--blue-400);
+
+  /* Semantic: accent + status */
+  --accent: var(--blue-400);
+  --accent-hover: var(--blue-300);
+  --accent-soft: var(--blue-900);
+  --accent-fg: var(--blue-300);
+  --ok: var(--green-400);
+  --ok-soft: var(--green-900);
+  --warn: var(--amber-400);
+  --warn-soft: var(--amber-900);
+  --bad: var(--red-400);
+  --bad-soft: var(--red-900);
+  --info: var(--violet-400);
+  --info-soft: var(--violet-900);
+
+  /* Terminal: always dark, in both themes (harness PTY output) */
+  --term-bg: #0d0d0c;
+  --term-bar: #151514;
+  --term-border: #2e2e2c;
+  --term-fg: #c9c9c2;
+  --term-muted: #6e6e68;
+  --term-blue: #82aaff;
+  --term-green: #6fcf8f;
+  --term-red: #ff8a80;
+  --term-amber: #f0b458;
+  --term-cursor: #e8e8e3;
+
+  /* Semantic: code + diff */
+  --code-bg: var(--gray-850);
+  --diff-add-bg: rgba(111, 207, 143, 0.11);
+  --diff-add-fg: var(--green-400);
+  --diff-del-bg: rgba(255, 138, 128, 0.11);
+  --diff-del-fg: var(--red-400);
+
+  /* Semantic: syntax (used sparingly in code views) */
+  --syntax-keyword: #c0a6ff;
+  --syntax-string: #9ccf8a;
+  --syntax-number: #e9b277;
+  --syntax-fn: #82aaff;
+  --syntax-comment: var(--gray-400);
+
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --surface-chrome: var(--gray-25);
+  --surface-panel: var(--gray-10);
+  --surface-editor: var(--white);
+  --surface-raised: var(--white);
+  --surface-sunken: var(--gray-10);
+  --surface-overlay: var(--white);
+  --surface-terminal: var(--gray-950);
+  --surface-hover: rgba(0, 0, 0, 0.04);
+  --surface-active: rgba(0, 0, 0, 0.07);
+  --surface-selected: rgba(36, 89, 201, 0.1);
+  --surface-scrim: rgba(0, 0, 0, 0.25);
+
+  --border-subtle: #e6e6e1;
+  --border-default: #dcdcd6;
+  --border-strong: #c9c9c2;
+  --border-focus: var(--blue-600);
+
+  --text-primary: #1d1d1b;
+  --text-secondary: #62625c;
+  --text-muted: #8a8a83;
+  --text-disabled: #b5b5ae;
+  --text-on-accent: #ffffff;
+  --text-link: var(--blue-600);
+
+  --accent: var(--blue-600);
+  --accent-hover: var(--blue-700);
+  --accent-soft: #e4ecfb;
+  --accent-fg: var(--blue-600);
+  --ok: var(--green-700);
+  --ok-soft: var(--green-50);
+  --warn: var(--amber-700);
+  --warn-soft: var(--amber-50);
+  --bad: var(--red-700);
+  --bad-soft: var(--red-50);
+  --info: var(--violet-700);
+  --info-soft: var(--violet-50);
+
+  --code-bg: #f3f3f0;
+  --diff-add-bg: rgba(31, 122, 63, 0.1);
+  --diff-add-fg: var(--green-700);
+  --diff-del-bg: rgba(179, 38, 30, 0.09);
+  --diff-del-fg: var(--red-700);
+
+  --syntax-keyword: #6f42c1;
+  --syntax-string: #22863a;
+  --syntax-number: #b05a00;
+  --syntax-fn: #1c469f;
+  --syntax-comment: #8a8a83;
+
+  color-scheme: light;
+}

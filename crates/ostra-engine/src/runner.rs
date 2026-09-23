@@ -9,7 +9,7 @@ use crate::services::{Notice, Services, SpawnEnv};
 use crate::state::{AUTO_FIXABLE_PARAM, SessionState};
 use crate::view;
 use ostra_core::agent::{AgentName, InitializerMode};
-use ostra_core::api::{ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary};
+use ostra_core::api::{ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary, TreeSession};
 use ostra_core::config::{
     PermissionRules, ProjectProfile, RouteQuery, load_toml, resolve_route,
 };
@@ -280,6 +280,21 @@ impl Engine {
     pub fn detail(&self, session: &SessionId) -> Result<SessionDetail, EngineError> {
         let st = self.state(session)?;
         view::detail(&st, &self.inner.db, &self.inner.workspace_id, self.live_executions())
+    }
+
+    /// The session's Sessions tree node, built from its stored row. The fold is read in place.
+    pub fn tree_session(&self, summary: &SessionSummary) -> Result<TreeSession, EngineError> {
+        let executions = self.inner.db.list_executions(&summary.id)?;
+        let live = self.inner.load(&summary.id)?;
+        let st = lock(&live.state);
+        Ok(view::tree_session(&st, summary, executions))
+    }
+
+    /// Numbered run labels of a session's executions.
+    pub fn run_labels(&self, session: &SessionId) -> Result<HashMap<ExecutionId, String>, EngineError> {
+        let live = self.inner.load(session)?;
+        let st = lock(&live.state);
+        Ok(view::run_labels(&st))
     }
 
     fn live_executions(&self) -> HashSet<ExecutionId> {
@@ -624,6 +639,7 @@ impl Inner {
                             .unwrap_or(summary.cost_usd),
                     ),
                     request: None,
+                    title: Some(summary.title.clone()),
                 },
             );
             if let Ok(Some(s)) = self.db.get_session(session) {
@@ -1144,7 +1160,7 @@ impl Inner {
         let _ = self.tx.send(EngineNotice::ExecutionStatus { execution: id.clone(), status: ExecutionStatus::Running });
         let token = CancellationToken::new();
         lock(&self.execs).insert(id.clone(), (Some(session.clone()), token.clone()));
-        let host = Arc::new(EngineHost { inner: self.clone(), session: Some(session.clone()), execution: id.clone() });
+        let host = Arc::new(EngineHost { inner: self.clone(), session: Some(session.clone()), execution: id.clone(), repo_root: Some(repo_root.clone()) });
         let harness_session_id = match route.executor {
             ExecutorKind::Harness(ostra_core::HarnessKind::Claude | ostra_core::HarnessKind::Grok) => {
                 Some(resume.as_ref().and_then(|r| r.native_session_id.clone()).unwrap_or_else(uuid_v4))
@@ -1234,7 +1250,7 @@ impl Inner {
         })?;
         let token = CancellationToken::new();
         lock(&self.execs).insert(id.clone(), (None, token.clone()));
-        let host = Arc::new(EngineHost { inner: self.clone(), session: None, execution: id.clone() });
+        let host = Arc::new(EngineHost { inner: self.clone(), session: None, execution: id.clone(), repo_root: Some(repo_root.to_path_buf()) });
         let spec = ExecutionSpec {
             id: id.clone(),
             agent: AgentName::QuickAnswer,
@@ -1288,11 +1304,24 @@ pub struct EngineHost {
     inner: Arc<Inner>,
     session: Option<SessionId>,
     execution: ExecutionId,
+    /// Tool call paths in the summary line are shown relative to it.
+    repo_root: Option<PathBuf>,
 }
 
 #[async_trait::async_trait]
 impl ExecutionHost for EngineHost {
     fn emit(&self, delta: ExecutionDelta) {
+        let summary = match &delta {
+            // The submit call ends every run, so the action before it says more.
+            ExecutionDelta::ToolCall { call, .. } if !call.tool.contains("submit_") => {
+                Some(ostra_core::api::tool_summary(call, self.repo_root.as_deref()))
+            }
+            ExecutionDelta::Status { message } => Some(ostra_core::api::summary_line(message)),
+            _ => None,
+        };
+        if let Some(line) = summary.filter(|l| !l.is_empty()) {
+            let _ = self.inner.db.set_execution_summary(&self.execution, &line);
+        }
         if let ExecutionDelta::NativeSessionId { id } = &delta {
             let _ = self.inner.db.set_native_session_id(&self.execution, id);
         }
@@ -1379,6 +1408,10 @@ impl Engine {
     pub fn execution(&self, id: &ExecutionId) -> Result<ExecutionView, EngineError> {
         let mut v = self.inner.db.get_execution(id)?.ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?;
         v.has_terminal = matches!(v.executor, ExecutorKind::Harness(_)) && lock(&self.inner.execs).contains_key(id);
+        if let Some(session) = v.session.clone() {
+            let st = self.state(&session)?;
+            view::decorate(&st, &view::run_labels(&st), &mut v);
+        }
         Ok(v)
     }
 }

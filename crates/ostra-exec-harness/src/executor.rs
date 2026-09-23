@@ -9,11 +9,12 @@ use crate::launch::{self, LaunchInput};
 use crate::live::{LiveExecution, LiveRegistry, missing_submit_instruction};
 use crate::outcome::{self, End, LAUNCH_PREFIX};
 use crate::pty::{DEFAULT_COLS, DEFAULT_ROWS, PtyRegistry, PtySession};
+use crate::term_log::TermLog;
 use ostra_core::config::GlobalConfig;
 use ostra_core::exec::{
     CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec, Executor,
 };
-use ostra_core::paths::session_state_dir;
+use ostra_core::paths::{harness_execution_dir, terminal_transcript};
 use ostra_core::{ExecutorKind, HarnessKind};
 use parking_lot::RwLock;
 use std::path::PathBuf;
@@ -187,9 +188,7 @@ impl HarnessExecutor {
                     ))
                 })?;
         }
-        let config_dir = session_state_dir(&spec.ctx.session_root)
-            .join("harness")
-            .join(spec.id.as_str());
+        let config_dir = harness_execution_dir(&spec.ctx.session_root, spec.id.as_str());
         std::fs::create_dir_all(&config_dir)
             .map_err(|e| launch_error(format!("creating {}: {e}", config_dir.display())))?;
         let input = LaunchInput {
@@ -219,11 +218,17 @@ impl HarnessExecutor {
             live.note_session(Some(sid.clone()), None);
         }
         let sink = host.clone();
+        let log = TermLog::create(terminal_transcript(&spec.ctx.session_root, spec.id.as_str())).ok();
         let pty = PtySession::spawn(
             &plan,
             cfg.cols,
             cfg.rows,
-            Box::new(move |b| sink.terminal(b)),
+            Box::new(move |b| {
+                sink.terminal(b);
+                if let Some(log) = &log {
+                    log.append(b);
+                }
+            }),
         )
         .map_err(|e| launch_error(format!("starting `{}`: {e}", plan.program)))?;
         host.emit(ExecutionDelta::Status {

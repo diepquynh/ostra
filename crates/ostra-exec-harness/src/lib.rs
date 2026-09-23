@@ -12,6 +12,7 @@ pub mod protocol;
 pub mod pty;
 pub mod services;
 pub mod setup;
+pub mod term_log;
 pub mod transcript;
 
 pub use bridge::{HarnessBridge, HookArgs, parse_hook_args, run_hook_cli, run_mcp_stdio};
@@ -22,3 +23,4 @@ pub use protocol::{HookEvent, McpRequest, McpResponse, PolicyRequest, PolicyResp
 pub use pty::{PtyRegistry, PtySession};
 pub use services::BridgeServices;
 pub use setup::{all_harness_status, ensure_agy_integration, harness_status, login_command};
+pub use term_log::{TRANSCRIPT_CAP, TermLog, read_transcript};

@@ -2,6 +2,7 @@
 
 use crate::app::App;
 use crate::auth::{Auth, cookie_value};
+use crate::files;
 use crate::workspace::WorkspaceRt;
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
@@ -10,7 +11,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use ostra_core::api::*;
-use ostra_core::config::{ValidationIssue, WorkspaceSettings, save_toml};
+use ostra_core::config::{ValidationIssue, WorkspaceSettings};
 use ostra_core::event::StoredEvent;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
 use ostra_core::paths;
@@ -42,6 +43,18 @@ impl ApiErr {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             body: ApiError { error: "The settings have problems. Fix them and save again.".into(), issues },
         }
+    }
+    fn invalid_workspace(issues: Vec<ValidationIssue>) -> Self {
+        Self::invalid_request(issues, "create the workspace")
+    }
+
+    /// A 422 whose message carries the issues too, for clients that show only `error`.
+    fn invalid_request(issues: Vec<ValidationIssue>, retry: &str) -> Self {
+        let error = match issues.as_slice() {
+            [one] => one.message.clone(),
+            _ => format!("Fix these problems and {retry} again: {}", issues.iter().map(|i| i.message.as_str()).collect::<Vec<_>>().join(" ")),
+        };
+        ApiErr { status: StatusCode::UNPROCESSABLE_ENTITY, body: ApiError { error, issues } }
     }
 }
 
@@ -143,6 +156,20 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/artifacts", get(artifact))
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/fs/list", get(fs_list))
+        .route("/api/environment", get(environment))
+        .route("/api/workspaces/validate", post(validate_new_workspace))
+        .route("/api/onboarding", get(onboarding))
+        .route("/api/onboarding/complete", post(complete_onboarding))
+        .route("/api/workspaces/{ws}/ui", get(get_ui_state).patch(patch_ui_state))
+        .route("/api/workspaces/{ws}/projects/{key}/tree", get(project_tree))
+        .route("/api/workspaces/{ws}/projects/{key}/file", get(project_file))
+        .route("/api/workspaces/{ws}/projects/{key}/files", get(project_files))
+        .route("/api/workspaces/{ws}/projects/{key}/diff", get(project_diff))
+        .route("/api/workspaces/{ws}/projects/{key}/changes", get(project_changes))
+        .route("/api/fs", get(fs_browse))
+        .route("/api/workspaces/{ws}/tree", get(workspace_tree))
+        .route("/api/workspaces/{ws}/search", get(search))
+        .route("/api/workspaces/{ws}/activity", get(workspace_activity))
         .route("/ws", get(crate::ws::handler))
         .merge(crate::bridge::internal_routes())
         .fallback(crate::assets::static_handler)
@@ -257,33 +284,53 @@ async fn list_workspaces(State(app): AppState) -> Res<Vec<WorkspaceSummary>> {
 }
 
 async fn create_workspace(State(app): AppState, Json(body): Json<CreateWorkspace>) -> Res<WorkspaceDetail> {
-    let name = body.name.trim().to_string();
-    if name.is_empty() {
-        return Err(ApiErr::bad("Give the workspace a name."));
+    refresh_env(&app).await;
+    match crate::setup::create(&app, &body) {
+        Ok(rt) => Ok(Json(rt.detail())),
+        Err(crate::setup::CreateError::Invalid(issues)) => Err(ApiErr::invalid_workspace(issues)),
+        Err(crate::setup::CreateError::Failed(m)) => Err(ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m)),
     }
-    if !body.root.is_absolute() {
-        return Err(ApiErr::bad("Choose an absolute folder for the workspace."));
-    }
-    std::fs::create_dir_all(&body.root).map_err(|e| ApiErr::bad(format!("Could not create {}: {e}", body.root.display())))?;
-    let root = std::fs::canonicalize(&body.root).map_err(|e| ApiErr::bad(e.to_string()))?;
-    if app.shared.registry.workspace_by_root(&root)?.is_some() {
-        return Err(ApiErr::new(StatusCode::CONFLICT, "That folder is already a registered workspace."));
-    }
-    let toml_path = paths::workspace_toml(&root);
-    if !toml_path.exists() {
-        save_toml(&toml_path, &WorkspaceSettings::seeded(&name)).map_err(|e| ApiErr::bad(e.to_string()))?;
-    }
-    let id = WorkspaceId::new();
-    app.shared.registry.add_workspace(&id, &name, &root)?;
-    let rt = app.attach(id, &root).map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")))?;
-    Ok(Json(rt.detail()))
 }
 
-async fn refresh_env(app: &App) {
+pub(crate) async fn refresh_env(app: &App) {
     if app.shared.env.read().stale() {
         let fresh = crate::env::EnvStatus::detect(&app.shared.global()).await;
         *app.shared.env.write() = fresh;
     }
+}
+
+async fn validate_new_workspace(State(app): AppState, Json(body): Json<CreateWorkspace>) -> Res<Vec<ValidationIssue>> {
+    refresh_env(&app).await;
+    Ok(Json(crate::setup::validate(&app, &body)))
+}
+
+async fn environment(State(app): AppState) -> Json<EnvironmentStatus> {
+    Json(crate::setup::environment(&app).await)
+}
+
+async fn onboarding(State(app): AppState) -> Res<OnboardingState> {
+    Ok(Json(crate::setup::onboarding(&app)?))
+}
+
+async fn complete_onboarding(State(app): AppState) -> Res<OnboardingState> {
+    app.shared.registry.mark_onboarded()?;
+    Ok(Json(crate::setup::onboarding(&app)?))
+}
+
+async fn get_ui_state(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceUiState> {
+    Ok(Json(ws(&app, &id)?.ui_state()))
+}
+
+async fn patch_ui_state(State(app): AppState, Path(id): Path<String>, body: axum::body::Bytes) -> Res<WorkspaceUiState> {
+    use crate::ui_state::UiStateError;
+    ws(&app, &id)?.patch_ui_state(&body).map(Json).map_err(|e| {
+        let status = match e {
+            UiStateError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            UiStateError::Invalid(_) => StatusCode::BAD_REQUEST,
+            UiStateError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        ApiErr::new(status, e.message())
+    })
 }
 
 async fn get_workspace(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceDetail> {
@@ -308,7 +355,10 @@ async fn validate_workspace(State(app): AppState, Path(id): Path<String>, Json(s
 
 async fn import_project(State(app): AppState, Path(id): Path<String>, Json(body): Json<ImportProject>) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
-    w.import_project(&body).map_err(ApiErr::bad)?;
+    w.import_project(&body).map_err(|e| match e {
+        crate::setup::CreateError::Invalid(issues) => ApiErr::invalid_request(issues, "import the project"),
+        crate::setup::CreateError::Failed(m) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m),
+    })?;
     Ok(Json(w.detail()))
 }
 
@@ -424,20 +474,14 @@ async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artif
         return Err(ApiErr::bad("That path is not a readable file of at most 4 MB."));
     }
     let content = std::fs::read_to_string(&path).map_err(|_| ApiErr::bad("The file is not text."))?;
-    Ok(Json(Artifact { path, content }))
+    let headings = ostra_core::outline::headings(&content);
+    Ok(Json(Artifact { path, content, headings }))
 }
 
 #[derive(Deserialize)]
 struct DiffQuery {
     project: String,
     phase: Option<u32>,
-}
-
-#[derive(serde::Serialize)]
-struct DiffFile {
-    path: String,
-    original: String,
-    modified: String,
 }
 
 async fn git_show(root: &std::path::Path, rev_path: &str) -> String {
@@ -520,8 +564,21 @@ async fn memory_delete(State(app): AppState, Path((id, key)): Path<(String, Stri
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn cost(State(app): AppState, Path(id): Path<String>) -> Res<CostReport> {
-    Ok(Json(ws(&app, &id)?.db.cost_report()?))
+#[derive(Deserialize)]
+struct CostQuery {
+    since: Option<String>,
+}
+
+async fn cost(State(app): AppState, Path(id): Path<String>, Query(q): Query<CostQuery>) -> Res<CostReport> {
+    let since = match q.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => Some(
+            chrono::DateTime::parse_from_rfc3339(s)
+                .map_err(|_| ApiErr::bad(format!("`since` must be an RFC 3339 time such as 2026-09-24T00:00:00Z, not `{s}`.")))?
+                .with_timezone(&chrono::Utc),
+        ),
+        None => None,
+    };
+    Ok(Json(ws(&app, &id)?.db.cost_report(since)?))
 }
 
 async fn ask(State(app): AppState, Path(id): Path<String>, Json(body): Json<AskQuestion>) -> Res<AskStarted> {
@@ -563,4 +620,67 @@ async fn fs_list(Query(q): Query<FsQuery>) -> Res<FsListing> {
     }
     entries.sort_by_key(|e| e.name.to_lowercase());
     Ok(Json(FsListing { parent: path.parent().map(|p| p.to_path_buf()), path, entries }))
+}
+
+// Project files (read-only). The logic lives in `crate::files`.
+
+async fn project_tree(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<files::TreeQuery>) -> Res<ProjectTree> {
+    let w = ws(&app, &id)?;
+    Ok(Json(app.files.tree(&w, &key, q).await?))
+}
+
+async fn project_file(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<files::FileQuery>) -> Res<ProjectFile> {
+    let w = ws(&app, &id)?;
+    Ok(Json(app.files.file(&w, &key, &q.path).await?))
+}
+
+/// Responds with a [`FileIndex`].
+async fn project_files(State(app): AppState, Path((id, key)): Path<(String, String)>) -> Result<Response, ApiErr> {
+    let w = ws(&app, &id)?;
+    let index = app.files.index(&w, &key).await?;
+    Ok(Json(index.as_ref()).into_response())
+}
+
+async fn project_diff(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<files::DiffQuery>) -> Res<FileDiff> {
+    let w = ws(&app, &id)?;
+    Ok(Json(app.files.diff(&w, &key, q).await?))
+}
+
+async fn project_changes(State(app): AppState, Path((id, key)): Path<(String, String)>) -> Res<Vec<ProjectChange>> {
+    let w = ws(&app, &id)?;
+    Ok(Json(app.files.changes(&w, &key).await?))
+}
+
+// Navigation. The logic lives in `crate::nav`.
+
+fn blocking_failed(e: tokio::task::JoinError) -> ApiErr {
+    ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+async fn workspace_tree(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceTree> {
+    let w = ws(&app, &id)?;
+    let tree = tokio::task::spawn_blocking(move || app.nav.tree(&w)).await.map_err(blocking_failed)??;
+    Ok(Json(tree))
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn search(State(app): AppState, Path(id): Path<String>, Query(q): Query<SearchQuery>) -> Res<SearchResults> {
+    let w = ws(&app, &id)?;
+    Ok(Json(crate::nav::search::search(&app, &w, q.q.as_deref().unwrap_or(""), q.limit).await?))
+}
+
+async fn workspace_activity(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceActivity> {
+    let w = ws(&app, &id)?;
+    let activity = tokio::task::spawn_blocking(move || crate::nav::activity::build(&w, chrono::Local::now())).await.map_err(blocking_failed)??;
+    Ok(Json(activity))
+}
+
+async fn fs_browse(State(app): AppState, Query(q): Query<files::BrowseQuery>) -> Json<FsBrowse> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    Json(app.files.browse.browse(q.path.as_deref(), q.prefix.as_deref(), q.limit, &home))
 }

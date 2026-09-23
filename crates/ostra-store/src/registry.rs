@@ -189,4 +189,21 @@ impl RegistryDb {
     pub fn kv_delete(&self, key: &str) -> Result<bool, StoreError> {
         Ok(self.lock().execute("DELETE FROM kv WHERE key = ?1", params![key])? > 0)
     }
+
+    // -- onboarding ---------------------------------------------------------------------------
+
+    pub fn onboarded_at(&self) -> Result<Option<DateTime<Utc>>, StoreError> {
+        match self.kv_get(ONBOARDED_AT)? {
+            Some(bytes) => Ok(Some(parse_time(&String::from_utf8_lossy(&bytes))?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Record that the first-run setup is done. A second call keeps the first time.
+    pub fn mark_onboarded(&self) -> Result<DateTime<Utc>, StoreError> {
+        self.lock().execute("INSERT OR IGNORE INTO kv (key, value) VALUES (?1, ?2)", params![ONBOARDED_AT, now().into_bytes()])?;
+        self.onboarded_at()?.ok_or_else(|| StoreError::NotFound(ONBOARDED_AT.into()))
+    }
 }
+
+const ONBOARDED_AT: &str = "onboarded_at";

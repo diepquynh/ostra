@@ -30,6 +30,9 @@ pub struct ClassifyOut {
     pub opts_in: OptsIn,
     #[serde(default)]
     pub reason: String,
+    /// A 2 to 5 word label for the session. Older decisions have none.
+    #[serde(default)]
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,6 +130,19 @@ pub struct CompletionOut {
     pub reason: String,
 }
 
+/// Longest session title kept, in characters.
+pub const TITLE_CHARS: usize = 60;
+
+/// A judge-written session title on one line, without wrapping quotes or a final period, cut to
+/// [`TITLE_CHARS`]. `None` when nothing is left.
+pub fn clean_title(raw: &str) -> Option<String> {
+    let line = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let line = line.trim_matches(|c: char| matches!(c, '"' | '\'' | '`')).trim_end_matches('.').trim();
+    let cut: String = line.chars().take(TITLE_CHARS).collect();
+    let cut = cut.trim();
+    (!cut.is_empty()).then(|| cut.to_string())
+}
+
 /// Extract the `reason` every judge output carries.
 pub fn reason_of(output: &Value) -> String {
     output.get("reason").and_then(|r| r.as_str()).unwrap_or_default().to_string()
@@ -159,9 +175,10 @@ pub fn output_schema(kind: JudgeKind, answer_schema: Option<Value>) -> Value {
                 "projects": {"type": "array", "items": {"type": "string"}},
                 "explore_tasks": {"type": "array", "items": explore_task_schema()},
                 "opts_in": {"type": "object", "properties": {"tests": {"type": "boolean"}, "docs": {"type": "boolean"}}, "required": ["tests", "docs"]},
-                "reason": reason
+                "reason": reason,
+                "title": {"type": "string", "description": "A 2 to 5 word label for the session, in sentence case, with no final period."}
             },
-            "required": ["category", "projects", "explore_tasks", "opts_in", "reason"]
+            "required": ["category", "projects", "explore_tasks", "opts_in", "reason", "title"]
         }),
         JudgeKind::Sufficiency => json!({
             "type": "object",
@@ -236,5 +253,17 @@ mod tests {
         let c: ClassifyOut = serde_json::from_value(v).unwrap();
         assert_eq!(c.category, Category::Implement);
         assert!(c.opts_in.tests);
+        assert_eq!(c.title, "");
+        let v = json!({"category":"RESEARCH","projects":[],"opts_in":{"tests":false,"docs":false},"reason":"r","title":"Order cancellation flow"});
+        assert_eq!(serde_json::from_value::<ClassifyOut>(v).unwrap().title, "Order cancellation flow");
+        assert!(output_schema(JudgeKind::Classify, None)["required"].as_array().unwrap().contains(&json!("title")));
+    }
+
+    #[test]
+    fn titles_are_cleaned() {
+        assert_eq!(clean_title("  \"Order   cancellation flow.\" ").as_deref(), Some("Order cancellation flow"));
+        assert_eq!(clean_title(" \n "), None);
+        let long = clean_title(&"word ".repeat(40)).unwrap();
+        assert!(long.chars().count() <= TITLE_CHARS);
     }
 }

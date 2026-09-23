@@ -8,6 +8,16 @@ pub fn is_project_key(value: &str) -> bool {
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+/// A project stack names a reference file (`go`, `typescript-node`), so it follows the key rule.
+pub fn is_stack_name(value: &str) -> bool {
+    is_project_key(value)
+}
+
+/// Why a stack value is refused.
+pub fn stack_issue(value: &str) -> String {
+    format!("`{value}` is not a stack name. Pick a listed stack, or leave it empty so the initializer detects it from the code.")
+}
+
 /// Suggest a project key from a folder name, the way init-kit Step 0 does.
 pub fn suggest_project_key(folder: &str) -> String {
     let mut out = String::new();

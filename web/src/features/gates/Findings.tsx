@@ -1,66 +1,73 @@
 import type { FactCheckFinding, ReviewFinding } from "../../api/types";
-import { Chip } from "../../components/Status";
+import type { Severity } from "../../api/gen/Severity";
+import { Chip, Table, type Tone } from "../../design";
 
-const tone = (s: string) => (s === "BLOCKER" || s === "HIGH" ? "bad" : s === "MEDIUM" ? "warn" : "");
+const tone = (s: Severity): Tone => (s === "BLOCKER" || s === "HIGH" ? "bad" : s === "MEDIUM" ? "warn" : "neutral");
 
+const muted = { fontSize: "var(--text-sm)", color: "var(--text-muted)" } as const;
+const mono = { fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)" } as const;
+
+/** Reviewer findings: severity and rule, file, then what is wrong, the exact fix, and any Guidance. */
 export function ReviewFindings({ findings }: { findings: ReviewFinding[] }) {
-  if (findings.length === 0) return <div className="muted small">No findings.</div>;
+  const rows = findings.map((f, i) => ({ ...f, id: i }));
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Severity</th>
-          <th>Where</th>
-          <th>Finding</th>
-        </tr>
-      </thead>
-      <tbody>
-        {findings.map((f, i) => (
-          <tr key={i}>
-            <td>
+    <Table
+      dense
+      rows={rows}
+      empty="No findings."
+      columns={[
+        {
+          key: "severity",
+          label: "Severity",
+          width: 110,
+          render: (f) => (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-start" }}>
               <Chip tone={tone(f.severity)}>{f.severity}</Chip>
-              <div className="mono small">{f.rule}</div>
-            </td>
-            <td className="mono small">{f.file}</td>
-            <td>
-              <div>{f.description}</div>
-              <div className="small muted">
-                Fix: <span className="mono">{f.fix}</span>
-              </div>
-              {f.guidance && <div className="small">Guidance: {f.guidance}</div>}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+              <span style={mono}>{f.rule}</span>
+            </div>
+          ),
+        },
+        { key: "file", label: "File", render: (f) => <span style={{ ...mono, overflowWrap: "anywhere" }}>{f.file}</span> },
+        {
+          key: "description",
+          label: "Finding",
+          render: (f) => (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, whiteSpace: "normal" }}>
+              <span>{f.description}</span>
+              <span style={muted}>
+                Fix: <code>{f.fix}</code>
+              </span>
+              {f.guidance && <span style={{ fontSize: "var(--text-sm)" }}>Guidance: {f.guidance}</span>}
+            </div>
+          ),
+        },
+      ]}
+    />
   );
 }
 
+/** Fact-check findings: severity, where in the artifact, the claim, and what is wrong with it. */
 export function FactFindings({ findings }: { findings: FactCheckFinding[] }) {
   if (findings.length === 0) return null;
+  const rows = findings.map((f, i) => ({ ...f, id: i }));
   return (
-    <table>
-      <thead>
-        <tr>
-          <th>Severity</th>
-          <th>Location</th>
-          <th>Claim and issue</th>
-        </tr>
-      </thead>
-      <tbody>
-        {findings.map((f, i) => (
-          <tr key={i}>
-            <td>
-              <Chip tone={tone(f.severity)}>{f.severity}</Chip>
-            </td>
-            <td className="small">{f.location}</td>
-            <td>
-              <div>{f.claim}</div>
-              <div className="small muted">{f.issue}</div>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <Table
+      dense
+      rows={rows}
+      columns={[
+        { key: "severity", label: "Severity", width: 90, render: (f) => <Chip tone={tone(f.severity)}>{f.severity}</Chip> },
+        { key: "location", label: "Location", width: 150 },
+        {
+          key: "claim",
+          label: "Claim and issue",
+          render: (f) => (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, whiteSpace: "normal" }}>
+              <span>{f.claim}</span>
+              <span style={muted}>{f.issue}</span>
+            </div>
+          ),
+        },
+      ]}
+    />
   );
 }

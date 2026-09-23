@@ -595,19 +595,46 @@ No compaction checkpoint is needed: the pipeline state is in the engine, not in 
 
 ## 12. User interface
 
-### 12.1 Screens
+### 12.1 Console layout and screens
+
+Each workspace opens as one console, laid out like a code editor:
+
+- **Title bar.** The workspace menu (switch workspace; Overview, Cost with this week's spend, Settings, Memory;
+  New workspace; Add project; Run the setup guide again), breadcrumbs for the open resource, a search field that
+  opens ⌘K, and toggles for the left dock and the quick-question dock.
+- **Left dock with two tabs.** Sessions is a tree: each session, its execution groups (one agent on one
+  project), the runs of each group with their live one-line summary, and the session's artifacts. `tree_patch`
+  messages keep it current without a refetch. Files shows one project read-only: a lazy folder tree with git
+  marks, dotfiles on request, "Find a file", and "Changed by sessions", which names the execution that last
+  changed each file.
+- **Editor tabs.** Every screen is a resource with an id and a URL: `ws:overview`, `ws:settings`, `ws:cost`,
+  `ws:memory`, `session:<id>`, `exec:<id>`, `artifact:<path>`, `project:<key>`, `file:<key>:<path>`. A row opened
+  from a list opens a preview tab, shown in italics, which the next preview replaces; an explicit open or a pin
+  keeps the tab. The tabs, the focused tab, the left dock tab, and the dock state are stored per workspace
+  through `/api/workspaces/:ws/ui`, so another browser opens the same layout.
+- **Status bar.** Connection state, running executions and gates waiting for the user (each opens a menu of
+  runs or gates), the active session's YOLO state, spend today with the week in its tooltip, and the theme
+  toggle.
+- **Shortcuts.** ⌘K searches sessions, executions, artifacts and their headings, files, projects, lessons, and
+  settings keys through `/api/workspaces/:ws/search`, and lists commands. ⌘/ opens the quick-question dock, ⌘B
+  toggles the left dock, and ⇧⌘E opens the Files tab. Other systems use Ctrl instead of ⌘.
+- **First run.** On a machine with no workspace and no finished onboarding, `/` shows the setup guide: a
+  machine check (`/api/environment`), name and folder, projects, defaults, and a review that validates the whole
+  request (`POST /api/workspaces/validate`) before one `POST /api/workspaces` creates it.
 
 | Screen | Content |
 | --- | --- |
-| Home | Workspace list, New workspace wizard (section 6.1). |
-| Workspace | Sessions with stage chips. A New task form (request text, plus tests, docs, and YOLO toggles), not a chat box. Projects, settings, memory browser, cost. |
+| Home | Workspace list, or the setup guide on first run (section 6.1). |
+| Workspace | Sessions with stage chips. A New task form (request text, plus tests, docs, and YOLO toggles), not a chat box. |
 | Session board | Lanes in SDLC order: Research, Requirements, Verification, Design, Build, Review, Test, Docs, Done. Each lane carries a short "why this step exists" note from `UC/docs/philosophy.md`. The Build lane shows the phase DAG with complexity and test policy per phase. The current gate is highlighted. |
-| Execution | An Activity tab (streamed thinking summary, tool calls with inputs, diffs, outputs, and every policy decision with its rule) and, for harness executions, a Terminal tab (xterm.js on the PTY, with input and resize). |
-| Artifacts | The spec rendered by section (requirements in EARS form with their acceptance criteria, contracts, External Evidence), the plan with its phase index, reports, and the review ledger shown as comments on a Monaco diff. |
+| Execution | An Activity tab (streamed thinking summary, tool calls with inputs, diffs, outputs, and every policy decision with its rule) and, for harness executions, a Terminal tab (xterm.js on the PTY, with input and resize; an ended run replays its stored transcript read-only). A paused permission ask shows Allow once and Deny above the stream; any other open gate that names the run links to it. Tool paths show relative to the project. |
+| Artifacts | The spec rendered by section (requirements in EARS form with their acceptance criteria, contracts, External Evidence), the plan with its phase index, reports, and the review ledger shown as comments on a Monaco diff. An outline from the artifact's headings sits beside the text. |
 | Gates | Open questions (recommended option first), spec and plan approval (disabled until PASS, with the findings shown), review cap, STUCK rescue, closing gate, skill approval for init, permission asks, and BLOCKER notices showing the reviewer's Guidance text, with no dismiss button. |
-| Settings | Workspace TOML as forms: projects, executor and model routing tables, instructions, permissions, YOLO, notifications. Validation on save. |
+| Project | A header with the init status, the checked-out branch, the path, and the stack. An Overview tab (profile, commands, skills, review rules) or Initialize for a new project, and a Files tab. |
+| File | One project file, read-only, with its git mark and the execution that changed it, or its diff against HEAD. |
+| Settings | Workspace TOML as forms: projects, executor and model routing tables, instructions, permissions, YOLO, notifications. Validated as you edit and again on save. Each routing row names what Agent default means for that agent (tier, model, and effort from its `agent.toml`), the stack choices are the embedded stack references, and the global permission rules from `~/.config/ostra/config.toml` show read-only. |
 | Memory | Lessons per project, searchable. The user may edit or delete any lesson. |
-| Cost | Per session, stage, agent, and executor: tokens, cache reads, cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
+| Cost | Per session, stage, agent, and executor over this week (the status bar's week) or all time: tokens, cache reads, cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
 
 ### 12.2 Explaining the process
 
@@ -620,7 +647,7 @@ Beginners are the audience, so the UI teaches as it runs:
 
 ### 12.3 Quick-questions side panel
 
-Available on every workspace screen. Answers come from the `quick-answer` agent, read-only: `Read`, `Grep`,
+Available on every workspace screen as the quick-question dock (⌘/). Answers come from the `quick-answer` agent, read-only: `Read`, `Grep`,
 `Glob`, `WebSearch`, `WebFetch`, `MemoryRecall`. Its context is the workspace's projects plus, when opened from
 a session, that session's artifacts. It never writes and never changes pipeline state. A "Turn into task"
 button starts a session with the question as the request.
@@ -636,30 +663,70 @@ harness needs login. Every notification deep-links to the screen that needs the 
 REST, JSON:
 
 ```
-GET/POST        /api/workspaces
-GET/PATCH       /api/workspaces/:ws                       settings (validated)
-POST/DELETE     /api/workspaces/:ws/projects              import (like /add-dir), remove
+GET             /api/info                                 version, VAPID public key
+POST            /api/auth/exchange                        one-time token for the session cookie
+GET             /api/onboarding                           first-run flag and workspace count
+POST            /api/onboarding/complete                  mark the setup guide finished
+GET             /api/environment                          providers, harnesses, stack names; before any workspace
+GET/POST        /api/workspaces                           list; create in one call (name, root, projects,
+                                                          permissions, yolo, routing_preset, notifications)
+POST            /api/workspaces/validate                  the same body; every issue, writes nothing
+GET/PATCH       /api/workspaces/:ws                       detail (projects, harnesses, agents, stacks, global
+                                                          permissions, validation); settings (validated)
+POST            /api/workspaces/:ws/validate              settings issues without saving
+GET/PATCH       /api/workspaces/:ws/ui                    console layout; PATCH merges top-level fields, 64 KB cap
+POST/DELETE     /api/workspaces/:ws/projects[/:key]       import (like /add-dir); 422 issues on key, path, stack;
+                                                          remove
 POST            /api/workspaces/:ws/projects/:key/init    start the init flow
+GET/PATCH/DELETE /api/workspaces/:ws/projects/:key/memory
+GET             /api/workspaces/:ws/projects/:key/tree    ?path=&depth=&hidden=; entries with git marks and the
+                                                          execution that changed them
+GET             /api/workspaces/:ws/projects/:key/file    ?path=; read-only text, binary flag, size cap
+GET             /api/workspaces/:ws/projects/:key/files   every non-ignored path, for Find a file and search
+GET             /api/workspaces/:ws/projects/:key/diff    ?path=&base=HEAD; parsed hunks
+GET             /api/workspaces/:ws/projects/:key/changes files sessions changed that still differ from HEAD
 GET/POST        /api/workspaces/:ws/sessions              list, create (request + toggles)
-GET             /api/sessions/:id                         state, stages, executions, gates
-POST            /api/sessions/:id/yolo                    toggle
+GET             /api/workspaces/:ws/tree                  the Sessions tree: sessions, groups, runs, artifacts
+GET             /api/workspaces/:ws/search                ?q=&limit=; ranked hits for ⌘K
+GET             /api/workspaces/:ws/activity              running executions, open gates, spend today and this
+                                                          week with the window starts
+GET             /api/workspaces/:ws/cost                  ?since=<RFC 3339>; spend per session, stage, agent,
+                                                          executor; all time without since
+POST            /api/workspaces/:ws/ask                   side-panel question (streams)
+GET             /api/sessions/:id                         state, stages, executions, gates, execution groups
+GET             /api/sessions/:id/events                  ?after=; the event log
+GET             /api/sessions/:id/diff                    ?project=&phase=; review loop files, HEAD against now
+POST            /api/sessions/:id/yolo | /amend | /stop
 POST            /api/gates/:id/answer                     user answer
 POST            /api/decisions/:id/override               override a judge decision
+GET             /api/executions/:id                       view, with its pending gate and project folder
+GET             /api/executions/:id/activity              ?after=; persisted activity items
 POST            /api/executions/:id/cancel | /resume
-GET             /api/artifacts?path=                      session-dir files only
-GET/PATCH/DELETE /api/workspaces/:ws/projects/:key/memory
-POST            /api/workspaces/:ws/ask                   side-panel question (streams)
+GET             /api/artifacts?path=                      session-dir files only, with the heading outline
+GET             /api/fs                                   ?path=&prefix=&limit=; type-to-browse folders, git and
+                                                          Ostra marks for the folder and its entries
+GET             /api/fs/list                              ?path=; the older folder listing
 POST            /api/push/subscribe
-POST            /internal/policy                          hook bridge, execution token only
+POST            /internal/policy | /internal/mcp          hook bridge and MCP shim, local peers and execution
+                                                          token only
 ```
 
-WebSocket `/ws`, multiplexed by channel:
+Validation failures answer 422 with `{ error, issues: [{ path, message }] }`, where `path` names the field.
+Other handler errors answer `{ error, issues: [] }`.
 
-- `session:<id>`: engine events such as `stage.entered`, `execution.started`, `execution.delta`, `tool.call`,
-  `tool.result`, `policy.decision`, `gate.opened`, `gate.answered`, `decision.made`, `execution.finished`, and
-  `session.completed`.
-- `term:<execution>`: binary PTY frames, plus `input` and `resize` messages from the browser.
-- `workspace:<ws>`: session list updates, harness availability, settings changes.
+WebSocket `/ws`, multiplexed by channel. The browser sends `subscribe` and `unsubscribe` with a channel, and
+`term_input` and `term_resize` for a PTY. The server answers `subscribed` and sends:
+
+- `session:<id>`: `session_event` for every appended engine event (stage entered, execution started and
+  finished, gate opened and answered, decision made, session completed), and `session_updated`.
+- `execution:<id>`: `execution_delta` (thinking, text, tool calls and results, policy decisions, usage) and
+  `execution_status`.
+- `term:<execution>`: binary PTY frames. Subscribing sends the live backlog, or the stored transcript of an
+  ended run.
+- `workspace:<ws>`: `session_updated`; `tree_patch` with a whole Sessions tree node, at most four per second per
+  session; `activity` with the running executions, open gates, and spend, at most two per second;
+  `project_fs_changed` with the project-relative paths an execution wrote, coalesced over a short window.
+- `home`: `session_updated` for every workspace, and `harness_status` on subscribe.
 
 ## 14. Repository layout
 

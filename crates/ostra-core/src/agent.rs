@@ -55,6 +55,13 @@ impl AgentName {
         }
     }
 
+    /// Sentence-case display name, for example `Code reviewer`.
+    pub fn label(self) -> String {
+        let spaced = self.as_str().replace('-', " ");
+        let mut chars = spaced.chars();
+        chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
+    }
+
     /// Snake-case form used in tool names such as `submit_code_reviewer`.
     pub fn snake(self) -> String {
         self.as_str().replace('-', "_")

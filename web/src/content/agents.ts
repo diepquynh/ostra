@@ -23,8 +23,6 @@ export const COMPLEXITY_AGENTS = ["implementer", "write-test"] as const;
 /** Route keys that always run on the native executor. */
 export const NATIVE_ONLY = new Set(["judge", "quick-answer"]);
 
-export const TIERS = ["fast", "balanced", "advanced", "frontier", "default"];
-
 export const PERMISSION_MODES: { mode: PermissionMode; label: string; help: string }[] = [
   { mode: "default", label: "Default", help: "Asks before file edits and before any command no rule allows." },
   { mode: "acceptEdits", label: "Accept edits", help: "File edits inside the project are allowed; unlisted commands still ask." },

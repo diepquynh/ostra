@@ -2,8 +2,12 @@
 //! loop, policy, tools, and git staging. The model plays each agent: it writes its files with the
 //! Write tool, then calls its submit tool.
 
-use ostra_core::api::{SessionDetail, SessionStatus, SessionSummary, WorkspaceDetail};
-use ostra_core::config::{GlobalConfig, TierTable, save_toml};
+use ostra_core::api::{
+    ApiError, Artifact, CostReport, DiffFile, DiffLineKind, EnvironmentStatus, ExecutionView, FileDiff, FileIndex, FsBrowse, GitMark,
+    Heading, OnboardingState, ProjectChange, ProjectFile, ProjectTree, ServerMsg, SessionDetail, SessionStatus, SessionSummary,
+    UI_STATE_MAX_BYTES, UiTab, SearchKind, SearchResults, WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree, WorkspaceUiState,
+};
+use ostra_core::config::{GlobalConfig, PermissionMode, TierTable, ValidationIssue, save_toml};
 use ostra_providers::mock::{response, tool_use_response};
 use ostra_providers::{Block, ChatRequest, ChatResponse, ProviderError, Role, ScriptedProvider, StopReason};
 use serde_json::{Value, json};
@@ -38,7 +42,7 @@ fn judge(req: &ChatRequest) -> Value {
     let schema = &req.tools[0].input_schema;
     let props = &schema["properties"];
     if props.get("category").is_some() {
-        json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "Research the greeting"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code."})
+        json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "Research the greeting"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code.", "title": "Greeting file"})
     } else if props.get("stakes").is_some() {
         json!({"stakes": "high", "reason": "Plan it."})
     } else if props.get("report_markdown").is_some() {
@@ -99,11 +103,20 @@ async fn wait_for<F: Fn(&SessionDetail) -> bool>(client: &reqwest::Client, base:
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn yolo_implement_session_end_to_end() {
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path();
-    // SAFETY: this is the only test in this binary, so no other thread reads the environment.
+/// The server reads its config and data paths from the process environment, so tests in this
+/// binary hold this lock for as long as their server runs.
+static SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct Server {
+    app: Arc<ostra_server::app::App>,
+    base: String,
+    client: reqwest::Client,
+}
+
+/// Start a signed-in server whose config and data live under `root`, with every tier on the
+/// scripted `mock` provider. Call it while holding [`SERIAL`].
+async fn boot(root: &Path) -> Server {
+    // SAFETY: the caller holds SERIAL, so no other test thread reads the environment meanwhile.
     unsafe {
         std::env::set_var("OSTRA_CONFIG", root.join("config.toml"));
         std::env::set_var("OSTRA_DATA_DIR", root.join("data"));
@@ -114,13 +127,6 @@ async fn yolo_implement_session_end_to_end() {
         TierTable { fast: Some("mock:m".into()), balanced: Some("mock:m".into()), advanced: Some("mock:m".into()), frontier: Some("mock:m".into()) },
     );
     save_toml(&root.join("config.toml"), &global).unwrap();
-
-    let app_dir = root.join("app");
-    std::fs::create_dir_all(app_dir.join(".ostra")).unwrap();
-    std::fs::write(app_dir.join(".ostra/INVENTORY.md"), "# app Inventory\n").unwrap();
-    std::fs::write(app_dir.join(".ostra/project.toml"), "[commands]\nformat = \"true\"\nbuild = \"true\"\n").unwrap();
-    let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&app_dir).output().unwrap();
-    git(&["init", "-q"]);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -136,6 +142,22 @@ async fn yolo_implement_session_end_to_end() {
     let token = url.split("#token=").nth(1).unwrap();
     let r = client.post(format!("{base}/api/auth/exchange")).json(&json!({"token": token})).send().await.unwrap();
     assert_eq!(r.status(), 204);
+    Server { app, base, client }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn yolo_implement_session_end_to_end() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, app } = boot(root).await;
+
+    let app_dir = root.join("app");
+    std::fs::create_dir_all(app_dir.join(".ostra")).unwrap();
+    std::fs::write(app_dir.join(".ostra/INVENTORY.md"), "# app Inventory\n").unwrap();
+    std::fs::write(app_dir.join(".ostra/project.toml"), "[commands]\nformat = \"true\"\nbuild = \"true\"\n").unwrap();
+    let git = |args: &[&str]| std::process::Command::new("git").args(args).current_dir(&app_dir).output().unwrap();
+    git(&["init", "-q"]);
 
     let ws: WorkspaceDetail = client
         .post(format!("{base}/api/workspaces"))
@@ -157,7 +179,11 @@ async fn yolo_implement_session_end_to_end() {
         .unwrap();
     assert_eq!(ws.projects.len(), 1);
     assert!(ws.validation.is_empty(), "{:?}", ws.validation);
+    let head = std::fs::read_to_string(app_dir.join(".git/HEAD")).unwrap();
+    let branch = head.trim().strip_prefix("ref: refs/heads/").unwrap().to_string();
+    assert_eq!(ws.projects[0].git_branch.as_ref(), Some(&branch), "read from .git/HEAD");
 
+    let mut pushed = app.push.subscribe();
     let s: SessionSummary = client
         .post(format!("{base}/api/workspaces/{}/sessions", ws.id))
         .json(&json!({"request": "Add a greeting file", "options": {"tests": false, "docs": false, "yolo": true}, "projects": []}))
@@ -176,6 +202,37 @@ async fn yolo_implement_session_end_to_end() {
     let agents: Vec<String> = d.executions.iter().map(|e| e.agent.to_string()).collect();
     assert_eq!(agents, ["explore", "generate-spec", "fact-check", "plan", "fact-check", "implementer", "code-reviewer"]);
     let imp = d.executions.iter().find(|e| e.agent == ostra_core::AgentName::Implementer).unwrap();
+    assert_eq!(d.summary.title.as_deref(), Some("Greeting file"));
+    assert_eq!(imp.group, "implementer:app");
+    assert_eq!(imp.run_label, "Phase 1");
+    assert_eq!(imp.stream, ostra_core::executor::ExecStream::Activity);
+    assert!(imp.summary.as_deref().is_some_and(|s| s.starts_with("Write ")), "{:?}", imp.summary);
+    assert!(!imp.has_transcript);
+    assert_eq!(imp.repo_root.as_ref(), Some(&ws.projects[0].path));
+    assert_eq!(imp.pending_gate, None, "nothing waits once the session completed");
+    let one: ExecutionView = client.get(format!("{base}/api/executions/{}", imp.id)).send().await.unwrap().json().await.unwrap();
+    assert_eq!((one.repo_root, one.pending_gate), (Some(ws.projects[0].path.clone()), None));
+    let ledger: Vec<DiffFile> = client
+        .get(reqwest::Url::parse_with_params(&format!("{base}/api/sessions/{}/diff", s.id), &[("project", "app")]).unwrap())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(ledger, vec![DiffFile { path: "greeting.txt".into(), original: String::new(), modified: "hello\n".into() }]);
+    let labels: Vec<&str> = d.executions.iter().map(|e| e.run_label.as_str()).collect();
+    assert_eq!(labels, ["Research task 1", "Spec", "Spec check", "Plan", "Plan check", "Phase 1", "Phase 1 · review pass"]);
+    let groups: Vec<(&str, usize)> = d.execution_groups.iter().map(|g| (g.group.as_str(), g.executions.len())).collect();
+    assert_eq!(groups, [("explore:app", 1), ("generate-spec:app", 1), ("fact-check:app", 2), ("plan:app", 1), ("implementer:app", 1), ("code-reviewer:app", 1)]);
+    let listed: Vec<SessionSummary> = client.get(format!("{base}/api/workspaces/{}/sessions", ws.id)).send().await.unwrap().json().await.unwrap();
+    assert_eq!(listed[0].title.as_deref(), Some("Greeting file"));
+    // An ended run with a stored transcript replays it on `term:<execution>`.
+    assert_eq!(ostra_server::ws::stored_transcript(&app, &imp.id), None);
+    let transcript = ostra_core::paths::terminal_transcript(&d.session_root, imp.id.as_str());
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    std::fs::write(&transcript, b"\x1b[1mdone\r\n").unwrap();
+    assert_eq!(ostra_server::ws::stored_transcript(&app, &imp.id).as_deref(), Some(&b"\x1b[1mdone\r\n"[..]));
     let activity: Vec<Value> = client.get(format!("{base}/api/executions/{}/activity", imp.id)).send().await.unwrap().json().await.unwrap();
     // The project write would have asked in default mode; under YOLO the policy allowed it and
     // recorded the rule.
@@ -187,4 +244,344 @@ async fn yolo_implement_session_end_to_end() {
     assert_eq!(art.status(), 200);
     let outside = client.get(reqwest::Url::parse_with_params(&format!("{base}/api/artifacts"), &[("path", app_dir.join("greeting.txt").display().to_string())]).unwrap()).send().await.unwrap();
     assert_eq!(outside.status(), 403, "only session files are served");
+
+    let art: Artifact = art.json().await.unwrap();
+    assert_eq!(art.headings, vec![Heading { id: "report".into(), level: 1, title: "Report".into() }]);
+
+    // The implementer's Write reached the workspace channel as a project_fs_changed message, and
+    // the session's tree node and the workspace activity were pushed there as they changed.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let (mut fs_changed, mut completed_node, mut activity_pushed) = (false, None, false);
+    while !(fs_changed && completed_node.is_some() && activity_pushed) {
+        let p = match tokio::time::timeout_at(deadline, pushed.recv()).await.expect("a workspace message is missing") {
+            Ok(p) => p,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(e) => panic!("{e}"),
+        };
+        assert_eq!(p.channels, vec![format!("workspace:{}", ws.id)]);
+        match p.msg {
+            ServerMsg::ProjectFsChanged { workspace, key, paths } => {
+                assert_eq!((workspace, key.as_str()), (ws.id.clone(), "app"));
+                fs_changed |= paths.iter().any(|p| p == "greeting.txt");
+            }
+            ServerMsg::TreePatch { workspace, session } => {
+                assert_eq!(workspace, ws.id);
+                if session.id == s.id && session.status == SessionStatus::Completed {
+                    completed_node = Some(session);
+                }
+            }
+            ServerMsg::Activity { workspace, .. } => {
+                assert_eq!(workspace, ws.id);
+                activity_pushed = true;
+            }
+            _ => {}
+        }
+    }
+
+    // The Sessions tree: one node, grouped like the session detail, with its artifacts.
+    let wsp = format!("{base}/api/workspaces/{}", ws.id);
+    let tree: WorkspaceTree = client.get(format!("{wsp}/tree")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(tree.sessions.len(), 1);
+    let node = &tree.sessions[0];
+    assert_eq!(Some(node), completed_node.as_ref(), "the last patch matches the tree");
+    assert_eq!((node.id.clone(), node.title.as_deref(), node.request.as_str(), node.open_gates), (s.id.clone(), Some("Greeting file"), "Add a greeting file", 0));
+    let groups: Vec<(&str, Vec<&str>)> = node.groups.iter().map(|g| (g.group.as_str(), g.runs.iter().map(|r| r.run_label.as_str()).collect())).collect();
+    assert_eq!(
+        groups,
+        [
+            ("explore:app", vec!["Research task 1"]),
+            ("generate-spec:app", vec!["Spec"]),
+            ("fact-check:app", vec!["Spec check", "Plan check"]),
+            ("plan:app", vec!["Plan"]),
+            ("implementer:app", vec!["Phase 1"]),
+            ("code-reviewer:app", vec!["Phase 1 · review pass"]),
+        ]
+    );
+    assert_eq!(node.groups[4].runs[0].id, imp.id);
+    assert_eq!(node.groups[4].runs[0].summary, imp.summary);
+    assert_eq!(node.artifacts, d.artifacts);
+    assert!(node.artifacts.iter().any(|a| a.kind == "spec"), "{:?}", node.artifacts);
+
+
+    // The read-only file endpoints, on the project the session changed (a repo with no commits).
+    let project = format!("{base}/api/workspaces/{}/projects/app", ws.id);
+    let get = |path: &str, query: &[(&str, &str)]| {
+        let url = reqwest::Url::parse_with_params(&format!("{project}/{path}"), query).unwrap();
+        client.get(url).send()
+    };
+    let tree: ProjectTree = get("tree", &[]).await.unwrap().json().await.unwrap();
+    assert!(tree.is_git);
+    let names: Vec<&str> = tree.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["greeting.txt"], "dotfiles are hidden by default");
+    let g = &tree.entries[0];
+    assert_eq!((g.git, g.staged, g.has_changes, g.size), (Some(GitMark::Added), true, true, 6));
+    let by = g.changed_by.as_ref().expect("attributed to the implementer");
+    assert_eq!((by.session.clone(), by.agent, by.phase, by.staged, by.running), (s.id.clone(), ostra_core::AgentName::Implementer, Some(1), true, false));
+    assert_eq!(by.execution, imp.id);
+
+    let tree: ProjectTree = get("tree", &[("hidden", "true"), ("depth", "2")]).await.unwrap().json().await.unwrap();
+    let paths: Vec<&str> = tree.entries.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(paths, vec![".ostra", ".ostra/INVENTORY.md", ".ostra/project.toml", "greeting.txt"]);
+    assert!(tree.entries[0].has_changes, "a folder holding untracked files has changes");
+
+    let file: ProjectFile = get("file", &[("path", "greeting.txt")]).await.unwrap().json().await.unwrap();
+    assert_eq!((file.content.as_deref(), file.binary, file.truncated), (Some("hello\n"), false, false));
+    assert_eq!(file.changed_by.map(|c| c.execution), Some(imp.id.clone()));
+    assert_eq!(get("file", &[("path", "missing.txt")]).await.unwrap().status(), 404);
+    assert_eq!(get("file", &[("path", "../config.toml")]).await.unwrap().status(), 403);
+    std::os::unix::fs::symlink(root, app_dir.join("escape")).unwrap();
+    assert_eq!(get("file", &[("path", "escape/config.toml")]).await.unwrap().status(), 403, "a symlink cannot lead out of the project");
+    assert_eq!(get("tree", &[("path", "escape")]).await.unwrap().status(), 403);
+
+    let diff: FileDiff = get("diff", &[("path", "greeting.txt")]).await.unwrap().json().await.unwrap();
+    assert_eq!((diff.added, diff.removed, diff.binary, diff.base.as_str()), (1, 0, false, "HEAD"));
+    assert_eq!(diff.hunks.len(), 1);
+    let line = &diff.hunks[0].lines[0];
+    assert_eq!((line.kind, line.text.as_str(), line.old_no, line.new_no), (DiffLineKind::Add, "hello", None, Some(1)));
+    assert_eq!(get("diff", &[("path", "greeting.txt"), ("base", "--output=/tmp/x")]).await.unwrap().status(), 400);
+
+    let changes: Vec<ProjectChange> = get("changes", &[]).await.unwrap().json().await.unwrap();
+    assert_eq!(changes.len(), 1);
+    assert_eq!((changes[0].path.as_str(), changes[0].added, changes[0].git), ("greeting.txt", 1, Some(GitMark::Added)));
+
+    let index: FileIndex = get("files", &[]).await.unwrap().json().await.unwrap();
+    assert!(index.paths.contains(&"greeting.txt".to_string()) && index.paths.contains(&".ostra/INVENTORY.md".to_string()), "{:?}", index.paths);
+    assert!(!index.truncated);
+
+    let fs: FsBrowse = client
+        .get(reqwest::Url::parse_with_params(&format!("{base}/api/fs"), &[("path", root.display().to_string()), ("prefix", "AP".into())]).unwrap())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let entries: Vec<(&str, bool, bool)> = fs.entries.iter().map(|e| (e.name.as_str(), e.is_git, e.is_ostra_project)).collect();
+    assert_eq!(entries, vec![("app", true, true)]);
+    assert!(!fs.is_git && !fs.is_ostra_project);
+    let fs: FsBrowse = client
+        .get(reqwest::Url::parse_with_params(&format!("{base}/api/fs"), &[("path", app_dir.display().to_string())]).unwrap())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(fs.is_git && fs.is_ostra_project, "the browsed folder itself is described");
+    let fs: FsBrowse = client
+        .get(reqwest::Url::parse_with_params(&format!("{base}/api/fs"), &[("path", root.join("nope/deeper").display().to_string())]).unwrap())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!fs.exists && !fs.readable);
+    assert_eq!(fs.nearest, std::fs::canonicalize(root).unwrap());
+
+    // Search: one hit per kind the session produced, plus a lesson, a project, and a setting.
+    client
+        .patch(format!("{wsp}/projects/app/memory"))
+        .json(&json!({"id": null, "area": "greeting", "lesson": "A greeting file ends with a newline."}))
+        .send()
+        .await
+        .unwrap();
+    let search = |q: &str| {
+        let url = reqwest::Url::parse_with_params(&format!("{wsp}/search"), &[("q", q)]).unwrap();
+        let client = client.clone();
+        async move { client.get(url).send().await.unwrap().json::<SearchResults>().await.unwrap() }
+    };
+    let found = search("greeting").await;
+    let first = |kind: SearchKind| found.items.iter().find(|h| h.kind == kind).unwrap_or_else(|| panic!("no {kind:?} hit in {:#?}", found.items));
+    assert_eq!(first(SearchKind::Session).id, format!("session:{}", s.id));
+    assert_eq!(first(SearchKind::Session).label, "Greeting file");
+    assert_eq!(first(SearchKind::File).id, "file:app:greeting.txt");
+    assert!(first(SearchKind::Artifact).id.starts_with(&format!("artifact:{}", d.session_root.display())), "{:?}", first(SearchKind::Artifact));
+    assert!(first(SearchKind::Lesson).id.starts_with("lesson:app:"));
+    assert!(found.items.windows(2).all(|w| w[0].score >= w[1].score), "best first");
+    let exec = search("implementer").await;
+    assert_eq!(exec.items[0].id, format!("exec:{}", imp.id));
+    assert_eq!(exec.items[0].label, "implementer · Phase 1");
+    assert_eq!(search("app").await.items[0].id, "project:app");
+    assert_eq!(search("budget").await.items[0].id, "setting:limits.session_budget_usd");
+    let heading = search("report").await;
+    assert!(heading.items.iter().any(|h| h.kind == SearchKind::Artifact && h.id == format!("artifact:{}", imp.report_path.clone().unwrap().display())));
+    let recent = search("").await;
+    assert_eq!(recent.items.iter().map(|h| h.id.clone()).collect::<Vec<_>>(), [format!("session:{}", s.id)]);
+    let url = reqwest::Url::parse_with_params(&format!("{wsp}/search"), &[("q", "a"), ("limit", "2")]).unwrap();
+    assert_eq!(client.get(url).send().await.unwrap().json::<SearchResults>().await.unwrap().items.len(), 2);
+
+    // Activity: nothing runs or waits once the session completed.
+    let activity: WorkspaceActivity = client.get(format!("{wsp}/activity")).send().await.unwrap().json().await.unwrap();
+    assert!(activity.running.is_empty() && activity.open_gates.is_empty(), "{activity:?}");
+    assert!(activity.spend_week_usd >= activity.spend_today_usd);
+    assert!(activity.week_since <= activity.today_since && activity.today_since <= chrono::Utc::now());
+
+    // Cost over all time, over the status bar's week, and over a window with nothing in it.
+    let cost = |since: Option<String>| {
+        let query: Vec<(&str, String)> = since.into_iter().map(|s| ("since", s)).collect();
+        let url = reqwest::Url::parse_with_params(&format!("{wsp}/cost"), &query).unwrap();
+        client.get(url).send()
+    };
+    let all: CostReport = cost(None).await.unwrap().json().await.unwrap();
+    assert_eq!((all.since, all.total.executions as usize), (None, d.executions.len()));
+    let week: CostReport = cost(Some(activity.week_since.to_rfc3339())).await.unwrap().json().await.unwrap();
+    assert_eq!(week.since, Some(activity.week_since));
+    assert_eq!(week.total.executions, all.total.executions);
+    assert!((week.total.usage.cost_usd - activity.spend_week_usd).abs() < 1e-9, "the same week as the status bar");
+    let later: CostReport = cost(Some("2999-01-01T00:00:00Z".into())).await.unwrap().json().await.unwrap();
+    assert_eq!(later.total.executions, 0);
+    let bad = cost(Some("last week".into())).await.unwrap();
+    assert_eq!(bad.status(), 400);
+    assert!(bad.json::<ApiError>().await.unwrap().error.contains("RFC 3339"));
+}
+
+fn issue_paths(issues: &[ValidationIssue]) -> Vec<&str> {
+    issues.iter().map(|i| i.path.as_str()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn setup_wizard_creates_a_workspace_in_one_call() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { app, base, client } = boot(root).await;
+    let get = |path: &str| client.get(format!("{base}{path}")).send();
+    let post = |path: &str, body: Value| client.post(format!("{base}{path}")).json(&body).send();
+
+    let first: OnboardingState = get("/api/onboarding").await.unwrap().json().await.unwrap();
+    assert_eq!(first, OnboardingState { onboarded_at: None, workspaces: 0 });
+
+    let env: EnvironmentStatus = get("/api/environment").await.unwrap().json().await.unwrap();
+    assert_eq!(env.harnesses.len(), 4);
+    assert!(env.providers.iter().any(|p| p.name == "anthropic"), "{:?}", env.providers);
+    assert_eq!(env.stacks, ["go", "java-spring", "python", "typescript-node"]);
+
+    let (a, b) = (root.join("a"), root.join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    let ws_root = root.join("shop");
+    let good = json!({
+        "name": "shop",
+        "root": ws_root,
+        "projects": [{"path": a, "key": "api", "stack": null}, {"path": b, "key": "web", "stack": "typescript-node"}],
+        "permissions": {"mode": "plan"},
+        "yolo": {"default": true},
+        "routing_preset": "native",
+        "notifications": {"push": false},
+    });
+    let issues: Vec<ValidationIssue> = post("/api/workspaces/validate", good.clone()).await.unwrap().json().await.unwrap();
+    assert_eq!(issues, vec![]);
+    assert!(!ws_root.exists(), "validation writes nothing");
+
+    let bad = json!({
+        "name": " ",
+        "root": ws_root,
+        "projects": [{"path": a, "key": "api"}, {"path": root.join("missing"), "key": "Web"}],
+        "permissions": {"mode": "loose"},
+        "routing_preset": "grok",
+    });
+    let r = post("/api/workspaces/validate", bad.clone()).await.unwrap();
+    assert_eq!(r.status(), 200);
+    let issues: Vec<ValidationIssue> = r.json().await.unwrap();
+    let expected = ["name", "permissions.mode", "projects[1].key", "projects[1].path", "routing_preset"];
+    assert_eq!(issue_paths(&issues), expected);
+    let r = post("/api/workspaces", bad).await.unwrap();
+    assert_eq!(r.status(), 422);
+    let err: ApiError = r.json().await.unwrap();
+    assert_eq!(issue_paths(&err.issues), expected);
+    assert!(!ws_root.exists(), "a refused create writes nothing");
+    assert!(app.shared.registry.list_workspaces().unwrap().is_empty());
+    assert_eq!(app.shared.registry.onboarded_at().unwrap(), None);
+
+    let r = post("/api/workspaces", good.clone()).await.unwrap();
+    assert_eq!(r.status(), 200);
+    let ws: WorkspaceDetail = r.json().await.unwrap();
+    assert!(ws.validation.is_empty(), "{:?}", ws.validation);
+    assert_eq!(ws.projects.iter().map(|p| p.key.as_str()).collect::<Vec<_>>(), ["api", "web"]);
+    assert_eq!(ws.settings.projects[1].stack.as_deref(), Some("typescript-node"));
+    assert_eq!(ws.settings.permissions.mode, PermissionMode::Plan);
+    assert!(ws.settings.yolo.default);
+    assert!(!ws.settings.notifications.push);
+    assert!(ws.settings.routing.executor.by_agent.is_empty());
+    assert!(ws_root.join(".ostra/workspace.toml").is_file());
+    assert_eq!(ws.stacks, env.stacks);
+    assert_eq!(ws.global_permissions.deny, ["Bash(rm -rf /*)"], "the global config's rules, shown read-only");
+    assert_eq!(ws.projects.iter().map(|p| p.git_branch.clone()).collect::<Vec<_>>(), [None, None], "neither folder is a repository");
+    assert_eq!(ws.agents.len(), 12);
+    let plan = ws.agents.iter().find(|a| a.name == ostra_core::AgentName::Plan).unwrap();
+    assert_eq!((plan.label.as_str(), plan.default_tier), ("Plan", ostra_core::Tier::Advanced));
+    assert_eq!(plan.resolved.as_ref().map(|r| r.model.as_str()), Some("mock:m"), "resolved through the tier table");
+    assert_eq!(plan.default_route, plan.resolved);
+
+    // Importing reports each problem on its request field.
+    let projects = format!("/api/workspaces/{}/projects", ws.id);
+    let r = post(&projects, json!({"path": root.join("missing"), "key": "Bad Key", "stack": "Type Script"})).await.unwrap();
+    assert_eq!(r.status(), 422);
+    let err: ApiError = r.json().await.unwrap();
+    assert_eq!(issue_paths(&err.issues), ["key", "stack", "path"]);
+    assert!(err.error.starts_with("Fix these problems and import the project again:"), "{}", err.error);
+    let r = post(&projects, json!({"path": a, "key": "web", "stack": null})).await.unwrap();
+    let err: ApiError = r.json().await.unwrap();
+    assert_eq!(issue_paths(&err.issues), ["key", "path"]);
+    let c = root.join("c");
+    std::fs::create_dir_all(&c).unwrap();
+    let r = post(&projects, json!({"path": c, "key": "docs", "stack": "rust-axum"})).await.unwrap();
+    assert_eq!(r.status(), 200);
+    let added: WorkspaceDetail = r.json().await.unwrap();
+    assert_eq!(added.projects[2].stack.as_deref(), Some("rust-axum"));
+
+    let again: ApiError = post("/api/workspaces", good).await.unwrap().json().await.unwrap();
+    assert_eq!(issue_paths(&again.issues), ["root"]);
+
+    let after: OnboardingState = get("/api/onboarding").await.unwrap().json().await.unwrap();
+    assert!(after.onboarded_at.is_some());
+    assert_eq!(after.workspaces, 1);
+    let list: Vec<WorkspaceSummary> = get("/api/workspaces").await.unwrap().json().await.unwrap();
+    assert_eq!((list[0].projects, list[0].available, list[0].root.clone()), (3, true, ws.root.clone()));
+
+    // The per-workspace validate route still answers next to the new one.
+    let settings = serde_json::to_value(&ws.settings).unwrap();
+    let r = post(&format!("/api/workspaces/{}/validate", ws.id), settings).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(r.json::<Vec<ValidationIssue>>().await.unwrap(), vec![]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn onboarding_flag_and_ui_state_round_trip() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { base, client, .. } = boot(dir.path()).await;
+
+    let done: OnboardingState = client.post(format!("{base}/api/onboarding/complete")).send().await.unwrap().json().await.unwrap();
+    let at = done.onboarded_at.expect("marked");
+    assert_eq!(done.workspaces, 0);
+    let again: OnboardingState = client.post(format!("{base}/api/onboarding/complete")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(again.onboarded_at, Some(at), "the first time stays");
+
+    let ws: WorkspaceDetail =
+        client.post(format!("{base}/api/workspaces")).json(&json!({"name": "ui", "root": dir.path().join("ws")})).send().await.unwrap().json().await.unwrap();
+    let ui = format!("{base}/api/workspaces/{}/ui", ws.id);
+    let empty: WorkspaceUiState = client.get(&ui).send().await.unwrap().json().await.unwrap();
+    assert_eq!(empty, WorkspaceUiState::default());
+
+    let r = client
+        .patch(&ui)
+        .json(&json!({"tabs": [{"id": "ws:overview", "pinned": true}, {"id": "session:s1", "preview": true}], "active": "session:s1", "left_tab": "files", "files_project": "app"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let r = client.patch(&ui).json(&json!({"theme": "dark", "dock_open": true})).send().await.unwrap();
+    let merged: WorkspaceUiState = r.json().await.unwrap();
+    let stored: WorkspaceUiState = client.get(&ui).send().await.unwrap().json().await.unwrap();
+    assert_eq!(stored, merged);
+    assert_eq!(stored.tabs, vec![UiTab { id: "ws:overview".into(), pinned: true, preview: false }, UiTab { id: "session:s1".into(), pinned: false, preview: true }]);
+    assert_eq!((stored.active.as_deref(), stored.left_tab.as_deref(), stored.theme.as_deref(), stored.dock_open), (Some("session:s1"), Some("files"), Some("dark"), true));
+
+    let big = json!({"active": "a".repeat(UI_STATE_MAX_BYTES)});
+    assert_eq!(client.patch(&ui).json(&big).send().await.unwrap().status(), 413);
+    assert_eq!(client.patch(&ui).json(&json!([1, 2])).send().await.unwrap().status(), 400);
+    let unchanged: WorkspaceUiState = client.get(&ui).send().await.unwrap().json().await.unwrap();
+    assert_eq!(unchanged, stored);
 }

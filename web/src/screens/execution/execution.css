@@ -1,0 +1,54 @@
+/* Execution screen layout. Components come from the design system; this file only places them. */
+.ex-page { max-width: 1000px; margin: 0 auto; padding: 20px 28px 40px; display: flex; flex-direction: column; gap: 14px; }
+.ex-loading { flex-direction: row; align-items: center; gap: 8px; color: var(--text-muted); }
+.ex-stack { display: flex; flex-direction: column; gap: 10px; }
+
+.ex-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.ex-head__main { flex: 1 1 420px; min-width: 0; }
+.ex-head__actions { display: flex; gap: 8px; align-items: center; }
+.ex-head__actions .os-select { min-width: 140px; }
+.ex-title { margin: 0 0 6px; font: var(--type-title); }
+.ex-title__sub { font-size: var(--text-md); font-weight: var(--weight-regular); color: var(--text-muted); }
+.ex-chips { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+.ex-mono { font: var(--text-sm)/1.4 var(--font-mono); }
+.ex-mono-strong { font: var(--weight-semibold) var(--text-sm)/1.4 var(--font-mono); }
+.ex-muted { color: var(--text-muted); }
+.ex-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ex-hint { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading-normal); }
+
+.ex-stats { display: flex; flex-wrap: wrap; border: 1px solid var(--border-default); border-radius: var(--radius-md); background: var(--surface-raised); }
+.ex-stat { display: flex; flex-direction: column; gap: 3px; padding: 8px 14px; border-right: 1px solid var(--border-subtle); }
+.ex-stat__label { font: var(--type-label); font-size: var(--text-2xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: var(--tracking-label); }
+.ex-stat__value { font: var(--weight-medium) var(--text-base)/1 var(--font-mono); }
+
+.ex-spawn { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); }
+.ex-spawn__head { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px; cursor: pointer; color: var(--text-muted); user-select: none; }
+.ex-spawn__head:hover { background: var(--surface-hover); }
+.ex-spawn__title { color: var(--text-secondary); font-weight: var(--weight-medium); }
+.ex-spawn__body { display: flex; flex-direction: column; gap: 8px; padding: 0 10px 10px; }
+.ex-spawn__body pre { white-space: pre-wrap; max-height: 360px; }
+
+.ex-activity { display: flex; flex-direction: column; gap: 8px; }
+.ex-status { font: var(--text-sm)/1.45 var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+.ex-thinking > summary { cursor: pointer; font-size: var(--text-sm); color: var(--text-muted); }
+.ex-thinking > div { margin-top: 6px; padding: 2px 0 2px 10px; border-left: 2px solid var(--border-default); color: var(--text-secondary); font-style: italic; line-height: 1.5; white-space: pre-wrap; }
+.ex-text { line-height: 1.55; padding: 4px 0; overflow-wrap: anywhere; }
+.ex-text > :first-child { margin-top: 0; }
+.ex-text > :last-child { margin-bottom: 0; }
+.ex-text p, .ex-text ul, .ex-text ol, .ex-text pre { margin: 0 0 6px; }
+.ex-text ul, .ex-text ol { padding-left: 20px; }
+.ex-live { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--text-muted); padding: 4px 0; }
+.ex-empty { color: var(--text-muted); padding: 8px 0; }
+
+.ex-xterm { flex: 1; min-height: 0; }
+.ex-xterm .xterm { height: 100%; }
+.ex-xterm .xterm-viewport { background: transparent !important; }
+.ex-xterm[data-readonly] .xterm-cursor-layer { display: none; }
+.ex-term-loading { display: flex; gap: 8px; align-items: center; color: var(--term-muted); }
+
+.ex-hook-input { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ex-hook-input .ex-mono { color: var(--text-secondary); overflow-wrap: anywhere; }
+.ex-hook-note { font-size: var(--text-xs); color: var(--text-muted); }
+.ex-hook-rule { display: inline-flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: var(--text-sm); }
+.ex-hook-rule code { white-space: nowrap; }

@@ -9,6 +9,7 @@ pub mod exec;
 pub mod executor;
 pub mod ids;
 pub mod model;
+pub mod outline;
 pub mod paths;
 pub mod pipeline;
 pub mod policy;

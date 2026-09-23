@@ -1,11 +1,11 @@
+import { agents, stacks } from "./fixtures.agents";
+import { backendProfile } from "./fixtures.projects";
 import type {
   ActivityItem,
-  CostReport,
-  CostRow,
   DecisionView,
+  ExecutionGroupView,
   ExecutionView,
   GateView,
-  Lesson,
   PhaseInfo,
   SessionDetail,
   SessionSummary,
@@ -74,7 +74,8 @@ export const settings: WorkspaceSettings = {
 
 export const workspaces: WorkspaceSummary[] = [
   { id: WS, name: "shop", root: ROOT, projects: 2, active_sessions: 1, available: true },
-  { id: "ws_notes", name: "notes", root: "/home/me/code/notes", projects: 0, active_sessions: 0, available: true },
+  { id: "ws_tools", name: "internal-tools", root: "/home/me/code/tools", projects: 2, active_sessions: 0, available: true },
+  { id: "ws_ostra", name: "ostra-dev", root: "/home/me/code/ostra-dev", projects: 1, active_sessions: 0, available: false },
 ];
 
 export const workspaceDetail: WorkspaceDetail = {
@@ -88,8 +89,9 @@ export const workspaceDetail: WorkspaceDetail = {
       init_status: "initialized",
       ultracode_bootstrap: false,
       is_git: true,
+      git_branch: "main",
       stack: "java-spring",
-      profile: null,
+      profile: backendProfile,
     },
     {
       key: "web",
@@ -97,6 +99,7 @@ export const workspaceDetail: WorkspaceDetail = {
       init_status: "not_initialized",
       ultracode_bootstrap: true,
       is_git: true,
+      git_branch: "feat/order-cancel",
       stack: "typescript-node",
       profile: null,
     },
@@ -112,6 +115,9 @@ export const workspaceDetail: WorkspaceDetail = {
     { name: "openai", has_key: false, source: "none" },
   ],
   validation: [],
+  agents,
+  stacks,
+  global_permissions: { allow: [], ask: [], deny: ["Bash(rm -rf /*)"] },
 };
 
 export const phases: PhaseInfo[] = [
@@ -165,6 +171,7 @@ export const sessionSummary: SessionSummary = {
   cost_usd: 3.42,
   created_at: at(0),
   updated_at: at(48),
+  title: "Order cancellation",
 };
 
 export const sessions: SessionSummary[] = [
@@ -182,6 +189,7 @@ export const sessions: SessionSummary[] = [
     cost_usd: 0.41,
     created_at: at(-600),
     updated_at: at(-590),
+    title: "Refund event publishing",
   },
   {
     ...sessionSummary,
@@ -197,6 +205,36 @@ export const sessions: SessionSummary[] = [
     cost_usd: 0.2,
     created_at: at(40),
     updated_at: at(47),
+    title: "Initialize web",
+  },
+  {
+    ...sessionSummary,
+    id: "s_refund",
+    request: "Retry refund webhooks with exponential backoff and a dead-letter table.",
+    status: "running",
+    lane: "verification",
+    stage_label: "Fact-check the spec",
+    yolo: true,
+    open_gates: 0,
+    projects: ["backend"],
+    cost_usd: 0.62,
+    created_at: at(30),
+    updated_at: at(47.5),
+    title: "Refund webhook retries",
+  },
+  {
+    ...sessionSummary,
+    id: "s_n1",
+    request: "Fix the N+1 query in the admin order list.",
+    status: "stalled",
+    lane: "build",
+    stage_label: "Implement phase 1",
+    open_gates: 0,
+    projects: ["backend"],
+    cost_usd: 0.33,
+    created_at: at(-3000),
+    updated_at: at(-2980),
+    title: "N+1 in order list",
   },
 ];
 
@@ -229,6 +267,13 @@ const exec = (
   error: null,
   can_resume: false,
   has_terminal: false,
+  group: `${agent}:${project}`,
+  run_label: agent,
+  stream: extra.executor?.startsWith("harness:") ? "terminal" : "activity",
+  summary: null,
+  has_transcript: false,
+  pending_gate: null,
+  repo_root: `/home/me/code/shop-${project}`,
   ...extra,
 });
 
@@ -253,8 +298,63 @@ export const executions: ExecutionView[] = [
   }),
   exec("x_rev2", "code-reviewer", "review", "backend", "running", 45, null, { kind: "review", phase: 2, tests: false, iteration: 2 }, {
     model: "anthropic:claude-sonnet-5",
+    summary: "Bash ./gradlew :order:check, waiting for permission",
+  }),
+  exec("x_imp3", "implementer", "implement", "web", "running", 44, null, { kind: "implement", phase: 3, work: "initial" }, {
+    executor: "harness:claude",
+    model: "haiku",
+    has_terminal: true,
+    summary: "Update src/components/OrderActions.tsx",
+  }),
+  exec("x_r1", "explore", "explore", "backend", "ok", 30, 33, { kind: "explore", task: 0 }, { session: "s_refund" }),
+  exec("x_r2", "generate-spec", "spec", "backend", "ok", 34, 36, { kind: "spec", round: 1 }, { session: "s_refund" }),
+  exec("x_r3", "fact-check", "fact-check-spec", "backend", "running", 37, null, { kind: "fact_check", target: "spec", pass: 1 }, {
+    session: "s_refund",
+    summary: "Grep webhook_events in migrations/ and src/",
+  }),
+  exec("x_res1", "explore", "explore", "backend", "ok", -600, -592, { kind: "explore", task: 0 }, { session: "s_research" }),
+  exec("x_n1", "implementer", "implement", "backend", "stuck", -3000, -2980, { kind: "implement", phase: 1, work: "initial" }, {
+    session: "s_n1",
+    executor: "harness:codex",
+    model: "gpt-5.6-luna",
+    has_transcript: true,
   }),
 ];
+
+const RUN_LABELS: Record<string, string> = {
+  x_exp1: "Research",
+  x_exp2: "Research",
+  x_spec: "Spec v1",
+  x_fc1: "Spec · pass 1",
+  x_plan: "Plan",
+  x_fc2: "Plan · pass 1",
+  x_imp1: "Phase 1",
+  x_rev1: "Phase 1 · pass 1",
+  x_imp2: "Phase 2",
+  x_rev2: "Phase 2 · pass 2",
+  x_imp3: "Phase 3",
+  x_r1: "Research",
+  x_r2: "Spec v1",
+  x_r3: "Spec · pass 1",
+  x_res1: "Research",
+  x_n1: "Phase 1",
+};
+for (const x of executions) x.run_label = RUN_LABELS[x.id] ?? x.run_label;
+
+/** Groups by agent and project, oldest first, like the fold's `execution_groups`. */
+export function groupsFor(list: ExecutionView[]): ExecutionGroupView[] {
+  const groups = new Map<string, ExecutionGroupView>();
+  for (const x of list) {
+    const g = groups.get(x.group) ?? { group: x.group, agent: x.agent, project: x.project, status: x.status, cost_usd: 0, executions: [] };
+    g.executions.push(x.id);
+    g.cost_usd = Math.round((g.cost_usd + x.usage.cost_usd) * 100) / 100;
+    g.status = list.some((y) => y.group === x.group && y.status === "running") ? "running" : x.status;
+    groups.set(x.group, g);
+  }
+  return [...groups.values()];
+}
+
+export const sessionExecutions = (id: string) => executions.filter((x) => x.session === id);
 
 const findings = [
   {
@@ -406,6 +506,7 @@ export const decisions: DecisionView[] = [
 export const sessionDetail: SessionDetail = {
   summary: sessionSummary,
   session_root: SROOT,
+  execution_groups: groupsFor(sessionExecutions(SESSION)),
   stages: [
     { stage: "classify", lane: "research", label: "Classify the request", status: "done", project: null, phase: null, executions: [], gate: null, detail: "IMPLEMENT" },
     { stage: "explore", lane: "research", label: "Explore backend", status: "done", project: "backend", phase: null, executions: ["x_exp1"], gate: null, detail: null },
@@ -429,7 +530,7 @@ export const sessionDetail: SessionDetail = {
     { info: phases[1], status: "reviewing", review_iterations: 2, tests: "none", security_block: false },
     { info: phases[2], status: "queued", review_iterations: 0, tests: "skipped", security_block: false },
   ],
-  executions,
+  executions: sessionExecutions(SESSION),
   gates,
   decisions,
   artifacts: [
@@ -464,53 +565,3 @@ export const activity: ActivityItem[] = [
   { seq: 11, at: at(47), delta: { kind: "text", text: "Waiting for permission to run the module checks." } },
   { seq: 12, at: at(47), delta: { kind: "usage", usage: usage(1, 0.31) } },
 ];
-
-export const lessons: Lesson[] = [
-  { id: 1, area: "order::OrderService", lesson: "Status changes must go through OrderStateMachine; setStatus skips the event publisher.", source: "implementer", created_at: at(-3000) },
-  { id: 2, area: "build", lesson: "./mvnw needs JAVA_HOME pointing at JDK 21; the system JDK 17 fails with class file version 65.", source: "explore", created_at: at(-2000) },
-];
-
-const row = (key: string, n: number, cost: number): CostRow => ({
-  key,
-  executions: n,
-  usage: usage(n, cost),
-  cache_reads_per_tool_call: 90000 / 14,
-});
-
-export const cost: CostReport = {
-  by_session: [row(SESSION, 10, 3.42), row("s_research", 1, 0.41)],
-  by_stage: [row("explore", 2, 0.6), row("spec", 1, 0.5), row("implement", 2, 1.1), row("review", 2, 0.6)],
-  by_agent: [row("explore", 2, 0.6), row("implementer", 2, 1.1), row("code-reviewer", 2, 0.6)],
-  by_executor: [row("native", 9, 3.0), row("harness:codex", 1, 0.42)],
-  total: row("total", 11, 3.83),
-};
-
-export const markdownSpec = `# Spec: order cancellation
-
-**Date:** 2026-09-22 · **Projects:** backend, web
-
-## Requirements
-
-| ID | Requirement (EARS) |
-| --- | --- |
-| R1 | When a customer requests cancellation of an order that has not shipped, the system shall set the order status to CANCELLED. |
-| R2 | If the order has shipped, then the system shall refuse the cancellation with HTTP 409. |
-
-### Acceptance criteria
-
-- **AC-R1-1** Given an order in status PAID, when the customer cancels it, then its status is CANCELLED and a refund starts.
-- **AC-R2-1** Given an order in status SHIPPED, when the customer cancels it, then the response is 409 and the status is unchanged.
-
-## External Evidence
-
-None.
-`;
-
-export const markdownLedger = `# Code Review Ledger
-
-## Iteration 1 (context: implementation)
-
-| ID | Severity | File | Rule | Description | Fix Suggestion |
-| --- | --- | --- | --- | --- | --- |
-| F1 | HIGH | OrderService.java | C3 | Missing shipped check | Add requireNotShipped() |
-`;

@@ -5,6 +5,8 @@ use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::Response;
 use ostra_core::api::{ClientMsg, ServerMsg};
+use ostra_core::ids::ExecutionId;
+use ostra_core::paths;
 use ostra_engine::EngineNotice;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -53,6 +55,14 @@ fn frame(execution: &str, bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The saved terminal of a harness execution with no live PTY, replayed read-only.
+pub fn stored_transcript(app: &App, id: &ExecutionId) -> Option<Vec<u8>> {
+    let w = crate::api::ws_of_execution(app, id).ok()?;
+    let session = w.db.get_execution(id).ok()??.session?;
+    let root = paths::session_root(&w.root, session.as_str());
+    ostra_exec_harness::read_transcript(&paths::terminal_transcript(&root, id.as_str()))
+}
+
 async fn send(socket: &mut WebSocket, msg: &ServerMsg) -> bool {
     match serde_json::to_string(msg) {
         Ok(text) => socket.send(Message::Text(text.into())).await.is_ok(),
@@ -62,9 +72,21 @@ async fn send(socket: &mut WebSocket, msg: &ServerMsg) -> bool {
 
 async fn run(app: Arc<App>, mut socket: WebSocket) {
     let mut rx = app.hub.subscribe();
+    let mut pushed = app.push.subscribe();
     let mut channels: HashSet<String> = HashSet::new();
     loop {
         tokio::select! {
+            p = pushed.recv() => {
+                match p {
+                    Ok(p) => {
+                        if p.channels.iter().any(|c| channels.contains(c)) && !send(&mut socket, &p.msg).await { break }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if !send(&mut socket, &ServerMsg::Error { message: "lagged".into() }).await { break }
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
             incoming = socket.recv() => {
                 let Some(Ok(msg)) = incoming else { break };
                 let text = match msg {
@@ -81,7 +103,8 @@ async fn run(app: Arc<App>, mut socket: WebSocket) {
                         channels.insert(channel.clone());
                         if channel.starts_with("term:") {
                             let id = ostra_core::ids::ExecutionId::from(channel.trim_start_matches("term:"));
-                            if let Some(backlog) = app.shared.harness.backlog(&id)
+                            let backlog = app.shared.harness.backlog(&id).or_else(|| stored_transcript(&app, &id));
+                            if let Some(backlog) = backlog
                                 && socket.send(Message::Binary(frame(id.as_str(), &backlog).into())).await.is_err()
                             {
                                 break;

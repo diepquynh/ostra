@@ -123,6 +123,58 @@ pub enum ExecPurpose {
     Init { mode: InitializerMode, item: Option<String> },
 }
 
+impl ExecPurpose {
+    /// The label of one run within its execution group, before a pass number is added.
+    pub fn run_label(&self) -> String {
+        let work = |w: &WorkKind| match w {
+            WorkKind::Initial | WorkKind::Rerun => "",
+            WorkKind::Fix => " · fix pass",
+            WorkKind::BlockerFix => " · blocker fix",
+            WorkKind::Resume => " · resume",
+            WorkKind::Rescue => " · rescue",
+        };
+        let item = |i: &Option<String>| i.as_deref().unwrap_or_default().trim().to_string();
+        match self {
+            ExecPurpose::Explore { task } => format!("Research task {}", task + 1),
+            ExecPurpose::Spec { .. } => "Spec".into(),
+            ExecPurpose::FactCheck { target: FactTarget::Spec, .. } => "Spec check".into(),
+            ExecPurpose::FactCheck { target: FactTarget::Plan, .. } => "Plan check".into(),
+            ExecPurpose::Plan { .. } => "Plan".into(),
+            ExecPurpose::Implement { phase, work: w } => format!("Phase {phase}{}", work(w)),
+            ExecPurpose::Review { phase, tests, .. } => {
+                format!("Phase {phase}{} · review pass", if *tests { " tests" } else { "" })
+            }
+            ExecPurpose::Epa { phase } => format!("Phase {phase}"),
+            ExecPurpose::WriteTest { phase, work: w } => format!("Phase {phase}{}", work(w)),
+            ExecPurpose::ModuleDocs { .. } => "Module docs".into(),
+            ExecPurpose::PromptGen { handoff_for: Some(_) } => "Handoff prompt".into(),
+            ExecPurpose::PromptGen { handoff_for: None } => "Prompt".into(),
+            ExecPurpose::Verify { phase } => format!("Phase {phase} · verification"),
+            ExecPurpose::QuickAnswer => "Answer".into(),
+            ExecPurpose::Init { mode, item: i } => match mode {
+                InitializerMode::Detect => "Detect the stack".into(),
+                InitializerMode::Adopt => "Adopt a bootstrap".into(),
+                InitializerMode::Scout => format!("Scout {}", item(i)).trim_end().to_string(),
+                InitializerMode::Propose => "Propose skills".into(),
+                InitializerMode::GenerateSkill => format!("Skill {}", item(i)).trim_end().to_string(),
+                InitializerMode::GenerateInventory => "Inventory".into(),
+            },
+        }
+    }
+}
+
+/// `base` for the first run of a label, and `base · pass n` (or `base n` when the label already
+/// ends in "pass") for later ones.
+pub fn numbered_run_label(base: &str, n: u32) -> String {
+    if n <= 1 {
+        base.to_string()
+    } else if base.ends_with(" pass") {
+        format!("{base} {n}")
+    } else {
+        format!("{base} · pass {n}")
+    }
+}
+
 /// A pending gate. The UI renders one card per variant.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -224,6 +276,17 @@ impl GatePayload {
             GatePayload::SkillApproval { .. } => "skill_approval",
             GatePayload::ExecutionFailed { .. } => "execution_failed",
             GatePayload::BudgetReached { .. } => "budget_reached",
+        }
+    }
+
+    /// The execution the gate holds or is about, when it names one.
+    pub fn execution(&self) -> Option<&ExecutionId> {
+        match self {
+            GatePayload::Stuck { execution, .. }
+            | GatePayload::Permission { execution, .. }
+            | GatePayload::HarnessFailure { execution, .. }
+            | GatePayload::ExecutionFailed { execution, .. } => Some(execution),
+            _ => None,
         }
     }
 }
@@ -396,4 +459,26 @@ pub struct StoredEvent {
     pub seq: i64,
     pub at: chrono::DateTime<chrono::Utc>,
     pub event: SessionEvent,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_labels() {
+        let imp = |work| ExecPurpose::Implement { phase: 2, work };
+        assert_eq!(imp(WorkKind::Initial).run_label(), "Phase 2");
+        assert_eq!(imp(WorkKind::Fix).run_label(), "Phase 2 · fix pass");
+        assert_eq!(ExecPurpose::Spec { round: 3 }.run_label(), "Spec");
+        assert_eq!(ExecPurpose::Review { phase: 1, tests: true, iteration: 2 }.run_label(), "Phase 1 tests · review pass");
+        assert_eq!(ExecPurpose::Explore { task: 0 }.run_label(), "Research task 1");
+        assert_eq!(
+            ExecPurpose::Init { mode: InitializerMode::Scout, item: Some("api".into()) }.run_label(),
+            "Scout api"
+        );
+        assert_eq!(numbered_run_label("Phase 1", 1), "Phase 1");
+        assert_eq!(numbered_run_label("Spec", 2), "Spec · pass 2");
+        assert_eq!(numbered_run_label("Phase 1 · fix pass", 3), "Phase 1 · fix pass 3");
+    }
 }
