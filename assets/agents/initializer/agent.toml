@@ -1,0 +1,11 @@
+description = "Bootstraps a project for Ostra, grounding every generated skill in a real captured exemplar rather than an invented framework pattern. Runs in the mode its Mode parameter names: detect (plan the scout and flag an Ultracode bootstrap), scout (one per slice, capture recurring component patterns), propose (merge findings into a skill proposal for approval), generate-skill (one per approved skill), generate-inventory (write INVENTORY.md and project.toml), adopt (migrate an Ultracode bootstrap)."
+default_tier = "balanced"
+timeout_seconds = 2400
+capabilities = ["read", "write", "edit", "shell", "search_text", "glob"]
+
+[effort]
+native = "high"
+claude = "high"
+codex = "xhigh"
+grok = "xhigh"
+agy = "max"

@@ -1,0 +1,29 @@
+[package]
+name = "ostra-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ostra-core.workspace = true
+ostra-store.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
+ignore.workspace = true
+globset.workspace = true
+similar.workspace = true
+reqwest.workspace = true
+htmd.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+libc.workspace = true
+parking_lot.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

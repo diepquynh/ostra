@@ -1,0 +1,11 @@
+description = "Answers one question about the workspace's projects in the side panel, from the code, the project memory, and retrieved pages. Read-only: never writes files and never changes pipeline state. Suggests Turn into task for work requests."
+default_tier = "balanced"
+timeout_seconds = 300
+capabilities = ["read", "search_text", "glob", "web_search", "web_fetch", "memory_recall"]
+
+[effort]
+native = "medium"
+claude = "medium"
+codex = "medium"
+grok = "medium"
+agy = "medium"

@@ -1,0 +1,445 @@
+use super::*;
+use ostra_core::HarnessKind;
+use crate::brief::{BriefInput, augment, build_brief, stated_in};
+use crate::spawn::*;
+use ostra_core::config::{Commands, ModuleRow, ProjectProfile, ReviewRule, SkillEntry};
+use ostra_core::pipeline::QuestionAnswer;
+
+fn all_executors() -> Vec<ExecutorKind> {
+    ExecutorKind::all()
+}
+
+fn text_assets() -> Vec<(String, String)> {
+    Assets::iter()
+        .filter(|p| p.ends_with(".md") || p.ends_with(".toml"))
+        .map(|p| (p.to_string(), asset_text(&p).unwrap()))
+        .collect()
+}
+
+#[test]
+fn every_agent_definition_loads_with_the_handover_tiers() {
+    let expect = [
+        (AgentName::Explore, Tier::Advanced),
+        (AgentName::GenerateSpec, Tier::Advanced),
+        (AgentName::FactCheck, Tier::Advanced),
+        (AgentName::Plan, Tier::Advanced),
+        (AgentName::Implementer, Tier::Balanced),
+        (AgentName::CodeReviewer, Tier::Balanced),
+        (AgentName::ExecutionPathAnalyzer, Tier::Balanced),
+        (AgentName::WriteTest, Tier::Balanced),
+        (AgentName::ModuleDocumentation, Tier::Advanced),
+        (AgentName::PromptGeneration, Tier::Advanced),
+        (AgentName::Initializer, Tier::Balanced),
+        (AgentName::QuickAnswer, Tier::Balanced),
+    ];
+    for (agent, tier) in expect {
+        let def = agent_def(agent);
+        assert_eq!(def.default_tier, tier, "{agent}");
+        assert!(!def.description.is_empty());
+        assert!(def.timeout_secs > 0);
+        for e in all_executors() {
+            assert!(def.effort.contains_key(e.tier_table()), "{agent} lacks effort for {e}");
+        }
+    }
+    assert_eq!(effort_for(AgentName::Initializer, ExecutorKind::Harness(HarnessKind::Codex)), Effort::Xhigh);
+    // Lowered from Ultracode's max after a self-init spent about $240 on Opus at max effort.
+    assert_eq!(effort_for(AgentName::Initializer, ExecutorKind::Native), Effort::High);
+}
+
+#[test]
+fn read_only_agents_have_no_edit_and_quick_answer_cannot_write() {
+    let qa = agent_def(AgentName::QuickAnswer);
+    assert!(!qa.capabilities.iter().any(|c| c.writes() || *c == Capability::Shell));
+    for a in [AgentName::CodeReviewer, AgentName::Plan, AgentName::ExecutionPathAnalyzer, AgentName::FactCheck] {
+        assert!(!agent_def(a).capabilities.contains(&Capability::Edit), "{a}");
+    }
+    assert!(agent_def(AgentName::Plan).capabilities.contains(&Capability::Write));
+}
+
+#[test]
+fn every_prompt_renders_for_every_executor_with_no_unresolved_token() {
+    for agent in AgentName::ALL {
+        for e in all_executors() {
+            let text = render_prompt(agent, e).unwrap_or_else(|err| panic!("{agent} on {e}: {err}"));
+            assert!(!text.contains("{{") && !text.contains("{%"), "{agent} on {e} has an unresolved token");
+            let submit = tool_name("submit", agent, e).unwrap();
+            assert!(text.contains(&submit), "{agent} on {e} never names its submit tool `{submit}`");
+        }
+    }
+}
+
+#[test]
+fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabulary() {
+    let native = render_prompt(AgentName::Implementer, ExecutorKind::Native).unwrap();
+    assert!(native.contains("submit_implementer"));
+    assert!(native.contains("Report"));
+    assert!(!native.starts_with("## Tool vocabulary"));
+    let codex = render_prompt(AgentName::Implementer, ExecutorKind::Harness(HarnessKind::Codex)).unwrap();
+    assert!(codex.starts_with("## Tool vocabulary"));
+    assert!(codex.contains("apply_patch"));
+    assert!(codex.contains(".ostra/skills/{name}/SKILL.md"));
+    let claude = render_prompt(AgentName::CodeReviewer, ExecutorKind::Harness(HarnessKind::Claude)).unwrap();
+    assert!(claude.contains("mcp__ostra__submit_code_reviewer"));
+    assert!(claude.contains("Do not start subagents"));
+}
+
+#[test]
+fn no_ultracode_leftovers_in_any_asset() {
+    // The initializer detects and migrates `.ultracode/` bootstraps, so it names them on purpose.
+    let allowed = [
+        ".ultracode",
+        "ultracode_bootstrap",
+        "ULTRACODE-BOOTSTRAP",
+        "Ultracode bootstrap",
+        "`ultracode-` or `ultracode:`",
+        "Ultracode, the plugin Ostra replaces",
+        "bootstrapped by Ultracode",
+    ];
+    for (path, text) in text_assets() {
+        let mut t = text.clone();
+        if path == "agents/initializer/prompt.md" || path == "agents/initializer/agent.toml" {
+            for a in allowed {
+                t = t.replace(a, "");
+            }
+        }
+        assert!(!t.to_lowercase().contains("ultracode"), "{path} still names ultracode");
+        assert!(!text.contains("{{#") && !text.contains("{{/"), "{path} still has a harness block");
+        assert!(!text.contains("Primary repo root"), "{path} still says Primary repo root");
+        assert!(!text.contains("repo-profile.json") || path.starts_with("agents/initializer/"), "{path}");
+        assert!(!text.contains("code-graph MCP"), "{path} still mentions a code-graph MCP");
+    }
+}
+
+#[test]
+fn no_em_dashes_in_any_asset() {
+    for (path, text) in text_assets() {
+        assert!(!text.contains('\u{2014}'), "{path} contains an em dash");
+    }
+}
+
+#[test]
+fn rule_id_sets_survive_the_port() {
+    let spec = asset_text("agents/generate-spec/prompt.md").unwrap();
+    for id in (1..=8).map(|n| format!("K{n}")).chain((1..=8).map(|n| format!("S{n}"))) {
+        assert!(spec.contains(&format!("**{id}")) || spec.contains(&format!("({id})")), "{id} missing");
+    }
+    for id in ["R-a", "R-b", "R-c", "R-d", "R-e", "AC-a", "AC-b", "AC-c", "AC-d"] {
+        assert!(spec.contains(id), "{id} missing from generate-spec");
+    }
+    let plan = asset_text("agents/plan/prompt.md").unwrap();
+    for n in 0..=13 {
+        assert!(plan.contains(&format!("**P{n}")), "P{n} missing from plan");
+    }
+    let judges = ["classify", "sufficiency", "route-answer", "rescue"]
+        .iter()
+        .map(|j| judge_prompt(j).unwrap())
+        .collect::<String>();
+    for id in ["D1", "D2", "M1", "T3", "D3", "D10", "T5", "D9"] {
+        assert!(judges.contains(id), "judges never cite {id}");
+    }
+}
+
+#[test]
+fn judges_and_references_resolve() {
+    for j in ["classify", "sufficiency", "stakes", "route-answer", "rescue", "resolve-review", "yolo-answer", "completion"]
+    {
+        let p = judge_prompt(j).unwrap_or_else(|| panic!("judge {j} missing"));
+        assert!(p.contains("`decide`"), "{j} must name the decide tool");
+    }
+    assert!(judge_prompt("nope").is_none());
+    for r in ["_generic", "go", "java-spring", "python", "typescript-node", "inventory-and-profile", "skill-archetypes"] {
+        let text = reference(r).unwrap_or_else(|| panic!("ref {r} missing"));
+        assert!(!text.contains("{{"), "{r} has an unresolved token");
+    }
+    assert!(reference_names().contains(&"java-spring".to_string()));
+    let meta = embedded_skill("meta-author").unwrap();
+    assert!(!meta.contains("{{"));
+}
+
+#[test]
+fn materialize_writes_refs_and_skills_with_the_assets_dir_filled() {
+    let dir = tempfile::tempdir().unwrap();
+    let written = materialize_assets(dir.path()).unwrap();
+    assert!(written.iter().any(|p| p.ends_with("refs/java-spring.md")));
+    assert!(written.iter().any(|p| p.ends_with("skills/meta-author/SKILL.md")));
+    let archetypes = std::fs::read_to_string(dir.path().join("refs/skill-archetypes.md")).unwrap();
+    assert!(archetypes.contains(&dir.path().display().to_string()));
+    assert!(materialize_assets(dir.path()).unwrap().is_empty(), "second run rewrites nothing");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Spawn contract
+// ---------------------------------------------------------------------------------------------
+
+fn common() -> Common {
+    Common {
+        workspace_root: "/ws".into(),
+        repo_root: "/ws/backend".into(),
+        session_dir: "/ws/.ostra/sessions/s1/backend".into(),
+        repo_key: "backend".into(),
+    }
+}
+
+fn roundtrip(p: &dyn SpawnParams) -> std::collections::BTreeMap<String, String> {
+    let block = p.render();
+    parse_block(p.agent(), &block).unwrap_or_else(|e| panic!("{}: {e}\n{block}", p.agent()))
+}
+
+#[test]
+fn every_struct_renders_a_block_its_own_contract_accepts() {
+    let extras = Extras {
+        research_docs: vec!["/ws/.ostra/sessions/s1/backend/ostra-research-1.md".into()],
+        user_answers: vec![QuestionAnswer { id: "Q1".into(), question: "Scope?".into(), answer: "Only backend".into() }],
+        required_skills: vec!["entity".into(), "service".into()],
+        ..Default::default()
+    };
+    let spec = GenerateSpecParams { common: common(), task: "Add cancel\nwith refunds".into(), spec_file: None, extra: extras };
+    let v = roundtrip(&spec);
+    assert_eq!(v["task"], "Add cancel\nwith refunds");
+    assert!(v["research_docs"].contains("ostra-research-1.md"));
+
+    let fc = FactCheckParams {
+        common: common(),
+        target: "/ws/s/ostra-spec-1.md".into(),
+        target_type: TargetType::Spec,
+        prior_findings: "none".into(),
+        spec_file: "/ws/s/ostra-spec-1.md".into(),
+        source_check: SourceCheck::Refetch,
+        research_docs: vec![],
+    };
+    assert_eq!(roundtrip(&fc)["source_check"], "refetch");
+
+    let plan = PlanParams {
+        common: common(),
+        spec_file: "/ws/s/ostra-spec-1.md".into(),
+        projects_in_scope: vec![("backend".into(), "/ws/backend".into())],
+        findings: None,
+        master_plan: None,
+    };
+    assert_eq!(roundtrip(&plan)["projects_in_scope"], "backend -> /ws/backend");
+
+    let imp = ImplementerParams {
+        common: common(),
+        report_file: "/ws/s/backend/ostra-implementer-phase-1.md".into(),
+        work: WorkSource::PhaseFile("/ws/s/ostra-plan-1-phase-1-data.md".into()),
+        extra: Extras::default(),
+    };
+    assert_eq!(imp.report_file(), Some(Path::new("/ws/s/backend/ostra-implementer-phase-1.md")));
+    assert!(roundtrip(&imp).contains_key("phase_file"));
+
+    let cr = CodeReviewerParams {
+        common: common(),
+        phase: "1".into(),
+        changed_files: vec!["src/a.rs".into(), "src/b.rs".into()],
+        change_rationale: "Phase 1 intent".into(),
+        work: WorkSource::NoPlan("inline fix".into()),
+        review_scope: Some("unstaged".into()),
+        context: Some(ReviewContext::Implementation),
+        epa_report: None,
+    };
+    let v = roundtrip(&cr);
+    assert_eq!(v["changed_files"], "src/a.rs\nsrc/b.rs");
+    assert!(cr.render().contains("Review scope: unstaged"));
+
+    let epa = EpaParams {
+        common: common(),
+        implementer_report: "/r/i.md".into(),
+        report_file: "/r/e.md".into(),
+        phase_file: None,
+        extra: Extras::default(),
+    };
+    roundtrip(&epa);
+    let wt = WriteTestParams {
+        common: common(),
+        implementer_report: "/r/i.md".into(),
+        epa_report: "/r/e.md".into(),
+        report_file: "/r/w.md".into(),
+        work: WorkSource::PhaseFile("/r/p.md".into()),
+        extra: Extras::default(),
+    };
+    roundtrip(&wt);
+    let md = ModuleDocsParams {
+        common: common(),
+        implementer_reports: vec!["/r/i1.md".into(), "/r/i2.md".into()],
+        report_file: "/r/m.md".into(),
+        extra: Extras::default(),
+    };
+    roundtrip(&md);
+    let pg = PromptGenParams {
+        common: common(),
+        task: "Write a skill".into(),
+        target_files: vec![".ostra/skills/x/SKILL.md".into()],
+        report_file: "/r/pg.md".into(),
+        extra: Extras::default(),
+    };
+    roundtrip(&pg);
+    let qa = QuickAnswerParams { common: common(), question: "Where is auth?".into(), projects_in_scope: vec![], session_artifacts: vec![] };
+    roundtrip(&qa);
+    let ex = ExploreParams { common: common(), task: "Research orders".into(), extra: Extras::default() };
+    roundtrip(&ex);
+}
+
+#[test]
+fn initializer_modes_render_their_mode_and_required_lines() {
+    let detect = InitDetectParams { common: common(), user_focus: Some("orders".into()) };
+    let v = roundtrip(&detect);
+    assert_eq!(v["mode"], "detect");
+    assert_eq!(detect.to_json()["mode"], "detect");
+    let scout = InitScoutParams {
+        common: common(),
+        slice: "orders".into(),
+        slice_paths: vec!["src/orders".into()],
+        stack_reference: "/data/assets/refs/java-spring.md".into(),
+        scout_plan: "/s/ostra-scout-plan.md".into(),
+    };
+    assert_eq!(roundtrip(&scout)["slice_paths"], "src/orders");
+    let propose = InitProposeParams {
+        common: common(),
+        scout_findings: vec!["/s/ostra-findings-a.md".into(), "/s/ostra-findings-b.md".into()],
+        scout_plan: "/s/ostra-scout-plan.md".into(),
+    };
+    roundtrip(&propose);
+    let gs = InitGenerateSkillParams {
+        common: common(),
+        skill_name: "entity".into(),
+        skill_kind: "creation".into(),
+        disposition: "generate".into(),
+        proposal: "/s/ostra-proposal.json".into(),
+        scout_findings: vec!["/s/ostra-findings-a.md".into()],
+    };
+    roundtrip(&gs);
+    let gi = InitGenerateInventoryParams {
+        common: common(),
+        generated_skills: r#"[{"name":"entity","kind":"creation","component_type":"entity","path":".ostra/skills/entity/SKILL.md"}]"#.into(),
+        reused_skills: "[]".into(),
+        proposal: "/s/ostra-proposal.json".into(),
+        scout_findings: vec!["/s/ostra-findings-a.md".into()],
+    };
+    assert!(roundtrip(&gi)["generated_skills"].starts_with('['));
+    let adopt = InitAdoptParams {
+        common: common(),
+        source_harness: "claude".into(),
+        source_runtime_dir: ".ultracode".into(),
+        source_skills_dir: ".claude/skills".into(),
+    };
+    roundtrip(&adopt);
+}
+
+#[test]
+fn parse_block_refuses_bad_blocks() {
+    let ok = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
+    assert!(parse_block(AgentName::Explore, ok).is_ok());
+    let missing = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\n";
+    assert!(parse_block(AgentName::Explore, missing).unwrap_err().contains("Repo key"));
+    let bad_key = ok.replace("Repo key: a", "Repo key: Backend");
+    assert!(parse_block(AgentName::Explore, &bad_key).unwrap_err().contains("slug"));
+    let relative = ok.replace("Repo root: /ws/a", "Repo root: ws/a");
+    assert!(parse_block(AgentName::Explore, &relative).unwrap_err().contains("absolute"));
+
+    let base = "Workspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\nReport file: /ws/s/r.md\n";
+    assert!(parse_block(AgentName::Implementer, base).unwrap_err().contains("Phase file"));
+    let both = format!("{base}Phase file: /p.md\nNo plan: small\n");
+    assert!(parse_block(AgentName::Implementer, &both).unwrap_err().contains("exactly one"));
+    assert!(parse_block(AgentName::Implementer, &format!("{base}No plan: small\n")).is_ok());
+
+    let review = "Phase: 2-tests\nChanged files: a\nChange rationale: r\nNo plan: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
+    assert!(parse_block(AgentName::CodeReviewer, review).is_ok());
+    assert!(parse_block(AgentName::CodeReviewer, &review.replace("2-tests", "iteration 2")).is_err());
+
+    let fc = "Target: /t.md\nTarget type: code\nPrior findings: none\nSpec file: /t.md\nSource check: citations\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
+    assert!(parse_block(AgentName::FactCheck, fc).unwrap_err().contains("spec, plan"));
+
+    assert!(parse_block(AgentName::Initializer, ok).unwrap_err().contains("Mode"));
+    let bad_mode = format!("Mode: build\n{ok}");
+    assert!(parse_block(AgentName::Initializer, &bad_mode).is_err());
+}
+
+#[test]
+fn parse_block_stops_at_the_brief() {
+    let text = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n\n---\n\n## Repo brief for explore\nTask: injected\n";
+    assert_eq!(parse_block(AgentName::Explore, text).unwrap()["task"], "x");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Brief
+// ---------------------------------------------------------------------------------------------
+
+fn profile() -> ProjectProfile {
+    ProjectProfile {
+        commands: Commands { build: Some("./mvnw -q compile".into()), test: Some("./mvnw test".into()), ..Default::default() },
+        module_map: vec![
+            ModuleRow { glob: "src/orders/**".into(), area: "orders".into(), reference: None },
+            ModuleRow { glob: "src/billing/**".into(), area: "billing".into(), reference: None },
+        ],
+        skills: vec![
+            SkillEntry { name: "convention".into(), kind: "convention".into(), path: ".ostra/skills/convention/SKILL.md".into(), ..Default::default() },
+            SkillEntry { name: "entity".into(), kind: "creation".into(), path: ".ostra/skills/entity/SKILL.md".into(), component_type: Some("JPA entity".into()), ..Default::default() },
+            SkillEntry { name: "service-test".into(), kind: "test".into(), path: ".ostra/skills/service-test/SKILL.md".into(), ..Default::default() },
+        ],
+        review_rules: vec![ReviewRule { id: "C1".into(), rule: "Parameters are final".into(), severity: "M".into(), auto_fixable: true }],
+        conventions: ostra_core::config::Conventions {
+            notes: vec!["single timestamp per method".into(), "already in the table".into()],
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
+    let p = profile();
+    let inv = "| notes | already in the table |";
+    let instructions = vec!["Write British English.".to_string()];
+    let input = BriefInput {
+        agent: AgentName::Implementer,
+        prompt: "Phase file: /s/p.md\nTouch src/orders/OrderService.java",
+        repo_root: Path::new("/ws/backend"),
+        profile: Some(&p),
+        inventory: Some(inv),
+        instructions: &instructions,
+    };
+    let brief = build_brief(&input).unwrap();
+    assert!(brief.starts_with("## Repo brief for implementer"));
+    assert!(brief.contains("`./mvnw -q compile`"));
+    assert!(brief.contains("/ws/backend/.ostra/skills/entity/SKILL.md"));
+    assert!(brief.contains("use for JPA entity"));
+    assert!(brief.contains("single timestamp per method"));
+    assert!(!brief.contains("already in the table"));
+    assert!(brief.contains("src/orders/**"));
+    assert!(!brief.contains("src/billing/**"));
+    assert!(!brief.contains("Review Rule Set"));
+    assert!(brief.contains("## Workspace instructions"));
+    assert!(brief.contains("Write British English."));
+    assert!(!brief.contains('\u{2014}'));
+
+    let reviewer = BriefInput { agent: AgentName::CodeReviewer, ..input };
+    let rb = build_brief(&reviewer).unwrap();
+    assert!(rb.contains("**C1** (M, auto-fixable)"));
+    assert!(!rb.contains("entity/SKILL.md"));
+
+    let wt = BriefInput { agent: AgentName::WriteTest, ..reviewer };
+    let wb = build_brief(&wt).unwrap();
+    assert!(wb.contains("service-test"));
+    assert!(!wb.contains("`entity`"));
+}
+
+#[test]
+fn brief_is_idempotent_and_handles_a_missing_profile() {
+    let p = profile();
+    let input = BriefInput {
+        agent: AgentName::Explore,
+        prompt: "Task: x",
+        repo_root: Path::new("/r"),
+        profile: Some(&p),
+        inventory: None,
+        instructions: &[],
+    };
+    let once = augment("Task: x", &input);
+    assert_eq!(augment(&once, &input), once);
+    let none = BriefInput { profile: None, ..input };
+    assert_eq!(augment("Task: x", &none), "Task: x");
+    let init = BriefInput { agent: AgentName::Initializer, profile: Some(&p), ..none };
+    assert!(build_brief(&init).is_none());
+    assert!(stated_in("a  b   c", "a\nb c"));
+    assert!(stated_in("", "ab"));
+}

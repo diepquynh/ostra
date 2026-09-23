@@ -1,0 +1,140 @@
+# Capability to tool name, per executor table (native, claude, codex, grok, agy).
+# Native names follow Claude Code's, because the
+# prompts are tuned to them. Ostra's own tools (report, memory, memory_recall, submit) come from the `ostra`
+# MCP server on harness executors. `{agent}` in a submit name is the agent's snake_case name.
+# A value that is not a bare tool name is prose, rendered into the prompt as written.
+
+[capabilities.read]
+native = "Read"
+claude = "Read"
+codex = "exec_command"
+grok = "read_file"
+agy = "view_file"
+
+[capabilities.edit]
+native = "Edit"
+claude = "Edit"
+codex = "apply_patch"
+grok = "search_replace"
+agy = "replace_file_content"
+
+[capabilities.write]
+native = "Write"
+claude = "Write"
+codex = "apply_patch"
+grok = "search_replace"
+agy = "write_to_file"
+
+[capabilities.shell]
+native = "Bash"
+claude = "Bash"
+codex = "exec_command"
+grok = "run_terminal_command"
+agy = "run_command"
+
+[capabilities.search_text]
+native = "Grep"
+claude = "Grep"
+codex = "exec_command"
+grok = "grep"
+agy = "grep_search"
+
+[capabilities.glob]
+native = "Glob"
+claude = "Glob"
+codex = "exec_command"
+grok = "list_dir"
+agy = "find_by_name"
+
+[capabilities.skill]
+native = "Skill"
+claude = "Read on the skill's SKILL.md"
+codex = "exec_command on the skill's SKILL.md"
+grok = "read_file on the skill's SKILL.md"
+agy = "view_file on the skill's SKILL.md"
+
+[capabilities.web_search]
+native = "WebSearch"
+claude = "WebSearch"
+codex = "web_search"
+grok = "web_search"
+agy = "search_web"
+
+[capabilities.web_fetch]
+native = "WebFetch"
+claude = "WebFetch"
+codex = "web_search"
+grok = "web_fetch"
+agy = "read_url_content"
+
+[capabilities.report]
+native = "Report"
+claude = "mcp__ostra__report"
+codex = "report"
+grok = "report"
+agy = "report"
+
+[capabilities.memory]
+native = "Memory"
+claude = "mcp__ostra__memory"
+codex = "memory"
+grok = "memory"
+agy = "memory"
+
+[capabilities.memory_recall]
+native = "MemoryRecall"
+claude = "mcp__ostra__memory_recall"
+codex = "memory_recall"
+grok = "memory_recall"
+agy = "memory_recall"
+
+[capabilities.submit]
+native = "submit_{agent}"
+claude = "mcp__ostra__submit_{agent}"
+codex = "submit_{agent}"
+grok = "submit_{agent}"
+agy = "submit_{agent}"
+
+# Instructions for capabilities a harness serves differently. Rendered into the tool vocabulary section
+# that opens a harness executor's prompt.
+
+[strategies.skill]
+claude = """
+Ostra keeps per-project skills in `.ostra/skills/`, which Claude Code's skill catalog does not scan. Load a \
+named skill by reading its `SKILL.md` completely with Read BEFORE acting, at the path your task or repo brief \
+carries. Given only a name, the path is `{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with \
+Ostra, such as `meta-author`, live at `{{ assets_dir }}/skills/{name}/SKILL.md`."""
+codex = """
+Codex has no tool for Ostra's skills. Loading one means reading its `SKILL.md` completely with exec_command \
+BEFORE acting, at the path your task or repo brief carries. Given only a name, the path is \
+`{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with Ostra, such as `meta-author`, live at \
+`{{ assets_dir }}/skills/{name}/SKILL.md`."""
+grok = """
+Grok Build subagents receive no skill catalog. Load a named skill by reading its `SKILL.md` completely with \
+read_file BEFORE acting, at the path your task or repo brief carries. Given only a name, the path is \
+`{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with Ostra, such as `meta-author`, live at \
+`{{ assets_dir }}/skills/{name}/SKILL.md`."""
+agy = """
+Antigravity has no separate skill tool. Load a named skill by reading its `SKILL.md` completely with \
+view_file BEFORE acting, at the path your task or repo brief carries. Given only a name, the path is \
+`{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with Ostra, such as `meta-author`, live at \
+`{{ assets_dir }}/skills/{name}/SKILL.md`."""
+
+[strategies.ostra_tools]
+claude = """
+The `mcp__ostra__*` tools come from Ostra's `ostra` MCP server, registered for this run. Call each by exactly \
+that name."""
+codex = """
+`report`, `memory`, `memory_recall`, and your `submit_*` tool are MCP tools from Ostra's `ostra` server, not \
+Codex capabilities. Call each by exactly that name."""
+grok = """
+`report`, `memory`, `memory_recall`, and your `submit_*` tool come from Ostra's `ostra` MCP server. If one is \
+not in your tool list, find it with search_tool (it appears as `ostra__<tool>`) and invoke it with use_tool."""
+agy = """
+`report`, `memory`, `memory_recall`, and your `submit_*` tool come from Ostra's `ostra` MCP server. Call each \
+by exactly that name."""
+
+[strategies.write]
+codex = """
+Codex writes and edits files with apply_patch. Create a file with an `*** Add File:` hunk and change one \
+with an `*** Update File:` hunk."""

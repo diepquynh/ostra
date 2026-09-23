@@ -1,0 +1,113 @@
+# Meta-Author
+
+**Goal:** Write instruction files that a model reads top to bottom, once, and executes without ambiguity.
+
+The initializer loads this skill when generating per-repo skills. A prompt-generation agent loads it when
+writing prompts or agents. Templates for the skill shapes live in `{{assets_dir}}/refs/skill-archetypes.md`.
+
+---
+
+## The 16 Writing Laws
+
+Every law governs the unit it names: a term, a sentence, a rule, a step, or the file as a whole. Apply all 16
+to every section, including the sections that already read clearly.
+
+1. **Define before reference.** Never use a term before its definition. Put a Definitions table first.
+2. **One instruction per sentence.** Split compound instructions.
+3. **Explicit ALL / ANY.** Write "ALL of" or "ANY of". Never leave quantifiers implied.
+4. **Concrete over abstract.** Write "Add `final` to the field", not "follow the standard pattern."
+5. **Show both sides.** Every rule shows a PASS and a FAIL example.
+6. **Explicit stop / continue.** Every decision point states both branches ("If X … If not X …").
+7. **Exact error codes / strings.** Return exact literals, never paraphrases.
+8. **No synonyms.** One word per concept, used everywhere. Pick "entity" and never also say "record" or "model".
+9. **Anchor cross-references.** Reference stable section names or anchors, not "above" or "below".
+10. **Exhaustive enumerations.** List every case. Never "etc." or "and so on".
+11. **Fallback for every rule.** Every matching rule has an else-branch.
+12. **Priority on conflict.** When rules can conflict, state which wins.
+13. **Constrain output formats.** Every output field has a type, allowed values, and conditions.
+14. **Self-check instruction.** End with a checklist the model re-runs against its own output.
+15. **Grounding over generation.** Prefer instructions grounded in real files and exemplars over invented ones.
+16. **Plain statement over metaphor.** Name the thing. Write "a parameter worth varying", not "a dial worth
+    turning". Write "this point still matters", not "this point earns its keep". A metaphor drags in
+    connotations you did not choose, and the reader has to translate it back before acting.
+
+## Law 16 in full: no mannered prose
+
+Mannered prose substitutes metaphor and flourish for direct statement. Instead of "a parameter worth varying,"
+the mannered writer produces "a dial worth turning." Instead of "this point still matters," they write "this
+point earns its keep." The phrases exist to display the writer, not to convey the idea, and readers can tell.
+That is why mannered prose irritates: it makes the reader work harder so the writer can perform. It is also
+imprecise. Metaphors drag in connotations the writer did not choose and cannot control. The fix is to say what
+you mean. When a literal phrase is available, use it.
+
+## Chain-of-Thought structure
+
+- The reader accumulates context top to bottom. No forward references ("as in Step 5 below").
+- Order steps by dependency (bottom-up for construction: build prerequisites first).
+- One logical operation per step. Each step ends with a **Pass condition** and, where it can fail, a **Fail
+  condition** with the exact output to emit.
+
+---
+
+## Writing a SKILL.md
+
+- YAML front matter: `name` (kebab-case, matches the directory) and an exhaustive `description` with concrete
+  trigger conditions. Routing is done by the INVENTORY, but a good description still helps discovery.
+- Pick the archetype (creation, convention, module-hub, or test) from `refs/skill-archetypes.md` and fill it.
+- Creation skills: list every placeholder up front. Order steps by dependency. The template must compile or
+  parse after substitution. Name every secondary file that must change (registration, migration, index, DI
+  module).
+- Convention skills: every rule has PASS and FAIL. Only include rules the repo actually follows.
+- End with a checklist (Law 14).
+
+## Writing a subagent markdown file
+
+- Front matter: `name`, `description`, `model`, `effort` (optional), `tools`, `timeout`, `context`.
+  `name` matches the filename. Do NOT put `hooks`, `mcpServers`, or `permissionMode` in agent front matter.
+- Definitions table before Step 1.
+- Every step: one operation, a Pass condition, and a Fail condition with exact fallback output.
+- Output format defined in exactly one place (the final step), with a field table (type plus allowed values)
+  and one example per distinct output case.
+- Constraints section: scope, output format, no-generation (if read-only), no-delegation.
+
+## Writing an LLM system prompt
+
+- Four sections in order: Objective, Operational Requirements, Output Format, Constraints.
+- State the specific role ("You are a {domain} reviewer"), never "helpful AI assistant".
+- Number every validation step with PASS and FAIL branches. Define every output field (type, allowed values,
+  condition).
+
+---
+
+## Self-review checklist (run against your own output, Law 14)
+
+- [ ] Every term defined before first use? (L1)
+- [ ] One instruction per sentence? (L2)
+- [ ] ALL/ANY explicit? (L3)
+- [ ] Concrete, not abstract? (L4)
+- [ ] Every rule shows PASS and FAIL? (L5)
+- [ ] Every decision has both branches? (L6)
+- [ ] Exact literals for codes/strings? (L7)
+- [ ] One word per concept, no synonyms? (L8)
+- [ ] Cross-refs use stable anchors? (L9)
+- [ ] Enumerations exhaustive, no "etc."? (L10)
+- [ ] Fallback for every rule? (L11)
+- [ ] Conflicts prioritized? (L12)
+- [ ] Output field formats constrained? (L13)
+- [ ] Self-check present? (L14)
+- [ ] Grounded in real exemplars, not invented? (L15)
+- [ ] Literal wording, no metaphor standing in for the plain term? (L16)
+- [ ] Reads top to bottom with no forward reference?
+
+If any item fails, edit the file and re-check before returning.
+
+## Anti-patterns
+
+- Vague role: "You are a helpful assistant." State the domain instead.
+- Forward reference: "as described in Step 5." Restructure so the information precedes its use.
+- Missing fail branch: "If valid, continue." State what happens when invalid.
+- Synonyms for one concept. Pick one word.
+- "etc." in an enumeration. List every case.
+- "Follow the standard pattern." Write the exact pattern. The reader has no memory.
+- Metaphor in place of the term: "turn the dial", "earns its keep", "the blast radius". Write the parameter,
+  the reason, or the set of affected files.

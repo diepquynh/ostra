@@ -1,0 +1,773 @@
+# Ostra handover
+
+Status on 2026-09-22: the design is agreed and nothing is built. This document is the brief for whoever builds
+Ostra. It records every decision taken so far, the design that follows from them, and where in the Ultracode
+plugin each behavior comes from.
+
+The Ultracode source lives at `../ultracode`, written `UC/` below. Read it for
+behavior, rules, and measured facts. Do not copy its code: Ostra is a new implementation in Rust and React, and
+most of Ultracode's code exists to adapt to four foreign hook engines that Ostra does not have.
+
+## 1. What Ostra is
+
+Ostra is a local development workspace that runs the Ultracode engineering pipeline: research, spec,
+fact-check, plan, build, review, test, and docs. The user starts one binary and works in a browser tab. A Rust
+server executes every tool call. Code drives the pipeline from stage to stage and holds every gate. Models do
+the work inside each stage and answer a small, named set of judgment questions.
+
+The audience is a developer learning a standard software development lifecycle. Every stage is shown,
+explained, and gated. Ostra is a workspace, not a chatbot: quick questions go to a side panel, and real work
+goes through the pipeline.
+
+## 2. Decisions
+
+All decisions below were made by the user on 2026-09-22. Treat them as requirements.
+
+| Topic | Decision |
+| --- | --- |
+| Name | Ostra. Binary `ostra`, crates `ostra-*`, per-project and per-workspace runtime dir `.ostra/`. |
+| Model access | API keys. Anthropic and OpenAI, abstracted behind a Rust provider trait and configured in TOML. |
+| UI | The whole UI runs in the browser, in React. It includes a live terminal view of each harness execution, the same way task executions from other harnesses are shown. |
+| Backend | A Rust server executes all tool calls and holds all state. |
+| Orchestrator | A code-driven engine. It makes a model call only where a decision needs judgment. |
+| Relationship to Ultracode | A complete rewrite, based on the plugin's prompt-driven workflow, its hooks, and its MCP tools. Not a fifth generator target. |
+| Deployment | Localhost, same machine as the code, single user, for the first build. |
+| Workspace | The user creates a dev workspace. It holds settings: which executor and model each agent task runs on, the tech stack of each project, memory, custom instructions, YOLO, and permissions. |
+| Projects | The user imports existing folders into a workspace at any time, like Claude Code's `/add-dir`. To start a new project the user creates it by hand and imports it. Ostra does not scaffold projects in v1. |
+| Executors | Each subagent task is routed to an executor: Ostra's native agent loop, or an installed harness CLI (Claude Code, Codex, Grok Build, Antigravity). The terminal view streams that harness's own interface, not a shell. |
+| Permissions | Claude Code's model: modes plus allow, ask, and deny rules. |
+| YOLO | Every permission is granted and every user-facing question is answered by the engine. The orchestrator decides everything. See section 10.5 for the exact boundary. |
+| Scope | Full conversion of the plugin in v1. |
+| Notifications | Browser push. |
+| Quick questions | A side panel, outside the pipeline. |
+| Repository | One monorepo: Rust crates plus a React frontend. React so a later cross-platform frontend can share components. |
+| Sessions | Session tracking is mandatory. Every execution, including every harness session, is resumable from it. |
+
+## 3. Glossary
+
+| Term | Meaning |
+| --- | --- |
+| Workspace | The unit the user creates. A directory holding `.ostra/workspace.toml`, the workspace database, and session artifacts. |
+| Project | An imported folder, usually a git checkout. Referenced by absolute path, never copied. Has a project key. Ultracode calls this a repo. |
+| Project key | Lowercase slug (`[a-z0-9][a-z0-9-]*`) naming a project inside a workspace. Ultracode's repo key. |
+| Session | One request carried through the pipeline. Ultracode's `ultracode-session-*` directory plus its gates. |
+| Stage | One node of the pipeline: explore, spec, fact-check, plan, a phase, review, format, closing gate, test, docs. |
+| Execution | One run of one agent. Ultracode's subagent spawn. |
+| Executor | What runs an execution: `native` (Ostra's agent loop on an API key) or `harness:claude`, `harness:codex`, `harness:grok`, `harness:agy` (an installed CLI in a PTY). |
+| Tier | `fast`, `balanced`, `advanced`, or `frontier`. Resolved per executor to a concrete model. |
+| Judge call | A model call the engine makes to reach an orchestration decision. Returns JSON against a schema. |
+| Gate | A point where the pipeline waits for a decision: a user answer, or under YOLO a judge answer. |
+| Guard | A policy rule no permission, no user instruction, and no YOLO setting can override. |
+
+## 4. Architecture
+
+```
+Browser (React)
+  Home · Workspace · Session board · Execution (Activity | Terminal) · Artifacts · Gates
+  Settings · Memory · Cost · Quick-questions side panel
+        │  REST + WebSocket (JSON events, binary PTY frames)
+Rust server `ostra` on 127.0.0.1
+  api ── engine (state machine, scheduler, judge)
+          ├── executors: native loop │ harness (PTY + hook bridge + MCP stdio shim)
+          ├── policy (guards + permissions) ── tools
+          ├── providers (anthropic, openai)
+          ├── store (SQLite event log + FTS5 memory)
+          ├── notify (Web Push)
+          └── assets (embedded agent prompts, skills, refs)
+Disk
+  ~/.config/ostra/config.toml                    providers, tiers, global permissions
+  ~/.local/share/ostra/registry.db               workspace list, push subscriptions, VAPID keys
+  <workspace>/.ostra/workspace.toml              workspace settings
+  <workspace>/.ostra/workspace.db                sessions, events, executions, decisions
+  <workspace>/.ostra/sessions/<session-id>/      session artifacts (spec, plan, phases, reports, ledgers)
+  <project>/.ostra/                              INVENTORY.md, project.toml, skills/, memory/knowledge.sqlite3
+```
+
+The per-project `.ostra/` is committable, like Ultracode's `.ultracode/`. Session artifacts live under the
+workspace because a session spans projects. That replaces Ultracode's "primary repo root": the workspace root
+owns all session state, so the `Primary repo root:` spawn parameter becomes `Workspace root:`.
+
+## 5. Where each behavior comes from
+
+Read these before building the matching part. Paths are relative to `UC/`.
+
+| Ostra part | Read in Ultracode | What it gives you |
+| --- | --- | --- |
+| Engine rules | `commands/orchestrate/prompt.md` | Every pipeline rule: D1 to D10, M1 to M6, T1 to T7, Hard rules 1 to 24, YOLO mode, answer routing, the code-review loop (Step 4). This file is the engine's specification. |
+| Init flow | `commands/init-kit/prompt.md`, `agents/initializer/prompt.md` | Detect, scout, propose, approval gate, generate-skill, generate-inventory, adopt. |
+| Agent prompts | `agents/<name>/prompt.md`, `agents/<name>/definition.json` | The 11 leaf agents, their tools, tiers, efforts, timeouts. |
+| Spawn contract | `hooks/subagent-parameters.json`, `hooks/lib/subagent-params.js` | Required `Label: value` lines per agent and per initializer mode, with types. |
+| Repo brief | `hooks/lib/context-brief.js` | What each agent is handed from the profile and inventory, and the containment rule that avoids stating a fact twice. |
+| Tool names | `definitions/tool-mapping.json` | Per-harness tool names and the skill-loading strategies for harnesses without a Skill tool. |
+| Model tiers | `definitions/model-mapping.json`, `hooks/model-router.js` | Tier-to-model per harness, `default`/`inherit`, deny on a mismatching caller model, phase-complexity lookup. |
+| Write scope | `hooks/lib/scope-policy.js`, `hooks/scope-guard.js`, `hooks/bash-scope-guard.js` | Per-agent write roots, session-only agents, initializer and module-documentation subtrees, implementer barred from test paths. |
+| State ownership | `hooks/lib/ledger-policy.js`, `hooks/artifact-guard.js` | Which actor may write which state file. |
+| Report paths | `hooks/lib/report-policy.js`, `mcp/lib/report.js` | Declared report path, any tool may write it, invented names refused, lesson gate. |
+| Build loops | `hooks/build-streak.js`, `hooks/build-streak-gate.js`, `hooks/lib/build-signal.js` | Consecutive-failure counter, recall at 2, warn at 3, refuse at 5, diagnostic signatures, recovery lessons. |
+| Review cap | `hooks/review-cap.js` | Cap of 3 per loop, YOLO budget of 10, one verification pass per escalation. |
+| Security | `agents/code-reviewer/prompt.md` Step 2.5, `hooks/security-block.js` | The `SEC-BLOCK-*` catalog, waiver detection, the module-documentation block. |
+| Plugin tamper | `hooks/lib/plugin-policy.js` | Why an agent must not run the tool's own code, and the opaque interpreter write channel (`node -e`, heredoc, pipe). |
+| Shell parsing | `hooks/lib/shell-paths.js` | Write-target extraction, heredoc bodies as data, placeholder `<ID>` not a redirect. Its test cases in `tests/test_definitions.test.js` are the edge cases to keep. |
+| Gates | `mcp/lib/gate.js`, `hooks/pipeline-gate.js` | Approval requires a fact-check PASS under the same key. Plan gate before phase spawns. |
+| Memory | `mcp/lib/memory.js` | FTS5 schema, dedupe on (area, lesson), area sub-scopes, bm25 ranking, targeted forget. |
+| Hub | `docs/hub.md`, `mcp/lib/hub/state.js` | Task routing by harness, leases, session query with inferred stage, adoption, YOLO notices. Ostra keeps the concepts and drops the transport. |
+| Harness facts | `docs/harness-limitations.md`, `docs/model-routing.md` | Measured behavior of each CLI's hooks, payloads, ask channels, size caps, MCP registration. Needed for harness executors. |
+| Cost metrics | `bench/`, `docs/philosophy.md` | Which metrics matter (cache reads per tool call, preamble, build loops) and why. |
+| Stack references | `refs/*.md` | Detection signals, component catalogs, commands, review rule seeds per stack. |
+| Rationale | `docs/philosophy.md`, `docs/architecture.md`, `README.md` | Why each stage exists. The session board's "why this step" text comes from the table in `philosophy.md`. |
+
+## 6. Workspaces and projects
+
+### 6.1 Creating a workspace
+
+The wizard asks for a name and a directory. It checks that at least one provider in `~/.config/ostra/config.toml`
+has a usable key, and lists which harness CLIs are installed and logged in. It writes
+`<workspace>/.ostra/workspace.toml` with seeded defaults (section 7) and registers the workspace in
+`registry.db`. A workspace with no projects is valid: the user adds them next.
+
+### 6.2 Importing a project
+
+The user adds a folder at any time, from the wizard or from workspace settings, like `/add-dir`. Ostra:
+
+1. Records the absolute path and asks for a project key (suggested from the folder name, same slug rule as
+   Ultracode's init-kit Step 0).
+2. Checks for `<project>/.ostra/INVENTORY.md`. If it is missing, the project shows "not initialized" and Ostra
+   offers the init flow (section 8.4). No pipeline task may target an uninitialized project. This is
+   `UC/hooks/skill-init-guard.js` as a precondition.
+3. If `<project>/.ultracode/` holds a complete Ultracode bootstrap, offers to migrate it, the way the
+   initializer's `adopt` mode does. Nice to have, not blocking.
+
+Removing a project from a workspace deletes nothing on disk.
+
+A new project is created by the user outside Ostra, then imported. The init flow then works from whatever code
+exists. For an empty folder, the stack chosen in project settings seeds skills from `refs/<stack>.md` in the
+convention-seeded mode `UC/refs/skill-archetypes.md` (Archetype D) already describes.
+
+### 6.3 Per-project state
+
+`<project>/.ostra/` holds:
+
+| File | Content | Written by |
+| --- | --- | --- |
+| `INVENTORY.md` | Commands, skills, skill application mapping, module map, review rule set. Same shape as `UC/refs/inventory-and-profile.md` section 1. | initializer |
+| `project.toml` | Stack, commands, test framework, module map, skills with paths, conventions, review rules. Ultracode's `repo-profile.json` without `models` and `harnesses`, which move to the workspace. | initializer, user |
+| `skills/<name>/SKILL.md` | Per-project skills, including `convention` and `module-hub`. | initializer, prompt-generation, module-documentation (references only) |
+| `memory/knowledge.sqlite3` | Durable lessons. | memory tools, user through the UI |
+
+Skills live in `.ostra/skills/`, not in any harness's skill directory. Every executor loads a skill by its
+path, which Ultracode measured as the one mechanism that works on every harness (Claude resolves names, Codex
+and Grok subagents need the path).
+
+## 7. Settings
+
+### 7.1 Global config
+
+```toml
+# ~/.config/ostra/config.toml
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+
+[providers.openai]
+api_key_env = "OPENAI_API_KEY"
+
+# Tier to model, per executor. Native entries are provider:model.
+[tiers.native]
+fast     = "anthropic:claude-haiku-4-5-20251001"
+balanced = "anthropic:claude-sonnet-5"
+advanced = "anthropic:claude-opus-5-5"
+frontier = "anthropic:claude-fable-5-1"
+
+# Harness entries are the CLI's own model slug. Defaults from UC/definitions/model-mapping.json.
+[tiers.claude]
+fast = "haiku"
+balanced = "sonnet"
+advanced = "opus"
+frontier = "fable"
+
+[tiers.codex]
+fast = "gpt-5.6-luna"
+balanced = "gpt-5.6-terra"
+advanced = "gpt-5.6-sol"
+frontier = "gpt-5.6-sol"
+
+[tiers.grok]
+fast = "grok-4.5"
+balanced = "grok-4.5"
+advanced = "grok-4.5"
+frontier = "grok-4.5"
+
+[tiers.agy]
+fast = "flash"
+balanced = "flash"
+advanced = "flash"
+frontier = "flash"
+
+[harness.claude]
+command = "claude"
+
+[harness.codex]
+command = "codex"
+
+[harness.grok]
+command = "grok"
+
+[harness.agy]
+command = "agy"
+
+[permissions]
+deny = ["Bash(rm -rf /*)"]
+```
+
+Keys come from environment variables or the OS keychain. They never reach the browser.
+
+### 7.2 Workspace settings
+
+```toml
+# <workspace>/.ostra/workspace.toml
+name = "shop"
+
+[[projects]]
+key = "backend"
+path = "/home/me/code/shop-backend"
+
+[[projects]]
+key = "web"
+path = "/home/me/code/shop-web"
+
+# Which executor runs each agent. Absent means native.
+[routing.executor.byAgent]
+implementer = "harness:codex"
+write-test = "harness:codex"
+
+[routing.executor.byPhaseComplexity.implementer]
+low = "harness:codex"
+medium = "harness:codex"
+high = "native"
+
+# Which tier each agent runs on, resolved through the chosen executor's tier table.
+# Seeded from UC/refs/inventory-and-profile.md. Every agent must have a route.
+[routing.model.byAgent]
+explore = "advanced"
+generate-spec = "advanced"
+plan = "advanced"
+fact-check = "advanced"
+code-reviewer = "balanced"
+execution-path-analyzer = "balanced"
+module-documentation = "advanced"
+prompt-generation = "advanced"
+initializer = "balanced"
+judge = "fast"
+quick-answer = "balanced"
+
+[routing.model.byPhaseComplexity.implementer]
+low = "fast"
+medium = "fast"
+high = "balanced"
+
+[routing.model.byPhaseComplexity.write-test]
+low = "fast"
+medium = "fast"
+high = "balanced"
+
+[instructions]
+all = "Write British English in comments and docs."
+
+[instructions.agents]
+implementer = "Keep functions under 40 lines."
+
+[yolo]
+default = false
+
+[permissions]
+mode = "default"            # default | acceptEdits | plan | bypass
+allow = ["Bash(./mvnw *)", "Bash(npm run test *)"]
+ask = []
+deny = ["Bash(git push *)"]
+
+[notifications]
+push = true
+```
+
+Routing rules, carried from `UC/hooks/model-router.js` and `UC/docs/model-routing.md`:
+
+- `byPhaseComplexity` wins over `byAgent`. The complexity comes from the phase file's `**Complexity:**` line.
+  Work with no phase file counts as `low`.
+- A tier value may also be a concrete model, or `{ native = "...", codex = "..." }` for an explicit
+  per-executor choice. There is no silent fallback: a route that does not resolve is a settings validation
+  error shown at save time, not at spawn time.
+- Settings are re-read on every execution, so an edit applies to the next execution without a restart.
+- The initializer runs generate-skill on `advanced` and its other modes on `balanced`, as init-kit does today.
+  The `initializer` route above sets the other modes.
+
+## 8. The engine
+
+### 8.1 Model
+
+Each session is a state machine. Every transition, every judge decision, every gate answer, and every
+execution result is appended to the `events` table. A session's state is the fold of its events, so a server
+restart replays and continues. The artifacts agents write stay files in the session directory, because the
+prompts address them by path.
+
+```
+Intake → Classify* → Explore ×N (parallel, per project or area) → Sufficiency* ─┐
+┌────────────────────────────────────────────────────────────────────────────────┘
+→ Spec → Open questions (gate) → FactCheck(spec) ⟲ → Spec approval (gate)
+→ Stakes* ── low: skip plan ──────────────────────────────────┐
+         └─ medium/high: Plan → FactCheck(plan) ⟲ → Plan approval (gate)
+→ Phases (DAG; per project sequential, across projects parallel; each phase: implement ⟷ review loop, stage)
+→ Format (per project, once)
+→ Closing gate (tests? docs?) → EPA ×N (parallel) → WriteTest (one phase at a time, review loop, stage)
+→ Module documentation → Completion report*
+
+* judge call     ⟲ FAIL goes back to the owning agent with the previous findings
+```
+
+Categories other than IMPLEMENT and PLAN take shorter paths, exactly as `UC/commands/orchestrate/prompt.md`
+Step 1 lists them: RESEARCH (explore only), SPEC (explore, spec), VERIFY (implementer running the test command),
+UNIT TEST (EPA, write-test, review, no closing gate), PROMPT (prompt-generation, then review if code changed),
+QUICK ANSWER (routed to the side panel).
+
+### 8.2 Rules as code
+
+Every rule ID stays, and the code that implements a rule cites it in a one-line comment. Section references are
+to `UC/commands/orchestrate/prompt.md`.
+
+| Rule | Engine behavior |
+| --- | --- |
+| D1, Hard 15 | IMPLEMENT and PLAN always pass through Spec. There is no transition from Explore to Plan. With no research document, Spec is not entered. |
+| D2 | Spec is entered only when no explore execution is running and the Sufficiency judge finds no needed `Not covered` item. Spec receives every research document path, oldest run stamp first, including superseded ones. |
+| D3 | Open questions from the spec are asked before any fact-check. Every answer re-runs generate-spec. The engine never edits the spec. |
+| D3a | `Prior findings:` is `none` on the first pass over an artifact and the previous pass's findings verbatim after. The engine adds no other instruction to a re-pass. |
+| D3b | `Source check:` is `refetch` only for a spec target's first pass whose External Evidence table has rows. Everything else is `citations`. |
+| D4, Hard 16 | The plan execution's parameters are the spec path, projects in scope, workspace root, session dir, and key. The parameter struct has no field for anything else. |
+| D5 | Plan fact-check always uses `citations` and receives the approved spec path. |
+| D6, D7, M2 to M6 | The scheduler reads the Phase Index. A phase is ready when every phase it depends on has completed and passed review. One implement pipeline per project at a time. Ready phases in different projects run in parallel. An unreadable dependency means "depends" (M5). |
+| D8, T1 to T7 | Test and doc stages never run between phases. Format runs once per project after its last phase. The closing gate is asked once per project, batched when several projects arrive together. `Test policy: Skip` phases are listed as uncovered with the plan's rationale. An explicit request in the task replaces the gate (T3). |
+| D9 | A failed phase removes every phase that depends on it from the queue. Independent phases continue. |
+| D10, answer routing | A requirement-level answer at any point after the spec exists re-runs generate-spec, then re-approval, then a new plan. |
+| Hard 4 | The engine reads each report before the next step. For native and submit-tool outputs this is structured data. |
+| Hard 13 | Implementer, write-test, and code-reviewer executions always carry `Phase file:` when a plan exists, or `No plan:` with a reason. |
+| Staging | After a phase's review passes, the engine runs `git -C <project> add` on the implementer report's changed files. Reviews use `Review scope: unstaged`. |
+| Review loop, Step 4 | Findings split into BLOCKER, auto-fixable, and the rest, using the project's review rule set. Auto-fixable findings are applied by the engine from their exact `Change \`x\` to \`y\` on line N` text. HIGH and MEDIUM go to the fix agent with the ledger path. The cap is 3 iterations per loop, counted by the engine. The 4th pass is a gate. |
+| Hard 21, security | A BLOCKER finding sends only the BLOCKER findings to the fix agent with a removal instruction, loops until clear, has no cap, and blocks module documentation. No gate answer can waive it. |
+| HANDOFF | The engine runs prompt-generation with the handoff request, then resumes the original agent with its resume instructions. |
+| STUCK | The Rescue judge picks one: run a targeted explore, re-run the agent with the missing fact quoted, or raise a gate. Never a plain retry. |
+
+### 8.3 Judge calls
+
+These are the only places a model makes an orchestration decision. Each has a short prompt derived from the
+matching part of `orchestrate/prompt.md`, a JSON output schema, and runs on the `judge` route (`fast` by
+default). Each decision is stored as an event with its input summary and its reason, and the UI shows it as
+"Ostra chose X because Y" with an override button. For a beginner this is where the pipeline explains itself.
+
+| Judge | Output |
+| --- | --- |
+| Classify | Category, projects in scope, explore tasks (one per project or area), and whether the request already opts into tests or docs. |
+| Sufficiency | For each `Not covered` item across the research documents: needed or not, plus the extra explore task if needed. |
+| Stakes | `low`, `medium`, or `high`, with a reason. `low` skips plan. |
+| Route answer | For a user answer: requirement change, implementation detail, or stage choice. Doubt resolves to requirement change. |
+| Rescue | For a STUCK report: explore, re-run with a stated fact, or gate. |
+| Resolve review | For a review loop at its cap under YOLO: per-finding fix instructions for one fix-and-verify round, or declare the phase blocked. |
+| YOLO answer | Under YOLO, the answer to any gate: an open question, an approval, the closing gate, a permission ask. Section 10.5. |
+| Completion | The completion report prose, including the stages not run and, under YOLO, the decided-for-you list. |
+
+### 8.4 The init flow
+
+The init flow is `UC/commands/init-kit/prompt.md` as engine stages:
+
+```
+detect → scout ×N (parallel, one per slice, max 12) → propose → skill approval (gate)
+→ generate-skill ×N (parallel, advanced tier) → generate-inventory → done
+```
+
+The approval gate is a table in the UI: per skill, generate, regenerate, reuse, or drop, with the defaults the
+propose mode sets. The legacy `adopt` mode becomes the `.ultracode/` migration from section 6.2.
+
+## 9. Agents and prompts
+
+### 9.1 Assets
+
+Each agent is `assets/agents/<name>/agent.toml` plus `prompt.md`, embedded in the binary. `agent.toml` carries
+the fields of Ultracode's `definition.json`: description, default tier, reasoning effort per executor, tool
+capabilities, timeout. Prompts are minijinja templates using the same token set as Ultracode (`{{tool_read}}`,
+`{{runtime_dir}}`, `{{skills_dir}}`, and the rest from `UC/docs/definitions.md`), rendered once per executor
+type, because a harness executor must see that harness's tool names.
+
+| Agent | Default tier | Output |
+| --- | --- | --- |
+| explore | advanced | One research document, then a submit call with its return fields. |
+| generate-spec | advanced | One spec file. |
+| fact-check | advanced | Submit call: `{verdict, target, findings}`. |
+| plan | advanced | Master plan plus one file per phase. |
+| implementer | balanced (routed by complexity) | Change report at the declared path, progress log. |
+| code-reviewer | balanced | Submit call with findings and `securityBlock`, plus its review ledger. |
+| execution-path-analyzer | balanced | EPA report at the declared path. |
+| write-test | balanced (routed by complexity) | Test report at the declared path. |
+| module-documentation | advanced | Area references plus its report. |
+| prompt-generation | advanced | Changed instruction files plus its report. |
+| initializer | balanced (generate-skill on advanced) | Per mode, as in `UC/agents/initializer/prompt.md`. |
+| quick-answer | balanced | New. Side-panel answers, read-only. Section 12.3. |
+
+### 9.2 Porting checklist for the prompts
+
+- Remove every `{{#harness}}...{{/harness}}` block and every paragraph about spawn tickets, hub waits, or hook
+  channels.
+- Rename the `ultracode-` artifact prefix to `ostra-` (`ostra-spec-*`, `ostra-plan-*`, `ostra-review-ledger-*`),
+  and change the policy patterns in the same commit.
+- Rename `Primary repo root:` to `Workspace root:`. Keep `Repo root:` and `Repo key:` so the prompts change as
+  little as possible. The UI says "project".
+- Replace "print a single JSON object" endings with a `submit_<agent>` tool whose input schema is that object.
+  This covers fact-check, code-reviewer, and explore's return fields. Drop the reviewer's
+  `systemMessage`/`hookSpecificOutput` wrapper for a plain schema. Code then reads structured data, so nothing
+  scrapes a final message (that removes `UC/hooks/factcheck-record.js` and `agy-message-record.js`).
+- Keep each prompt's writing-style section and every rule ID (K1 to K8, S1 to S8, R-a to R-e, AC-a to AC-d, P0
+  to P13).
+- `UC/commands/orchestrate/prompt.md`, `hub-listen`, and `yolo` are not runtime prompts in Ostra. The first is
+  the engine specification and the source of the judge prompts. The other two become engine features.
+- `UC/skills/meta-author/prompt.md` and `UC/refs/*.md` are embedded assets the initializer and prompt-generation
+  load.
+
+### 9.3 Spawn contract and brief
+
+Port `UC/hooks/subagent-parameters.json` to one Rust struct per agent (and per initializer mode), so a missing
+required parameter does not compile. The engine renders the struct as the `Label: value` block the prompts
+expect. For harness executors the same struct is validated at runtime too.
+
+Port `UC/hooks/lib/context-brief.js` as the repo brief appended to every execution: commands, skills (name and
+path), conventions not already in the inventory, the full review rule set for the reviewer, and the module-map
+rows matching paths the task names. Add the workspace's custom instructions (`instructions.all`, then the
+agent's own entry). Never include routing settings.
+
+## 10. Executors, tools, and policy
+
+### 10.1 Native executor
+
+A streaming agent loop behind `trait Provider` with Anthropic (Messages API) and OpenAI (Responses API)
+implementations.
+
+- System prompt: the rendered agent prompt. First user message: the spawn block plus the repo brief. Loaded
+  skills join the cached prefix.
+- Prompt caching on the system prompt, the tool definitions, and loaded skills.
+- Reasoning effort maps from `agent.toml` to each provider's effort or thinking setting.
+- `timeout_seconds` is a hard budget per execution. Cancel is immediate.
+- Long executions clear old tool results before the context fills. The implementer's progress log is what lets
+  a re-run resume, as in Ultracode.
+- Tokens, cache reads, and cost are recorded per execution.
+
+### 10.2 Harness executors
+
+A harness executor runs one leaf agent in an installed CLI under `portable-pty`, in the project directory. The
+PTY bytes go to the browser, where xterm.js shows the harness's own interface. The user can watch and type
+into it.
+
+| Concern | Design |
+| --- | --- |
+| Prompt | The agent prompt rendered with that harness's tool names and skill-loading strategy from `UC/definitions/tool-mapping.json`, passed as the harness's system prompt addition. The spawn block plus brief is the first user message. |
+| Leaf only | The harness's own subagent tool is disabled for the run. Every Ostra agent is a leaf. |
+| Guards and permissions | Ostra writes a per-execution hook config pointing every PreToolUse and PostToolUse event at `ostra hook --execution <id>`, a subcommand of the same binary. It forwards the payload to `/internal/policy` with an execution token and prints the harness's response shape. One Rust policy engine then serves all harnesses. A permission ask waits for the browser answer. |
+| Ostra tools | `ostra mcp-stdio --execution <id>` serves `report`, `memory`, `memory_recall`, and the `submit_*` tools over stdio. Stdio, because it is the one MCP registration shape Ultracode verified on all four harnesses (`UC/docs/hub.md`, "Why a stdio shim"). |
+| Completion | Detected from the harness's stop event through the hook bridge, and confirmed from its transcript. Needs verifying per harness (section 18). |
+| Session id | Claude Code and Grok accept a chosen `--session-id`, so Ostra picks it up front. Codex and Antigravity cannot choose one (`UC/README.md`), so Ostra captures it from the first output event or the transcript. |
+| Resume | The Resume button opens a PTY with the harness's resume command and that session id. |
+| Auth | The PTY gets the user's environment. A harness started without its auth environment comes up logged out (Ultracode's tmux experience). An unauthenticated harness is shown in settings, and its login flow runs in the terminal view. |
+| Unavailable harness | Settings validation refuses a route to a harness that is not installed. At runtime, an auth or launch failure raises a gate: log in, or re-route this execution to native. Under YOLO the engine re-routes to native and records it. |
+
+The per-harness adapters (payload field names, deny and ask shapes, size caps) come from
+`UC/hooks/lib/harness.js`, `UC/hooks/lib/common.js`, and `UC/docs/harness-limitations.md`. The facts that
+matter most:
+
+- Claude Code: an explicit tool list drops MCP tools it does not name. Hook rewrites go only in
+  `hookSpecificOutput.updatedInput`. `ask` is honored even in bypass mode.
+- Codex: hooks must be trusted in `/hooks` before they run, and trust is keyed to the hook config hash.
+  `codex exec` cancelled MCP calls under the default approval policy on 0.147.0. Unknown `model` values fail
+  the run.
+- Grok Build: deny and ask reasons are clipped to 256 characters, so put the correction first. Payloads over
+  128 KiB lose `toolInput`, and a guard must deny then. MCP servers are hidden in untrusted directories.
+- Antigravity: hook output is proto-validated, and an unknown field discards the whole response. PostToolUse
+  never carries the tool result. MCP servers register only through `agy mcp add`. Deny uses a top-level
+  `decision`, and asks use `force_ask`.
+
+The hub's jobs move into Ostra. Task routing is the executor route. Claims and leases are the engine's
+scheduler. Session query, with its inferred stage, is the session list. Adoption is unnecessary because Ostra
+owns every session. Push channels and wake commands disappear.
+
+### 10.3 Tools
+
+Native tool names match Claude Code's, because the prompts are tuned to them: `Read`, `Write`, `Edit`, `Bash`,
+`Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, plus `Report`, `Memory`, `MemoryRecall`, and the `submit_*`
+tools.
+
+- `Edit` requires the file to have been read in this execution, and its old string must match exactly once.
+- `Grep` and `Glob` use the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`, `globset`).
+- `Bash` runs in a tokio child process with a persistent working directory, a 2-minute default timeout (10
+  maximum), and truncated output. Its live output also streams to the execution's Activity view.
+- `WebSearch` uses the provider's server-side search tool. `WebFetch` uses the provider's fetch tool where one
+  exists, else an HTTP fetch converted to markdown.
+- `Report` writes the declared report path (`UC/mcp/lib/report.js`).
+
+### 10.4 Policy
+
+Every tool call from every executor goes through two layers in order.
+
+**Layer 1, guards:** No permission, no user answer, and no YOLO setting overrides these. Each is a port.
+
+| Guard | Rule | Source |
+| --- | --- | --- |
+| Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. initializer writes only `.ostra/` and `.ostra/skills/`. module-documentation writes only `skills/module-hub/references/`. Everything else stays inside its `Repo root:`. | `scope-policy.js` |
+| No tests from implementer | implementer may not write a path matching the test patterns. | `scope-policy.js` |
+| State ownership | Engine-owned state (gates, verdicts, progress, streaks, scope records, the memory database) has no writer but the engine. The review ledger is writable by code-reviewer, implementer, and write-test. The security sentinel only by code-reviewer. The progress log only by implementer. | `ledger-policy.js` |
+| Artifact ownership | Spec and plan files are written only by their owning agent. | `artifact-guard.js` |
+| Report path | For agents given `Report file:`, an `ostra-*` file in the session dir must be that exact path. Any mechanism may write it. | `report-policy.js` |
+| Lesson gate | A report is refused while a verified failure-to-recovery transition has no recorded lesson, unless the report tool is called with a stated reason. | `report-policy.js`, `report.js` |
+| Build streak | Counted per execution. At 2 failures, recalled lessons are appended to the tool result. At 3, a warning. At 5, build and test commands are refused and the agent is told to return `STUCK:`. | `build-streak*.js`, `build-signal.js` |
+| Tool self-protection | Ostra's binary, assets, config, and databases are read-only to agents. Inline interpreter code that writes files, spawns processes, or names engine state is refused. | `plugin-policy.js` |
+
+**Layer 2, permissions**, in Claude Code's model:
+
+- Modes: `default` (ask for edits and unlisted commands), `acceptEdits` (edits inside the project allowed),
+  `plan` (read-only), `bypass` (no asks).
+- Rules: `allow`, `ask`, and `deny` lists with patterns such as `Bash(npm run test *)`, `Edit(src/**)`,
+  `Read(~/.ssh/**)`, `WebFetch(domain:docs.rs)`. Deny beats ask, and ask beats allow.
+- Scopes, merged in order: global config, workspace, session.
+- `Bash` commands are parsed with tree-sitter-bash, and each subcommand is matched separately, so
+  `npm test && curl evil` does not pass on `Bash(npm test *)`.
+- An ask becomes a browser card with "allow once", "always in this workspace", and "deny", plus a push
+  notification.
+
+Ultracode hooks that become engine code and need no policy: `session-guard`, `pipeline-gate`, `model-router`,
+`spawn-scope`, `spawn-log`, `factcheck-record`, `agy-message-record`, `review-cap`, `security-block`,
+`session-resume`, `skill-init-guard`, `profile-read-guard`, `bash-guard`, `monitor-guard`, and the codex spawn
+tickets.
+
+### 10.5 YOLO
+
+YOLO means the orchestrator decides everything. With YOLO on for a session:
+
+- **Permissions:** every ask is allowed. The session behaves as `bypass`.
+- **Questions:** every gate is answered by the YOLO judge, with no wait: open questions (recommended option
+  unless the research says otherwise), spec and plan approval, the closing gate, the review cap, STUCK
+  rescues, and harness re-routing.
+- **Review loop:** the budget rises to 10 iterations. At the budget the Resolve judge runs one fix round, then
+  one verification pass, repeating while it converges (`UC/hooks/review-cap.js`). A loop that stops converging
+  blocks that phase, and independent work continues.
+- **Record:** every YOLO decision is an event. The completion report ends with a "Decided for you" section
+  listing each decision, its reason, and a link to undo or re-run from that point. A push notification fires
+  at completion and when a phase is blocked.
+
+YOLO does not change what must be true, because none of these are questions:
+
+- Guards (section 10.4, layer 1) still apply.
+- Approval still requires a fact-check PASS. The judge approves only a spec or plan that has one.
+- BLOCKER security findings are still removed before the run can complete.
+- Explicit `deny` rules still apply. This one needs the user's confirmation (section 18).
+
+YOLO can be set per workspace (`yolo.default`) and toggled per session at any time, taking effect from the next
+gate or tool call.
+
+## 11. Sessions and resume
+
+### 11.1 Tables (`workspace.db`)
+
+| Table | Holds |
+| --- | --- |
+| `projects` | key, path, init status. |
+| `sessions` | id, request, category, state, projects in scope, YOLO flag, created and updated times. |
+| `events` | session id, sequence, type, payload JSON, time. Append-only, and the source of truth. |
+| `executions` | id, session, stage, agent, executor, model, spawn parameters, status (`running`, `ok`, `stuck`, `handoff`, `error`, `denied`, `interrupted`), native session id, report path, token and cost totals, start and end. |
+| `messages` | Native execution transcripts, for resume and for the Activity view. |
+| `gates` | Open and answered gates, answer source (`user` or `yolo`), answer payload. |
+| `decisions` | Judge calls: kind, input summary, output, reason, overridden flag. |
+| `tool_calls` | Per execution: tool, input, policy decision and the rule behind it, duration, output reference. |
+
+Memory stays in each project's `.ostra/memory/knowledge.sqlite3`, using `UC/mcp/lib/memory.js`'s schema.
+
+### 11.2 Resume
+
+- **Server restart:** replay events. Executions left `running` become `interrupted`, and the engine re-runs
+  each with the same spawn block. The implementer resumes from its progress log.
+- **Native execution:** continue from `messages`.
+- **Harness execution:** open the harness's resume command with the stored native session id in a new PTY.
+- **Session list:** each session shows its stage (the hub's `inferStage` idea, taken from events), its
+  executions, and a Resume or Open action.
+
+No compaction checkpoint is needed: the pipeline state is in the engine, not in any model's context.
+
+## 12. User interface
+
+### 12.1 Screens
+
+| Screen | Content |
+| --- | --- |
+| Home | Workspace list, New workspace wizard (section 6.1). |
+| Workspace | Sessions with stage chips. A New task form (request text, plus tests, docs, and YOLO toggles), not a chat box. Projects, settings, memory browser, cost. |
+| Session board | Lanes in SDLC order: Research, Requirements, Verification, Design, Build, Review, Test, Docs, Done. Each lane carries a short "why this step exists" note from `UC/docs/philosophy.md`. The Build lane shows the phase DAG with complexity and test policy per phase. The current gate is highlighted. |
+| Execution | An Activity tab (streamed thinking summary, tool calls with inputs, diffs, outputs, and every policy decision with its rule) and, for harness executions, a Terminal tab (xterm.js on the PTY, with input and resize). |
+| Artifacts | The spec rendered by section (requirements in EARS form with their acceptance criteria, contracts, External Evidence), the plan with its phase index, reports, and the review ledger shown as comments on a Monaco diff. |
+| Gates | Open questions (recommended option first), spec and plan approval (disabled until PASS, with the findings shown), review cap, STUCK rescue, closing gate, skill approval for init, permission asks, and BLOCKER notices showing the reviewer's Guidance text, with no dismiss button. |
+| Settings | Workspace TOML as forms: projects, executor and model routing tables, instructions, permissions, YOLO, notifications. Validation on save. |
+| Memory | Lessons per project, searchable. The user may edit or delete any lesson. |
+| Cost | Per session, stage, agent, and executor: tokens, cache reads, cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
+
+### 12.2 Explaining the process
+
+Beginners are the audience, so the UI teaches as it runs:
+
+- Each stage card says what the stage produces and what it protects against.
+- Each judge decision shows its reason and an override.
+- Each denial shows the rule that fired and what to do instead.
+- Spec and plan views explain EARS and Given/When/Then in a collapsible note the first time they appear.
+
+### 12.3 Quick-questions side panel
+
+Available on every workspace screen. Answers come from the `quick-answer` agent, read-only: `Read`, `Grep`,
+`Glob`, `WebSearch`, `WebFetch`, `MemoryRecall`. Its context is the workspace's projects plus, when opened from
+a session, that session's artifacts. It never writes and never changes pipeline state. A "Turn into task"
+button starts a session with the question as the request.
+
+### 12.4 Push notifications
+
+Web Push through a service worker with VAPID keys stored in `registry.db`. `http://localhost` is a secure
+context, so no TLS is needed. Push fires when a gate is waiting, a session completes, a phase is blocked, or a
+harness needs login. Every notification deep-links to the screen that needs the user.
+
+## 13. API
+
+REST, JSON:
+
+```
+GET/POST        /api/workspaces
+GET/PATCH       /api/workspaces/:ws                       settings (validated)
+POST/DELETE     /api/workspaces/:ws/projects              import (like /add-dir), remove
+POST            /api/workspaces/:ws/projects/:key/init    start the init flow
+GET/POST        /api/workspaces/:ws/sessions              list, create (request + toggles)
+GET             /api/sessions/:id                         state, stages, executions, gates
+POST            /api/sessions/:id/yolo                    toggle
+POST            /api/gates/:id/answer                     user answer
+POST            /api/decisions/:id/override               override a judge decision
+POST            /api/executions/:id/cancel | /resume
+GET             /api/artifacts?path=                      session-dir files only
+GET/PATCH/DELETE /api/workspaces/:ws/projects/:key/memory
+POST            /api/workspaces/:ws/ask                   side-panel question (streams)
+POST            /api/push/subscribe
+POST            /internal/policy                          hook bridge, execution token only
+```
+
+WebSocket `/ws`, multiplexed by channel:
+
+- `session:<id>`: engine events such as `stage.entered`, `execution.started`, `execution.delta`, `tool.call`,
+  `tool.result`, `policy.decision`, `gate.opened`, `gate.answered`, `decision.made`, `execution.finished`, and
+  `session.completed`.
+- `term:<execution>`: binary PTY frames, plus `input` and `resize` messages from the browser.
+- `workspace:<ws>`: session list updates, harness availability, settings changes.
+
+## 14. Repository layout
+
+```
+ostra/
+  Cargo.toml                      workspace
+  crates/
+    ostra-core                    ids, domain types, event types
+    ostra-engine                  state machine, scheduler, judge calls, rule implementations
+    ostra-agents                  asset loading, minijinja rendering, spawn structs, repo brief
+    ostra-exec-native             agent loop
+    ostra-exec-harness            PTY, per-harness launch and adapters, hook bridge, MCP stdio shim
+    ostra-tools                   file, search, shell, web, memory, report, skill, submit
+    ostra-policy                  guards, permissions, bash parsing
+    ostra-providers               anthropic, openai
+    ostra-store                   SQLite (rusqlite with bundled FTS5), migrations, event log
+    ostra-notify                  Web Push
+    ostra-server                  axum, WebSocket, auth, embedded web build, CLI entry (serve, hook, mcp-stdio)
+  assets/
+    agents/<name>/{agent.toml, prompt.md}
+    judges/<name>.md
+    skills/meta-author/
+    refs/*.md
+    tool-mapping.toml
+  web/                            React, Vite, TypeScript
+    src/features/{workspaces,sessions,board,executions,artifacts,gates,settings,memory,cost,ask}
+  tests/
+    conformance/                  engine fixtures: event history in, expected next step out, one per rule ID
+    policy/                       guard and permission cases
+```
+
+Main dependencies: tokio, axum, tower-http, rusqlite (bundled), serde, serde_json, toml, reqwest,
+eventsource-stream, portable-pty, grep-searcher, grep-regex, ignore, globset, similar, minijinja,
+tree-sitter-bash, web-push, keyring, rust-embed, tracing, uuid. Web: React, Vite, xterm.js, Monaco,
+react-markdown.
+
+## 15. Security
+
+The server runs shell commands for its caller, so these ship in the first build:
+
+- Bind to `127.0.0.1` only.
+- `ostra` prints and opens a URL carrying a one-time token in the fragment. The page exchanges it once for an
+  `HttpOnly`, `SameSite=Strict` session cookie.
+- Reject a `Host` header other than `127.0.0.1:<port>` or `localhost:<port>`, which blocks DNS rebinding.
+  Reject a foreign `Origin` on REST and on the WebSocket upgrade. Send no CORS headers.
+- `/internal/policy` and the MCP shim accept only per-execution tokens, which expire when the execution ends.
+- API keys stay on the server. Logs never contain keys, tokens, or file bodies.
+
+## 16. Milestones
+
+| Milestone | Scope | Done when |
+| --- | --- | --- |
+| M0 | Server, React shell, auth, workspace wizard, project import, TOML config, native executor, one explore execution streamed end to end. | A user creates a workspace, imports a repo, and watches an explore execution write a research document. |
+| M1 | Engine through Classify, Explore, Spec, fact-check loops, both approval gates, Plan, phases with the review loop and staging, format. Guards and permissions with ask cards. | An IMPLEMENT request on a real repo reaches a reviewed, staged change, with every rule in section 8.2 covered by a conformance fixture. |
+| M2 | Init flow, skill approval table, per-project state, memory tools and browser, repo brief with custom instructions. | A fresh repo is initialized from the UI and later executions load its skills and recall its lessons. |
+| M3 | Closing stages, BLOCKER handling, HANDOFF and STUCK, YOLO, push, restart resume, cost view, side panel. | An unattended YOLO session completes, notifies, and lists every decision it made. |
+| M4 | Claude Code and Codex harness executors: PTY terminal view, hook bridge, MCP shim, session id capture, resume. | An implementer phase routed to Codex runs in the terminal view under Ostra's guards and resumes after a restart. |
+| M5 | Grok Build and Antigravity executors, the full conformance suite, polish. | Every agent runs on every executor, and all fixtures pass. |
+
+## 17. Testing
+
+- **Conformance:** One fixture per rule ID from section 8.2: an event history and an expected next engine step.
+- **Policy:** Port the cases from `UC/tests/test_definitions.test.js` for scope, bash scope, artifacts,
+  ledgers, tool self-protection, reports, build streak, review cap, and security. The shell edge cases (heredoc
+  bodies, `<ID>` placeholders, dot-only tokens, piped interpreters) carry over exactly.
+- **Memory and gates:** Port the memory and gate cases from the same file.
+- **Harness adapters:** Build payload fixtures per harness from `UC/tests/` and the shapes in
+  `UC/hooks/lib/harness.js`, including Grok's camelCase and Antigravity's nested `toolCall.args`.
+- **Providers:** Recorded-response tests for both providers. A live smoke test runs only with keys present.
+
+## 18. Open items
+
+| Item | Status |
+| --- | --- |
+| Explicit `deny` rules under YOLO | Assumed to still apply, since the user wrote them on purpose. Confirm with the user. |
+| Harness completion detection | Verify per CLI that the stop event reaches the hook bridge from an interactive PTY session, and that the final message is readable from its transcript. |
+| Codex hook trust | Verify whether per-invocation hook config through `-c` still needs `/hooks` trust. If it does, find another way to enforce guards on Codex executions before M4. |
+| Harness flags | Verify each launch and resume flag against the installed CLI versions before relying on it: system prompt addition, disabled tools, session id, MCP config, hook config, model. |
+| OpenAI model ids | Fill `tiers.native` alternatives for OpenAI once the target models are chosen. |
+| `.ultracode/` migration | Nice to have after M2. |
+
+## 19. Lessons from Ultracode to keep
+
+Each of these was learned from a recorded failure. The numbers are from Ultracode's recorded sessions.
+
+- **Declared report paths:** Agents naming their own reports produced 27 filename shapes across 1,864
+  artifacts, and later stages missed them. The engine names every report.
+- **Build loops:** 15 of 912 subagent runs (1.6%) hit four or more consecutive build failures and used 10.7%
+  of all spend. The streak guard exists because of that measurement.
+- **Fact-check scope:** A re-pass told to re-audit turned three plan passes into 468 tool calls to find two
+  findings. A re-pass gets the prior findings and nothing else.
+- **One address for state:** A verdict written under the repo subdirectory and read at the session root
+  deadlocked the spec gate. State is addressed by (session, project key), resolved the same way by every
+  reader and writer.
+- **Required inputs:** A reader that searched for a missing value picked stale state. A missing required input
+  fails immediately.
+- **Waivers:** An orchestrator blocked by a guard ran the tool's own code to forge its approval. Guards withhold
+  capabilities, not just paths.
+
+## 20. Writing rules
+
+Ostra's prompts, judge prompts, UI copy, and docs follow Ultracode's writing rules
+(`UC/CLAUDE.md`, "Writing style"):
+
+- No em dashes.
+- Sentence-case headings.
+- State the instruction, then the reason.
+- No metaphor where a literal phrase exists.
+- No superlatives standing in for a number.
+- Keep the causal "because" clauses in prompts, since a model that knows why a rule exists applies it to cases
+  the rule did not list.

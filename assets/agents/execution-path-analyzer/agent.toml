@@ -1,0 +1,11 @@
+description = "Traces every execution path through the functions an implementer phase changed (branches, early returns, error paths, boundary cases) and writes an EPA report for write-test to consume, one path per test. Runs only when the user asked for tests, after every coding phase is implemented and reviewed, before write-test. Read-only on project source."
+default_tier = "balanced"
+timeout_seconds = 1200
+capabilities = ["read", "shell", "write", "search_text", "glob", "report"]
+
+[effort]
+native = "high"
+claude = "high"
+codex = "high"
+grok = "high"
+agy = "high"

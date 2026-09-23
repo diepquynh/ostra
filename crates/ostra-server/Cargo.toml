@@ -1,0 +1,53 @@
+[package]
+name = "ostra-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ostra-core.workspace = true
+ostra-engine.workspace = true
+ostra-store.workspace = true
+ostra-agents.workspace = true
+ostra-providers.workspace = true
+ostra-tools.workspace = true
+ostra-policy.workspace = true
+ostra-exec-native.workspace = true
+ostra-exec-harness.workspace = true
+ostra-notify.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+rust-embed.workspace = true
+mime_guess.workspace = true
+rand.workspace = true
+hex.workspace = true
+sha2.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+which.workspace = true
+dirs.workspace = true
+open.workspace = true
+parking_lot.workspace = true
+if-addrs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+reqwest.workspace = true
+
+[[bin]]
+name = "ostra"
+path = "src/main.rs"

@@ -1,0 +1,87 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.98"
+
+[workspace.dependencies]
+ostra-core = { path = "crates/ostra-core" }
+ostra-engine = { path = "crates/ostra-engine" }
+ostra-agents = { path = "crates/ostra-agents" }
+ostra-exec-native = { path = "crates/ostra-exec-native" }
+ostra-exec-harness = { path = "crates/ostra-exec-harness" }
+ostra-tools = { path = "crates/ostra-tools" }
+ostra-policy = { path = "crates/ostra-policy" }
+ostra-providers = { path = "crates/ostra-providers" }
+ostra-store = { path = "crates/ostra-store" }
+ostra-notify = { path = "crates/ostra-notify" }
+
+tokio = { version = "1.53", features = ["full"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+async-trait = "0.1"
+axum = { version = "0.8", features = ["ws", "macros"] }
+axum-extra = { version = "0.12", features = ["cookie"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "set-header"] }
+rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "cookies"] }
+eventsource-stream = "0.2"
+portable-pty = "0.9"
+grep-searcher = "0.1"
+grep-regex = "0.1"
+grep-matcher = "0.1"
+ignore = "0.4"
+globset = "0.4"
+similar = "3"
+minijinja = { version = "2.24", features = ["loader"] }
+tree-sitter = "0.27"
+tree-sitter-bash = "0.25"
+p256 = { version = "0.14", features = ["ecdh", "ecdsa"] }
+hkdf = "0.13"
+aes-gcm = "0.11"
+keyring = "4"
+rust-embed = "8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl", "chrono-impl"] }
+thiserror = "2"
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.6", features = ["derive"] }
+regex = "1"
+base64 = "0.23"
+rand = "0.10"
+sha2 = "0.11"
+hex = "0.4"
+dirs = "7"
+htmd = "0.5"
+mime_guess = "2"
+tempfile = "3"
+pretty_assertions = "1"
+bytes = "1"
+url = "2"
+parking_lot = "0.12"
+open = "5"
+which = "8"
+walkdir = "2"
+if-addrs = "0.15"
+schemars = "1.2"
+tokio-util = "0.7"
+http = "1"
+libc = "0.2"
+vt100 = "0.16"
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 1

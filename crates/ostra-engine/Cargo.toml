@@ -1,0 +1,27 @@
+[package]
+name = "ostra-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ostra-core.workspace = true
+ostra-store.workspace = true
+ostra-agents.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+pretty_assertions.workspace = true
+
+[[test]]
+name = "conformance"
+path = "../../tests/conformance/main.rs"

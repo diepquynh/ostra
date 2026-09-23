@@ -1,0 +1,6 @@
+/target
+/target-*
+web/node_modules
+web/dist
+.ostra/
+*.log
