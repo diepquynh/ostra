@@ -302,7 +302,7 @@ impl Accumulator {
     fn finish(self, requested_model: &str) -> ChatResponse {
         let model = if self.model.is_empty() { requested_model.to_string() } else { self.model };
         let mut usage = self.usage;
-        usage.cost_usd = pricing::cost(&model, &usage, self.web_searches);
+        usage.cost_usd = pricing::cost(&model, &usage, 0, self.web_searches);
         ChatResponse {
             content: self.items.into_values().collect(),
             stop: self.stop.unwrap_or(StopReason::Other("unknown".into())),

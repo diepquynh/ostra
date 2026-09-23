@@ -115,6 +115,9 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
               <Button variant="primary" icon="play" disabled={busy} onClick={init}>
                 {busy ? "Starting…" : `Initialize ${p.key}`}
               </Button>
+              <Button variant="ghost" icon="refresh-ccw" onClick={reload}>
+                Check again
+              </Button>
               {removeButton("ghost")}
             </div>
           </div>

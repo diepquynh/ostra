@@ -223,3 +223,27 @@ async fn implement_session_runs_to_completion_under_yolo() {
     assert!(services.notices.lock().unwrap().iter().any(|n| n.title == "Session complete"));
     let _ = EngineNotice::Terminal { execution: ostra_core::ids::ExecutionId::new(), bytes: vec![] };
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn init_session_start_and_end_notify_project_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = dir.path().join("app");
+    std::fs::create_dir_all(&app).unwrap();
+    let ws_root = dir.path().join("ws");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    let mut ws = WorkspaceSettings::seeded("t");
+    ws.projects.push(ProjectEntry { key: "app".into(), path: app.clone(), stack: None });
+    let exec = Arc::new(Scripted { root: app, runs: Mutex::new(vec![]) });
+    let services = Arc::new(Fake { ws, executor: exec, notices: Mutex::new(vec![]) });
+    let engine = Engine::new(ws_root, WorkspaceId::new(), WorkspaceDb::open_in_memory().unwrap(), services);
+    let mut rx = engine.subscribe();
+    let summary = engine.create_init_session("app", None).unwrap();
+    engine.stop_session(&summary.id).unwrap();
+    let mut changes = 0;
+    while let Ok(n) = rx.try_recv() {
+        if matches!(n, EngineNotice::ProjectsChanged) {
+            changes += 1;
+        }
+    }
+    assert_eq!(changes, 2);
+}

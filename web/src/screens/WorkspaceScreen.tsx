@@ -15,7 +15,7 @@ export type WorkspaceScreenProps = {
  * `useShell().taskDraft` and clears it with `setTaskDraft(null)` once used.
  */
 export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
-  const { detail } = useWorkspace();
+  const { detail, reload } = useWorkspace();
   const { open } = useNav();
   const { addProject } = useShell();
   const sessions = useSessionSummaries(ws);
@@ -62,11 +62,18 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
       {uninitialized.length > 0 && (
         <Banner
           tone="warn"
-          actions={uninitialized.slice(0, 3).map((p) => (
-            <Button key={p.key} size="sm" onClick={() => open(`project:${p.key}`)}>
-              Initialize {p.key}
-            </Button>
-          ))}
+          actions={
+            <>
+              {uninitialized.slice(0, 3).map((p) => (
+                <Button key={p.key} size="sm" onClick={() => open(`project:${p.key}`)}>
+                  Initialize {p.key}
+                </Button>
+              ))}
+              <Button size="sm" variant="ghost" icon="refresh-ccw" onClick={reload}>
+                Check again
+              </Button>
+            </>
+          }
         >
           {uninitialized.map((p) => p.key).join(", ")} {uninitialized.length === 1 ? "is" : "are"} not initialized. Pipeline tasks cannot target an
           uninitialized project.

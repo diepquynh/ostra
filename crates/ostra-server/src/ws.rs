@@ -41,6 +41,11 @@ fn route(msg: &HubMsg) -> Routed {
             Some(ServerMsg::SessionUpdated { summary: summary.clone() }),
             None,
         ),
+        EngineNotice::ProjectsChanged => (
+            vec![format!("workspace:{}", msg.workspace)],
+            Some(ServerMsg::WorkspaceUpdated { workspace: msg.workspace.clone() }),
+            None,
+        ),
         EngineNotice::Terminal { execution, bytes } => (vec![format!("term:{execution}")], None, Some((execution.to_string(), bytes.clone()))),
     }
 }

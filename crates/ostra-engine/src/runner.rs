@@ -43,6 +43,8 @@ pub enum EngineNotice {
     ExecutionStatus { execution: ExecutionId, status: ExecutionStatus },
     SessionUpdated { summary: SessionSummary },
     Terminal { execution: ExecutionId, bytes: Vec<u8> },
+    /// A project's init status may have changed: an init session started or ended.
+    ProjectsChanged,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -618,9 +620,12 @@ impl Inner {
         let stored = {
             // The state lock serializes appends per session, so seq order is fold order.
             let mut st = lock(&live.state);
+            let was_terminal = st.is_terminal();
             let stored = self.db.append_event(session, &event)?;
             self.materialize(session, &event)?;
             st.apply(&stored);
+            let init_changed = matches!(st.kind, SessionKind::Init { .. })
+                && (matches!(event, SessionEvent::SessionCreated { .. }) || (!was_terminal && st.is_terminal()));
             let cost = lock(&self.judge_cost).get(session).copied().unwrap_or(0.0);
             let summary = view::summary(&st, &self.workspace_id, cost);
             let _ = self.db.update_session(
@@ -644,6 +649,9 @@ impl Inner {
             );
             if let Ok(Some(s)) = self.db.get_session(session) {
                 let _ = self.tx.send(EngineNotice::SessionUpdated { summary: s });
+            }
+            if init_changed {
+                let _ = self.tx.send(EngineNotice::ProjectsChanged);
             }
             stored
         };
