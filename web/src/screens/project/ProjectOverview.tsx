@@ -76,7 +76,7 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
   const commands = profile ? COMMANDS.filter(([k]) => profile.commands[k]) : [];
 
   return (
-    <div style={{ maxWidth: "var(--content-max)", padding: "18px 24px 40px", display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ padding: "18px 24px 40px", display: "flex", flexDirection: "column", gap: 16 }}>
       {error && <Banner tone="bad">{error}</Banner>}
       {p.init_status === "missing" ? (
         <Banner tone="bad" title="Folder missing" actions={removeButton("danger")}>
@@ -84,7 +84,7 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
         </Banner>
       ) : p.init_status === "initializing" ? (
         <Panel title="Initializing" icon="sparkles" tone="highlight">
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 680 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ lineHeight: 1.55, color: "var(--text-secondary)" }}>
               The init session is scouting the code and proposing skills. It stops for your approval before it writes any skill.
             </div>
@@ -100,7 +100,7 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
         </Panel>
       ) : p.init_status === "not_initialized" ? (
         <Panel title="Initialize this project" icon="sparkles" tone="warn">
-          <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 680 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ lineHeight: 1.55, color: "var(--text-secondary)" }}>
               Initializing scouts the code for recurring patterns, proposes skills for your approval, then writes <code>.ostra/INVENTORY.md</code>,{" "}
               <code>.ostra/project.toml</code>, and the skills every agent loads. No pipeline task can target this project until it is done.

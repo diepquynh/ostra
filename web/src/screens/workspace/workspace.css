@@ -1,11 +1,11 @@
 /* Layout for the workspace pages (overview, settings, cost, memory) that the design components do not cover. */
 
-.wp-page { max-width: var(--content-max); margin: 0 auto; padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 16px; }
+.wp-page { padding: 22px 28px 40px; display: flex; flex-direction: column; gap: 16px; }
 .wp-head { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .wp-head__text { flex: 1; min-width: 0; }
 .wp-title { margin: 0; font: var(--type-title); }
 .wp-sub { font: var(--text-sm)/1.6 var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
-.wp-lead { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; max-width: 720px; }
+.wp-lead { margin: 0; font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; }
 .wp-muted { color: var(--text-muted); font-size: var(--text-sm); }
 .wp-mono { font-family: var(--font-mono); font-size: var(--text-sm); }
 .wp-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

@@ -69,7 +69,7 @@ export function SessionScreen({ id }: SessionScreenProps) {
 }
 
 function Board({ children }: { children: ReactNode }) {
-  return <div style={{ padding: "20px 28px 40px", display: "flex", flexDirection: "column", gap: 16, maxWidth: 1240, margin: "0 auto" }}>{children}</div>;
+  return <div style={{ padding: "20px 28px 40px", display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>;
 }
 
 function SessionBoard({ detail: d, events, onDetail, reload }: { detail: SessionDetail; events: StoredEvent[]; onDetail: (d: SessionDetail) => void; reload: () => void }) {

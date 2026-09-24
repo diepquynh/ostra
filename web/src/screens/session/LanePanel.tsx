@@ -17,7 +17,7 @@ export function LanePanel({ detail, lane, onGate }: { detail: SessionDetail; lan
   const picked = stages.find((x) => x.key === selected)?.s ?? null;
   return (
     <Panel title={LANES[lane].title} subtitle={`${stages.length} stage${stages.length === 1 ? "" : "s"}`} icon="list-tree">
-      <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 8, maxWidth: 680 }}>{LANES[lane].why}</div>
+      <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 8 }}>{LANES[lane].why}</div>
       {stages.length === 0 ? (
         <div style={label}>No stage in this lane has started. It runs when the pipeline reaches it, or the completion report says why it was skipped.</div>
       ) : (

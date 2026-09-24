@@ -4,7 +4,7 @@
 .art-outline__empty { padding: 0 8px; font-size: var(--text-sm); color: var(--text-muted); }
 .art-outline__path { padding: 0 8px; font: var(--text-2xs)/1.5 var(--font-mono); color: var(--text-muted); word-break: break-all; }
 .art-scroll { flex: 1; min-width: 0; overflow: auto; position: relative; }
-.art-article { max-width: var(--prose-max); margin: 0 auto; padding: 24px 32px 60px; font: var(--type-prose); }
+.art-article { padding: 24px 32px 60px; font: var(--type-prose); }
 .art-toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
 .art-title { font: var(--type-title); margin: 0 0 18px; }
 .art-note { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading-normal); margin: 0; }
@@ -47,7 +47,6 @@
 .art-ledger-line--warn { background: var(--warn-soft); }
 .art-ledger-mark--bad { border-left: 3px solid var(--bad); margin-left: 3px; }
 .art-ledger-mark--warn { border-left: 3px solid var(--warn); margin-left: 3px; }
-.art-article--wide { max-width: var(--content-max); }
 .art-finding { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); line-height: 1.45; }
 .art-finding__fix { color: var(--text-secondary); }
 .art-where { display: flex; flex-direction: column; gap: 2px; }

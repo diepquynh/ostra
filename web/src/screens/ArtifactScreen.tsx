@@ -106,7 +106,7 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
         <div className="art-outline__path">{path}</div>
       </nav>
       <div className="art-scroll" ref={scroller}>
-        <article className={kind === "ledger" ? "art-article art-article--wide" : "art-article"}>
+        <article className="art-article">
           <div className="art-toolbar">
             <Chip tone="accent">{KIND_LABEL[kind]}</Chip>
             {ref?.project && <Chip mono>{ref.project}</Chip>}

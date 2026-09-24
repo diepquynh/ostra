@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type MouseEvent } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
 import { Button, Kbd, StatusDot, Tabs, type Tone } from "../design";
@@ -14,6 +14,7 @@ import { AddProjectDialog, NewWorkspaceDialog, Onboarding, selfScrolling } from 
 import { resourceMeta } from "./meta";
 import { Palette } from "./Palette";
 import { QuickDock } from "./QuickDock";
+import { ResizeHandle, usePanelWidths } from "./ResizeHandle";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
 import { TitleBar } from "./TitleBar";
@@ -43,6 +44,7 @@ function Shell({ ws }: { ws: string }) {
   const [local] = useState(() => loadLocalUi(ws));
   const [tabs, dispatch] = useReducer(tabsReducer, null, () => initialTabs(local?.tabs ?? null, routeId));
   const [prefs, setPrefs] = useState<UiPrefs>(() => local?.prefs ?? DEFAULT_PREFS);
+  const [widths, setWidth] = usePanelWidths();
   const setPref = useCallback(<K extends keyof UiPrefs>(k: K, v: UiPrefs[K] | ((p: UiPrefs[K]) => UiPrefs[K])) => {
     setPrefs((p) => ({ ...p, [k]: typeof v === "function" ? (v as (x: UiPrefs[K]) => UiPrefs[K])(p[k]) : v }));
   }, []);
@@ -213,7 +215,9 @@ function Shell({ ws }: { ws: string }) {
 
   return (
     <ConsoleContext.Provider value={ctx}>
-      <div style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--surface-editor)" }}>
+      <div
+        style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--surface-editor)", ...({ "--sidebar-w": `${widths.sidebar}px`, "--dock-w": `${widths.dock}px` } as CSSProperties) }}
+      >
         <TitleBar
           ws={ws}
           wsName={wsName}
@@ -233,6 +237,7 @@ function Shell({ ws }: { ws: string }) {
           {prefs.sidebarOpen && (
             <Sidebar
               ws={ws}
+              resizer={<ResizeHandle side="sidebar" edge="right" width={widths.sidebar} onResize={setWidth} />}
               tab={prefs.leftTab}
               setTab={(t) => setPref("leftTab", t)}
               sessions={tree.sessions}
@@ -286,6 +291,7 @@ function Shell({ ws }: { ws: string }) {
           {prefs.dockOpen && (
             <QuickDock
               ws={ws}
+              resizer={<ResizeHandle side="dock" edge="left" width={widths.dock} onResize={setWidth} />}
               session={activeSession}
               seed={dockSeed}
               onClose={() => setPref("dockOpen", false)}

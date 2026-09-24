@@ -206,6 +206,8 @@ function SessionsPanel({ sessions, loading, error, projects, activeId, open, onA
 
 export type SidebarProps = {
   ws: string;
+  /** The drag handle on the right edge. */
+  resizer?: ReactNode;
   tab: LeftTab;
   setTab: (t: LeftTab) => void;
   sessions: TreeSession[];
@@ -221,7 +223,7 @@ export type SidebarProps = {
   onAddProject: () => void;
 };
 
-export function Sidebar({ ws, tab, setTab, sessions, loading, error, projects, activeId, open, pinActive, filesProject, setFilesProject, onAddProject }: SidebarProps) {
+export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, projects, activeId, open, pinActive, filesProject, setFilesProject, onAddProject }: SidebarProps) {
   const onDoubleClick = (e: MouseEvent) => {
     const row = (e.target as HTMLElement).closest('[role="treeitem"]');
     if (row?.getAttribute("aria-selected") === "true") pinActive();
@@ -233,7 +235,7 @@ export function Sidebar({ ws, tab, setTab, sessions, loading, error, projects, a
   return (
     <aside
       onDoubleClick={onDoubleClick}
-      style={{ width: "var(--sidebar-w)", flex: "none", background: "var(--surface-panel)", borderRight: "1px solid var(--border-default)", display: "flex", flexDirection: "column", minHeight: 0 }}
+      style={{ position: "relative", width: "var(--sidebar-w)", flex: "none", background: "var(--surface-panel)", borderRight: "1px solid var(--border-default)", display: "flex", flexDirection: "column", minHeight: 0 }}
     >
       <div style={{ padding: "0 8px", flex: "none" }}>
         <Tabs
@@ -260,6 +262,7 @@ export function Sidebar({ ws, tab, setTab, sessions, loading, error, projects, a
       ) : (
         <SessionsPanel sessions={sessions} loading={loading} error={error} projects={projects} activeId={activeId} open={open} onAddProject={onAddProject} />
       )}
+      {resizer}
     </aside>
   );
 }

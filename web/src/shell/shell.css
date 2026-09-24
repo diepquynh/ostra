@@ -24,3 +24,13 @@ body { overflow: hidden; }
 .os-prose table { border-collapse: collapse; font-size: var(--text-sm); }
 .os-prose th, .os-prose td { border: 1px solid var(--border-default); padding: 4px 8px; text-align: left; }
 .os-prose blockquote { border-left: 2px solid var(--border-strong); padding-left: 10px; color: var(--text-secondary); }
+
+/* Drag handles on the docks' inner edges. The panel is `position: relative`; the handle straddles its border. */
+.shell-resize { position: absolute; top: 0; bottom: 0; width: 7px; z-index: 5; cursor: col-resize; touch-action: none; }
+.shell-resize--right { right: -4px; }
+.shell-resize--left { left: -4px; }
+.shell-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background var(--dur-fast); }
+.shell-resize:hover::after, .shell-resize:focus-visible::after, .shell-resizing .shell-resize::after { background: var(--accent); }
+.shell-resize:focus-visible { outline: none; }
+body.shell-resizing { cursor: col-resize; user-select: none; }
+body.shell-resizing iframe, body.shell-resizing .xterm { pointer-events: none; }

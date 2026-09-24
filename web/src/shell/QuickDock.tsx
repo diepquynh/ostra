@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, socket } from "../api";
 import type { ExecutionStatus } from "../api/types";
 import { Markdown } from "../components/Markdown";
@@ -71,6 +71,8 @@ function Answer({ execution, question, onTurnIntoTask }: { execution: string; qu
 
 export type QuickDockProps = {
   ws: string;
+  /** The drag handle on the left edge. */
+  resizer?: ReactNode;
   /** Session whose artifacts the answer may read: the active tab's session. */
   session: string | null;
   /** Text to put in the question box when the dock opens (from "Ask about this file"). */
@@ -80,7 +82,7 @@ export type QuickDockProps = {
 };
 
 /** The quick-question dock (⌘/): read-only answers from the `quick-answer` agent, outside the pipeline. */
-export function QuickDock({ ws, session, seed, onClose, onTurnIntoTask }: QuickDockProps) {
+export function QuickDock({ ws, resizer, session, seed, onClose, onTurnIntoTask }: QuickDockProps) {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
@@ -115,7 +117,7 @@ export function QuickDock({ ws, session, seed, onClose, onTurnIntoTask }: QuickD
   return (
     <aside
       aria-label="Quick question"
-      style={{ width: "var(--dock-w)", flex: "none", background: "var(--surface-panel)", borderLeft: "1px solid var(--border-default)", display: "flex", flexDirection: "column", minHeight: 0 }}
+      style={{ position: "relative", width: "var(--dock-w)", flex: "none", background: "var(--surface-panel)", borderLeft: "1px solid var(--border-default)", display: "flex", flexDirection: "column", minHeight: 0 }}
     >
       <div style={{ height: "var(--tabbar-h)", display: "flex", alignItems: "center", gap: 8, padding: "0 6px 0 12px", borderBottom: "1px solid var(--border-default)", background: "var(--surface-chrome)", flex: "none" }}>
         <Icon name="message-square" size={14} style={{ color: "var(--text-muted)" }} />
@@ -179,6 +181,7 @@ export function QuickDock({ ws, session, seed, onClose, onTurnIntoTask }: QuickD
           </Button>
         </div>
       </form>
+      {resizer}
     </aside>
   );
 }

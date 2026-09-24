@@ -1,5 +1,5 @@
 /* Execution screen layout. Components come from the design system; this file only places them. */
-.ex-page { max-width: 1000px; margin: 0 auto; padding: 20px 28px 40px; display: flex; flex-direction: column; gap: 14px; }
+.ex-page { padding: 20px 28px 40px; display: flex; flex-direction: column; gap: 14px; }
 .ex-loading { flex-direction: row; align-items: center; gap: 8px; color: var(--text-muted); }
 .ex-stack { display: flex; flex-direction: column; gap: 10px; }
 

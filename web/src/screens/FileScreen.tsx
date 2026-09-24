@@ -145,7 +145,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
                 <DiffPane hunks={d.hunks} />
               </>
             ) : view === "rendered" ? (
-              <div style={{ maxWidth: 760, padding: "20px 28px 40px" }}>
+              <div style={{ padding: "20px 28px 40px" }}>
                 <Markdown text={f.content ?? ""} className="os-prose" />
               </div>
             ) : (
