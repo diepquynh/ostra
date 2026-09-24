@@ -141,6 +141,9 @@ fn claude_tools(caps: &[Capability]) -> String {
     if caps.contains(&Capability::Skill) && !tools.contains(&"Read") {
         tools.push("Read");
     }
+    // Interactive Claude Code connects MCP servers after startup and exposes their tools only as
+    // deferred tools, so without ToolSearch the `mcp__ostra__*` tools never reach the model.
+    tools.push("ToolSearch");
     tools.join(",")
 }
 
@@ -642,7 +645,7 @@ pub(crate) mod tests {
         let p = plan(&input(&s, HarnessKind::Claude, tmp.path()));
         assert_eq!(p.args.last().unwrap(), "Repo root: /repo\nTask: do it");
         let i = p.args.iter().position(|a| a == "--tools").unwrap();
-        assert_eq!(p.args[i + 1], "Read,Edit,Bash");
+        assert_eq!(p.args[i + 1], "Read,Edit,Bash,ToolSearch");
         assert!(p.session_id.is_some());
         let settings: serde_json::Value = serde_json::from_str(&p.files[0].1).unwrap();
         let cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]

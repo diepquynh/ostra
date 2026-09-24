@@ -123,7 +123,8 @@ view_file BEFORE acting, at the path your task or repo brief carries. Given only
 [strategies.ostra_tools]
 claude = """
 The `mcp__ostra__*` tools come from Ostra's `ostra` MCP server, registered for this run. Call each by exactly \
-that name."""
+that name. If one is not in your tool list yet, load it with ToolSearch (`select:mcp__ostra__<tool>`) and then \
+call it, because the server connects after the session starts and its tools arrive deferred."""
 codex = """
 `report`, `memory`, `memory_recall`, and your `submit_*` tool are MCP tools from Ostra's `ostra` server, not \
 Codex capabilities. Call each by exactly that name."""

