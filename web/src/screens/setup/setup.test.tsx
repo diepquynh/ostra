@@ -220,4 +220,28 @@ describe("Add project dialog", () => {
     expect(screen.getByText("`Go Lang` is not a stack name.").getAttribute("role")).toBe("alert");
     expect(screen.queryByText("Fix these problems and import the project again.")).toBeNull();
   });
+
+  it("clones from git with the key from the URL and places the server's issues on their fields", async () => {
+    vi.spyOn(api, "gitCredentials").mockResolvedValue([{ id: "gc_1", label: "Work", host: "github.com", kind: "https", username: null, has_secret: true }]);
+    const clone = vi
+      .spyOn(api, "cloneProject")
+      .mockRejectedValueOnce(new HttpError(422, "x", [{ path: "url", message: "Ostra does not clone file:// URLs." }]))
+      .mockRejectedValueOnce(new HttpError(502, "fatal: Authentication failed"));
+    render(
+      <ConsoleContext.Provider value={ctx()}>
+        <AddProjectDialog ws="ws_demo" onClose={vi.fn()} onAdded={vi.fn()} />
+      </ConsoleContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /Clone from git/ }));
+    type(/^Repository URL/, "https://github.com/acme/shop-api.git");
+    expect(screen.getByRole("textbox", { name: /^Project key/ })).toHaveProperty("value", "shop-api");
+    await screen.findByRole("option", { name: /Work/ });
+    fireEvent.change(screen.getByRole("combobox", { name: /^Credential/ }), { target: { value: "gc_1" } });
+    await act(async () => click("Clone and import"));
+    expect(clone.mock.calls[0][1]).toMatchObject({ url: "https://github.com/acme/shop-api.git", key: "shop-api", credential: "gc_1" });
+    await screen.findByText("Ostra does not clone file:// URLs.");
+    expect(screen.getByRole("textbox", { name: /^Repository URL/ }).getAttribute("aria-invalid")).toBe("true");
+    await act(async () => click("Clone and import"));
+    await screen.findByText("fatal: Authentication failed");
+  });
 });

@@ -26,6 +26,8 @@ pub struct WorkspaceRt {
     pub db: WorkspaceDb,
     pub engine: Engine,
     pub shared: Arc<Shared>,
+    /// Project keys and folders with a clone or pull in progress.
+    pub cloning: parking_lot::Mutex<Vec<(String, PathBuf)>>,
 }
 
 pub fn default_tier(key: &str) -> Tier {
@@ -85,22 +87,22 @@ pub fn validate_settings(
     issues
 }
 
-fn field_issue(path: &str, message: String) -> ValidationIssue {
+pub fn field_issue(path: &str, message: String) -> ValidationIssue {
     ValidationIssue {
         path: path.into(),
         message,
     }
 }
 
-/// The settings entry an import request adds, or every problem with the request, each on its
-/// field: `key`, `path`, or `stack`.
-pub fn import_entry(
+/// The trimmed key and stack of an import or clone request, with an issue on `key` or `stack` for
+/// each problem.
+pub fn key_and_stack(
     settings: &WorkspaceSettings,
-    root: &Path,
-    req: &ImportProject,
-) -> Result<ProjectEntry, Vec<ValidationIssue>> {
-    let mut issues = vec![];
-    let key = req.key.trim();
+    key: &str,
+    stack: Option<&str>,
+    issues: &mut Vec<ValidationIssue>,
+) -> (String, Option<String>) {
+    let key = key.trim();
     if !is_project_key(key) {
         issues.push(field_issue("key", format!("`{key}` is not a project key. Use lowercase letters, digits, and dashes, starting with a letter or digit.")));
     } else if settings.project(key).is_some() {
@@ -111,14 +113,22 @@ pub fn import_entry(
             ),
         ));
     }
-    let stack = req
-        .stack
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let stack = stack.map(str::trim).filter(|s| !s.is_empty());
     if let Some(s) = stack.filter(|s| !is_stack_name(s)) {
         issues.push(field_issue("stack", stack_issue(s)));
     }
+    (key.to_string(), stack.map(str::to_string))
+}
+
+/// The settings entry an import request adds, or every problem with the request, each on its
+/// field: `key`, `path`, or `stack`.
+pub fn import_entry(
+    settings: &WorkspaceSettings,
+    root: &Path,
+    req: &ImportProject,
+) -> Result<ProjectEntry, Vec<ValidationIssue>> {
+    let mut issues = vec![];
+    let (key, stack) = key_and_stack(settings, &req.key, req.stack.as_deref(), &mut issues);
     let path = if !req.path.is_absolute() {
         issues.push(field_issue("path", "Use an absolute path.".into()));
         None
@@ -155,11 +165,7 @@ pub fn import_entry(
         }
     };
     match path {
-        Some(path) if issues.is_empty() => Ok(ProjectEntry {
-            key: key.to_string(),
-            path,
-            stack: stack.map(str::to_string),
-        }),
+        Some(path) if issues.is_empty() => Ok(ProjectEntry { key, path, stack }),
         _ => Err(issues),
     }
 }
@@ -244,6 +250,7 @@ impl WorkspaceRt {
             db,
             engine,
             shared,
+            cloning: Default::default(),
         };
         rt.sync_projects();
         Ok(rt)

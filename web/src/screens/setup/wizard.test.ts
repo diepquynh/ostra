@@ -13,6 +13,7 @@ import {
   stackOptions,
   projectIndex,
   projectStart,
+  repoName,
   stepForIssue,
   stepsFor,
   suggestKey,
@@ -22,6 +23,13 @@ import {
 } from "./wizard";
 
 describe("project keys", () => {
+  it("take the repository name from a git URL", () => {
+    expect(repoName("https://github.com/acme/shop-api.git")).toBe("shop-api");
+    expect(repoName("git@github.com:acme/Shop_Web.git")).toBe("Shop_Web");
+    expect(suggestKey(repoName("ssh://git@host:2222/team/app/"))).toBe("app");
+    expect(repoName("")).toBe("");
+  });
+
   it("derives a key from the folder name with the server's slug rule", () => {
     expect(suggestKey("shop-backend")).toBe("shop-backend");
     expect(suggestKey("Billing Service")).toBe("billing-service");

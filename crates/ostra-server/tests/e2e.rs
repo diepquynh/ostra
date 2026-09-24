@@ -1620,3 +1620,195 @@ async fn terminal_streams_over_the_socket() {
     ptys.remove(&exec);
     pty.terminate(Duration::from_millis(200)).await;
 }
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Serve a bare repository over git's dumb HTTP protocol, answering 401 without the expected
+/// Basic credentials.
+async fn serve_repo(bare: PathBuf, basic: String) -> String {
+    use axum::http::{HeaderMap, StatusCode, Uri, header};
+    let handler = move |uri: Uri, headers: HeaderMap| {
+        let (bare, basic) = (bare.clone(), basic.clone());
+        async move {
+            let authorized = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|h| h.to_str().ok())
+                == Some(basic.as_str());
+            if !authorized {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    [(header::WWW_AUTHENTICATE, "Basic realm=\"git\"")],
+                    Vec::new(),
+                );
+            }
+            let rel = uri.path().trim_start_matches("/repo.git/");
+            match std::fs::read(bare.join(rel)) {
+                Ok(bytes) => (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, "application/octet-stream")],
+                    bytes,
+                ),
+                Err(_) => (
+                    StatusCode::NOT_FOUND,
+                    [(header::CONTENT_TYPE, "text/plain")],
+                    Vec::new(),
+                ),
+            }
+        }
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let router = axum::Router::new().fallback(handler);
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    format!("http://127.0.0.1:{port}/repo.git")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn projects_clone_and_pull_with_a_saved_git_credential() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { base, client, .. } = boot(dir.path()).await;
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "gitws", "root": dir.path().join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let src = dir.path().join("src");
+    let bare = dir.path().join("repo.git");
+    std::fs::create_dir(&src).unwrap();
+    git(&src, &["init", "-q"]);
+    std::fs::write(src.join("a.txt"), "1").unwrap();
+    git(&src, &["add", "."]);
+    git(&src, &["commit", "-qm", "one"]);
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            &src.to_string_lossy(),
+            &bare.to_string_lossy(),
+        ],
+    );
+    git(&bare, &["update-server-info"]);
+    // base64 of "x-access-token:tok-e2e-secret"
+    let url = serve_repo(
+        bare.clone(),
+        "Basic eC1hY2Nlc3MtdG9rZW46dG9rLWUyZS1zZWNyZXQ=".into(),
+    )
+    .await;
+
+    let clone = format!("{base}/api/workspaces/{}/clone", ws.id);
+    let r = client
+        .post(&clone)
+        .json(&json!({"url": "file:///etc", "key": "Bad Key"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 422);
+    let err: ApiError = r.json().await.unwrap();
+    assert_eq!(issue_paths(&err.issues), ["url", "key"]);
+
+    // No credential saved yet: git fails instead of prompting.
+    let r = client
+        .post(&clone)
+        .json(&json!({"url": url, "key": "app"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 502);
+    assert!(!dir.path().join("ws/app").exists());
+
+    let creds = format!("{base}/api/git/credentials");
+    let r = client
+        .post(&creds)
+        .json(&json!({"host": "127.0.0.1", "kind": "https", "secret": "tok-e2e-secret"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body = r.text().await.unwrap();
+    assert!(!body.contains("tok-e2e-secret"), "{body}");
+
+    let r = client
+        .post(&clone)
+        .json(&json!({"url": url, "key": "app"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "{}", r.text().await.unwrap());
+    let detail: WorkspaceDetail = r.json().await.unwrap();
+    let app = detail.projects.iter().find(|p| p.key == "app").unwrap();
+    assert!(app.is_git);
+    assert_eq!(app.git_branch.as_deref(), Some("main"));
+    let checkout = dir.path().join("ws/app");
+    assert!(checkout.join("a.txt").exists());
+    let config = std::fs::read_to_string(checkout.join(".git/config")).unwrap();
+    assert!(!config.contains("tok-e2e-secret"), "{config}");
+
+    let pull = format!("{base}/api/workspaces/{}/projects/app/pull", ws.id);
+    let out: Value = client
+        .post(&pull)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(out["updated"], false, "{out}");
+
+    std::fs::write(src.join("b.txt"), "2").unwrap();
+    git(&src, &["add", "."]);
+    git(&src, &["commit", "-qm", "two"]);
+    git(&src, &["push", "-q", &bare.to_string_lossy(), "main"]);
+    git(&bare, &["update-server-info"]);
+    let r = client.post(&pull).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let out: Value = r.json().await.unwrap();
+    assert_eq!(out["updated"], true, "{out}");
+    assert!(checkout.join("b.txt").exists());
+
+    let list: Vec<Value> = client
+        .get(&creds)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let id = list[0]["id"].as_str().unwrap();
+    let left: Vec<Value> = client
+        .delete(format!("{creds}/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(left.is_empty());
+}

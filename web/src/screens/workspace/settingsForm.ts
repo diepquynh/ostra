@@ -260,11 +260,12 @@ export function stableJson(v: unknown): string {
 // Issues, tabs and deep links
 // ---------------------------------------------------------------------------------------------
 
-export type SettingsTab = "general" | "projects" | "routing" | "permissions" | "instructions" | "notifications";
+export type SettingsTab = "general" | "projects" | "git" | "routing" | "permissions" | "instructions" | "notifications";
 
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "projects", label: "Projects" },
+  { id: "git", label: "Git" },
   { id: "routing", label: "Routing" },
   { id: "permissions", label: "Permissions" },
   { id: "instructions", label: "Instructions" },
@@ -306,7 +307,7 @@ export type IssueMap = { byField: Record<string, ValidationIssue[]>; unmatched: 
 export function mapIssues(issues: ValidationIssue[], fields: string[]): IssueMap {
   const byField: Record<string, ValidationIssue[]> = {};
   const unmatched: ValidationIssue[] = [];
-  const byTab: Record<SettingsTab, number> = { general: 0, projects: 0, routing: 0, permissions: 0, instructions: 0, notifications: 0 };
+  const byTab: Record<SettingsTab, number> = { general: 0, projects: 0, git: 0, routing: 0, permissions: 0, instructions: 0, notifications: 0 };
   for (const i of issues) {
     byTab[tabOf(i.path)] += 1;
     const f = fieldForIssue(i.path, fields);

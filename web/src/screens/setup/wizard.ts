@@ -69,6 +69,12 @@ export function suggestKey(folder: string): string {
   return slug || "project";
 }
 
+/** The repository name at the end of a git URL: `git@github.com:acme/shop-api.git` gives `shop-api`. */
+export function repoName(url: string): string {
+  const tail = url.trim().replace(/\/+$/, "").split(/[/:]/).pop() ?? "";
+  return tail.replace(/\.git$/, "");
+}
+
 export const isProjectKey = (k: string) => /^[a-z0-9][a-z0-9-]*$/.test(k);
 
 export function keyError(key: string, taken: string[]): string | null {

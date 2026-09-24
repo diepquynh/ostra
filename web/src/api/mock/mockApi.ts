@@ -1,6 +1,6 @@
 import { HttpError, type Api } from "../client";
 import type { SearchHit, TreeSession, WorkspaceActivity } from "../nav";
-import type { DecisionView, ExecutionView, GateView, PendingGate, ProjectSkills, SessionDetail, SessionSummary, SkillDoc, WorkspaceUiState } from "../types";
+import type { DecisionView, ExecutionView, GitCredentialView, GateView, PendingGate, ProjectSkills, SessionDetail, SessionSummary, SkillDoc, WorkspaceUiState } from "../types";
 import * as f from "./fixtures";
 import * as fx from "./fixtures.execution";
 import { eventsFor, gateSessions } from "./fixtures.session";
@@ -21,6 +21,7 @@ const attempt = <T>(fn: () => T): Promise<T> => {
 };
 
 let settings = structuredClone(f.settings);
+let gitCreds: GitCredentialView[] = [];
 let gates: GateView[] = structuredClone(f.gates);
 let lessons = structuredClone(wf.lessonsByProject);
 let skillDocs: Record<string, Record<string, SkillDoc>> = Object.fromEntries(
@@ -185,6 +186,34 @@ export const mockApi: Api = {
         { key: body.key.trim(), path: body.path, init_status: "not_initialized", ultracode_bootstrap: false, is_git: true, git_branch: "main", stack: body.stack || null, profile: null },
       ],
     });
+  },
+  cloneProject: (_ws, body) => {
+    const key = body.key.trim();
+    return delay(
+      {
+        ...f.workspaceDetail,
+        projects: [
+          ...f.workspaceDetail.projects,
+          { key, path: body.path || `${f.workspaceDetail.root}/${key}`, init_status: "not_initialized", ultracode_bootstrap: false, is_git: true, git_branch: body.branch || "main", stack: body.stack || null, profile: null },
+        ],
+      },
+      1500,
+    );
+  },
+  pullProject: () => delay({ branch: "main", updated: false, before: "1a2b3c4", after: "1a2b3c4", output: "Already up to date." }),
+  gitCredentials: () => delay(gitCreds),
+  createGitCredential: (edit) => {
+    const host = (edit.host ?? "").trim();
+    gitCreds = [...gitCreds, { id: `gc_${gitCreds.length + 1}`, label: edit.label || host, host, kind: edit.kind === "ssh" ? "ssh" : "https", username: edit.username || null, has_secret: true }];
+    return delay(gitCreds);
+  },
+  updateGitCredential: (id, edit) => {
+    gitCreds = gitCreds.map((c) => (c.id === id ? { ...c, label: edit.label ?? c.label, host: edit.host ?? c.host, username: edit.username ?? c.username } : c));
+    return delay(gitCreds);
+  },
+  deleteGitCredential: (id) => {
+    gitCreds = gitCreds.filter((c) => c.id !== id);
+    return delay(gitCreds);
   },
   removeProject: (_ws, key) => delay({ ...f.workspaceDetail, projects: f.workspaceDetail.projects.filter((p) => p.key !== key) }),
   initProject: () => delay(f.sessions[2]),

@@ -152,6 +152,105 @@ pub struct ImportProject {
     pub stack: Option<String>,
 }
 
+/// `POST /api/workspaces/{ws}/clone`: clone a git repository and import it. Only `url`
+/// and `key` are needed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CloneProject {
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub stack: Option<String>,
+    /// Where the checkout goes. Absent means `<workspace root>/<key>`. It must not exist or be an
+    /// empty folder.
+    #[serde(default)]
+    #[ts(type = "string | null", optional)]
+    pub path: Option<PathBuf>,
+    /// The branch to check out. Absent means the remote's default branch.
+    #[serde(default)]
+    #[ts(optional)]
+    pub branch: Option<String>,
+    /// A saved git credential id. Absent means the saved credential that matches the URL, else
+    /// the machine's own git and SSH setup.
+    #[serde(default)]
+    #[ts(optional)]
+    pub credential: Option<String>,
+}
+
+/// `POST /api/workspaces/{ws}/projects/{key}/pull`: what a fast-forward pull did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitPullResult {
+    pub branch: Option<String>,
+    /// False when the branch was already up to date.
+    pub updated: bool,
+    /// Short commit ids before and after the pull.
+    pub before: Option<String>,
+    pub after: Option<String>,
+    /// The last lines git printed.
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum GitCredentialKind {
+    /// A username and a personal access token, for `https://` remotes.
+    Https,
+    /// An unencrypted private key, for `ssh://` and `git@host:path` remotes.
+    Ssh,
+}
+
+/// A git credential saved in the registry. The secret is reported only as present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitCredentialView {
+    pub id: String,
+    pub label: String,
+    /// A host, optionally with a path prefix: `github.com` or `github.com/acme`. The longest match
+    /// against a remote's host and path wins.
+    pub host: String,
+    pub kind: GitCredentialKind,
+    pub username: Option<String>,
+    pub has_secret: bool,
+}
+
+/// `POST /api/git/credentials` and `PATCH /api/git/credentials/{id}`. On a patch an absent field
+/// keeps its value; `secret` is write-only.
+#[derive(Clone, PartialEq, Serialize, Deserialize, TS, Default)]
+#[ts(export)]
+pub struct GitCredentialEdit {
+    #[serde(default)]
+    #[ts(optional)]
+    pub label: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub host: Option<String>,
+    #[serde(default)]
+    #[ts(as = "Option<GitCredentialKind>", optional)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub username: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub secret: Option<String>,
+}
+
+impl std::fmt::Debug for GitCredentialEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitCredentialEdit")
+            .field("label", &self.label)
+            .field("host", &self.host)
+            .field("kind", &self.kind)
+            .field("username", &self.username)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct HarnessStatus {
@@ -1199,6 +1298,13 @@ pub enum ServerMsg {
         workspace: WorkspaceId,
         key: String,
         paths: Vec<String>,
+    },
+    /// A line of git progress for a clone into project `key`, on `workspace:<id>`. At most four
+    /// per second per clone.
+    GitProgress {
+        workspace: WorkspaceId,
+        key: String,
+        line: String,
     },
     /// A session node of the Sessions tree changed or appeared, on `workspace:<id>`. Replace the
     /// node with the same id. At most four per second per session.

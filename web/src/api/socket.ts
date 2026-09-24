@@ -50,6 +50,7 @@ export function channelsFor(msg: WireMsg): string[] {
     case "harness_status":
       return ["home"];
     case "project_fs_changed":
+    case "git_progress":
     case "tree_patch":
     case "activity":
       return [`workspace:${msg.workspace}`];

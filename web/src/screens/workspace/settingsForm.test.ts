@@ -152,7 +152,7 @@ describe("issue paths", () => {
     expect(Object.keys(m.byField).sort()).toEqual(["limits.max_parallel_executions", "name", "routing.model.byAgent.plan"]);
     expect(m.byField["routing.model.byAgent.plan"].map((i) => i.message)).toEqual(["b", "c"]);
     expect(m.unmatched.map((i) => i.message)).toEqual(["e"]);
-    expect(m.byTab).toEqual({ general: 3, projects: 0, routing: 2, permissions: 0, instructions: 0, notifications: 0 });
+    expect(m.byTab).toEqual({ general: 3, projects: 0, git: 0, routing: 2, permissions: 0, instructions: 0, notifications: 0 });
   });
 
   it("name the tab of every settings key", () => {

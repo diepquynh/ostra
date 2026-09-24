@@ -10,6 +10,10 @@ import type {
   ExecutionView,
   FsListing,
   GateView,
+  CloneProject,
+  GitCredentialEdit,
+  GitCredentialView,
+  GitPullResult,
   ImportProject,
   Lesson,
   LessonEdit,
@@ -112,6 +116,12 @@ export const httpApi = {
     request<ValidationIssue[]>("POST", `/api/workspaces/${enc(ws)}/validate`, settings),
   importProject: (ws: string, body: ImportProject) =>
     request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/projects`, body),
+  cloneProject: (ws: string, body: CloneProject) => request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/clone`, body),
+  pullProject: (ws: string, key: string) => request<GitPullResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/pull`),
+  gitCredentials: () => request<GitCredentialView[]>("GET", "/api/git/credentials"),
+  createGitCredential: (edit: GitCredentialEdit) => request<GitCredentialView[]>("POST", "/api/git/credentials", edit),
+  updateGitCredential: (id: string, edit: GitCredentialEdit) => request<GitCredentialView[]>("PATCH", `/api/git/credentials/${enc(id)}`, edit),
+  deleteGitCredential: (id: string) => request<GitCredentialView[]>("DELETE", `/api/git/credentials/${enc(id)}`),
   removeProject: (ws: string, key: string) =>
     request<WorkspaceDetail>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}`),
   initProject: (ws: string, key: string) =>

@@ -33,7 +33,7 @@ All decisions below were made by the user on 2026-09-22. Treat them as requireme
 | Relationship to Ultracode | A complete rewrite, based on the plugin's prompt-driven workflow, its hooks, and its MCP tools. Not a fifth generator target. |
 | Deployment | Localhost, same machine as the code, single user, for the first build. |
 | Workspace | The user creates a dev workspace. It holds settings: which executor and model each agent task runs on, the tech stack of each project, memory, custom instructions, YOLO, and permissions. |
-| Projects | The user imports existing folders into a workspace at any time, like Claude Code's `/add-dir`. To start a new project the user creates it by hand and imports it. Ostra does not scaffold projects in v1. |
+| Projects | The user imports existing folders into a workspace at any time, like Claude Code's `/add-dir`, or clones a git repository into it (6.4). To start a new project the user creates it by hand and imports it. Ostra does not scaffold projects in v1. |
 | Executors | Each subagent task is routed to an executor: Ostra's native agent loop, or an installed harness CLI (Claude Code, Codex, Grok Build, Antigravity). The terminal view streams that harness's own interface, not a shell. |
 | Permissions | Claude Code's model: modes plus allow, ask, and deny rules. |
 | YOLO | Every permission is granted and every user-facing question is answered by the engine. The orchestrator decides everything. See section 10.5 for the exact boundary. |
@@ -139,10 +139,6 @@ The user adds a folder at any time, from the wizard or from workspace settings, 
 
 Removing a project from a workspace deletes nothing on disk.
 
-A new project is created by the user outside Ostra, then imported. The init flow then works from whatever code
-exists. For an empty folder, the stack chosen in project settings seeds skills from `refs/<stack>.md` in the
-convention-seeded mode `UC/refs/skill-archetypes.md` (Archetype D) already describes.
-
 ### 6.3 Per-project state
 
 `<project>/.ostra/` holds:
@@ -157,6 +153,35 @@ convention-seeded mode `UC/refs/skill-archetypes.md` (Archetype D) already descr
 Skills live in `.ostra/skills/`, not in any harness's skill directory. Every executor loads a skill by its
 path, which Ultracode measured as the one mechanism that works on every harness (Claude resolves names, Codex
 and Grok subagents need the path).
+
+A new project is created by the user outside Ostra, then imported. The init flow then works from whatever code
+exists. For an empty folder, the stack chosen in project settings seeds skills from `refs/<stack>.md` in the
+convention-seeded mode `UC/refs/skill-archetypes.md` (Archetype D) already describes.
+
+### 6.4 Cloning and pulling from git
+
+The Add project dialog can clone a repository instead of importing a folder, so a workspace can live in a
+container with no host checkout. Ostra runs `git clone` into `<workspace root>/<key>` or a chosen empty folder,
+streams git's progress to `workspace:<id>` as `git_progress`, and imports the checkout the way 6.2 does. A
+failed clone removes what it wrote. A project that is a git checkout can be pulled from its board: the pull is
+`git pull --ff-only` on the checked-out branch, and it is refused while a running or waiting session has the
+project in scope, because it would change files under an implementer.
+
+- Remotes are `https://`, `http://`, `ssh://`, or `user@host:path`. Local paths, `file://`, and `ext::` are
+  refused, because they read or run things on the server's machine. A URL that carries a password is refused,
+  because git keeps the URL in `.git/config`.
+- Git credentials are saved from Settings, Git, in `registry.db` next to the provider keys, for every
+  workspace. One is an HTTPS token (with an optional user name) or an unencrypted SSH private key, and names a
+  host with an optional path prefix (`github.com/acme`). The longest matching prefix for the remote's kind
+  wins; a host without a port matches any port. Secrets are write-only. A key can be pasted or imported from a
+  file, which the browser reads and sends like a pasted one. The settings page says that credentials stay on the
+  machine that runs Ostra (its data folder, or the data volume under Docker).
+- Git receives a credential per command only: a token through a one-off `credential.helper` that reads the
+  process environment (the user's own helpers are dropped for that command, so the token is never copied into
+  them), a key through a 0600 temporary file named in `GIT_SSH_COMMAND`. Neither reaches `.git/config`, an
+  agent's environment, or a harness, so an agent cannot push with them.
+- Every git command runs with `GIT_TERMINAL_PROMPT=0` and SSH `BatchMode=yes` with
+  `StrictHostKeyChecking=accept-new`, so a missing credential fails instead of waiting on a prompt.
 
 ## 7. Settings
 
@@ -718,6 +743,12 @@ GET/PATCH       /api/workspaces/:ws/ui                    console layout; PATCH 
 POST/DELETE     /api/workspaces/:ws/projects[/:key]       import (like /add-dir); 422 issues on key, path, stack;
                                                           remove
 POST            /api/workspaces/:ws/projects/:key/init    start the init flow
+POST            /api/workspaces/:ws/clone                 clone a repository and import it (url, key, stack,
+                                                          path, branch, credential); 422 issues per field,
+                                                          502 with git's last lines, 409 while busy
+POST            /api/workspaces/:ws/projects/:key/pull    fast-forward pull; 409 while a session uses it
+GET/POST        /api/git/credentials                      list; add (every call answers the whole list)
+PATCH/DELETE    /api/git/credentials/:id                  edit (absent fields kept); delete
 GET/PATCH/DELETE /api/workspaces/:ws/projects/:key/memory
 GET             /api/workspaces/:ws/projects/:key/tree    ?path=&depth=&hidden=; entries with git marks and the
                                                           execution that changed them
@@ -768,7 +799,8 @@ WebSocket `/ws`, multiplexed by channel. The browser sends `subscribe` and `unsu
   own channel, never through engine notices, so a busy terminal cannot make session events lag.
 - `workspace:<ws>`: `session_updated`; `tree_patch` with a whole Sessions tree node, at most four per second per
   session; `activity` with the running executions, open gates, and spend, at most two per second;
-  `project_fs_changed` with the project-relative paths an execution wrote, coalesced over a short window.
+  `project_fs_changed` with the project-relative paths an execution wrote, coalesced over a short window;
+  `git_progress` with git's latest progress line for a clone into a project key, at most four per second.
 - `home`: `session_updated` for every workspace, and `harness_status` on subscribe.
 
 ## 14. Repository layout

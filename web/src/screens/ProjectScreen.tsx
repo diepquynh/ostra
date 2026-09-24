@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { ProjectView } from "../api/types";
-import { Button, Chip, Icon, Spinner, StatusChip, Tabs } from "../design";
+import { api } from "../api";
+import type { GitPullResult, ProjectView } from "../api/types";
+import { Banner, Button, Chip, Icon, Spinner, StatusChip, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
 import { ProjectFiles } from "./project/ProjectFiles";
 import { ProjectOverview } from "./project/ProjectOverview";
@@ -27,6 +28,17 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
   const shell = useShell();
   const [tab, setTab] = useState<"overview" | "files">("overview");
   const p = detail?.projects.find((x) => x.key === projectKey);
+  const [pulling, setPulling] = useState(false);
+  const [pulled, setPulled] = useState<{ ok: GitPullResult } | { error: string } | null>(null);
+
+  const pull = () => {
+    setPulling(true);
+    setPulled(null);
+    api.pullProject(ws, projectKey).then(
+      (ok) => setPulled({ ok }),
+      (e: Error) => setPulled({ error: e.message }),
+    ).finally(() => setPulling(false));
+  };
 
   if (!detail)
     return (
@@ -70,10 +82,28 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
             </span>
           </div>
         </div>
+        {p.is_git && (
+          <Button size="sm" icon="git-pull-request" disabled={pulling} title="Fast-forward the checked-out branch from its upstream" onClick={pull}>
+            {pulling ? "Pulling…" : "Pull"}
+          </Button>
+        )}
         <Button size="sm" icon="folder-tree" onClick={() => shell.browseFiles(p.key)}>
           Browse files
         </Button>
       </div>
+      {pulled && (
+        <div style={{ padding: "12px 24px 0", flex: "none" }}>
+          {"error" in pulled ? (
+            <Banner tone="bad">{pulled.error}</Banner>
+          ) : (
+            <Banner tone="info">
+              {pulled.ok.updated
+                ? `Pulled ${pulled.ok.branch ?? "the branch"} from ${pulled.ok.before ?? "?"} to ${pulled.ok.after ?? "?"}.`
+                : `${pulled.ok.branch ?? "The branch"} is already up to date.`}
+            </Banner>
+          )}
+        </div>
+      )}
       <div style={{ padding: "12px 24px 0", flex: "none" }}>
         <Tabs
           label="Project"

@@ -3,6 +3,7 @@ import { api, HttpError } from "../api";
 import type { ValidationIssue, WorkspaceDetail } from "../api/types";
 import { Banner, Button, Panel, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
+import { GitCredentials } from "./setup/GitCredentials";
 import { ProviderCredentials } from "./setup/ProviderCredentials";
 import { flash, Loading, Page, useAfterPaint, useAnchor } from "./workspace/Page";
 import {
@@ -240,6 +241,7 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
       />
       {tab === "general" && <GeneralSection {...props} />}
       {tab === "projects" && <ProjectsSection {...props} onAdd={addProject} stacks={detail.stacks} />}
+      {tab === "git" && <GitCredentials />}
       {tab === "routing" && (
         <>
           <RoutingSection {...props} harnesses={detail.harnesses} agentInfo={detail.agents} />

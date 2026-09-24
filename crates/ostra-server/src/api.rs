@@ -186,6 +186,19 @@ pub fn router(app: Arc<App>) -> axum::Router {
         )
         .route("/api/workspaces/{ws}/validate", post(validate_workspace))
         .route("/api/workspaces/{ws}/projects", post(import_project))
+        .route("/api/workspaces/{ws}/clone", post(clone_project))
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/pull",
+            post(pull_project),
+        )
+        .route(
+            "/api/git/credentials",
+            get(git_credentials).post(create_git_credential),
+        )
+        .route(
+            "/api/git/credentials/{id}",
+            axum::routing::patch(patch_git_credential).delete(delete_git_credential),
+        )
         .route(
             "/api/workspaces/{ws}/projects/{key}",
             delete(remove_project),
@@ -547,6 +560,112 @@ async fn import_project(
         crate::setup::CreateError::Failed(m) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m),
     })?;
     Ok(Json(w.detail()))
+}
+
+async fn clone_project(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<CloneProject>,
+) -> Res<WorkspaceDetail> {
+    let w = ws(&app, &id)?;
+    let plan = crate::git::clone_plan(&w, &app.shared.registry, &body)
+        .map_err(|issues| ApiErr::invalid_request(issues, "clone the project"))?;
+    // A task of its own, so a closed tab does not kill git halfway and leave a partial checkout.
+    let (app2, w2) = (app.clone(), w.clone());
+    tokio::spawn(async move { crate::git::clone(&app2, &w2, plan).await })
+        .await
+        .map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(git_err)?;
+    Ok(Json(w.detail()))
+}
+
+fn git_err(e: crate::git::GitError) -> ApiErr {
+    match e {
+        crate::git::GitError::Busy(m) => ApiErr::new(StatusCode::CONFLICT, m),
+        crate::git::GitError::Git(m) => ApiErr::new(StatusCode::BAD_GATEWAY, m),
+        crate::git::GitError::Import(crate::setup::CreateError::Invalid(issues)) => {
+            ApiErr::invalid_request(issues, "import the cloned project")
+        }
+        crate::git::GitError::Import(crate::setup::CreateError::Failed(m)) => {
+            ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m)
+        }
+    }
+}
+
+async fn pull_project(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<GitPullResult> {
+    let w = ws(&app, &id)?;
+    let dir = w
+        .project_path(&key)
+        .ok_or_else(|| ApiErr::not_found(format!("No project {key}.")))?;
+    if !dir.join(".git").exists() {
+        return Err(ApiErr::bad(format!(
+            "`{key}` is not a git repository, so there is nothing to pull."
+        )));
+    }
+    let busy = w.db.list_sessions()?.into_iter().find(|s| {
+        matches!(s.status, SessionStatus::Running | SessionStatus::Waiting)
+            && (s.projects.contains(&key)
+                || matches!(&s.kind, ostra_core::event::SessionKind::Init { project } if *project == key))
+    });
+    if let Some(s) = busy {
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            format!(
+                "Stop session {} or wait for it to finish, then pull, because it is working in `{key}`.",
+                s.id
+            ),
+        ));
+    }
+    let (app2, w2) = (app.clone(), w.clone());
+    let out = tokio::spawn(async move { crate::git::pull(&app2, &w2, &key, &dir).await })
+        .await
+        .map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(git_err)?;
+    Ok(Json(out))
+}
+
+fn credential_err(e: crate::git::EditError) -> ApiErr {
+    match e {
+        crate::git::EditError::Invalid(issues) => {
+            ApiErr::invalid_request(issues, "save the git credential")
+        }
+        crate::git::EditError::NotFound => ApiErr::not_found("No such git credential."),
+        crate::git::EditError::Store(e) => e.into(),
+    }
+}
+
+async fn git_credentials(State(app): AppState) -> Res<Vec<GitCredentialView>> {
+    Ok(Json(crate::git::views(&app.shared.registry)?))
+}
+
+async fn create_git_credential(
+    State(app): AppState,
+    Json(edit): Json<GitCredentialEdit>,
+) -> Res<Vec<GitCredentialView>> {
+    crate::git::save(&app.shared.registry, None, &edit).map_err(credential_err)?;
+    git_credentials(State(app)).await
+}
+
+async fn patch_git_credential(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(edit): Json<GitCredentialEdit>,
+) -> Res<Vec<GitCredentialView>> {
+    crate::git::save(&app.shared.registry, Some(&id), &edit).map_err(credential_err)?;
+    git_credentials(State(app)).await
+}
+
+async fn delete_git_credential(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Res<Vec<GitCredentialView>> {
+    if !crate::git::delete(&app.shared.registry, &id)? {
+        return Err(ApiErr::not_found("No such git credential."));
+    }
+    git_credentials(State(app)).await
 }
 
 async fn remove_project(
