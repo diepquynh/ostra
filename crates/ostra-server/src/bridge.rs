@@ -166,8 +166,9 @@ fn served_by_mcp(tool: &str) -> bool {
     MCP_TOOLS.iter().any(|(_, native, _)| *native == tool)
 }
 
-const MCP_TOOLS: [(&str, &str, Capability); 3] = [
+const MCP_TOOLS: [(&str, &str, Capability); 4] = [
     ("report", "Report", Capability::Report),
+    ("document", "Document", Capability::Document),
     ("memory", "Memory", Capability::Memory),
     ("memory_recall", "MemoryRecall", Capability::MemoryRecall),
 ];
@@ -258,9 +259,9 @@ impl BridgeServices for ServerBridge {
     fn mcp_tools(&self, execution: &ExecutionId) -> Vec<(String, String, Value)> {
         let Some(r) = self.get(execution) else { return vec![] };
         let caps: Vec<Capability> = MCP_TOOLS.iter().map(|(_, _, c)| *c).collect();
-        let _ = &r;
         ostra_tools::definitions(&caps)
             .into_iter()
+            .chain(ostra_tools::document_tool_definition(r.env.config().agent))
             .filter_map(|d| {
                 MCP_TOOLS.iter().find(|(_, n, _)| *n == d.name).map(|(name, _, _)| (name.to_string(), d.description, d.input_schema))
             })

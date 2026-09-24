@@ -26,6 +26,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "WebSearch",
     "WebFetch",
     "Report",
+    "Document",
     "Memory",
     "MemoryRecall",
 ];

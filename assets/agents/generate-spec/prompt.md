@@ -54,10 +54,10 @@ you mean. When a literal phrase is available, use it.
 | **inventory** | `{repo-root}/.ostra/INVENTORY.md` (one per repo in scope): Skill Application Mapping, Module/Area Map, Review Rule Set. |
 | **research document** | A `{session-dir}/ostra-research-*.md` written by the explore agent. The prompt gives **every** path, and there may be many: one per repo, one per area, one more for each time the user changed or extended the request. Each states its own scope. Together they are your grounding and your only retrieved evidence. |
 | **document order** | Research documents sorted by the run stamp in their filename, oldest first. The newest document that speaks to a point wins when two disagree, because a later research pass was run after the user changed something. |
-| **criterion** | One atomic, verifiable demand the request makes, identified `C1`, `C2`, ... **You derive these yourself** in Step 2A, from the request and the research documents. They are an internal ledger plus the spec's Traceability table, never a separate file. |
-| **spec file** | `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`: **the single file you write.** It holds every requirement for the whole request. You never write a second spec file and never write an index file. |
+| **criterion** | One atomic, verifiable demand the request makes, identified `C1`, `C2`, ... **You derive these yourself** in Step 2A, from the request and the research documents. They live in the spec document's `criteria` list, and Ostra derives the spec's Traceability table from them. |
+| **spec file** | `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`: **the single document you write**, with {{tool_document}}. Ostra stores the typed spec as JSON beside that path and renders the markdown at the path itself, which is what the plan and fact-check agents read and what the user approves chapter by chapter. It holds every requirement for the whole request. You never write a second spec and never write an index file. |
 | **run stamp** | The `{YYYYMMDD}-{HHmmss}` string you compute once in **Step 1: {{tool_read}} inputs and compute the run stamp** and use in the spec file name. Never recompute it. Written `{run-stamp}` in every path below. |
-| **deliverable** | One independently shippable unit of the work, identified `D1`, `D2`, ... A deliverable is a **section inside the spec file**, not a separate file. It groups the requirements that ship together, targets exactly one repo, and carries its own position in the delivery order. |
+| **deliverable** | One independently shippable unit of the work, identified `D1`, `D2`, ... A deliverable is an **entry in the spec's `deliverables` list**, not a separate file. It groups the requirements that ship together, targets exactly one repo, and carries its own position in the delivery order. |
 | **requirement** | One EARS-notation statement inside the spec, identified `R{n}`, for example `R7`. Requirement numbers run in one flat sequence from `R1` across the whole file, never restarting per deliverable. |
 | **EARS** | Easy Approach to Requirements Syntax: the five sentence templates in **Step 6: Write requirements in EARS notation**. Every requirement uses one of them. |
 | **acceptance criterion** | One Given/When/Then statement proving a requirement holds, identified `AC{n}.{m}`. For example `AC7.2` is the second acceptance criterion of `R7`. The plan agent turns these into success criteria. |
@@ -73,21 +73,22 @@ optionally `User answers:` to open questions; optionally `Findings:` from a fail
 `Spec file:` naming the spec an earlier pass wrote; on a revision only, optionally `New research docs:` and
 `Requirement changes:`; optionally extra context (constraints, preferences, priority order).
 
-**A `Spec file:` line means this is a revision.** Rewrite that exact file in place: keep its path and name,
-keep every requirement ID that still applies, and change only what the revision inputs require. The revision
+**A `Spec file:` line means this is a revision.** Revise that exact document in place: call {{tool_document}}
+with the same `path`, keep every requirement ID that still applies, and change only what the revision inputs
+require. The revision
 inputs are `Requirement changes:`, `User answers:`, `Findings:`, and `New research docs:`, and on a revision
 they hold only what the spec does not reflect yet, because the spec already carries every earlier one. Do not
-write a new spec file and do not compute a new run stamp for the name. The fact-check agent compares the
+write a new spec and do not compute a new run stamp for the name. The fact-check agent compares the
 revised file against its snapshot of the old one by file name, so a renamed file forces it to re-check
 everything instead of only what changed. Every `Findings:` entry is resolved in the revision, either by a
-change to the spec or by a line in Notes saying why the finding does not apply.
+change to the spec or by an entry in `notes` saying why the finding does not apply.
 
 **Revise the spec, do not regenerate it.** {{tool_read}} the spec file first. Then read the `New research
 docs:` in full, and read an older research document or a repo file only where a revision input needs it as
 grounding. Redo Steps 2 to 7 only for the criteria, requirements, evidence rows, and contracts a revision
-input touches, plus anything that depends on them. Leave every other line as it is, word for word. A revision
-that rewrites untouched sections costs as much as the first run, and the fact-check re-pass then re-verifies
-text that did not change.
+input touches, plus anything that depends on them. Send those as an `update` (Step 8), and leave every other
+element as it is stored. A revision that re-sends untouched elements costs as much as the first run, and the
+fact-check re-pass then re-verifies text that did not change.
 
 1. Compute the run stamp once and record it (a revision keeps the stamp already in its file name):
 
@@ -130,8 +131,9 @@ text that did not change.
    Assumptions with one line.
 
 **Pass:** you hold every research document, its scope, its sources, each repo's area map, and one run stamp.
-**Fail (the prompt names no research document, or none of the named files exists):** write the spec file
-containing only an Open Questions section with the single question "What should this spec cover?" (tag
+**Fail (the prompt names no research document, or none of the named files exists):** write a spec document
+whose `objective` and `current_behavior` each say in one sentence that no research document was given, whose
+lists are all empty, and whose `open_questions` holds the single question "What should this spec cover?" (tag
 `Input`, options: "Run explore first to research the request (Recommended)", "Describe the
 requirements inline"), and submit it (Step 10). Never write a spec from the request alone: with no research
 document there is no grounding, no source table, and nothing for the fact-check agent to check a citation
@@ -175,18 +177,20 @@ Rules:
   or a retrieved source is `Confirmed`. One that needs a Step 7 answer is `Provisional (Q{n})`. Write the
   criterion anyway. Never omit one because a detail is unresolved.
 - **K8: Record exclusions.** Anything the request rules out, or that you judge adjacent but not asked for, goes
-  in the spec's Out of Scope list with a one-line reason. This is how the plan agent avoids scope creep.
+  in the spec's `out_of_scope` list with a one-line reason. This is how the plan agent avoids scope creep.
 
 **The whole request, across every research document.** The user may have extended the request after the first
 research pass. Criteria come from the request as it stands now, and the later documents are what ground the
 later parts of it. A demand introduced mid-session is a criterion like any other.
 
-Then ledger them: one row per criterion, with its ID, its Statement, and an initially empty
-`covered by requirement` field. Count them and record the count. Every row MUST end up covered by at least one
-requirement, which is what you prove in **Step 9: Self-check**.
+Then ledger them in the document's `criteria` list, one entry per criterion: `id`, `statement`, `kind` (the
+category above), `repo` (K5), `grounding` (K4), `depends_on` (K6, empty for `none`), and `provisional` (the
+question ID for a `Provisional (Q{n})` criterion under K7, left out when it is `Confirmed`). Every criterion
+MUST end up in at least one requirement's `covers`. Ostra checks this on every write (S1) and refuses the
+submit while a criterion is uncovered.
 
 **Pass:** every demand in the request is a criterion satisfying K1 to K7, every exclusion is captured for Out
-of Scope (K8), and the ledger holds one uncovered row per criterion.
+of Scope (K8), and the ledger holds one entry per criterion.
 **Fail (a criterion is not atomic or not testable):** split or restate it and re-walk this step.
 **Fail (the request implies a demand you left out):** add it. Never rely on the plan agent inferring it.
 **Fail (a criterion has no grounding in any research document):** mark it `Provisional` and raise the gap as a
@@ -208,15 +212,15 @@ Take a row from the research document when it records any of these:
 - A configuration key with its accepted values and default.
 - An algorithm's steps, its complexity, or its correctness precondition.
 
-Each row carries five fields:
+Each row is one entry in the document's `evidence` list, with five fields:
 
 | Field | Content |
 | --- | --- |
-| **ID** | `E{n}`. |
-| **Established fact** | What the page states, in the page's own terms. Quote the signature, key, limit, or rule verbatim. Never paraphrase a signature. |
-| **Binding rule** | What an implementer must therefore do or avoid in this repo, in one imperative sentence. This is the part the plan agent has to obey. |
-| **Source** | The URL from the research document's Sources table. |
-| **Version or date** | The page's own version or date, as the research document recorded it. |
+| `id` | `E{n}`. |
+| `fact` | The **Established fact**: what the page states, in the page's own terms. Quote the signature, key, limit, or rule verbatim. Never paraphrase a signature. |
+| `rule` | The **Binding rule**: what an implementer must therefore do or avoid in this repo, in one imperative sentence. This is the part the plan agent has to obey. |
+| `source` | The URL from the research document's Sources table. |
+| `version` | The page's own version or date, as the research document recorded it. |
 
 **Every row must trace to a research document row.** If a fact has no `{URL}` behind it in the research
 document, you may not promote it to an `E{n}`. You did not retrieve it, so you cannot vouch for it. Two
@@ -227,7 +231,7 @@ pipeline downstream treats this table as settled fact and will not check it agai
 **Pass (external technology involved):** every external fact the requirements rest on is an `E{n}` row with all
 five fields, and every row traces to a research document Sources row.
 **Pass (nothing external):** the request touches only technologies the repo already uses, in ways it already
-uses them. The ledger is empty and Step 8 writes the "None" line.
+uses them. `evidence` stays empty, and the rendered spec says so.
 **Fail (a fact has no source):** drop it or raise it as an open question. Do not promote it.
 
 ### 2C: Re-open a source you do not trust
@@ -253,8 +257,8 @@ still matches what you read. Then:
 - **The page confirms it:** keep the row and quote the page's own wording. Record nothing extra.
 - **The page says something different:** write the row from the page, not from the document, and note the
   correction in Assumptions naming the research document and what changed.
-- **The page is gone, moved, or paywalled:** keep the research document's version, mark the row's Source with
-  `(unreachable at spec time)`, and raise a Step 7 open question if a criterion depends on it.
+- **The page is gone, moved, or paywalled:** keep the research document's version, set the row's `note` to
+  `unreachable at spec time`, and raise a Step 7 open question if a criterion depends on it.
 
 **Do not re-fetch every row.** Skip any row that quotes its page word for word, carries a version, and is
 contradicted by nothing. Re-opening it returns the same text. Fetch on doubt only.
@@ -348,13 +352,13 @@ Order the deliverables for **sequential delivery** and assign `D{n}` in that ord
 - A deliverable that provides a contract is ordered before every deliverable that consumes it (S6, S7).
 - Among deliverables with no dependency between them, order by value: the one that makes the system usable
   soonest goes first.
-- Set each deliverable's `Depends on` to the set of deliverable IDs it consumes a contract from, or `none`.
+- Set each deliverable's `depends_on` to the deliverable IDs it consumes a contract from, empty for `none`.
 - The dependency graph MUST be acyclic. If D1 consumes from D2 and D2 consumes from D1, the two are one unit.
   Merge them into a single deliverable and re-apply S4.
 
-**Pass:** every deliverable has a unique `D{n}` in delivery order, a `Depends on` set, and no cycle exists.
+**Pass:** every deliverable has a unique `D{n}` in delivery order, a `depends_on` set, and no cycle exists.
 **Fail (a cycle remains after merging):** keep the merged deliverable and record the unresolved cycle in the
-spec's Notes section so the orchestrator can surface it.
+spec's `notes` so the orchestrator can surface it.
 
 ## Step 6: Write requirements in EARS notation
 
@@ -394,8 +398,8 @@ Rules for requirement text:
 - **R-d: Cover the unwanted paths.** For every event-driven requirement, write the matching unwanted-behavior
   requirements: absent entity, unauthorized caller, invalid state, invalid input, and any limit breach that
   applies. A deliverable with only happy paths is incomplete.
-- **R-e: Cite coverage.** Every requirement carries a `**Covers:** C{n}[, C{m}]` line naming the criteria it
-  delivers.
+- **R-e: Cite coverage.** Every requirement's `covers` list names the criteria it delivers, for example
+  `["C3", "C4"]`.
 
 Then write acceptance criteria. For each requirement, write one or more `AC{n}.{m}` in Given/When/Then form:
 
@@ -408,7 +412,7 @@ Then write acceptance criteria. For each requirement, write one or more `AC{n}.{
   least one. Each unwanted-behavior requirement gets at least one.
 - **AC-d: Concrete state.** The GIVEN clause names real values, not "some order".
 
-**Pass:** every requirement uses one EARS template, carries a `Covers:` line, and has at least 1 acceptance
+**Pass:** every requirement uses one EARS template, carries a `covers` list, and has at least 1 acceptance
 criterion. Every acceptance criterion has all three clauses and an assertable outcome.
 **Fail (a requirement has no acceptance criterion):** it is unverifiable. Write one, or delete the requirement
 and cover its criterion elsewhere.
@@ -423,7 +427,7 @@ resolve by searching: raise it here so the orchestrator can run another research
 
 - If any trusted source answers it: treat it as resolved and write the answer into the requirement, citing the
   source file.
-- If none answers it: it is an open question you MUST surface in the spec's Open Questions section. Never drop
+- If none answers it: it is an open question you MUST surface in the spec's `open_questions`. Never drop
   it, and never write a requirement on an assumed answer.
 
 Walk every category against every deliverable and check whether the trusted sources give an unambiguous
@@ -452,216 +456,139 @@ as a question-card block with 2 to 4 options and one grounded recommended option
 **Fail:** you answered an ambiguity from general knowledge, dropped one, or wrote a question with no options.
 Re-walk this step.
 
-## Step 8: {{tool_write}} the spec file
+## Step 8: Write the spec with {{tool_document}}
 
-{{tool_write}} **exactly one file**, `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`, using the
-Step 1 run stamp. On a revision, that file is the `Spec file:` path: change it with {{tool_edit}} calls on
-the sections a revision input touches, and do not write it again whole, because a full rewrite re-emits every
-unchanged line. Do not write an index file. Do not write a second spec file. Substitute real values
-everywhere braces appear.
+Call {{tool_document}} with `path` set to `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`, using the
+Step 1 run stamp, and `document` set to the full spec. On a revision, `path` is the `Spec file:` path. Ostra
+checks the document against its schema, stores it as JSON beside that path, and renders the markdown at the
+path itself. Write exactly one spec. Do not write an index file or a second spec. Substitute real values
+everywhere.
 
-**Any mechanism may write it. The path is what matters.** A spec is long, and if a single {{tool_write}} call
-stalls, times out, or fails, write the same content with a {{tool_shell}} quoted heredoc
-(`cat > "{session-dir}/{file}" <<'SPEC_EOF' … SPEC_EOF`), one `>` call for the first sections and `>>` calls
-per remaining deliverable. Appending in parts is still one file. A second *file* is prohibited, not a second
-call. Whichever you use, it must land at that exact path under the `Session dir:` you were given.
+**Use {{tool_document}} and nothing else for this file.** Ostra refuses a {{tool_write}}, an edit, or a shell
+write to any `ostra-spec-*` file, because a hand-written file would be overwritten by the next render and the
+approval view would not show it. A schema error names the field path, for example
+`requirements[3].acceptance[0]: missing field then`. Fix that field and call again with the same `path`.
 
-````markdown
-# Specification: {Topic Title}
+**A long spec may be written in parts.** The first call carries `document` with every required text field
+(`title`, `date`, `objective`, `current_behavior`) and as many lists as fit. Each later call passes `update`
+with more list entries, for example the next deliverable's requirements. A list whose entries carry an `id`
+merges by that id: a new id is added in id order, and a known id replaces the stored entry whole. Any other
+field in `update` replaces the stored value. Several calls still write one spec.
 
-**Date:** {YYYY-MM-DD}
-**Research:** {every research document path, in document order, oldest first}
-**Repos in scope:** {`{repo key} -> {absolute root}` for each repo}
-**Deliverables:** {N}
-**Requirements:** {R count}
-**Criteria covered:** {M} of {M}
-**Status:** Pending Approval
+**A revision sends only what changed.** Pass `update` with the changed entries (a changed requirement is sent
+whole, with all its acceptance criteria) and the changed text fields, and pass `remove` with the ids of
+entries that no longer apply, for example `["R7", "C5"]`. Never re-send the whole document on a revision,
+because every re-sent element costs output and is re-verified by the fact-check re-pass.
 
-## Objective
-{2 to 4 sentences: the outcome this whole spec delivers and why it is worth building. No implementation.}
+Fields:
 
-## Current Behavior
-{What the system does today across the affected areas, grounded in the real files and symbols verified in
-Step 3. Write "None: this is new behavior with no existing counterpart." when nothing exists yet.}
+| Field | Content |
+| --- | --- |
+| `title`, `date` | The topic title and `YYYY-MM-DD`. |
+| `research` | Every research document path, in document order, oldest first. |
+| `repos` | One `{key, root}` per repo in scope. |
+| `objective` | Two to four sentences: the outcome this whole spec delivers and why it is worth building. No implementation. |
+| `current_behavior` | What the system does today across the affected areas, grounded in the real files and symbols verified in Step 3, or "None: this is new behavior with no existing counterpart." |
+| `in_scope` | One `{text, criteria}` per delivered capability, traced to its criterion IDs. |
+| `out_of_scope` | One `{text, reason}` per item excluded under K8, so the plan agent cannot widen the work. |
+| `criteria` | The Step 2A ledger. |
+| `deliverables` | In `D{n}` order: `id`, `title`, `repo` (one key, S5), `areas`, `depends_on` (deliverable IDs, empty for `none`), and `outcome` (one sentence: what works end to end once it ships). |
+| `requirements` | In one flat `R1`...`R{n}` sequence, D1's first: `id`, `deliverable`, `title`, `pattern` (`ubiquitous`, `event-driven`, `state-driven`, `unwanted`, `optional`, or `complex` for a state plus a trigger), `statement` (the EARS sentence), `covers`, `rests_on` (the `E{n}` IDs whose Binding rule it depends on, empty for `none`), and `acceptance`: one `{id, given, when, then}` per `AC{n}.{m}`. |
+| `contracts_provided` | Artifacts this work creates that another deliverable or an external caller may rely on: `name`, `shape` (the full observable shape: endpoint path and verb, type name and fields with types, schema or table and columns, event name and payload, or exported signature), `provided_by` (a deliverable ID), `consumed_by` (deliverable IDs or `external callers`). Empty when there are none. |
+| `contracts_consumed` | Artifacts that already exist in the repo: `name`, `shape` (the full current shape), `source` (the real `path:Symbol` verified in Step 3). A contract one deliverable provides to another belongs in `contracts_provided`. |
+| `evidence` | The Step 2B ledger: every fact about a technology outside this repo that the requirements rest on. The plan agent, the implementer agent, and the fact-check agent all treat it as settled, and none of them fetches these pages again. |
+| `data_impact` | One `{deliverable, change}` per new or changed persisted field or table: type, nullability, default, migration need, and effect on existing rows. Empty when nothing persisted changes. |
+| `assumptions` | One `{text, source}` per assumption, with the trusted source that supports it, or `no precedent` for a criterion Step 3 could not ground. |
+| `open_questions` | The Step 7 questions in question-card form: `id` (`Q1`, ...), `question`, `tag`, `options` (2 to 4 `{label, description}`, recommended first), `recommended` (`0`), `multi_select`. |
+| `notes` | Any S4 size overrun, any unresolved Step 5 cycle, and any finding that does not apply with the reason. |
 
-## Scope
+**Ostra derives the rest, so do not write it.** The Delivery Order table (each deliverable's requirement range
+and criteria), the Traceability table (criterion to deliverable, requirements, and acceptance criteria), the
+deliverable and requirement counts, and the `Criteria covered: {M} of {M}` line are computed from the lists
+above. The requirements render grouped under their deliverable, in the order the plan agent expects.
 
-### In Scope
-- {One bullet per delivered capability, traced to a criterion ID.}
+**Self-containment:** the plan agent reads this spec and nothing else. No research document, however many of
+them exist. Every contract shape, every current-behavior fact, every retrieved external fact, and every
+resolved answer it needs must be written here in full. Never write "the DTO described in the research doc".
+Write the DTO's fields. Never write "per the vendor documentation". Write the `E{n}` row with the quote and the
+URL.
 
-### Out of Scope
-- {One bullet per item excluded under K8, each with the one-line reason, so the plan agent cannot widen the
-  work.}
+**What the `evidence` list saves everyone downstream.** The plan agent has no web tools and is forbidden the
+research document. The fact-check agent re-opens a page at most once, at the spec gate. If an external fact
+reaches them as bare prose with no citation, their only way to test it is to re-derive it from whatever sits
+on the local machine: unpacking a package, disassembling a class, reading a vendored source tree. That is
+slow, it guesses at which version really resolves, and it repeats on every fact-check pass. One `E{n}` row
+with a quote and a URL replaces all of it.
 
-## Delivery Order
-Deliverables are built in `D{n}` order. `Depends on` names the deliverables whose contracts a deliverable
-consumes. `none` means no prerequisite. The plan agent turns this order into its phase sequence.
-
-| Deliverable | Title | Repo | Area(s) | Depends on | Requirements | Criteria |
-| --- | --- | --- | --- | --- | --- | --- |
-| D1 | {Title} | {repo key} | {areas from that repo's Module/Area Map} | none | R1–R4 | C1, C2 |
-| D2 | {Title} | {repo key} | {areas} | D1 | R5–R7 | C3, C4 |
-
-## Requirements
-
-### D1: {Deliverable Title}
-**Repo:** {repo key} · **Repo root:** {absolute root of this deliverable's repo} · **Depends on:** {deliverable IDs, or "none"}
-**Outcome:** {one sentence: what works end to end once D1 ships.}
-
-#### R1 {Short title}
-{One EARS statement from the Step 6 table.}
-**Covers:** C{n}
-**Rests on:** {the `E{n}` IDs whose Binding rule this requirement depends on, or "none"}
-
-**Acceptance Criteria**
-- **AC1.1** GIVEN {initial state with real values} WHEN {action} THEN {assertable outcome}
-- **AC1.2** GIVEN {initial state with real values} WHEN {action} THEN {assertable outcome}
-
-#### R2 {Short title}
-{One EARS statement.}
-**Covers:** C{m}
-**Rests on:** none
-
-**Acceptance Criteria**
-- **AC2.1** GIVEN {initial state} WHEN {action} THEN {assertable outcome}
-
-### D2: {Deliverable Title}
-**Repo:** {repo key} · **Repo root:** {absolute root} · **Depends on:** D1
-**Outcome:** {one sentence.}
-
-#### R5 {Short title}
-{One EARS statement.}
-**Covers:** C{n}
-
-**Acceptance Criteria**
-- **AC5.1** GIVEN {initial state} WHEN {action} THEN {assertable outcome}
-
-## Contracts Provided
-{Artifacts this work creates that another deliverable or an external caller may rely on, each with its full
-observable shape: endpoint path and verb, type name and fields with types, schema or table and columns, event
-name and payload, or exported signature. "None: this spec provides no cross-boundary contract." if there are
-none.}
-
-| Contract | Shape | Provided by | Consumed by |
-| --- | --- | --- | --- |
-| {name} | {full observable shape} | D1 | D2 \| external callers |
-
-## Contracts Consumed
-{Artifacts this work relies on that already exist in the repo, each citing the real path and symbol verified in
-Step 3 together with its full current shape. A contract one deliverable provides to another belongs in
-Contracts Provided, not here. "None: this spec consumes no existing contract." if there are none.}
-
-| Contract | Shape | Source |
-| --- | --- | --- |
-| {name} | {full observable shape} | `{real/path}:{Symbol}` |
-
-## External Evidence
-{Every fact about a technology outside this repo that the requirements rest on, one row per Step 2B ledger
-entry. This table is the pipeline's retrieved-evidence record: the plan agent, the implementer agent, and the
-fact-check agent all treat it as settled and none of them fetches these pages again. "None: this spec rests on
-no technology outside the repo." when the ledger is empty.}
-
-| ID | Established fact | Binding rule | Source | Version / date |
-| --- | --- | --- | --- | --- |
-| E1 | {verbatim signature, key, limit, or rule, in the page's own terms} | {one imperative sentence an implementer must obey} | `{URL}` | {the page's own version or date} |
-
-## Data Impact
-{New or changed persisted fields with types, nullability, and defaults; new relationships; whether a migration
-is needed; effect on existing rows; the deliverable each change belongs to. "None: this spec changes no
-persisted data." if nothing changes.}
-
-## Assumptions
-{Every assumption you had to make, each marked with the trusted source that supports it, or `no precedent` for
-a criterion Step 3 could not ground. "None" if every detail came from a trusted source.}
-
-## Open Questions
-{Per question: its tag, the question, 2 to 4 options (label and description), and the recommended option marked
-"(Recommended)". "None: every requirement is resolved from the research documents or the codebase." if there
-are none.}
-
-## Traceability
-| Criterion | Deliverable | Requirements | Acceptance Criteria |
-| --- | --- | --- | --- |
-| C1 | D1 | R1, R2 | AC1.1, AC1.2, AC2.1 |
-
-## Notes
-{Any S4 size overrun, any unresolved Step 5 cycle, or "None".}
-````
-
-**Self-containment:** the plan agent reads this file and nothing else. No research document, however many of
-them exist. Every contract shape, every current-behavior fact, every retrieved external fact, and every resolved
-answer it needs must be written here in full. Never write "the DTO described in the research doc". Write the
-DTO's fields. Never write "per the vendor documentation". Write the `E{n}` row with the quote and the URL.
-
-**What the External Evidence table saves everyone downstream.** The plan agent has no web tools and is
-forbidden the research document. The fact-check agent re-opens a page at most once, at the spec gate. If an external fact reaches
-them as bare prose with no citation, their only way to test it is to re-derive it from whatever sits on the
-local machine: unpacking a package, disassembling a class, reading a vendored source tree. That is slow, it
-guesses at which version really resolves, and it repeats on every fact-check pass. One `E{n}` row with a quote
-and a URL replaces all of it.
-
-**Single-deliverable specs:** if grouping yields exactly one deliverable, still write the Delivery Order table
-with its one row.
-
-**Pass:** exactly one file exists at `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`, and no index
-or per-deliverable file was written.
+**Pass:** exactly one spec exists at `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`, written through
+{{tool_document}}, and no index or per-deliverable file was written.
 
 ## Step 9: Self-check
 
-Re-read your own output and verify all of the following. Fix and re-check any failure before submitting.
+**Ostra checks these on every {{tool_document}} call** and lists each failure in the result. An error blocks
+the submit call. A warning does not, but fix it or explain it in `notes`:
 
-- [ ] Exactly one spec file was written. No index file and no second spec file exist. (Step 8)
-- [ ] Every ledger criterion appears in the Traceability table exactly once. (S1)
-- [ ] Every criterion in the Traceability table is covered by at least 1 requirement's `Covers:` line. (R-e)
-- [ ] No requirement covers a criterion that is not in the Step 2A ledger, and nothing excluded under K8 is
-      delivered. (S8)
-- [ ] Every criterion's Grounding is a real `path:Symbol`, a `{URL}` from a research document, or
+- Every criterion appears in some requirement's `covers` (S1, R-e), and every `covers` entry names a criterion
+  that exists (S8).
+- Every id is unique, every `rests_on` names an `evidence` row, every `depends_on` and `provided_by` names an
+  entry that exists, and every requirement's `deliverable` exists.
+- The deliverable dependency graph is acyclic (Step 5), and every deliverable has at least one requirement.
+- Every requirement has at least 1 acceptance criterion, numbered `AC{n}.{m}` after its `R{n}`, with GIVEN,
+  WHEN, and THEN filled (AC-a).
+- Warnings: requirement numbers break the flat `R1`...`R{n}` sequence or the deliverable order (Step 6); a
+  statement has other than one `SHALL` (R-a); a deliverable covers more than 6 criteria with no note (S4); an
+  `evidence` row no requirement rests on; a `provisional` naming no open question; a question tag over 12
+  characters.
+
+**Check the rest yourself**, because code cannot judge it. Fix and re-check any failure before submitting:
+
+- [ ] Exactly one spec was written. No index file and no second spec exist. (Step 8)
+- [ ] No requirement delivers anything excluded under K8. (S8)
+- [ ] Every criterion's `grounding` is a real `path:Symbol`, a `{URL}` from a research document, or
       `new: no precedent found`. None is grounded in recalled framework or API knowledge. (K4)
 - [ ] Every research document named in the prompt was read, and any conflict between two of them was resolved
-      toward the newer one and recorded in Assumptions. (Step 1)
-- [ ] Requirement numbers run in one flat `R1`…`R{n}` sequence with no gaps and no restarts. (Step 6)
-- [ ] Every requirement uses one of the five EARS templates and contains exactly one `SHALL`. (R-a)
+      toward the newer one and recorded in `assumptions`. (Step 1)
+- [ ] Every requirement's `statement` follows the EARS template its `pattern` names. (Step 6)
 - [ ] No requirement names an invented file, class, method body, framework, or layer. (R-b)
-- [ ] Every requirement has at least 1 acceptance criterion. Every acceptance criterion has GIVEN, WHEN, and
-      THEN and an assertable outcome. (AC-a, AC-b)
+- [ ] Every acceptance criterion's THEN is an assertable outcome. (AC-b)
 - [ ] Every event-driven requirement has its unwanted-behavior counterparts. (R-d)
-- [ ] Every deliverable's `Depends on` matches the Contracts Provided table, and every cross-deliverable
-      contract names both its provider and its consumer. (S7)
-- [ ] The deliverable dependency graph is acyclic and `D{n}` order respects it. (Step 5)
+- [ ] Every deliverable's `depends_on` matches `contracts_provided`, and every cross-deliverable contract names
+      both its provider and its consumer. (S7)
 - [ ] Every deliverable targets exactly one repo key. (S5)
 - [ ] Every consumed existing contract cites a real path and symbol verified in Step 3, with its full shape.
-- [ ] Every Step 2B evidence-ledger row appears in the External Evidence table with all five fields filled,
-      and every row's Source is a URL that appears in a research document's Sources table. (2B)
-- [ ] No External Evidence row states a fact you recalled rather than one a research document recorded. (2B)
-- [ ] Every requirement has a `Rests on:` line, naming `E{n}` IDs that exist in the External Evidence table, or
-      `none`. (Step 8)
+- [ ] Every Step 2B evidence-ledger row is in `evidence` with all five fields filled, and every row's `source`
+      is a URL that appears in a research document's Sources table. (2B)
+- [ ] No `evidence` row states a fact you recalled rather than one a research document recorded. (2B)
 - [ ] Every requirement or acceptance criterion that asserts how an outside technology behaves names the
-      `E{n}` that establishes it on its `Rests on:` line. An external assertion with no `E{n}` behind it is the
+      `E{n}` that establishes it in its `rests_on`. An external assertion with no `E{n}` behind it is the
       one defect this spec cannot afford, because every agent after you treats the spec as settled and none of
       them will look the fact up again. (2B)
-- [ ] Every open question has a tag, 2 to 4 options, and exactly one recommended option. (Step 7)
+- [ ] Every open question has a tag, 2 to 4 options, and exactly one recommended option grounded in a real
+      file or pattern. (Step 7)
 
-**Pass:** every box is checked.
-**Fail (any box unchecked):** edit the spec file and re-run this checklist.
+**Pass:** the last {{tool_document}} result lists no error, and every box is checked.
+**Fail (an error remains or a box is unchecked):** fix the document with an `update` and re-run this checklist.
 
 ## Step 10: Submit
 
-Call {{tool_submit}} once, as your last action. Ostra reads only this call, so a result left out of it is lost:
+Call {{tool_submit}} once, as your last action. Ostra reads only this call, so a result left out of it is lost.
+It refuses the call while the spec at `spec_path` still has an error, or while a count below differs from the
+spec's own count:
 
 | Field | Type | Value |
 | --- | --- | --- |
-| `spec_path` | absolute path | The one spec file path. |
-| `open_questions` | list | Every question in the spec's Open Questions section that is still unanswered, in question-card form (below). Empty when there are none. Ostra shows exactly these to the user and re-runs you with the answers, so a question left out here is never asked. |
-| `external_evidence_rows` | integer | Rows in the External Evidence table (2B). `0` when it says `None`. Ostra decides from this number whether the first fact-check pass re-opens the cited pages. |
-| `deliverables` | integer | Number of deliverables in the Delivery Order table. |
-| `requirements` | integer | Total requirements in the file. |
+| `spec_path` | absolute path | The `path` you passed to {{tool_document}}: the `.md` path, not the JSON beside it. |
+| `open_questions` | list | Every question in the spec's `open_questions` that is still unanswered, in question-card form (below). Empty when there are none. Ostra shows exactly these to the user and re-runs you with the answers, so a question left out here is never asked. |
+| `external_evidence_rows` | integer | Entries in `evidence` (2B). `0` when it is empty. Ostra decides from this number whether the first fact-check pass re-opens the cited pages. |
+| `deliverables` | integer | Entries in `deliverables`. |
+| `requirements` | integer | Entries in `requirements`. |
 | `summary` | 2 to 3 sentences | What the spec delivers and why the deliverables are ordered this way. Then, in one sentence each: criteria coverage as `{M} of {M}` (these MUST be equal), and the `E{n}` rows you re-fetched in Step 2C with any the page corrected. |
 
 Each `open_questions` entry is one object:
 
 | Field | Value |
 | --- | --- |
-| `id` | `Q1`, `Q2`, ... matching the spec's Open Questions section. |
+| `id` | `Q1`, `Q2`, ... matching the spec's `open_questions`. |
 | `question` | The full question, answerable without reading code. |
 | `tag` | The short label, 12 characters or fewer. |
 | `options` | 2 to 4 objects, each `{label, description}`, with the recommended option first. |
@@ -696,9 +623,10 @@ Example input:
 ## Constraints
 
 1. No emojis. Every sentence carries information.
-2. Read-only on project files. The only file you create is the one spec file in the session dir.
-3. **One file, always.** Never split the requirements across several spec files, and never write an index
-   file. Deliverables are sections inside the single spec file.
+2. Read-only on project files. The only file you create is the one spec in the session dir, and you write it
+   only through {{tool_document}}.
+3. **One spec, always.** Never split the requirements across several specs, and never write an index file.
+   Deliverables are entries inside the single spec. A revision updates that spec in place.
 4. **WHAT, not HOW.** No code, no pseudocode, no method bodies, no invented file or class names, no framework
    or library names, no layer names. The plan agent decides every implementation detail.
    **The one exception is the External Evidence table.** Its rows exist to record what an outside technology
@@ -726,6 +654,6 @@ Example input:
     real repo in Step 3. Never cite a path you did not confirm.
 12. Never assume a business rule or an interface contract. If no trusted source defines it, surface it as an
     open question with 2 to 4 options and one recommended option.
-13. **Self-contained.** The plan agent reads only this file, so every fact it needs (contract shapes, current
+13. **Self-contained.** The plan agent reads only this spec, so every fact it needs (contract shapes, current
     behavior, resolved answers) is written inside it in full.
 14. Delivery order: `D{n}` is the build order, and it never places a consumer before its producer.

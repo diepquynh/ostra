@@ -5,6 +5,7 @@ import type { DiffFile } from "../types";
 import type { ActivityItem, Artifact, ExecutionDelta, ExecutionView, PolicyDecision, ToolCall, Usage } from "../types";
 import { Slugger } from "../../screens/artifact/outline";
 import * as f from "./fixtures";
+import { documentFor } from "./fixtures.documents";
 
 const SROOT = `/home/me/code/shop/.ostra/sessions/${f.SESSION}`;
 const BACKEND = "/home/me/code/shop-backend";
@@ -624,5 +625,5 @@ export function artifactFor(path: string): Artifact {
           : name.includes("implementer")
             ? REPORT
             : SPEC;
-  return { path, content, headings: mockHeadings(content) };
+  return { path, content, headings: mockHeadings(content), document: documentFor(path) };
 }

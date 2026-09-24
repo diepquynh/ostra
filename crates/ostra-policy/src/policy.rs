@@ -251,6 +251,11 @@ impl ExecutionPolicy {
             }
             return None;
         }
+        if tool == "Document" {
+            let raw = call.str_field("path").unwrap_or_default();
+            let target = self.roots.resolve(&self.roots.repo, raw);
+            return guards::check_document(&self.ctx, &self.roots, &target, raw);
+        }
         if tool.starts_with("submit_") {
             let status = call.str_field("status").unwrap_or("ok");
             if status == "ok"
@@ -443,7 +448,7 @@ impl ExecutionPolicy {
                 });
                 let known = matches!(
                     tool,
-                    "WebSearch" | "Skill" | "Report" | "Memory" | "MemoryRecall"
+                    "WebSearch" | "Skill" | "Report" | "Document" | "Memory" | "MemoryRecall"
                 ) || tool.starts_with("submit_")
                     || harness_internal;
                 match self.rule_decision(&subject, &session_allow) {

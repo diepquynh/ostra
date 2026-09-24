@@ -33,7 +33,7 @@ you mean. When a literal phrase is available, use it.
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The code-reviewer, EPA, and write-test agents read your change report from this exact path. |
 | **repo brief** | A `## Repo brief for implementer` section at the end of your prompt, resolved for you from this repo's profile and inventory: the exact `build`, `test`, and `format` command strings, the skills to load (each with its catalog **name** and its `SKILL.md` **path** fallback), this repo's conventions, and the module-map rows covering your paths. It is your routing source. Use it verbatim and do not re-derive it. |
 | **repo profile / inventory** | `{repo-root}/.ostra/project.toml` and `{repo-root}/.ostra/INVENTORY.md`. Your brief already carries what you need from them. Open them **only** if you need a table the brief does not include (for example the full Review Rule Set text). Never re-read them just to confirm a command the brief already gave you. |
-| **plan document** | One of two modes: (1) a phase file at `{session-dir}/ostra-plan-*-phase-{N}-{slug}.md` from the plan agent, with self-contained steps for one phase, or (2) inline instructions in the orchestrator's prompt when the plan tier was skipped for a lower-stakes request. |
+| **plan document** | One of two modes: (1) a phase file at `{session-dir}/ostra-plan-*-phase-{N}.md` from the plan agent, with self-contained steps for one phase, or (2) inline instructions in the orchestrator's prompt when the plan tier was skipped for a lower-stakes request. |
 | **prior phase reports** | Comma-separated implementer-report paths from earlier phases, for context on what already exists (names, paths, patterns). `None` for phase 1 or inline invocations. |
 | **step** | One atomic unit of work: create or modify exactly one file, then verify. |
 | **change report** | Markdown at the exact path on the `Report file:` line, usually `{session-dir}/ostra-implementer-phase-{N}.md`. Ostra names it so the next stage can find it. Lists every file created, modified, or deleted with a description. |
@@ -101,7 +101,7 @@ and build something else. State what failed, what you tried, and what you need.
 
 ## Step 1: {{tool_read}} Inputs
 
-The orchestrator's prompt contains some of: a **phase file path** (`{session-dir}/ostra-plan-*-phase-{N}-{slug}.md`);
+The orchestrator's prompt contains some of: a **phase file path** (`{session-dir}/ostra-plan-*-phase-{N}.md`);
 **inline instructions** (no-plan tasks or fixes); **fix instructions** (specific code-reviewer findings with
 paths and descriptions); **prior phase reports**; **context files**.
 

@@ -53,8 +53,11 @@ fn read_only_agents_have_no_edit_and_quick_answer_cannot_write() {
     for a in [AgentName::CodeReviewer, AgentName::ExecutionPathAnalyzer, AgentName::FactCheck] {
         assert!(!agent_def(a).capabilities.contains(&Capability::Edit), "{a}");
     }
-    // Plan edits its own files on a revision; the write-scope guard keeps it inside the session dir.
-    assert!(agent_def(AgentName::Plan).capabilities.contains(&Capability::Edit));
+    // Explore, spec, and plan write their documents through the Document tool, never a file write.
+    for a in [AgentName::Explore, AgentName::GenerateSpec, AgentName::Plan] {
+        let caps = &agent_def(a).capabilities;
+        assert!(caps.contains(&Capability::Document) && !caps.iter().any(|c| c.writes()), "{a}");
+    }
 }
 
 #[test]

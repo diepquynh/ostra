@@ -471,7 +471,7 @@ fn undeclared_report_is_unconstrained() {
     );
     allowed(
         &f.policy(AgentName::Explore),
-        &write(f.session_dir.join("ostra-research-20260826-auth.md")),
+        &document(f.session_dir.join("ostra-research-20260826-auth.md")),
     );
 }
 
@@ -788,7 +788,6 @@ fn artifact_ownership() {
     let f = fx();
     let spec = f.session_root.join("ostra-spec-20260922-120000-orders.md");
     std::fs::write(&spec, "# spec").unwrap();
-    allowed(&f.policy(AgentName::GenerateSpec), &write(&spec));
     for agent in [AgentName::Plan, AgentName::FactCheck, AgentName::Explore] {
         assert_eq!(
             guard_of(&f.policy(agent), &write(&spec)),
@@ -796,13 +795,6 @@ fn artifact_ownership() {
             "{agent}"
         );
     }
-    allowed(
-        &f.policy(AgentName::Plan),
-        &write(
-            f.session_root
-                .join("ostra-plan-20260922-orders-phase-1-data.md"),
-        ),
-    );
     denied(
         &f.policy(AgentName::GenerateSpec),
         &write(f.session_root.join("ostra-plan-x.md")),
@@ -822,6 +814,66 @@ fn artifact_ownership() {
         &fc,
         &bash(format!("cp /tmp/x \"{}\"", spec.display())),
         "generate-spec",
+    );
+}
+
+fn document(p: impl AsRef<Path>) -> ToolCall {
+    ToolCall::new(
+        "Document",
+        json!({"path": p.as_ref().to_string_lossy(), "update": {}}),
+    )
+}
+
+#[test]
+fn documents_change_only_through_the_document_tool() {
+    let f = fx();
+    let spec = f.session_root.join("ostra-spec-20260922-120000-orders.md");
+    let gs = f.policy(AgentName::GenerateSpec);
+    for target in [
+        spec.clone(),
+        spec.with_extension("json"),
+        f.session_root.join("ostra-plan-1-x-phase-2.md"),
+    ] {
+        let owner = if target.to_string_lossy().contains("plan") {
+            f.policy(AgentName::Plan)
+        } else {
+            f.policy(AgentName::GenerateSpec)
+        };
+        assert_eq!(guard_of(&owner, &write(&target)), "document-tool");
+        denied(&owner, &write(&target), "Document tool");
+    }
+    denied(
+        &gs,
+        &bash(format!("cat >> \"{}\" <<'EOF'\nx\nEOF", spec.display())),
+        "Document tool",
+    );
+    let explore = f.policy(AgentName::Explore);
+    denied(
+        &explore,
+        &write(f.session_dir.join("ostra-research-1-x.md")),
+        "Document tool",
+    );
+    // Fact-check's snapshot copies and the plan's spec snapshot are plain files.
+    allowed(
+        &f.policy(AgentName::FactCheck),
+        &write(
+            f.session_root
+                .join("factcheck-snapshot-spec/ostra-spec-20260922-120000-orders.md"),
+        ),
+    );
+    allowed(
+        &f.policy(AgentName::Plan),
+        &write(f.session_root.join("plan-snapshot/spec.md")),
+    );
+
+    allowed(&explore, &document(f.session_dir.join("ostra-research-1-x.md")));
+    assert_eq!(
+        guard_of(&f.policy(AgentName::Plan), &document(&spec)),
+        "artifact-ownership"
+    );
+    assert_eq!(
+        guard_of(&explore, &document(f.repo.join("ostra-research-1-x.md"))),
+        "write-scope"
     );
 }
 

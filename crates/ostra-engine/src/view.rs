@@ -5,6 +5,7 @@ use crate::runner::EngineError;
 use crate::state::{DocsState, EpaState, ExecRecord, LoopNext, SessionState, WorkLoop};
 use ostra_core::agent::AgentName;
 use ostra_core::api::{
+    FactCheckView,
     ArtifactRef, ChangedBy, DecisionView, ExecutionGroupView, ExecutionView, GateView, PendingGate, PhaseStatus, PhaseView,
     SessionDetail, SessionStatus, SessionSummary, StageCard, StageStatus, TreeGroup, TreeRun, TreeSession,
 };
@@ -678,7 +679,27 @@ pub fn detail(
         completion,
         session_root: s.session_root.clone(),
         execution_groups,
+        fact_checks: fact_checks(s),
     })
+}
+
+pub fn fact_checks(s: &SessionState) -> Vec<FactCheckView> {
+    fn track<T>(t: &crate::state::ArtifactTrack<T>, target: &str) -> Vec<FactCheckView> {
+        t.checks
+            .iter()
+            .map(|c| FactCheckView {
+                execution: c.exec.clone(),
+                target: target.into(),
+                version: c.version,
+                current: c.version == t.version,
+                verdict: c.result.as_ref().map(|r| r.verdict),
+                findings: c.result.as_ref().map(|r| r.findings.clone()).unwrap_or_default(),
+            })
+            .collect()
+    }
+    let mut out = track(&s.spec, "spec");
+    out.extend(track(&s.plan, "plan"));
+    out
 }
 
 #[cfg(test)]

@@ -495,7 +495,8 @@ async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artif
     }
     let content = std::fs::read_to_string(&path).map_err(|_| ApiErr::bad("The file is not text."))?;
     let headings = ostra_core::outline::headings(&content);
-    Ok(Json(Artifact { path, content, headings }))
+    let document = ostra_core::doc::load_view(&path);
+    Ok(Json(Artifact { path, content, headings, document }))
 }
 
 #[derive(Deserialize)]

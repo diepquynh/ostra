@@ -1,0 +1,88 @@
+{
+  "title": "Order cancellation",
+  "date": "2026-07-28",
+  "research": ["/work/shop/.ostra/sessions/s_01/backend/ostra-research-20260728-141030-order-lifecycle.md"],
+  "repos": [{"key": "backend", "root": "/work/shop/backend"}, {"key": "web", "root": "/work/shop/web"}],
+  "objective": "Let customers cancel an order while it is still ACTIVE, and tell the warehouse through the existing event queue, so support staff stop editing order rows by hand.",
+  "current_behavior": "Orders change state only through `OrderService` (`src/orders/service.ts`). There is no cancellation path; `OrderService.refund` is the closest precedent and publishes `order.refunded`.",
+  "in_scope": [
+    {"text": "Customer-initiated cancellation of an ACTIVE order.", "criteria": ["C1", "C2", "C3"]},
+    {"text": "A cancel button on the order page.", "criteria": ["C4"]}
+  ],
+  "out_of_scope": [
+    {"text": "Cancelling a shipped order.", "reason": "Q1 is open; the research recommends rejecting it."},
+    {"text": "Refund of the payment.", "reason": "The payment service owns refunds and the request does not ask for it."}
+  ],
+  "criteria": [
+    {"id": "C1", "statement": "A customer can cancel their own order while it is ACTIVE.", "kind": "Functional", "repo": "backend", "grounding": "src/orders/service.ts:OrderService.refund"},
+    {"id": "C2", "statement": "Cancelling an order the caller does not own is rejected.", "kind": "Constraint", "repo": "backend", "grounding": "src/orders/service.ts:OrderService.refund"},
+    {"id": "C3", "statement": "A cancellation publishes an event the warehouse can read.", "kind": "Integration", "repo": "backend", "grounding": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SendMessage.html", "depends_on": ["C1"]},
+    {"id": "C4", "statement": "The order page offers cancellation for an ACTIVE order.", "kind": "Functional", "repo": "web", "grounding": "new: no precedent found", "depends_on": ["C1"], "provisional": "Q1"}
+  ],
+  "deliverables": [
+    {"id": "D1", "title": "Cancellation endpoint", "repo": "backend", "areas": ["orders", "events"], "depends_on": [], "outcome": "A customer can cancel an ACTIVE order through the API and the warehouse receives `order.cancelled`."},
+    {"id": "D2", "title": "Cancel button", "repo": "web", "areas": ["orders-ui"], "depends_on": ["D1"], "outcome": "A customer can cancel an ACTIVE order from the order page."}
+  ],
+  "requirements": [
+    {
+      "id": "R1", "deliverable": "D1", "title": "Cancel an active order", "pattern": "event-driven",
+      "statement": "WHEN the owner of an ACTIVE order requests its cancellation THE SYSTEM SHALL set the order status to CANCELLED.",
+      "covers": ["C1"], "rests_on": [],
+      "acceptance": [
+        {"id": "AC1.1", "given": "order `o-1` owned by user `u-1` with status ACTIVE", "when": "`u-1` sends `POST /orders/o-1/cancel`", "then": "the response status is 200 and `o-1` has status CANCELLED"}
+      ]
+    },
+    {
+      "id": "R2", "deliverable": "D1", "title": "Reject another user's order", "pattern": "unwanted",
+      "statement": "IF the caller does not own the order THEN THE SYSTEM SHALL reject the cancellation with status 403.",
+      "covers": ["C2"], "rests_on": [],
+      "acceptance": [
+        {"id": "AC2.1", "given": "order `o-1` owned by user `u-1` with status ACTIVE", "when": "user `u-2` sends `POST /orders/o-1/cancel`", "then": "the response status is 403 and `o-1` remains ACTIVE"}
+      ]
+    },
+    {
+      "id": "R3", "deliverable": "D1", "title": "Publish the cancellation", "pattern": "event-driven",
+      "statement": "WHEN an order is cancelled THE SYSTEM SHALL publish `order.cancelled` carrying the order identifier.",
+      "covers": ["C3"], "rests_on": ["E1"],
+      "acceptance": [
+        {"id": "AC3.1", "given": "order `o-1` with status ACTIVE", "when": "its owner cancels it", "then": "one `order.cancelled` message with `orderId` `o-1` and message group `o-1` is on the queue"}
+      ]
+    },
+    {
+      "id": "R4", "deliverable": "D2", "title": "Offer the cancel button", "pattern": "state-driven",
+      "statement": "WHILE an order is ACTIVE THE SYSTEM SHALL show a Cancel order button on the order page.",
+      "covers": ["C4"], "rests_on": [],
+      "acceptance": [
+        {"id": "AC4.1", "given": "the order page for ACTIVE order `o-1`", "when": "the page renders", "then": "a Cancel order button is visible"},
+        {"id": "AC4.2", "given": "the order page for SHIPPED order `o-2`", "when": "the page renders", "then": "no Cancel order button is shown"}
+      ]
+    }
+  ],
+  "contracts_provided": [
+    {"name": "Cancel order endpoint", "shape": "`POST /orders/:id/cancel`, no body. 200 with the order JSON; 403 when the caller does not own it; 409 when it is not ACTIVE.", "provided_by": "D1", "consumed_by": ["D2"]}
+  ],
+  "contracts_consumed": [
+    {"name": "Event publisher", "shape": "`publish(event: DomainEvent): Promise<void>`", "source": "src/events/publisher.ts:publish"}
+  ],
+  "evidence": [
+    {"id": "E1", "fact": "`MessageGroupId` is required for every message sent to a FIFO queue.", "rule": "Set the order id as the message group of `order.cancelled`.", "source": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SendMessage.html", "version": "API version 2012-11-05"}
+  ],
+  "data_impact": [],
+  "assumptions": [
+    {"text": "CANCELLED is a new terminal status that no existing flow reads.", "source": "src/orders/types.ts:OrderStatus"}
+  ],
+  "open_questions": [
+    {
+      "id": "Q1",
+      "question": "May a customer cancel an order after it has shipped?",
+      "tag": "Scope",
+      "options": [
+        {"label": "No, only before shipping", "description": "Matches the refund flow, which rejects orders in the wrong state."},
+        {"label": "Yes, as a return request", "description": "Needs a new RETURN_REQUESTED state and a warehouse notification."}
+      ],
+      "recommended": 0,
+      "multi_select": false
+    }
+  ],
+  "notes": []
+}

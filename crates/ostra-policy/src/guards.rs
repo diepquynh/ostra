@@ -15,6 +15,7 @@ pub const NO_TESTS: &str = "no-tests-from-implementer";
 pub const STATE_OWNERSHIP: &str = "state-ownership";
 pub const ARTIFACT_OWNERSHIP: &str = "artifact-ownership";
 pub const REPORT_PATH: &str = "report-path";
+pub const DOCUMENT_TOOL: &str = "document-tool";
 pub const LESSON_GATE: &str = "lesson-gate";
 pub const BUILD_STREAK: &str = "build-streak";
 pub const SELF_PROTECTION: &str = "self-protection";
@@ -218,17 +219,17 @@ static AGENT_OWNED: LazyLock<Vec<Owned>> = LazyLock::new(|| {
 static ARTIFACTS: LazyLock<Vec<(Regex, AgentName, &'static str)>> = LazyLock::new(|| {
     vec![
         (
-            Regex::new(r"^ostra-spec-.*\.md$").unwrap(),
+            Regex::new(r"^ostra-spec-.*\.(md|json)$").unwrap(),
             AgentName::GenerateSpec,
             "the spec is the requirements contract and only generate-spec rewrites it (Rules D3 and D10)",
         ),
         (
-            Regex::new(r"^ostra-plan-.*\.md$").unwrap(),
+            Regex::new(r"^ostra-plan-.*\.(md|json)$").unwrap(),
             AgentName::Plan,
             "the plan and its phase files are written only by the plan agent (Rule D10)",
         ),
         (
-            Regex::new(r"^ostra-research-.*\.md$").unwrap(),
+            Regex::new(r"^ostra-research-.*\.(md|json)$").unwrap(),
             AgentName::Explore,
             "research documents are written only by explore",
         ),
@@ -359,6 +360,17 @@ pub fn check_write(
                 ));
             }
         }
+        // Document tool (HANDOVER 10.4): the markdown is rendered from the typed document.
+        if roots.in_session(target) && ostra_core::doc::doc_kind_for(target).is_some() {
+            return Some(deny(
+                DOCUMENT_TOOL,
+                format!(
+                    "Change \"{base}\" with the Document tool instead, sending `update` for a revision: Ostra renders \
+                     this file from its typed document, so a direct write would be overwritten and the browser would not \
+                     show it."
+                ),
+            ));
+        }
     }
 
     // Write scope (scope-policy.js checkScope).
@@ -388,6 +400,33 @@ pub fn check_write(
         if let Some(rec) = pending_lesson {
             return Some(lesson_denial(rec, true));
         }
+    }
+    None
+}
+
+/// The `Document` tool's target: its owner writes it, inside this execution's session dir.
+pub fn check_document(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial> {
+    if roots.is_protected(target) || roots.is_engine_state(target) {
+        return check_write(ctx, roots, target, raw, None);
+    }
+    let base = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    for (pattern, owner, why) in ARTIFACTS.iter() {
+        if pattern.is_match(&base) && ctx.agent != *owner {
+            return Some(deny(
+                ARTIFACT_OWNERSHIP,
+                format!("Leave \"{base}\" to {owner}: {why}. Say what should change in your report instead."),
+            ));
+        }
+    }
+    if !inside(&roots.session_dir, target) {
+        return Some(deny(
+            WRITE_SCOPE,
+            format!(
+                "Write the document inside \"{}\", this execution's session dir: \"{raw}\" is outside it, and the next \
+                 stage reads the session dir.",
+                disp(&roots.session_dir)
+            ),
+        ));
     }
     None
 }

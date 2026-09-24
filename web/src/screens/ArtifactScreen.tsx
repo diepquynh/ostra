@@ -11,6 +11,8 @@ import { useNav, useShell } from "../lib/nav";
 import { ArtifactMarkdown } from "./artifact/ArtifactMarkdown";
 import { approvalBadges, artifactKind, hasEarsNote, KIND_LABEL } from "./artifact/kind";
 import { LedgerView } from "./artifact/LedgerView";
+import { DocumentView } from "./artifact/doc/DocumentView";
+import { pickFactCheck } from "./artifact/doc/model";
 import "./artifact/artifact.css";
 
 export type ArtifactScreenProps = {
@@ -90,6 +92,66 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
   }, [outline]);
 
   const title = ref?.label ?? headings.find((h) => h.level === 1)?.title ?? basename(path);
+  const typed = art.data?.document ?? null;
+  const [asMarkdown, setAsMarkdown] = useState(false);
+  const target = typed?.document.kind === "spec" ? "spec" : typed && typed.document.kind !== "research" ? "plan" : null;
+  const check = target ? pickFactCheck(detail.data?.fact_checks, target) : null;
+
+  const toolbar = (
+    <div className="art-toolbar">
+      <Chip tone="accent">{KIND_LABEL[kind]}</Chip>
+      {ref?.project && <Chip mono>{ref.project}</Chip>}
+      {badges.map((b) => (
+        <Chip key={b.label} tone={b.tone} icon={b.icon}>
+          {b.label}
+        </Chip>
+      ))}
+      <span style={{ flex: 1 }} />
+      {hasEarsNote(kind) && noteHidden && (
+        <Button size="sm" variant="ghost" icon="info" onClick={() => setNoteHidden(false)}>
+          How to read requirements
+        </Button>
+      )}
+      {typed && (
+        <Button size="sm" variant="ghost" icon={asMarkdown ? "list-tree" : "file-text"} onClick={() => setAsMarkdown(!asMarkdown)}>
+          {asMarkdown ? "Document" : "Markdown"}
+        </Button>
+      )}
+      {owner && <IconButton size="sm" icon="kanban" label="Open the session board" onClick={() => nav.open(`session:${owner.id}`)} />}
+      <IconButton size="sm" icon="message-square" label="Ask about this artifact" onClick={() => shell.openDock(`In ${basename(path)}, `)} />
+      <IconButton size="sm" icon="copy" label="Copy path" onClick={() => void navigator.clipboard?.writeText(path)} />
+      <IconButton size="sm" icon="refresh-ccw" label="Reload" onClick={art.reload} />
+    </div>
+  );
+  const earsNote = hasEarsNote(kind) && !noteHidden && (
+    <Banner
+      tone="info"
+      title={EARS_NOTE.title}
+      actions={<IconButton size="sm" icon="x" label="Hide the note" onClick={() => setNoteHidden(true)} />}
+      style={{ marginBottom: 22 }}
+    >
+      <Markdown text={EARS_NOTE.body} className="art-ears" />
+    </Banner>
+  );
+
+  if (typed && !asMarkdown) {
+    return (
+      <div className="art-screen">
+        <DocumentView
+          path={path}
+          view={typed}
+          check={check}
+          header={
+            <>
+              {toolbar}
+              <h1 className="art-title">{title}</h1>
+              {earsNote}
+            </>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="art-screen">
@@ -107,36 +169,9 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
       </nav>
       <div className="art-scroll" ref={scroller}>
         <article className="art-article">
-          <div className="art-toolbar">
-            <Chip tone="accent">{KIND_LABEL[kind]}</Chip>
-            {ref?.project && <Chip mono>{ref.project}</Chip>}
-            {badges.map((b) => (
-              <Chip key={b.label} tone={b.tone} icon={b.icon}>
-                {b.label}
-              </Chip>
-            ))}
-            <span style={{ flex: 1 }} />
-            {hasEarsNote(kind) && noteHidden && (
-              <Button size="sm" variant="ghost" icon="info" onClick={() => setNoteHidden(false)}>
-                How to read requirements
-              </Button>
-            )}
-            {owner && <IconButton size="sm" icon="kanban" label="Open the session board" onClick={() => nav.open(`session:${owner.id}`)} />}
-            <IconButton size="sm" icon="message-square" label="Ask about this artifact" onClick={() => shell.openDock(`In ${basename(path)}, `)} />
-            <IconButton size="sm" icon="copy" label="Copy path" onClick={() => void navigator.clipboard?.writeText(path)} />
-            <IconButton size="sm" icon="refresh-ccw" label="Reload" onClick={art.reload} />
-          </div>
+          {toolbar}
           {!headings.some((h) => h.level === 1) && <h1 className="art-title">{title}</h1>}
-          {hasEarsNote(kind) && !noteHidden && (
-            <Banner
-              tone="info"
-              title={EARS_NOTE.title}
-              actions={<IconButton size="sm" icon="x" label="Hide the note" onClick={() => setNoteHidden(true)} />}
-              style={{ marginBottom: 22 }}
-            >
-              <Markdown text={EARS_NOTE.body} className="art-ears" />
-            </Banner>
-          )}
+          {earsNote}
           {art.error ? (
             <Banner tone="bad" title="Ostra could not read this artifact" actions={<Button size="sm" onClick={art.reload}>Try again</Button>}>
               {art.error.message}

@@ -536,6 +536,24 @@ pub struct SessionDetail {
     pub session_root: PathBuf,
     /// Executions grouped by agent and project, ordered by their first start.
     pub execution_groups: Vec<ExecutionGroupView>,
+    /// Every fact-check pass over the spec and the plan, oldest first.
+    pub fact_checks: Vec<FactCheckView>,
+}
+
+/// One fact-check pass, for showing its findings on the document it checked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FactCheckView {
+    pub execution: ExecutionId,
+    /// `spec` or `plan`.
+    pub target: String,
+    /// The artifact version the pass checked.
+    pub version: u32,
+    /// True when it checked the artifact as it stands now.
+    pub current: bool,
+    /// `None` while the pass runs.
+    pub verdict: Option<crate::submit::Verdict>,
+    pub findings: Vec<crate::submit::FactCheckFinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -581,6 +599,8 @@ pub struct Artifact {
     pub content: String,
     /// The markdown outline, in document order.
     pub headings: Vec<Heading>,
+    /// The typed document the markdown was rendered from, for research, spec, plan, and phase files.
+    pub document: Option<crate::doc::DocumentView>,
 }
 
 /// One markdown heading of an artifact.

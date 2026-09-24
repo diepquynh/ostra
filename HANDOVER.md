@@ -358,7 +358,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | D8, T1 to T7 | Test and doc stages never run between phases. Format runs once per project after its last phase. The closing gate is asked once per project, batched when several projects arrive together. `Test policy: Skip` phases are listed as uncovered with the plan's rationale. An explicit request in the task replaces the gate (T3). |
 | D9 | A failed phase removes every phase that depends on it from the queue. Independent phases continue. |
 | D10, answer routing | A requirement-level answer at any point after the spec exists re-runs generate-spec, then re-approval, then a plan revision. Both revise in place: generate-spec gets only the answers, changes, and research documents its spec does not reflect yet, and the plan agent edits only the phases the spec's diff reaches. |
-| Hard 4 | The engine reads each report before the next step. For native and submit-tool outputs this is structured data. |
+| Hard 4 | The engine reads each report before the next step. For native and submit-tool outputs this is structured data. The research document, the spec, and the plan are typed documents (10.3), and a submit call naming one is refused while it has a check error or disagrees with the submit's counts and phases. |
 | Hard 13 | Implementer, write-test, and code-reviewer executions always carry `Phase file:` when a plan exists, or `No plan:` with a reason. |
 | Staging | After a phase's review passes, the engine runs `git -C <project> add` on the implementer report's changed files. Reviews use `Review scope: unstaged`. |
 | Review loop, Step 4 | Findings split into BLOCKER, auto-fixable, and the rest, using the project's review rule set. Auto-fixable findings are applied by the engine from their exact `Change \`x\` to \`y\` on line N` text. HIGH and MEDIUM go to the fix agent with the ledger path. The cap is 3 iterations per loop, counted by the engine. The 4th pass is a gate. |
@@ -408,10 +408,10 @@ type, because a harness executor must see that harness's tool names.
 
 | Agent | Default tier | Output |
 | --- | --- | --- |
-| explore | advanced | One research document, then a submit call with its return fields. |
-| generate-spec | advanced | One spec file. |
+| explore | advanced | One typed research document through `Document`, then a submit call with its return fields. |
+| generate-spec | advanced | One typed spec through `Document`, revised in place with `update`. |
 | fact-check | advanced | Submit call: `{verdict, target, findings}`. |
-| plan | advanced | Master plan plus one file per phase. |
+| plan | advanced | One typed plan through `Document`, from which Ostra writes the master plan and one file per phase. |
 | implementer | balanced (routed by complexity) | Change report at the declared path, progress log. |
 | code-reviewer | balanced | Submit call with findings and `securityBlock`, plus its review ledger. |
 | execution-path-analyzer | balanced | EPA report at the declared path. |
@@ -507,8 +507,8 @@ owns every session. Push channels and wake commands disappear.
 ### 10.3 Tools
 
 Native tool names match Claude Code's, because the prompts are tuned to them: `Read`, `Write`, `Edit`, `Bash`,
-`Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, plus `Report`, `Memory`, `MemoryRecall`, and the `submit_*`
-tools.
+`Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, plus `Report`, `Document`, `Memory`, `MemoryRecall`, and the
+`submit_*` tools.
 
 - `Edit` requires the file to have been read in this execution, and its old string must match exactly once.
 - `Grep` and `Glob` use the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`, `globset`).
@@ -517,6 +517,26 @@ tools.
 - `WebSearch` uses the provider's server-side search tool. `WebFetch` uses the provider's fetch tool where one
   exists, else an HTTP fetch converted to markdown.
 - `Report` writes the declared report path (`UC/mcp/lib/report.js`).
+- `Document` writes the typed document of explore (research), generate-spec (spec), and plan (plan), whose
+  schemas are the structs in `ostra-core/src/doc`. It takes `path` (the `.md` path, `ostra-research-*`,
+  `ostra-spec-*`, or the master `ostra-plan-*`) and either `document` (the whole document) or `update`, plus
+  an optional `remove` list of ids.
+  - Merge: an `update` replaces each top-level field it names, except a list whose items carry an `id`, which
+    merges by id. A new id is added in natural id order (`R2` before `R10`), and a known id replaces the
+    stored item whole. `remove` drops items by id, and phases by their number. A revision therefore sends
+    only what changed.
+  - Storage and rendering: the document is stored as `<name>.json` beside `path`, and the markdown at `path`
+    is rendered from it with the section names the old templates used, because the downstream prompts and
+    fact-check read those sections. A plan also writes `<master>-phase-{N}.md` and its JSON per phase and
+    deletes the files of a removed phase.
+  - Derived parts: Ostra computes, and the model never writes, the spec's Delivery Order and Traceability
+    tables and its counts, and the plan's Deliverable Index, Phase Index, Test Policy Rationale, Requirement
+    Traceability, and Step Count Summary.
+  - Checks: every write runs the document checks and returns their results. Errors are broken references and
+    rules code can decide (uncovered criteria under S1, dangling `R`, `C`, `D`, and `E` ids, `AC{n}.{m}`
+    numbering, deliverable and phase cycles, the P10 phase sequence, a missing P12 rationale, P13 binding rules
+    not copied verbatim). Warnings cover judgment calls such as one `SHALL` per statement and the S4 size. A
+    submit call is refused while an error remains.
 
 ### 10.4 Policy
 
@@ -530,6 +550,7 @@ Every tool call from every executor goes through two layers in order.
 | No tests from implementer | implementer may not write a path matching the test patterns. | `scope-policy.js` |
 | State ownership | Engine-owned state (gates, verdicts, progress, streaks, scope records, the memory database) has no writer but the engine. The review ledger is writable by code-reviewer, implementer, and write-test. The security sentinel only by code-reviewer. The progress log only by implementer. | `ledger-policy.js` |
 | Artifact ownership | Spec and plan files are written only by their owning agent. | `artifact-guard.js` |
+| Document tool | `ostra-research-*`, `ostra-spec-*`, and `ostra-plan-*` files (`.md` and `.json`) are written only by the `Document` tool. A file write, edit, or shell write to one is refused with the correction to call `Document`, because the next render would overwrite it and the browser view would not show it. Fact-check snapshot copies are exempt. | Ostra (no Ultracode source) |
 | Report path | For agents given `Report file:`, an `ostra-*` file in the session dir must be that exact path. Any mechanism may write it. | `report-policy.js` |
 | Lesson gate | A report is refused while a verified failure-to-recovery transition has no recorded lesson, unless the report tool is called with a stated reason. | `report-policy.js`, `report.js` |
 | Build streak | Counted per execution. At 2 failures, recalled lessons are appended to the tool result. At 3, a warning. At 5, build and test commands are refused and the agent is told to return `STUCK:`. | `build-streak*.js`, `build-signal.js` |
@@ -640,7 +661,7 @@ Each workspace opens as one console, laid out like a code editor:
 | Workspace | Sessions with stage chips. A New task form (request text, plus tests, docs, and YOLO toggles), not a chat box. |
 | Session board | Lanes in SDLC order: Research, Requirements, Verification, Design, Build, Review, Test, Docs, Done. Each lane carries a short "why this step exists" note from `UC/docs/philosophy.md`. The Build lane shows the phase DAG with complexity and test policy per phase. The current gate is highlighted. |
 | Execution | An Activity tab (streamed thinking summary, tool calls with inputs, diffs, outputs, and every policy decision with its rule) and, for harness executions, a Terminal tab (xterm.js on the PTY, with input and resize; an ended run replays its stored transcript read-only). A paused permission ask shows Allow once and Deny above the stream; any other open gate that names the run links to it. Tool paths show relative to the project. |
-| Artifacts | The spec rendered by section (requirements in EARS form with their acceptance criteria, contracts, External Evidence), the plan with its phase index, reports, and the review ledger shown as comments on a Monaco diff. An outline from the artifact's headings sits beside the text. |
+| Artifacts | Research documents, the spec, the plan, and phase files render natively from their typed documents, one chapter per page, with a chapter menu that shows counts (for example requirements, open questions, sources). The spec shows requirements in EARS form with their acceptance criteria, contracts, and External Evidence. The plan shows each phase as its own chapter with its steps. IDs such as `R3`, `E2`, and `step 2.3` are chips that open the chapter holding that element. Fact-check findings sit on the element their `element` field names. The rendered markdown is one toggle away. Reports stay markdown with an outline from their headings beside the text, and the review ledger shows as comments on a Monaco diff. |
 | Gates | Open questions (recommended option first), spec and plan approval (disabled until PASS, with the findings shown), review cap, STUCK rescue, closing gate, skill approval for init, permission asks, and BLOCKER notices showing the reviewer's Guidance text, with no dismiss button. |
 | Project | A header with the init status, the checked-out branch, the path, and the stack. An Overview tab (profile, commands, skills, review rules) or Initialize for a new project, and a Files tab. |
 | File | One project file, read-only, with its git mark and the execution that changed it, or its diff against HEAD. |

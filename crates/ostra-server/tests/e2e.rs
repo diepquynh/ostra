@@ -67,20 +67,34 @@ fn respond(req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
     let report = label(&text, "Report file");
     let turn = assistant_turns(req);
     let write = |path: &Path, content: &str| tool_use_response(&id(), "Write", json!({"file_path": path, "content": content}));
+    let document = |path: &Path, doc: Value| tool_use_response(&id(), "Document", json!({"path": path, "document": doc}));
     let spec = session.join("ostra-spec-1.md");
     let plan = session.join("ostra-plan-1.md");
-    let phase = session.join("ostra-plan-1-phase-1-greeting.md");
+    let phase = session.join("ostra-plan-1-phase-1.md");
+    let research = session.join("ostra-research-1.md");
     let out = match (submit.as_str(), turn) {
-        ("submit_explore", 0) => write(&session.join("ostra-research-1.md"), "# Research: greeting\n"),
-        ("submit_explore", _) => tool_use_response(&id(), &submit, json!({"research_path": session.join("ostra-research-1.md"), "scope_covered": "s", "findings_summary": "No greeting exists.", "sources_retrieved": 0, "open_questions": 0, "not_covered": []})),
-        ("submit_generate_spec", 0) => write(&spec, "# Spec\n"),
+        ("submit_explore", 0) => document(&research, json!({"title": "Greeting", "date": "2026-07-28", "repo": "app", "scope": "The greeting.", "problem": "No greeting exists."})),
+        ("submit_explore", _) => tool_use_response(&id(), &submit, json!({"research_path": research, "scope_covered": "s", "findings_summary": "No greeting exists.", "sources_retrieved": 0, "open_questions": 0, "not_covered": []})),
+        ("submit_generate_spec", 0) => document(&spec, json!({
+            "title": "Greeting", "date": "2026-07-28", "objective": "Print a greeting.", "current_behavior": "None.",
+            "criteria": [{"id": "C1", "statement": "A greeting file exists.", "kind": "Functional", "repo": "app", "grounding": "new: no precedent found"}],
+            "deliverables": [{"id": "D1", "title": "Greeting", "repo": "app", "outcome": "The file exists."}],
+            "requirements": [{"id": "R1", "deliverable": "D1", "title": "Greeting file", "pattern": "ubiquitous", "statement": "THE SYSTEM SHALL contain greeting.txt.", "covers": ["C1"],
+                "acceptance": [{"id": "AC1.1", "given": "the repo", "when": "it is read", "then": "greeting.txt says hello"}]}]
+        })),
         ("submit_generate_spec", _) => tool_use_response(&id(), &submit, json!({"spec_path": spec, "open_questions": [], "external_evidence_rows": 0, "deliverables": 1, "requirements": 1, "summary": "Print a greeting."})),
         ("submit_fact_check", _) => {
             let target = label(&text, "Target type");
             tool_use_response(&id(), &submit, json!({"verdict": "PASS", "target": target, "findings": []}))
         }
-        ("submit_plan", 0) => write(&plan, "# Plan\n"),
-        ("submit_plan", 1) => write(&phase, "# Phase 1: greeting\n**Complexity:** Low\n"),
+        ("submit_plan", 0) => document(&plan, json!({
+            "title": "Greeting", "date": "2026-07-28", "spec": spec, "stakes": "High", "stakes_rationale": "r", "summary": "One phase.",
+            "phases": [{"id": 1, "name": "greeting", "deliverable": "D1", "repo": "app", "repo_root": repo, "complexity": "Low", "test_policy": "Required",
+                "test_rationale": "Step 1.1 writes the file.", "description": "d", "context": "This is the first phase. No prior phases.",
+                "requirements": [{"id": "R1", "statement": "THE SYSTEM SHALL contain greeting.txt."}],
+                "steps": [{"id": "1.1", "title": "Write the file", "file": "greeting.txt", "change": "Create", "delivers": ["R1"], "action": "Write hello.", "verify": "true", "size": "Small"}],
+                "verification": "true"}]
+        })),
         ("submit_plan", _) => tool_use_response(&id(), &submit, json!({"spec_path": spec, "master_plan_path": plan, "phases": [{"id": 1, "deliverable": "D1", "project": "app", "title": "greeting", "complexity": "Low", "test_policy": "Required", "depends_on": [], "file": phase}], "stakes": "High", "summary": "One phase.", "step_count": 1, "requirement_coverage": "1 of 1"})),
         ("submit_implementer", 0) => write(&repo.join("greeting.txt"), "hello\n"),
         ("submit_implementer", 1) => write(Path::new(&report), "# Report\n\nAdded greeting.txt\n"),
@@ -221,6 +235,22 @@ async fn yolo_implement_session_end_to_end() {
         .await
         .unwrap();
     assert_eq!(ledger, vec![DiffFile { path: "greeting.txt".into(), original: String::new(), modified: "hello\n".into() }]);
+    // Typed documents come back with the artifact, and fact-check passes with the session.
+    for (kind, doc_kind) in [("research", "research"), ("spec", "spec"), ("plan", "plan"), ("phase", "phase")] {
+        let r = d.artifacts.iter().find(|a| a.kind == kind).unwrap_or_else(|| panic!("no {kind} artifact"));
+        let art: Value = client
+            .get(reqwest::Url::parse_with_params(&format!("{base}/api/artifacts"), &[("path", r.path.to_str().unwrap())]).unwrap())
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(art["document"]["document"]["kind"], doc_kind, "{art}");
+        assert_eq!(art["document"]["issues"], json!([]), "{kind}");
+    }
+    let checks: Vec<(&str, bool)> = d.fact_checks.iter().map(|c| (c.target.as_str(), c.current)).collect();
+    assert_eq!(checks, [("spec", true), ("plan", true)]);
     let labels: Vec<&str> = d.executions.iter().map(|e| e.run_label.as_str()).collect();
     assert_eq!(labels, ["Research task 1", "Spec", "Spec check", "Plan", "Plan check", "Phase 1", "Phase 1 · review pass"]);
     let groups: Vec<(&str, usize)> = d.execution_groups.iter().map(|g| (g.group.as_str(), g.executions.len())).collect();

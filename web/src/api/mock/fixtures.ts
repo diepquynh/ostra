@@ -454,7 +454,7 @@ export const gates: GateView[] = [
       spec_path: `${SROOT}/ostra-spec-20260922-100700-order-cancel.md`,
       summary: "Two deliverables: the backend cancellation contract, then the web client types and button.",
       findings: [
-        { severity: "LOW", location: "R4", claim: "The endpoint returns within 200 ms", issue: "No measurement backs this; it does not block approval." },
+        { severity: "LOW", location: "R4", element: null, claim: "The endpoint returns within 200 ms", issue: "No measurement backs this; it does not block approval." },
       ],
     },
     answer: { kind: "approval", approved: true, feedback: null },
@@ -514,6 +514,21 @@ export const sessionDetail: SessionDetail = {
   summary: sessionSummary,
   session_root: SROOT,
   execution_groups: groupsFor(sessionExecutions(SESSION)),
+  fact_checks: [
+    {
+      execution: "x_fc1",
+      target: "spec",
+      version: 1,
+      current: true,
+      verdict: "PASS",
+      findings: [
+        { severity: "LOW", location: "R3", element: "R3", claim: "One `order.cancelled` message reaches the queue", issue: "The research does not say whether the publisher retries; a retry could send two messages." },
+      ],
+    },
+    { execution: "x_fc2", target: "plan", version: 1, current: true, verdict: "PASS", findings: [
+      { severity: "LOW", location: "Phase 1, step 1.2", element: "step 1.2", claim: "Map `InvalidState` to 409", issue: "The router has no existing 409 mapping to follow; the step names none." },
+    ] },
+  ],
   stages: [
     { stage: "classify", lane: "research", label: "Classify the request", status: "done", project: null, phase: null, executions: [], gate: null, detail: "IMPLEMENT" },
     { stage: "explore", lane: "research", label: "Explore backend", status: "done", project: "backend", phase: null, executions: ["x_exp1"], gate: null, detail: null },

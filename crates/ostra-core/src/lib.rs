@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod api;
 pub mod config;
+pub mod doc;
 pub mod event;
 pub mod exec;
 pub mod executor;

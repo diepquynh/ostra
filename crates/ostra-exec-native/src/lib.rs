@@ -283,6 +283,11 @@ impl Run {
             .filter(|d| !(server_fetch && d.name == "WebFetch"))
             .map(|d| ToolDef { name: d.name, description: d.description, input_schema: d.input_schema, cache: false })
             .collect();
+        if caps.contains(&ostra_core::Capability::Document)
+            && let Some(d) = ostra_tools::document_tool_definition(spec.agent)
+        {
+            tools.push(ToolDef { name: d.name, description: d.description, input_schema: d.input_schema, cache: false });
+        }
         let submit_def = ostra_tools::submit_tool_definition(spec.agent);
         tools.push(ToolDef {
             name: submit_def.name,
@@ -478,6 +483,9 @@ impl Run {
         }
         if let Err(e) = ostra_core::submit::validate_submit(self.spec.agent, input) {
             return Err(err(format!("The {name} input is invalid: {e}. Fix it and call {name} again.")));
+        }
+        if let Err(e) = ostra_core::doc::check_submit(self.spec.agent, input) {
+            return Err(err(format!("{e} Nothing was recorded.")));
         }
         let status = match input.get("status").and_then(|s| s.as_str()) {
             Some("stuck") => ExecutionStatus::Stuck,

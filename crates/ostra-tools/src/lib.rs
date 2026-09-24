@@ -4,6 +4,7 @@
 
 mod bash;
 mod defs;
+mod doc;
 mod fs;
 mod misc;
 mod search;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-pub use defs::{ToolDefinition, definitions, submit_tool_definition, wants_web_search};
+pub use defs::{ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search};
 
 /// Resolves an embedded skill name (for example `meta-author`) to its path and content.
 pub type SkillResolver = Arc<dyn Fn(&str) -> Option<(PathBuf, String)> + Send + Sync>;
@@ -138,6 +139,7 @@ pub async fn execute(
             "Skill" => misc::skill(env, input).await,
             "WebFetch" => web::fetch(env, input).await,
             "Report" => misc::report(env, input).await,
+            "Document" => doc::document(env, input).await,
             "Memory" => misc::memory(env, input).await,
             "MemoryRecall" => misc::memory_recall(env, input).await,
             "WebSearch" => ToolOutput::err(

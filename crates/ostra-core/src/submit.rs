@@ -110,6 +110,10 @@ impl Severity {
 pub struct FactCheckFinding {
     pub severity: Severity,
     pub location: String,
+    /// The ID of the element the claim sits in: `R3`, `AC3.2`, `E2`, `D1`, `C4`, `phase 2`, or
+    /// `step 2.3`. Ostra shows the finding on that element.
+    #[serde(default)]
+    pub element: Option<String>,
     pub claim: String,
     pub issue: String,
 }

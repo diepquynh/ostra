@@ -3,6 +3,7 @@ import type { ArtifactRef } from "./ArtifactRef";
 import type { DecisionView } from "./DecisionView";
 import type { ExecutionGroupView } from "./ExecutionGroupView";
 import type { ExecutionView } from "./ExecutionView";
+import type { FactCheckView } from "./FactCheckView";
 import type { GateView } from "./GateView";
 import type { PhaseView } from "./PhaseView";
 import type { SessionSummary } from "./SessionSummary";
@@ -16,4 +17,8 @@ completion: string | null, session_root: string,
 /**
  * Executions grouped by agent and project, ordered by their first start.
  */
-execution_groups: Array<ExecutionGroupView>, };
+execution_groups: Array<ExecutionGroupView>, 
+/**
+ * Every fact-check pass over the spec and the plan, oldest first.
+ */
+fact_checks: Array<FactCheckView>, };

@@ -153,6 +153,7 @@ function build(spec: SessionSpec): SessionDetail {
     completion: null,
     session_root: sroot(spec.id),
     execution_groups: f.groupsFor(executions),
+    fact_checks: [],
   };
 }
 
@@ -334,8 +335,8 @@ const specs: SessionSpec[] = [
           spec_path: `${sroot("s_guest")}/ostra-spec-20260922-guest-checkout.md`,
           summary: "Six requirements across one deliverable: a guest order model, an email-signed order link, and rate limits on guest checkout.",
           findings: [
-            { severity: "LOW", location: "R5", claim: "Order links expire after 30 days", issue: "The research names no retention rule for this; the number comes from the request." },
-            { severity: "LOW", location: "External Evidence, row 2", claim: "Spring Security 7 supports one-time tokens", issue: "Cited page is dated 2026-03; a newer minor release exists." },
+            { severity: "LOW", location: "R5", element: null, claim: "Order links expire after 30 days", issue: "The research names no retention rule for this; the number comes from the request." },
+            { severity: "LOW", location: "External Evidence, row 2", element: null, claim: "Spring Security 7 supports one-time tokens", issue: "Cited page is dated 2026-03; a newer minor release exists." },
           ],
         },
       },
@@ -390,7 +391,7 @@ const specs: SessionSpec[] = [
             { id: 3, deliverable: "D1", project: "backend", title: "Reservation expiry job", complexity: "medium", test_policy: "Required", depends_on: [2], file: `${sroot("s_stock")}/ostra-plan-20260922-inventory-reservations-phase-3.md`, test_rationale: null },
             { id: 4, deliverable: "D2", project: "web", title: "Stock badge on the product page", complexity: "low", test_policy: "Skip", depends_on: null, file: `${sroot("s_stock")}/ostra-plan-20260922-inventory-reservations-phase-4.md`, test_rationale: "Renders one existing field with no branch." },
           ],
-          findings: [{ severity: "LOW", location: "Phase 3, step 2", claim: "The scheduler runs every minute", issue: "The existing @Scheduled jobs use a 5 minute cron; the plan does not say why this one differs." }],
+          findings: [{ severity: "LOW", location: "Phase 3, step 2", element: null, claim: "The scheduler runs every minute", issue: "The existing @Scheduled jobs use a 5 minute cron; the plan does not say why this one differs." }],
         },
       },
     ],
@@ -436,8 +437,8 @@ const specs: SessionSpec[] = [
           target: "spec",
           passes: 3,
           findings: [
-            { severity: "HIGH", location: "R3", claim: "The provider refunds a Payment Intent with POST /v1/intents/{id}/refund", issue: "The cited reference page documents refunds as POST /v1/refunds with a payment_intent field." },
-            { severity: "MEDIUM", location: "External Evidence, row 1", claim: "Webhook signatures use HMAC-SHA1", issue: "The provider's current page says HMAC-SHA256." },
+            { severity: "HIGH", location: "R3", element: null, claim: "The provider refunds a Payment Intent with POST /v1/intents/{id}/refund", issue: "The cited reference page documents refunds as POST /v1/refunds with a payment_intent field." },
+            { severity: "MEDIUM", location: "External Evidence, row 1", element: null, claim: "Webhook signatures use HMAC-SHA1", issue: "The provider's current page says HMAC-SHA256." },
           ],
         },
       },

@@ -38,13 +38,13 @@ you mean. When a literal phrase is available, use it.
 | **repo root** | Absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Every repo-relative path in this file resolves against it. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir` it. |
 | **repo key** | The lowercase slug from the prompt's `Repo key:` line. Ostra records your verdict under it, so the approval gate for this artifact can find it. You never write that record yourself, and nothing about your own output changes. |
-| **target** | The file named by the prompt's `Target:` line: either the spec file (`ostra-spec-*.md`) or the plan's master file (`ostra-plan-*.md`, not a phase file). {{tool_read}} it first. |
+| **target** | The file named by the prompt's `Target:` line: either the spec file (`ostra-spec-*.md`) or the plan's master file (`ostra-plan-*.md`, not a phase file). {{tool_read}} it first. Ostra renders it, and every phase file, from a typed document the generating agent wrote, so read the markdown as it stands. Its tables that the generating agent does not write, such as the spec's Delivery Order and Traceability tables and the plan's Phase Index and Requirement Traceability, are derived from the same document. |
 | **target type** | The prompt's `Target type:` line: `spec` or `plan`. Determines which claims below apply. |
 | **research doc** | Path(s) from the prompt's `Research docs:` lines, if given (one per repo `explore` ran for). The pages `explore` actually fetched, with their URLs and dates. It outranks your own training-data knowledge, exactly as it does for `explore`. On a `spec` target it is what you check the External Evidence table against. |
 | **spec file** | The path from the prompt's `Spec file:` line: the one `ostra-spec-*.md` for this request. On a `spec` target it is the same path as `Target:`. On a `plan` target it is the approved spec whose External Evidence table the plan had to carry forward, and you read it to resolve every `E{n}` a phase file names. Never go looking for it: a spawn without the line is an `ERROR`. |
 | **evidence row** | One `E{n}` row of the spec's External Evidence table: an Established fact quoted from a retrieved page, a Binding rule an implementer must obey, a Source URL, and the page's version or date. Approved with the spec, and settled from that point on. |
 | **source check** | The prompt's `Source check:` line, `citations` or `refetch`. It decides how far you go on external facts, and the orchestrator sets it per spawn. Read it and obey it: a suspicious-looking row does not license you to upgrade `citations` to `refetch`. See Step 2. |
-| **phase file** | For a `plan` target: `{session-dir}/ostra-plan-*-phase-{N}-*.md`, one per row of the target's Phase Index. |
+| **phase file** | For a `plan` target: `{session-dir}/ostra-plan-*-phase-{N}.md`, one per row of the target's Phase Index. |
 | **prior findings** | The prompt's `Prior findings:` line. The literal word `none` on a first pass over this artifact. On a later pass, the findings your previous pass returned, or `no findings on the previous pass` when it returned none. It decides which of the two Step 0 scopes you run. |
 | **first pass** | An invocation whose `Prior findings:` is exactly `none`. It checks the whole bounded claim surface. |
 | **re-pass** | An invocation whose `Prior findings:` is anything other than `none`. It checks the prior findings, if any, and the text that changed since the previous pass, and nothing else. |
@@ -315,7 +315,10 @@ lost:
 | --- | --- |
 | `verdict` | `PASS`, `FAIL`, or `ERROR` (the Step 2 refetch-on-plan case only). The verdict rule below decides between `PASS` and `FAIL`. |
 | `target` | `spec` or `plan`, the prompt's `Target type:`. |
-| `findings` | One object per finding: `severity` (`HIGH`, `MEDIUM`, or `LOW`), `location` (file name plus section, requirement, or step ID), `claim` (the quoted claim), `issue` (what verification failed and, for `HIGH` or `MEDIUM`, what breaks). Empty when there are none. |
+| `findings` | One object per finding: `severity` (`HIGH`, `MEDIUM`, or `LOW`), `location` (file name plus section, requirement, or step ID), `element` (the ID of the element the claim sits in: `R3`, `AC3.2`, `E2`, `D1`, `C4`, `phase 2`, or `step 2.3`; left out when the claim sits in no single element), `claim` (the quoted claim), `issue` (what verification failed and, for `HIGH` or `MEDIUM`, what breaks). Empty when there are none. |
+
+Ostra shows each finding on the element `element` names, in the document the user approves, so name the
+most specific element: the acceptance criterion rather than its requirement, the step rather than its phase.
 
 Ostra passes your findings verbatim to the next pass as its `Prior findings:`, so write each one so it can be
 checked on its own.
@@ -335,15 +338,17 @@ checked on its own.
   "findings": [
     {
       "severity": "HIGH",
-      "location": "ostra-plan-20260817-093000-order-lifecycle-phase-2-service-layer.md, Step 2.3",
+      "location": "ostra-plan-20260817-093000-order-lifecycle-phase-2.md, Step 2.3",
+      "element": "step 2.3",
       "claim": "Modify the existing `OrderService.cancel` method",
       "issue": "No `cancel` method exists on `OrderService` (src/services/order-service.ts). grep found only `create` and `refund`. Step 2.3 cannot complete."
     },
     {
       "severity": "MEDIUM",
-      "location": "ostra-plan-20260817-093000-order-lifecycle.md, Phase Index row 3",
-      "claim": "Depends on phase 5",
-      "issue": "Phase Index has phases 1-4 only; phase 5 does not exist. The orchestrator cannot schedule phase 3."
+      "location": "ostra-plan-20260817-093000-order-lifecycle-phase-3.md, Step 3.1",
+      "element": "step 3.1",
+      "claim": "Skills: `grpc-client`",
+      "issue": "The web repo's INVENTORY Skill Application Mapping has no `grpc-client` skill. The implementer cannot load it and Step 3.1 runs without its pattern."
     }
   ]
 }

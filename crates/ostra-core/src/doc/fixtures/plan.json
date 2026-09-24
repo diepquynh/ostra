@@ -1,0 +1,85 @@
+{
+  "title": "Order cancellation",
+  "date": "2026-07-28",
+  "spec": "/work/shop/.ostra/sessions/s_01/ostra-spec-20260728-141030-order-cancellation.md",
+  "repos": [{"key": "backend", "root": "/work/shop/backend"}, {"key": "web", "root": "/work/shop/web"}],
+  "stakes": "Medium",
+  "stakes_rationale": "Adds a state transition other flows read and a new event type the warehouse consumes.",
+  "summary": "Adds a cancel transition to the order service and its endpoint, publishes `order.cancelled` on the existing FIFO queue, then adds the Cancel order button to the web order page.",
+  "success_criteria": [
+    {"text": "Build passes: `npm run build` in backend and web."},
+    {"id": "AC1.1", "text": "Cancelling ACTIVE order `o-1` as its owner returns 200 and sets CANCELLED."},
+    {"id": "AC2.1", "text": "Cancelling as another user returns 403 and leaves the order ACTIVE."},
+    {"id": "AC3.1", "text": "One `order.cancelled` message with group `o-1` reaches the queue."},
+    {"id": "AC4.1", "text": "The order page shows Cancel order for an ACTIVE order."},
+    {"id": "AC4.2", "text": "The order page hides Cancel order for a SHIPPED order."}
+  ],
+  "clarifying_questions": [],
+  "deliverables": [{"id": "D1", "title": "Cancellation endpoint"}, {"id": "D2", "title": "Cancel button"}],
+  "phases": [
+    {
+      "id": 1, "name": "Cancel transition", "deliverable": "D1", "repo": "backend", "repo_root": "/work/shop/backend",
+      "complexity": "Medium", "test_policy": "Required", "test_rationale": "Step 1.1 adds a transition with two rejection branches.",
+      "depends_on": [], "areas": ["orders", "events"],
+      "description": "Adds `OrderService.cancel` and publishes `order.cancelled`.",
+      "context": "This is the first phase. No prior phases.",
+      "skills": ["backend-service"],
+      "requirements": [
+        {"id": "R1", "statement": "WHEN the owner of an ACTIVE order requests its cancellation THE SYSTEM SHALL set the order status to CANCELLED."},
+        {"id": "R2", "statement": "IF the caller does not own the order THEN THE SYSTEM SHALL reject the cancellation with status 403."},
+        {"id": "R3", "statement": "WHEN an order is cancelled THE SYSTEM SHALL publish `order.cancelled` carrying the order identifier."}
+      ],
+      "constraints": [
+        {"id": "E1", "fact": "`MessageGroupId` is required for every message sent to a FIFO queue.", "rule": "Set the order id as the message group of `order.cancelled`.", "source": "https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SendMessage.html", "version": "API version 2012-11-05"}
+      ],
+      "steps": [
+        {
+          "id": "1.1", "title": "Add the cancel transition", "file": "src/orders/service.ts", "change": "Modify",
+          "read_first": ["src/orders/service.ts", "src/events/publisher.ts"],
+          "delivers": ["R1", "R2", "R3"],
+          "action": "Add method `cancel(id: string, userId: string): Promise<Order>`. Logic: (1) load by `id`, throw `NotFound` if absent; (2) throw `Forbidden` when `order.userId` differs from `userId`; (3) throw `InvalidState` unless status is ACTIVE; (4) set CANCELLED and save; (5) publish `order.cancelled` with `orderId`.",
+          "binding_rules": [{"id": "E1", "rule": "Set the order id as the message group of `order.cancelled`."}],
+          "skills": ["backend-service"], "verify": "npm run build", "size": "Medium"
+        },
+        {
+          "id": "1.2", "title": "Add the cancel route", "file": "src/orders/routes.ts", "change": "Modify",
+          "read_first": ["src/orders/routes.ts"],
+          "delivers": ["R1", "R2"],
+          "action": "Add `POST /orders/:id/cancel`, calling `OrderService.cancel` with the session user and mapping `Forbidden` to 403 and `InvalidState` to 409.",
+          "skills": ["backend-service"], "verify": "npm run build", "size": "Small"
+        }
+      ],
+      "verification": "npm run build"
+    },
+    {
+      "id": 2, "name": "Cancel button", "deliverable": "D2", "repo": "web", "repo_root": "/work/shop/web",
+      "complexity": "Low", "test_policy": "Required", "test_rationale": "Step 2.1 adds a status branch that decides whether the button renders.",
+      "depends_on": [1], "areas": ["orders-ui"],
+      "description": "Shows Cancel order on ACTIVE orders and calls the endpoint.",
+      "context": "Phase 1 added `POST /orders/:id/cancel` in the backend repo: no body, 200 with the order JSON, 403 when the caller does not own the order, 409 when it is not ACTIVE.",
+      "skills": ["react-component"],
+      "requirements": [
+        {"id": "R4", "statement": "WHILE an order is ACTIVE THE SYSTEM SHALL show a Cancel order button on the order page."}
+      ],
+      "constraints": [],
+      "steps": [
+        {
+          "id": "2.1", "title": "Add the button", "file": "src/orders/OrderPage.tsx", "change": "Modify",
+          "read_first": ["src/orders/OrderPage.tsx"],
+          "delivers": ["R4"],
+          "action": "Render a Cancel order button only when `order.status` is ACTIVE. On click, call `POST /orders/:id/cancel` and replace the order with the response.",
+          "skills": ["react-component"], "verify": "npm run build", "size": "Small"
+        }
+      ],
+      "verification": "npm run build"
+    }
+  ],
+  "risks": [
+    {"risk": "The warehouse consumer ignores unknown event types.", "impact": "Cancelled orders still ship.", "likelihood": "Medium", "mitigation": "Coordinate the consumer change before release."}
+  ],
+  "verification": ["**Per-step / per-phase:** the phase's repo's `build` command.", "**Final:** each repo's `build` command after its phases."],
+  "pre_checks": [
+    {"check": "Surviving callers (8A)", "scope": "0 symbols removed, renamed, or moved", "result": "Clean"},
+    {"check": "Target-module imports (8B)", "scope": "0 files moved between modules", "result": "Clean"}
+  ]
+}

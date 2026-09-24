@@ -1,7 +1,7 @@
 description = "Reads EVERY research document the request produced and writes exactly ONE spec file: requirements in EARS notation with Given/When/Then criteria, grouped into ordered deliverables, plus the contracts and an External Evidence table carrying each cited external fact forward. Runs once per request after all exploration has finished, and again to fold in answers and fact-check findings. States WHAT, never HOW. Read-only on project source."
 default_tier = "advanced"
 timeout_seconds = 1800
-capabilities = ["read", "write", "edit", "shell", "search_text", "glob", "web_search", "web_fetch"]
+capabilities = ["read", "shell", "search_text", "glob", "web_search", "web_fetch", "document"]
 
 [effort]
 native = "high"

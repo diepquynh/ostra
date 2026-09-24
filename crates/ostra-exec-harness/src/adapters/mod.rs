@@ -112,11 +112,12 @@ pub fn ostra_mcp_tool(name: &str) -> Option<String> {
     Some(canonical_ostra_tool(bare))
 }
 
-/// `report` to `Report`, `memory` to `Memory`, `memory_recall` to `MemoryRecall`; `submit_*` keeps
-/// its name.
+/// `report` to `Report`, `document` to `Document`, `memory` to `Memory`, `memory_recall` to
+/// `MemoryRecall`; `submit_*` keeps its name.
 pub fn canonical_ostra_tool(bare: &str) -> String {
     match bare {
         "report" => "Report".into(),
+        "document" => "Document".into(),
         "memory" => "Memory".into(),
         "memory_recall" => "MemoryRecall".into(),
         other => other.to_string(),

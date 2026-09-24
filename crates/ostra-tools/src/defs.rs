@@ -94,6 +94,16 @@ Usage:
 - The path is fixed by Ostra so later stages can find the report. You do not choose it.
 - If the call is refused because a failure-to-recovery lesson is not recorded yet, record it with Memory first, or pass reason to say why no lesson applies.";
 
+const DOCUMENT: &str = "Writes your document: the research document, the spec, or the plan, as typed JSON. Ostra renders the markdown the next stage reads from it and shows each part in the browser.
+
+Usage:
+- path is the absolute path of the document's markdown file in your session dir, named as your prompt says. Ostra writes it and a .json beside it. A plan also gets one `-phase-{N}.md` file per phase.
+- Send document to write the whole document. It replaces what is there.
+- Send update to revise in place: each top-level field you name replaces the stored one, except a list whose items carry an `id`, which is merged by id. Send only the items that changed. remove drops list items by id.
+- A long document can be written in parts: a first call with document holding every required field, then update calls that add list items.
+- The result lists what Ostra's checks found. Fix every error before you submit, because the submit call is refused while one remains.
+- Never write these files with Write, Edit, or the shell. Ostra refuses it, because the markdown is rendered from the document.";
+
 const MEMORY: &str = "Records a durable lesson in this project's memory, for future runs to recall.
 
 Usage:
@@ -246,6 +256,31 @@ fn memory_recall_def() -> ToolDefinition {
     )
 }
 
+/// The `Document` tool for an agent that writes a typed document, with that document's schema.
+pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition> {
+    let kind = ostra_core::doc::DocKind::for_agent(agent)?;
+    let mut schema = kind.schema();
+    let defs = schema.as_object_mut().and_then(|m| m.remove("$defs")).unwrap_or_else(|| json!({}));
+    if let Some(m) = schema.as_object_mut() {
+        m.remove("$schema");
+    }
+    let mut defs = match defs {
+        serde_json::Value::Object(m) => m,
+        _ => Default::default(),
+    };
+    defs.insert("Document".into(), schema);
+    Some(def(
+        "Document",
+        DOCUMENT,
+        json!({"type": "object", "properties": {
+            "path": {"type": "string", "description": "Absolute path of the document's markdown file in your session dir"},
+            "document": {"$ref": "#/$defs/Document", "description": "The whole document. Replaces what is stored"},
+            "update": {"type": "object", "description": "Top-level fields to change. Lists of items with an `id` merge by id"},
+            "remove": {"type": "array", "items": {"type": "string"}, "description": "Ids of list items to remove, such as `R4` or a phase number"}
+        }, "required": ["path"], "additionalProperties": false, "$defs": defs}),
+    ))
+}
+
 /// Local tool definitions for these capabilities, in declaration order. WebSearch is omitted: it
 /// runs on the provider's side (see [`wants_web_search`]).
 pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
@@ -263,6 +298,8 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
             Capability::Skill => Some(skill_def()),
             Capability::WebFetch => Some(web_fetch_def()),
             Capability::Report => Some(report_def()),
+            // Agent-specific: see [`document_tool_definition`].
+            Capability::Document => None,
             Capability::Memory => Some(memory_def()),
             Capability::MemoryRecall => Some(memory_recall_def()),
             Capability::WebSearch => None,
@@ -326,5 +363,26 @@ mod tests {
         let d = submit_tool_definition(AgentName::CodeReviewer);
         assert_eq!(d.name, "submit_code_reviewer");
         assert!(d.input_schema.get("properties").is_some());
+    }
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::*;
+
+    /// Every `$ref` in the Document schema points at a definition it carries.
+    #[test]
+    fn document_schema_refs_resolve() {
+        for agent in [AgentName::Explore, AgentName::GenerateSpec, AgentName::Plan] {
+            let d = document_tool_definition(agent).unwrap();
+            let text = d.input_schema.to_string();
+            let defs = d.input_schema["$defs"].as_object().unwrap();
+            for part in text.split("\"#/$defs/").skip(1) {
+                let name = part.split('"').next().unwrap();
+                assert!(defs.contains_key(name), "{agent}: dangling ref {name}");
+            }
+            assert!(!d.description.contains('\u{2014}'));
+        }
+        assert!(document_tool_definition(AgentName::Implementer).is_none());
     }
 }

@@ -159,7 +159,7 @@ pub fn agy_tools(caps: &[Capability]) -> Vec<&'static str> {
             Capability::Glob => add(&["find_by_name"]),
             Capability::WebSearch => add(&["search_web"]),
             Capability::WebFetch => add(&["read_url_content"]),
-            Capability::Report | Capability::Memory | Capability::MemoryRecall => {}
+            Capability::Report | Capability::Document | Capability::Memory | Capability::MemoryRecall => {}
         }
     }
     out

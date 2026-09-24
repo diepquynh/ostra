@@ -160,19 +160,42 @@ async fn reads_is_denied_outside_scope_reports_and_submits() {
 #[tokio::test]
 async fn invalid_submit_is_retried() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::Explore, PermissionMode::Default, vec![Capability::Read]);
+    let mut s = spec(&f, AgentName::QuickAnswer, PermissionMode::Default, vec![Capability::Read]);
     s.ctx.report_file = None;
     let p = ScriptedProvider::new();
-    p.push_tool_use("submit_explore", json!({"research_path": "/x"}));
-    p.push_tool_use(
-        "submit_explore",
-        json!({"research_path": "/x", "scope_covered": "a", "findings_summary": "b", "sources_retrieved": 0, "open_questions": 0, "not_covered": []}),
-    );
+    p.push_tool_use("submit_quick_answer", json!({"sources": []}));
+    p.push_tool_use("submit_quick_answer", json!({"answer": "a", "sources": []}));
     let (exec, p) = executor(p);
     let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
     assert_eq!(r.status, ExecutionStatus::Ok);
     let (msg, is_err) = &tool_results(&p.requests()[1])[0];
     assert!(*is_err && msg.contains("invalid"), "{msg}");
+}
+
+#[tokio::test]
+async fn explore_submits_only_after_its_document() {
+    let f = fixture();
+    let mut s = spec(&f, AgentName::Explore, PermissionMode::Default, vec![Capability::Read, Capability::Document]);
+    s.ctx.report_file = None;
+    let md = f.session.join("ostra-research-1-greeting.md");
+    let submit = json!({"research_path": md, "scope_covered": "a", "findings_summary": "b", "sources_retrieved": 0, "open_questions": 0, "not_covered": []});
+    let p = ScriptedProvider::new();
+    p.push_tool_use("submit_explore", submit.clone());
+    p.push_tool_use(
+        "Document",
+        json!({"path": md, "document": {"title": "Greeting", "date": "2026-07-28", "repo": "app", "scope": "s", "problem": "p"}}),
+    );
+    p.push_tool_use("submit_explore", submit);
+    let (exec, p) = executor(p);
+    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    assert_eq!(r.status, ExecutionStatus::Ok);
+    let reqs = p.requests();
+    assert!(reqs[0].tools.iter().any(|t| t.name == "Document" && t.input_schema["$defs"].get("Document").is_some()));
+    let (msg, is_err) = &tool_results(&reqs[1])[0];
+    assert!(*is_err && msg.contains("Document tool"), "{msg}");
+    let (msg, is_err) = &tool_results(&reqs[2])[0];
+    assert!(!*is_err && msg.contains("Wrote the research document"), "{msg}");
+    assert!(std::fs::read_to_string(&md).unwrap().starts_with("# Research: Greeting"));
 }
 
 #[tokio::test]
@@ -263,7 +286,7 @@ async fn timeout_is_an_error() {
 #[tokio::test]
 async fn resumes_from_transcript() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::Explore, PermissionMode::Default, vec![Capability::Read]);
+    let mut s = spec(&f, AgentName::QuickAnswer, PermissionMode::Default, vec![Capability::Read]);
     s.ctx.report_file = None;
     let from = ExecutionId::new();
     s.resume = Some(ostra_core::exec::ResumeInfo { from: from.clone(), native_session_id: None });
@@ -276,10 +299,7 @@ async fn resumes_from_transcript() {
         ],
     );
     let p = ScriptedProvider::new();
-    p.push_tool_use(
-        "submit_explore",
-        json!({"research_path": "/x", "scope_covered": "a", "findings_summary": "b", "sources_retrieved": 0, "open_questions": 0}),
-    );
+    p.push_tool_use("submit_quick_answer", json!({"answer": "a"}));
     let (exec, p) = executor(p);
     let r = exec.run(s, Arc::new(host), CancellationToken::new()).await;
     assert_eq!(r.status, ExecutionStatus::Ok);

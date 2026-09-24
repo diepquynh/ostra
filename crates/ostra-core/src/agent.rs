@@ -163,6 +163,8 @@ pub enum Capability {
     WebSearch,
     WebFetch,
     Report,
+    /// The typed-document tool: research, spec, and plan documents (HANDOVER 10.3).
+    Document,
     Memory,
     MemoryRecall,
 }
@@ -181,6 +183,7 @@ impl Capability {
             Capability::WebSearch => "WebSearch",
             Capability::WebFetch => "WebFetch",
             Capability::Report => "Report",
+            Capability::Document => "Document",
             Capability::Memory => "Memory",
             Capability::MemoryRecall => "MemoryRecall",
         }

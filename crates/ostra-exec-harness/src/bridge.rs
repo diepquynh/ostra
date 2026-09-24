@@ -224,6 +224,9 @@ impl HarnessBridge {
                     "Fix the arguments and call `{name}` again: {message}. Nothing was recorded."
                 ));
             }
+            if let Err(message) = ostra_core::doc::check_submit(live.agent, &args) {
+                return tool_error(&format!("{message} Nothing was recorded."));
+            }
             return if live.record_submit(args) {
                 tool_text(
                     "Recorded. Your run is complete: end your turn now, without further tool calls.",
@@ -763,6 +766,29 @@ mod tests {
             .message
             .unwrap();
         assert_eq!(unauth["error"]["code"], -32001);
+    }
+
+    #[tokio::test]
+    async fn mcp_submit_needs_the_document() {
+        let fake = Arc::new(Fake::default());
+        let live = LiveRegistry::new();
+        let exec = live.register(ExecutionId::new(), AgentName::Explore, HarnessKind::Claude);
+        let bridge = HarnessBridge::new(fake, live);
+        let args = json!({"research_path": "/nowhere/ostra-research-1.md", "scope_covered": "s", "findings_summary": "f", "sources_retrieved": 0, "open_questions": 0});
+        let r = bridge
+            .handle_mcp(
+                exec.token(),
+                McpRequest {
+                    execution: exec.id.clone(),
+                    message: json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "submit_explore", "arguments": args}}),
+                },
+            )
+            .await
+            .message
+            .unwrap();
+        assert_eq!(r["result"]["isError"], true);
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Document tool"), "{r}");
+        assert!(!exec.has_submit());
     }
 
     #[test]

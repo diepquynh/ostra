@@ -126,9 +126,22 @@ describe("artifact screen", () => {
     );
   }
 
+  const plan = `/home/me/code/shop/.ostra/sessions/${f.SESSION}/ostra-plan-20260922-100500-order-cancel.md`;
+  const research = `/home/me/code/shop/.ostra/sessions/${f.SESSION}/backend/ostra-research-20260922-100100-order-lifecycle.md`;
+  const report = `/home/me/code/shop/.ostra/sessions/${f.SESSION}/backend/ostra-implementer-phase-1.md`;
+  const chapters = () =>
+    Array.from(host!.querySelectorAll<HTMLElement>('[aria-label="Chapters"] [role="treeitem"]')).map((r) => ({
+      el: r,
+      label: r.querySelector(".os-tree-item__label")?.textContent ?? r.textContent ?? "",
+      meta: r.querySelector(".os-tree-item__meta")?.textContent ?? null,
+    }));
+  const chapter = (label: string) => chapters().find((c) => c.label.startsWith(label))!.el;
+  const button = (text: string) => Array.from(host!.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === text)!;
+
   it("lists the outline, shows the EARS note for a spec, and deep-links a heading", async () => {
     const open = vi.fn();
     await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, open));
+    await act(async () => button("Markdown").click());
     const outline = Array.from(host!.querySelectorAll('[aria-label="Outline"] [role="treeitem"]')).map((r) => r.textContent);
     expect(outline).toContain("Requirements");
     expect(outline).toContain("External Evidence");
@@ -144,5 +157,75 @@ describe("artifact screen", () => {
     await act(async () => host!.querySelector<HTMLButtonElement>('button[aria-label="Hide the note"]')!.click());
     expect(host!.textContent).not.toContain("How to read requirements and acceptance criteria");
     expect(host!.textContent).toContain("How to read requirements");
+  });
+
+  it("pages a typed spec by chapter, with counts", async () => {
+    const open = vi.fn();
+    await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, open));
+    const list = chapters();
+    expect(list.map((c) => c.label)).toEqual(expect.arrayContaining(["Overview", "Criteria", "Requirements", "D1: Cancellation endpoint", "External evidence", "Traceability", "Fact-check"]));
+    expect(list.find((c) => c.label === "Requirements")!.meta).toBe("4");
+    expect(host!.querySelector(".doc-chapter")!.getAttribute("data-chapter")).toBe("overview");
+    expect(host!.textContent).toContain("4 of 4");
+    await act(async () => chapter("External evidence").click());
+    expect(open).toHaveBeenLastCalledWith(`artifact:${spec}`, { anchor: "evidence" });
+    expect(host!.querySelector(".doc-chapter")!.getAttribute("data-chapter")).toBe("evidence");
+    expect(host!.querySelector("#el-e1")).not.toBeNull();
+    expect(host!.querySelector("#el-r1")).toBeNull();
+  });
+
+  it("follows a cross-reference chip to its element", async () => {
+    const open = vi.fn();
+    await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, open));
+    await act(async () => chapter("External evidence").click());
+    const r3 = Array.from(host!.querySelectorAll<HTMLButtonElement>("button.doc-ref")).find((b) => b.textContent === "R3")!;
+    await act(async () => r3.click());
+    expect(open).toHaveBeenLastCalledWith(`artifact:${spec}`, { anchor: "req-d1/r3" });
+    expect(host!.querySelector(".doc-chapter")!.getAttribute("data-chapter")).toBe("req-d1");
+    expect(host!.querySelector("#el-r3")!.className).toContain("doc-el--focus");
+  });
+
+  it("marks the element a fact-check finding names", async () => {
+    await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, () => {}));
+    expect(chapter("D1: Cancellation endpoint").querySelector(".doc-dot--info")).not.toBeNull();
+    await act(async () => chapter("D1: Cancellation endpoint").click());
+    const notes = host!.querySelector('#el-r3 [aria-label="Notes on R3"]');
+    expect(notes?.textContent).toContain("Fact-check");
+    expect(notes?.textContent).toContain("retry");
+    await act(async () => chapter("Fact-check").click());
+    expect(host!.textContent).toContain("PASS");
+  });
+
+  it("renders a plan's phases and a phase file", async () => {
+    await render(withNav(<ArtifactScreen ws={f.WS} path={plan} />, () => {}));
+    expect(chapters().map((c) => c.label)).toEqual(expect.arrayContaining(["Phases", "Phase 1: Cancel transition", "Phase 2: Cancel button"]));
+    await act(async () => chapter("Phase 1: Cancel transition").click());
+    expect(host!.querySelector("#el-step-1\\.1")?.textContent).toContain("src/orders/service.ts");
+    expect(host!.querySelector('#el-step-1\\.2 [aria-label="Notes on step 1.2"]')).not.toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    await render(withNav(<ArtifactScreen ws={f.WS} path={plan.replace(".md", "-phase-2.md")} />, () => {}));
+    expect(chapters().map((c) => c.label)).toEqual(["Overview", "Steps", "Requirements delivered", "External constraints"]);
+  });
+
+  it("shows a research document's chapters", async () => {
+    await render(withNav(<ArtifactScreen ws={f.WS} path={research} />, () => {}));
+    expect(chapters().map((c) => c.label)).toEqual(expect.arrayContaining(["Files", "Patterns", "Data flow", "Approaches", "Open questions", "Sources"]));
+    await act(async () => chapter("Open questions").click());
+    expect(host!.querySelector("#el-q1")?.textContent).toContain("Recommended");
+    expect(host!.textContent).not.toContain("How to read requirements");
+  });
+
+  it("switches between the document and its markdown, and leaves reports as markdown", async () => {
+    await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, () => {}));
+    await act(async () => button("Markdown").click());
+    expect(host!.querySelector('[aria-label="Outline"]')).not.toBeNull();
+    await act(async () => button("Document").click());
+    expect(host!.querySelector('[aria-label="Chapters"]')).not.toBeNull();
+    act(() => root?.unmount());
+    host?.remove();
+    await render(withNav(<ArtifactScreen ws={f.WS} path={report} />, () => {}));
+    expect(host!.querySelector('[aria-label="Chapters"]')).toBeNull();
+    expect(button("Markdown")).toBeUndefined();
   });
 });
