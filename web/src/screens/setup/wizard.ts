@@ -1,7 +1,7 @@
 // Pure state for the setup steps: values, step order, what each step needs before Continue, the
 // request body, the workspace.toml preview, and which step a validation issue belongs to.
 
-import type { CreateWorkspace, EnvironmentStatus, HarnessKind, PermissionMode, RoutingPreset, ValidationIssue } from "../../api/types";
+import type { CloneProject, CreateWorkspace, EnvironmentStatus, HarnessKind, PermissionMode, RoutingPreset, ValidationIssue } from "../../api/types";
 
 export type StepId = "welcome" | "check" | "name" | "projects" | "defaults" | "review";
 
@@ -43,6 +43,8 @@ export type WizardValues = {
   nameTouched: boolean;
   root: string;
   projects: DraftProject[];
+  /** Repositories to clone into the workspace. The clone endpoint needs the workspace, so they run after it is created. */
+  clones: CloneProject[];
   mode: PermissionMode;
   preset: RoutingPreset;
   yolo: boolean;
@@ -54,6 +56,7 @@ export const initialValues = (): WizardValues => ({
   nameTouched: false,
   root: "~/",
   projects: [],
+  clones: [],
   mode: "default",
   preset: "native",
   yolo: false,
@@ -159,6 +162,10 @@ export function tomlFor(v: WizardValues, home: string | null = null): string {
     out.push("", "[[projects]]", `key = ${tomlString(p.key)}`, `path = ${tomlString(expandHome(p.path, home))}`);
     if (p.stack) out.push(`stack = ${tomlString(p.stack)}`);
   }
+  for (const c of v.clones) {
+    out.push("", `# Cloned from ${c.url} after the workspace is created.`, "[[projects]]", `key = ${tomlString(c.key)}`, `path = ${tomlString(clonePath(c, v.root, home))}`);
+    if (c.stack) out.push(`stack = ${tomlString(c.stack)}`);
+  }
   if (v.preset !== "native") {
     out.push("", "[routing.executor.byAgent]");
     for (const a of HARNESS_AGENTS) out.push(`${/^[a-z]+$/.test(a) ? a : tomlString(a)} = ${tomlString(presetExecutor(v.preset))}`);
@@ -193,7 +200,12 @@ export const creationTasks = (v: WizardValues) => [
   "Create the workspace database",
   "Register the workspace in registry.db",
   ...v.projects.map((p) => `Import ${p.key}`),
+  ...v.clones.map((c) => `Clone ${c.key}`),
 ];
+
+/** Where a clone's checkout goes: its own folder, else `<workspace root>/<key>`, like the server. */
+export const clonePath = (c: CloneProject, root: string, home: string | null) =>
+  c.path ? expandHome(c.path, home) : `${expandHome(root.trim(), home).replace(/\/+$/, "")}/${c.key}`;
 
 export const PROVIDER_LABEL: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI" };
 export const HARNESS_LABEL: Record<HarnessKind, string> = { claude: "Claude Code", codex: "Codex", grok: "Grok Build", agy: "Antigravity" };

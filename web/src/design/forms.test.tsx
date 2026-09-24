@@ -198,4 +198,37 @@ describe("FolderPicker, with a list function", () => {
     expect(screen.getByTestId("value").textContent).toBe("/home/me/");
     await waitFor(() => expect(screen.getByText("Downloads")).toBeTruthy());
   });
+
+  const CREATE = "Create this folder and any missing parent folders";
+
+  it("creates a missing folder with its parents and browses into it", async () => {
+    const mkdir = vi.fn(async (path: string) => {
+      FS[path] = [];
+    });
+    function WithMkdir() {
+      const [value, setValue] = useState("/home/me/new/deep");
+      return (
+        <>
+          <FolderPicker value={value} onChange={setValue} list={list} mkdir={mkdir} debounceMs={0} />
+          <output data-testid="value">{value}</output>
+        </>
+      );
+    }
+    render(<WithMkdir />);
+    fireEvent.click(await screen.findByTitle(CREATE));
+    await waitFor(() => expect(mkdir).toHaveBeenCalledWith("/home/me/new/deep"));
+    await waitFor(() => expect(screen.getByTestId("value").textContent).toBe("/home/me/new/deep/"));
+    await waitFor(() => expect(screen.getByText("No folders here.")).toBeTruthy());
+    expect(screen.queryByTitle(CREATE)).toBeNull();
+    delete FS["/home/me/new/deep"];
+  });
+
+  it("offers create for a typed name no folder has, and not for an existing one", async () => {
+    render(<FolderPicker value="/home/me/code/shop-web" list={list} mkdir={async () => undefined} debounceMs={0} />);
+    await waitFor(() => expect(screen.getAllByText("shop-web")).toBeTruthy());
+    expect(screen.queryByTitle(CREATE)).toBeNull();
+    cleanup();
+    render(<FolderPicker value="/home/me/code/shop" list={list} mkdir={async () => undefined} debounceMs={0} />);
+    expect((await screen.findByTitle(CREATE)).textContent).toBe("Create /home/me/code/shop");
+  });
 });

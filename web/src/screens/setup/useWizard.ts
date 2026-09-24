@@ -4,7 +4,7 @@ import { HttpError } from "../../api/client";
 import type { ValidationIssue, WorkspaceDetail } from "../../api/types";
 import { useAsync } from "../../lib/hooks";
 import { useHome } from "./folders";
-import { canContinue, creationTasks, initialValues, issuesByStep, stepsFor, toCreateBody, type StepId, type WizardValues } from "./wizard";
+import { canContinue, creationTasks, expandHome, initialValues, issuesByStep, stepsFor, toCreateBody, type StepId, type WizardValues } from "./wizard";
 
 /** Time each creation checklist row stays in progress before the next one starts. */
 export const TASK_MS = 420;
@@ -27,6 +27,9 @@ export function useWizard(skipWelcome: boolean) {
   const [created, setCreated] = useState<WorkspaceDetail | null>(null);
   const [createError, setCreateError] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
+  /** The clone running now, and why each failed clone failed. A failed clone leaves the workspace in place. */
+  const [cloning, setCloning] = useState<string | null>(null);
+  const [cloneFailures, setCloneFailures] = useState<Record<string, string>>({});
 
   const id: StepId = steps[i].id;
   const set = useCallback((patch: Partial<WizardValues>) => setV((x) => ({ ...x, ...patch })), []);
@@ -79,20 +82,33 @@ export function useWizard(skipWelcome: boolean) {
     setCreating(true);
     setCreateError(null);
     setProgress(0);
+    setCloneFailures({});
+    // Rows up to the imports finish with the create call; each clone row finishes with its own clone.
+    const base = tasks.length - v.clones.length;
     // The checklist advances on a timer but holds on its last row until the server answers.
-    timer.current = setInterval(() => setProgress((n) => Math.min(n + 1, tasks.length - 1)), TASK_MS);
+    timer.current = setInterval(() => setProgress((n) => Math.min(n + 1, base - 1)), TASK_MS);
     api.createWorkspace(body).then(
-      (d) => {
+      async (d) => {
         if (timer.current) clearInterval(timer.current);
         setCreated(d);
         timer.current = setInterval(
           () =>
             setProgress((n) => {
-              if (n + 1 >= tasks.length && timer.current) clearInterval(timer.current);
-              return Math.min(n + 1, tasks.length);
+              if (n + 1 >= base && timer.current) clearInterval(timer.current);
+              return n >= base ? n : n + 1;
             }),
           TASK_MS / 2,
         );
+        for (const [i, c] of v.clones.entries()) {
+          setCloning(c.key);
+          try {
+            setCreated(await api.cloneProject(d.id, { ...c, path: c.path ? expandHome(c.path, home) : undefined }));
+          } catch (e) {
+            setCloneFailures((f) => ({ ...f, [c.key]: e instanceof Error ? e.message : String(e) }));
+          }
+          setProgress((n) => Math.max(n, base + i + 1));
+        }
+        setCloning(null);
       },
       (e: Error) => {
         if (timer.current) clearInterval(timer.current);
@@ -126,6 +142,8 @@ export function useWizard(skipWelcome: boolean) {
     createError,
     tasks,
     progress,
+    cloning,
+    cloneFailures,
     done: !!created && progress >= tasks.length,
   };
 }

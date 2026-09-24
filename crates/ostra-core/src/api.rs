@@ -262,6 +262,42 @@ pub struct HarnessStatus {
     pub logged_in: Option<bool>,
 }
 
+/// What a setup terminal runs for one harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum HarnessSetupAction {
+    /// The vendor's official installer script.
+    Install,
+    /// The CLI's own interactive login.
+    Login,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct HarnessSetupRequest {
+    pub action: HarnessSetupAction,
+}
+
+/// A terminal on this machine running an install or login. Stream it on `term:<terminal>` and
+/// type into it with `term_input`, like a harness execution. When it exits, the server checks
+/// the harnesses again and sends `harness_status` on `home`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct HarnessSetupTerminal {
+    pub terminal: String,
+    /// The command line it runs, for display.
+    pub command: String,
+}
+
+/// `POST /api/fs/mkdir`: create a folder and any missing parents, like `mkdir -p`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FsMkdir {
+    /// Absolute, or starting with `~`.
+    pub path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ProviderStatus {

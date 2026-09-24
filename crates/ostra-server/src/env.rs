@@ -103,3 +103,51 @@ impl EnvStatus {
         self.checked.elapsed() > Duration::from_secs(60)
     }
 }
+
+/// `PATH` with the official installers' folders appended where missing.
+pub fn path_with_install_dirs(
+    path: Option<std::ffi::OsString>,
+    home: &std::path::Path,
+) -> std::ffi::OsString {
+    let mut dirs: Vec<PathBuf> = path
+        .as_deref()
+        .map(|p| std::env::split_paths(p).collect())
+        .unwrap_or_default();
+    for d in ostra_exec_harness::install_dirs(home) {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    std::env::join_paths(dirs).unwrap_or_else(|_| path.unwrap_or_default())
+}
+
+/// Let a harness installed while the server runs resolve by name, without a restart.
+///
+/// # Safety
+/// Call before any other thread starts, because it writes the process environment.
+pub unsafe fn extend_path() {
+    let path = path_with_install_dirs(std::env::var_os("PATH"), &home());
+    // SAFETY: the caller guarantees no other thread reads or writes the environment.
+    unsafe { std::env::set_var("PATH", path) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn install_dirs_join_path_once() {
+        let home = Path::new("/home/me");
+        let p = path_with_install_dirs(Some("/usr/bin:/home/me/.local/bin".into()), home);
+        assert_eq!(
+            p,
+            std::ffi::OsString::from("/usr/bin:/home/me/.local/bin:/home/me/.grok/bin")
+        );
+        let p = path_with_install_dirs(None, home);
+        assert_eq!(
+            p,
+            std::ffi::OsString::from("/home/me/.local/bin:/home/me/.grok/bin")
+        );
+    }
+}

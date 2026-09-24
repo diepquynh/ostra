@@ -733,6 +733,9 @@ POST            /api/auth/exchange                        one-time token for the
 GET             /api/onboarding                           first-run flag and workspace count
 POST            /api/onboarding/complete                  mark the setup guide finished
 GET             /api/environment                          providers, harnesses, stack names; before any workspace
+POST            /api/harnesses/:harness/setup             {action: install | login}; a PTY on `term:setup_<h>_<a>`
+                                                          running the vendor's official installer or the CLI's
+                                                          login; `harness_status` on `home` when it exits
 GET/POST        /api/workspaces                           list; create in one call (name, root, projects,
                                                           permissions, yolo, routing_preset, notifications)
 POST            /api/workspaces/validate                  the same body; every issue, writes nothing
@@ -776,6 +779,7 @@ POST            /api/executions/:id/cancel | /resume
 GET             /api/artifacts?path=                      session-dir files only, with the heading outline
 GET             /api/fs                                   ?path=&prefix=&limit=; type-to-browse folders, git and
                                                           Ostra marks for the folder and its entries
+POST            /api/fs/mkdir                             {path}; create a folder with its parents (`mkdir -p`)
 GET             /api/fs/list                              ?path=; the older folder listing
 POST            /api/push/subscribe
 POST            /internal/policy | /internal/mcp          hook bridge and MCP shim, local peers and execution

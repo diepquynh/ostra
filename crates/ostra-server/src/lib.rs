@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod env;
 pub mod files;
 pub mod git;
+pub mod harness_setup;
 pub mod nav;
 pub mod prices;
 pub mod services;

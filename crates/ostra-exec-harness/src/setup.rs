@@ -92,6 +92,22 @@ pub fn login_command(global: &GlobalConfig, harness: HarnessKind) -> (String, Ve
     (cmd, args)
 }
 
+/// The vendor's official installer for a harness CLI, a shell pipeline for `sh -c`.
+pub fn install_script(harness: HarnessKind) -> &'static str {
+    match harness {
+        HarnessKind::Claude => "curl -fsSL https://claude.ai/install.sh | bash",
+        HarnessKind::Codex => "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        HarnessKind::Grok => "curl -fsSL https://x.ai/cli/install.sh | bash",
+        HarnessKind::Agy => "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+    }
+}
+
+/// Where the official installers put their binaries. A server started before an install does
+/// not see a shell profile's `PATH` change, so these join its `PATH` at start.
+pub fn install_dirs(home: &Path) -> Vec<PathBuf> {
+    vec![home.join(".local/bin"), home.join(".grok/bin")]
+}
+
 // ---------------------------------------------------------------------------------------------
 // Antigravity global integration
 // ---------------------------------------------------------------------------------------------

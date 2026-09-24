@@ -304,6 +304,8 @@ export const mockApi: Api = {
       ],
     }),
   fsBrowse: (opts = {}) => delay(mockBrowse(opts.path, opts.prefix, opts.limit)),
+  fsMkdir: (path) => delay(mockBrowse(path)),
+  harnessSetup: (harness, action) => delay({ terminal: `setup_${harness}_${action}`, command: `${harness} ${action}` }),
 
   environment: () => delay({ providers: f.workspaceDetail.providers, harnesses: f.workspaceDetail.harnesses, stacks: f.workspaceDetail.stacks }),
   saveProvider: (name, edit) => {

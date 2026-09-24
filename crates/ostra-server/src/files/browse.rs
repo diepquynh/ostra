@@ -1,5 +1,6 @@
 //! `GET /api/fs`: folder names for the type-to-browse picker. One directory read per request (or
 //! none, from a two-second cache), no recursion, no git process, never file contents.
+//! `POST /api/fs/mkdir`: create a folder with its missing parents.
 
 use ostra_core::api::{FsBrowse, FsEntry};
 use ostra_core::paths;
@@ -111,6 +112,26 @@ impl BrowseCache {
         Some(names)
     }
 
+    /// Create `raw` and its missing parents, like `mkdir -p`, then describe it.
+    pub fn mkdir(&self, raw: &str, home: &Path) -> Result<FsBrowse, String> {
+        let raw = raw.trim();
+        if !(raw.starts_with('/') || raw == "~" || raw.starts_with("~/")) {
+            return Err("Type an absolute path, starting with / or ~/.".into());
+        }
+        let path = expand(raw, home);
+        if path.exists() && !path.is_dir() {
+            return Err(format!(
+                "Choose another name, because {} is a file.",
+                path.display()
+            ));
+        }
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("Could not create {}: {e}", path.display()))?;
+        // Every cached ancestor listing may now miss a new folder.
+        self.dirs.lock().clear();
+        Ok(self.browse(Some(raw), None, None, home))
+    }
+
     pub fn browse(
         &self,
         raw: Option<&str>,
@@ -213,6 +234,42 @@ mod tests {
         assert!(truncated);
         let (out, _) = filter_names(names.iter().copied(), "", 3);
         assert_eq!(out, vec!["billing-service", "dotfiles", "eshop"]);
+    }
+
+    #[test]
+    fn mkdir_creates_parents_and_refreshes_listings() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::write(base.join("file.txt"), "x").unwrap();
+        let cache = BrowseCache::default();
+        assert!(
+            cache
+                .browse(Some("~"), None, None, &base)
+                .entries
+                .is_empty()
+        );
+
+        let b = cache.mkdir("~/code/shop/web", &base).unwrap();
+        assert!(b.exists && b.readable);
+        assert_eq!(b.path, base.join("code/shop/web"));
+        let listed = cache.browse(Some("~"), None, None, &base);
+        assert_eq!(
+            listed.entries.len(),
+            1,
+            "the cached home listing was dropped"
+        );
+        assert!(
+            cache.mkdir("~/code/shop/web", &base).is_ok(),
+            "an existing folder is fine"
+        );
+
+        assert!(
+            cache
+                .mkdir("~/file.txt", &base)
+                .unwrap_err()
+                .contains("is a file")
+        );
+        assert!(cache.mkdir("relative/path", &base).is_err());
     }
 
     #[test]

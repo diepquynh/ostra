@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, FolderPicker, Input, Select } from "../../design";
-import { listFolders, useFolderInfo } from "./folders";
+import { listFolders, makeFolder, useFolderInfo } from "./folders";
 import { basename, isChosen, keyError, stackOptions, suggestKey, type DraftProject, type ImportErrors } from "./wizard";
 
 export type ImportFormProps = {
@@ -57,7 +57,7 @@ export function ImportForm({ takenKeys, takenPaths = {}, onAdd, onDraft, serverE
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <FolderPicker value={path} onChange={setPath} list={listFolders} height={compact ? 150 : 170} />
+        <FolderPicker value={path} onChange={setPath} list={listFolders} mkdir={makeFolder} height={compact ? 150 : 170} />
         {(pErr || serverErrors.path) && (
           <span className="os-field__error" role="alert">
             {pErr ?? serverErrors.path}

@@ -57,6 +57,8 @@ export interface FolderPickerProps {
   onBrowse?: (path: string) => void;
   /** Home directory for "~" expansion. With list, the listing's home is used when this is omitted. */
   home?: string;
+  /** Creates a folder and its missing parents, like `mkdir -p`. With it, a typed path that does not exist offers "Create". */
+  mkdir?: (path: string) => Promise<unknown>;
   height?: number;
 }
 
@@ -88,6 +90,8 @@ interface Browse {
   loading: boolean;
   error: string | null;
   browse: (dir: string) => void;
+  /** Lists the current directory again. */
+  reload: () => void;
 }
 
 function useListing(list: FolderLister | undefined, start: string, debounceMs: number): Browse {
@@ -95,6 +99,7 @@ function useListing(list: FolderLister | undefined, start: string, debounceMs: n
   const [listing, setListing] = useState<FolderListing | null>(null);
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     if (!list) return;
@@ -118,7 +123,7 @@ function useListing(list: FolderLister | undefined, start: string, debounceMs: n
       clearTimeout(t);
       ctrl.abort();
     };
-  }, [list, requested, debounceMs]);
+  }, [list, requested, debounceMs, nonce]);
 
   const stale = loadedFor !== requested;
   return {
@@ -132,6 +137,10 @@ function useListing(list: FolderLister | undefined, start: string, debounceMs: n
     loading: stale,
     error: stale ? null : error,
     browse: setRequested,
+    reload: () => {
+      setLoadedFor(null);
+      setNonce((n) => n + 1);
+    },
   };
 }
 
@@ -154,6 +163,7 @@ export function FolderPicker(props: FolderPickerProps) {
         loading: false,
         error: null,
         browse: (dir) => props.onBrowse?.(dir),
+        reload: () => props.onBrowse?.(props.browsePath ?? "/"),
       };
   const home = props.home ?? b.home;
   const [hi, setHi] = useState(0);
@@ -180,6 +190,30 @@ export function FolderPicker(props: FolderPickerProps) {
   const selected = value.replace(/\/$/, "") || "/";
   const isSelected = !!parsed && !prefix && parsed.dir === current;
   const showSelected = isSelected && !value.endsWith("/");
+
+  // The typed folder, when it does not exist yet: the missing directory itself, or a name no entry matches exactly.
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const target = parsed ? (parsed.prefix ? join(parsed.dir, parsed.prefix) : parsed.dir) : null;
+  const canCreate =
+    !!props.mkdir && !!target && !b.loading && !b.error && (b.missing ? b.nearest !== null : !!parsed?.prefix && !b.entries.some((e) => e.name === parsed.prefix));
+  useEffect(() => setCreateError(null), [target]);
+  const create = () => {
+    if (!props.mkdir || !target || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    props.mkdir(target).then(
+      () => {
+        setCreating(false);
+        onChange?.(target + "/");
+        b.reload();
+      },
+      (e: unknown) => {
+        setCreating(false);
+        setCreateError(e instanceof Error ? e.message : String(e));
+      },
+    );
+  };
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "ArrowDown") {
@@ -246,6 +280,16 @@ export function FolderPicker(props: FolderPickerProps) {
               <span style={{ color: "var(--text-secondary)" }}>{b.nearest}</span>
             </div>
           )}
+          {canCreate && (
+            <div className="os-picker__row" title="Create this folder and any missing parent folders" onClick={create}>
+              {creating ? <Spinner size={12} /> : <Icon name="folder-plus" size={14} style={{ color: "var(--accent-fg)" }} />}
+              <span style={{ flex: 1 }}>
+                {creating ? "Creating " : "Create "}
+                <span style={{ fontFamily: "var(--font-mono)" }}>{target}</span>
+              </span>
+            </div>
+          )}
+          {createError && <div style={{ padding: "8px 10px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>{createError}</div>}
           {!b.missing && b.parent && !prefix && (
             <div className="os-picker__row" onClick={() => onChange?.(b.parent === "/" ? "/" : b.parent + "/")}>
               <Icon name="corner-left-up" size={14} style={{ color: "var(--text-muted)" }} />

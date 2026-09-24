@@ -42,9 +42,7 @@ export function Onboarding({ onFinish }: OnboardingProps) {
         </aside>
         <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--surface-editor)" }}>
           <div style={{ flex: 1, overflow: "auto" }}>
-            <div style={{ maxWidth: 720, margin: "0 auto" }}>
-              <WizardBody w={w} padding="48px 40px 40px" />
-            </div>
+            <WizardBody w={w} padding="48px 40px 40px" />
           </div>
           <div
             style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 24px", borderTop: "1px solid var(--border-default)", background: "var(--surface-panel)" }}

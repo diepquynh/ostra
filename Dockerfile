@@ -39,7 +39,7 @@ RUN cargo build --release -p ostra-server
 FROM ubuntu:26.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git openssh-client \
+    && apt-get install -y --no-install-recommends ca-certificates git openssh-client curl \
     && rm -rf /var/lib/apt/lists/*
 # Fixed UID/GID 1000 so a bind-mounted host directory owned by the common first
 # non-root Linux user (1000) is writable without a runtime chown.

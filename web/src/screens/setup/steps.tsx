@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { ValidationIssue, WorkspaceDetail } from "../../api/types";
+import type { CloneProject, ValidationIssue, WorkspaceDetail } from "../../api/types";
+import { useChannel } from "../../lib/hooks";
 import {
   Banner,
   Button,
@@ -20,11 +21,16 @@ import {
   type IconName,
   type LaneState,
 } from "../../design";
+import { HarnessAction, SetupTerminalPanel, useHarnessSetup } from "./HarnessSetup";
+import { CloneForm } from "./CloneForm";
+import { useGitCredentials } from "./GitCredentials";
 import { ImportForm } from "./ImportForm";
 import { ProviderCredentials } from "./ProviderCredentials";
-import { listFolders, useFolderInfo } from "./folders";
+import { listFolders, makeFolder, useFolderInfo } from "./folders";
 import type { Wizard } from "./useWizard";
 import {
+  clonePath,
+  expandHome,
   HARNESS_LABEL,
   keySource,
   patchName,
@@ -55,7 +61,7 @@ function StepHead({ title, text }: { title: string; text?: ReactNode }) {
   return (
     <div>
       <h2 style={{ margin: "0 0 6px", font: "var(--type-title)" }}>{title}</h2>
-      {text && <div style={{ color: "var(--text-secondary)", lineHeight: 1.55, maxWidth: 600 }}>{text}</div>}
+      {text && <div style={{ color: "var(--text-secondary)", lineHeight: 1.55 }}>{text}</div>}
     </div>
   );
 }
@@ -92,7 +98,7 @@ function StepWelcome() {
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
         <h1 style={{ margin: "0 0 8px", font: "var(--weight-semibold) var(--text-2xl)/1.2 var(--font-sans)", letterSpacing: "var(--tracking-tight)" }}>Set up Ostra</h1>
-        <div style={{ fontSize: "var(--text-md)", color: "var(--text-secondary)", lineHeight: 1.55, maxWidth: 560 }}>
+        <div style={{ fontSize: "var(--text-md)", color: "var(--text-secondary)", lineHeight: 1.55 }}>
           Ostra runs a software development lifecycle on your own machine. You describe a change; code drives it from stage to stage and models do the work inside
           each stage.
         </div>
@@ -132,7 +138,7 @@ function StepWelcome() {
 
 type Tone = "ok" | "warn" | "neutral";
 
-function CheckRow({ delay, label, sub, result, tone }: { delay: number; label: string; sub: string; result: string; tone: Tone }) {
+function CheckRow({ delay, label, sub, result, tone, action }: { delay: number; label: string; sub: string; result: string; tone: Tone; action?: ReactNode }) {
   const [done, setDone] = useState(delay === 0);
   useEffect(() => {
     if (delay === 0) return;
@@ -153,6 +159,7 @@ function CheckRow({ delay, label, sub, result, tone }: { delay: number; label: s
         {label} <span style={{ font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", marginLeft: 4 }}>{sub}</span>
       </span>
       {done ? <Chip tone={tone}>{result}</Chip> : <span style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Checking…</span>}
+      {done && action}
     </div>
   );
 }
@@ -160,6 +167,7 @@ function CheckRow({ delay, label, sub, result, tone }: { delay: number; label: s
 function StepCheck({ w }: { w: Wizard }) {
   const reduced = useReducedMotion();
   const e = w.env.data;
+  const setup = useHarnessSetup(e?.harnesses, w.env.reload);
   if (w.env.error)
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -226,15 +234,17 @@ function StepCheck({ w }: { w: Wizard }) {
                   sub={h.command + (h.version ? ` ${h.version}` : "")}
                   result={!h.installed ? "Not installed" : h.logged_in === true ? "Logged in" : h.logged_in === false ? "Not logged in" : "Installed"}
                   tone={!h.installed ? "neutral" : h.logged_in === false ? "warn" : "ok"}
+                  action={<HarnessAction h={h} starting={setup.starting === h.harness} onStart={(a) => setup.start(h.harness, a)} />}
                 />
               ))}
             </div>
           </div>
+          <SetupTerminalPanel run={setup.run} error={setup.error} onClose={setup.close} onCheck={w.env.reload} />
         </>
       )}
       <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", lineHeight: 1.5 }}>
-        Agents run on the native executor unless workspace settings route them to an installed harness. A harness that is not logged in can log in later from an
-        execution's Terminal tab.
+        Agents run on the native executor unless workspace settings route them to an installed harness. Install runs the vendor's official installer script, and
+        Log in runs the CLI's own login, both in a terminal here. A harness that is not logged in can also log in later from an execution's Terminal tab.
       </div>
     </div>
   );
@@ -260,7 +270,7 @@ function StepName({ w }: { w: Wizard }) {
         </span>
       </div>
       <div className="os-field">
-        <FolderPicker value={v.root} onChange={(root) => set(patchName(v, root))} list={listFolders} height={180} />
+        <FolderPicker value={v.root} onChange={(root) => set(patchName(v, root))} list={listFolders} mkdir={makeFolder} height={180} />
         {info.state === "missing" && (
           <span className="os-field__hint">
             No folder at <code>{v.root}</code> yet. Ostra creates it when it creates the workspace.
@@ -277,21 +287,28 @@ function StepName({ w }: { w: Wizard }) {
 
 function StepProjects({ w }: { w: Wizard }) {
   const { v, set } = w;
-  const [adding, setAdding] = useState(v.projects.length === 0);
+  const [adding, setAdding] = useState(v.projects.length === 0 && v.clones.length === 0);
+  const [source, setSource] = useState<"folder" | "git">("folder");
+  const [clone, setClone] = useState<CloneProject | null>(null);
+  // Remounts the clone form after each add, so it starts empty.
+  const [cloneForm, setCloneForm] = useState(0);
+  const creds = useGitCredentials();
   const issues = w.byStep.projects ?? [];
   const takenPaths = Object.fromEntries(v.projects.map((p) => [p.path, p.key]));
+  const takenKeys = [...v.projects.map((p) => p.key), ...v.clones.map((c) => c.key)];
+  const any = v.projects.length + v.clones.length > 0;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <StepHead
         title="Add projects"
-        text="Import existing folders, usually git checkouts. To start a new project, create the folder by hand first, then import it. You can skip this and add projects later."
+        text="Import folders on this machine, or clone git repositories into the workspace. Clones run after the workspace is created. You can skip this and add projects later."
       />
-      {v.projects.length > 0 && (
+      {any && (
         <div className="os-panel">
           {v.projects.map((p, i) => {
             const mine = issues.filter((x) => projectIndex(x.path) === i);
             return (
-              <div key={p.key} className="os-rise" style={{ borderBottom: i < v.projects.length - 1 ? "1px solid var(--border-subtle)" : 0 }}>
+              <div key={p.key} className="os-rise" style={{ borderBottom: i < v.projects.length - 1 || v.clones.length ? "1px solid var(--border-subtle)" : 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, height: 40, padding: "0 8px 0 12px" }}>
                   <Icon name="folder-git-2" size={15} style={{ color: "var(--accent-fg)" }} />
                   <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{p.key}</span>
@@ -313,32 +330,93 @@ function StepProjects({ w }: { w: Wizard }) {
               </div>
             );
           })}
+          {v.clones.map((c, i) => (
+            <div
+              key={c.key}
+              className="os-rise"
+              style={{ display: "flex", alignItems: "center", gap: 10, height: 40, padding: "0 8px 0 12px", borderBottom: i < v.clones.length - 1 ? "1px solid var(--border-subtle)" : 0 }}
+            >
+              <Icon name="git-fork" size={15} style={{ color: "var(--accent-fg)" }} />
+              <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{c.key}</span>
+              <span
+                style={{ flex: 1, minWidth: 0, font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={`${c.url} → ${clonePath(c, v.root, w.home)}`}
+              >
+                {c.url}
+              </span>
+              <Chip>{c.stack || "detect"}</Chip>
+              <Chip tone="info">clone</Chip>
+              <IconButton size="sm" icon="x" label={`Remove ${c.key}`} onClick={() => set({ clones: v.clones.filter((x) => x.key !== c.key) })} />
+            </div>
+          ))}
         </div>
       )}
       {adding ? (
         <Panel
-          title="Import a folder"
-          icon="folder-plus"
+          title={source === "folder" ? "Import a folder" : "Clone from git"}
+          icon={source === "folder" ? "folder-plus" : "git-fork"}
           actions={
-            v.projects.length > 0 && (
+            any && (
               <Button size="sm" variant="ghost" onClick={() => setAdding(false)}>
                 Done
               </Button>
             )
           }
         >
-          <ImportForm
-            takenKeys={v.projects.map((p) => p.key)}
-            takenPaths={takenPaths}
-            stacks={w.env.data?.stacks ?? []}
-            initialPath={projectStart(v.root)}
-            onAdd={(p) => set({ projects: [...v.projects, p] })}
-          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Tabs
+              label="Project source"
+              value={source}
+              onChange={(id) => setSource(id as "folder" | "git")}
+              tabs={[
+                { id: "folder", label: "Folder on this machine", icon: "folder-plus" },
+                { id: "git", label: "Clone from git", icon: "git-fork" },
+              ]}
+            />
+            {source === "folder" ? (
+              <ImportForm
+                takenKeys={takenKeys}
+                takenPaths={takenPaths}
+                stacks={w.env.data?.stacks ?? []}
+                initialPath={projectStart(v.root)}
+                onAdd={(p) => set({ projects: [...v.projects, p] })}
+              />
+            ) : (
+              <>
+                <CloneForm
+                  key={cloneForm}
+                  takenKeys={takenKeys}
+                  stacks={w.env.data?.stacks ?? []}
+                  root={expandHome(v.root.trim(), w.home)}
+                  credentials={creds.list}
+                  serverErrors={{}}
+                  onDraft={setClone}
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span className="os-field__hint" style={{ flex: 1 }}>
+                    Save tokens and SSH keys under Settings, Git, or let the machine's own git and SSH setup answer. The clone runs when you create the workspace.
+                  </span>
+                  <Button
+                    icon="plus"
+                    disabled={!clone}
+                    onClick={() => {
+                      if (!clone) return;
+                      set({ clones: [...v.clones, clone] });
+                      setClone(null);
+                      setCloneForm((n) => n + 1);
+                    }}
+                  >
+                    Add to the list
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
         </Panel>
       ) : (
         <div>
           <Button icon="plus" onClick={() => setAdding(true)}>
-            Import another folder
+            Add another project
           </Button>
         </div>
       )}
@@ -401,6 +479,11 @@ function StepDefaults({ w }: { w: Wizard }) {
 }
 
 function Checklist({ w }: { w: Wizard }) {
+  const [line, setLine] = useState<{ key: string; text: string } | null>(null);
+  useChannel(w.cloning && w.created ? `workspace:${w.created.id}` : null, (m) => {
+    if (m.type === "git_progress") setLine({ key: m.key, text: m.line });
+  });
+  const failed = Object.keys(w.cloneFailures);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <StepHead title={w.done ? "Workspace ready" : "Creating the workspace"} />
@@ -408,21 +491,27 @@ function Checklist({ w }: { w: Wizard }) {
         {w.tasks.map((t, i) => {
           const n = w.progress;
           const mono = t.includes("/");
+          const key = t.startsWith("Clone ") ? t.slice(6) : null;
+          const failure = key ? w.cloneFailures[key] : undefined;
+          const note = failure ?? (key && i === n && line?.key === key ? line.text : null);
           return (
             <div
               key={t}
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
-                height: 36,
+                flexWrap: "wrap",
+                columnGap: 10,
+                minHeight: 36,
                 padding: "0 12px",
                 borderBottom: i < w.tasks.length - 1 ? "1px solid var(--border-subtle)" : 0,
                 color: i <= n ? "var(--text-primary)" : "var(--text-muted)",
               }}
             >
               <span style={{ width: 16, display: "grid", placeItems: "center" }}>
-                {i < n ? (
+                {failure ? (
+                  <Icon name="circle-x" size={15} style={{ color: "var(--bad)" }} />
+                ) : i < n ? (
                   <Icon name="circle-check" size={15} style={{ color: "var(--ok)" }} />
                 ) : i === n ? (
                   <Spinner size={12} style={{ color: "var(--accent)" }} />
@@ -431,10 +520,28 @@ function Checklist({ w }: { w: Wizard }) {
                 )}
               </span>
               <span style={{ fontFamily: mono ? "var(--font-mono)" : undefined, fontSize: mono ? "var(--text-sm)" : undefined }}>{t}</span>
+              {note && (
+                <span
+                  style={{
+                    flexBasis: "100%",
+                    padding: "0 0 8px 26px",
+                    font: "var(--text-sm)/1.4 var(--font-mono)",
+                    color: failure ? "var(--bad)" : "var(--text-muted)",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {note}
+                </span>
+              )}
             </div>
           );
         })}
       </div>
+      {w.done && failed.length > 0 && (
+        <Banner tone="warn" title={failed.length === 1 ? `${failed[0]} was not cloned` : `${failed.length} repositories were not cloned`}>
+          The workspace was created. Fix the problem above, then clone again from Add project in the workspace.
+        </Banner>
+      )}
     </div>
   );
 }
@@ -447,7 +554,7 @@ function StepReview({ w }: { w: Wizard }) {
   const rows: [string, string][] = [
     ["Name", v.name],
     ["Directory", w.home && v.root.startsWith("~/") ? w.home + v.root.slice(1) : v.root],
-    ["Projects", v.projects.length ? v.projects.map((p) => p.key).join(", ") : "none yet"],
+    ["Projects", v.projects.length || v.clones.length ? [...v.projects.map((p) => p.key), ...v.clones.map((c) => `${c.key} (clone)`)].join(", ") : "none yet"],
     ["Permission mode", v.mode],
     ["Implementers", presetExecutor(v.preset)],
     ["YOLO", v.yolo ? "on" : "off"],

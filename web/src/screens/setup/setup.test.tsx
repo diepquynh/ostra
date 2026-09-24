@@ -12,6 +12,8 @@ import { AddProjectDialog } from "./AddProjectDialog";
 import { makeLister } from "./folders";
 import { NewWorkspaceDialog } from "./NewWorkspaceDialog";
 
+vi.mock("../execution/XtermScreen", () => ({ default: ({ execution }: { execution: string }) => <div data-testid="xterm" className="ex-xterm" tabIndex={0}>{execution}</div> }));
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -121,6 +123,74 @@ describe("New workspace dialog", () => {
     );
     return onClose;
   }
+
+  it("installs a missing harness and logs in an installed one in a terminal", async () => {
+    const setup = vi.spyOn(api, "harnessSetup");
+    const onClose = renderDialog();
+    await screen.findByText("Antigravity");
+    // The rows reveal their results one by one.
+    expect(await screen.findAllByRole("button", { name: "Install" }, { timeout: 4000 })).toHaveLength(1);
+    await act(async () => click("Install"));
+    expect(setup).toHaveBeenLastCalledWith("agy", "install");
+    expect(await screen.findByText("Install Antigravity")).toBeTruthy();
+    expect((await screen.findByTestId("xterm")).textContent).toBe("setup_agy_install");
+    // Escape belongs to the CLI in the terminal, so the dialog stays open.
+    fireEvent.keyDown(screen.getByTestId("xterm"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    click("Maximize the terminal");
+    expect(screen.getByTestId("xterm").closest(".ex-term-frame")?.hasAttribute("data-maximized")).toBe(true);
+    fireEvent.keyDown(screen.getByTestId("xterm"), { key: "Escape", shiftKey: true });
+    expect(screen.getByTestId("xterm").closest(".ex-term-frame")?.hasAttribute("data-maximized")).toBe(false);
+    expect(onClose).not.toHaveBeenCalled();
+    await act(async () => click("Log in"));
+    expect(setup).toHaveBeenLastCalledWith("grok", "login");
+    expect(await screen.findByText("Log in to Grok Build")).toBeTruthy();
+    click("Close the terminal");
+    expect(screen.queryByTestId("xterm")).toBeNull();
+  });
+
+  it("queues clones in the projects step and clones them after the workspace is created", async () => {
+    const created = vi.spyOn(api, "createWorkspace");
+    const clone = vi
+      .spyOn(api, "cloneProject")
+      .mockImplementationOnce(async () => workspaceDetail)
+      .mockRejectedValueOnce(new HttpError(502, "fatal: Authentication failed"));
+    renderDialog();
+    await screen.findByText("Anthropic");
+    click("Continue");
+    type("Folder path", "/home/me/code/shop-three");
+    await waitFor(() => expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe("shop-three"));
+    click("Continue");
+
+    await screen.findByText("Import a folder");
+    fireEvent.click(screen.getByRole("tab", { name: /Clone from git/ }));
+    for (const url of ["https://github.com/acme/shop-api.git", "https://github.com/acme/private.git"]) {
+      type(/^Repository URL/, url);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add to the list" })).toHaveProperty("disabled", false));
+      click("Add to the list");
+    }
+    await screen.findByRole("button", { name: "Remove private" });
+    expect(screen.getByRole("textbox", { name: /^Repository URL/ })).toHaveProperty("value", "");
+    // A queued key is taken, so the same repository cannot be queued twice.
+    type(/^Repository URL/, "https://github.com/acme/shop-api.git");
+    expect(screen.getByRole("button", { name: "Add to the list" })).toHaveProperty("disabled", true);
+    click("Continue");
+    click("Continue");
+
+    await screen.findByText("The settings pass validation.");
+    expect(document.querySelector(".os-code")!.textContent).toContain('path = "/home/me/code/shop-three/shop-api"');
+    click("Create workspace");
+    expect(await screen.findByText("Clone shop-api")).toBeTruthy();
+    await screen.findByText("Workspace ready", undefined, { timeout: 5000 });
+    expect(created.mock.calls[0][0].projects).toEqual([]);
+    expect(clone.mock.calls.map((c) => [c[0], c[1].key])).toEqual([
+      ["ws_new", "shop-api"],
+      ["ws_new", "private"],
+    ]);
+    expect(screen.getByText("fatal: Authentication failed")).toBeTruthy();
+    expect(screen.getByText("private was not cloned")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open workspace" })).toBeTruthy();
+  }, 15000);
 
   it("walks the steps, maps a server issue back to its step, then creates the workspace", async () => {
     const onClose = renderDialog();

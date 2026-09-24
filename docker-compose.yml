@@ -19,6 +19,9 @@ services:
     stop_signal: SIGINT
     volumes:
       - ostra-data:/data
+      # Harness CLIs installed from the setup check land in ~/.local/bin or ~/.grok/bin, and
+      # their logins in dot folders here, so the home folder outlives the container.
+      - ostra-home:/home/ostra
       - ./config:/config
       # Both halves must be the same absolute host path: Ostra stores workspace and project
       # paths literally, so only projects and workspaces under this directory can be imported
@@ -27,3 +30,4 @@ services:
 
 volumes:
   ostra-data: {}
+  ostra-home: {}

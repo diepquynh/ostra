@@ -278,6 +278,8 @@ pub fn router(app: Arc<App>) -> axum::Router {
             get(project_changes),
         )
         .route("/api/fs", get(fs_browse))
+        .route("/api/fs/mkdir", post(fs_mkdir))
+        .route("/api/harnesses/{harness}/setup", post(harness_setup))
         .route("/api/workspaces/{ws}/tree", get(workspace_tree))
         .route("/api/workspaces/{ws}/search", get(search))
         .route("/api/workspaces/{ws}/activity", get(workspace_activity))
@@ -458,6 +460,17 @@ async fn validate_new_workspace(
 
 async fn environment(State(app): AppState) -> Json<EnvironmentStatus> {
     Json(crate::setup::environment(&app).await)
+}
+
+async fn harness_setup(
+    State(app): AppState,
+    Path(harness): Path<String>,
+    Json(body): Json<HarnessSetupRequest>,
+) -> Res<HarnessSetupTerminal> {
+    let harness: ostra_core::executor::HarnessKind = harness.parse().map_err(ApiErr::not_found)?;
+    crate::harness_setup::start(&app, harness, body.action)
+        .map(Json)
+        .map_err(|m| ApiErr::new(StatusCode::CONFLICT, m))
 }
 
 async fn patch_provider(
@@ -1194,6 +1207,15 @@ async fn workspace_activity(
             .await
             .map_err(blocking_failed)??;
     Ok(Json(activity))
+}
+
+async fn fs_mkdir(State(app): AppState, Json(body): Json<FsMkdir>) -> Res<FsBrowse> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
+    tokio::task::spawn_blocking(move || app.files.browse.mkdir(&body.path, &home))
+        .await
+        .map_err(blocking_failed)?
+        .map(Json)
+        .map_err(ApiErr::bad)
 }
 
 async fn fs_browse(State(app): AppState, Query(q): Query<files::BrowseQuery>) -> Json<FsBrowse> {

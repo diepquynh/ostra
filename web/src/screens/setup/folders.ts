@@ -20,6 +20,9 @@ export function makeLister(browse: Api["fsBrowse"]): FolderLister {
 
 export const listFolders: FolderLister = makeLister((opts, init) => api.fsBrowse(opts, init));
 
+/** The FolderPicker's `mkdir` over `POST /api/fs/mkdir`, which creates missing parents too. */
+export const makeFolder = (path: string) => api.fsMkdir(path);
+
 export type FolderInfo =
   | { state: "none" }
   | { state: "checking" }

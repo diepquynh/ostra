@@ -67,6 +67,8 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // SAFETY: no other thread exists yet; the runtime starts below.
+    unsafe { ostra_server::env::extend_path() };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

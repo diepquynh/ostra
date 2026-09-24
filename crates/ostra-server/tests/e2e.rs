@@ -4,10 +4,11 @@
 
 use ostra_core::api::{
     ApiError, Artifact, CostReport, DiffFile, DiffLineKind, EnvironmentStatus, ExecutionView,
-    FileDiff, FileIndex, FsBrowse, GitMark, Heading, OnboardingState, ProjectChange, ProjectFile,
-    ProjectSkills, ProjectTree, ProviderStatus, SearchKind, SearchResults, ServerMsg,
-    SessionDetail, SessionStatus, SessionSummary, SkillDoc, SkillOrigin, UI_STATE_MAX_BYTES, UiTab,
-    WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree, WorkspaceUiState,
+    FileDiff, FileIndex, FsBrowse, GitMark, HarnessSetupTerminal, Heading, OnboardingState,
+    ProjectChange, ProjectFile, ProjectSkills, ProjectTree, ProviderStatus, SearchKind,
+    SearchResults, ServerMsg, SessionDetail, SessionStatus, SessionSummary, SkillDoc, SkillOrigin,
+    UI_STATE_MAX_BYTES, UiTab, WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree,
+    WorkspaceUiState,
 };
 use ostra_core::config::{GlobalConfig, PermissionMode, TierTable, ValidationIssue, save_toml};
 use ostra_providers::mock::{response, tool_use_response};
@@ -866,6 +867,27 @@ async fn yolo_implement_session_end_to_end() {
         .unwrap();
     assert!(!fs.exists && !fs.readable);
     assert_eq!(fs.nearest, std::fs::canonicalize(root).unwrap());
+
+    let made: FsBrowse = client
+        .post(format!("{base}/api/fs/mkdir"))
+        .json(&json!({"path": root.join("nope/deeper").display().to_string()}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        made.exists && made.readable,
+        "mkdir creates the missing parents"
+    );
+    let refused = client
+        .post(format!("{base}/api/fs/mkdir"))
+        .json(&json!({"path": "relative/dir"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
 
     // Search: one hit per kind the session produced, plus a lesson, a project, and a setting.
     client
@@ -1811,4 +1833,89 @@ async fn projects_clone_and_pull_with_a_saved_git_credential() {
         .await
         .unwrap();
     assert!(left.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn harness_login_runs_in_a_setup_terminal() {
+    use std::os::unix::fs::PermissionsExt;
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { app, base, client } = boot(dir.path()).await;
+    let fake = dir.path().join("fake-claude");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho \"login $*\"\nread x\necho \"got $x\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut global = GlobalConfig::default();
+    global.harness.get_mut("claude").unwrap().command = fake.display().to_string();
+    save_toml(&dir.path().join("config.toml"), &global).unwrap();
+    let mut pushed = app.push.subscribe();
+
+    let start = || async {
+        client
+            .post(format!("{base}/api/harnesses/claude/setup"))
+            .json(&json!({"action": "login"}))
+            .send()
+            .await
+            .unwrap()
+            .json::<HarnessSetupTerminal>()
+            .await
+            .unwrap()
+    };
+    let term = start().await;
+    assert_eq!(term.terminal, "setup_claude_login");
+    assert!(
+        term.command.ends_with("fake-claude auth login"),
+        "{}",
+        term.command
+    );
+    let pty = app
+        .shared
+        .harness
+        .ptys()
+        .get(&term.terminal.as_str().into())
+        .unwrap();
+    let wait_for = |text: &'static str| {
+        let pty = pty.clone();
+        async move {
+            for _ in 0..100 {
+                if pty.screen_text().contains(text) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            panic!("no {text:?} in {}", pty.screen_text());
+        }
+    };
+    wait_for("login auth login").await;
+    start().await;
+    assert!(
+        Arc::ptr_eq(
+            &pty,
+            &app.shared
+                .harness
+                .ptys()
+                .get(&term.terminal.as_str().into())
+                .unwrap()
+        ),
+        "a running terminal is reattached, not started twice"
+    );
+    pty.write(b"code-123\r").unwrap();
+    wait_for("got code-123").await;
+    let msg = tokio::time::timeout(Duration::from_secs(10), pushed.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg.channels, vec!["home".to_string()]);
+    assert!(matches!(msg.msg, ServerMsg::HarnessStatus { .. }));
+
+    let r = client
+        .post(format!("{base}/api/harnesses/nope/setup"))
+        .json(&json!({"action": "login"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
 }

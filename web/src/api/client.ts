@@ -34,6 +34,8 @@ import type {
 } from "./types";
 import type { DiffFile } from "./gen/DiffFile";
 import type { EnvironmentStatus } from "./gen/EnvironmentStatus";
+import type { HarnessSetupAction } from "./gen/HarnessSetupAction";
+import type { HarnessSetupTerminal } from "./gen/HarnessSetupTerminal";
 import type { ProviderCredentialsEdit } from "./gen/ProviderCredentialsEdit";
 import type { ProviderStatus } from "./gen/ProviderStatus";
 import type { FileDiff } from "./gen/FileDiff";
@@ -178,6 +180,9 @@ export const httpApi = {
   listDir: (path?: string) => request<FsListing>("GET", `/api/fs/list${q({ path })}`),
   fsBrowse: (opts: { path?: string; prefix?: string; limit?: number } = {}, init: { signal?: AbortSignal } = {}) =>
     request<FsBrowse>("GET", `/api/fs${q(opts)}`, undefined, init.signal),
+  fsMkdir: (path: string) => request<FsBrowse>("POST", "/api/fs/mkdir", { path }),
+  harnessSetup: (harness: string, action: HarnessSetupAction) =>
+    request<HarnessSetupTerminal>("POST", `/api/harnesses/${enc(harness)}/setup`, { action }),
 
   environment: () => request<EnvironmentStatus>("GET", "/api/environment"),
   saveProvider: (name: string, edit: ProviderCredentialsEdit) => request<ProviderStatus>("PATCH", `/api/providers/${enc(name)}`, edit),

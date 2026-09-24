@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { CloneProject, GitCredentialView } from "../../api/types";
-import { Input, Select } from "../../design";
+import { FolderPicker, Input, Select } from "../../design";
+import { listFolders, makeFolder } from "./folders";
 import { keyError, repoName, stackOptions, suggestKey } from "./wizard";
 
 export type CloneErrors = Partial<Record<"url" | "key" | "path" | "stack" | "branch" | "credential", string>>;
@@ -27,14 +28,14 @@ export function CloneForm({ takenKeys, stacks, root, credentials, serverErrors, 
   const name = repoName(url);
   const key = keyEdit ?? (name ? suggestKey(name) : "");
   const kErr = key || keyEdit !== null ? keyError(key, takenKeys) : null;
-  const dest = path.trim() || `${root.replace(/\/+$/, "")}/${key || "<key>"}`;
+  const dest = path.trim().replace(/(.)\/+$/, "$1") || `${root.replace(/\/+$/, "")}/${key || "<key>"}`;
 
   const emit = (next: Partial<{ url: string; key: string; branch: string; credential: string; path: string; stack: string }>) => {
     const v = { url, key, branch, credential, path, stack, ...next };
     const ok = v.url.trim() !== "" && v.key !== "" && !keyError(v.key, takenKeys);
     onDraft(
       ok
-        ? { url: v.url.trim(), key: v.key, branch: v.branch.trim() || undefined, credential: v.credential || undefined, path: v.path.trim() || undefined, stack: v.stack || undefined }
+        ? { url: v.url.trim(), key: v.key, branch: v.branch.trim() || undefined, credential: v.credential || undefined, path: v.path.trim().replace(/(.)\/+$/, "$1") || undefined, stack: v.stack || undefined }
         : null,
     );
   };
@@ -109,19 +110,24 @@ export function CloneForm({ takenKeys, stacks, root, credentials, serverErrors, 
           hint={serverErrors.stack}
         />
       </div>
-      <Input
-        label="Folder (optional)"
-        mono
-        disabled={disabled}
-        placeholder={dest}
-        value={path}
-        error={serverErrors.path}
-        hint={`The checkout goes to ${dest}. The folder must not exist yet, or be empty.`}
-        onChange={(e) => {
-          setPath(e.target.value);
-          emit({ path: e.target.value });
-        }}
-      />
+      <div className="os-field">
+        <span className="os-field__label">Folder (optional)</span>
+        <span className="os-field__hint">{`The checkout goes to ${dest}. The folder must not exist yet, or be empty.`}</span>
+        <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, pointerEvents: disabled ? "none" : undefined }}>
+          <FolderPicker
+            value={path}
+            onChange={(p) => {
+              setPath(p);
+              emit({ path: p });
+            }}
+            list={listFolders}
+            mkdir={makeFolder}
+            initialPath={root || "~"}
+            height={150}
+          />
+        </fieldset>
+        {serverErrors.path && <span className="os-field__error">{serverErrors.path}</span>}
+      </div>
     </div>
   );
 }
