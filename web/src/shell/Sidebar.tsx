@@ -6,6 +6,7 @@ import { formatCost, humanize } from "../lib/format";
 import type { OpenOptions } from "../lib/nav";
 import { parseResource } from "../lib/resource";
 import { FilesPanel } from "./FilesPanel";
+import { GitPanel } from "./GitPanel";
 import { sessionLabel } from "./meta";
 import type { LeftTab } from "./uiState";
 
@@ -246,6 +247,7 @@ export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, pr
           tabs={[
             { id: "sessions", label: "Sessions", icon: "git-pull-request", count: sessions.length },
             { id: "files", label: "Files", icon: "folder-tree" },
+            { id: "git", label: "Git", icon: "git-branch" },
           ]}
         />
       </div>
@@ -258,6 +260,16 @@ export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, pr
           selected={selectedFile}
           onOpenFile={(key, path, opts) => open(`file:${key}:${path}`, opts?.edit ? { anchor: "edit" } : { preview: true })}
           onOpenProject={(key) => open(`project:${key}`)}
+          onAddProject={onAddProject}
+        />
+      ) : tab === "git" ? (
+        <GitPanel
+          ws={ws}
+          projects={projects}
+          project={filesProject}
+          setProject={setFilesProject}
+          selected={selectedFile}
+          onOpenFile={(key, path) => open(`file:${key}:${path}`, { preview: true })}
           onAddProject={onAddProject}
         />
       ) : (

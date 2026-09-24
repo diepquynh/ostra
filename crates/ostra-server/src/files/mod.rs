@@ -782,6 +782,20 @@ fn absorb(app: &App, t: Touch, batch: &mut BTreeMap<ProjectId, BTreeSet<String>>
     }
 }
 
+/// Tell the browsers that git changed the project: marks, and files too after a pull or checkout.
+/// An empty path list reloads every listing a browser holds.
+pub fn announce_git(app: &App, workspace: &WorkspaceId, key: &str) {
+    app.files.invalidate(workspace, key);
+    let _ = app.push.send(Pushed {
+        channels: vec![format!("workspace:{workspace}")],
+        msg: ServerMsg::ProjectFsChanged {
+            workspace: workspace.clone(),
+            key: key.to_string(),
+            paths: vec![],
+        },
+    });
+}
+
 /// Tell the browsers and the code index that the user saved a file.
 pub fn announce_save(app: &App, workspace: &WorkspaceId, key: &str, rel: &str) {
     app.code.touch(&(workspace.clone(), key.to_string()), rel);

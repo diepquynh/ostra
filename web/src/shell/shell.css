@@ -34,3 +34,6 @@ body { overflow: hidden; }
 .shell-resize:focus-visible { outline: none; }
 body.shell-resizing { cursor: col-resize; user-select: none; }
 body.shell-resizing iframe, body.shell-resizing .xterm { pointer-events: none; }
+
+.git-row-action { visibility: hidden; }
+.os-tree-item:hover .git-row-action, .os-tree-item:focus-within .git-row-action { visibility: visible; }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
 import type { ChangedBy } from "../api/types";
@@ -13,6 +13,7 @@ import { SourceView, type SymbolRef } from "./project/code/SourceView";
 import { lineFromHash } from "./project/code/tokens";
 import { useFileEdit } from "./project/code/useFileEdit";
 import { DiffPane } from "./project/DiffPane";
+import { changeBlocks } from "./project/diff";
 import { extOf, fmtSize, GIT_MARK, modifiedLabel } from "./project/files";
 
 export type FileScreenProps = {
@@ -87,6 +88,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
 
   const f = file.data;
   const d = diff.data && diff.data.hunks.length > 0 ? diff.data : null;
+  const changes = useMemo(() => (d ? changeBlocks(d.hunks) : null), [d]);
   const ext = extOf(path);
   const md = ext === "md" || ext === "markdown";
   const views: TabItem[] = [{ id: "file", label: "File", icon: "file-text" }];
@@ -264,6 +266,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
                   onSymbol={setSelected}
                   highlightLine={goto?.line ?? hashLine}
                   scrollNonce={goto?.n}
+                  changes={changes}
                 />
               )}
             </>

@@ -14,6 +14,7 @@ pub mod git;
 pub mod harness_setup;
 pub mod nav;
 pub mod prices;
+pub mod repo;
 pub mod services;
 pub mod setup;
 pub mod skills;

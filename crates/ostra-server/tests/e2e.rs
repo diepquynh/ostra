@@ -4,11 +4,11 @@
 
 use ostra_core::api::{
     ApiError, Artifact, CostReport, DiffFile, DiffLineKind, EnvironmentStatus, ExecutionView,
-    FileDiff, FileIndex, FsBrowse, GitMark, HarnessSetupTerminal, Heading, OnboardingState,
-    ProjectChange, ProjectFile, ProjectSkills, ProjectTree, ProviderStatus, SearchKind,
-    SearchResults, ServerMsg, SessionDetail, SessionStatus, SessionSummary, SkillDoc, SkillOrigin,
-    UI_STATE_MAX_BYTES, UiTab, WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree,
-    WorkspaceUiState,
+    FileDiff, FileIndex, FsBrowse, GitBranch, GitChange, GitMark, GitOpResult, GitRepoStatus,
+    HarnessSetupTerminal, Heading, OnboardingState, ProjectChange, ProjectFile, ProjectSkills,
+    ProjectTree, ProviderStatus, SearchKind, SearchResults, ServerMsg, SessionDetail,
+    SessionStatus, SessionSummary, SkillDoc, SkillOrigin, UI_STATE_MAX_BYTES, UiTab,
+    WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree, WorkspaceUiState,
 };
 use ostra_core::code::{CodeDeps, CodeFile, CodeLocation, CodeSymbols, CodeUsages, SymbolKind};
 use ostra_core::config::{GlobalConfig, PermissionMode, TierTable, ValidationIssue, save_toml};
@@ -2051,6 +2051,124 @@ async fn projects_clone_and_pull_with_a_saved_git_credential() {
         .await
         .unwrap();
     assert!(left.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_git_dock_stages_commits_pushes_and_switches_branches() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { base, client, .. } = boot(dir.path()).await;
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "gitdock", "root": dir.path().join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let src = dir.path().join("src");
+    let bare = dir.path().join("origin.git");
+    let work = dir.path().join("ws/app");
+    std::fs::create_dir(&src).unwrap();
+    git(&src, &["init", "-q"]);
+    std::fs::write(src.join("a.txt"), "1\n").unwrap();
+    git(&src, &["add", "."]);
+    git(&src, &["commit", "-qm", "one"]);
+    let (bare_s, work_s) = (bare.to_string_lossy(), work.to_string_lossy());
+    git(
+        dir.path(),
+        &["clone", "-q", "--bare", &src.to_string_lossy(), &bare_s],
+    );
+    git(dir.path(), &["clone", "-q", &bare_s, &work_s]);
+    git(&work, &["config", "user.name", "Dock"]);
+    git(&work, &["config", "user.email", "dock@example.com"]);
+    let r = client
+        .post(format!("{base}/api/workspaces/{}/projects", ws.id))
+        .json(&json!({"path": work, "key": "app"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "{}", r.text().await.unwrap());
+
+    let g = format!("{base}/api/workspaces/{}/projects/app/git", ws.id);
+    let post = |path: &str, body: Value| {
+        let req = client.post(format!("{g}/{path}")).json(&body);
+        async move { req.send().await.unwrap() }
+    };
+    let ok = |r: reqwest::Response| async move {
+        assert_eq!(r.status(), 200);
+        r.json::<GitOpResult>().await.unwrap().status
+    };
+    let paths = |l: &[GitChange]| l.iter().map(|c| c.path.clone()).collect::<Vec<_>>();
+
+    std::fs::write(work.join("a.txt"), "2\n").unwrap();
+    std::fs::write(work.join("new.txt"), "n\n").unwrap();
+    let st: GitRepoStatus = client.get(&g).send().await.unwrap().json().await.unwrap();
+    assert_eq!(st.branch.as_deref(), Some("main"));
+    assert_eq!(st.upstream.as_deref(), Some("origin/main"));
+    assert!(st.staged.is_empty());
+    assert_eq!(paths(&st.unstaged), ["a.txt", "new.txt"]);
+    assert_eq!(st.unstaged[1].mark, GitMark::Untracked);
+
+    assert_eq!(
+        post("stage", json!({"paths": ["../x"]})).await.status(),
+        400
+    );
+    let st = ok(post("stage", json!({"paths": ["new.txt", "a.txt"]})).await).await;
+    assert_eq!(paths(&st.staged), ["a.txt", "new.txt"]);
+    assert_eq!(st.staged[1].mark, GitMark::Added);
+    let st = ok(post("unstage", json!({"paths": ["a.txt"]})).await).await;
+    assert_eq!(paths(&st.staged), ["new.txt"]);
+    assert_eq!(paths(&st.unstaged), ["a.txt"]);
+
+    assert_eq!(post("commit", json!({"message": "  "})).await.status(), 400);
+    let st = ok(post("commit", json!({"message": "Add new.txt"})).await).await;
+    assert!(st.staged.is_empty());
+    assert_eq!((st.ahead, st.behind), (1, 0));
+    let st = ok(post("push", json!({})).await).await;
+    assert_eq!(st.ahead, 0);
+    let log = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&bare)
+        .args(["log", "-1", "--format=%s", "main"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Add new.txt");
+
+    let st = ok(post("checkout", json!({"branch": "feature", "create": true})).await).await;
+    assert_eq!(st.branch.as_deref(), Some("feature"));
+    assert_eq!(st.upstream, None);
+    assert_eq!(
+        paths(&st.unstaged),
+        ["a.txt"],
+        "local changes move to the new branch"
+    );
+    let st = ok(post("push", json!({})).await).await;
+    assert_eq!(st.upstream.as_deref(), Some("origin/feature"));
+    assert_eq!(
+        post("checkout", json!({"branch": "--orphan"}))
+            .await
+            .status(),
+        400
+    );
+    let st = ok(post("checkout", json!({"branch": "main"})).await).await;
+    assert_eq!(st.branch.as_deref(), Some("main"));
+    let st = ok(post("fetch", json!({})).await).await;
+    assert_eq!(st.behind, 0);
+
+    let branches: Vec<GitBranch> = client
+        .get(format!("{g}/branches"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let names: Vec<_> = branches.iter().map(|b| b.name.as_str()).collect();
+    assert_eq!(names, ["main", "feature", "origin/feature", "origin/main"]);
+    assert!(branches[0].current);
+    assert_eq!(branches[0].subject, "Add new.txt");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

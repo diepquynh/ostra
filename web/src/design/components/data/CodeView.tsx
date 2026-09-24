@@ -57,6 +57,9 @@ function tokens(line: string, lang: string): ReactNode[] {
   return out;
 }
 
+/** One line with CodeView's light syntax color; md and txt stay plain. */
+export const colorLine = (line: string, language = ""): ReactNode => (line === "" ? " " : language === "md" || language === "txt" ? line : tokens(line, language));
+
 /** Read-only source view with line numbers and light syntax color. */
 export function CodeView({ code, language = "", startLine = 1, highlight = [], added = [], removed = [], flush, maxHeight, style }: CodeViewProps) {
   const lines = code.replace(/\n$/, "").split("\n");
@@ -68,7 +71,7 @@ export function CodeView({ code, language = "", startLine = 1, highlight = [], a
         return (
           <div key={idx} className={`os-code__line ${cls}`}>
             <span className="os-code__ln">{n}</span>
-            <span>{l === "" ? " " : language === "md" || language === "txt" ? l : tokens(l, language)}</span>
+            <span>{colorLine(l, language)}</span>
           </div>
         );
       })}

@@ -10,6 +10,15 @@ const key = (k: string, mods: { meta?: boolean; ctrl?: boolean; shift?: boolean;
 });
 
 describe("console shortcuts", () => {
+  it("moves between tabs with Ctrl+Tab on every system", () => {
+    for (const mac of [true, false]) {
+      expect(shortcutOf(key("Tab", { ctrl: true }), mac)).toBe("next-tab");
+      expect(shortcutOf(key("Tab", { ctrl: true, shift: true }), mac)).toBe("prev-tab");
+    }
+    expect(shortcutOf(key("Tab", { meta: true }), true)).toBeNull();
+    expect(shortcutOf(key("Tab"), false)).toBeNull();
+  });
+
   it("uses ⌘ on a Mac", () => {
     expect(shortcutOf(key("k", { meta: true }), true)).toBe("palette");
     expect(shortcutOf(key("/", { meta: true }), true)).toBe("dock");

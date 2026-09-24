@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { api } from "../api";
 import type { GitPullResult, ProjectView } from "../api/types";
-import { Banner, Button, Chip, Icon, Spinner, StatusChip, Tabs } from "../design";
+import { Banner, Button, Chip, Icon, Spinner, StatusChip } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
-import { ProjectFiles } from "./project/ProjectFiles";
 import { ProjectOverview } from "./project/ProjectOverview";
 
 export type ProjectScreenProps = {
@@ -20,13 +19,12 @@ export function stackLabel(p: ProjectView): string | null {
 }
 
 /**
- * Resource `project:<key>`: the project header, then an Overview tab (commands, skills, maintenance, or the
- * Initialize flow) and a Files tab (a read-only browser). Scrolls its own content.
+ * Resource `project:<key>`: the project header, then the overview (commands, skills, maintenance, or the
+ * Initialize flow). "Browse files" opens the Files view. Scrolls its own content.
  */
 export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
   const { detail } = useWorkspace();
   const shell = useShell();
-  const [tab, setTab] = useState<"overview" | "files">("overview");
   const p = detail?.projects.find((x) => x.key === projectKey);
   const [pulling, setPulling] = useState(false);
   const [pulled, setPulled] = useState<{ ok: GitPullResult } | { error: string } | null>(null);
@@ -104,24 +102,9 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
           )}
         </div>
       )}
-      <div style={{ padding: "12px 24px 0", flex: "none" }}>
-        <Tabs
-          label="Project"
-          value={tab}
-          onChange={(t) => setTab(t as "overview" | "files")}
-          tabs={[
-            { id: "overview", label: p.init_status === "not_initialized" ? "Initialize" : "Overview", icon: p.init_status === "not_initialized" ? "sparkles" : "info" },
-            { id: "files", label: "Files", icon: "folder-tree" },
-          ]}
-        />
+      <div style={{ flex: 1, overflow: "auto", minHeight: 0, paddingTop: 12 }}>
+        <ProjectOverview ws={ws} project={p} />
       </div>
-      {tab === "files" ? (
-        <ProjectFiles key={p.key} ws={ws} project={p} />
-      ) : (
-        <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-          <ProjectOverview ws={ws} project={p} />
-        </div>
-      )}
     </div>
   );
 }

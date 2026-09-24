@@ -81,6 +81,18 @@ function Shell({ ws }: { ws: string }) {
     return () => clearTimeout(t);
   }, [ws, tabs, prefs]);
 
+  // Vertical wheels scroll the tab strip sideways. Native listener because React's onWheel is passive.
+  const tabStrip = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY) || el.scrollWidth <= el.clientWidth) return;
+      e.preventDefault();
+      el.scrollLeft += e.deltaY;
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
   // URL and active tab follow each other. `shellNav` marks a URL change the shell made itself.
   const shellNav = useRef<string | null>(null);
   const pendingAnchor = useRef<string | null>(null);
@@ -167,11 +179,22 @@ function Shell({ ws }: { ws: string }) {
     [ws, tabs, open, taskDraft, theme, detail.data, detail.reload, setPref],
   );
 
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = shortcutOf(e);
       if (!s) return;
       e.preventDefault();
+      if (s === "next-tab" || s === "prev-tab") {
+        // Strip order, wrapping at the ends, like VS Code with its MRU switcher turned off.
+        const { tabs: list, active } = tabsRef.current;
+        if (list.length < 2) return;
+        const i = list.findIndex((t) => t.id === active);
+        const next = list[(i + (s === "next-tab" ? 1 : -1) + list.length) % list.length];
+        dispatch({ type: "activate", id: next.id });
+        return;
+      }
       if (s === "palette") setPalette((p) => !p);
       else if (s === "dock") setPref("dockOpen", (d) => !d);
       else if (s === "sidebar") setPref("sidebarOpen", (v) => !v);
@@ -254,7 +277,7 @@ function Shell({ ws }: { ws: string }) {
           )}
           <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--surface-editor)" }}>
             {tabs.tabs.length > 0 && (
-              <div className="shell-tabs" onDoubleClick={onTabsDoubleClick} onAuxClick={onTabsAuxClick}>
+              <div ref={tabStrip} className="shell-tabs" onDoubleClick={onTabsDoubleClick} onAuxClick={onTabsAuxClick}>
                 <Tabs
                   variant="bar"
                   label="Open tabs"

@@ -156,14 +156,31 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
     for (const dir of ["", ...Object.keys(open).filter((d) => open[d])]) if (!folders[dir] && !loading.current.has(dir)) load(dir);
   }, [key, open, folders, load]);
 
-  // Reveal the file the active tab shows.
-  useEffect(() => {
-    if (!selected || selected.key !== key) return;
+  // Reveal the file the active tab shows: switch to its project, open its folders, and scroll to it once it renders.
+  const treeRef = useRef<HTMLDivElement>(null);
+  const [scrollTo, setScrollTo] = useState<string | null>(null);
+  const reveal = (clearFilter: boolean) => {
+    if (!selected) return;
+    if (selected.key !== key) setProject(selected.key);
+    if (clearFilter) setFilter("");
     const dirs = parents(selected.path);
-    if (dirs.every((d) => open[d])) return;
-    setOpen((o) => ({ ...o, ...Object.fromEntries(dirs.map((d) => [d, true])) }));
+    setOpenDirs((m) => {
+      const o = m[selected.key] ?? {};
+      return dirs.every((d) => o[d]) ? m : { ...m, [selected.key]: { ...o, ...Object.fromEntries(dirs.map((d) => [d, true])) } };
+    });
+    setScrollTo(`${selected.key}:${selected.path}`);
+  };
+  useEffect(() => {
+    reveal(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.key, selected?.path, key]);
+  }, [selected?.key, selected?.path]);
+  useEffect(() => {
+    if (!scrollTo || !selected || scrollTo !== `${key}:${selected.path}`) return;
+    const el = treeRef.current?.querySelector('[aria-selected="true"]');
+    if (!el) return;
+    el.scrollIntoView?.({ block: "nearest" });
+    setScrollTo(null);
+  });
 
   // Files changed on disk: reload the loaded listings, at most twice a second.
   const loadedRef = useRef<() => void>(() => {});
@@ -280,6 +297,7 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
           <div style={{ flex: 1, minWidth: 0 }}>
             <Select size="sm" mono aria-label="Project" value={key} onChange={(e) => setProject(e.target.value)} options={projects.map((p) => ({ value: p.key, label: p.key }))} />
           </div>
+          <IconButton size="sm" icon="locate-fixed" label="Reveal the open file" disabled={!selected} onClick={() => reveal(true)} />
           <IconButton size="sm" icon="info" label="Project overview" onClick={() => onOpenProject(key)} />
           <IconButton size="sm" icon={showHidden ? "eye" : "eye-off"} label={showHidden ? "Hide dotfiles" : "Show dotfiles"} active={showHidden} onClick={() => setShowHidden(!showHidden)} />
           <IconButton size="sm" icon="file-plus" label="New file" onClick={() => startCreate("file")} />
@@ -301,7 +319,7 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
           </div>
         )}
       </div>
-      <div role="tree" aria-label={`Files in ${key}`} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "0 8px 8px" }}>
+      <div ref={treeRef} role="tree" aria-label={`Files in ${key}`} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "0 8px 8px" }}>
         {q ? (
           index.loading && index.paths.length === 0 ? (
             <div style={{ padding: "12px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)", display: "flex", gap: 6, alignItems: "center" }}>

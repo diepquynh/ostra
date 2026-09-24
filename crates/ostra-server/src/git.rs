@@ -4,11 +4,14 @@
 
 use crate::app::{App, Pushed};
 use crate::workspace::{WorkspaceRt, field_issue, key_and_stack};
+use ostra_core::api::SessionStatus;
 use ostra_core::api::{
     CloneProject, GitCredentialEdit, GitCredentialKind, GitCredentialView, GitPullResult,
     ImportProject, ServerMsg,
 };
 use ostra_core::config::ValidationIssue;
+use ostra_core::event::SessionKind;
+use ostra_core::ids::SessionId;
 use ostra_core::paths;
 use ostra_store::{RegistryDb, StoreError};
 use serde::{Deserialize, Serialize};
@@ -558,7 +561,7 @@ pub async fn run_git(
     }
 }
 
-async fn git_quiet(dir: &Path, args: &[&str]) -> Option<String> {
+pub(crate) async fn git_quiet(dir: &Path, args: &[&str]) -> Option<String> {
     let auth = GitAuth::new(None).ok()?;
     run_git(Some(dir), &auth, args, QUICK_TIMEOUT, |_| {})
         .await
@@ -583,7 +586,7 @@ pub struct ClonePlan {
     pub credential: Option<SavedGitCredential>,
 }
 
-fn branch_ok(b: &str) -> bool {
+pub(crate) fn branch_ok(b: &str) -> bool {
     !b.is_empty()
         && !b.starts_with('-')
         && !b.contains("..")
@@ -704,12 +707,14 @@ pub enum GitError {
     Busy(String),
     /// Git ran and failed, or could not run.
     Git(String),
+    /// The request cannot run as asked; the text says what to change.
+    Invalid(String),
     /// The checkout exists but could not be imported.
     Import(crate::setup::CreateError),
 }
 
-/// Keys and folders with a clone in progress, released when the clone ends.
-struct Claim<'a> {
+/// Keys and folders with a clone, pull, or other git command in progress, released when it ends.
+pub(crate) struct Claim<'a> {
     w: &'a WorkspaceRt,
     key: String,
 }
@@ -720,14 +725,14 @@ impl Drop for Claim<'_> {
     }
 }
 
-fn claim<'a>(w: &'a WorkspaceRt, key: &str, dest: &Path) -> Result<Claim<'a>, GitError> {
+pub(crate) fn claim<'a>(w: &'a WorkspaceRt, key: &str, dest: &Path) -> Result<Claim<'a>, GitError> {
     let mut busy = w.cloning.lock();
     if let Some((k, _)) = busy
         .iter()
         .find(|(k, d)| k == key || paths::is_inside(d, dest) || paths::is_inside(dest, d))
     {
         return Err(GitError::Busy(format!(
-            "A clone into `{k}` is already running. Wait for it to finish."
+            "Git is already running in `{k}`. Wait for it to finish, then try again."
         )));
     }
     busy.push((key.to_string(), dest.to_path_buf()));
@@ -795,7 +800,7 @@ pub async fn clone(app: &App, w: &WorkspaceRt, plan: ClonePlan) -> Result<(), Gi
     Ok(())
 }
 
-fn workspace_updated(app: &App, w: &WorkspaceRt) {
+pub(crate) fn workspace_updated(app: &App, w: &WorkspaceRt) {
     let _ = app.push.send(Pushed {
         channels: vec![format!("workspace:{}", w.id), "home".into()],
         msg: ServerMsg::WorkspaceUpdated {
@@ -807,6 +812,39 @@ fn workspace_updated(app: &App, w: &WorkspaceRt) {
 // ---------------------------------------------------------------------------------------------
 // Pull
 // ---------------------------------------------------------------------------------------------
+
+/// The session working in project `key`, which every git command that changes the checkout waits
+/// for.
+pub fn session_in(w: &WorkspaceRt, key: &str) -> Result<Option<SessionId>, StoreError> {
+    Ok(w.db.list_sessions()?.into_iter().find_map(|s| {
+        (matches!(s.status, SessionStatus::Running | SessionStatus::Waiting)
+            && (s.projects.iter().any(|p| p == key)
+                || matches!(&s.kind, SessionKind::Init { project } if project == key)))
+        .then_some(s.id)
+    }))
+}
+
+/// Authentication for talking to `remote`: the saved credential that matches its fetch URL, or
+/// its push URL when `push`.
+pub(crate) async fn remote_auth(
+    app: &App,
+    dir: &Path,
+    remote: &str,
+    push: bool,
+) -> Result<GitAuth, GitError> {
+    let mut args = vec!["remote", "get-url"];
+    if push {
+        args.push("--push");
+    }
+    args.extend(["--", remote]);
+    let url = git_quiet(dir, &args).await;
+    let credential = match url.as_deref().map(parse_remote) {
+        Some(Ok(r)) => credential_for(&load_all(&app.shared.registry).unwrap_or_default(), &r),
+        _ => None,
+    };
+    GitAuth::new(credential.as_ref())
+        .map_err(|e| GitError::Git(format!("Could not prepare the SSH key: {e}")))
+}
 
 /// Fast-forward the project's current branch from its upstream, with the saved credential that
 /// matches the upstream's URL.
@@ -829,13 +867,7 @@ pub async fn pull(
     )
     .await
     .unwrap_or_else(|| "origin".into());
-    let url = git_quiet(dir, &["remote", "get-url", "--", &remote]).await;
-    let credential = match url.as_deref().map(parse_remote) {
-        Some(Ok(r)) => credential_for(&load_all(&app.shared.registry).unwrap_or_default(), &r),
-        _ => None,
-    };
-    let auth = GitAuth::new(credential.as_ref())
-        .map_err(|e| GitError::Git(format!("Could not prepare the SSH key: {e}")))?;
+    let auth = remote_auth(app, dir, &remote, false).await?;
     let before = git_quiet(dir, &["rev-parse", "--short", "HEAD"]).await;
     let output = run_git(
         Some(dir),
@@ -847,6 +879,7 @@ pub async fn pull(
     .await
     .map_err(GitError::Git)?;
     let after = git_quiet(dir, &["rev-parse", "--short", "HEAD"]).await;
+    crate::files::announce_git(app, &w.id, key);
     workspace_updated(app, w);
     Ok(GitPullResult {
         branch: Some(branch),

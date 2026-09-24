@@ -194,6 +194,93 @@ pub struct GitPullResult {
     pub output: String,
 }
 
+/// One changed path in the Git dock, project-relative.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitChange {
+    pub path: String,
+    pub mark: GitMark,
+    /// A rename's or copy's source path, when it is inside the project.
+    pub orig_path: Option<String>,
+}
+
+/// `GET /api/workspaces/{ws}/projects/{key}/git`: the project's branch and its changes, split the
+/// way `git status` splits them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitRepoStatus {
+    pub is_git: bool,
+    /// None when HEAD is detached.
+    pub branch: Option<String>,
+    /// Short id of HEAD; None before the first commit.
+    pub head: Option<String>,
+    /// The upstream branch, such as `origin/main`.
+    pub upstream: Option<String>,
+    pub ahead: u32,
+    pub behind: u32,
+    /// Changes in the index.
+    pub staged: Vec<GitChange>,
+    /// Work tree changes not in the index, untracked files included.
+    pub unstaged: Vec<GitChange>,
+    /// Unmerged paths.
+    pub conflicted: Vec<GitChange>,
+    /// Staged paths outside the project. A commit takes the whole index, so it includes them.
+    pub staged_elsewhere: u32,
+    /// A list reached its cap.
+    pub truncated: bool,
+    /// Set when a session works in the project, so the dock disables every change to git.
+    pub busy: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitBranch {
+    /// `main`, or `origin/main` for a remote branch.
+    pub name: String,
+    pub remote: bool,
+    pub current: bool,
+    pub upstream: Option<String>,
+    /// Short id of the branch tip.
+    pub commit: String,
+    /// The tip's subject line.
+    pub subject: String,
+}
+
+/// `POST .../git/stage` and `.../git/unstage`. An empty list means every change.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitPaths {
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
+/// `POST .../git/commit`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitCommitRequest {
+    pub message: String,
+}
+
+/// `POST .../git/checkout`: switch to `branch`, or create it from `start` (HEAD when absent) and
+/// switch to it. A remote branch name checks out a local branch that tracks it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitCheckoutRequest {
+    pub branch: String,
+    #[serde(default)]
+    pub create: bool,
+    #[serde(default)]
+    pub start: Option<String>,
+}
+
+/// What a git command from the Git dock did: git's last lines, and the status after it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitOpResult {
+    pub output: String,
+    pub status: GitRepoStatus,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

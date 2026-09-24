@@ -681,18 +681,25 @@ Each workspace opens as one console, laid out like a code editor:
 - **Title bar.** The workspace menu (switch workspace; Overview, Cost with this week's spend, Settings, Memory;
   New workspace; Add project; Run the setup guide again), breadcrumbs for the open resource, a search field that
   opens ⌘K, and toggles for the left dock and the quick-question dock.
-- **Left dock with two tabs.** Sessions is a tree: each session, its execution groups (one agent on one
+- **Left dock with three tabs.** Sessions is a tree: each session, its execution groups (one agent on one
   project), the runs of each group with their live one-line summary, and the session's artifacts. `tree_patch`
   messages keep it current without a refetch. Files shows one project: a lazy folder tree with git
   marks, dotfiles on request, "Find a file", New file and New folder, and "Changed by sessions", which names
   the execution that last changed each file. New file and New folder open a name field in the last folder
   toggled, else the open file's folder; a name with `/` creates the folders on the way. A new file is empty and
-  opens in edit mode (12.6).
+  opens in edit mode (12.6). The reveal button, and every switch to a file tab, opens that file's folders and
+  scrolls it into view. Git shows the same project's branch, ahead and behind counts, merge conflicts, staged
+  changes, and unstaged changes, with stage and unstage per file or for all, a commit box, fetch, pull, push
+  (which sets the upstream on a first push), and a branch menu to switch branches, check out a remote branch
+  as a tracking branch, or create a branch from HEAD. A commit takes the whole index, so the panel warns when
+  staged files outside the project will be committed too. Every git command that changes the checkout is
+  refused while a session works in the project, and remotes authenticate with the saved git credential.
 - **Editor tabs.** Every screen is a resource with an id and a URL: `ws:overview`, `ws:settings`, `ws:cost`,
   `ws:memory`, `session:<id>`, `exec:<id>`, `artifact:<path>`, `project:<key>`, `file:<key>:<path>`. A row opened
   from a list opens a preview tab, shown in italics, which the next preview replaces; an explicit open or a pin
   keeps the tab. The tabs, the focused tab, the left dock tab, and the dock state are stored per workspace
-  through `/api/workspaces/:ws/ui`, so another browser opens the same layout.
+  through `/api/workspaces/:ws/ui`, so another browser opens the same layout. Ctrl+Tab and Ctrl+Shift+Tab move
+  to the next and previous tab in strip order, wrapping at the ends, on every system.
 - **Status bar.** Connection state, running executions and gates waiting for the user (each opens a menu of
   runs or gates), the active session's YOLO state, spend today with the week in its tooltip, and the theme
   toggle.

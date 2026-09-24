@@ -35,7 +35,7 @@ export { CommandPalette, filterPaletteItems, type CommandPaletteProps, type Pale
 export { Panel, type PanelProps } from "./components/data/Panel";
 export { SectionLabel, type SectionLabelProps } from "./components/data/SectionLabel";
 export { Table, type TableProps, type TableColumn } from "./components/data/Table";
-export { CodeView, type CodeViewProps } from "./components/data/CodeView";
+export { CodeView, colorLine, type CodeViewProps } from "./components/data/CodeView";
 
 export { LaneStepper, LANE_ORDER, type LaneStepperProps, type LaneId, type LaneState } from "./components/pipeline/LaneStepper";
 export { StageRow, type StageRowProps, type StageStatus } from "./components/pipeline/StageRow";

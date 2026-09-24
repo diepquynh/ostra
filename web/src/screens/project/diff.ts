@@ -22,3 +22,53 @@ export function diffRows(hunks: DiffHunk[]): DiffRow[] {
   });
   return rows;
 }
+
+export type ChangeKind = "add" | "mod" | "del";
+
+/** One run of changed lines, as the file view's gutter marks it. */
+export type ChangeBlock = {
+  kind: ChangeKind;
+  /** Current line numbers the mark covers; a deletion marks the line before the removed text. */
+  lines: number[];
+  /** The line the inline comparison opens under. */
+  anchor: number;
+  old: { no: number; text: string }[];
+  current: { no: number; text: string }[];
+};
+
+/** Group each hunk's consecutive added and removed lines into blocks, VS Code style. */
+export function changeBlocks(hunks: DiffHunk[]): ChangeBlock[] {
+  const out: ChangeBlock[] = [];
+  for (const h of hunks) {
+    let open: ChangeBlock | null = null;
+    // The current line the next removed line sits before.
+    let next = h.new_lines === 0 ? h.new_start + 1 : h.new_start;
+    const close = () => {
+      if (!open) return;
+      if (open.current.length) {
+        open.kind = open.old.length ? "mod" : "add";
+        open.lines = open.current.map((l) => l.no);
+      } else {
+        open.lines = [Math.max(1, next - 1)];
+      }
+      open.anchor = open.lines[open.lines.length - 1];
+      out.push(open);
+      open = null;
+    };
+    for (const l of h.lines) {
+      if (l.type === "context") {
+        close();
+        next = (l.new_no ?? next) + 1;
+        continue;
+      }
+      open ??= { kind: "del", lines: [], anchor: 0, old: [], current: [] };
+      if (l.type === "del" && l.old_no !== null) open.old.push({ no: l.old_no, text: l.text });
+      if (l.type === "add" && l.new_no !== null) {
+        open.current.push({ no: l.new_no, text: l.text });
+        next = l.new_no + 1;
+      }
+    }
+    close();
+  }
+  return out;
+}

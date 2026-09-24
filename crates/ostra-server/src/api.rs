@@ -207,6 +207,35 @@ pub fn router(app: Arc<App>) -> axum::Router {
             "/api/workspaces/{ws}/projects/{key}/pull",
             post(pull_project),
         )
+        .route("/api/workspaces/{ws}/projects/{key}/git", get(git_status))
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/git/branches",
+            get(git_branches),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/git/stage",
+            post(git_stage),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/git/unstage",
+            post(git_unstage),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/git/commit",
+            post(git_commit),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/git/fetch",
+            post(git_fetch),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/git/push",
+            post(git_push),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/git/checkout",
+            post(git_checkout),
+        )
         .route(
             "/api/git/credentials",
             get(git_credentials).post(create_git_credential),
@@ -635,6 +664,7 @@ fn git_err(e: crate::git::GitError) -> ApiErr {
     match e {
         crate::git::GitError::Busy(m) => ApiErr::new(StatusCode::CONFLICT, m),
         crate::git::GitError::Git(m) => ApiErr::new(StatusCode::BAD_GATEWAY, m),
+        crate::git::GitError::Invalid(m) => ApiErr::bad(m),
         crate::git::GitError::Import(crate::setup::CreateError::Invalid(issues)) => {
             ApiErr::invalid_request(issues, "import the cloned project")
         }
@@ -657,18 +687,10 @@ async fn pull_project(
             "`{key}` is not a git repository, so there is nothing to pull."
         )));
     }
-    let busy = w.db.list_sessions()?.into_iter().find(|s| {
-        matches!(s.status, SessionStatus::Running | SessionStatus::Waiting)
-            && (s.projects.contains(&key)
-                || matches!(&s.kind, ostra_core::event::SessionKind::Init { project } if *project == key))
-    });
-    if let Some(s) = busy {
+    if let Some(s) = crate::git::session_in(&w, &key)? {
         return Err(ApiErr::new(
             StatusCode::CONFLICT,
-            format!(
-                "Stop session {} or wait for it to finish, then pull, because it is working in `{key}`.",
-                s.id
-            ),
+            crate::repo::busy_text(&s, &key),
         ));
     }
     let (app2, w2) = (app.clone(), w.clone());
@@ -677,6 +699,111 @@ async fn pull_project(
         .map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .map_err(git_err)?;
     Ok(Json(out))
+}
+
+async fn git_status(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<GitRepoStatus> {
+    let w = ws(&app, &id)?;
+    let root = crate::files::project_root(&w, &key)?;
+    Ok(Json(crate::repo::status(&w, &key, &root).await))
+}
+
+async fn git_branches(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<Vec<GitBranch>> {
+    let w = ws(&app, &id)?;
+    let root = crate::files::project_root(&w, &key)?;
+    Ok(Json(crate::repo::branches(&root).await))
+}
+
+/// Run one Git dock command in its own task, so a closed tab does not stop git halfway.
+async fn git_op<F, Fut>(app: Arc<App>, id: String, key: String, f: F) -> Res<GitOpResult>
+where
+    F: FnOnce(Arc<App>, Arc<WorkspaceRt>, String, std::path::PathBuf) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<GitOpResult, crate::git::GitError>> + Send,
+{
+    let w = ws(&app, &id)?;
+    let root = crate::files::project_root(&w, &key)?;
+    tokio::spawn(async move { f(app, w, key, root).await })
+        .await
+        .map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .map_err(git_err)
+}
+
+async fn git_stage(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<GitPaths>,
+) -> Res<GitOpResult> {
+    git_op(app, id, key, |app, w, key, root| async move {
+        crate::repo::Op::new(&app, &w, &key, &root)
+            .stage(&body)
+            .await
+    })
+    .await
+}
+
+async fn git_unstage(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<GitPaths>,
+) -> Res<GitOpResult> {
+    git_op(app, id, key, |app, w, key, root| async move {
+        crate::repo::Op::new(&app, &w, &key, &root)
+            .unstage(&body)
+            .await
+    })
+    .await
+}
+
+async fn git_commit(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<GitCommitRequest>,
+) -> Res<GitOpResult> {
+    git_op(app, id, key, |app, w, key, root| async move {
+        crate::repo::Op::new(&app, &w, &key, &root)
+            .commit(&body.message)
+            .await
+    })
+    .await
+}
+
+async fn git_fetch(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<GitOpResult> {
+    git_op(app, id, key, |app, w, key, root| async move {
+        crate::repo::Op::new(&app, &w, &key, &root).fetch().await
+    })
+    .await
+}
+
+async fn git_push(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<GitOpResult> {
+    git_op(app, id, key, |app, w, key, root| async move {
+        crate::repo::Op::new(&app, &w, &key, &root).push().await
+    })
+    .await
+}
+
+async fn git_checkout(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<GitCheckoutRequest>,
+) -> Res<GitOpResult> {
+    git_op(app, id, key, |app, w, key, root| async move {
+        crate::repo::Op::new(&app, &w, &key, &root)
+            .checkout(&body)
+            .await
+    })
+    .await
 }
 
 fn credential_err(e: crate::git::EditError) -> ApiErr {

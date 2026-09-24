@@ -5,6 +5,7 @@ import * as f from "./fixtures";
 import * as fx from "./fixtures.execution";
 import { eventsFor, gateSessions } from "./fixtures.session";
 import * as wf from "./fixtures.workspace";
+import { mockGit } from "./mockGit";
 import { mockBrowse, mockChanges, mockDiff, mockFile, mockFileIndex, mockMkdir, mockSaveFile, mockTree } from "./projectFiles";
 import { mockCodeDeps, mockCodeFile, mockCodeSymbols, mockCodeUsages } from "./mockCode";
 import { mockCreateWorkspace, mockValidateCreate, mockValidateImport } from "./fixtures.projects";
@@ -202,6 +203,14 @@ export const mockApi: Api = {
     );
   },
   pullProject: () => delay({ branch: "main", updated: false, before: "1a2b3c4", after: "1a2b3c4", output: "Already up to date." }),
+  gitStatus: (_ws, key) => delay(mockGit.status(key)),
+  gitBranches: (_ws, key) => delay(mockGit.branches(key)),
+  gitStage: (_ws, key, paths) => delay(mockGit.stage(key, paths, true)),
+  gitUnstage: (_ws, key, paths) => delay(mockGit.stage(key, paths, false)),
+  gitCommit: (_ws, key, message) => attempt(() => mockGit.commit(key, message)),
+  gitFetch: (_ws, key) => delay(mockGit.op(key, "Fetched origin."), 400),
+  gitPush: (_ws, key) => delay(mockGit.push(key), 600),
+  gitCheckout: (_ws, key, body) => attempt(() => mockGit.checkout(key, body)),
   gitCredentials: () => delay(gitCreds),
   createGitCredential: (edit) => {
     const host = (edit.host ?? "").trim();
