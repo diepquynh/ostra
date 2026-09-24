@@ -1451,9 +1451,9 @@ async fn skills_are_listed_edited_adopted_and_deleted() {
             .entry
             .as_ref()
             .map(|e| (e.path.as_str(), e.source.as_deref())),
-        Some((".ostra/skills/entity/SKILL.md", Some("user")))
+        Some((".agents/skills/entity/SKILL.md", Some("user")))
     );
-    assert!(repo.join(".ostra/skills/entity/SKILL.md").is_file());
+    assert!(repo.join(".agents/skills/entity/SKILL.md").is_file());
 
     let r = client
         .put(&skill)
@@ -1478,7 +1478,7 @@ async fn skills_are_listed_edited_adopted_and_deleted() {
         .unwrap();
     assert_eq!(r.status(), 200);
     assert!(
-        repo.join(".ostra/skills/deploy/references/steps.md")
+        repo.join(".agents/skills/deploy/references/steps.md")
             .is_file()
     );
     let r = client
@@ -1504,7 +1504,7 @@ async fn skills_are_listed_edited_adopted_and_deleted() {
     );
 
     assert_eq!(client.delete(&skill).send().await.unwrap().status(), 204);
-    assert!(!repo.join(".ostra/skills/entity").exists());
+    assert!(!repo.join(".agents/skills/entity").exists());
     assert_eq!(client.delete(&skill).send().await.unwrap().status(), 404);
     assert_eq!(client.get(&skill).send().await.unwrap().status(), 404);
 }

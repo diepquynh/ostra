@@ -2,7 +2,7 @@
 
 /**
  * `POST /api/workspaces/:ws/projects/:key/skills/:name/adopt`: copy a harness skill directory into
- * `.ostra/skills/<name>/` and register it.
+ * `.agents/skills/<name>/` and register it.
  */
 export type SkillAdopt = { 
 /**

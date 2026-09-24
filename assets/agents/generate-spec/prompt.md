@@ -46,7 +46,7 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.ostra/skills/...` path and repo-relative source path in this file resolves against it. Run every command with it as the working directory. |
+| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run every command with it as the working directory. |
 | **repos in scope** | The one or more repos this spec targets. The prompt gives them as a single `Repo root:`, or, for a cross-repo request, a `Repos in scope:` list of `{repo key} -> {absolute root}`. {{tool_read}} each repo's profile and inventory. |
 | **repo key** | A short lowercase slug naming one repo in scope (for example `backend`, `web`), taken from the prompt. Tag every deliverable with the key of the repo it changes. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The plan agent reads your spec file from this exact path. |
@@ -420,7 +420,7 @@ and cover its criterion elsewhere.
 ## Step 7: Open questions
 
 Your trusted sources are, in order: the research documents, a page one of them cites that you re-read in Step
-2C, the repo source code, and the module-hub references (`{repo-root}/.ostra/skills/module-hub/`). For every
+2C, the repo source code, and the module-hub references (the module-hub skill's `references/`, under `{repo-root}/.agents/skills/module-hub/` or `{repo-root}/.ostra/skills/module-hub/`). For every
 ambiguity, try all four before asking. Do NOT answer from general framework, language, or API knowledge, and
 do NOT assume an answer. An ambiguity about a technology no research document covers is **not** yours to
 resolve by searching: raise it here so the orchestrator can run another research pass.

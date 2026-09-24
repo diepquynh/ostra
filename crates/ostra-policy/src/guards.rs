@@ -490,13 +490,29 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
             ),
         ));
     }
+    let legacy_skills = roots.repo.join(paths::LEGACY_SKILLS_DIR);
+    // HANDOVER rule I2: the initializer writes skills only to `.agents/skills/`.
+    if agent == AgentName::Initializer && inside(&legacy_skills, target) {
+        return Some(deny(
+            WRITE_SCOPE,
+            format!(
+                "Write the skill under \"{}\" instead: \"{raw}\" is in the older skills dir, which Ostra reads but \
+                 never writes new skills to.",
+                disp(&paths::project_skills_dir(&roots.repo))
+            ),
+        ));
+    }
     let extra: Option<Vec<PathBuf>> = match agent {
-        AgentName::Initializer => Some(vec![paths::project_runtime(&roots.repo)]),
-        AgentName::ModuleDocumentation => Some(vec![
-            paths::project_skills_dir(&roots.repo)
-                .join("module-hub")
-                .join("references"),
+        AgentName::Initializer => Some(vec![
+            paths::project_runtime(&roots.repo),
+            paths::project_skills_dir(&roots.repo),
         ]),
+        AgentName::ModuleDocumentation => Some(
+            paths::project_skill_dirs(&roots.repo)
+                .into_iter()
+                .map(|d| d.join("module-hub").join("references"))
+                .collect(),
+        ),
         _ => None,
     };
     if let Some(roots_allowed) = extra {

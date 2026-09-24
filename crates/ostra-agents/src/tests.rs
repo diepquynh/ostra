@@ -1,5 +1,5 @@
 use super::*;
-use crate::brief::{BriefInput, augment, build_brief, stated_in};
+use crate::brief::{BriefInput, ProjectDoc, augment, build_brief, project_docs, stated_in};
 use crate::spawn::*;
 use ostra_core::HarnessKind;
 use ostra_core::config::{Commands, ModuleRow, ProjectProfile, ReviewRule, SkillEntry};
@@ -118,7 +118,7 @@ fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabula
     .unwrap();
     assert!(codex.starts_with("## Tool vocabulary"));
     assert!(codex.contains("apply_patch"));
-    assert!(codex.contains(".ostra/skills/{name}/SKILL.md"));
+    assert!(codex.contains(".agents/skills/{name}/SKILL.md"));
     let claude = render_prompt(
         AgentName::CodeReviewer,
         ExecutorKind::Harness(HarnessKind::Claude),
@@ -380,7 +380,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
     let pg = PromptGenParams {
         common: common(),
         task: "Write a skill".into(),
-        target_files: vec![".ostra/skills/x/SKILL.md".into()],
+        target_files: vec![".agents/skills/x/SKILL.md".into()],
         report_file: "/r/pg.md".into(),
         extra: Extras::default(),
     };
@@ -437,7 +437,7 @@ fn initializer_modes_render_their_mode_and_required_lines() {
     roundtrip(&gs);
     let gi = InitGenerateInventoryParams {
         common: common(),
-        generated_skills: r#"[{"name":"entity","kind":"creation","component_type":"entity","path":".ostra/skills/entity/SKILL.md"}]"#.into(),
+        generated_skills: r#"[{"name":"entity","kind":"creation","component_type":"entity","path":".agents/skills/entity/SKILL.md"}]"#.into(),
         reused_skills: "[]".into(),
         proposal: "/s/ostra-proposal.json".into(),
         scout_findings: vec!["/s/ostra-findings-a.md".into()],
@@ -548,20 +548,20 @@ fn profile() -> ProjectProfile {
             SkillEntry {
                 name: "convention".into(),
                 kind: "convention".into(),
-                path: ".ostra/skills/convention/SKILL.md".into(),
+                path: ".agents/skills/convention/SKILL.md".into(),
                 ..Default::default()
             },
             SkillEntry {
                 name: "entity".into(),
                 kind: "creation".into(),
-                path: ".ostra/skills/entity/SKILL.md".into(),
+                path: ".agents/skills/entity/SKILL.md".into(),
                 component_type: Some("JPA entity".into()),
                 ..Default::default()
             },
             SkillEntry {
                 name: "service-test".into(),
                 kind: "test".into(),
-                path: ".ostra/skills/service-test/SKILL.md".into(),
+                path: ".agents/skills/service-test/SKILL.md".into(),
                 ..Default::default()
             },
         ],
@@ -594,11 +594,12 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
         profile: Some(&p),
         inventory: Some(inv),
         instructions: &instructions,
+        project_docs: &[],
     };
     let brief = build_brief(&input).unwrap();
     assert!(brief.starts_with("## Repo brief for implementer"));
     assert!(brief.contains("`./mvnw -q compile`"));
-    assert!(brief.contains("/ws/backend/.ostra/skills/entity/SKILL.md"));
+    assert!(brief.contains("/ws/backend/.agents/skills/entity/SKILL.md"));
     assert!(brief.contains("use for JPA entity"));
     assert!(brief.contains("single timestamp per method"));
     assert!(!brief.contains("already in the table"));
@@ -636,6 +637,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         profile: Some(&p),
         inventory: None,
         instructions: &[],
+        project_docs: &[],
     };
     let once = augment("Task: x", &input);
     assert_eq!(augment(&once, &input), once);
@@ -650,6 +652,33 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         ..none
     };
     assert!(build_brief(&init).is_none());
+    let docs = vec![ProjectDoc {
+        path: "/r/AGENTS.md".into(),
+        content: "Run make check before you finish.\n".into(),
+    }];
+    let init_docs = BriefInput {
+        project_docs: &docs,
+        ..init
+    };
+    let brief = build_brief(&init_docs).unwrap();
+    assert!(brief.starts_with("## Project instructions"));
+    assert!(brief.contains("### `/r/AGENTS.md`\n\nRun make check before you finish."));
+    let once = augment("Task: x", &init_docs);
+    assert_eq!(augment(&once, &init_docs), once);
     assert!(stated_in("a  b   c", "a\nb c"));
     assert!(stated_in("", "ab"));
+}
+
+#[test]
+fn project_docs_skip_links_and_copies() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("CLAUDE.md"), "# Rules\n").unwrap();
+    std::fs::write(d.path().join("agent.md"), "# Rules\n").unwrap();
+    std::fs::write(d.path().join("Agents.MD"), "# Other\n").unwrap();
+    let docs = project_docs(d.path());
+    let names: Vec<String> = docs
+        .iter()
+        .map(|p| p.path.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["CLAUDE.md", "Agents.MD"]);
 }

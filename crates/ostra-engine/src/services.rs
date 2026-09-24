@@ -39,6 +39,8 @@ pub struct SpawnEnv<'a> {
     pub profile: Option<&'a ProjectProfile>,
     pub inventory: Option<&'a str>,
     pub repo_root: &'a Path,
+    /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
+    pub project_docs: &'a [ostra_agents::brief::ProjectDoc],
 }
 
 pub trait SpawnFactory: Send + Sync {

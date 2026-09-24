@@ -1,6 +1,7 @@
 //! The repo brief appended to every execution's first message, ported from Ultracode's
 //! `hooks/lib/context-brief.js`. It carries the project facts an agent needs so it does not spend
-//! its first tool calls fetching them, then the workspace's custom instructions.
+//! its first tool calls fetching them, then the project's own agent instruction files (`CLAUDE.md`,
+//! `AGENTS.md`, `AGENT.md`), then the workspace's custom instructions.
 //!
 //! Selection is a containment test against the inventory's own text, not a static field list: the
 //! same profile field repeats the inventory in one repo and is the only statement of a rule in
@@ -9,15 +10,44 @@
 
 use ostra_core::AgentName;
 use ostra_core::config::{ModuleRow, ProjectProfile, SkillEntry};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const MAX_BRIEF_CHARS: usize = 3600;
+/// Per instruction file. Longer files are cut and the agent reads the rest from disk.
+pub const MAX_PROJECT_DOC_CHARS: usize = 12000;
 const MAX_SKILL_ROWS: usize = 16;
 const MAX_MODULE_ROWS: usize = 10;
 
 /// Heading that marks a message already carrying a brief, so a re-render never stacks two.
 pub const BRIEF_HEADING: &str = "## Repo brief for ";
 pub const INSTRUCTIONS_HEADING: &str = "## Workspace instructions";
+pub const PROJECT_DOCS_HEADING: &str = "## Project instructions";
+
+/// An agent instruction file at the project root and its text.
+#[derive(Debug, Clone)]
+pub struct ProjectDoc {
+    pub path: PathBuf,
+    pub content: String,
+}
+
+/// The project's instruction files, read from disk. A file that is a link to, or a copy of, one
+/// already read is left out, because repos often ship `AGENTS.md` as a link to `CLAUDE.md`.
+pub fn project_docs(repo_root: &Path) -> Vec<ProjectDoc> {
+    let mut seen: Vec<(PathBuf, String)> = vec![];
+    let mut out = vec![];
+    for path in ostra_core::paths::project_instruction_files(repo_root) {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        if content.trim().is_empty() || seen.iter().any(|(p, c)| *p == real || *c == content) {
+            continue;
+        }
+        seen.push((real, content.clone()));
+        out.push(ProjectDoc { path, content });
+    }
+    out
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -59,6 +89,8 @@ pub struct BriefInput<'a> {
     pub inventory: Option<&'a str>,
     /// `instructions.all`, then the agent's own entry.
     pub instructions: &'a [String],
+    /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
+    pub project_docs: &'a [ProjectDoc],
 }
 
 fn squash(s: &str) -> String {
@@ -334,6 +366,28 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         }
     }
 
+    if !input.project_docs.is_empty() {
+        let docs: Vec<String> = input
+            .project_docs
+            .iter()
+            .map(|d| {
+                let text = d.content.trim();
+                let body = if text.chars().count() > MAX_PROJECT_DOC_CHARS {
+                    let cut: String = text.chars().take(MAX_PROJECT_DOC_CHARS).collect();
+                    format!("{cut}\n\n(truncated; read the file for the rest)")
+                } else {
+                    text.to_string()
+                };
+                format!("### `{}`\n\n{body}", d.path.display())
+            })
+            .collect();
+        out.push(format!(
+            "{PROJECT_DOCS_HEADING}\n\nThe project's own agent instruction files. Follow them for work in this \
+             project unless they conflict with your own rules above, which win.\n\n{}",
+            docs.join("\n\n")
+        ));
+    }
+
     let instructions: Vec<&String> = input
         .instructions
         .iter()
@@ -358,7 +412,10 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
 /// The first message with the brief appended. Idempotent: a message that already carries a brief is
 /// returned unchanged.
 pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String {
-    if first_message.contains(BRIEF_HEADING) || first_message.contains(INSTRUCTIONS_HEADING) {
+    if [BRIEF_HEADING, PROJECT_DOCS_HEADING, INSTRUCTIONS_HEADING]
+        .iter()
+        .any(|h| first_message.contains(h))
+    {
         return first_message.to_string();
     }
     match build_brief(input) {

@@ -147,12 +147,19 @@ Removing a project from a workspace deletes nothing on disk.
 | --- | --- | --- |
 | `INVENTORY.md` | Commands, skills, skill application mapping, module map, review rule set. Same shape as `UC/refs/inventory-and-profile.md` section 1. | initializer |
 | `project.toml` | Stack, commands, test framework, module map, skills with paths, conventions, review rules. Ultracode's `repo-profile.json` without `models` and `harnesses`, which move to the workspace. | initializer, user |
-| `skills/<name>/SKILL.md` | Per-project skills, including `convention` and `module-hub`. | initializer, prompt-generation, module-documentation (references only) |
 | `memory/knowledge.sqlite3` | Durable lessons. | memory tools, user through the UI |
 
-Skills live in `.ostra/skills/`, not in any harness's skill directory. Every executor loads a skill by its
-path, which Ultracode measured as the one mechanism that works on every harness (Claude resolves names, Codex
-and Grok subagents need the path).
+Per-project skills, including `convention` and `module-hub`, live in `<project>/.agents/skills/<name>/SKILL.md`,
+the cross-harness standard. They are written by the initializer, prompt-generation, module-documentation
+(references only), and the user. Projects initialized before this kept skills in `.ostra/skills/`, which Ostra
+still reads but never writes a new skill to; a name in both resolves to `.agents/skills/`. Other harness
+directories (`.claude/skills/` and the rest) are not loaded until a skill is adopted into `.agents/skills/`.
+Every executor loads a skill by its path, which Ultracode measured as the one mechanism that works on every
+harness (Claude resolves names, Codex and Grok subagents need the path).
+
+Every execution's first message carries the project's own agent instruction files after the repo brief:
+`CLAUDE.md`, `AGENTS.md`, and `AGENT.md` at the project root, matched in any letter case, each cut at 12,000
+characters, with a link or identical copy of a file already included left out.
 
 A new project is created by the user outside Ostra, then imported. The init flow then works from whatever code
 exists. For an empty folder, the stack chosen in project settings seeds skills from `refs/<stack>.md` in the
@@ -422,6 +429,11 @@ detect → scout ×N (parallel, one per slice, max 12) → propose → skill app
 The approval gate is a table in the UI: per skill, generate, regenerate, reuse, or drop, with the defaults the
 propose mode sets. The legacy `adopt` mode becomes the `.ultracode/` migration from section 6.2.
 
+| Rule | Behavior |
+| --- | --- |
+| I1 | Detect checks the existing setup before it plans any scout: skills in `.agents/skills/` and `.ostra/skills/`, the instruction files, and a prior `project.toml`. Candidate component types that an existing skill already teaches are scouted for counts only. When existing skills cover every candidate type plus `convention` and `module-hub`, detect returns no slices and propose runs on the existing skills with no scouts. No slices and no existing skills fail the init. |
+| I2 | Every skill the init writes goes to `.agents/skills/`. Regenerating a skill that lives in `.ostra/skills/` writes the new one to `.agents/skills/` and leaves the old file for the user. |
+
 ## 9. Agents and prompts
 
 ### 9.1 Assets
@@ -578,7 +590,7 @@ Every tool call from every executor goes through two layers in order.
 
 | Guard | Rule | Source |
 | --- | --- | --- |
-| Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. initializer writes only `.ostra/` and `.ostra/skills/`. module-documentation writes only `skills/module-hub/references/`. Everything else stays inside its `Repo root:`. | `scope-policy.js` |
+| Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. initializer writes only `.ostra/` and `.agents/skills/`. module-documentation writes only the module-hub skill's `references/` (under `.agents/skills/` or `.ostra/skills/`). Everything else stays inside its `Repo root:`. | `scope-policy.js` |
 | No tests from implementer | implementer may not write a path matching the test patterns. | `scope-policy.js` |
 | State ownership | Engine-owned state (gates, verdicts, progress, streaks, scope records, the memory database) has no writer but the engine. The review ledger is writable by code-reviewer, implementer, and write-test. The security sentinel only by code-reviewer. The progress log only by implementer. | `ledger-policy.js` |
 | Artifact ownership | Spec and plan files are written only by their owning agent. | `artifact-guard.js` |

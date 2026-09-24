@@ -9,8 +9,9 @@ that every agent is instructed to **Read** first. Skill discovery is a loading m
 routing source. The inventory works the instant it is written because it is just a file.
 
 **Design principle: every skill row carries BOTH a name and a path.** A per-project skill lives in the target
-repo at `.ostra/skills/{name}/SKILL.md`. Ostra's skill tool resolves a name to that path, and every harness
-executor loads a skill by reading the path, because a path is the one mechanism that works on every harness
+repo at `.agents/skills/{name}/SKILL.md`, the cross-harness standard. A project initialized before that may still
+keep some at `.ostra/skills/{name}/SKILL.md`; their rows keep that path. Ostra's skill tool resolves a name to
+whichever of the two exists, and every harness executor loads a skill by reading the path, because a path is the one mechanism that works on every harness
 (Claude Code resolves names, but Codex and Grok Build subagents need the path). The explicit `path` column is
 therefore essential: it is the universal mechanism. Never drop it, and never let an agent guess a path.
 
@@ -45,9 +46,9 @@ Generated: {YYYY-MM-DD} · Stack: {language}/{framework} · Machine profile: `.o
 
 | Skill                | Kind        | Path                                     | Load when (component / file type)           |
 | -------------------- | ----------- | ---------------------------------------- | ------------------------------------------- |
-| `convention`         | convention  | `.ostra/skills/convention/SKILL.md`     | Always. Auto-load for any code edit.        |
-| `module-hub`         | module-hub  | `.ostra/skills/module-hub/SKILL.md`     | Locating which area/module a path belongs to.|
-| `{component-skill}`  | creation    | `.ostra/skills/{component-skill}/SKILL.md` | Creating or modifying a {component type}. |
+| `convention`         | convention  | `.agents/skills/convention/SKILL.md`     | Always. Auto-load for any code edit.        |
+| `module-hub`         | module-hub  | `.agents/skills/module-hub/SKILL.md`     | Locating which area/module a path belongs to.|
+| `{component-skill}`  | creation    | `.agents/skills/{component-skill}/SKILL.md` | Creating or modifying a {component type}. |
 
 ## Skill Application Mapping
 
@@ -59,7 +60,7 @@ Generated: {YYYY-MM-DD} · Stack: {language}/{framework} · Machine profile: `.o
 
 | Path glob                | Area        | Reference                                   |
 | ------------------------ | ----------- | ------------------------------------------- |
-| `{glob}`                 | {area name} | `.ostra/skills/module-hub/references/{x}.md` or `none` |
+| `{glob}`                 | {area name} | `.agents/skills/module-hub/references/{x}.md` or `none` |
 
 ## Review Rule Set
 
@@ -119,20 +120,20 @@ area = "app"
 [[skills]]
 name = "convention"
 kind = "convention"
-path = ".ostra/skills/convention/SKILL.md"
+path = ".agents/skills/convention/SKILL.md"
 source = "generated"
 
 [[skills]]
 name = "entity"
 kind = "creation"
-path = ".ostra/skills/entity/SKILL.md"
+path = ".agents/skills/entity/SKILL.md"
 component_type = "entity"
 source = "generated"
 
 [[skills]]
 name = "deploy"
 kind = "other"
-path = ".ostra/skills/deploy/SKILL.md"
+path = ".agents/skills/deploy/SKILL.md"
 source = "reused"
 
 [conventions]

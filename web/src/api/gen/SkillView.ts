@@ -8,7 +8,7 @@ export type SkillView = { name: string,
  */
 description: string | null, 
 /**
- * Relative to the project root, for example `.ostra/skills/convention/SKILL.md`.
+ * Relative to the project root, for example `.agents/skills/convention/SKILL.md`.
  */
 path: string, origin: SkillOrigin, 
 /**

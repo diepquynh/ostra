@@ -29,7 +29,7 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and {{tool_skill}} resolves skill names against `Repo root:`, so a skill loaded for another directory is the wrong one. Every `.ostra/...` and `.ostra/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
+| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and {{tool_skill}} resolves skill names against `Repo root:`, so a skill loaded for another directory is the wrong one. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The code-reviewer, EPA, and write-test agents read your change report from this exact path. |
 | **repo brief** | A `## Repo brief for implementer` section at the end of your prompt, resolved for you from this repo's profile and inventory: the exact `build`, `test`, and `format` command strings, the skills to load (each with its catalog **name** and its `SKILL.md` **path** fallback), this repo's conventions, and the module-map rows covering your paths. It is your routing source. Use it verbatim and do not re-derive it. |
 | **repo profile / inventory** | `{repo-root}/.ostra/project.toml` and `{repo-root}/.ostra/INVENTORY.md`. Your brief already carries what you need from them. Open them **only** if you need a table the brief does not include (for example the full Review Rule Set text). Never re-read them just to confirm a command the brief already gave you. |
@@ -162,7 +162,7 @@ read the reason so you do not repeat the approach.
 ## Step 2: Load Skills
 
 **Load each skill with {{tool_skill}}, by name or by the `SKILL.md` path your repo brief lists.** Per-repo
-skills live in the target repo at `.ostra/skills/{name}/SKILL.md`, under exactly the names your **repo brief**
+skills live in the target repo at `.agents/skills/{name}/SKILL.md` (or `.ostra/skills/{name}/SKILL.md` in an older project), under exactly the names your **repo brief**
 carries. If a call comes back `Unknown skill`, do not retry variants or search. {{tool_read}} the exact
 `SKILL.md` path from the brief. The file's content is the same either way.
 
@@ -311,7 +311,7 @@ If a handoff is needed:
 | Plan step involves… | Required agent | Trigger |
 | --- | --- | --- |
 | Writing AI/LLM prompt text (system-prompt content, operational requirements, output format) | `prompt-generation` | Step authors prompt text or an AI inferencing prompt |
-| Creating or editing a `SKILL.md` file | `prompt-generation` | Step targets `.ostra/skills/*/SKILL.md` or `skills/*/SKILL.md` |
+| Creating or editing a `SKILL.md` file | `prompt-generation` | Step targets `.agents/skills/*/SKILL.md`, `.ostra/skills/*/SKILL.md`, or `skills/*/SKILL.md` |
 | Creating or editing an agent markdown file | `prompt-generation` | Step targets an agent definition directory (`.claude/agents/`, `.codex/agents/`, `.grok/agents/`, `.agents/`) or `agents/*.md` |
 
 Writing unit tests is never a handoff for this agent (see Constraint 6). Skip the step and note it in the

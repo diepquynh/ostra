@@ -25,3 +25,4 @@ test-prices = []
 
 [dev-dependencies]
 pretty_assertions.workspace = true
+tempfile.workspace = true

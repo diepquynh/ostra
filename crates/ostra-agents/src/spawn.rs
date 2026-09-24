@@ -643,6 +643,16 @@ pub struct InitGenerateInventoryParams {
     pub scout_findings: Vec<PathBuf>,
 }
 
+/// `none` when no scout ran, because existing skills already covered the project and the label is
+/// still required.
+fn scout_findings(b: &mut Block, paths: &[PathBuf]) {
+    if paths.is_empty() {
+        b.line("Scout findings", "none");
+    } else {
+        b.paths("Scout findings", paths);
+    }
+}
+
 macro_rules! init_impl {
     ($ty:ty, $mode:expr, |$s:ident, $b:ident| $body:block) => {
         impl SpawnParams for $ty {
@@ -689,7 +699,7 @@ init_impl!(InitScoutParams, InitializerMode::Scout, |s, b| {
     b.path("Scout plan", &s.scout_plan);
 });
 init_impl!(InitProposeParams, InitializerMode::Propose, |s, b| {
-    b.paths("Scout findings", &s.scout_findings);
+    scout_findings(&mut b, &s.scout_findings);
     b.path("Scout plan", &s.scout_plan);
 });
 init_impl!(
@@ -700,7 +710,7 @@ init_impl!(
         b.line("Skill kind", &s.skill_kind);
         b.line("Disposition", &s.disposition);
         b.path("Proposal", &s.proposal);
-        b.paths("Scout findings", &s.scout_findings);
+        scout_findings(&mut b, &s.scout_findings);
     }
 );
 init_impl!(
@@ -710,7 +720,7 @@ init_impl!(
         b.line("Generated skills", &s.generated_skills);
         b.line("Reused skills", &s.reused_skills);
         b.path("Proposal", &s.proposal);
-        b.paths("Scout findings", &s.scout_findings);
+        scout_findings(&mut b, &s.scout_findings);
     }
 );
 

@@ -5,8 +5,15 @@ use std::path::{Path, PathBuf};
 
 /// Per-project and per-workspace runtime dir.
 pub const RUNTIME_DIR: &str = ".ostra";
-/// Per-project skills dir, relative to the project root.
-pub const SKILLS_DIR: &str = ".ostra/skills";
+/// Per-project skills dir, relative to the project root: the cross-harness `.agents` standard. Ostra
+/// writes every new skill here.
+pub const SKILLS_DIR: &str = ".agents/skills";
+/// Where Ostra kept skills before `.agents/skills`. Still read, never written.
+pub const LEGACY_SKILLS_DIR: &str = ".ostra/skills";
+/// Every per-project skills dir Ostra loads from, in lookup order.
+pub const SKILL_DIRS: &[&str] = &[SKILLS_DIR, LEGACY_SKILLS_DIR];
+/// Agent instruction files at a project root, matched case-insensitively.
+pub const INSTRUCTION_FILES: &[&str] = &["claude.md", "agents.md", "agent.md"];
 /// Artifact prefix, replacing Ultracode's `ultracode-`.
 pub const ARTIFACT_PREFIX: &str = "ostra-";
 
@@ -90,6 +97,36 @@ pub fn project_profile(project: &Path) -> PathBuf {
 
 pub fn project_skills_dir(project: &Path) -> PathBuf {
     project.join(SKILLS_DIR)
+}
+
+pub fn project_skill_dirs(project: &Path) -> Vec<PathBuf> {
+    SKILL_DIRS.iter().map(|d| project.join(d)).collect()
+}
+
+/// The `SKILL.md` of the named project skill, from the first skills dir that holds one.
+pub fn find_project_skill(project: &Path, name: &str) -> Option<PathBuf> {
+    project_skill_dirs(project)
+        .into_iter()
+        .map(|d| d.join(name).join("SKILL.md"))
+        .find(|p| p.is_file())
+}
+
+/// `CLAUDE.md`, `AGENTS.md`, and `AGENT.md` at the project root in any letter case, in that order.
+pub fn project_instruction_files(project: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<(usize, PathBuf)> = std::fs::read_dir(project)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file() || t.is_symlink()))
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_ascii_lowercase();
+            let rank = INSTRUCTION_FILES.iter().position(|f| *f == name)?;
+            Some((rank, e.path()))
+        })
+        .filter(|(_, p)| p.is_file())
+        .collect();
+    found.sort();
+    found.into_iter().map(|(_, p)| p).collect()
 }
 
 pub fn project_memory_db(project: &Path) -> PathBuf {
@@ -208,6 +245,34 @@ mod tests {
         );
         assert_eq!(report::review_ledger("none"), "ostra-review-ledger.md");
         assert_eq!(report::review_ledger("-tests"), "ostra-review-ledger.md");
+    }
+
+    #[test]
+    fn instruction_files_match_any_case() {
+        let dir = tempfile::tempdir().unwrap();
+        for f in ["Agents.md", "claude.MD", "README.md", "AGENT.md"] {
+            std::fs::write(dir.path().join(f), "x").unwrap();
+        }
+        std::fs::create_dir(dir.path().join("agents.md.d")).unwrap();
+        let names: Vec<String> = project_instruction_files(dir.path())
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["claude.MD", "Agents.md", "AGENT.md"]);
+    }
+
+    #[test]
+    fn skills_resolve_from_agents_before_ostra() {
+        let dir = tempfile::tempdir().unwrap();
+        for d in [".ostra/skills/a", ".ostra/skills/b", ".agents/skills/a"] {
+            std::fs::create_dir_all(dir.path().join(d)).unwrap();
+            std::fs::write(dir.path().join(d).join("SKILL.md"), "x").unwrap();
+        }
+        let a = find_project_skill(dir.path(), "a").unwrap();
+        assert!(a.ends_with(".agents/skills/a/SKILL.md"));
+        let b = find_project_skill(dir.path(), "b").unwrap();
+        assert!(b.ends_with(".ostra/skills/b/SKILL.md"));
+        assert!(find_project_skill(dir.path(), "c").is_none());
     }
 
     #[test]

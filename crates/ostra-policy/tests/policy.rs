@@ -184,11 +184,18 @@ fn write_scope_per_agent() {
     }
 
     let init = f.policy(AgentName::Initializer);
-    allowed(
+    denied(
         &init,
         &write(f.repo.join(".ostra/skills/convention/SKILL.md")),
+        "older skills dir",
     );
+    allowed(&init, &write(f.repo.join(".agents/skills/entity/SKILL.md")));
     allowed(&init, &write(f.repo.join(".ostra/INVENTORY.md")));
+    denied(
+        &init,
+        &write(f.repo.join(".agents/rules.md")),
+        "outside the scope of initializer",
+    );
     denied(
         &init,
         &write(f.repo.join("src/App.ts")),
@@ -199,6 +206,10 @@ fn write_scope_per_agent() {
     allowed(
         &docs,
         &write(f.repo.join(".ostra/skills/module-hub/references/auth.md")),
+    );
+    allowed(
+        &docs,
+        &write(f.repo.join(".agents/skills/module-hub/references/auth.md")),
     );
     denied(
         &docs,

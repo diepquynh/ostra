@@ -1365,7 +1365,7 @@ pub enum ServerMsg {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum SkillOrigin {
-    /// Under `.ostra/skills/`, the directory every executor loads skills from.
+    /// Under `.agents/skills/` or the older `.ostra/skills/`, the directories every executor loads skills from.
     Ostra,
     /// In a harness's own directory, such as `.claude/skills/`. Executions do not load it until it is adopted.
     Harness,
@@ -1377,7 +1377,7 @@ pub struct SkillView {
     pub name: String,
     /// The `description` from the SKILL.md frontmatter.
     pub description: Option<String>,
-    /// Relative to the project root, for example `.ostra/skills/convention/SKILL.md`.
+    /// Relative to the project root, for example `.agents/skills/convention/SKILL.md`.
     pub path: String,
     pub origin: SkillOrigin,
     /// The `project.toml` entry. Only registered skills reach the repo brief.
@@ -1406,8 +1406,9 @@ pub struct SkillDoc {
     pub content: String,
 }
 
-/// `PUT /api/workspaces/:ws/projects/:key/skills/:name`: write `.ostra/skills/<name>/SKILL.md` and
-/// register it in `project.toml`.
+/// `PUT /api/workspaces/:ws/projects/:key/skills/:name`: write the skill's SKILL.md, under
+/// `.agents/skills/<name>/` unless it already lives under `.ostra/skills/<name>/`, and register it in
+/// `project.toml`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SkillSave {
@@ -1418,7 +1419,7 @@ pub struct SkillSave {
 }
 
 /// `POST /api/workspaces/:ws/projects/:key/skills/:name/adopt`: copy a harness skill directory into
-/// `.ostra/skills/<name>/` and register it.
+/// `.agents/skills/<name>/` and register it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SkillAdopt {

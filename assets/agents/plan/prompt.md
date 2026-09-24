@@ -49,7 +49,7 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.ostra/skills/...` path and repo-relative source path in this file resolves against it. Run all build and git commands with it as the working directory. |
+| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build and git commands with it as the working directory. |
 | **repos in scope** | The one or more repos this plan targets. The prompt gives them as a single `Repo root:`, or, for a cross-repo plan, a `Repos in scope:` list of `{repo key} -> {absolute root}`. The spec file's own `Repos in scope:` header lists the same set. {{tool_read}} each repo's profile and inventory. |
 | **repo key** | A short lowercase slug naming one repo in scope (for example `backend`, `web`), taken from the prompt and matching the spec's Delivery Order table. Tag every phase with the key of the repo it changes. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The implementer agent reads your phase files from this exact path. |
@@ -157,7 +157,7 @@ everything a change reaches. Then:
 - {{tool_read}} an existing sibling of each artifact type you will create (a peer in the same area) to learn
   the exact local pattern to follow.
 - For each in-scope repo, use **that repo's** inventory Module/Area Map to find affected areas. Read any area
-  reference under that repo's `.ostra/skills/module-hub/references/` for those areas.
+  reference under that repo's module-hub skill `references/` for those areas.
 
 For refactors and renames: enumerate every affected location and record what each change breaks, then fold it
 into the Risk Assessment so the implementer agent knows how far the change reaches.
@@ -454,7 +454,7 @@ external rule, copy the `E{n}` row into `constraints` and its Binding rule sente
 **Single-phase plans:** still write a plan with one phase. Ostra writes both the master plan file and the one
 phase file.
 
-**No documentation phase.** Never write a phase that updates `.ostra/skills/module-hub/references/`. The
+**No documentation phase.** Never write a phase that updates the module-hub skill's `references/`. The
 orchestrator spawns `module-documentation` once per repo after every phase has passed review, and
 that agent reads all the implementer reports and documents the finished state. A documentation phase here would
 duplicate it and document an intermediate state.

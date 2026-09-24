@@ -2,7 +2,6 @@ use crate::fs::write_file;
 use crate::{ToolEnv, ToolOutput, required, str_arg, u64_arg};
 use ostra_store::memory::{DEFAULT_RECALL_LIMIT, MemoryStore};
 use serde_json::Value;
-use std::path::PathBuf;
 
 const MAX_RECALL_LIMIT: usize = 50;
 
@@ -34,19 +33,23 @@ pub async fn skill(env: &ToolEnv, input: &Value) -> ToolOutput {
             "`{name}` is not a skill name. Pass a SKILL.md location as `path` instead."
         ));
     }
-    let local: PathBuf = ostra_core::paths::project_skills_dir(&env.config().repo_root)
-        .join(bare)
-        .join("SKILL.md");
-    if let Ok(content) = tokio::fs::read_to_string(&local).await {
+    let repo = &env.config().repo_root;
+    if let Some(local) = ostra_core::paths::find_project_skill(repo, bare)
+        && let Ok(content) = tokio::fs::read_to_string(&local).await
+    {
         env.mark_read(&local);
         return skill_output(&local, &content);
     }
     if let Some((path, content)) = (env.config().skill_resolver)(bare) {
         return skill_output(&path, &content);
     }
+    let tried = ostra_core::paths::project_skill_dirs(repo)
+        .iter()
+        .map(|d| d.join(bare).join("SKILL.md").display().to_string())
+        .collect::<Vec<_>>()
+        .join(" or ");
     ToolOutput::err(format!(
-        "Unknown skill `{bare}`: there is no {}. Use the skill paths your repo brief lists; do not guess a path.",
-        local.display()
+        "Unknown skill `{bare}`: there is no {tried}. Use the skill paths your repo brief lists; do not guess a path."
     ))
 }
 
@@ -170,6 +173,11 @@ mod tests {
         )
         .await;
         assert!(!out.is_error && out.text.contains("Skill loaded from"));
+        let agents = env.config().repo_root.join(".agents/skills/convention");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(agents.join("SKILL.md"), "# Convention\nUse const.").unwrap();
+        let out = run(&env, "Skill", json!({"name": "convention"})).await;
+        assert!(out.text.contains("Use const."), "{}", out.text);
         let out = run(&env, "Skill", json!({"name": "meta-author"})).await;
         assert!(out.text.contains("# Meta"));
         let out = run(&env, "Skill", json!({"name": "nope"})).await;

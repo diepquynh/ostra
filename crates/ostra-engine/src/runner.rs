@@ -1592,6 +1592,7 @@ impl Inner {
             .unwrap_or_else(|| self.workspace_root.clone());
         let profile: Option<ProjectProfile> = load_toml(&paths::project_profile(&repo_root)).ok();
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
+        let project_docs = ostra_agents::brief::project_docs(&repo_root);
         let _ = std::fs::create_dir_all(&req.session_dir);
         if st.category == Some(Category::UnitTest)
             && let Some(p) = &req.inputs.implementer_report
@@ -1614,6 +1615,7 @@ impl Inner {
                 profile: profile.as_ref(),
                 inventory: inventory.as_deref(),
                 repo_root: &repo_root,
+                project_docs: &project_docs,
             },
         ) {
             Ok(b) => b,

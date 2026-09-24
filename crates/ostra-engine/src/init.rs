@@ -1,6 +1,7 @@
 //! The init flow, `UC/commands/init-kit/prompt.md` as engine stages (HANDOVER 8.4):
-//! detect, scout ×N (parallel, max 6), propose, skill approval gate, generate-skill ×N
-//! (parallel, advanced tier), generate-inventory.
+//! detect (existing skills and instruction files first), scout ×N (parallel, max 6, skipped when
+//! existing skills cover the project), propose, skill approval gate, generate-skill ×N (parallel,
+//! advanced tier), generate-inventory.
 
 use crate::plan::{SpawnInputs, SpawnRequest, Step};
 use crate::state::{InitTrack, SessionState};
@@ -80,6 +81,15 @@ pub fn slices(detect: &Value) -> Vec<(String, String, Vec<String>)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn existing_skill_count(detect: &Value) -> usize {
+    detect
+        .get("existing_skills")
+        .and_then(|s| s.as_array())
+        .map_or(0, |a| {
+            a.iter().filter(|x| !str_at(x, "name").is_empty()).count()
+        })
 }
 
 /// The proposal's skills with the defaults the propose mode sets: new and recommended generate,
@@ -192,9 +202,10 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let scout_plan = str_at(detect, "scout_plan_path").to_string();
     let reference = str_at(detect, "reference_name").to_string();
     let slices = slices(detect);
-    if slices.is_empty() {
+    // Rule I1: no slices is a complete existing skill setup, so propose reconciles it without scouts.
+    if slices.is_empty() && existing_skill_count(detect) == 0 {
         push(Step::Fail {
-            error: "Detect found no slices to scout, so there is nothing to build skills from."
+            error: "Detect found no slices to scout and no existing skills, so there is nothing to build skills from."
                 .into(),
         });
         return;

@@ -78,7 +78,7 @@ Usage:
 const SKILL: &str = "Loads a skill: a SKILL.md file of instructions for a kind of task.
 
 Usage:
-- Pass name to load the project skill at `.ostra/skills/<name>/SKILL.md` or a skill Ostra ships. Pass path to load a SKILL.md at an exact location.
+- Pass name to load the project skill at `.agents/skills/<name>/SKILL.md` (or the older `.ostra/skills/<name>/SKILL.md`) or a skill Ostra ships. Pass path to load a SKILL.md at an exact location.
 - Load each skill your prompt or brief names before you start the work it covers, then follow its instructions.
 - Never guess a skill name or path. Use the ones your brief lists.";
 

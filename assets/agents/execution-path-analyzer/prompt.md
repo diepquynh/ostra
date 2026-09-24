@@ -31,7 +31,7 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.ostra/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
+| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The write-test agent reads your EPA report from this exact path. |
 | **repo profile** | `{repo-root}/.ostra/project.toml`: stack, commands, module map. The repo brief at the end of your task already carries the parts you need. |
 | **inventory** | `{repo-root}/.ostra/INVENTORY.md`: the Skill Application Mapping (file type to test skills) and the Module/Area map. |

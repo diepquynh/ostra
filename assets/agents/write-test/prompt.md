@@ -37,7 +37,7 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and {{tool_skill}} resolves skill names against `Repo root:`, so a skill loaded for another directory is the wrong one. Every `.ostra/...` and `.ostra/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
+| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and {{tool_skill}} resolves skill names against `Repo root:`, so a skill loaded for another directory is the wrong one. Every `.ostra/...` and `.agents/skills/...` path and repo-relative source path in this file resolves against it. Run all build/test/format/git commands with it as the working directory (for example `git -C {repo-root} status`). |
 | **repo brief** | A `## Repo brief for write-test` section at the end of your prompt, resolved for you from this repo's profile and inventory: the exact `test` and `testOne` command strings, the test framework, the **Test types** table (which runner applies to which files, and what each requires), the test skills to load (each with its catalog **name** and its `SKILL.md` **path** fallback), and this repo's conventions. It is your routing source. Use it verbatim and do not re-derive it. |
 | **repo profile / INVENTORY** | `{repo-root}/.ostra/project.toml` and `{repo-root}/.ostra/INVENTORY.md`. Your brief already carries what you need from them. Open them **only** for a table the brief does not include (for example the full Review Rule Set text). |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The code-reviewer reads your test report from this exact path. |
@@ -96,7 +96,7 @@ listed test skill). Route by name from that table, never by skill descriptions.
 ## Step 3: Load and apply test skills
 
 **Load each skill with {{tool_skill}}, by name or by the `SKILL.md` path your repo brief lists.** Per-repo
-skills live in the target repo at `.ostra/skills/{name}/SKILL.md`. If a call comes back `Unknown skill`, do
+skills live in the target repo at `.agents/skills/{name}/SKILL.md` (or `.ostra/skills/{name}/SKILL.md` in an older project). If a call comes back `Unknown skill`, do
 not retry variants or search. {{tool_read}} the exact path from your **repo brief**, which
 lists each test skill's name and path.
 

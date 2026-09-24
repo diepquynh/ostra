@@ -1,5 +1,5 @@
-//! Per-project skills: the `skills` list in `project.toml` plus the files under `.ostra/skills/`, and
-//! skills that sit in a harness's own directory until they are adopted.
+//! Per-project skills: the `skills` list in `project.toml` plus the files under `.agents/skills/` and
+//! the older `.ostra/skills/`, and skills that sit in a harness's own directory until they are adopted.
 
 use crate::api::ApiErr;
 use crate::workspace::WorkspaceRt;
@@ -16,7 +16,6 @@ pub const KINDS: &[&str] = &["convention", "module-hub", "creation", "test", "ot
 /// Harness skill directories, relative to the project root.
 pub const HARNESS_DIRS: &[&str] = &[
     ".claude/skills",
-    ".agents/skills",
     ".codex/skills",
     ".grok/skills",
     ".gemini/skills",
@@ -126,7 +125,17 @@ fn load_profile(root: &Path) -> Result<ProjectProfile, ApiErr> {
 }
 
 fn ostra_rel(name: &str) -> String {
-    format!(".ostra/skills/{name}/SKILL.md")
+    format!("{}/{name}/SKILL.md", paths::SKILLS_DIR)
+}
+
+/// Where the named skill's SKILL.md is, relative to the root: the dir that already holds it, else
+/// `.agents/skills/`.
+fn located_rel(root: &Path, name: &str) -> String {
+    paths::SKILL_DIRS
+        .iter()
+        .map(|d| format!("{d}/{name}/SKILL.md"))
+        .find(|rel| root.join(rel).is_file())
+        .unwrap_or_else(|| ostra_rel(name))
 }
 
 /// The `description` from YAML frontmatter, including a folded (`>`) or literal (`|`) block.
@@ -187,19 +196,21 @@ pub fn scan(root: &Path) -> Vec<SkillView> {
             }
         })
         .collect();
-    for name in skill_dirs(&paths::project_skills_dir(root)) {
-        let rel = ostra_rel(&name);
-        if out.iter().any(|s| s.path == rel || s.name == name) {
-            continue;
+    for dir in paths::SKILL_DIRS {
+        for name in skill_dirs(&root.join(dir)) {
+            let rel = format!("{dir}/{name}/SKILL.md");
+            if out.iter().any(|s| s.path == rel || s.name == name) {
+                continue;
+            }
+            out.push(SkillView {
+                description: describe(&root.join(&rel)),
+                name,
+                path: rel,
+                origin: SkillOrigin::Ostra,
+                entry: None,
+                exists: true,
+            });
         }
-        out.push(SkillView {
-            description: describe(&root.join(&rel)),
-            name,
-            path: rel,
-            origin: SkillOrigin::Ostra,
-            entry: None,
-            exists: true,
-        });
     }
     for dir in HARNESS_DIRS {
         for name in skill_dirs(&root.join(dir)) {
@@ -262,13 +273,13 @@ fn upsert_entry(
             e.kind = kind.into();
             e.component_type = component_type;
             if e.path.is_empty() {
-                e.path = ostra_rel(name);
+                e.path = located_rel(root, name);
             }
         }
         None => profile.skills.push(SkillEntry {
             name: name.into(),
             kind: kind.into(),
-            path: ostra_rel(name),
+            path: located_rel(root, name),
             component_type,
             source: Some(source.into()),
         }),
@@ -295,11 +306,16 @@ pub fn save(w: &WorkspaceRt, key: &str, name: &str, body: &SkillSave) -> Result<
         .into_iter()
         .find(|e| e.name == name && !e.path.is_empty())
         .map(|e| e.path)
-        .unwrap_or_else(|| ostra_rel(name));
-    let file = root.join(&rel);
-    if !file.starts_with(root.join(".ostra")) {
+        .unwrap_or_else(|| located_rel(&root, name));
+    let file = paths::normalize(&root.join(&rel));
+    let writable = [
+        paths::project_runtime(&root),
+        paths::project_skills_dir(&root),
+    ];
+    if !writable.iter().any(|d| file.starts_with(d)) {
         return Err(conflict(format!(
-            "Edit `{rel}` in the Files tab: Ostra writes skills only under `.ostra/`."
+            "Edit `{rel}` in the Files tab: Ostra writes skills only under `{}/` and `.ostra/`.",
+            paths::SKILLS_DIR
         )));
     }
     if let Some(dir) = file.parent() {
@@ -316,14 +332,18 @@ pub fn delete(w: &WorkspaceRt, key: &str, name: &str) -> Result<(), ApiErr> {
     let mut profile = load_profile(&root)?;
     let before = profile.skills.len();
     profile.skills.retain(|e| e.name != name);
-    let dir = paths::project_skills_dir(&root).join(name);
-    if profile.skills.len() == before && !dir.exists() {
+    let dirs: Vec<PathBuf> = paths::project_skill_dirs(&root)
+        .into_iter()
+        .map(|d| d.join(name))
+        .filter(|d| d.exists())
+        .collect();
+    if profile.skills.len() == before && dirs.is_empty() {
         return Err(not_found(format!("No skill `{name}` in {key}.")));
     }
     if profile.skills.len() != before {
         save_toml(&paths::project_profile(&root), &profile).map_err(io)?;
     }
-    if dir.exists() {
+    for dir in dirs {
         std::fs::remove_dir_all(&dir).map_err(io)?;
     }
     Ok(())
@@ -343,7 +363,10 @@ pub fn adopt(
         .find(|s| s.origin == SkillOrigin::Harness && s.path == body.from)
         .ok_or_else(|| not_found(format!("No harness skill at `{}` in {key}.", body.from)))?;
     let target = paths::project_skills_dir(&root).join(name);
-    if target.exists() || load_profile(&root)?.skills.iter().any(|e| e.name == name) {
+    let taken = paths::project_skill_dirs(&root)
+        .iter()
+        .any(|d| d.join(name).exists());
+    if taken || load_profile(&root)?.skills.iter().any(|e| e.name == name) {
         return Err(conflict(format!(
             "Pick another name: `{name}` is already a skill in {key}."
         )));
@@ -423,10 +446,12 @@ mod tests {
             std::fs::write(p, text).unwrap();
         };
         write(
-            ".ostra/skills/entity/SKILL.md",
+            ".agents/skills/entity/SKILL.md",
             "---\ndescription: Entities.\n---\n",
         );
+        write(".agents/skills/fresh/SKILL.md", "# Fresh\n");
         write(".ostra/skills/loose/SKILL.md", "# Loose\n");
+        write(".ostra/skills/fresh/SKILL.md", "# Shadowed\n");
         write(
             ".claude/skills/deploy/SKILL.md",
             "---\ndescription: Deploys.\n---\n",
@@ -464,6 +489,7 @@ mod tests {
                     Some("Entities.".into())
                 ),
                 ("gone".into(), SkillOrigin::Ostra, true, false, None),
+                ("fresh".into(), SkillOrigin::Ostra, false, true, None),
                 ("loose".into(), SkillOrigin::Ostra, false, true, None),
                 (
                     "deploy".into(),

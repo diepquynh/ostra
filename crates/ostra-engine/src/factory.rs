@@ -281,6 +281,7 @@ impl SpawnFactory for AgentsFactory {
                 profile: env.profile,
                 inventory: env.inventory,
                 instructions: &instructions,
+                project_docs: env.project_docs,
             },
         );
         let system_prompt =

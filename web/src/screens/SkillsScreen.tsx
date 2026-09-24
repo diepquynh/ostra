@@ -35,7 +35,7 @@ function state(s: SkillView): { label: string; tone: "ok" | "warn" | "bad" | "ne
 
 /**
  * Resource `ws:skills`: every project's skills in one place. Registered skills reach every agent through the repo
- * brief; skills in a harness directory such as `.claude/skills/` can be adopted into `.ostra/skills/`.
+ * brief; skills in a harness directory such as `.claude/skills/` can be adopted into `.agents/skills/`.
  * `?project=<key>` narrows the list to one project.
  */
 export function SkillsScreen({ ws }: SkillsScreenProps) {
@@ -93,7 +93,7 @@ export function SkillsScreen({ ws }: SkillsScreenProps) {
       <p className="wp-lead">
         Skills are the per-project instructions agents load before they create a component, write a test, or follow a convention. Only
         skills registered in <code>.ostra/project.toml</code> reach agents, through the repo brief. Skills in a harness directory such as{" "}
-        <code>.claude/skills/</code> are listed so you can adopt them into <code>.ostra/skills/</code>.
+        <code>.claude/skills/</code> are listed so you can adopt them into <code>.agents/skills/</code>.
       </p>
       {projects.length === 0 ? (
         <Banner tone="info" actions={<Button size="sm" icon="folder-plus" onClick={addProject}>Add project</Button>}>
@@ -298,7 +298,7 @@ function SkillEditor({
         {blocked && <Banner tone="warn">{blocked}</Banner>}
         {skill && !harness && !skill.entry && (
           <Banner tone="warn" title="Agents do not load this skill yet">
-            It is in <code>.ostra/skills/</code> but not in <code>project.toml</code>. Set its kind and register it so the repo brief lists it.
+            It is in <code>{skill.path.replace(/\/[^/]+\/SKILL\.md$/, "/")}</code> but not in <code>project.toml</code>. Set its kind and register it so the repo brief lists it.
           </Banner>
         )}
         {skill && !skill.exists && (
@@ -308,7 +308,7 @@ function SkillEditor({
         )}
         {harness && (
           <Banner tone="info" title="Executions do not load this skill">
-            It lives in a harness directory. Adopting copies its folder into <code>.ostra/skills/</code> and registers it, so every executor
+            It lives in a harness directory. Adopting copies its folder into <code>.agents/skills/</code> and registers it, so every executor
             loads it.
           </Banner>
         )}
@@ -322,7 +322,7 @@ function SkillEditor({
                   label="Name"
                   mono
                   placeholder="entity"
-                  hint="Letters, digits, - and _. It becomes the folder under .ostra/skills/."
+                  hint="Letters, digits, - and _. It becomes the folder under .agents/skills/."
                   value={name}
                   onChange={(e) => {
                     const next = e.target.value;
@@ -382,7 +382,7 @@ function SkillEditor({
         >
           <div className="wp-stack">
             <span>
-              This removes the entry from <code>project.toml</code> and deletes <code>.ostra/skills/{skill.name}/</code> with every file in it.
+              This removes the entry from <code>project.toml</code> and deletes <code>{skill.path.replace(/\/SKILL\.md$/, "/")}</code> with every file in it.
               Later executions in {project} will no longer load it.
             </span>
             {error && <Banner tone="bad">{error}</Banner>}
@@ -441,7 +441,7 @@ function AdoptDialog({
       }
     >
       <div className="wp-stack">
-        <Input label="Name" mono hint="The folder under .ostra/skills/. The harness copy stays where it is." value={name} onChange={(e) => setName(e.target.value)} />
+        <Input label="Name" mono hint="The folder under .agents/skills/. The harness copy stays where it is." value={name} onChange={(e) => setName(e.target.value)} />
         <Select label="Kind" value={kind} onChange={(e) => setKind(e.target.value)} options={KINDS} />
         <Input label="Use for" placeholder="JPA entity" value={ct} onChange={(e) => setCt(e.target.value)} />
         {error && <Banner tone="bad">{error}</Banner>}

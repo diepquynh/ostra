@@ -107,24 +107,28 @@ agy = "submit_{agent}"
 
 [strategies.skill]
 claude = """
-Ostra keeps per-project skills in `.ostra/skills/`, which Claude Code's skill catalog does not scan. Load a \
-named skill by reading its `SKILL.md` completely with Read BEFORE acting, at the path your task or repo brief \
-carries. Given only a name, the path is `{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with \
-Ostra, such as `meta-author`, live at `{{ assets_dir }}/skills/{name}/SKILL.md`."""
+Ostra keeps per-project skills in `.agents/skills/` (older projects: `.ostra/skills/`), which Claude Code's \
+skill catalog does not scan. Load a named skill by reading its `SKILL.md` completely with Read BEFORE acting, at \
+the path your task or repo brief carries. Given only a name, the path is \
+`{repo-root}/.agents/skills/{name}/SKILL.md`, or `{repo-root}/.ostra/skills/{name}/SKILL.md` in an older \
+project. Skills that ship with Ostra, such as `meta-author`, live at `{{ assets_dir }}/skills/{name}/SKILL.md`."""
 codex = """
 Codex has no tool for Ostra's skills. Loading one means reading its `SKILL.md` completely with exec_command \
 BEFORE acting, at the path your task or repo brief carries. Given only a name, the path is \
-`{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with Ostra, such as `meta-author`, live at \
+`{repo-root}/.agents/skills/{name}/SKILL.md`, or `{repo-root}/.ostra/skills/{name}/SKILL.md` in an older \
+project. Skills that ship with Ostra, such as `meta-author`, live at \
 `{{ assets_dir }}/skills/{name}/SKILL.md`."""
 grok = """
 Grok Build subagents receive no skill catalog. Load a named skill by reading its `SKILL.md` completely with \
 read_file BEFORE acting, at the path your task or repo brief carries. Given only a name, the path is \
-`{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with Ostra, such as `meta-author`, live at \
+`{repo-root}/.agents/skills/{name}/SKILL.md`, or `{repo-root}/.ostra/skills/{name}/SKILL.md` in an older \
+project. Skills that ship with Ostra, such as `meta-author`, live at \
 `{{ assets_dir }}/skills/{name}/SKILL.md`."""
 agy = """
 Antigravity has no separate skill tool. Load a named skill by reading its `SKILL.md` completely with \
 view_file BEFORE acting, at the path your task or repo brief carries. Given only a name, the path is \
-`{repo-root}/.ostra/skills/{name}/SKILL.md`. Skills that ship with Ostra, such as `meta-author`, live at \
+`{repo-root}/.agents/skills/{name}/SKILL.md`, or `{repo-root}/.ostra/skills/{name}/SKILL.md` in an older \
+project. Skills that ship with Ostra, such as `meta-author`, live at \
 `{{ assets_dir }}/skills/{name}/SKILL.md`."""
 
 [strategies.ostra_tools]

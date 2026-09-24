@@ -1447,3 +1447,73 @@ fn init_generates_at_most_eight_skills_by_default() {
         4
     );
 }
+
+fn init_session() -> H {
+    let mut h = H {
+        id: SessionId::from("s1"),
+        events: vec![],
+        ctx: PlanCtx::default(),
+    };
+    h.ev(SessionEvent::SessionCreated {
+        kind: SessionKind::Init {
+            project: "p".into(),
+        },
+        request: String::new(),
+        options: SessionOptions::default(),
+        projects: vec![ProjectRef {
+            key: "p".into(),
+            path: PathBuf::from("/code/p"),
+        }],
+        workspace_root: PathBuf::from("/ws"),
+        session_root: root(),
+    });
+    h
+}
+
+fn detect_submit(slices: Value, existing: Value) -> Value {
+    json!({"status": "ok", "summary": "s", "files": [], "result": {
+        "scout_plan_path": "/ws/.ostra/sessions/s1/p/ostra-scout-plan.md",
+        "stack": "go",
+        "reference_name": "go",
+        "slices": slices,
+        "existing_skills": existing,
+        "ultracode_bootstrap": false
+    }})
+}
+
+#[test]
+fn rule_i1_existing_skills_covering_the_project_skip_the_scouts() {
+    let mut h = init_session();
+    assert_eq!(h.summaries(), vec!["spawn initializer init detect"]);
+    h.run(
+        "spawn initializer init detect",
+        detect_submit(
+            json!([]),
+            json!([{"name": "convention", "kind": "convention", "path": ".agents/skills/convention/SKILL.md", "description": "d"}]),
+        ),
+    );
+    assert_eq!(h.summaries(), vec!["spawn initializer init propose"]);
+}
+
+#[test]
+fn rule_i1_no_slices_and_no_existing_skills_fail() {
+    let mut h = init_session();
+    h.run(
+        "spawn initializer init detect",
+        detect_submit(json!([]), json!([])),
+    );
+    assert_eq!(h.summaries(), vec!["fail"]);
+}
+
+#[test]
+fn rule_i1_slices_still_fan_out_beside_existing_skills() {
+    let mut h = init_session();
+    h.run(
+        "spawn initializer init detect",
+        detect_submit(
+            json!([{"descriptor": "api", "slug": "api", "paths": ["api"]}]),
+            json!([{"name": "entity", "kind": "other", "path": ".ostra/skills/entity/SKILL.md", "description": "d"}]),
+        ),
+    );
+    assert_eq!(h.summaries(), vec!["spawn initializer init scout api"]);
+}

@@ -1040,7 +1040,7 @@ pub struct SkillEntry {
     pub name: String,
     /// `convention`, `module-hub`, `creation`, `test`, or `other`.
     pub kind: String,
-    /// Relative to the project root, for example `.ostra/skills/convention/SKILL.md`.
+    /// Relative to the project root, for example `.agents/skills/convention/SKILL.md`.
     pub path: String,
     pub component_type: Option<String>,
     /// `generated`, `reused`, `adopted`, or `user`.

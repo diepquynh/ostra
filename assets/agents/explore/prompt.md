@@ -40,11 +40,11 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.ostra/skills/...` path and source path in this file resolves against it. Run all commands with it as the working directory. You research **this one repo only**. |
+| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo. Every `.ostra/...` and `.agents/skills/...` path and source path in this file resolves against it. Run all commands with it as the working directory. You research **this one repo only**. |
 | **session dir** | Scratch directory from the prompt's `Session dir:`. It already exists. Do not `mkdir`. The generate-spec agent reads your document, and every other research document, from this exact path. |
 | **research task** | The prompt's `Task:` line: the one question or area this spawn covers. It may be the whole request, one repo's share of it, or a follow-up the user raised after an earlier document was written. Answer exactly it. |
 | **repo profile** | `{repo-root}/.ostra/project.toml`: stack, commands, module map. The repo brief at the end of your task carries the parts you need, so read the file only for a table the brief lacks. |
-| **module-hub** | `{repo-root}/.ostra/skills/module-hub/SKILL.md` plus `references/`: the area routing tables. |
+| **module-hub** | `{repo-root}/.agents/skills/module-hub/SKILL.md` (or `.ostra/skills/module-hub/SKILL.md` in an older project; the brief lists the path) plus `references/`: the area routing tables. |
 | **external technology** | Anything the request depends on that lives outside this repo: a managed service, SDK, library, framework, protocol, data store, wire format, or third-party API. |
 | **retrieved source** | A page you fetched **in this run** with {{tool_web_search}} or {{tool_web_fetch}}: vendor documentation, an API reference, release notes, an RFC, or the library's own repository, cited by URL plus the page's own version or date. Your recollection of an API is **not** a source. |
 | **run stamp** | The `{YYYYMMDD}-{HHmmss}` string you compute once in Step 1 and use in your output file name. Never recompute it. It is also how generate-spec orders several research documents when two of them disagree, so a stamp you did not compute in this run makes your document look older or newer than it is. |
@@ -147,7 +147,7 @@ guarantees, and costs the page documents), never in what you remember about the 
 
 ## Step 5: Open questions
 
-Your trusted sources are the repo source code, the module-hub references (`.ostra/skills/module-hub/`), and
+Your trusted sources are the repo source code, the module-hub references (the module-hub skill's `references/`), and
 the primary sources you retrieved in Step 3B. For every ambiguity, try all three before writing a question. Do
 NOT answer from recalled framework, language, or API knowledge, and do NOT assume an answer.
 

@@ -27,7 +27,7 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and every relative path in your task and brief resolves against this root, so a call from anywhere else reads the wrong files. Every `.ostra/...` and `.ostra/skills/...` path, "this repo" reference, and repo-relative source path in this file resolves against it. Run build/typecheck with it as the working directory. |
+| **repo root** | Required absolute path from the prompt's `Repo root:` line. **Before your first tool call, make it your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and every relative path in your task and brief resolves against this root, so a call from anywhere else reads the wrong files. Every `.ostra/...` and `.agents/skills/...` path, "this repo" reference, and repo-relative source path in this file resolves against it. Run build/typecheck with it as the working directory. |
 | **session dir** | Scratch dir from `Session dir:`. It already exists. |
 | **meta-author** | The `meta-author` skill: the 16 Laws, Chain-of-Thought rules, archetypes, and self-review checklist. |
 | **target** | The file to create or edit, named in the prompt (`Target:`), or "New". |
@@ -94,5 +94,5 @@ lost:
    reference caught in review.
 4. Self-review is mandatory. Never skip it.
 5. Match existing patterns. Read examples before writing.
-6. For SKILL.md and agent files, write only under `.ostra/skills/` or the agents directory. No source-code
+6. For SKILL.md and agent files, write only under `.agents/skills/`, the existing skill's own directory, or the agents directory. No source-code
    edits.
