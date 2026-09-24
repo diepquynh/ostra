@@ -37,6 +37,7 @@
 .os-input--multiline textarea { resize: vertical; min-height: 60px; line-height: var(--leading-normal); }
 .os-input--invalid { border-color: var(--bad); }
 .os-input--sm { height: var(--control-h-sm); font-size: var(--text-sm); }
+.os-input--sm.os-input--multiline { height: auto; padding: 5px 8px; }
 .os-input__icon { color: var(--text-muted); flex: none; }
 .os-select { position: relative; padding-right: 26px; cursor: pointer; }
 .os-select select { appearance: none; cursor: pointer; }
@@ -276,7 +277,7 @@
 
 /* Menu */
 .os-menu-scrim { position: fixed; inset: 0; z-index: 90; }
-.os-menu { position: absolute; z-index: 91; top: calc(100% + 4px); min-width: 220px; padding: 4px; background: var(--surface-overlay); border-radius: var(--radius-lg); box-shadow: var(--shadow-popover); animation: os-fade-in var(--dur-fast) var(--ease-out); }
+.os-menu { position: absolute; z-index: 91; top: calc(100% + 4px); min-width: 220px; max-height: min(70vh, 520px); overflow-y: auto; overscroll-behavior: contain; padding: 4px; background: var(--surface-overlay); border-radius: var(--radius-lg); box-shadow: var(--shadow-popover); animation: os-fade-in var(--dur-fast) var(--ease-out); }
 .os-menu__item { display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--text-primary); font-size: var(--text-base); cursor: pointer; white-space: nowrap; }
 .os-menu__item:hover { background: var(--surface-selected); }
 .os-menu__item--danger { color: var(--bad); }
