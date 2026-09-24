@@ -12,15 +12,11 @@ use ostra_core::{ExecutionId, HarnessKind};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-/// MCP protocol versions the shim speaks, oldest first. `2026-07-28` replaced `initialize` with
-/// `server/discover`; both handshakes are answered.
-pub const MCP_VERSIONS: &[&str] = &[
-    "2024-11-05",
-    "2025-03-26",
-    "2025-06-18",
-    "2025-11-25",
-    "2026-07-28",
-];
+/// MCP protocol versions the shim speaks, oldest first. `2026-07-28` is left out on purpose: its
+/// results need `resultType`, `ttlMs`, and `cacheScope`, and Claude Code rejects a `tools/list`
+/// without them, so the run gets no Ostra tools. Without it in `server/discover`, clients fall
+/// back to the `initialize` handshake.
+pub const MCP_VERSIONS: &[&str] = &["2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"];
 const MCP_INITIALIZE_DEFAULT: &str = "2025-11-25";
 
 #[derive(Clone)]
@@ -175,7 +171,7 @@ impl HarnessBridge {
                     .get("protocolVersion")
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                let version = if MCP_VERSIONS.contains(&asked) && asked != "2026-07-28" {
+                let version = if MCP_VERSIONS.contains(&asked) {
                     asked
                 } else {
                     MCP_INITIALIZE_DEFAULT
@@ -676,6 +672,25 @@ mod tests {
             init.message.unwrap()["result"]["protocolVersion"],
             "2025-06-18"
         );
+        let newest = bridge
+            .handle_mcp(
+                &token,
+                call(1, "initialize", json!({"protocolVersion": "2026-07-28"})),
+            )
+            .await;
+        assert_eq!(
+            newest.message.unwrap()["result"]["protocolVersion"],
+            MCP_INITIALIZE_DEFAULT
+        );
+        // Offering 2026-07-28 makes Claude Code negotiate it and then reject every result
+        // without `resultType`; see MCP_VERSIONS.
+        let discover = bridge
+            .handle_mcp(&token, call(1, "server/discover", json!({})))
+            .await
+            .message
+            .unwrap();
+        let offered = discover["result"]["supportedVersions"].as_array().unwrap();
+        assert!(!offered.contains(&json!("2026-07-28")), "{offered:?}");
 
         let note = McpRequest {
             execution: exec.id.clone(),
@@ -776,6 +791,8 @@ mod tests {
     fn offline_shim_is_inert() {
         let r = offline_mcp(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).unwrap();
         assert_eq!(r["result"]["tools"], json!([]));
+        let d = offline_mcp(&json!({"jsonrpc": "2.0", "id": 2, "method": "server/discover"})).unwrap();
+        assert!(!d["result"]["supportedVersions"].as_array().unwrap().contains(&json!("2026-07-28")));
         assert!(
             offline_mcp(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
                 .is_none()
