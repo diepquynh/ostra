@@ -12,6 +12,7 @@ pane for one resource id and keeps the props below; `index.tsx` maps ids to scre
 | `SettingsScreen` | `{ ws }` | `ws:settings`, `/w/:ws/settings`. Workspace settings forms; a `#setting:<dotted key>` anchor opens that field's tab and rings it. Agent defaults come from `WorkspaceDetail.agents`, stacks from `WorkspaceDetail.stacks`, and the read-only global rules from `WorkspaceDetail.global_permissions`. |
 | `CostScreen` | `{ ws }` | `ws:cost`, `/w/:ws/cost`. Spend tables for this week (from `WorkspaceActivity.week_since`, the status bar's week) or all time. |
 | `MemoryScreen` | `{ ws }` | `ws:memory`, `/w/:ws/memory`. Lessons per project; `?project=<key>` or a `#project:<key>` anchor preselects one, `#lesson:<key>:<id>` selects a lesson. |
+| `SkillsScreen` | `{ ws }` | `ws:skills`, `/w/:ws/skills`. Every project's skills: create, edit, register, delete, and adopt harness skills from `.claude/skills/` and similar; `?project=<key>` narrows the list. |
 | `ProjectScreen` | `{ ws, projectKey }` | `project:<key>`, `/w/:ws/p/:key`. Header with the branch (`ProjectView.git_branch`), then Overview (or Initialize) and Files tabs; "Browse files" calls `useShell().browseFiles(key)`. Scrolls itself. |
 | `FileScreen` | `{ ws, projectKey, path }` | `file:<key>:<path>`, `/w/:ws/f/:key/<path>`. Read-only file or Changes diff. Scrolls itself. |
 | `setup/Onboarding` | `{ onFinish(workspaceId \| null) }` | Full screen at `/` on first run, and from "Run the setup guide again". The caller completes onboarding. Stacks come from `EnvironmentStatus.stacks`. |

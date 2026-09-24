@@ -1,14 +1,15 @@
 // Resource ids name everything the console can open in a tab. The URL of the active tab is derived
 // from its id, and a URL maps back to exactly one id, so reloads and deep links restore the same tab.
 //
-//   ws:overview | ws:cost | ws:settings | ws:memory   /w/:ws, /w/:ws/cost, /w/:ws/settings, /w/:ws/memory
+//   ws:overview | ws:cost | ws:settings | ws:memory | ws:skills
+//                                                    /w/:ws, /w/:ws/cost, /w/:ws/settings, /w/:ws/memory, /w/:ws/skills
 //   session:<id>                                     /w/:ws/s/:id
 //   exec:<id>                                        /w/:ws/x/:id
 //   artifact:<absolute path>                         /w/:ws/artifact?path=<path>
 //   project:<key>                                    /w/:ws/p/:key
 //   file:<key>:<project-relative path>               /w/:ws/f/:key/<path>
 
-export type WorkspacePage = "overview" | "cost" | "settings" | "memory";
+export type WorkspacePage = "overview" | "cost" | "settings" | "memory" | "skills";
 
 export type Resource =
   | { type: "ws"; page: WorkspacePage }
@@ -18,7 +19,7 @@ export type Resource =
   | { type: "project"; key: string }
   | { type: "file"; key: string; path: string };
 
-const PAGES: WorkspacePage[] = ["overview", "cost", "settings", "memory"];
+const PAGES: WorkspacePage[] = ["overview", "cost", "settings", "memory", "skills"];
 
 /** Parse a resource id. Returns null for anything that is not one. */
 export function parseResource(id: string): Resource | null {

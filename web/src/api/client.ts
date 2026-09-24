@@ -13,6 +13,10 @@ import type {
   ImportProject,
   Lesson,
   LessonEdit,
+  ProjectSkills,
+  SkillAdopt,
+  SkillDoc,
+  SkillSave,
   OverrideDecision,
   PushSubscription,
   ServerInfo,
@@ -142,6 +146,18 @@ export const httpApi = {
     request<Lesson>("PATCH", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/memory`, body),
   deleteLesson: (ws: string, key: string, id: number) =>
     request<void>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/memory${q({ id })}`),
+
+  skills: (ws: string) => request<ProjectSkills[]>("GET", `/api/workspaces/${enc(ws)}/skills`),
+  skill: (ws: string, key: string, name: string) =>
+    request<SkillDoc>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}`),
+  harnessSkill: (ws: string, key: string, path: string) =>
+    request<SkillDoc>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/harness-skill${q({ path })}`),
+  saveSkill: (ws: string, key: string, name: string, body: SkillSave) =>
+    request<SkillDoc>("PUT", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}`, body),
+  deleteSkill: (ws: string, key: string, name: string) =>
+    request<void>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}`),
+  adoptSkill: (ws: string, key: string, name: string, body: SkillAdopt) =>
+    request<SkillDoc>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}/adopt`, body),
 
   /** `since` (RFC 3339) limits the report to executions that started at or after it. */
   cost: (ws: string, since?: string | null) => request<CostReport>("GET", `/api/workspaces/${enc(ws)}/cost${q({ since })}`),

@@ -137,6 +137,10 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/workspaces/{ws}/projects", post(import_project))
         .route("/api/workspaces/{ws}/projects/{key}", delete(remove_project))
         .route("/api/workspaces/{ws}/projects/{key}/init", post(init_project))
+        .route("/api/workspaces/{ws}/skills", get(skills_list))
+        .route("/api/workspaces/{ws}/projects/{key}/skills/{name}", get(skill_get).put(skill_save).delete(skill_delete))
+        .route("/api/workspaces/{ws}/projects/{key}/skills/{name}/adopt", post(skill_adopt))
+        .route("/api/workspaces/{ws}/projects/{key}/harness-skill", get(harness_skill_get))
         .route("/api/workspaces/{ws}/projects/{key}/memory", get(memory_list).patch(memory_edit).delete(memory_delete))
         .route("/api/workspaces/{ws}/sessions", get(list_sessions).post(create_session))
         .route("/api/workspaces/{ws}/cost", get(cost))
@@ -562,6 +566,39 @@ async fn memory_delete(State(app): AppState, Path((id, key)): Path<(String, Stri
     let w = ws(&app, &id)?;
     memory_store(&w, &key)?.delete(q.id)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+// Skills. The logic lives in `crate::skills`.
+
+async fn skills_list(State(app): AppState, Path(id): Path<String>) -> Res<Vec<ProjectSkills>> {
+    let w = ws(&app, &id)?;
+    Ok(Json(crate::skills::list(&w)))
+}
+
+async fn skill_get(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>) -> Res<SkillDoc> {
+    let w = ws(&app, &id)?;
+    Ok(Json(crate::skills::get(&w, &key, &name)?))
+}
+
+async fn skill_save(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>, Json(body): Json<SkillSave>) -> Res<SkillDoc> {
+    let w = ws(&app, &id)?;
+    Ok(Json(crate::skills::save(&w, &key, &name, &body)?))
+}
+
+async fn skill_delete(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>) -> Result<StatusCode, ApiErr> {
+    let w = ws(&app, &id)?;
+    crate::skills::delete(&w, &key, &name)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn skill_adopt(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>, Json(body): Json<SkillAdopt>) -> Res<SkillDoc> {
+    let w = ws(&app, &id)?;
+    Ok(Json(crate::skills::adopt(&w, &key, &name, &body)?))
+}
+
+async fn harness_skill_get(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<PathQuery>) -> Res<SkillDoc> {
+    let w = ws(&app, &id)?;
+    Ok(Json(crate::skills::get_harness(&w, &key, &q.path)?))
 }
 
 #[derive(Deserialize)]

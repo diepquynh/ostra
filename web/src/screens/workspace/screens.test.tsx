@@ -71,6 +71,34 @@ describe("memory screen", () => {
   });
 });
 
+describe("skills screen", () => {
+  const skillRows = () => Array.from(main().querySelectorAll(".sk-row")).map((b) => b.textContent ?? "");
+
+  it("creates, edits and deletes a skill against the mock server", async () => {
+    await mount(`/w/${WS}/skills?project=backend`);
+    await waitFor(() => expect(skillRows().some((t) => t.includes("axum-handler"))).toBe(true));
+
+    fireEvent.click(within(main()).getByRole("button", { name: /New skill/ }));
+    fireEvent.change(await within(main()).findByLabelText(/^Name/), { target: { value: "migration" } });
+    expect((within(main()).getByLabelText(/^SKILL\.md/) as HTMLTextAreaElement).value).toContain("name: migration");
+    fireEvent.click(within(main()).getByRole("button", { name: "Create the skill" }));
+    await waitFor(() => expect(skillRows().some((t) => t.includes("migration"))).toBe(true));
+    expect(main().querySelector(".sk-row[data-active]")?.textContent).toContain("migration");
+
+    const editor = () => within(main()).getByLabelText(/^SKILL\.md/) as HTMLTextAreaElement;
+    await waitFor(() => expect(editor().value).toContain("# migration"));
+    expect((within(main()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(editor(), { target: { value: `${editor().value}\nRun sqlx migrate.\n` } });
+    fireEvent.click(within(main()).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect((within(main()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true));
+
+    fireEvent.click(within(main()).getByRole("button", { name: /Delete/ }));
+    const confirm = await screen.findByRole("dialog");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete the skill" }));
+    await waitFor(() => expect(skillRows().some((t) => t.includes("migration"))).toBe(false));
+  });
+});
+
 describe("settings screen", () => {
   it("opens the tab a setting deep link names and rings the field", async () => {
     await mount(`/w/${WS}/settings#setting:permissions.deny`);

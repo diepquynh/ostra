@@ -4,7 +4,7 @@
 
 use ostra_core::api::{
     ApiError, Artifact, CostReport, DiffFile, DiffLineKind, EnvironmentStatus, ExecutionView, FileDiff, FileIndex, FsBrowse, GitMark,
-    Heading, OnboardingState, ProjectChange, ProjectFile, ProjectTree, ServerMsg, SessionDetail, SessionStatus, SessionSummary,
+    Heading, OnboardingState, ProjectChange, ProjectFile, ProjectSkills, ProjectTree, SkillDoc, SkillOrigin, ServerMsg, SessionDetail, SessionStatus, SessionSummary,
     UI_STATE_MAX_BYTES, UiTab, SearchKind, SearchResults, WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree, WorkspaceUiState,
 };
 use ostra_core::config::{GlobalConfig, PermissionMode, TierTable, ValidationIssue, save_toml};
@@ -584,4 +584,66 @@ async fn onboarding_flag_and_ui_state_round_trip() {
     assert_eq!(client.patch(&ui).json(&json!([1, 2])).send().await.unwrap().status(), 400);
     let unchanged: WorkspaceUiState = client.get(&ui).send().await.unwrap().json().await.unwrap();
     assert_eq!(unchanged, stored);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn skills_are_listed_edited_adopted_and_deleted() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { base, client, .. } = boot(dir.path()).await;
+    let repo = dir.path().join("app");
+    std::fs::create_dir_all(repo.join(".claude/skills/deploy/references")).unwrap();
+    std::fs::write(repo.join(".claude/skills/deploy/SKILL.md"), "---\ndescription: Deploy the app.\n---\n# Deploy\n").unwrap();
+    std::fs::write(repo.join(".claude/skills/deploy/references/steps.md"), "1. ship\n").unwrap();
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "sk", "root": dir.path().join("ws"), "projects": [{"path": repo, "key": "app"}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let wsp = format!("{base}/api/workspaces/{}", ws.id);
+    let list = || async { client.get(format!("{wsp}/skills")).send().await.unwrap().json::<Vec<ProjectSkills>>().await.unwrap() };
+
+    let before = list().await;
+    assert_eq!(before[0].skills.len(), 1);
+    assert_eq!((before[0].skills[0].origin, before[0].skills[0].description.as_deref()), (SkillOrigin::Harness, Some("Deploy the app.")));
+
+    let skill = format!("{wsp}/projects/app/skills/entity");
+    let r = client.put(&skill).json(&json!({"kind": "creation", "component_type": "Entity", "content": "---\ndescription: Entities.\n---\n"})).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let doc: SkillDoc = r.json().await.unwrap();
+    assert_eq!(doc.skill.entry.as_ref().map(|e| (e.path.as_str(), e.source.as_deref())), Some((".ostra/skills/entity/SKILL.md", Some("user"))));
+    assert!(repo.join(".ostra/skills/entity/SKILL.md").is_file());
+
+    let r = client.put(&skill).json(&json!({"kind": "nope", "content": "x"})).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    let r = client.put(format!("{wsp}/projects/app/skills/a.b")).json(&json!({"kind": "other", "content": "x"})).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+
+    let r = client
+        .post(format!("{wsp}/projects/app/skills/deploy/adopt"))
+        .json(&json!({"from": ".claude/skills/deploy/SKILL.md", "kind": "other"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(repo.join(".ostra/skills/deploy/references/steps.md").is_file());
+    let r = client
+        .post(format!("{wsp}/projects/app/skills/deploy/adopt"))
+        .json(&json!({"from": ".claude/skills/deploy/SKILL.md", "kind": "other"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409, "the name is taken now");
+
+    let names: Vec<(String, SkillOrigin, bool)> = list().await[0].skills.iter().map(|s| (s.name.clone(), s.origin, s.entry.is_some())).collect();
+    assert_eq!(names, vec![("entity".into(), SkillOrigin::Ostra, true), ("deploy".into(), SkillOrigin::Ostra, true), ("deploy".into(), SkillOrigin::Harness, false)]);
+
+    assert_eq!(client.delete(&skill).send().await.unwrap().status(), 204);
+    assert!(!repo.join(".ostra/skills/entity").exists());
+    assert_eq!(client.delete(&skill).send().await.unwrap().status(), 404);
+    assert_eq!(client.get(&skill).send().await.unwrap().status(), 404);
 }

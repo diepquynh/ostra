@@ -29,7 +29,7 @@ function WorkspaceSwitcher({ ws, wsName, activeId, go, onNewWorkspace, onAddProj
   const { activity } = useActivity(ws);
   const navigate = useNavigate();
   const list = workspaces.some((w) => w.id === ws) ? workspaces : [{ id: ws, name: wsName, root: "", projects: 0, active_sessions: 0, available: true }, ...workspaces];
-  const page = (id: string, label: string, icon: "layout-dashboard" | "coins" | "settings" | "brain", hint?: string): MenuItem => ({
+  const page = (id: string, label: string, icon: "layout-dashboard" | "coins" | "settings" | "brain" | "book-open", hint?: string): MenuItem => ({
     id,
     label,
     icon,
@@ -60,6 +60,7 @@ function WorkspaceSwitcher({ ws, wsName, activeId, go, onNewWorkspace, onAddProj
         page("ws:cost", "Cost", "coins", week != null ? formatCost(week) : undefined),
         page("ws:settings", "Settings", "settings"),
         page("ws:memory", "Memory", "brain"),
+        page("ws:skills", "Skills", "book-open"),
       ];
     }),
     { type: "divider" },

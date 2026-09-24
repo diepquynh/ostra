@@ -23,6 +23,7 @@ const PAGE: Record<string, [string, IconName]> = {
   cost: ["Cost", "coins"],
   settings: ["Settings", "settings"],
   memory: ["Memory", "brain"],
+  skills: ["Skills", "book-open"],
 };
 
 export const sessionLabel = (s: Pick<TreeSession, "title" | "request">) => s.title ?? truncate(s.request, 40);

@@ -796,7 +796,7 @@ pub struct SkillEntry {
     /// Relative to the project root, for example `.ostra/skills/convention/SKILL.md`.
     pub path: String,
     pub component_type: Option<String>,
-    /// `generated` or `reused`.
+    /// `generated`, `reused`, `adopted`, or `user`.
     pub source: Option<String>,
 }
 

@@ -7,9 +7,10 @@ import { MemoryScreen } from "./MemoryScreen";
 import { ProjectScreen } from "./ProjectScreen";
 import { SessionScreen } from "./SessionScreen";
 import { SettingsScreen } from "./SettingsScreen";
+import { SkillsScreen } from "./SkillsScreen";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 
-export { ArtifactScreen, CostScreen, ExecutionScreen, FileScreen, MemoryScreen, ProjectScreen, SessionScreen, SettingsScreen, WorkspaceScreen };
+export { ArtifactScreen, CostScreen, ExecutionScreen, FileScreen, MemoryScreen, ProjectScreen, SessionScreen, SettingsScreen, SkillsScreen, WorkspaceScreen };
 export { Onboarding } from "./setup/Onboarding";
 export { NewWorkspaceDialog } from "./setup/NewWorkspaceDialog";
 export { AddProjectDialog } from "./setup/AddProjectDialog";
@@ -26,6 +27,7 @@ export function ScreenFor({ ws, id }: { ws: string; id: string }) {
       if (r.page === "cost") return <CostScreen key={id} ws={ws} />;
       if (r.page === "settings") return <SettingsScreen key={id} ws={ws} />;
       if (r.page === "memory") return <MemoryScreen key={id} ws={ws} />;
+      if (r.page === "skills") return <SkillsScreen key={id} ws={ws} />;
       return <WorkspaceScreen key={id} ws={ws} />;
     case "session":
       return <SessionScreen key={id} ws={ws} id={r.id} />;

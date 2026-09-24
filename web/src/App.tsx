@@ -62,6 +62,7 @@ export const routes: RouteObject[] = [
       { path: "cost", ...screen },
       { path: "settings", ...screen },
       { path: "memory", ...screen },
+      { path: "skills", ...screen },
       { path: "s/:id", ...screen },
       { path: "x/:id", ...screen },
       { path: "artifact", ...screen },

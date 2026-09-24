@@ -11,6 +11,7 @@ pub mod files;
 pub mod nav;
 pub mod services;
 pub mod setup;
+pub mod skills;
 pub mod ui_state;
 pub mod workspace;
 pub mod ws;

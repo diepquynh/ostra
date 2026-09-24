@@ -10,6 +10,6 @@ kind: string,
  */
 path: string, component_type: string | null, 
 /**
- * `generated` or `reused`.
+ * `generated`, `reused`, `adopted`, or `user`.
  */
 source: string | null, };

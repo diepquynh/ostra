@@ -1098,6 +1098,78 @@ pub enum ServerMsg {
     Activity { workspace: WorkspaceId, activity: WorkspaceActivity },
 }
 
+// ---------------------------------------------------------------------------------------------
+// Skills
+// ---------------------------------------------------------------------------------------------
+
+/// Where a skill sits in a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SkillOrigin {
+    /// Under `.ostra/skills/`, the directory every executor loads skills from.
+    Ostra,
+    /// In a harness's own directory, such as `.claude/skills/`. Executions do not load it until it is adopted.
+    Harness,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillView {
+    pub name: String,
+    /// The `description` from the SKILL.md frontmatter.
+    pub description: Option<String>,
+    /// Relative to the project root, for example `.ostra/skills/convention/SKILL.md`.
+    pub path: String,
+    pub origin: SkillOrigin,
+    /// The `project.toml` entry. Only registered skills reach the repo brief.
+    pub entry: Option<crate::config::SkillEntry>,
+    /// False when `project.toml` names a SKILL.md that is not on disk.
+    pub exists: bool,
+}
+
+/// `GET /api/workspaces/:ws/skills`: every project's skills.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProjectSkills {
+    pub project: String,
+    #[ts(type = "string")]
+    pub path: PathBuf,
+    /// Set when the skills cannot be read or changed, such as a missing directory or a running init.
+    pub blocked: Option<String>,
+    pub skills: Vec<SkillView>,
+}
+
+/// `GET /api/workspaces/:ws/projects/:key/skills/:name`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillDoc {
+    pub skill: SkillView,
+    pub content: String,
+}
+
+/// `PUT /api/workspaces/:ws/projects/:key/skills/:name`: write `.ostra/skills/<name>/SKILL.md` and
+/// register it in `project.toml`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillSave {
+    /// `convention`, `module-hub`, `creation`, `test`, or `other`.
+    pub kind: String,
+    pub component_type: Option<String>,
+    pub content: String,
+}
+
+/// `POST /api/workspaces/:ws/projects/:key/skills/:name/adopt`: copy a harness skill directory into
+/// `.ostra/skills/<name>/` and register it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SkillAdopt {
+    /// The harness skill's SKILL.md, relative to the project root.
+    pub from: String,
+    pub kind: String,
+    pub component_type: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

@@ -1,6 +1,6 @@
 import { HttpError, type Api } from "../client";
 import type { SearchHit, TreeSession, WorkspaceActivity } from "../nav";
-import type { DecisionView, ExecutionView, GateView, PendingGate, SessionDetail, SessionSummary, WorkspaceUiState } from "../types";
+import type { DecisionView, ExecutionView, GateView, PendingGate, ProjectSkills, SessionDetail, SessionSummary, SkillDoc, WorkspaceUiState } from "../types";
 import * as f from "./fixtures";
 import * as fx from "./fixtures.execution";
 import { eventsFor, gateSessions } from "./fixtures.session";
@@ -23,6 +23,27 @@ const attempt = <T>(fn: () => T): Promise<T> => {
 let settings = structuredClone(f.settings);
 let gates: GateView[] = structuredClone(f.gates);
 let lessons = structuredClone(wf.lessonsByProject);
+let skillDocs: Record<string, Record<string, SkillDoc>> = Object.fromEntries(
+  f.workspaceDetail.projects.map((p) => [
+    p.key,
+    Object.fromEntries(
+      (p.profile?.skills ?? []).map((e) => [
+        e.name,
+        {
+          skill: { name: e.name, description: `Use when a task touches a ${e.component_type ?? e.kind}.`, path: e.path, origin: "ostra", entry: e, exists: true },
+          content: `---\nname: ${e.name}\ndescription: Use when a task touches a ${e.component_type ?? e.kind}.\n---\n\n# ${e.name}\n`,
+        } satisfies SkillDoc,
+      ]),
+    ),
+  ]),
+);
+const mockSkills = (): ProjectSkills[] =>
+  f.workspaceDetail.projects.map((p) => ({ project: p.key, path: p.path, blocked: null, skills: Object.values(skillDocs[p.key] ?? {}).map((d) => d.skill) }));
+const skillDoc = (key: string, name: string) => {
+  const d = skillDocs[key]?.[name];
+  if (!d) throw new HttpError(404, `No skill \`${name}\` in ${key}.`);
+  return d;
+};
 let yolo = false;
 let ui: WorkspaceUiState = { tabs: [], active: null, left_tab: null, files_project: null, sidebar_open: null, dock_open: false, theme: null };
 
@@ -223,6 +244,23 @@ export const mockApi: Api = {
     lessons = { ...lessons, [key]: (lessons[key] ?? []).filter((l) => l.id !== id) };
     return delay(undefined);
   },
+  skills: () => delay(mockSkills()),
+  skill: async (_ws, key, name) => delay(skillDoc(key, name)),
+  harnessSkill: async (_ws, key, path) => delay(skillDoc(key, path)),
+  saveSkill: (_ws, key, name, body) => {
+    const old = skillDocs[key]?.[name];
+    const entry = { name, kind: body.kind, path: `.ostra/skills/${name}/SKILL.md`, component_type: body.component_type, source: old?.skill.entry?.source ?? "user" };
+    const doc: SkillDoc = { skill: { name, description: old?.skill.description ?? null, path: entry.path, origin: "ostra", entry, exists: true }, content: body.content };
+    skillDocs = { ...skillDocs, [key]: { ...skillDocs[key], [name]: doc } };
+    return delay(doc);
+  },
+  deleteSkill: (_ws, key, name) => {
+    const rest = { ...skillDocs[key] };
+    delete rest[name];
+    skillDocs = { ...skillDocs, [key]: rest };
+    return delay(undefined);
+  },
+  adoptSkill: async (_ws, key, name) => delay(skillDoc(key, name)),
   cost: (_ws, since) => delay(since ? wf.costSince(since) : wf.cost),
   ask: () => delay({ execution: "x_rev2" }),
   pushSubscribe: () => delay(undefined),

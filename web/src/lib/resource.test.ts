@@ -12,6 +12,7 @@ describe("resource ids and routes", () => {
     ["ws:cost", "/w/shop/cost"],
     ["ws:settings", "/w/shop/settings"],
     ["ws:memory", "/w/shop/memory"],
+    ["ws:skills", "/w/shop/skills"],
     ["session:s_1", "/w/shop/s/s_1"],
     ["exec:x9", "/w/shop/x/x9"],
     ["artifact:/home/me/shop/.ostra/sessions/s 1/ostra-spec.md", "/w/shop/artifact?path=%2Fhome%2Fme%2Fshop%2F.ostra%2Fsessions%2Fs%201%2Fostra-spec.md"],

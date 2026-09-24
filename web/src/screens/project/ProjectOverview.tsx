@@ -141,7 +141,16 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
                 </div>
               )}
             </Panel>
-            <Panel title="Skills" subtitle={profile?.skills.length ?? 0} icon="book-open">
+            <Panel
+              title="Skills"
+              subtitle={profile?.skills.length ?? 0}
+              icon="book-open"
+              actions={
+                <Button size="sm" variant="ghost" icon="pencil" onClick={() => navigate(`${resourcePath(ws, "ws:skills")}?project=${encodeURIComponent(p.key)}`)}>
+                  Manage
+                </Button>
+              }
+            >
               {profile?.skills.length ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {profile.skills.map((s) => (
