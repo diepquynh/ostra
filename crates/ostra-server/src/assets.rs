@@ -35,9 +35,12 @@ pub async fn static_handler(uri: Uri) -> Response {
     {
         return res;
     }
+    // Client routes can end in a file name (`/w/{ws}/f/{key}/src/main.rs`), so only asset-shaped
+    // paths 404: the build's `assets/` folder and root-level files like `/favicon.ico`.
     if path.starts_with("api/")
         || path.starts_with("internal/")
-        || path.contains('.') && !path.ends_with(".html")
+        || path.starts_with("assets/")
+        || !path.contains('/') && path.contains('.') && !path.ends_with(".html")
     {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -48,4 +51,22 @@ pub async fn static_handler(uri: Uri) -> Response {
         )
             .into_response()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn status(path: &str) -> StatusCode {
+        static_handler(path.parse().unwrap()).await.status()
+    }
+
+    #[tokio::test]
+    async fn client_routes_load_the_app_and_missing_assets_404() {
+        assert_eq!(status("/w/ws_1/settings").await, StatusCode::OK);
+        assert_eq!(status("/w/ws_1/f/app/src/main.rs").await, StatusCode::OK);
+        assert_eq!(status("/assets/gone-1234.js").await, StatusCode::NOT_FOUND);
+        assert_eq!(status("/favicon.ico").await, StatusCode::NOT_FOUND);
+        assert_eq!(status("/api/nope").await, StatusCode::NOT_FOUND);
+    }
 }
