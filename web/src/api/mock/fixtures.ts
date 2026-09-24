@@ -28,6 +28,7 @@ const usage = (i: number, cost: number): Usage => ({
   output_tokens: 1800 * i,
   cache_read_tokens: 90000 * i,
   cache_write_tokens: 8000 * i,
+  cache_write_1h_tokens: 0,
   cost_usd: cost,
   tool_calls: 14 * i,
   build_ms: 4200 * i,

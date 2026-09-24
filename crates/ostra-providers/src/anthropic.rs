@@ -329,7 +329,6 @@ struct Accumulator {
     blocks: Vec<(usize, Option<Partial>, Option<Block>)>,
     usage: Usage,
     web_searches: u64,
-    cache_write_1h: u64,
     model: String,
     stop: Option<String>,
     refusal_category: Option<String>,
@@ -351,7 +350,7 @@ fn server_tool_summary(input: &Value) -> String {
         .to_string()
 }
 
-fn read_usage(u: &Value, usage: &mut Usage, cache_write_1h: &mut u64, web_searches: &mut u64) {
+fn read_usage(u: &Value, usage: &mut Usage, web_searches: &mut u64) {
     let get = |k: &str| u.get(k).and_then(|v| v.as_u64());
     if let Some(v) = get("input_tokens") {
         usage.input_tokens = v;
@@ -366,7 +365,7 @@ fn read_usage(u: &Value, usage: &mut Usage, cache_write_1h: &mut u64, web_search
         usage.cache_write_tokens = v;
     }
     if let Some(v) = u.pointer("/cache_creation/ephemeral_1h_input_tokens").and_then(|v| v.as_u64()) {
-        *cache_write_1h = v;
+        usage.cache_write_1h_tokens = v;
     }
     if let Some(v) = u.pointer("/server_tool_use/web_search_requests").and_then(|v| v.as_u64()) {
         *web_searches = v;
@@ -386,7 +385,7 @@ impl Accumulator {
                 if let Some(m) = ev.get("message") {
                     self.model = m.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string();
                     if let Some(u) = m.get("usage") {
-                        read_usage(u, &mut self.usage, &mut self.cache_write_1h, &mut self.web_searches);
+                        read_usage(u, &mut self.usage, &mut self.web_searches);
                     }
                 }
             }
@@ -475,7 +474,7 @@ impl Accumulator {
                     self.refusal_category = Some(cat.to_string());
                 }
                 if let Some(u) = ev.get("usage") {
-                    read_usage(u, &mut self.usage, &mut self.cache_write_1h, &mut self.web_searches);
+                    read_usage(u, &mut self.usage, &mut self.web_searches);
                 }
             }
             "message_stop" => self.done = true,
@@ -508,7 +507,7 @@ impl Accumulator {
         };
         let model = if self.model.is_empty() { requested_model.to_string() } else { self.model };
         let mut usage = self.usage;
-        usage.cost_usd = pricing::cost(&model, &usage, self.cache_write_1h, self.web_searches);
+        usage.cost_usd = pricing::cost(&model, &usage, self.web_searches);
         ChatResponse { content, stop, usage, model, refusal_category: self.refusal_category }
     }
 }
@@ -732,8 +731,8 @@ mod tests {
             "cache_creation_input_tokens": 3000,
             "cache_creation": {"ephemeral_5m_input_tokens": 2000, "ephemeral_1h_input_tokens": 1000},
         });
-        let (mut usage, mut write_1h, mut searches) = (Usage::default(), 0, 0);
-        read_usage(&u, &mut usage, &mut write_1h, &mut searches);
-        assert_eq!((usage.cache_write_tokens, write_1h), (3000, 1000));
+        let (mut usage, mut searches) = (Usage::default(), 0);
+        read_usage(&u, &mut usage, &mut searches);
+        assert_eq!((usage.cache_write_tokens, usage.cache_write_1h_tokens), (3000, 1000));
     }
 }

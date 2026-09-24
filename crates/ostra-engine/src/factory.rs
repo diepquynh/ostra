@@ -22,6 +22,7 @@ fn work_source(phase: Option<&PhaseInfo>, category: Option<Category>) -> WorkSou
                 Some(Category::Verify) => "A verification request: no code change is planned.",
                 Some(Category::UnitTest) => "The user asked for tests directly, so no plan exists.",
                 Some(Category::Prompt) => "A prompt change: the pipeline has no plan tier for it.",
+                Some(Category::QuickChange) => "A quick change: the request names the whole edit, so research, spec, plan, and review were skipped.",
                 _ => "The stakes judge rated this request low, so the plan tier was skipped.",
             }
             .into(),

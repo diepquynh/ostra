@@ -4,7 +4,7 @@ import type { CostReport, CostRow } from "../../api/types";
 import { COST_GROUPS, costLines, costTotals } from "./costTable";
 
 const row = (key: string, cost: number, extra: Partial<CostRow["usage"]> = {}, n = 1): CostRow => {
-  const usage = { input_tokens: 12000, output_tokens: 1800, cache_read_tokens: 90000, cache_write_tokens: 0, cost_usd: cost, tool_calls: 10, build_ms: 0, ...extra };
+  const usage = { input_tokens: 12000, output_tokens: 1800, cache_read_tokens: 90000, cache_write_tokens: 0, cache_write_1h_tokens: 0, cost_usd: cost, tool_calls: 10, build_ms: 0, ...extra };
   return { key, executions: n, usage, cache_reads_per_tool_call: usage.tool_calls ? usage.cache_read_tokens / usage.tool_calls : 0 };
 };
 
@@ -38,7 +38,7 @@ describe("cost tables", () => {
 
   it("format numbers and leave empty what did not happen", () => {
     const [l] = costLines([row("judge", 0.004, { tool_calls: 0, build_ms: 0, input_tokens: 1_250_000, output_tokens: 950 })], "agent", 0);
-    expect(l).toMatchObject({ runs: 1, input: "1.3M", output: "950", cacheReads: "90.0k", perCall: "", build: "", cost: "<$0.01", share: "" });
+    expect(l).toMatchObject({ runs: 1, input: "1.3M", output: "950", cacheReads: "90.0k", cacheWrites5m: "0", cacheWrites1h: "0", perCall: "", build: "", cost: "<$0.01", share: "" });
     const [b] = costLines([row("implementer", 1.2, { build_ms: 125000 })], "agent", 1.2);
     expect(b).toMatchObject({ perCall: "9.0k", build: "2 min 5 s", cost: "$1.20", share: "100%" });
   });

@@ -15,6 +15,8 @@ pub enum Category {
     Verify,
     UnitTest,
     Prompt,
+    /// A small edit the request fully describes: one implementer pass on the native executor.
+    QuickChange,
     QuickAnswer,
 }
 
@@ -28,6 +30,7 @@ impl Category {
             Category::Verify => "VERIFY",
             Category::UnitTest => "UNIT_TEST",
             Category::Prompt => "PROMPT",
+            Category::QuickChange => "QUICK_CHANGE",
             Category::QuickAnswer => "QUICK_ANSWER",
         }
     }

@@ -294,7 +294,7 @@ impl<'a> Planner<'a> {
                     self.completion();
                 }
             }
-            Category::Verify | Category::Prompt => {
+            Category::Verify | Category::Prompt | Category::QuickChange => {
                 self.phases();
                 if s.phases.values().all(|p| p.impl_loop.is_terminal()) && self.nothing_running() {
                     self.completion();

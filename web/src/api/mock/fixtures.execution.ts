@@ -70,6 +70,7 @@ const use = (i: number, o: number, cache: number, cost: number, calls: number, b
   output_tokens: o,
   cache_read_tokens: cache,
   cache_write_tokens: Math.round(i / 20),
+  cache_write_1h_tokens: 0,
   cost_usd: cost,
   tool_calls: calls,
   build_ms: build,

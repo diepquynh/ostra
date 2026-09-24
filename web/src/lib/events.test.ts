@@ -41,7 +41,7 @@ describe("activity folding", () => {
         at: "",
         delta: {
           kind: "usage",
-          usage: { input_tokens: 1, output_tokens: 2, cache_read_tokens: 3, cache_write_tokens: 0, cost_usd: 0.1, tool_calls: 1, build_ms: 0 },
+          usage: { input_tokens: 1, output_tokens: 2, cache_read_tokens: 3, cache_write_tokens: 0, cache_write_1h_tokens: 0, cost_usd: 0.1, tool_calls: 1, build_ms: 0 },
         },
       },
     ]);

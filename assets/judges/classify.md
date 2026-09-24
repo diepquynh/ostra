@@ -24,10 +24,15 @@ the areas of its module map.
 | `VERIFY` | test, validate, check that it works (run the existing test command) |
 | `UNIT_TEST` | write or fix tests |
 | `PROMPT` | write or edit an AI prompt, a `SKILL.md`, or an agent file |
+| `QUICK_CHANGE` | a small edit the request spells out in full: which file or symbol, and what it becomes (fix this typo, rename `x` to `y` in one file, set this constant to 5) |
 | `QUICK_ANSWER` | a factual question with no code change |
 
 If two categories fit, pick the one that produces more of the pipeline, because a stage the request did not
 need costs one round and a stage it needed but skipped costs a wrong result. If nothing fits, pick `RESEARCH`.
+
+Pick `QUICK_CHANGE` only when a developer could make the edit without reading anything beyond the lines
+it touches, because it skips research, the spec, the plan, and review. A request that needs a decision, spans
+more than a few lines, changes behavior other code depends on, or asks for tests or docs is `IMPLEMENT`.
 
 **Projects.** Include a project when the user pinned it, when the request names it or its area, or when the
 change lands in it. With one project in the workspace, it is always the only project in scope. When
@@ -54,7 +59,7 @@ period, and leave out the project key unless the request is about the project as
 
 Call `decide` once with:
 
-- `category`: one of the eight values above.
+- `category`: one of the nine values above.
 - `projects`: the project keys in scope.
 - `explore_tasks`: a list of `{project, task}`.
 - `opts_in`: `{tests, docs}`, both booleans.

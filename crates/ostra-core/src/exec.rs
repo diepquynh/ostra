@@ -34,12 +34,16 @@ impl ExecutionStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)]
+#[serde(default)]
 #[ts(export)]
 pub struct Usage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
+    /// Every cache write, 5-minute and 1-hour TTL together.
     pub cache_write_tokens: u64,
+    /// The part of `cache_write_tokens` written with the 1-hour TTL, which costs more.
+    pub cache_write_1h_tokens: u64,
     pub cost_usd: f64,
     pub tool_calls: u64,
     /// Wall time spent in build and test commands, for the build-loop metric.
@@ -52,6 +56,7 @@ impl Usage {
         self.output_tokens += other.output_tokens;
         self.cache_read_tokens += other.cache_read_tokens;
         self.cache_write_tokens += other.cache_write_tokens;
+        self.cache_write_1h_tokens += other.cache_write_1h_tokens;
         self.cost_usd += other.cost_usd;
         self.tool_calls += other.tool_calls;
         self.build_ms += other.build_ms;

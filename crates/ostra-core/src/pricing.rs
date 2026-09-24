@@ -4,7 +4,7 @@
 //! are the standard short-context rates after the 2026-07-30 price change, from third-party
 //! trackers; check the official pricing page before relying on them.
 
-use ostra_core::exec::Usage;
+use crate::exec::Usage;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Pricing {
@@ -54,13 +54,13 @@ pub fn price(model: &str) -> Option<Pricing> {
         .map(|(_, p)| *p)
 }
 
-/// Cost of one response. `input_tokens` excludes cache reads and writes, as both providers'
-/// usage is normalized to before this is called. `cache_write_1h_tokens` is the part of
-/// `cache_write_tokens` written with the 1-hour TTL; the rest are 5-minute writes.
-pub fn cost(model: &str, usage: &Usage, cache_write_1h_tokens: u64, web_searches: u64) -> f64 {
+/// Cost of one response. `input_tokens` excludes cache reads and writes, as every provider's and
+/// harness transcript's usage is normalized to before this is called. The part of
+/// `cache_write_tokens` not in `cache_write_1h_tokens` is priced as 5-minute writes.
+pub fn cost(model: &str, usage: &Usage, web_searches: u64) -> f64 {
     let Some(p) = price(model) else { return 0.0 };
     let m = 1_000_000.0;
-    let write_1h = cache_write_1h_tokens.min(usage.cache_write_tokens);
+    let write_1h = usage.cache_write_1h_tokens.min(usage.cache_write_tokens);
     usage.input_tokens as f64 * p.input / m
         + usage.output_tokens as f64 * p.output / m
         + usage.cache_read_tokens as f64 * p.cache_read / m
@@ -86,14 +86,14 @@ mod tests {
     #[test]
     fn computes_cost() {
         let u = Usage { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_tokens: 1_000_000, ..Default::default() };
-        let c = cost("claude-sonnet-5", &u, 0, 1);
+        let c = cost("claude-sonnet-5", &u, 1);
         assert!((c - (2.0 + 10.0 + 0.2 + 0.01)).abs() < 1e-9);
     }
 
     #[test]
     fn cache_writes_priced_by_ttl() {
-        let u = Usage { cache_write_tokens: 3_000_000, ..Default::default() };
-        let c = cost("claude-opus-5", &u, 1_000_000, 0);
+        let u = Usage { cache_write_tokens: 3_000_000, cache_write_1h_tokens: 1_000_000, ..Default::default() };
+        let c = cost("claude-opus-5", &u, 0);
         assert!((c - (2.0 * 6.25 + 10.0)).abs() < 1e-9);
     }
 }

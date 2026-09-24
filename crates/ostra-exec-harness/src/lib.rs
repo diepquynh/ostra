@@ -14,6 +14,7 @@ pub mod services;
 pub mod setup;
 pub mod term_log;
 pub mod transcript;
+pub mod usage_watch;
 
 pub use bridge::{HarnessBridge, HookArgs, parse_hook_args, run_hook_cli, run_mcp_stdio};
 pub use executor::{HarnessExecutor, HarnessExecutorConfig};

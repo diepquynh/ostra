@@ -14,6 +14,7 @@ pub mod outline;
 pub mod paths;
 pub mod pipeline;
 pub mod policy;
+pub mod pricing;
 pub mod slug;
 pub mod submit;
 

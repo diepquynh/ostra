@@ -19,6 +19,8 @@ function columns(first: string): TableColumn<CostLine>[] {
     { key: "input", label: "Input", num: true },
     { key: "output", label: "Output", num: true },
     { key: "cacheReads", label: "Cache reads", num: true },
+    { key: "cacheWrites5m", label: <span title="Cache writes with the 5-minute TTL">Cache writes 5m</span>, num: true },
+    { key: "cacheWrites1h", label: <span title="Cache writes with the 1-hour TTL, which cost more than 5-minute writes">Cache writes 1h</span>, num: true },
     { key: "perCall", label: <span title="Cache reads divided by tool calls. A rising value means each tool call re-reads more context.">Cache / tool call</span>, num: true },
     { key: "build", label: "Build time", num: true },
     { key: "cost", label: "Cost", num: true },

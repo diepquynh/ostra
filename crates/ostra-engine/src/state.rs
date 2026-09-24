@@ -1023,6 +1023,14 @@ impl SessionState {
                     self.project_tracks.entry(key.clone()).or_default().format = Some(None);
                 }
             }
+            // Quick change (HANDOVER 8.2): one pass per project, no review, staged when it changed files.
+            Category::QuickChange => {
+                for (i, key) in scope.iter().enumerate() {
+                    let mut l = WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                    l.review = ReviewMode::Never;
+                    self.insert_phase(inline_phase(i as u32 + 1, key, "Quick change", i), l);
+                }
+            }
             Category::Prompt => {
                 if let Some(key) = scope.first() {
                     let mut l = WorkLoop::new(false, AgentName::PromptGeneration, AgentName::Implementer);
@@ -1216,6 +1224,12 @@ impl SessionState {
             JudgeKind::Completion => self.completion_decision = Some(id.clone()),
             JudgeKind::YoloAnswer => {}
         }
+    }
+
+    /// The executor an agent must run on regardless of routing: native after a harness failure,
+    /// and native for a quick change, which skips the harness startup cost.
+    pub fn forced_executor(&self, agent: AgentName) -> Option<ostra_core::ExecutorKind> {
+        (self.native_fallback.contains(&agent) || self.category == Some(Category::QuickChange)).then_some(ostra_core::ExecutorKind::Native)
     }
 
     fn can_override_classify_now(&self) -> bool {

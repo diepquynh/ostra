@@ -24,6 +24,9 @@ export type CostLine = {
   input: string;
   output: string;
   cacheReads: string;
+  /** Cache writes by TTL, priced at 1.25x (5 minutes) and 2x (1 hour) the input rate on Anthropic. */
+  cacheWrites5m: string;
+  cacheWrites1h: string;
   perCall: string;
   build: string;
   cost: string;
@@ -58,6 +61,8 @@ export function costLines(rows: CostRow[], group: CostGroup, total: number, sess
       input: formatTokens(r.usage.input_tokens),
       output: formatTokens(r.usage.output_tokens),
       cacheReads: formatTokens(r.usage.cache_read_tokens),
+      cacheWrites5m: formatTokens(r.usage.cache_write_tokens - r.usage.cache_write_1h_tokens),
+      cacheWrites1h: formatTokens(r.usage.cache_write_1h_tokens),
       perCall: r.usage.tool_calls > 0 ? formatTokens(r.cache_reads_per_tool_call) : "",
       build: r.usage.build_ms > 0 ? formatDuration(r.usage.build_ms) : "",
       cost: formatCost(r.usage.cost_usd),

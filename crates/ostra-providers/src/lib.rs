@@ -4,7 +4,6 @@
 pub mod anthropic;
 pub mod mock;
 pub mod openai;
-pub mod pricing;
 mod retry;
 mod sse;
 
@@ -19,7 +18,7 @@ use std::fmt;
 use std::sync::Arc;
 
 pub use mock::ScriptedProvider;
-pub use pricing::{Pricing, price};
+pub use ostra_core::pricing::{self, Pricing, price};
 pub use retry::RetryPolicy;
 pub use tokio_util::sync::CancellationToken;
 

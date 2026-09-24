@@ -80,7 +80,7 @@ function execution(session: string, x: ExecSpec): ExecutionView {
     status: x.status,
     started_at: at(x.start),
     ended_at: x.end === null ? null : at(x.end),
-    usage: { input_tokens: 21000, output_tokens: 3100, cache_read_tokens: 140000, cache_write_tokens: 9000, cost_usd: x.cost, tool_calls: 18, build_ms: 0 },
+    usage: { input_tokens: 21000, output_tokens: 3100, cache_read_tokens: 140000, cache_write_tokens: 9000, cache_write_1h_tokens: 0, cost_usd: x.cost, tool_calls: 18, build_ms: 0 },
     report_path: null,
     native_session_id: null,
     spawn_block: `Workspace root: ${ROOT}\nRepo root: /home/me/code/shop-${x.project}\nSession dir: ${sroot(session)}/${x.project}\nRepo key: ${x.project}`,

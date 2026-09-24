@@ -1067,7 +1067,7 @@ impl Inner {
         let meta = factory.agent_meta(req.agent);
         let complexity = req.complexity();
         let tier_override = matches!(req.purpose, ExecPurpose::Init { mode: InitializerMode::GenerateSkill, .. }).then_some(Tier::Advanced);
-        let executor_override = st.native_fallback.contains(&req.agent).then_some(ExecutorKind::Native);
+        let executor_override = st.forced_executor(req.agent);
         let route = match resolve_route(
             &global,
             &settings,

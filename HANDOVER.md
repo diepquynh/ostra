@@ -338,7 +338,7 @@ Intake → Classify* → Explore ×N (parallel, per project or area) → Suffici
 Categories other than IMPLEMENT and PLAN take shorter paths, exactly as `UC/commands/orchestrate/prompt.md`
 Step 1 lists them: RESEARCH (explore only), SPEC (explore, spec), VERIFY (implementer running the test command),
 UNIT TEST (EPA, write-test, review, no closing gate), PROMPT (prompt-generation, then review if code changed),
-QUICK ANSWER (routed to the side panel).
+QUICK ANSWER (routed to the side panel). Ostra adds QUICK CHANGE (one implementer pass on the native executor).
 
 ### 8.2 Rules as code
 
@@ -360,6 +360,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | D10, answer routing | A requirement-level answer at any point after the spec exists re-runs generate-spec, then re-approval, then a plan revision. Both revise in place: generate-spec gets only the answers, changes, and research documents its spec does not reflect yet, and the plan agent edits only the phases the spec's diff reaches. |
 | Hard 4 | The engine reads each report before the next step. For native and submit-tool outputs this is structured data. The research document, the spec, and the plan are typed documents (10.3), and a submit call naming one is refused while it has a check error or disagrees with the submit's counts and phases. |
 | Hard 13 | Implementer, write-test, and code-reviewer executions always carry `Phase file:` when a plan exists, or `No plan:` with a reason. |
+| Quick change | QUICK_CHANGE is a small edit the request fully describes. It runs one implementer pass per project in scope with `No plan:`, always on the native executor whatever the routing says, because a harness adds seconds of startup to a change that takes one edit. No research, spec, plan, review, format, or closing stage runs. Changed files are staged, then the completion report. |
 | Staging | After a phase's review passes, the engine runs `git -C <project> add` on the implementer report's changed files. Reviews use `Review scope: unstaged`. |
 | Review loop, Step 4 | Findings split into BLOCKER, auto-fixable, and the rest, using the project's review rule set. Auto-fixable findings are applied by the engine from their exact `Change \`x\` to \`y\` on line N` text. HIGH and MEDIUM go to the fix agent with the ledger path. The cap is 3 iterations per loop, counted by the engine. The 4th pass is a gate. |
 | Hard 21, security | A BLOCKER finding sends only the BLOCKER findings to the fix agent with a removal instruction, loops until clear, has no cap, and blocks module documentation. No gate answer can waive it. |
@@ -481,6 +482,7 @@ into it.
 | Ostra tools | `ostra mcp-stdio --execution <id>` serves `report`, `memory`, `memory_recall`, and the `submit_*` tools over stdio. Stdio, because it is the one MCP registration shape Ultracode verified on all four harnesses (`UC/docs/hub.md`, "Why a stdio shim"). |
 | Completion | Detected from the harness's stop event through the hook bridge, and confirmed from its transcript. Needs verifying per harness (section 18). |
 | Session id | Claude Code and Grok accept a chosen `--session-id`, so Ostra picks it up front. Codex and Antigravity cannot choose one (`UC/README.md`), so Ostra captures it from the first output event or the transcript. |
+| Cost | Read from the harness's own session file. While the execution runs, a file watcher (`notify`) on the file's directory reads each appended line once and reports usage live; the whole file is read again for the final result. Hooks are not used for this, because they exist to enforce policy. Claude Code (`~/.claude/projects/*/<id>.jsonl`) repeats a message's usage on each of its lines, so usage counts once per message id, priced per message model with 5-minute and 1-hour cache writes apart. Codex (`rollout-*.jsonl`) reports running totals whose input includes cached input, priced per increase with the current turn's model. Grok Build (`sessions/<cwd>/<id>/updates.jsonl`) states each turn's cost in `costUsdTicks`, 10^10 per dollar. Antigravity's transcript records no usage, so its executions show no cost. |
 | Resume | The Resume button opens a PTY with the harness's resume command and that session id. |
 | Auth | The PTY gets the user's environment. A harness started without its auth environment comes up logged out (Ultracode's tmux experience). An unauthenticated harness is shown in settings, and its login flow runs in the terminal view. |
 | Unavailable harness | Settings validation refuses a route to a harness that is not installed. At runtime, an auth or launch failure raises a gate: log in, or re-route this execution to native. Under YOLO the engine re-routes to native and records it. |
@@ -667,7 +669,7 @@ Each workspace opens as one console, laid out like a code editor:
 | File | One project file, read-only, with its git mark and the execution that changed it, or its diff against HEAD. |
 | Settings | Workspace TOML as forms: projects, executor and model routing tables, instructions, permissions, YOLO, notifications. Validated as you edit and again on save. Each routing row names what Agent default means for that agent (tier, model, and effort from its `agent.toml`), the stack choices are the embedded stack references, and the global permission rules from `~/.config/ostra/config.toml` show read-only. |
 | Memory | Lessons per project, searchable. The user may edit or delete any lesson. |
-| Cost | Per session, stage, agent, and executor over this week (the status bar's week) or all time: tokens, cache reads, cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
+| Cost | Per session, stage, agent, and executor over this week (the status bar's week) or all time: tokens, cache reads, cache writes by TTL (5 minutes, 1 hour), cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
 
 ### 12.2 Explaining the process
 

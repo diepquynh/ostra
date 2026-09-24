@@ -345,13 +345,24 @@ impl Executor for HarnessExecutor {
         let result = match self.launch(&spec, harness, &live, &host).await {
             Ok(pty) => {
                 self.ptys.insert(spec.id.clone(), pty.clone());
+                let home = self.config().home;
+                let stop_following = cancel.child_token();
+                let follower = tokio::spawn(crate::usage_watch::follow(
+                    harness,
+                    home.clone(),
+                    live.clone(),
+                    host.clone(),
+                    stop_following.clone(),
+                ));
                 let end = self
                     .supervise(&spec, harness, &live, &pty, &host, &cancel)
                     .await;
+                // Stopped before the final result, so a late live reading cannot overwrite it.
+                stop_following.cancel();
+                let _ = follower.await;
                 let screen = pty.screen_text();
                 pty.terminate(Duration::from_secs(3)).await;
                 self.ptys.remove(&spec.id);
-                let home = self.config().home;
                 outcome::result(
                     end,
                     harness,

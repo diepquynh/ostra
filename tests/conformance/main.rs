@@ -803,6 +803,36 @@ fn quick_answer_category() {
     assert_eq!(h.summaries(), vec!["complete"]);
 }
 
+// Quick change: one implementer pass on the native executor, staged, then completion.
+#[test]
+fn quick_change_runs_one_native_pass_without_review() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "QUICK_CHANGE", "projects": ["p"], "explore_tasks": [{"project": "p", "task": "ignored"}], "opts_in": {"tests": false, "docs": false}, "reason": "r"}));
+    assert_eq!(h.summaries(), vec!["spawn implementer phase 1 initial"]);
+    let req = h.spawn_step("spawn implementer");
+    assert_eq!(req.inputs.task.as_deref(), Some("Add order cancellation"));
+    assert_eq!(h.state().forced_executor(AgentName::Implementer), Some(ExecutorKind::Native));
+    h.run("spawn implementer phase 1 initial", impl_submit(1, &["src/a.rs"]));
+    assert_eq!(h.summaries(), vec!["command stage p"]);
+    h.command(CommandPurpose::Stage, "p");
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+#[test]
+fn quick_change_with_nothing_changed_skips_staging() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "QUICK_CHANGE", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": false}, "reason": "r"}));
+    h.run("spawn implementer phase 1 initial", impl_submit(1, &[]));
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+#[test]
+fn other_categories_follow_the_routing() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["p"]);
+    assert_eq!(h.state().forced_executor(AgentName::Implementer), None);
+}
+
 #[test]
 fn unit_test_category_skips_the_closing_gate() {
     let mut h = H::new(&["p"], SessionOptions::default());

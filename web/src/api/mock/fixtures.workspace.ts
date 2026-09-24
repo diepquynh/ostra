@@ -26,6 +26,7 @@ const usage = (runs: number, cost: number, calls: number, buildMs = 0): Usage =>
   output_tokens: Math.round(cost * 21000),
   cache_read_tokens: Math.round(cost * 1_420_000),
   cache_write_tokens: Math.round(cost * 96000),
+  cache_write_1h_tokens: 0,
   cost_usd: cost,
   tool_calls: calls * runs,
   build_ms: buildMs,
