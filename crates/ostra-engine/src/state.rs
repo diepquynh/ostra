@@ -37,6 +37,8 @@ pub const ERROR_RETRIES: u32 = 1;
 pub const SUFFICIENCY_ROUNDS: u32 = 3;
 /// Key in a review execution's params holding the project's auto-fixable rule IDs.
 pub const AUTO_FIXABLE_PARAM: &str = "auto_fixable_ids";
+/// `Prior findings:` after a pass that found nothing: a re-pass, not a first pass (Rule D3a).
+pub const NO_PRIOR_FINDINGS: &str = "no findings on the previous pass";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExploreOrigin {
@@ -73,8 +75,15 @@ impl ExploreTask {
 pub struct FactCheckPass {
     pub exec: ExecutionId,
     pub version: u32,
-    pub epoch: u32,
     pub result: Option<FactCheckSubmit>,
+}
+
+/// How much of a generator's accumulated input one run was given.
+#[derive(Debug, Clone, Default)]
+pub struct InputMark {
+    pub answers: usize,
+    pub changes: usize,
+    pub docs: Vec<PathBuf>,
 }
 
 /// Generation and fact-check state of the spec or the plan.
@@ -88,6 +97,10 @@ pub struct ArtifactTrack<T> {
     pub needs_run: bool,
     pub answers: Vec<QuestionAnswer>,
     pub changes: Vec<String>,
+    /// The input the running generation was given.
+    pub sent: InputMark,
+    /// The input the current artifact already reflects, so a revision gets only what is new.
+    pub applied: InputMark,
     pub pending_findings: Option<String>,
     pub checks: Vec<FactCheckPass>,
     pub check_running: Option<ExecutionId>,
@@ -104,9 +117,6 @@ pub struct ArtifactTrack<T> {
     pub failed_gate: Option<GateId>,
     pub error_retries: u32,
     pub stopped: bool,
-    /// Bumped when the artifact is replaced by a fresh one (a new plan after Rule D10), so the
-    /// first fact-check pass over it is `Prior findings: none` again (Rule D3a).
-    pub epoch: u32,
     /// The plan must be regenerated once the spec is approved again (Rule D10).
     pub invalidated: bool,
 }
@@ -121,6 +131,8 @@ impl<T> ArtifactTrack<T> {
             needs_run: false,
             answers: vec![],
             changes: vec![],
+            sent: InputMark::default(),
+            applied: InputMark::default(),
             pending_findings: None,
             checks: vec![],
             check_running: None,
@@ -137,7 +149,6 @@ impl<T> ArtifactTrack<T> {
             failed_gate: None,
             error_retries: 0,
             stopped: false,
-            epoch: 0,
             invalidated: false,
         }
     }
@@ -147,7 +158,7 @@ impl<T> ArtifactTrack<T> {
         self.checks
             .iter()
             .rev()
-            .find(|c| c.version == self.version && c.epoch == self.epoch && c.result.is_some())
+            .find(|c| c.version == self.version && c.result.is_some())
             .and_then(|c| c.result.as_ref())
     }
 
@@ -157,21 +168,36 @@ impl<T> ArtifactTrack<T> {
 
     /// Findings of the previous pass over this artifact, or `none` on its first pass (Rule D3a).
     pub fn prior_findings(&self) -> String {
-        self.checks
-            .iter()
-            .rev()
-            .filter(|c| c.epoch == self.epoch)
-            .find_map(|c| c.result.as_ref())
-            .map(|r| r.findings_text())
-            .unwrap_or_else(|| "none".into())
+        match self.checks.iter().rev().find_map(|c| c.result.as_ref()) {
+            // A clean pass still leaves a snapshot, so the next pass diffs instead of starting over.
+            Some(r) if r.findings.is_empty() => NO_PRIOR_FINDINGS.into(),
+            Some(r) => r.findings_text(),
+            None => "none".into(),
+        }
     }
 
-    pub fn has_pass_in_epoch(&self) -> bool {
-        self.checks.iter().any(|c| c.epoch == self.epoch && c.result.is_some())
+    pub fn has_pass(&self) -> bool {
+        self.checks.iter().any(|c| c.result.is_some())
+    }
+
+    /// Answers the current artifact does not reflect yet: all of them before the first artifact.
+    pub fn pending_answers(&self) -> Vec<QuestionAnswer> {
+        let from = if self.current.is_some() { self.applied.answers } else { 0 };
+        self.answers.get(from..).unwrap_or_default().to_vec()
+    }
+
+    pub fn pending_changes(&self) -> Vec<String> {
+        let from = if self.current.is_some() { self.applied.changes } else { 0 };
+        self.changes.get(from..).unwrap_or_default().to_vec()
     }
 
     pub fn busy(&self) -> bool {
         self.running.is_some() || self.check_running.is_some()
+    }
+
+    fn start_check(&mut self, id: &ExecutionId) {
+        self.check_running = Some(id.clone());
+        self.checks.push(FactCheckPass { exec: id.clone(), version: self.version, result: None });
     }
 
     fn revoke_approval(&mut self) {
@@ -1206,37 +1232,28 @@ impl SessionState {
                 }
             }
             ExecPurpose::Spec { .. } => {
-                self.spec.running = Some(id.clone());
-                self.spec.runs.push(id.clone());
-                self.spec.needs_run = false;
+                let docs = self.research_docs();
+                let t = &mut self.spec;
+                t.running = Some(id.clone());
+                t.runs.push(id.clone());
+                t.needs_run = false;
+                t.sent = InputMark { answers: t.answers.len(), changes: t.changes.len(), docs };
             }
             ExecPurpose::Plan { .. } => {
                 self.plan.running = Some(id.clone());
                 self.plan.runs.push(id.clone());
                 self.plan.needs_run = false;
+                // Rule D10: the plan is revised in place against the changed spec, not replaced.
                 if self.plan.invalidated {
                     self.plan.invalidated = false;
-                    self.plan.epoch += 1;
-                    self.plan.current = None;
                     self.plan.pending_findings = None;
                     self.plan.consecutive_fails = 0;
                 }
             }
             ExecPurpose::FactCheck { target, .. } => {
-                let (track_version, track_epoch) = match target {
-                    FactTarget::Spec => {
-                        self.spec.check_running = Some(id.clone());
-                        (self.spec.version, self.spec.epoch)
-                    }
-                    FactTarget::Plan => {
-                        self.plan.check_running = Some(id.clone());
-                        (self.plan.version, self.plan.epoch)
-                    }
-                };
-                let pass = FactCheckPass { exec: id.clone(), version: track_version, epoch: track_epoch, result: None };
                 match target {
-                    FactTarget::Spec => self.spec.checks.push(pass),
-                    FactTarget::Plan => self.plan.checks.push(pass),
+                    FactTarget::Spec => self.spec.start_check(id),
+                    FactTarget::Plan => self.plan.start_check(id),
                 }
             }
             ExecPurpose::Epa { phase } => {
@@ -1314,6 +1331,7 @@ impl SessionState {
                 match (status, parse::<GenerateSpecSubmit>(&result.submit)) {
                     (ExecutionStatus::Ok, Some(sub)) => {
                         self.spec.current = Some(sub);
+                        self.spec.applied = self.spec.sent.clone();
                         self.spec.version += 1;
                         self.spec.pending_findings = None;
                         self.spec.revoke_approval();

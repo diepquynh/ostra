@@ -350,14 +350,14 @@ to `UC/commands/orchestrate/prompt.md`.
 | D1, Hard 15 | IMPLEMENT and PLAN always pass through Spec. There is no transition from Explore to Plan. With no research document, Spec is not entered. |
 | D2 | Spec is entered only when no explore execution is running and the Sufficiency judge finds no needed `Not covered` item. Spec receives every research document path, oldest run stamp first, including superseded ones. |
 | D3 | Open questions from the spec are asked before any fact-check. Every answer re-runs generate-spec. The engine never edits the spec. |
-| D3a | `Prior findings:` is `none` on the first pass over an artifact and the previous pass's findings verbatim after. The engine adds no other instruction to a re-pass. |
+| D3a | `Prior findings:` is `none` on the first pass over an artifact and the previous pass's findings verbatim after, or `no findings on the previous pass` when that pass found nothing, so a revision after a clean pass is still a re-pass. The engine adds no other instruction to a re-pass. |
 | D3b | `Source check:` is `refetch` only for a spec target's first pass whose External Evidence table has rows. Everything else is `citations`. |
-| D4, Hard 16 | The plan execution's parameters are the spec path, projects in scope, workspace root, session dir, and key. The parameter struct has no field for anything else. |
+| D4, Hard 16 | The plan execution's parameters are the spec path, projects in scope, workspace root, session dir, and key, plus the earlier master plan and fact-check findings on a re-spawn. The parameter struct has no field for anything else. |
 | D5 | Plan fact-check always uses `citations` and receives the approved spec path. |
 | D6, D7, M2 to M6 | The scheduler reads the Phase Index. A phase is ready when every phase it depends on has completed and passed review. One implement pipeline per project at a time. Ready phases in different projects run in parallel. An unreadable dependency means "depends" (M5). |
 | D8, T1 to T7 | Test and doc stages never run between phases. Format runs once per project after its last phase. The closing gate is asked once per project, batched when several projects arrive together. `Test policy: Skip` phases are listed as uncovered with the plan's rationale. An explicit request in the task replaces the gate (T3). |
 | D9 | A failed phase removes every phase that depends on it from the queue. Independent phases continue. |
-| D10, answer routing | A requirement-level answer at any point after the spec exists re-runs generate-spec, then re-approval, then a new plan. |
+| D10, answer routing | A requirement-level answer at any point after the spec exists re-runs generate-spec, then re-approval, then a plan revision. Both revise in place: generate-spec gets only the answers, changes, and research documents its spec does not reflect yet, and the plan agent edits only the phases the spec's diff reaches. |
 | Hard 4 | The engine reads each report before the next step. For native and submit-tool outputs this is structured data. |
 | Hard 13 | Implementer, write-test, and code-reviewer executions always carry `Phase file:` when a plan exists, or `No plan:` with a reason. |
 | Staging | After a phase's review passes, the engine runs `git -C <project> add` on the implementer report's changed files. Reviews use `Review scope: unstaged`. |

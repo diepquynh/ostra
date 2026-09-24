@@ -331,6 +331,12 @@ fn d3a_prior_findings() {
     h.run("spawn generate-spec", spec_submit(0, 0));
     let second = h.spawn_step("spawn fact-check");
     assert_eq!(second.inputs.prior_findings.as_deref(), Some("HIGH, L: C step 2.3 calls a missing method"));
+    h.run("spawn fact-check", fact("PASS", "spec", &[]));
+    let g = h.open_gate("spec_approval");
+    h.answer(&g, GateAnswer::Approval { approved: false, feedback: Some("Drop the retry logic".into()) });
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    let third = h.spawn_step("spawn fact-check");
+    assert_eq!(third.inputs.prior_findings.as_deref(), Some("no findings on the previous pass"), "a clean pass still makes a re-pass");
 }
 
 // ------------------------------------------------------------------------------------------
@@ -547,7 +553,36 @@ fn d10_change_at_plan_approval_goes_to_spec() {
     let g = h.open_gate("spec_approval");
     h.answer(&g, GateAnswer::Approval { approved: true, feedback: None });
     let plan = h.spawn_step("spawn plan");
-    assert!(plan.inputs.findings.is_none(), "a fresh plan, not a FAIL re-run");
+    assert!(plan.inputs.findings.is_none(), "a spec-change revision, not a FAIL re-run");
+    assert!(plan.inputs.target.is_some(), "the earlier plan is revised in place");
+    h.run("spawn plan", plan_submit(one_phase()));
+    let check = h.spawn_step("spawn fact-check fact-check-plan");
+    assert_eq!(check.inputs.prior_findings.as_deref(), Some("no findings on the previous pass"));
+}
+
+// D10: a spec revision gets only the input its spec does not reflect yet.
+#[test]
+fn d10_spec_revision_gets_only_new_input() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let first = h.spawn_step("spawn generate-spec");
+    assert!(first.inputs.new_research_docs.is_empty(), "a first run reads every research document");
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.run("spawn fact-check", fact("PASS", "spec", &[]));
+    let g = h.open_gate("spec_approval");
+    h.answer(&g, GateAnswer::Approval { approved: false, feedback: Some("Drop the retry logic".into()) });
+    let rev = h.spawn_step("spawn generate-spec");
+    assert_eq!(rev.inputs.changes, vec!["Drop the retry logic".to_string()]);
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.run("spawn fact-check", fact("FAIL", "spec", &["x"]));
+    let fix = h.spawn_step("spawn generate-spec");
+    assert!(fix.inputs.changes.is_empty(), "an applied change is not sent again");
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.ev(SessionEvent::RequestAmended { text: "also handle refunds".into() });
+    h.run("spawn explore explore#1", explore_submit(1, &[]));
+    let amended = h.spawn_step("spawn generate-spec");
+    assert_eq!(amended.inputs.research_docs.len(), 2);
+    assert_eq!(amended.inputs.new_research_docs.len(), 1);
+    assert_eq!(amended.inputs.changes, vec!["The user extended the request: also handle refunds".to_string()]);
 }
 
 #[test]

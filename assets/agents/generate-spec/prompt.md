@@ -70,15 +70,24 @@ you mean. When a literal phrase is available, use it.
 The orchestrator's prompt contains: the user request (`Task:`); the repos in scope (a single `Repo root:` or a
 `Repos in scope:` list); **every** research document path for this request (`Research docs:`, oldest first);
 optionally `User answers:` to open questions; optionally `Findings:` from a failed fact-check pass; optionally a
-`Spec file:` naming the spec an earlier pass wrote; optionally extra context (constraints, preferences,
-priority order).
+`Spec file:` naming the spec an earlier pass wrote; on a revision only, optionally `New research docs:` and
+`Requirement changes:`; optionally extra context (constraints, preferences, priority order).
 
 **A `Spec file:` line means this is a revision.** Rewrite that exact file in place: keep its path and name,
-keep every requirement ID that still applies, and change only what the answers or findings require. Do not
+keep every requirement ID that still applies, and change only what the revision inputs require. The revision
+inputs are `Requirement changes:`, `User answers:`, `Findings:`, and `New research docs:`, and on a revision
+they hold only what the spec does not reflect yet, because the spec already carries every earlier one. Do not
 write a new spec file and do not compute a new run stamp for the name. The fact-check agent compares the
 revised file against its snapshot of the old one by file name, so a renamed file forces it to re-check
 everything instead of only what changed. Every `Findings:` entry is resolved in the revision, either by a
 change to the spec or by a line in Notes saying why the finding does not apply.
+
+**Revise the spec, do not regenerate it.** {{tool_read}} the spec file first. Then read the `New research
+docs:` in full, and read an older research document or a repo file only where a revision input needs it as
+grounding. Redo Steps 2 to 7 only for the criteria, requirements, evidence rows, and contracts a revision
+input touches, plus anything that depends on them. Leave every other line as it is, word for word. A revision
+that rewrites untouched sections costs as much as the first run, and the fact-check re-pass then re-verifies
+text that did not change.
 
 1. Compute the run stamp once and record it (a revision keeps the stamp already in its file name):
 
@@ -86,7 +95,8 @@ change to the spec or by a line in Notes saying why the finding does not apply.
    date +%Y%m%d-%H%M%S
    ```
 
-2. **{{tool_read}} every research document the prompt names, all of them, in document order.** Exploration is
+2. **{{tool_read}} every research document the prompt names, all of them, in document order.** On a revision,
+   read only what the revision paragraph above allows. Exploration is
    user-driven and repeatable, so a request often has several: one per repo, one per area, and one more each
    time the user changed or extended what they asked for. Read each one's Scope section first so you know what
    it does and does not cover.
@@ -115,6 +125,9 @@ change to the spec or by a line in Notes saying why the finding does not apply.
 5. If user answers are given, integrate them. An answer resolves the research documents' `Q{n}` questions and
    is authoritative over anything those documents assumed. Record the resolved value in the requirement it
    settles.
+6. If requirement changes are given, write each one into the spec. A change is the user's direct edit to what
+   they asked for, so it overrides the research documents and earlier answers. Record what it replaced in
+   Assumptions with one line.
 
 **Pass:** you hold every research document, its scope, its sources, each repo's area map, and one run stamp.
 **Fail (the prompt names no research document, or none of the named files exists):** write the spec file
@@ -442,7 +455,9 @@ Re-walk this step.
 ## Step 8: {{tool_write}} the spec file
 
 {{tool_write}} **exactly one file**, `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`, using the
-Step 1 run stamp. On a revision, that file is the `Spec file:` path, rewritten in place. Do not write an index file. Do not write a second spec file. Substitute real values
+Step 1 run stamp. On a revision, that file is the `Spec file:` path: change it with {{tool_edit}} calls on
+the sections a revision input touches, and do not write it again whole, because a full rewrite re-emits every
+unchanged line. Do not write an index file. Do not write a second spec file. Substitute real values
 everywhere braces appear.
 
 **Any mechanism may write it. The path is what matters.** A spec is long, and if a single {{tool_write}} call
@@ -699,7 +714,8 @@ Example input:
    found`. Never ground one in recalled framework or API knowledge to make the ledger look complete.
 8. **Read every research document, and let the newest win.** Exploration is repeatable and user-driven, so a
    request may have many. Read all of them, resolve a conflict toward the newer run stamp, record the reversal
-   in Assumptions, and treat silence as a gap rather than a denial.
+   in Assumptions, and treat silence as a gap rather than a denial. A revision is the exception: it reads the
+   new ones, plus only the parts of older ones a revision input needs.
 9. **Search only to check, never to discover.** Re-fetch a source a research document already cited when you
    doubt the row (2C). Never search for a technology no document covers: that is a research pass the user
    should see, and it belongs to `explore`. Raise the open question instead.

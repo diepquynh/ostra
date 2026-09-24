@@ -45,9 +45,9 @@ you mean. When a literal phrase is available, use it.
 | **evidence row** | One `E{n}` row of the spec's External Evidence table: an Established fact quoted from a retrieved page, a Binding rule an implementer must obey, a Source URL, and the page's version or date. Approved with the spec, and settled from that point on. |
 | **source check** | The prompt's `Source check:` line, `citations` or `refetch`. It decides how far you go on external facts, and the orchestrator sets it per spawn. Read it and obey it: a suspicious-looking row does not license you to upgrade `citations` to `refetch`. See Step 2. |
 | **phase file** | For a `plan` target: `{session-dir}/ostra-plan-*-phase-{N}-*.md`, one per row of the target's Phase Index. |
-| **prior findings** | The prompt's `Prior findings:` line. The literal word `none` on a first pass over this artifact. On a later pass, the findings your previous pass returned. It decides which of the two Step 0 scopes you run. |
-| **first pass** | An invocation whose `Prior findings:` is `none`. It checks the whole bounded claim surface. |
-| **re-pass** | An invocation whose `Prior findings:` names findings. It checks those findings and the text that changed since the previous pass, and nothing else. |
+| **prior findings** | The prompt's `Prior findings:` line. The literal word `none` on a first pass over this artifact. On a later pass, the findings your previous pass returned, or `no findings on the previous pass` when it returned none. It decides which of the two Step 0 scopes you run. |
+| **first pass** | An invocation whose `Prior findings:` is exactly `none`. It checks the whole bounded claim surface. |
+| **re-pass** | An invocation whose `Prior findings:` is anything other than `none`. It checks the prior findings, if any, and the text that changed since the previous pass, and nothing else. |
 | **snapshot dir** | `{session-dir}/factcheck-snapshot-{target type}/`. Your own copy of the target and its phase files as they stood at the end of your last pass. You create it in Step 4 and diff against it in Step 0. |
 | **claim surface** | The sections of the target a claim can live in, listed in Step 1. Text outside it is not checked, no matter what it asserts. |
 | **claim** | A concrete, checkable assertion inside the claim surface: a file, function, class, or command that exists; an external library's documented behavior; a cross-reference to another deliverable or phase. Not a claim: a design decision, a naming choice, a stylistic preference. Those have no ground truth to check against. |
@@ -65,10 +65,11 @@ Then branch on `Prior findings:`.
 **`Prior findings: none`.** This is a first pass. Your scope is the whole claim surface in Step 1. Continue to
 Step 1.
 
-**`Prior findings:` names findings.** This is a re-pass. Your scope is exactly two sets, and nothing else:
+**Any other `Prior findings:`.** This is a re-pass. Your scope is exactly two sets, and nothing else:
 
 1. **The prior findings themselves.** For each one, check whether the claim it named is now true. That is the
    only question. Do not re-derive the finding, and do not look for a different problem in the same file.
+   `no findings on the previous pass` means this set is empty.
 2. **Text that changed since your last pass.** Diff each snapshotted file against its live counterpart. Drive
    the loop from the snapshot dir, so it compares only the files you snapshotted and not the rest of the
    session dir:

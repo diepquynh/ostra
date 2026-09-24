@@ -229,6 +229,10 @@ pub struct GenerateSpecParams {
     pub task: String,
     /// On a revision, the spec file to rewrite in place.
     pub spec_file: Option<PathBuf>,
+    /// On a revision, the research documents the spec was written without.
+    pub new_research_docs: Vec<PathBuf>,
+    /// Requirement changes from the user that the spec does not reflect yet.
+    pub requirement_changes: Vec<String>,
     pub extra: Extras,
 }
 
@@ -237,7 +241,7 @@ pub struct FactCheckParams {
     pub common: Common,
     pub target: PathBuf,
     pub target_type: TargetType,
-    /// `none` on the first pass, the previous pass's findings verbatim after (Rule D3a).
+    /// `none` on the first pass, then the previous pass's findings verbatim or `NO_PRIOR_FINDINGS` (Rule D3a).
     pub prior_findings: String,
     pub spec_file: PathBuf,
     pub source_check: SourceCheck,
@@ -353,6 +357,8 @@ impl SpawnParams for GenerateSpecParams {
         b.line("Task", &self.task);
         b.common(&self.common);
         b.opt_path("Spec file", self.spec_file.as_deref());
+        b.paths("New research docs", &self.new_research_docs);
+        b.list("Requirement changes", &self.requirement_changes);
         b.extras(&self.extra);
         b.finish()
     }

@@ -50,10 +50,11 @@ fn every_agent_definition_loads_with_the_handover_tiers() {
 fn read_only_agents_have_no_edit_and_quick_answer_cannot_write() {
     let qa = agent_def(AgentName::QuickAnswer);
     assert!(!qa.capabilities.iter().any(|c| c.writes() || *c == Capability::Shell));
-    for a in [AgentName::CodeReviewer, AgentName::Plan, AgentName::ExecutionPathAnalyzer, AgentName::FactCheck] {
+    for a in [AgentName::CodeReviewer, AgentName::ExecutionPathAnalyzer, AgentName::FactCheck] {
         assert!(!agent_def(a).capabilities.contains(&Capability::Edit), "{a}");
     }
-    assert!(agent_def(AgentName::Plan).capabilities.contains(&Capability::Write));
+    // Plan edits its own files on a revision; the write-scope guard keeps it inside the session dir.
+    assert!(agent_def(AgentName::Plan).capabilities.contains(&Capability::Edit));
 }
 
 #[test]
@@ -194,7 +195,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         required_skills: vec!["entity".into(), "service".into()],
         ..Default::default()
     };
-    let spec = GenerateSpecParams { common: common(), task: "Add cancel\nwith refunds".into(), spec_file: None, extra: extras };
+    let spec = GenerateSpecParams { common: common(), task: "Add cancel\nwith refunds".into(), spec_file: None, new_research_docs: vec![], requirement_changes: vec![], extra: extras };
     let v = roundtrip(&spec);
     assert_eq!(v["task"], "Add cancel\nwith refunds");
     assert!(v["research_docs"].contains("ostra-research-1.md"));

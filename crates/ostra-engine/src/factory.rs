@@ -29,19 +29,6 @@ fn work_source(phase: Option<&PhaseInfo>, category: Option<Category>) -> WorkSou
     }
 }
 
-fn changes_note(inputs: &SpawnInputs) -> Option<String> {
-    if inputs.changes.is_empty() {
-        return None;
-    }
-    let mut s = String::from("Requirement changes from the user. Write each one into the spec:\n");
-    for c in &inputs.changes {
-        s.push_str("- ");
-        s.push_str(c);
-        s.push('\n');
-    }
-    Some(s)
-}
-
 fn work_extras(inputs: &SpawnInputs) -> Extras {
     let mut e = Extras { ledger_file: inputs.ledger_file.clone(), ..Default::default() };
     match inputs.work {
@@ -109,12 +96,13 @@ impl SpawnFactory for AgentsFactory {
                 common,
                 task: i.task.clone().ok_or("missing task")?,
                 spec_file: i.spec_file.clone(),
+                new_research_docs: i.new_research_docs.clone(),
+                requirement_changes: i.changes.clone(),
                 extra: Extras {
                     research_docs: i.research_docs.clone(),
                     projects_in_scope: i.projects_in_scope.clone(),
                     user_answers: i.answers.clone(),
                     findings: i.findings.clone(),
-                    task_note: changes_note(i),
                     ..Default::default()
                 },
             }),

@@ -76,13 +76,30 @@ you mean. When a literal phrase is available, use it.
 ## Step 1: {{tool_read}} the spec and the repo tables
 
 The orchestrator's prompt contains: the repos in scope (a single `Repo root:` or a `Repos in scope:` list);
-exactly one `{session-dir}/ostra-spec-*.md` path; and, on a re-spawn only, `Findings:` from the fact-check
-pass plus `Master plan:` naming the master plan file an earlier pass wrote.
+exactly one `{session-dir}/ostra-spec-*.md` path; and, on a re-spawn only, `Master plan:` naming the master
+plan file an earlier pass wrote, with `Findings:` from the fact-check pass when that pass failed.
 
 **A `Master plan:` line means this is a revision.** Keep the run stamp in that file's name and every existing
-file name. Rewrite the named files in place, following Constraint 16. The fact-check agent compares your files
-against its snapshot by file name, so a renamed file forces it to re-check everything instead of only what
-changed.
+file name. Change the named files in place with {{tool_edit}}, following Constraint 16, and do not write a file
+again whole. The fact-check agent compares your files against its snapshot by file name, so a renamed file
+forces it to re-check everything instead of only what changed. There are two kinds:
+
+- **With `Findings:`**, the fact-check failed. Fix the findings (Constraint 16).
+- **Without `Findings:`**, the spec changed after the plan was written. Find what changed by diffing the spec
+  against the copy the earlier pass saved in Step 8D:
+
+  ```bash
+  diff -u "{session-dir}/plan-snapshot/spec.md" "{spec file}" || true
+  ```
+
+  Then change only the phases and steps that deliver a changed requirement, acceptance criterion, contract, or
+  evidence row, plus whatever depends on them. Add a phase at the end of the sequence for a new deliverable,
+  and leave every other phase file untouched. When a deliverable is removed, delete its phase and renumber only
+  the phases after it, because phase IDs stay one unbroken sequence (P10). If the snapshot is missing, compare every phase against the spec
+  and edit only the phases that no longer match it.
+
+On a revision, read the master plan and the phase files first, and run Step 2 exploration and the Step 8
+checks only for the steps you change.
 
 1. Compute the run stamp once and record it (a revision keeps the stamp already in the master plan's name):
 
@@ -583,7 +600,8 @@ on.
 
 ### 8C: Record the results
 
-Append the outcome to the master plan file so the orchestrator and the fact-check agent can see the checks ran:
+Append the outcome to the master plan file so the orchestrator and the fact-check agent can see the checks ran.
+On a revision, replace the existing section with {{tool_edit}} instead of appending a second one:
 
 ```bash
 cat >> "{session-dir}/{master plan file}" <<'PLAN_EOF'
@@ -595,6 +613,14 @@ cat >> "{session-dir}/{master plan file}" <<'PLAN_EOF'
 | Surviving callers (8A) | {N} symbols removed, renamed, or moved | {Clean, or: {M} call sites found and repointed in steps {IDs}} |
 | Target-module imports (8B) | {N} files moved between modules | {Clean, or: {M} unresolved imports, declared in steps {IDs}} |
 PLAN_EOF
+```
+
+### 8D: Save the spec you planned
+
+Copy the spec so a later revision can diff against it (Step 1):
+
+```bash
+mkdir -p "{session-dir}/plan-snapshot" && cp "{spec file}" "{session-dir}/plan-snapshot/spec.md"
 ```
 
 ## Step 9: Submit
@@ -690,8 +716,9 @@ Example input:
     each governing row into its phase file's External Constraints table and its Binding rule onto the step
     that must obey it (P13), verbatim both times. A contradiction between an `E{n}` and the repo is a Step 4
     question, not a decision you make.
-16. **A re-spawn fixes the findings it was given and nothing else.** When the orchestrator re-spawns you with
-    fact-check findings, change only the steps those findings name, plus whatever Step 8 flags as a
-    consequence of that change. Do not re-plan an untouched phase, do not renumber phases, and do not rewrite
+16. **A re-spawn changes what it was given and nothing else.** When the orchestrator re-spawns you with
+    fact-check findings, change only the steps those findings name. When it re-spawns you after a spec change,
+    change only the steps the spec diff reaches (Step 1). Add whatever Step 8 flags as a consequence of that
+    change. Do not re-plan an untouched phase, do not renumber phases, and do not rewrite
     a phase file whose steps no finding mentions. The fact-check re-pass diffs your output against its own
     snapshot, so an unrelated edit turns a ten-call re-pass into a full re-verification.

@@ -31,6 +31,8 @@ pub struct PlanCtx {
 pub struct SpawnInputs {
     pub task: Option<String>,
     pub research_docs: Vec<PathBuf>,
+    /// On a spec revision, the research documents the current spec was written without.
+    pub new_research_docs: Vec<PathBuf>,
     pub projects_in_scope: Vec<(String, PathBuf)>,
     pub answers: Vec<QuestionAnswer>,
     pub changes: Vec<String>,
@@ -405,8 +407,14 @@ impl<'a> Planner<'a> {
                 task: Some(s.full_request()),
                 research_docs: s.research_docs(),
                 projects_in_scope: self.scope_paths(),
-                answers: t.answers.clone(),
-                changes: t.changes.clone(),
+                // A revision gets only the input its spec does not reflect yet, so it edits
+                // instead of rewriting.
+                answers: t.pending_answers(),
+                changes: t.pending_changes(),
+                new_research_docs: match t.current {
+                    Some(_) => s.research_docs().into_iter().filter(|d| !t.applied.docs.contains(d)).collect(),
+                    None => vec![],
+                },
                 findings: t.pending_findings.clone(),
                 // Rewriting in place keeps the file name, so a fact-check re-pass compares
                 // against its snapshot by name (Rule D3a).
@@ -434,7 +442,7 @@ impl<'a> Planner<'a> {
         }
         match t.check_for_current() {
             None => {
-                let first = !t.has_pass_in_epoch();
+                let first = !t.has_pass();
                 // Rule D3b: refetch only on a spec's first pass with External Evidence rows.
                 let source_check = if first && spec.external_evidence_rows > 0 { "refetch" } else { "citations" };
                 let pass = t.checks.len() as u32 + 1;
@@ -522,13 +530,14 @@ impl<'a> Planner<'a> {
                 );
                 return false;
             }
-            // Rule D4: the plan reads the spec and nothing else. Findings are the one addition,
-            // on a FAIL re-run (Rule D5).
+            // Rule D4: the plan reads the spec and its own earlier plan, nothing else. Findings are
+            // the one addition, on a FAIL re-run (Rule D5). After a spec change (Rule D10) the
+            // earlier plan is revised in place against the spec's diff.
             let inputs = SpawnInputs {
                 spec_file: Some(spec_path),
                 projects_in_scope: self.scope_paths(),
                 findings: if t.invalidated { None } else { t.pending_findings.clone() },
-                target: if t.invalidated { None } else { t.current.as_ref().map(|c| PathBuf::from(&c.master_plan_path)) },
+                target: t.current.as_ref().map(|c| PathBuf::from(&c.master_plan_path)),
                 ..Default::default()
             };
             let round = t.runs.len() as u32 + 1;
