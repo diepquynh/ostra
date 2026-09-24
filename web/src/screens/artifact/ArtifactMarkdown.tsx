@@ -5,6 +5,7 @@ import type { Heading } from "../../api/gen/Heading";
 import { CodeView } from "../../design";
 import { headingText, rehypeHeadingIds } from "./outline";
 import { ColumnResizer } from "./ColumnResizer";
+import { ScrollTable } from "./ScrollTable";
 
 type HastLike = { type: string; tagName?: string; value?: string; properties?: Record<string, unknown>; children?: HastLike[] };
 
@@ -51,9 +52,9 @@ export function ArtifactMarkdown({ text, headings, onAnchor }: ArtifactMarkdownP
         return <CodeView language={cls?.slice("language-".length) ?? "txt"} code={source} style={{ margin: "0 0 14px" }} />;
       },
       table: ({ node: _node, ...rest }: ComponentProps<"table"> & { node?: unknown }) => (
-        <div className="art-table">
+        <ScrollTable>
           <table {...rest} />
-        </div>
+        </ScrollTable>
       ),
       th: ({ node: _node, children, ...rest }: ComponentProps<"th"> & { node?: unknown }) => (
         <th {...rest}>

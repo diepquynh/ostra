@@ -4,6 +4,7 @@ import { Markdown } from "../../../components/Markdown";
 import { Chip, cx, Icon, SectionLabel, type Tone } from "../../../design";
 import { findingElement, normId, severityTone, type Mark, type MarkTone } from "./model";
 import { ColumnResizer } from "../ColumnResizer";
+import { ScrollTable } from "../ScrollTable";
 
 export type DocCtx = {
   /** Go to an element id (`R3`, `step 2.1`) or a chapter id. */
@@ -235,7 +236,7 @@ export function EvidenceCard({ e, restedOnBy }: { e: Evidence; restedOnBy?: stri
 
 export function SourcesTable({ sources }: { sources: Source[] }) {
   return (
-    <div className="art-table">
+    <ScrollTable>
       <table>
         <thead>
           <tr>
@@ -265,7 +266,7 @@ export function SourcesTable({ sources }: { sources: Source[] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </ScrollTable>
   );
 }
 
@@ -273,7 +274,7 @@ export function SourcesTable({ sources }: { sources: Source[] }) {
 export function Grid({ head, rows, ids }: { head: string[]; rows: ReactNode[][]; ids?: string[] }) {
   const { focus } = useDoc();
   return (
-    <div className="art-table">
+    <ScrollTable>
       <table>
         <thead>
           <tr>
@@ -301,7 +302,7 @@ export function Grid({ head, rows, ids }: { head: string[]; rows: ReactNode[][];
           })}
         </tbody>
       </table>
-    </div>
+    </ScrollTable>
   );
 }
 

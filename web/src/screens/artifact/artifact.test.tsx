@@ -114,6 +114,25 @@ describe("report tables", () => {
   });
 });
 
+describe("sideways scrolling", () => {
+  it("keeps the sticky scrollbar and the table in step", async () => {
+    await render(<ArtifactMarkdown text={"| A | B |\n| --- | --- |\n| 1 | 2 |\n"} headings={[]} onAnchor={() => {}} />, 1);
+    const box = host!.querySelector<HTMLDivElement>(".art-table")!;
+    const bar = host!.querySelector<HTMLDivElement>(".art-hscroll")!;
+    await act(async () => {
+      box.scrollLeft = 120;
+      box.dispatchEvent(new Event("scroll"));
+    });
+    expect(bar.scrollLeft).toBe(120);
+    await act(async () => {
+      bar.dispatchEvent(new Event("scroll"));
+      bar.scrollLeft = 40;
+      bar.dispatchEvent(new Event("scroll"));
+    });
+    expect(box.scrollLeft).toBe(40);
+  });
+});
+
 describe("artifact kind and badges", () => {
   it("reads the kind from the ref, else from the file name", () => {
     expect(artifactKind("/s/ostra-spec-x.md")).toBe("spec");

@@ -34,7 +34,11 @@
 .art-md [id] { scroll-margin-top: 16px; }
 .art-md input[type="checkbox"] { margin: 0 6px 0 0; vertical-align: -1px; }
 
-.art-table { margin: 0 0 16px; border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow-x: auto; }
+.art-table-frame { margin: 0 0 16px; }
+.art-table { border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow-x: auto; scrollbar-width: none; }
+.art-table::-webkit-scrollbar { display: none; }
+/* The table's own scrollbar is hidden; this copy sticks to the bottom of the view. */
+.art-hscroll { position: sticky; bottom: 0; z-index: 1; overflow-x: auto; overflow-y: hidden; background: var(--surface-editor); }
 .art-table table { width: 100%; border-collapse: collapse; font-size: var(--text-base); line-height: 1.5; }
 .art-table th { position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; font: var(--type-label); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-label); color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-default); background: var(--surface-panel, transparent); }
 .art-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; background: var(--surface-raised); }
