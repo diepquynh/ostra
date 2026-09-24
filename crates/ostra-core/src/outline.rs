@@ -62,14 +62,23 @@ pub fn headings(markdown: &str) -> Vec<Heading> {
 /// `None` for a heading with no text, which has nothing to show in an outline.
 fn heading(slugs: &mut Slugger, level: u8, raw: &str) -> Option<Heading> {
     let title = inline_text(raw.trim());
-    (!title.is_empty()).then(|| Heading { id: slugs.slug(&title), level, title })
+    (!title.is_empty()).then(|| Heading {
+        id: slugs.slug(&title),
+        level,
+        title,
+    })
 }
 
 fn front_matter_end(lines: &[&str]) -> usize {
     if lines.first().map(|l| l.trim_end()) != Some("---") {
         return 0;
     }
-    lines.iter().skip(1).position(|l| matches!(l.trim_end(), "---" | "...")).map(|p| p + 2).unwrap_or(0)
+    lines
+        .iter()
+        .skip(1)
+        .position(|l| matches!(l.trim_end(), "---" | "..."))
+        .map(|p| p + 2)
+        .unwrap_or(0)
 }
 
 fn opens_fence(line: &str) -> Option<(char, usize)> {
@@ -139,7 +148,9 @@ fn starts_block(line: &str) -> bool {
         || t.starts_with('|')
         || t.starts_with('<')
         || setext_level(line).is_some()
-        || t.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.len() <= 9 && n.chars().all(|c| c.is_ascii_digit()))
+        || t.split_once(". ").is_some_and(|(n, _)| {
+            !n.is_empty() && n.len() <= 9 && n.chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 /// The text a reader sees: code spans, emphasis, links, and images reduced to their text.
@@ -158,7 +169,8 @@ fn inline_text(raw: &str) -> String {
                 let run = chars[i..].iter().take_while(|c| **c == '`').count();
                 let body_start = i + run;
                 let close = (body_start..chars.len()).find(|&j| {
-                    chars[j..].iter().take_while(|c| **c == '`').count() == run && (j == 0 || chars[j - 1] != '`')
+                    chars[j..].iter().take_while(|c| **c == '`').count() == run
+                        && (j == 0 || chars[j - 1] != '`')
                 });
                 match close {
                     Some(j) => {
@@ -176,7 +188,9 @@ fn inline_text(raw: &str) -> String {
             '!' if chars.get(i + 1) == Some(&'[') => i += 1,
             '[' => match link_end(&chars, i) {
                 Some((text_end, end)) => {
-                    out.push_str(&inline_text(&chars[i + 1..text_end].iter().collect::<String>()));
+                    out.push_str(&inline_text(
+                        &chars[i + 1..text_end].iter().collect::<String>(),
+                    ));
                     i = end;
                 }
                 None => {
@@ -242,7 +256,10 @@ mod tests {
     use super::*;
 
     fn outline(md: &str) -> Vec<(u8, String, String)> {
-        headings(md).into_iter().map(|h| (h.level, h.id, h.title)).collect()
+        headings(md)
+            .into_iter()
+            .map(|h| (h.level, h.id, h.title))
+            .collect()
     }
 
     fn h(level: u8, id: &str, title: &str) -> (u8, String, String) {
@@ -253,12 +270,18 @@ mod tests {
     fn slugs_follow_github() {
         assert_eq!(slugify("Hello, World!"), "hello-world");
         assert_eq!(slugify("Phase 1: greeting"), "phase-1-greeting");
-        assert_eq!(slugify("snake_case and kebab-case"), "snake_case-and-kebab-case");
+        assert_eq!(
+            slugify("snake_case and kebab-case"),
+            "snake_case-and-kebab-case"
+        );
         assert_eq!(slugify("Two  spaces"), "two--spaces");
         assert_eq!(slugify("Ünïcode Straße"), "ünïcode-straße");
         assert_eq!(slugify("C++ & Rust (2024)"), "c--rust-2024");
         let mut s = Slugger::default();
-        let got: Vec<String> = ["Reqs", "Reqs", "Reqs-1", "Reqs"].iter().map(|t| s.slug(t)).collect();
+        let got: Vec<String> = ["Reqs", "Reqs", "Reqs-1", "Reqs"]
+            .iter()
+            .map(|t| s.slug(t))
+            .collect();
         assert_eq!(got, ["reqs", "reqs-1", "reqs-1-1", "reqs-2"]);
     }
 
@@ -283,7 +306,13 @@ mod tests {
     #[test]
     fn an_unclosed_fence_hides_the_rest() {
         assert_eq!(outline("# One\n```\n# Two\n"), vec![h(1, "one", "One")]);
-        assert_eq!(outline("First line\nsecond line\n---"), vec![h(2, "first-line-second-line", "First line second line")]);
-        assert_eq!(outline("# One\n````\n```\n# Two\n````\n# Three"), vec![h(1, "one", "One"), h(1, "three", "Three")]);
+        assert_eq!(
+            outline("First line\nsecond line\n---"),
+            vec![h(2, "first-line-second-line", "First line second line")]
+        );
+        assert_eq!(
+            outline("# One\n````\n```\n# Two\n````\n# Three"),
+            vec![h(1, "one", "One"), h(1, "three", "Three")]
+        );
     }
 }

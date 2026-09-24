@@ -1,7 +1,9 @@
 use crate::text::truncate_end;
 use crate::{ToolEnv, ToolOutput, bool_arg, required, str_arg, u64_arg};
 use grep_regex::RegexMatcherBuilder;
-use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkContextKind, SinkMatch};
+use grep_searcher::{
+    BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkContextKind, SinkMatch,
+};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -9,22 +11,36 @@ use std::time::SystemTime;
 const MAX_GLOB_RESULTS: usize = 100;
 const MAX_GREP_OUTPUT: usize = 30_000;
 
-fn walker(root: &Path, glob: Option<&str>, file_type: Option<&str>) -> Result<ignore::Walk, String> {
+fn walker(
+    root: &Path,
+    glob: Option<&str>,
+    file_type: Option<&str>,
+) -> Result<ignore::Walk, String> {
     let mut b = ignore::WalkBuilder::new(root);
-    b.hidden(false).git_ignore(true).git_exclude(true).git_global(true).parents(true).require_git(false);
+    b.hidden(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .parents(true)
+        .require_git(false);
     b.filter_entry(|e| e.file_name() != ".git");
     if let Some(glob) = glob.filter(|g| !g.trim().is_empty()) {
         let mut ob = ignore::overrides::OverrideBuilder::new(root);
         for g in split_globs(glob) {
             ob.add(&g).map_err(|e| format!("Invalid glob `{g}`: {e}"))?;
         }
-        b.overrides(ob.build().map_err(|e| format!("Invalid glob `{glob}`: {e}"))?);
+        b.overrides(
+            ob.build()
+                .map_err(|e| format!("Invalid glob `{glob}`: {e}"))?,
+        );
     }
     if let Some(t) = file_type.filter(|t| !t.trim().is_empty()) {
         let mut tb = ignore::types::TypesBuilder::new();
         tb.add_defaults();
         tb.select(type_alias(t.trim()));
-        let types = tb.build().map_err(|e| format!("Unknown file type `{t}`: {e}"))?;
+        let types = tb
+            .build()
+            .map_err(|e| format!("Unknown file type `{t}`: {e}"))?;
         b.types(types);
     }
     Ok(b.build())
@@ -77,11 +93,14 @@ fn split_globs(glob: &str) -> Vec<String> {
 }
 
 fn mtime(path: &Path) -> SystemTime {
-    std::fs::metadata(path).and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH)
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
 fn sort_by_mtime(paths: &mut [PathBuf]) {
-    let mut keyed: Vec<(SystemTime, PathBuf)> = paths.iter().map(|p| (mtime(p), p.clone())).collect();
+    let mut keyed: Vec<(SystemTime, PathBuf)> =
+        paths.iter().map(|p| (mtime(p), p.clone())).collect();
     keyed.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     for (slot, (_, p)) in paths.iter_mut().zip(keyed) {
         *slot = p;
@@ -132,9 +151,15 @@ impl ContentSink<'_> {
                 self.lines.push("--".into());
             }
             first = false;
-            let shown = if part.len() > 500 { format!("{}...", &part[..crate::text::floor_boundary(part, 500)]) } else { part.to_string() };
+            let shown = if part.len() > 500 {
+                format!("{}...", &part[..crate::text::floor_boundary(part, 500)])
+            } else {
+                part.to_string()
+            };
             match (self.line_numbers, n) {
-                (true, Some(n)) => self.lines.push(format!("{}{sep}{n}{sep}{shown}", self.path)),
+                (true, Some(n)) => self
+                    .lines
+                    .push(format!("{}{sep}{n}{sep}{shown}", self.path)),
                 _ => self.lines.push(format!("{}{sep}{shown}", self.path)),
             }
             if n.is_some() {
@@ -242,7 +267,10 @@ fn grep_blocking(a: GrepArgs) -> ToolOutput {
             let files = rows.len();
             rows.truncate(limit);
             ToolOutput::ok(truncate_end(
-                &format!("{}\n\nFound {total} matches across {files} files", rows.join("\n")),
+                &format!(
+                    "{}\n\nFound {total} matches across {files} files",
+                    rows.join("\n")
+                ),
                 MAX_GREP_OUTPUT,
             ))
         }
@@ -277,7 +305,9 @@ fn grep_blocking(a: GrepArgs) -> ToolOutput {
             lines.truncate(limit);
             let mut out = lines.join("\n");
             if truncated {
-                out.push_str(&format!("\n\n(Output limited to {limit} lines by head_limit.)"));
+                out.push_str(&format!(
+                    "\n\n(Output limited to {limit} lines by head_limit.)"
+                ));
             }
             ToolOutput::ok(truncate_end(&out, MAX_GREP_OUTPUT))
         }
@@ -289,7 +319,9 @@ pub async fn grep(env: &ToolEnv, input: &Value) -> ToolOutput {
         Ok(p) => p.to_string(),
         Err(e) => return e,
     };
-    let root = str_arg(input, "path").map(|p| env.resolve(p)).unwrap_or_else(|| env.cwd());
+    let root = str_arg(input, "path")
+        .map(|p| env.resolve(p))
+        .unwrap_or_else(|| env.cwd());
     if !root.exists() {
         return ToolOutput::err(format!("Path does not exist: {}", root.display()));
     }
@@ -312,9 +344,17 @@ pub async fn grep(env: &ToolEnv, input: &Value) -> ToolOutput {
         mode,
         case_insensitive: bool_arg(input, "-i").unwrap_or(false),
         line_numbers: bool_arg(input, "-n").unwrap_or(true),
-        before: u64_arg(input, "-B").map(|n| n as usize).or(ctx).unwrap_or(0),
-        after: u64_arg(input, "-A").map(|n| n as usize).or(ctx).unwrap_or(0),
-        head_limit: u64_arg(input, "head_limit").map(|n| n as usize).filter(|n| *n > 0),
+        before: u64_arg(input, "-B")
+            .map(|n| n as usize)
+            .or(ctx)
+            .unwrap_or(0),
+        after: u64_arg(input, "-A")
+            .map(|n| n as usize)
+            .or(ctx)
+            .unwrap_or(0),
+        head_limit: u64_arg(input, "head_limit")
+            .map(|n| n as usize)
+            .filter(|n| *n > 0),
         multiline: bool_arg(input, "multiline").unwrap_or(false),
     };
     tokio::task::spawn_blocking(move || grep_blocking(args))
@@ -323,7 +363,10 @@ pub async fn grep(env: &ToolEnv, input: &Value) -> ToolOutput {
 }
 
 fn glob_blocking(pattern: String, root: PathBuf) -> ToolOutput {
-    let matcher = match globset::GlobBuilder::new(&pattern).literal_separator(true).build() {
+    let matcher = match globset::GlobBuilder::new(&pattern)
+        .literal_separator(true)
+        .build()
+    {
         Ok(g) => g.compile_matcher(),
         Err(e) => return ToolOutput::err(format!("Invalid glob `{pattern}`: {e}")),
     };
@@ -334,7 +377,11 @@ fn glob_blocking(pattern: String, root: PathBuf) -> ToolOutput {
     let mut hits: Vec<PathBuf> = walk
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-        .filter(|e| e.path().strip_prefix(&root).is_ok_and(|rel| matcher.is_match(rel)))
+        .filter(|e| {
+            e.path()
+                .strip_prefix(&root)
+                .is_ok_and(|rel| matcher.is_match(rel))
+        })
         .map(|e| e.into_path())
         .collect();
     if hits.is_empty() {
@@ -357,7 +404,9 @@ pub async fn glob(env: &ToolEnv, input: &Value) -> ToolOutput {
         Ok(p) => p.to_string(),
         Err(e) => return e,
     };
-    let root = str_arg(input, "path").map(|p| env.resolve(p)).unwrap_or_else(|| env.cwd());
+    let root = str_arg(input, "path")
+        .map(|p| env.resolve(p))
+        .unwrap_or_else(|| env.cwd());
     if !root.is_dir() {
         return ToolOutput::err(format!("Not a directory: {}", root.display()));
     }
@@ -377,11 +426,19 @@ mod tests {
         fs::create_dir_all(root.join("target")).unwrap();
         fs::create_dir_all(root.join(".ostra/skills/convention")).unwrap();
         fs::write(root.join(".gitignore"), "target/\n").unwrap();
-        fs::write(root.join("src/main.rs"), "fn main() {\n    let order = 1;\n    println!(\"{order}\");\n}\n").unwrap();
+        fs::write(
+            root.join("src/main.rs"),
+            "fn main() {\n    let order = 1;\n    println!(\"{order}\");\n}\n",
+        )
+        .unwrap();
         fs::write(root.join("src/deep/lib.rs"), "pub fn Order() {}\n").unwrap();
         fs::write(root.join("src/app.js"), "const order = 2;\n").unwrap();
         fs::write(root.join("target/gen.rs"), "let order = 3;\n").unwrap();
-        fs::write(root.join(".ostra/skills/convention/SKILL.md"), "order rules\n").unwrap();
+        fs::write(
+            root.join(".ostra/skills/convention/SKILL.md"),
+            "order rules\n",
+        )
+        .unwrap();
     }
 
     #[tokio::test]
@@ -394,14 +451,33 @@ mod tests {
         assert!(out.text.starts_with("Found 3 files"), "{}", out.text);
         assert!(!out.text.contains("target/gen.rs"));
         assert!(out.text.contains(".ostra/skills/convention/SKILL.md"));
-        let out = run(&env, "Grep", json!({"pattern": "order", "-i": true, "type": "rust"})).await;
+        let out = run(
+            &env,
+            "Grep",
+            json!({"pattern": "order", "-i": true, "type": "rust"}),
+        )
+        .await;
         assert!(out.text.starts_with("Found 2 files"), "{}", out.text);
         let out = run(&env, "Grep", json!({"pattern": "order", "glob": "*.js"})).await;
         assert!(out.text.starts_with("Found 1 file\n") && out.text.contains("app.js"));
-        let out = run(&env, "Grep", json!({"pattern": "let order", "output_mode": "content", "-A": 1})).await;
-        assert!(out.text.contains("main.rs:2:    let order = 1;"), "{}", out.text);
+        let out = run(
+            &env,
+            "Grep",
+            json!({"pattern": "let order", "output_mode": "content", "-A": 1}),
+        )
+        .await;
+        assert!(
+            out.text.contains("main.rs:2:    let order = 1;"),
+            "{}",
+            out.text
+        );
         assert!(out.text.contains("main.rs-3-"), "{}", out.text);
-        let out = run(&env, "Grep", json!({"pattern": "order", "output_mode": "count", "path": "src"})).await;
+        let out = run(
+            &env,
+            "Grep",
+            json!({"pattern": "order", "output_mode": "count", "path": "src"}),
+        )
+        .await;
         assert!(out.text.contains("main.rs:2"), "{}", out.text);
         let out = run(&env, "Grep", json!({"pattern": "nothing-here"})).await;
         assert_eq!(out.text, "No files found");
@@ -409,7 +485,12 @@ mod tests {
         assert!(out.is_error);
         let out = run(&env, "Grep", json!({"pattern": "main\\(\\) \\{\\n    let", "multiline": true, "output_mode": "files_with_matches"})).await;
         assert!(out.text.contains("main.rs"), "{}", out.text);
-        let out = run(&env, "Grep", json!({"pattern": "order", "output_mode": "content", "head_limit": 1})).await;
+        let out = run(
+            &env,
+            "Grep",
+            json!({"pattern": "order", "output_mode": "content", "head_limit": 1}),
+        )
+        .await;
         assert!(out.text.contains("head_limit"));
     }
 
@@ -423,7 +504,11 @@ mod tests {
         assert!(out.text.contains("src/main.rs") && out.text.contains("src/deep/lib.rs"));
         assert!(!out.text.contains("target/gen.rs"));
         let out = run(&env, "Glob", json!({"pattern": "*.rs", "path": "src"})).await;
-        assert!(out.text.contains("main.rs") && !out.text.contains("lib.rs"), "{}", out.text);
+        assert!(
+            out.text.contains("main.rs") && !out.text.contains("lib.rs"),
+            "{}",
+            out.text
+        );
         let out = run(&env, "Glob", json!({"pattern": "*.nope"})).await;
         assert_eq!(out.text, "No files found");
         for i in 0..120 {

@@ -65,7 +65,11 @@ impl DocKind {
         fn typed<T: DeserializeOwned>(v: &Value) -> Result<T, String> {
             serde_path_to_error::deserialize(v.clone()).map_err(|e| {
                 let at = e.path().to_string();
-                if at == "." { e.inner().to_string() } else { format!("{at}: {}", e.inner()) }
+                if at == "." {
+                    e.inner().to_string()
+                } else {
+                    format!("{at}: {}", e.inner())
+                }
             })
         }
         Ok(match self {
@@ -83,11 +87,14 @@ pub fn doc_kind_for(path: &Path) -> Option<DocKind> {
     if !(name.ends_with(".md") || name.ends_with(".json")) {
         return None;
     }
-    [DocKind::Research, DocKind::Spec, DocKind::Plan].into_iter().find(|k| name.starts_with(k.prefix()))
+    [DocKind::Research, DocKind::Spec, DocKind::Plan]
+        .into_iter()
+        .find(|k| name.starts_with(k.prefix()))
 }
 
 fn is_phase_file(path: &Path) -> bool {
-    path.file_stem().is_some_and(|s| phase_number(&s.to_string_lossy()).is_some())
+    path.file_stem()
+        .is_some_and(|s| phase_number(&s.to_string_lossy()).is_some())
 }
 
 /// `N` in `ostra-plan-...-phase-N`.
@@ -102,7 +109,10 @@ pub fn json_path(md: &Path) -> PathBuf {
 
 /// The phase file Ostra writes for phase `id` of the master plan at `master`.
 pub fn phase_path(master: &Path, id: u32) -> PathBuf {
-    let stem = master.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let stem = master
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
     master.with_file_name(format!("{stem}-phase-{id}.md"))
 }
 
@@ -136,7 +146,10 @@ pub struct Written {
 
 impl Written {
     pub fn errors(&self) -> usize {
-        self.issues.iter().filter(|i| i.level == IssueLevel::Error).count()
+        self.issues
+            .iter()
+            .filter(|i| i.level == IssueLevel::Error)
+            .count()
     }
 }
 
@@ -163,26 +176,45 @@ pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>
         let keep: Vec<PathBuf> = plan.phases.iter().map(|p| phase_path(md, p.id)).collect();
         for p in &plan.phases {
             let path = phase_path(md, p.id);
-            let deliverable_title = plan.deliverables.iter().find(|d| d.id == p.deliverable).map(|d| d.title.clone());
-            let doc = PhaseDoc { plan: plan.title.clone(), date: plan.date.clone(), spec: plan.spec.clone(), deliverable_title, phase: p.clone() };
+            let deliverable_title = plan
+                .deliverables
+                .iter()
+                .find(|d| d.id == p.deliverable)
+                .map(|d| d.title.clone());
+            let doc = PhaseDoc {
+                plan: plan.title.clone(),
+                date: plan.date.clone(),
+                spec: plan.spec.clone(),
+                deliverable_title,
+                phase: p.clone(),
+            };
             put(&json_path(&path), &pretty(&doc))?;
             put(&path, &render(&Document::Phase(doc), &path))?;
             files.push(path);
         }
-        let stem = md.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let stem = md
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_default();
         let prefix = format!("{stem}-phase-");
         for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())?.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             let stale = name.starts_with(&prefix)
                 && (name.ends_with(".md") || name.ends_with(".json"))
-                && !keep.iter().any(|k| k.with_extension("") == path.with_extension(""));
+                && !keep
+                    .iter()
+                    .any(|k| k.with_extension("") == path.with_extension(""));
             if stale {
                 let _ = std::fs::remove_file(&path);
             }
         }
     }
-    Ok(Written { document, files, issues })
+    Ok(Written {
+        document,
+        files,
+        issues,
+    })
 }
 
 #[cfg(test)]
@@ -192,11 +224,26 @@ mod tests {
     #[test]
     fn kinds_and_paths() {
         let dir = Path::new("/ws/.ostra/sessions/s1");
-        assert_eq!(doc_kind_for(&dir.join("ostra-spec-1-x.md")), Some(DocKind::Spec));
-        assert_eq!(doc_kind_for(&dir.join("ostra-plan-1-x-phase-2.md")), Some(DocKind::Plan));
-        assert_eq!(doc_kind_for(&dir.join("ostra-research-1.json")), Some(DocKind::Research));
-        assert_eq!(doc_kind_for(&dir.join("ostra-implementer-phase-1.md")), None);
-        assert_eq!(phase_path(&dir.join("ostra-plan-1-x.md"), 3), dir.join("ostra-plan-1-x-phase-3.md"));
+        assert_eq!(
+            doc_kind_for(&dir.join("ostra-spec-1-x.md")),
+            Some(DocKind::Spec)
+        );
+        assert_eq!(
+            doc_kind_for(&dir.join("ostra-plan-1-x-phase-2.md")),
+            Some(DocKind::Plan)
+        );
+        assert_eq!(
+            doc_kind_for(&dir.join("ostra-research-1.json")),
+            Some(DocKind::Research)
+        );
+        assert_eq!(
+            doc_kind_for(&dir.join("ostra-implementer-phase-1.md")),
+            None
+        );
+        assert_eq!(
+            phase_path(&dir.join("ostra-plan-1-x.md"), 3),
+            dir.join("ostra-plan-1-x-phase-3.md")
+        );
         assert!(is_phase_file(&dir.join("ostra-plan-1-x-phase-3.md")));
         assert!(!is_phase_file(&dir.join("ostra-plan-1-x.md")));
     }

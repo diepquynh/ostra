@@ -78,7 +78,12 @@ impl TermLog {
 
 /// Create or truncate `path` as a file only its owner can read.
 fn private(path: &Path) -> std::io::Result<File> {
-    let file = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
     // `mode` applies only on creation; an older transcript keeps its bits otherwise.
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     Ok(file)
@@ -117,6 +122,10 @@ mod tests {
         assert_eq!(mode(path.parent().unwrap()), 0o700);
         let log = TermLog::with_cap(path.clone(), 10).unwrap();
         log.append(b"new");
-        assert_eq!(std::fs::read(&path).unwrap(), b"new", "a new run replaces the old transcript");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"new",
+            "a new run replaces the old transcript"
+        );
     }
 }

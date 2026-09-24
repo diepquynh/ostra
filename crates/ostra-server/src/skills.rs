@@ -4,7 +4,9 @@
 use crate::api::ApiErr;
 use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
-use ostra_core::api::{InitStatus, ProjectSkills, SkillAdopt, SkillDoc, SkillOrigin, SkillSave, SkillView};
+use ostra_core::api::{
+    InitStatus, ProjectSkills, SkillAdopt, SkillDoc, SkillOrigin, SkillSave, SkillView,
+};
 use ostra_core::config::{ProjectProfile, SkillEntry, load_toml, save_toml};
 use ostra_core::paths;
 use std::path::{Path, PathBuf};
@@ -12,8 +14,14 @@ use std::path::{Path, PathBuf};
 pub const KINDS: &[&str] = &["convention", "module-hub", "creation", "test", "other"];
 
 /// Harness skill directories, relative to the project root.
-pub const HARNESS_DIRS: &[&str] =
-    &[".claude/skills", ".agents/skills", ".codex/skills", ".grok/skills", ".gemini/skills", ".ultracode/skills"];
+pub const HARNESS_DIRS: &[&str] = &[
+    ".claude/skills",
+    ".agents/skills",
+    ".codex/skills",
+    ".grok/skills",
+    ".gemini/skills",
+    ".ultracode/skills",
+];
 
 const MAX_SKILL_BYTES: usize = 512 * 1024;
 
@@ -38,8 +46,17 @@ pub fn list(w: &WorkspaceRt) -> Vec<ProjectSkills> {
         .into_iter()
         .map(|p| {
             let blocked = blocked_reason(&p.init_status);
-            let skills = if p.init_status == InitStatus::Missing { vec![] } else { scan(&p.path) };
-            ProjectSkills { project: p.key, path: p.path, blocked, skills }
+            let skills = if p.init_status == InitStatus::Missing {
+                vec![]
+            } else {
+                scan(&p.path)
+            };
+            ProjectSkills {
+                project: p.key,
+                path: p.path,
+                blocked,
+                skills,
+            }
         })
         .collect()
 }
@@ -56,7 +73,11 @@ fn blocked_reason(status: &InitStatus) -> Option<String> {
 
 /// The project's root, refusing changes while its folder is missing or an init session runs.
 fn editable_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr> {
-    let view = w.project_views().into_iter().find(|p| p.key == key).ok_or_else(|| not_found(format!("No project {key}.")))?;
+    let view = w
+        .project_views()
+        .into_iter()
+        .find(|p| p.key == key)
+        .ok_or_else(|| not_found(format!("No project {key}.")))?;
     match blocked_reason(&view.init_status) {
         Some(reason) => Err(conflict(reason)),
         None => Ok(view.path),
@@ -64,14 +85,21 @@ fn editable_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr> {
 }
 
 fn read_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr> {
-    w.project_path(key).filter(|p| p.is_dir()).ok_or_else(|| not_found(format!("No project {key}.")))
+    w.project_path(key)
+        .filter(|p| p.is_dir())
+        .ok_or_else(|| not_found(format!("No project {key}.")))
 }
 
 pub fn check_name(name: &str) -> Result<(), ApiErr> {
     let ok = !name.is_empty()
         && name.len() <= 64
-        && name.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        && name
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if ok {
         Ok(())
     } else {
@@ -85,12 +113,16 @@ fn check_kind(kind: &str) -> Result<(), ApiErr> {
     if KINDS.contains(&kind) {
         Ok(())
     } else {
-        Err(bad(format!("Set the kind to one of {}: `{kind}` is not a skill kind.", KINDS.join(", "))))
+        Err(bad(format!(
+            "Set the kind to one of {}: `{kind}` is not a skill kind.",
+            KINDS.join(", ")
+        )))
     }
 }
 
 fn load_profile(root: &Path) -> Result<ProjectProfile, ApiErr> {
-    load_toml(&paths::project_profile(root)).map_err(|e| conflict(format!("Fix `.ostra/project.toml` first: {e}")))
+    load_toml(&paths::project_profile(root))
+        .map_err(|e| conflict(format!("Fix `.ostra/project.toml` first: {e}")))
 }
 
 fn ostra_rel(name: &str) -> String {
@@ -99,7 +131,10 @@ fn ostra_rel(name: &str) -> String {
 
 /// The `description` from YAML frontmatter, including a folded (`>`) or literal (`|`) block.
 pub fn frontmatter_description(text: &str) -> Option<String> {
-    let body = text.strip_prefix("---")?.trim_start_matches(['\r', ' ']).strip_prefix('\n')?;
+    let body = text
+        .strip_prefix("---")?
+        .trim_start_matches(['\r', ' '])
+        .strip_prefix('\n')?;
     let end = body.find("\n---").unwrap_or(body.len());
     let lines: Vec<&str> = body[..end].lines().collect();
     let i = lines.iter().position(|l| l.starts_with("description:"))?;
@@ -183,13 +218,20 @@ pub fn scan(root: &Path) -> Vec<SkillView> {
 }
 
 fn view(root: &Path, name: &str) -> Option<SkillView> {
-    scan(root).into_iter().find(|s| s.origin == SkillOrigin::Ostra && s.name == name)
+    scan(root)
+        .into_iter()
+        .find(|s| s.origin == SkillOrigin::Ostra && s.name == name)
 }
 
 pub fn get(w: &WorkspaceRt, key: &str, name: &str) -> Result<SkillDoc, ApiErr> {
     let root = read_root(w, key)?;
-    let skill = view(&root, name).ok_or_else(|| not_found(format!("No skill `{name}` in {key}.")))?;
-    let content = if skill.exists { std::fs::read_to_string(root.join(&skill.path)).map_err(io)? } else { String::new() };
+    let skill =
+        view(&root, name).ok_or_else(|| not_found(format!("No skill `{name}` in {key}.")))?;
+    let content = if skill.exists {
+        std::fs::read_to_string(root.join(&skill.path)).map_err(io)?
+    } else {
+        String::new()
+    };
     Ok(SkillDoc { skill, content })
 }
 
@@ -204,9 +246,17 @@ pub fn get_harness(w: &WorkspaceRt, key: &str, rel: &str) -> Result<SkillDoc, Ap
     Ok(SkillDoc { skill, content })
 }
 
-fn upsert_entry(root: &Path, name: &str, kind: &str, component_type: Option<String>, source: &str) -> Result<(), ApiErr> {
+fn upsert_entry(
+    root: &Path,
+    name: &str,
+    kind: &str,
+    component_type: Option<String>,
+    source: &str,
+) -> Result<(), ApiErr> {
     let mut profile = load_profile(root)?;
-    let component_type = component_type.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    let component_type = component_type
+        .map(|c| c.trim().to_string())
+        .filter(|c| !c.is_empty());
     match profile.skills.iter_mut().find(|e| e.name == name) {
         Some(e) => {
             e.kind = kind.into();
@@ -230,10 +280,14 @@ pub fn save(w: &WorkspaceRt, key: &str, name: &str, body: &SkillSave) -> Result<
     check_name(name)?;
     check_kind(&body.kind)?;
     if body.content.trim().is_empty() {
-        return Err(bad("Write the skill's instructions: SKILL.md cannot be empty."));
+        return Err(bad(
+            "Write the skill's instructions: SKILL.md cannot be empty.",
+        ));
     }
     if body.content.len() > MAX_SKILL_BYTES {
-        return Err(bad("Keep SKILL.md under 512 KB and move long material into files next to it, because agents read it whole."));
+        return Err(bad(
+            "Keep SKILL.md under 512 KB and move long material into files next to it, because agents read it whole.",
+        ));
     }
     let root = editable_root(w, key)?;
     let rel = load_profile(&root)?
@@ -244,7 +298,9 @@ pub fn save(w: &WorkspaceRt, key: &str, name: &str, body: &SkillSave) -> Result<
         .unwrap_or_else(|| ostra_rel(name));
     let file = root.join(&rel);
     if !file.starts_with(root.join(".ostra")) {
-        return Err(conflict(format!("Edit `{rel}` in the Files tab: Ostra writes skills only under `.ostra/`.")));
+        return Err(conflict(format!(
+            "Edit `{rel}` in the Files tab: Ostra writes skills only under `.ostra/`."
+        )));
     }
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir).map_err(io)?;
@@ -273,7 +329,12 @@ pub fn delete(w: &WorkspaceRt, key: &str, name: &str) -> Result<(), ApiErr> {
     Ok(())
 }
 
-pub fn adopt(w: &WorkspaceRt, key: &str, name: &str, body: &SkillAdopt) -> Result<SkillDoc, ApiErr> {
+pub fn adopt(
+    w: &WorkspaceRt,
+    key: &str,
+    name: &str,
+    body: &SkillAdopt,
+) -> Result<SkillDoc, ApiErr> {
     check_name(name)?;
     check_kind(&body.kind)?;
     let root = editable_root(w, key)?;
@@ -283,11 +344,23 @@ pub fn adopt(w: &WorkspaceRt, key: &str, name: &str, body: &SkillAdopt) -> Resul
         .ok_or_else(|| not_found(format!("No harness skill at `{}` in {key}.", body.from)))?;
     let target = paths::project_skills_dir(&root).join(name);
     if target.exists() || load_profile(&root)?.skills.iter().any(|e| e.name == name) {
-        return Err(conflict(format!("Pick another name: `{name}` is already a skill in {key}.")));
+        return Err(conflict(format!(
+            "Pick another name: `{name}` is already a skill in {key}."
+        )));
     }
-    let from_dir = root.join(&source.path).parent().map(Path::to_path_buf).ok_or_else(|| bad("The skill has no directory."))?;
+    let from_dir = root
+        .join(&source.path)
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| bad("The skill has no directory."))?;
     copy_dir(&from_dir, &target).map_err(io)?;
-    upsert_entry(&root, name, &body.kind, body.component_type.clone(), "adopted")?;
+    upsert_entry(
+        &root,
+        name,
+        &body.kind,
+        body.component_type.clone(),
+        "adopted",
+    )?;
     get(w, key, name)
 }
 
@@ -312,10 +385,23 @@ mod tests {
 
     #[test]
     fn descriptions() {
-        assert_eq!(frontmatter_description("---\nname: a\ndescription: Use it.\n---\n# A").as_deref(), Some("Use it."));
-        assert_eq!(frontmatter_description("---\ndescription: \"Quoted\"\n---\n").as_deref(), Some("Quoted"));
-        assert_eq!(frontmatter_description("---\ndescription: >\n  Two\n  lines\nname: x\n---\n").as_deref(), Some("Two lines"));
-        assert_eq!(frontmatter_description("# No frontmatter\ndescription: x"), None);
+        assert_eq!(
+            frontmatter_description("---\nname: a\ndescription: Use it.\n---\n# A").as_deref(),
+            Some("Use it.")
+        );
+        assert_eq!(
+            frontmatter_description("---\ndescription: \"Quoted\"\n---\n").as_deref(),
+            Some("Quoted")
+        );
+        assert_eq!(
+            frontmatter_description("---\ndescription: >\n  Two\n  lines\nname: x\n---\n")
+                .as_deref(),
+            Some("Two lines")
+        );
+        assert_eq!(
+            frontmatter_description("# No frontmatter\ndescription: x"),
+            None
+        );
     }
 
     #[test]
@@ -336,26 +422,56 @@ mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, text).unwrap();
         };
-        write(".ostra/skills/entity/SKILL.md", "---\ndescription: Entities.\n---\n");
+        write(
+            ".ostra/skills/entity/SKILL.md",
+            "---\ndescription: Entities.\n---\n",
+        );
         write(".ostra/skills/loose/SKILL.md", "# Loose\n");
-        write(".claude/skills/deploy/SKILL.md", "---\ndescription: Deploys.\n---\n");
+        write(
+            ".claude/skills/deploy/SKILL.md",
+            "---\ndescription: Deploys.\n---\n",
+        );
         let profile = ProjectProfile {
             skills: vec![
-                SkillEntry { name: "entity".into(), kind: "creation".into(), path: ostra_rel("entity"), ..Default::default() },
-                SkillEntry { name: "gone".into(), kind: "other".into(), path: ostra_rel("gone"), ..Default::default() },
+                SkillEntry {
+                    name: "entity".into(),
+                    kind: "creation".into(),
+                    path: ostra_rel("entity"),
+                    ..Default::default()
+                },
+                SkillEntry {
+                    name: "gone".into(),
+                    kind: "other".into(),
+                    path: ostra_rel("gone"),
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         };
         save_toml(&paths::project_profile(root), &profile).unwrap();
-        let got: Vec<(String, SkillOrigin, bool, bool, Option<String>)> =
-            scan(root).into_iter().map(|s| (s.name, s.origin, s.entry.is_some(), s.exists, s.description)).collect();
+        let got: Vec<(String, SkillOrigin, bool, bool, Option<String>)> = scan(root)
+            .into_iter()
+            .map(|s| (s.name, s.origin, s.entry.is_some(), s.exists, s.description))
+            .collect();
         assert_eq!(
             got,
             vec![
-                ("entity".into(), SkillOrigin::Ostra, true, true, Some("Entities.".into())),
+                (
+                    "entity".into(),
+                    SkillOrigin::Ostra,
+                    true,
+                    true,
+                    Some("Entities.".into())
+                ),
                 ("gone".into(), SkillOrigin::Ostra, true, false, None),
                 ("loose".into(), SkillOrigin::Ostra, false, true, None),
-                ("deploy".into(), SkillOrigin::Harness, false, true, Some("Deploys.".into())),
+                (
+                    "deploy".into(),
+                    SkillOrigin::Harness,
+                    false,
+                    true,
+                    Some("Deploys.".into())
+                ),
             ]
         );
     }

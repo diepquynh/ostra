@@ -13,7 +13,14 @@ pub const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const WEB_SEARCH_USD: f64 = 0.01;
 
 /// Providers whose own listing wins when resellers list the same model id at other prices.
-const FIRST_PARTY: &[&str] = &["anthropic", "openai", "xai", "google", "mistral", "deepseek"];
+const FIRST_PARTY: &[&str] = &[
+    "anthropic",
+    "openai",
+    "xai",
+    "google",
+    "mistral",
+    "deepseek",
+];
 
 /// USD per million tokens.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -37,7 +44,12 @@ impl Pricing {
     /// The rates for one request whose prompt (input, cache reads, and cache writes) has this many
     /// tokens.
     pub fn rates(&self, prompt_tokens: u64) -> Rates {
-        self.tiers.iter().rev().find(|(size, _)| prompt_tokens > *size).map(|(_, r)| *r).unwrap_or(self.base)
+        self.tiers
+            .iter()
+            .rev()
+            .find(|(size, _)| prompt_tokens > *size)
+            .map(|(_, r)| *r)
+            .unwrap_or(self.base)
     }
 }
 
@@ -78,12 +90,28 @@ struct TierBound {
     size: u64,
 }
 
-fn rates(provider: &str, input: f64, output: f64, cache_read: Option<f64>, cache_write: Option<f64>) -> Rates {
+fn rates(
+    provider: &str,
+    input: f64,
+    output: f64,
+    cache_read: Option<f64>,
+    cache_write: Option<f64>,
+) -> Rates {
     let cache_write = cache_write.unwrap_or(input * 1.25);
     // models.dev lists the 5-minute write only. Anthropic prices 1-hour writes at twice the input
     // rate; other providers have one write TTL.
-    let cache_write_1h = if provider == "anthropic" { input * 2.0 } else { cache_write };
-    Rates { input, output, cache_read: cache_read.unwrap_or(input), cache_write, cache_write_1h }
+    let cache_write_1h = if provider == "anthropic" {
+        input * 2.0
+    } else {
+        cache_write
+    };
+    Rates {
+        input,
+        output,
+        cache_read: cache_read.unwrap_or(input),
+        cache_write,
+        cache_write_1h,
+    }
 }
 
 /// Prices by provider and model id.
@@ -105,13 +133,23 @@ impl Catalog {
                     .into_iter()
                     .filter_map(|(id, m)| {
                         let c = m.cost?;
-                        let base = rates(&provider, c.input?, c.output?, c.cache_read, c.cache_write);
+                        let base =
+                            rates(&provider, c.input?, c.output?, c.cache_read, c.cache_write);
                         let mut tiers: Vec<(u64, Rates)> = c
                             .tiers
                             .iter()
                             .filter_map(|t| {
                                 let bound = t.tier.as_ref().filter(|b| b.kind == "context")?;
-                                Some((bound.size, rates(&provider, t.input?, t.output?, t.cache_read, t.cache_write)))
+                                Some((
+                                    bound.size,
+                                    rates(
+                                        &provider,
+                                        t.input?,
+                                        t.output?,
+                                        t.cache_read,
+                                        t.cache_write,
+                                    ),
+                                ))
                             })
                             .collect();
                         tiers.sort_by_key(|(size, _)| *size);
@@ -145,7 +183,10 @@ impl Catalog {
         let prefixed = first_party
             .filter_map(|p| self.providers.get(p))
             .flat_map(|m| m.iter())
-            .filter(|(base, _)| id.strip_prefix(base.as_str()).is_some_and(|rest| rest.starts_with('-')))
+            .filter(|(base, _)| {
+                id.strip_prefix(base.as_str())
+                    .is_some_and(|rest| rest.starts_with('-'))
+            })
             .max_by_key(|(base, _)| base.len())
             .map(|(_, p)| p);
         prefixed.or_else(|| {
@@ -206,7 +247,11 @@ mod tests {
     fn looks_up_first_party_then_prefix() {
         let c = sample();
         assert_eq!(c.price("claude-opus-5-5").unwrap().base.input, 4.0);
-        assert_eq!(c.price("claude-opus-5").unwrap().base.input, 5.0, "anthropic's listing beats a reseller's");
+        assert_eq!(
+            c.price("claude-opus-5").unwrap().base.input,
+            5.0,
+            "anthropic's listing beats a reseller's"
+        );
         assert_eq!(c.price("anthropic:claude-opus-5").unwrap().base.input, 5.0);
         assert_eq!(c.price("claude-sonnet-5-20260901").unwrap().base.input, 2.0);
         assert_eq!(c.price("claude-fable-5-1").unwrap().base.cache_read, 0.25);
@@ -228,10 +273,19 @@ mod tests {
     #[test]
     fn prices_cache_writes_by_ttl() {
         install_test_prices();
-        let u = Usage { cache_write_tokens: 3_000_000, cache_write_1h_tokens: 1_000_000, ..Default::default() };
+        let u = Usage {
+            cache_write_tokens: 3_000_000,
+            cache_write_1h_tokens: 1_000_000,
+            ..Default::default()
+        };
         let c = cost("claude-opus-5", &u, 0);
         assert!((c - (2.0 * 6.25 + 10.0)).abs() < 1e-9);
-        let u = Usage { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_tokens: 1_000_000, ..Default::default() };
+        let u = Usage {
+            input_tokens: 1_000_000,
+            output_tokens: 1_000_000,
+            cache_read_tokens: 1_000_000,
+            ..Default::default()
+        };
         assert!((cost("claude-sonnet-5", &u, 1) - (2.0 + 10.0 + 0.2 + 0.01)).abs() < 1e-9);
     }
 }

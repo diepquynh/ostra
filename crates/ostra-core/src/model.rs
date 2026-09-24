@@ -66,7 +66,9 @@ impl Effort {
 }
 
 /// A plan phase's `**Complexity:**` value. Work with no phase file counts as `Low`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS, Default,
+)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
 pub enum Complexity {

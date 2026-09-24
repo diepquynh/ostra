@@ -43,7 +43,19 @@ pub struct Access {
 
 /// Interfaces that carry container or VM bridges rather than the machine's own address.
 fn is_bridge(name: &str) -> bool {
-    ["docker", "br-", "veth", "cni", "flannel", "virbr", "vnet", "tailscale", "lo"].iter().any(|p| name.starts_with(p))
+    [
+        "docker",
+        "br-",
+        "veth",
+        "cni",
+        "flannel",
+        "virbr",
+        "vnet",
+        "tailscale",
+        "lo",
+    ]
+    .iter()
+    .any(|p| name.starts_with(p))
 }
 
 fn host_port(ip: std::net::IpAddr, port: u16) -> String {
@@ -59,7 +71,11 @@ pub fn is_local_address(ip: std::net::IpAddr) -> bool {
         std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped().map(std::net::IpAddr::V4).unwrap_or(ip),
         v4 => v4,
     };
-    ip.is_loopback() || if_addrs::get_if_addrs().unwrap_or_default().iter().any(|i| i.ip() == ip)
+    ip.is_loopback()
+        || if_addrs::get_if_addrs()
+            .unwrap_or_default()
+            .iter()
+            .any(|i| i.ip() == ip)
 }
 
 /// The machine's host name, without a `.local` suffix (macOS often includes one).
@@ -77,7 +93,12 @@ fn hostname() -> Option<String> {
 
 impl Access {
     pub fn loopback(port: u16) -> Self {
-        Access { port, bind: std::net::IpAddr::from([127, 0, 0, 1]), extra_hosts: vec![], dev: false }
+        Access {
+            port,
+            bind: std::net::IpAddr::from([127, 0, 0, 1]),
+            extra_hosts: vec![],
+            dev: false,
+        }
     }
 
     pub fn is_remote(&self) -> bool {
@@ -87,7 +108,11 @@ impl Access {
     /// Non-loopback addresses of the machine's own interfaces, IPv4 first.
     pub fn lan_addresses(&self) -> Vec<std::net::IpAddr> {
         if !self.bind.is_unspecified() {
-            return if self.bind.is_loopback() { vec![] } else { vec![self.bind] };
+            return if self.bind.is_loopback() {
+                vec![]
+            } else {
+                vec![self.bind]
+            };
         }
         let mut v: Vec<std::net::IpAddr> = if_addrs::get_if_addrs()
             .unwrap_or_default()
@@ -104,7 +129,11 @@ impl Access {
     /// Every `Host` header value that reaches this server.
     pub fn hosts(&self) -> Vec<String> {
         let port = self.port;
-        let mut v = vec![format!("127.0.0.1:{port}"), format!("localhost:{port}"), format!("[::1]:{port}")];
+        let mut v = vec![
+            format!("127.0.0.1:{port}"),
+            format!("localhost:{port}"),
+            format!("[::1]:{port}"),
+        ];
         if self.bind.is_unspecified() {
             // Bridge addresses count too: a container or VM on this machine may connect through one.
             for i in if_addrs::get_if_addrs().unwrap_or_default() {
@@ -122,7 +151,10 @@ impl Access {
             if h.is_empty() {
                 continue;
             }
-            let has_port = h.rsplit_once(':').is_some_and(|(_, p)| p.chars().all(|c| c.is_ascii_digit())) && !h.ends_with(']');
+            let has_port = h
+                .rsplit_once(':')
+                .is_some_and(|(_, p)| p.chars().all(|c| c.is_ascii_digit()))
+                && !h.ends_with(']');
             if has_port {
                 v.push(h);
             } else {
@@ -160,7 +192,10 @@ fn random_hex() -> String {
 }
 
 fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +232,10 @@ impl ExchangeError {
 pub fn mint_token(registry: &RegistryDb) -> anyhow::Result<String> {
     let token = random_hex();
     let expires = now() + TOKEN_TTL_SECS;
-    registry.kv_set(&format!("auth:token:{}", hash(&token)), expires.to_string().as_bytes())?;
+    registry.kv_set(
+        &format!("auth:token:{}", hash(&token)),
+        expires.to_string().as_bytes(),
+    )?;
     Ok(token)
 }
 
@@ -217,29 +255,46 @@ impl Auth {
     }
 
     pub fn sign_in_url(&self) -> anyhow::Result<String> {
-        Ok(format!("http://{}/#token={}", self.url_host, mint_token(&self.registry)?))
+        Ok(format!(
+            "http://{}/#token={}",
+            self.url_host,
+            mint_token(&self.registry)?
+        ))
     }
 
     /// Exchange a one-time token for a cookie value. A used token stays recorded as used, so a
     /// second attempt can say so rather than look like an unknown token.
     pub fn exchange(&self, token: &str) -> Result<String, ExchangeError> {
         let key = format!("auth:token:{}", hash(token.trim()));
-        let stored = self.registry.kv_get(&key).ok().flatten().ok_or(ExchangeError::Unknown)?;
+        let stored = self
+            .registry
+            .kv_get(&key)
+            .ok()
+            .flatten()
+            .ok_or(ExchangeError::Unknown)?;
         let stored = String::from_utf8(stored).map_err(|_| ExchangeError::Unknown)?;
         if let Some(at) = stored.strip_prefix("used:") {
             let ago = now().saturating_sub(at.parse().unwrap_or(0));
             return Err(ExchangeError::Used { seconds_ago: ago });
         }
-        let _ = self.registry.kv_set(&key, format!("used:{}", now()).as_bytes());
+        let _ = self
+            .registry
+            .kv_set(&key, format!("used:{}", now()).as_bytes());
         let expires: u64 = stored.parse().map_err(|_| ExchangeError::Unknown)?;
         if expires < now() {
-            return Err(ExchangeError::Expired { seconds_ago: now() - expires });
+            return Err(ExchangeError::Expired {
+                seconds_ago: now() - expires,
+            });
         }
         let cookie = random_hex();
         let h = hash(&cookie);
         let created = now();
-        let _ = self.registry.kv_set(&format!("{COOKIE_KEY}{h}"), created.to_string().as_bytes());
-        self.cookies.write().insert(h, (created + COOKIE_TTL_SECS, Instant::now()));
+        let _ = self
+            .registry
+            .kv_set(&format!("{COOKIE_KEY}{h}"), created.to_string().as_bytes());
+        self.cookies
+            .write()
+            .insert(h, (created + COOKIE_TTL_SECS, Instant::now()));
         Ok(cookie)
     }
 
@@ -252,7 +307,12 @@ impl Auth {
             return expires > now();
         }
         let key = format!("{COOKIE_KEY}{h}");
-        let expires = self.registry.kv_get(&key).ok().flatten().and_then(|v| sign_in_expiry(&v));
+        let expires = self
+            .registry
+            .kv_get(&key)
+            .ok()
+            .flatten()
+            .and_then(|v| sign_in_expiry(&v));
         match expires {
             Some(e) if e > now() => {
                 self.cookies.write().insert(h, (e, Instant::now()));
@@ -280,7 +340,9 @@ impl Auth {
             None => true,
             Some(o) => {
                 let o = o.to_lowercase();
-                let rest = o.strip_prefix("http://").or_else(|| o.strip_prefix("https://"));
+                let rest = o
+                    .strip_prefix("http://")
+                    .or_else(|| o.strip_prefix("https://"));
                 rest.is_some_and(|r| self.hosts.iter().any(|h| h == r))
             }
         }
@@ -289,13 +351,19 @@ impl Auth {
     /// `secure` when the browser reached Ostra over HTTPS, as through a TLS reverse proxy.
     pub fn cookie_header(value: &str, secure: bool) -> String {
         let secure = if secure { "; Secure" } else { "" };
-        format!("{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_TTL_SECS}{secure}")
+        format!(
+            "{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_TTL_SECS}{secure}"
+        )
     }
 }
 
 /// The stored value is the sign-in's creation time in seconds.
 fn sign_in_expiry(stored: &[u8]) -> Option<u64> {
-    std::str::from_utf8(stored).ok()?.parse::<u64>().ok().map(|created| created + COOKIE_TTL_SECS)
+    std::str::from_utf8(stored)
+        .ok()?
+        .parse::<u64>()
+        .ok()
+        .map(|created| created + COOKIE_TTL_SECS)
 }
 
 /// A sign-in as `ostra signins` lists it: an id prefix of its hash, and its times in seconds.
@@ -313,7 +381,11 @@ pub fn list_sign_ins(registry: &RegistryDb) -> anyhow::Result<Vec<SignIn>> {
         .filter_map(|(key, value)| {
             let expires = sign_in_expiry(&value)?;
             let id = key.strip_prefix(COOKIE_KEY)?.chars().take(12).collect();
-            Some(SignIn { id, created: expires - COOKIE_TTL_SECS, expires })
+            Some(SignIn {
+                id,
+                created: expires - COOKIE_TTL_SECS,
+                expires,
+            })
         })
         .filter(|s| s.expires > now())
         .collect();
@@ -331,7 +403,10 @@ pub fn revoke_sign_ins(registry: &RegistryDb) -> anyhow::Result<usize> {
 }
 
 pub fn cookie_value(header: Option<&str>) -> Option<String> {
-    header?.split(';').map(str::trim).find_map(|kv| kv.strip_prefix(&format!("{COOKIE}=")).map(String::from))
+    header?
+        .split(';')
+        .map(str::trim)
+        .find_map(|kv| kv.strip_prefix(&format!("{COOKIE}=")).map(String::from))
 }
 
 fn server_file() -> std::path::PathBuf {
@@ -347,9 +422,14 @@ pub fn write_server_file(auth: &Auth) -> anyhow::Result<()> {
 
 /// A server recorded its pid in `server.json` and that process is alive.
 pub fn server_running() -> bool {
-    let Ok(text) = std::fs::read_to_string(server_file()) else { return false };
-    let pid = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("pid").and_then(|p| p.as_u64()));
-    pid.and_then(|p| i32::try_from(p).ok()).is_some_and(process_alive)
+    let Ok(text) = std::fs::read_to_string(server_file()) else {
+        return false;
+    };
+    let pid = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("pid").and_then(|p| p.as_u64()));
+    pid.and_then(|p| i32::try_from(p).ok())
+        .is_some_and(process_alive)
 }
 
 /// `kill(pid, 0)` probes without signalling, on Linux and macOS alike. EPERM means the process
@@ -359,7 +439,10 @@ fn process_alive(pid: i32) -> bool {
         return false;
     }
     // SAFETY: signal 0 performs only the existence and permission check.
-    unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
+    unsafe {
+        libc::kill(pid, 0) == 0
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
 }
 
 pub fn remove_server_file() {
@@ -368,10 +451,18 @@ pub fn remove_server_file() {
 
 /// `ostra url`: a fresh sign-in URL for the server that is running now.
 pub fn request_url() -> anyhow::Result<String> {
-    let text = std::fs::read_to_string(server_file()).map_err(|_| anyhow::anyhow!("No Ostra server is running. Start one with `ostra`."))?;
+    let text = std::fs::read_to_string(server_file())
+        .map_err(|_| anyhow::anyhow!("No Ostra server is running. Start one with `ostra`."))?;
     let v: serde_json::Value = serde_json::from_str(&text)?;
-    let port = v.get("port").and_then(|p| p.as_u64()).ok_or_else(|| anyhow::anyhow!("server.json has no port"))?;
-    let host = v.get("url_host").and_then(|h| h.as_str()).map(String::from).unwrap_or_else(|| format!("127.0.0.1:{port}"));
+    let port = v
+        .get("port")
+        .and_then(|p| p.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("server.json has no port"))?;
+    let host = v
+        .get("url_host")
+        .and_then(|h| h.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| format!("127.0.0.1:{port}"));
     let registry = RegistryDb::open(&paths::registry_db_path())?;
     Ok(format!("http://{host}/#token={}", mint_token(&registry)?))
 }
@@ -386,7 +477,10 @@ mod tests {
         let auth = Auth::new(reg.clone(), &Access::loopback(7878));
         let token = mint_token(&reg).unwrap();
         let cookie = auth.exchange(&token).unwrap();
-        assert!(matches!(auth.exchange(&token), Err(ExchangeError::Used { .. })));
+        assert!(matches!(
+            auth.exchange(&token),
+            Err(ExchangeError::Used { .. })
+        ));
         assert_eq!(auth.exchange("nope"), Err(ExchangeError::Unknown));
         assert!(auth.check_cookie(&cookie));
         assert!(!auth.check_cookie("nope"));
@@ -402,16 +496,32 @@ mod tests {
         assert_eq!(list_sign_ins(&reg).unwrap().len(), 1);
 
         let old = format!("{COOKIE_KEY}{}", hash("old"));
-        reg.kv_set(&old, (now() - COOKIE_TTL_SECS - 1).to_string().as_bytes()).unwrap();
-        assert!(!auth.check_cookie("old"), "a sign-in older than the TTL is refused");
+        reg.kv_set(&old, (now() - COOKIE_TTL_SECS - 1).to_string().as_bytes())
+            .unwrap();
+        assert!(
+            !auth.check_cookie("old"),
+            "a sign-in older than the TTL is refused"
+        );
         assert_eq!(reg.kv_get(&old).unwrap(), None, "and removed");
 
         assert_eq!(revoke_sign_ins(&reg).unwrap(), 1);
-        assert!(auth.check_cookie(&cookie), "the cache holds for a short while");
+        assert!(
+            auth.check_cookie(&cookie),
+            "the cache holds for a short while"
+        );
         let fresh = Auth::new(reg.clone(), &Access::loopback(7878));
-        assert!(!fresh.check_cookie(&cookie), "a revoked sign-in is refused once the registry is read");
-        auth.cookies.write().values_mut().for_each(|(_, checked)| *checked -= RECHECK);
-        assert!(!auth.check_cookie(&cookie), "the running server notices after the recheck window");
+        assert!(
+            !fresh.check_cookie(&cookie),
+            "a revoked sign-in is refused once the registry is read"
+        );
+        auth.cookies
+            .write()
+            .values_mut()
+            .for_each(|(_, checked)| *checked -= RECHECK);
+        assert!(
+            !auth.check_cookie(&cookie),
+            "the running server notices after the recheck window"
+        );
     }
 
     #[test]
@@ -435,7 +545,10 @@ mod tests {
 
     #[test]
     fn host_and_origin() {
-        let auth = Auth::new(RegistryDb::open_in_memory().unwrap(), &Access::loopback(7878));
+        let auth = Auth::new(
+            RegistryDb::open_in_memory().unwrap(),
+            &Access::loopback(7878),
+        );
         assert!(auth.allowed_host(Some("127.0.0.1:7878")));
         assert!(auth.allowed_host(Some("localhost:7878")));
         assert!(!auth.allowed_host(Some("evil.example:7878")));
@@ -443,7 +556,10 @@ mod tests {
         assert!(auth.allowed_origin(None));
         assert!(auth.allowed_origin(Some("http://localhost:7878")));
         assert!(!auth.allowed_origin(Some("http://evil.example")));
-        assert_eq!(cookie_value(Some("a=b; ostra_session=xyz")), Some("xyz".into()));
+        assert_eq!(
+            cookie_value(Some("a=b; ostra_session=xyz")),
+            Some("xyz".into())
+        );
     }
 
     #[test]

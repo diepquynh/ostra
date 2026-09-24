@@ -15,9 +15,21 @@ pub async fn fetch(env: &ToolEnv, input: &Value) -> ToolOutput {
         Err(e) => return ToolOutput::err(format!("Invalid URL `{raw}`: {e}")),
     };
     if !matches!(url.scheme(), "http" | "https") {
-        return ToolOutput::err(format!("Only http and https URLs can be fetched, not `{}`.", url.scheme()));
+        return ToolOutput::err(format!(
+            "Only http and https URLs can be fetched, not `{}`.",
+            url.scheme()
+        ));
     }
-    let resp = match env.http.get(url.clone()).header("accept", "text/html, text/markdown, text/plain, application/json;q=0.9, */*;q=0.5").send().await {
+    let resp = match env
+        .http
+        .get(url.clone())
+        .header(
+            "accept",
+            "text/html, text/markdown, text/plain, application/json;q=0.9, */*;q=0.5",
+        )
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => return ToolOutput::err(format!("Fetching {url} failed: {e}")),
     };
@@ -45,8 +57,15 @@ pub async fn fetch(env: &ToolEnv, input: &Value) -> ToolOutput {
     if final_url != url {
         out.push_str(&format!("Redirected to: {final_url}\n"));
     }
-    out.push_str(&format!("Content of {final_url} (HTTP {}):\n\n{text}", status.as_u16()));
-    if status.is_success() { ToolOutput::ok(out) } else { ToolOutput::err(out) }
+    out.push_str(&format!(
+        "Content of {final_url} (HTTP {}):\n\n{text}",
+        status.as_u16()
+    ));
+    if status.is_success() {
+        ToolOutput::ok(out)
+    } else {
+        ToolOutput::err(out)
+    }
 }
 
 async fn read_capped(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
@@ -64,11 +83,16 @@ async fn read_capped(mut resp: reqwest::Response) -> Result<Vec<u8>, String> {
 fn to_text(content_type: &str, body: &[u8]) -> Result<String, String> {
     let text = String::from_utf8_lossy(body);
     let sniff_html = || {
-        let head: String = text.chars().take(512).collect::<String>().to_ascii_lowercase();
+        let head: String = text
+            .chars()
+            .take(512)
+            .collect::<String>()
+            .to_ascii_lowercase();
         head.contains("<html") || head.contains("<!doctype html")
     };
     if content_type.contains("html") || (content_type.is_empty() && sniff_html()) {
-        return htmd::convert(&text).map_err(|e| format!("Converting HTML to markdown failed: {e}"));
+        return htmd::convert(&text)
+            .map_err(|e| format!("Converting HTML to markdown failed: {e}"));
     }
     let textual = content_type.is_empty()
         || content_type.starts_with("text/")
@@ -80,7 +104,9 @@ fn to_text(content_type: &str, body: &[u8]) -> Result<String, String> {
     if textual && !body[..body.len().min(8192)].contains(&0) {
         return Ok(text.into_owned());
     }
-    Err(format!("The response is `{content_type}`, which is not text, so it cannot be shown."))
+    Err(format!(
+        "The response is `{content_type}`, which is not text, so it cannot be shown."
+    ))
 }
 
 #[cfg(test)]
@@ -108,7 +134,12 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let env = env_in(d.path());
         let url = serve_once("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n<html><body><h1>Title</h1><p>Some <b>bold</b> text</p></body></html>").await;
-        let out = run(&env, "WebFetch", json!({"url": url, "prompt": "What is the title?"})).await;
+        let out = run(
+            &env,
+            "WebFetch",
+            json!({"url": url, "prompt": "What is the title?"}),
+        )
+        .await;
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.starts_with("Prompt: What is the title?"));
         assert!(out.text.contains("# Title"), "{}", out.text);
@@ -122,14 +153,20 @@ mod tests {
         let out = run(&env, "WebFetch", json!({"url": "file:///etc/passwd"})).await;
         assert!(out.is_error && out.text.contains("http and https"));
         assert!(to_text("image/png", &[0x89, 0x50, 0]).is_err());
-        assert_eq!(to_text("application/json", b"{\"a\":1}").unwrap(), "{\"a\":1}");
+        assert_eq!(
+            to_text("application/json", b"{\"a\":1}").unwrap(),
+            "{\"a\":1}"
+        );
     }
 
     #[tokio::test]
     async fn reports_http_errors() {
         let d = tempfile::tempdir().unwrap();
         let env = env_in(d.path());
-        let url = serve_once("HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nnope").await;
+        let url = serve_once(
+            "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nnope",
+        )
+        .await;
         let out = run(&env, "WebFetch", json!({"url": url})).await;
         assert!(out.is_error && out.text.contains("HTTP 404"));
     }

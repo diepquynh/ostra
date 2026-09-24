@@ -34,7 +34,9 @@ pub async fn skill(env: &ToolEnv, input: &Value) -> ToolOutput {
             "`{name}` is not a skill name. Pass a SKILL.md location as `path` instead."
         ));
     }
-    let local: PathBuf = ostra_core::paths::project_skills_dir(&env.config().repo_root).join(bare).join("SKILL.md");
+    let local: PathBuf = ostra_core::paths::project_skills_dir(&env.config().repo_root)
+        .join(bare)
+        .join("SKILL.md");
     if let Ok(content) = tokio::fs::read_to_string(&local).await {
         env.mark_read(&local);
         return skill_output(&local, &content);
@@ -62,13 +64,21 @@ pub async fn report(env: &ToolEnv, input: &Value) -> ToolOutput {
         return ToolOutput::err(e);
     }
     env.mark_read(&path);
-    ToolOutput::ok(format!("Report written to {} ({} bytes).", path.display(), content.len()))
+    ToolOutput::ok(format!(
+        "Report written to {} ({} bytes).",
+        path.display(),
+        content.len()
+    ))
 }
 
 pub async fn memory(env: &ToolEnv, input: &Value) -> ToolOutput {
     let area = match required(input, "area") {
         Ok(a) if !a.trim().is_empty() => a.trim().to_string(),
-        Ok(_) => return ToolOutput::err("`area` is empty. Scope the lesson to a module, for example `orders::Service`."),
+        Ok(_) => {
+            return ToolOutput::err(
+                "`area` is empty. Scope the lesson to a module, for example `orders::Service`.",
+            );
+        }
         Err(e) => return e,
     };
     let lesson = match required(input, "lesson") {
@@ -82,7 +92,9 @@ pub async fn memory(env: &ToolEnv, input: &Value) -> ToolOutput {
         .unwrap_or_else(|| env.config().memory_source.clone());
     let db = env.config().memory_db.clone();
     let result = tokio::task::spawn_blocking(move || {
-        MemoryStore::open(&db).and_then(|s| s.record(&area, &lesson, &source)).map(|total| (area, total))
+        MemoryStore::open(&db)
+            .and_then(|s| s.record(&area, &lesson, &source))
+            .map(|total| (area, total))
     })
     .await;
     match result {
@@ -98,7 +110,10 @@ pub async fn memory(env: &ToolEnv, input: &Value) -> ToolOutput {
 pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput {
     let query = str_arg(input, "query").map(str::to_string);
     let area = str_arg(input, "area").map(str::to_string);
-    let limit = u64_arg(input, "limit").map(|l| l as usize).unwrap_or(DEFAULT_RECALL_LIMIT).clamp(1, MAX_RECALL_LIMIT);
+    let limit = u64_arg(input, "limit")
+        .map(|l| l as usize)
+        .unwrap_or(DEFAULT_RECALL_LIMIT)
+        .clamp(1, MAX_RECALL_LIMIT);
     let db = env.config().memory_db.clone();
     let result = tokio::task::spawn_blocking(move || {
         MemoryStore::open(&db).and_then(|s| s.recall(area.as_deref(), query.as_deref(), limit))
@@ -112,10 +127,20 @@ pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput {
     if lessons.is_empty() {
         return ToolOutput::ok("No lessons recorded for this query.");
     }
-    let mut out = format!("{} lesson{} recalled, most relevant first:\n", lessons.len(), if lessons.len() == 1 { "" } else { "s" });
+    let mut out = format!(
+        "{} lesson{} recalled, most relevant first:\n",
+        lessons.len(),
+        if lessons.len() == 1 { "" } else { "s" }
+    );
     for (i, l) in lessons.iter().enumerate() {
         let date = l.created_at.get(..10).unwrap_or(&l.created_at);
-        out.push_str(&format!("{}. [{}] {} (source: {}, {date})\n", i + 1, l.area, l.lesson, l.source));
+        out.push_str(&format!(
+            "{}. [{}] {} (source: {}, {date})\n",
+            i + 1,
+            l.area,
+            l.lesson,
+            l.source
+        ));
     }
     ToolOutput::ok(out.trim_end().to_string())
 }
@@ -133,8 +158,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("SKILL.md"), "# Convention\nUse final.").unwrap();
         let out = run(&env, "Skill", json!({"name": "convention"})).await;
-        assert!(!out.is_error && out.text.contains("Use final."), "{}", out.text);
-        let out = run(&env, "Skill", json!({"path": ".ostra/skills/convention/SKILL.md"})).await;
+        assert!(
+            !out.is_error && out.text.contains("Use final."),
+            "{}",
+            out.text
+        );
+        let out = run(
+            &env,
+            "Skill",
+            json!({"path": ".ostra/skills/convention/SKILL.md"}),
+        )
+        .await;
         assert!(!out.is_error && out.text.contains("Skill loaded from"));
         let out = run(&env, "Skill", json!({"name": "meta-author"})).await;
         assert!(out.text.contains("# Meta"));
@@ -152,7 +186,12 @@ mod tests {
         assert!(!out.is_error, "{}", out.text);
         let path = env.config().report_file.clone().unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "# Report\n");
-        let out = run(&env, "Edit", json!({"file_path": path, "old_string": "Report", "new_string": "Change report"})).await;
+        let out = run(
+            &env,
+            "Edit",
+            json!({"file_path": path, "old_string": "Report", "new_string": "Change report"}),
+        )
+        .await;
         assert!(!out.is_error, "{}", out.text);
     }
 
@@ -172,10 +211,29 @@ mod tests {
         let env = env_in(d.path());
         let out = run(&env, "MemoryRecall", json!({"query": "ownership"})).await;
         assert_eq!(out.text, "No lessons recorded for this query.");
-        let out = run(&env, "Memory", json!({"area": "orders", "lesson": "cancel checks ownership first"})).await;
-        assert!(!out.is_error && out.text.contains("1 lesson."), "{}", out.text);
-        let out = run(&env, "MemoryRecall", json!({"query": "ownership", "area": "orders"})).await;
-        assert!(out.text.contains("1. [orders] cancel checks ownership first (source: implementer x_test"), "{}", out.text);
+        let out = run(
+            &env,
+            "Memory",
+            json!({"area": "orders", "lesson": "cancel checks ownership first"}),
+        )
+        .await;
+        assert!(
+            !out.is_error && out.text.contains("1 lesson."),
+            "{}",
+            out.text
+        );
+        let out = run(
+            &env,
+            "MemoryRecall",
+            json!({"query": "ownership", "area": "orders"}),
+        )
+        .await;
+        assert!(
+            out.text
+                .contains("1. [orders] cancel checks ownership first (source: implementer x_test"),
+            "{}",
+            out.text
+        );
         let out = run(&env, "Memory", json!({"area": " ", "lesson": "x"})).await;
         assert!(out.is_error);
     }

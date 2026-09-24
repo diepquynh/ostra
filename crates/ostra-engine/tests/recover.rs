@@ -5,7 +5,10 @@ use async_trait::async_trait;
 use ostra_core::api::CreateSession;
 use ostra_core::config::{GlobalConfig, ProjectEntry, ResolvedRoute, WorkspaceSettings};
 use ostra_core::event::{ExecPurpose, SessionEvent, SessionOptions};
-use ostra_core::exec::{CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec, ExecutionStatus, Executor, Usage};
+use ostra_core::exec::{
+    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
+    ExecutionStatus, Executor, Usage,
+};
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Effort;
@@ -22,8 +25,18 @@ struct Hanging;
 
 #[async_trait]
 impl Executor for Hanging {
-    async fn run(&self, _spec: ExecutionSpec, host: Arc<dyn ExecutionHost>, cancel: CancellationToken) -> ExecutionResult {
-        host.emit(ExecutionDelta::Usage { usage: Usage { cost_usd: 0.5, ..Default::default() } });
+    async fn run(
+        &self,
+        _spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        cancel: CancellationToken,
+    ) -> ExecutionResult {
+        host.emit(ExecutionDelta::Usage {
+            usage: Usage {
+                cost_usd: 0.5,
+                ..Default::default()
+            },
+        });
         cancel.cancelled().await;
         ExecutionResult::with_status(ExecutionStatus::Cancelled)
     }
@@ -53,8 +66,18 @@ impl Services for Fake {
     fn factory(&self) -> Arc<dyn SpawnFactory> {
         Arc::new(AgentsFactory)
     }
-    async fn judge(&self, _: &ResolvedRoute, _: &str, _: &str, _: Value, _: Effort) -> Result<(Value, Usage), String> {
-        Ok((json!({"category": "RESEARCH", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "t"}], "opts_in": {"tests": false, "docs": false}, "reason": "r"}), Usage::default()))
+    async fn judge(
+        &self,
+        _: &ResolvedRoute,
+        _: &str,
+        _: &str,
+        _: Value,
+        _: Effort,
+    ) -> Result<(Value, Usage), String> {
+        Ok((
+            json!({"category": "RESEARCH", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "t"}], "opts_in": {"tests": false, "docs": false}, "reason": "r"}),
+            Usage::default(),
+        ))
     }
     fn notify(&self, _: Notice) {}
     fn protected_paths(&self) -> Vec<PathBuf> {
@@ -70,15 +93,32 @@ async fn recovery_keeps_usage_and_reruns() {
     std::fs::create_dir_all(app.join(".ostra")).unwrap();
     std::fs::write(app.join(".ostra/INVENTORY.md"), "# Inventory").unwrap();
     let mut ws = WorkspaceSettings::seeded("t");
-    ws.projects.push(ProjectEntry { key: "app".into(), path: app, stack: None });
+    ws.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app,
+        stack: None,
+    });
     let services = Arc::new(Fake { ws });
     let db = WorkspaceDb::open(&dir.path().join("workspace.db")).unwrap();
     let id = WorkspaceId::new();
     let first = Engine::new(dir.path().to_path_buf(), id.clone(), db, services.clone());
-    let s = first.create_session(CreateSession { request: "Explain greet".into(), options: SessionOptions::default(), projects: vec![] }).unwrap();
+    let s = first
+        .create_session(CreateSession {
+            request: "Explain greet".into(),
+            options: SessionOptions::default(),
+            projects: vec![],
+        })
+        .unwrap();
     let running = || first.state(&s.id).unwrap().running_executions().count();
     for _ in 0..100 {
-        if running() == 1 && first.db().list_executions(&s.id).unwrap().iter().any(|e| e.usage.cost_usd > 0.0) {
+        if running() == 1
+            && first
+                .db()
+                .list_executions(&s.id)
+                .unwrap()
+                .iter()
+                .any(|e| e.usage.cost_usd > 0.0)
+        {
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -93,18 +133,34 @@ async fn recovery_keeps_usage_and_reruns() {
     let interrupted = events
         .iter()
         .find_map(|e| match &e.event {
-            SessionEvent::ExecutionFinished { result, .. } if result.status == ExecutionStatus::Interrupted => Some(result.clone()),
+            SessionEvent::ExecutionFinished { result, .. }
+                if result.status == ExecutionStatus::Interrupted =>
+            {
+                Some(result.clone())
+            }
             _ => None,
         })
         .expect("an interrupted execution");
-    assert!((interrupted.usage.cost_usd - 0.5).abs() < 1e-9, "usage kept: {:?}", interrupted.usage);
+    assert!(
+        (interrupted.usage.cost_usd - 0.5).abs() < 1e-9,
+        "usage kept: {:?}",
+        interrupted.usage
+    );
     for _ in 0..100 {
         let explores = second
             .db()
             .events(&s.id)
             .unwrap()
             .iter()
-            .filter(|e| matches!(&e.event, SessionEvent::ExecutionStarted { purpose: ExecPurpose::Explore { .. }, .. }))
+            .filter(|e| {
+                matches!(
+                    &e.event,
+                    SessionEvent::ExecutionStarted {
+                        purpose: ExecPurpose::Explore { .. },
+                        ..
+                    }
+                )
+            })
             .count();
         if explores == 2 {
             return;
@@ -121,15 +177,35 @@ async fn offline_stop_prevents_rerun_on_recovery() {
     std::fs::create_dir_all(app.join(".ostra")).unwrap();
     std::fs::write(app.join(".ostra/INVENTORY.md"), "# Inventory").unwrap();
     let mut ws = WorkspaceSettings::seeded("t");
-    ws.projects.push(ProjectEntry { key: "app".into(), path: app, stack: None });
+    ws.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app,
+        stack: None,
+    });
     let services = Arc::new(Fake { ws });
     let path = dir.path().join("workspace.db");
     let id = WorkspaceId::new();
-    let first = Engine::new(dir.path().to_path_buf(), id.clone(), WorkspaceDb::open(&path).unwrap(), services.clone());
-    let s = first.create_session(CreateSession { request: "Explain greet".into(), options: SessionOptions::default(), projects: vec![] }).unwrap();
+    let first = Engine::new(
+        dir.path().to_path_buf(),
+        id.clone(),
+        WorkspaceDb::open(&path).unwrap(),
+        services.clone(),
+    );
+    let s = first
+        .create_session(CreateSession {
+            request: "Explain greet".into(),
+            options: SessionOptions::default(),
+            projects: vec![],
+        })
+        .unwrap();
     for _ in 0..100 {
         if first.state(&s.id).unwrap().running_executions().count() == 1
-            && first.db().list_executions(&s.id).unwrap().iter().any(|e| e.usage.cost_usd > 0.0)
+            && first
+                .db()
+                .list_executions(&s.id)
+                .unwrap()
+                .iter()
+                .any(|e| e.usage.cost_usd > 0.0)
         {
             break;
         }
@@ -137,15 +213,30 @@ async fn offline_stop_prevents_rerun_on_recovery() {
     }
     // The server "died"; stop the session before starting again.
     let db = WorkspaceDb::open(&path).unwrap();
-    assert_eq!(ostra_engine::runner::stop_session_offline(&db, &s.id).unwrap(), 1);
-    let second = Engine::new(dir.path().to_path_buf(), id, WorkspaceDb::open(&path).unwrap(), services);
+    assert_eq!(
+        ostra_engine::runner::stop_session_offline(&db, &s.id).unwrap(),
+        1
+    );
+    let second = Engine::new(
+        dir.path().to_path_buf(),
+        id,
+        WorkspaceDb::open(&path).unwrap(),
+        services,
+    );
     second.recover().unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     let st = second.state(&s.id).unwrap();
     assert!(st.failed.is_some());
     let started = st.executions.len();
     assert_eq!(started, 1, "no execution re-ran after an offline stop");
-    let finished = st.executions.values().next().unwrap().result.clone().unwrap();
+    let finished = st
+        .executions
+        .values()
+        .next()
+        .unwrap()
+        .result
+        .clone()
+        .unwrap();
     assert_eq!(finished.status, ExecutionStatus::Cancelled);
     assert!((finished.usage.cost_usd - 0.5).abs() < 1e-9);
 }

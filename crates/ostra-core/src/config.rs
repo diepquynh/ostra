@@ -155,22 +155,45 @@ impl Default for GlobalConfig {
                 "anthropic:claude-fable-5-1",
             ),
         );
-        tiers.insert("claude".into(), TierTable::of("haiku", "sonnet", "opus", "fable"));
+        tiers.insert(
+            "claude".into(),
+            TierTable::of("haiku", "sonnet", "opus", "fable"),
+        );
         tiers.insert(
             "codex".into(),
-            TierTable::of("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-sol"),
+            TierTable::of(
+                "gpt-5.6-luna",
+                "gpt-5.6-terra",
+                "gpt-5.6-sol",
+                "gpt-5.6-sol",
+            ),
         );
-        tiers.insert("grok".into(), TierTable::of("grok-4.5", "grok-4.5", "grok-4.5", "grok-4.5"));
-        tiers.insert("agy".into(), TierTable::of("flash", "flash", "flash", "flash"));
+        tiers.insert(
+            "grok".into(),
+            TierTable::of("grok-4.5", "grok-4.5", "grok-4.5", "grok-4.5"),
+        );
+        tiers.insert(
+            "agy".into(),
+            TierTable::of("flash", "flash", "flash", "flash"),
+        );
         let mut harness = BTreeMap::new();
         for h in HarnessKind::ALL {
-            harness.insert(h.as_str().to_string(), HarnessConfig { command: h.as_str().into(), args: vec![] });
+            harness.insert(
+                h.as_str().to_string(),
+                HarnessConfig {
+                    command: h.as_str().into(),
+                    args: vec![],
+                },
+            );
         }
         GlobalConfig {
             providers,
             tiers,
             harness,
-            permissions: PermissionRules { deny: vec!["Bash(rm -rf /*)".into()], ..Default::default() },
+            permissions: PermissionRules {
+                deny: vec!["Bash(rm -rf /*)".into()],
+                ..Default::default()
+            },
             server: ServerConfig::default(),
         }
     }
@@ -239,7 +262,11 @@ pub struct WorkspacePermissions {
 
 impl WorkspacePermissions {
     pub fn rules(&self) -> PermissionRules {
-        PermissionRules { allow: self.allow.clone(), ask: self.ask.clone(), deny: self.deny.clone() }
+        PermissionRules {
+            allow: self.allow.clone(),
+            ask: self.ask.clone(),
+            deny: self.deny.clone(),
+        }
     }
 }
 
@@ -275,7 +302,10 @@ pub struct Limits {
 
 impl Default for Limits {
     fn default() -> Self {
-        Limits { max_parallel_executions: 3, session_budget_usd: 25.0 }
+        Limits {
+            max_parallel_executions: 3,
+            session_budget_usd: 25.0,
+        }
     }
 }
 
@@ -333,14 +363,24 @@ impl<'de> Deserialize<'de> for EffortRouting {
             serde::de::Error::custom("routing.effort takes `byAgent` and `byPhaseComplexity` tables of low, medium, high, xhigh, or max")
         })?;
         Ok(match form {
-            Form::Split(s) => EffortRouting { by_agent: s.by_agent, by_phase_complexity: s.by_phase_complexity },
-            Form::Flat(by_agent) => EffortRouting { by_agent, by_phase_complexity: BTreeMap::new() },
+            Form::Split(s) => EffortRouting {
+                by_agent: s.by_agent,
+                by_phase_complexity: s.by_phase_complexity,
+            },
+            Form::Flat(by_agent) => EffortRouting {
+                by_agent,
+                by_phase_complexity: BTreeMap::new(),
+            },
         })
     }
 }
 
 /// The effort a route key's settings ask for, or `None` for the agent definition's default.
-pub fn resolve_effort(ws: &WorkspaceSettings, key: &str, complexity: Option<Complexity>) -> Option<Effort> {
+pub fn resolve_effort(
+    ws: &WorkspaceSettings,
+    key: &str,
+    complexity: Option<Complexity>,
+) -> Option<Effort> {
     let effort = &ws.routing.effort;
     let complexity = complexity.unwrap_or_default();
     effort
@@ -432,13 +472,22 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
     ("projects", "Projects in this workspace"),
     ("routing.executor", "Which executor runs each agent"),
     ("routing.executor.byAgent", "Executor per agent"),
-    ("routing.executor.byPhaseComplexity", "Executor per agent and phase complexity"),
+    (
+        "routing.executor.byPhaseComplexity",
+        "Executor per agent and phase complexity",
+    ),
     ("routing.model", "Which model or tier each agent uses"),
     ("routing.model.byAgent", "Model or tier per agent"),
-    ("routing.model.byPhaseComplexity", "Model or tier per agent and phase complexity"),
+    (
+        "routing.model.byPhaseComplexity",
+        "Model or tier per agent and phase complexity",
+    ),
     ("routing.effort", "Reasoning effort for each agent"),
     ("routing.effort.byAgent", "Reasoning effort per agent"),
-    ("routing.effort.byPhaseComplexity", "Reasoning effort per agent and phase complexity"),
+    (
+        "routing.effort.byPhaseComplexity",
+        "Reasoning effort per agent and phase complexity",
+    ),
     ("instructions.all", "Instructions every agent receives"),
     ("instructions.agents", "Instructions per agent"),
     ("yolo.default", "Start new sessions in YOLO mode"),
@@ -446,9 +495,18 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
     ("permissions.allow", "Tool calls allowed without asking"),
     ("permissions.ask", "Tool calls that always ask"),
     ("permissions.deny", "Tool calls that are always denied"),
-    ("notifications.push", "Push notifications for gates and finished sessions"),
-    ("limits.max_parallel_executions", "Executions that may run at once"),
-    ("limits.session_budget_usd", "Dollars one session may spend before it pauses"),
+    (
+        "notifications.push",
+        "Push notifications for gates and finished sessions",
+    ),
+    (
+        "limits.max_parallel_executions",
+        "Executions that may run at once",
+    ),
+    (
+        "limits.session_budget_usd",
+        "Dollars one session may spend before it pauses",
+    ),
 ];
 
 impl WorkspaceSettings {
@@ -485,7 +543,10 @@ impl WorkspaceSettings {
             projects: vec![],
             routing: Routing {
                 executor: ExecutorRouting::default(),
-                model: ModelRouting { by_agent, by_phase_complexity: by_phase },
+                model: ModelRouting {
+                    by_agent,
+                    by_phase_complexity: by_phase,
+                },
                 effort: EffortRouting::default(),
             },
             instructions: Instructions::default(),
@@ -503,10 +564,20 @@ impl WorkspaceSettings {
     /// Custom instructions for one agent: `instructions.all`, then the agent's own entry.
     pub fn instructions_for(&self, agent: AgentName) -> Vec<String> {
         let mut out = vec![];
-        if let Some(all) = self.instructions.all.as_ref().filter(|s| !s.trim().is_empty()) {
+        if let Some(all) = self
+            .instructions
+            .all
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+        {
             out.push(all.clone());
         }
-        if let Some(own) = self.instructions.agents.get(agent.as_str()).filter(|s| !s.trim().is_empty()) {
+        if let Some(own) = self
+            .instructions
+            .agents
+            .get(agent.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
             out.push(own.clone());
         }
         out
@@ -556,24 +627,49 @@ pub struct RouteQuery<'a> {
 
 impl<'a> RouteQuery<'a> {
     pub fn new(key: &'a str, default_tier: Tier) -> Self {
-        RouteQuery { key, default_tier, complexity: None, tier_override: None, executor_override: None }
+        RouteQuery {
+            key,
+            default_tier,
+            complexity: None,
+            tier_override: None,
+            executor_override: None,
+        }
     }
 }
 
 /// Resolve the executor for a route key. `byPhaseComplexity` wins over `byAgent`, absent means
 /// native. The judge always runs natively: it is an engine call, not an agent execution.
-pub fn resolve_executor(ws: &WorkspaceSettings, key: &str, complexity: Option<Complexity>) -> ExecutorKind {
+pub fn resolve_executor(
+    ws: &WorkspaceSettings,
+    key: &str,
+    complexity: Option<Complexity>,
+) -> ExecutorKind {
     if key == JUDGE_ROUTE {
         return ExecutorKind::Native;
     }
     let complexity = complexity.unwrap_or_default();
-    if let Some(e) = ws.routing.executor.by_phase_complexity.get(key).and_then(|m| m.get(&complexity)) {
+    if let Some(e) = ws
+        .routing
+        .executor
+        .by_phase_complexity
+        .get(key)
+        .and_then(|m| m.get(&complexity))
+    {
         return *e;
     }
-    ws.routing.executor.by_agent.get(key).copied().unwrap_or(ExecutorKind::Native)
+    ws.routing
+        .executor
+        .by_agent
+        .get(key)
+        .copied()
+        .unwrap_or(ExecutorKind::Native)
 }
 
-fn model_choice<'w>(ws: &'w WorkspaceSettings, key: &str, complexity: Option<Complexity>) -> Option<&'w ModelChoice> {
+fn model_choice<'w>(
+    ws: &'w WorkspaceSettings,
+    key: &str,
+    complexity: Option<Complexity>,
+) -> Option<&'w ModelChoice> {
     let complexity = complexity.unwrap_or_default();
     ws.routing
         .model
@@ -588,7 +684,9 @@ pub fn resolve_route(
     ws: &WorkspaceSettings,
     q: RouteQuery<'_>,
 ) -> Result<ResolvedRoute, RouteError> {
-    let executor = q.executor_override.unwrap_or_else(|| resolve_executor(ws, q.key, q.complexity));
+    let executor = q
+        .executor_override
+        .unwrap_or_else(|| resolve_executor(ws, q.key, q.complexity));
     let table_name = executor.tier_table();
     let table = global.tiers.get(table_name);
     let from_tier = |tier: Tier| -> Result<ResolvedRoute, RouteError> {
@@ -599,7 +697,11 @@ pub fn resolve_route(
             ))
         })?;
         check_model(executor, model, q.key)?;
-        Ok(ResolvedRoute { executor, model: model.to_string(), tier: Some(tier) })
+        Ok(ResolvedRoute {
+            executor,
+            model: model.to_string(),
+            tier: Some(tier),
+        })
     };
     if let Some(tier) = q.tier_override {
         return from_tier(tier);
@@ -620,7 +722,11 @@ pub fn resolve_route(
                 return from_tier(tier);
             }
             check_model(executor, v, q.key)?;
-            Ok(ResolvedRoute { executor, model: v.to_string(), tier: None })
+            Ok(ResolvedRoute {
+                executor,
+                model: v.to_string(),
+                tier: None,
+            })
         }
         ModelChoice::PerExecutor(map) => {
             let v = map.get(table_name).ok_or_else(|| {
@@ -633,7 +739,11 @@ pub fn resolve_route(
                 return from_tier(tier);
             }
             check_model(executor, v, q.key)?;
-            Ok(ResolvedRoute { executor, model: v.to_string(), tier: None })
+            Ok(ResolvedRoute {
+                executor,
+                model: v.to_string(),
+                tier: None,
+            })
         }
     }
 }
@@ -644,7 +754,8 @@ fn check_model(executor: ExecutorKind, model: &str, key: &str) -> Result<(), Rou
     }
     if executor == ExecutorKind::Native {
         match model.split_once(':') {
-            Some((provider, m)) if matches!(provider, "anthropic" | "openai" | "mock") && !m.is_empty() => {}
+            Some((provider, m))
+                if matches!(provider, "anthropic" | "openai" | "mock") && !m.is_empty() => {}
             _ => {
                 return Err(RouteError(format!(
                     "`{key}` resolves to native model `{model}`; native models are written `anthropic:<model>` or `openai:<model>`"
@@ -697,33 +808,55 @@ pub fn validate_workspace(
             ));
         }
         if !seen.insert(p.key.clone()) {
-            issues.push(issue(format!("projects[{i}].key"), format!("Project key `{}` is used twice.", p.key)));
+            issues.push(issue(
+                format!("projects[{i}].key"),
+                format!("Project key `{}` is used twice.", p.key),
+            ));
         }
         if !p.path.is_absolute() {
-            issues.push(issue(format!("projects[{i}].path"), "Project paths must be absolute.".into()));
+            issues.push(issue(
+                format!("projects[{i}].path"),
+                "Project paths must be absolute.".into(),
+            ));
         }
-        if let Some(stack) = p.stack.as_deref().filter(|s| !s.is_empty() && !is_stack_name(s)) {
+        if let Some(stack) = p
+            .stack
+            .as_deref()
+            .filter(|s| !s.is_empty() && !is_stack_name(s))
+        {
             issues.push(issue(format!("projects[{i}].stack"), stack_issue(stack)));
         }
     }
 
     for key in ws.routing.executor.by_agent.keys() {
         if !route_keys().contains(&key.as_str()) {
-            issues.push(issue(format!("routing.executor.byAgent.{key}"), format!("`{key}` is not an agent.")));
+            issues.push(issue(
+                format!("routing.executor.byAgent.{key}"),
+                format!("`{key}` is not an agent."),
+            ));
         }
     }
     for key in ws.routing.model.by_agent.keys() {
         if !route_keys().contains(&key.as_str()) {
-            issues.push(issue(format!("routing.model.byAgent.{key}"), format!("`{key}` is not an agent.")));
+            issues.push(issue(
+                format!("routing.model.byAgent.{key}"),
+                format!("`{key}` is not an agent."),
+            ));
         }
     }
     for key in ws.routing.effort.by_agent.keys() {
         if !AgentName::ALL.iter().any(|a| a.as_str() == key) {
-            issues.push(issue(format!("routing.effort.byAgent.{key}"), format!("`{key}` is not an agent.")));
+            issues.push(issue(
+                format!("routing.effort.byAgent.{key}"),
+                format!("`{key}` is not an agent."),
+            ));
         }
     }
     for key in ws.routing.effort.by_phase_complexity.keys() {
-        if !AgentName::ALL.iter().any(|a| a.as_str() == key && a.routes_by_complexity()) {
+        if !AgentName::ALL
+            .iter()
+            .any(|a| a.as_str() == key && a.routes_by_complexity())
+        {
             issues.push(issue(
                 format!("routing.effort.byPhaseComplexity.{key}"),
                 format!("`{key}` does not run per plan phase; set its effort under `byAgent`."),
@@ -731,10 +864,16 @@ pub fn validate_workspace(
         }
     }
     if ws.limits.max_parallel_executions == 0 {
-        issues.push(issue("limits.max_parallel_executions".into(), "Allow at least one execution at a time.".into()));
+        issues.push(issue(
+            "limits.max_parallel_executions".into(),
+            "Allow at least one execution at a time.".into(),
+        ));
     }
     if !ws.limits.session_budget_usd.is_finite() || ws.limits.session_budget_usd < 0.0 {
-        issues.push(issue("limits.session_budget_usd".into(), "The budget is a dollar amount of 0 or more; 0 means no limit.".into()));
+        issues.push(issue(
+            "limits.session_budget_usd".into(),
+            "The budget is a dollar amount of 0 or more; 0 means no limit.".into(),
+        ));
     }
     if ws.routing.executor.by_agent.contains_key(JUDGE_ROUTE) {
         issues.push(issue(
@@ -742,7 +881,13 @@ pub fn validate_workspace(
             "Judge calls always run natively; remove this route.".into(),
         ));
     }
-    if ws.routing.executor.by_agent.get("quick-answer").is_some_and(|e| *e != ExecutorKind::Native) {
+    if ws
+        .routing
+        .executor
+        .by_agent
+        .get("quick-answer")
+        .is_some_and(|e| *e != ExecutorKind::Native)
+    {
         issues.push(issue(
             "routing.executor.byAgent.quick-answer".into(),
             "The side panel answers on the native executor only.".into(),
@@ -760,7 +905,10 @@ pub fn validate_workspace(
             vec![None]
         };
         for c in complexities {
-            let q = RouteQuery { complexity: c, ..RouteQuery::new(key, default_tier(key)) };
+            let q = RouteQuery {
+                complexity: c,
+                ..RouteQuery::new(key, default_tier(key))
+            };
             match resolve_route(global, ws, q) {
                 Ok(route) => {
                     if let ExecutorKind::Harness(h) = route.executor
@@ -768,7 +916,10 @@ pub fn validate_workspace(
                     {
                         issues.push(issue(
                             format!("routing.executor.byAgent.{key}"),
-                            format!("`{key}` routes to {}, which is not installed on this machine.", h.display_name()),
+                            format!(
+                                "`{key}` routes to {}, which is not installed on this machine.",
+                                h.display_name()
+                            ),
                         ));
                     }
                     if let Some((provider, _)) = route.native_parts()
@@ -784,7 +935,10 @@ pub fn validate_workspace(
                 }
                 Err(e) => {
                     let suffix = c.map(|c| format!(" ({c})")).unwrap_or_default();
-                    issues.push(issue(format!("routing.model.byAgent.{key}"), format!("{}{suffix}", e.0)));
+                    issues.push(issue(
+                        format!("routing.model.byAgent.{key}"),
+                        format!("{}{suffix}", e.0),
+                    ));
                 }
             }
         }
@@ -849,7 +1003,12 @@ impl Commands {
             ("run", &self.run),
         ]
         .into_iter()
-        .filter_map(|(k, v)| v.as_deref().map(str::trim).filter(|s| !s.is_empty() && *s != "—").map(|s| (k, s)))
+        .filter_map(|(k, v)| {
+            v.as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty() && *s != "—")
+                .map(|s| (k, s))
+        })
         .collect()
     }
 }
@@ -913,7 +1072,9 @@ impl ProjectProfile {
     pub fn auto_fixable_ids(&self) -> Vec<String> {
         self.review_rules
             .iter()
-            .filter(|r| r.auto_fixable && !r.id.starts_with("SEC-BLOCK") && !r.id.starts_with("PHASE-REQ"))
+            .filter(|r| {
+                r.auto_fixable && !r.id.starts_with("SEC-BLOCK") && !r.id.starts_with("PHASE-REQ")
+            })
             .map(|r| r.id.clone())
             .collect()
     }
@@ -926,35 +1087,60 @@ impl ProjectProfile {
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("reading {path}: {source}")]
-    Io { path: PathBuf, source: std::io::Error },
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     #[error("parsing {path}: {message}")]
     Parse { path: PathBuf, message: String },
 }
 
 pub fn load_toml<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, ConfigError> {
     match std::fs::read_to_string(path) {
-        Ok(text) => toml::from_str(&text)
-            .map_err(|e| ConfigError::Parse { path: path.to_path_buf(), message: e.to_string() }),
+        Ok(text) => toml::from_str(&text).map_err(|e| ConfigError::Parse {
+            path: path.to_path_buf(),
+            message: e.to_string(),
+        }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
-        Err(e) => Err(ConfigError::Io { path: path.to_path_buf(), source: e }),
+        Err(e) => Err(ConfigError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        }),
     }
 }
 
 pub fn load_toml_required<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, ConfigError> {
-    let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e })?;
-    toml::from_str(&text).map_err(|e| ConfigError::Parse { path: path.to_path_buf(), message: e.to_string() })
+    let text = std::fs::read_to_string(path).map_err(|e| ConfigError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    toml::from_str(&text).map_err(|e| ConfigError::Parse {
+        path: path.to_path_buf(),
+        message: e.to_string(),
+    })
 }
 
 /// Write TOML atomically (temp file plus rename).
 pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigError> {
-    let text = toml::to_string_pretty(value)
-        .map_err(|e| ConfigError::Parse { path: path.to_path_buf(), message: e.to_string() })?;
+    let text = toml::to_string_pretty(value).map_err(|e| ConfigError::Parse {
+        path: path.to_path_buf(),
+        message: e.to_string(),
+    })?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| ConfigError::Io { path: parent.to_path_buf(), source: e })?;
+        std::fs::create_dir_all(parent).map_err(|e| ConfigError::Io {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
     }
     let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, text).map_err(|e| ConfigError::Io { path: tmp.clone(), source: e })?;
-    std::fs::rename(&tmp, path).map_err(|e| ConfigError::Io { path: path.to_path_buf(), source: e })
+    std::fs::write(&tmp, text).map_err(|e| ConfigError::Io {
+        path: tmp.clone(),
+        source: e,
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| ConfigError::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })
 }
 
 #[cfg(test)]
@@ -1038,7 +1224,10 @@ deny = ["Bash(git push *)"]
         let high = resolve_route(
             &g,
             &ws,
-            RouteQuery { complexity: Some(Complexity::High), ..RouteQuery::new("implementer", Tier::Balanced) },
+            RouteQuery {
+                complexity: Some(Complexity::High),
+                ..RouteQuery::new("implementer", Tier::Balanced)
+            },
         )
         .unwrap();
         assert_eq!(high.executor, ExecutorKind::Native);
@@ -1053,13 +1242,32 @@ deny = ["Bash(git push *)"]
     #[test]
     fn project_stacks_follow_the_key_rule() {
         let mut ws = WorkspaceSettings::seeded("x");
-        for (key, stack) in [("a", Some("rust-axum")), ("b", Some("")), ("c", None), ("d", Some("Type Script"))] {
-            ws.projects.push(ProjectEntry { key: key.into(), path: PathBuf::from(format!("/code/{key}")), stack: stack.map(str::to_string) });
+        for (key, stack) in [
+            ("a", Some("rust-axum")),
+            ("b", Some("")),
+            ("c", None),
+            ("d", Some("Type Script")),
+        ] {
+            ws.projects.push(ProjectEntry {
+                key: key.into(),
+                path: PathBuf::from(format!("/code/{key}")),
+                stack: stack.map(str::to_string),
+            });
         }
-        let env = Environment { installed_harnesses: vec![], providers_with_keys: vec!["anthropic".into()] };
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
         let issues = validate_workspace(&GlobalConfig::default(), &ws, &env, tier);
-        assert_eq!(issues.iter().map(|i| i.path.as_str()).collect::<Vec<_>>(), ["projects[3].stack"]);
-        assert!(issues[0].message.starts_with("`Type Script` is not a stack name."));
+        assert_eq!(
+            issues.iter().map(|i| i.path.as_str()).collect::<Vec<_>>(),
+            ["projects[3].stack"]
+        );
+        assert!(
+            issues[0]
+                .message
+                .starts_with("`Type Script` is not a stack name.")
+        );
     }
 
     #[test]
@@ -1068,16 +1276,26 @@ deny = ["Bash(git push *)"]
         ws.routing.model.by_agent.remove("plan");
         let g = GlobalConfig::default();
         assert!(resolve_route(&g, &ws, RouteQuery::new("plan", Tier::Advanced)).is_err());
-        let env = Environment { installed_harnesses: vec![], providers_with_keys: vec!["anthropic".into()] };
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
         let issues = validate_workspace(&g, &ws, &env, tier);
-        assert!(issues.iter().any(|i| i.path == "routing.model.byAgent.plan"));
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.path == "routing.model.byAgent.plan")
+        );
     }
 
     #[test]
     fn seeded_defaults_validate() {
         let ws = WorkspaceSettings::seeded("x");
         let g = GlobalConfig::default();
-        let env = Environment { installed_harnesses: vec![], providers_with_keys: vec!["anthropic".into()] };
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
         assert_eq!(validate_workspace(&g, &ws, &env, tier), vec![]);
     }
 
@@ -1085,7 +1303,10 @@ deny = ["Bash(git push *)"]
     fn uninstalled_harness_is_refused() {
         let ws: WorkspaceSettings = toml::from_str(SAMPLE).unwrap();
         let g = GlobalConfig::default();
-        let env = Environment { installed_harnesses: vec![], providers_with_keys: vec!["anthropic".into()] };
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
         let issues = validate_workspace(&g, &ws, &env, tier);
         assert!(issues.iter().any(|i| i.message.contains("Codex")));
     }
@@ -1093,7 +1314,10 @@ deny = ["Bash(git push *)"]
     #[test]
     fn native_model_needs_provider() {
         let mut ws = WorkspaceSettings::seeded("x");
-        ws.routing.model.by_agent.insert("plan".into(), "claude-opus-5-5".into());
+        ws.routing
+            .model
+            .by_agent
+            .insert("plan".into(), "claude-opus-5-5".into());
         let g = GlobalConfig::default();
         assert!(resolve_route(&g, &ws, RouteQuery::new("plan", Tier::Advanced)).is_err());
     }
@@ -1101,14 +1325,20 @@ deny = ["Bash(git push *)"]
     #[test]
     fn default_and_override() {
         let mut ws = WorkspaceSettings::seeded("x");
-        ws.routing.model.by_agent.insert("plan".into(), "default".into());
+        ws.routing
+            .model
+            .by_agent
+            .insert("plan".into(), "default".into());
         let g = GlobalConfig::default();
         let r = resolve_route(&g, &ws, RouteQuery::new("plan", Tier::Advanced)).unwrap();
         assert_eq!(r.tier, Some(Tier::Advanced));
         let r = resolve_route(
             &g,
             &ws,
-            RouteQuery { tier_override: Some(Tier::Advanced), ..RouteQuery::new("initializer", Tier::Balanced) },
+            RouteQuery {
+                tier_override: Some(Tier::Advanced),
+                ..RouteQuery::new("initializer", Tier::Balanced)
+            },
         )
         .unwrap();
         assert_eq!(r.model, "anthropic:claude-opus-5-5");
@@ -1121,9 +1351,18 @@ deny = ["Bash(git push *)"]
              [routing.effort.byPhaseComplexity.implementer]\nhigh = \"max\"\n",
         )
         .unwrap();
-        assert_eq!(resolve_effort(&ws, "implementer", Some(Complexity::High)), Some(Effort::Max));
-        assert_eq!(resolve_effort(&ws, "implementer", Some(Complexity::Low)), Some(Effort::Medium));
-        assert_eq!(resolve_effort(&ws, "implementer", None), Some(Effort::Medium));
+        assert_eq!(
+            resolve_effort(&ws, "implementer", Some(Complexity::High)),
+            Some(Effort::Max)
+        );
+        assert_eq!(
+            resolve_effort(&ws, "implementer", Some(Complexity::Low)),
+            Some(Effort::Medium)
+        );
+        assert_eq!(
+            resolve_effort(&ws, "implementer", None),
+            Some(Effort::Medium)
+        );
         assert_eq!(resolve_effort(&ws, "plan", None), Some(Effort::High));
         assert_eq!(resolve_effort(&ws, "explore", None), None);
         let back: WorkspaceSettings = toml::from_str(&toml::to_string(&ws).unwrap()).unwrap();
@@ -1132,17 +1371,32 @@ deny = ["Bash(git push *)"]
 
     #[test]
     fn flat_effort_table_reads_as_by_agent() {
-        let ws: WorkspaceSettings = toml::from_str("name = \"x\"\n[routing.effort]\nplan = \"high\"\n").unwrap();
+        let ws: WorkspaceSettings =
+            toml::from_str("name = \"x\"\n[routing.effort]\nplan = \"high\"\n").unwrap();
         assert_eq!(ws.routing.effort.by_agent.get("plan"), Some(&Effort::High));
-        assert!(toml::from_str::<WorkspaceSettings>("name = \"x\"\n[routing.effort]\nplan = \"huge\"\n").is_err());
+        assert!(
+            toml::from_str::<WorkspaceSettings>(
+                "name = \"x\"\n[routing.effort]\nplan = \"huge\"\n"
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn effort_by_phase_complexity_needs_a_phase_agent() {
         let mut ws = WorkspaceSettings::seeded("x");
-        ws.routing.effort.by_phase_complexity.insert("plan".into(), BTreeMap::from([(Complexity::High, Effort::Max)]));
-        ws.routing.effort.by_phase_complexity.insert("write-test".into(), BTreeMap::from([(Complexity::High, Effort::Max)]));
-        let env = Environment { installed_harnesses: vec![], providers_with_keys: vec!["anthropic".into()] };
+        ws.routing.effort.by_phase_complexity.insert(
+            "plan".into(),
+            BTreeMap::from([(Complexity::High, Effort::Max)]),
+        );
+        ws.routing.effort.by_phase_complexity.insert(
+            "write-test".into(),
+            BTreeMap::from([(Complexity::High, Effort::Max)]),
+        );
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
         let issues = validate_workspace(&GlobalConfig::default(), &ws, &env, tier);
         let paths: Vec<_> = issues.iter().map(|i| i.path.as_str()).collect();
         assert_eq!(paths, ["routing.effort.byPhaseComplexity.plan"]);

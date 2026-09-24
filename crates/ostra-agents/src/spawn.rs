@@ -176,7 +176,10 @@ impl Block {
     }
 
     fn scope(&mut self, projects: &[(String, PathBuf)]) {
-        let v: Vec<String> = projects.iter().map(|(k, p)| format!("{k} -> {}", p.display())).collect();
+        let v: Vec<String> = projects
+            .iter()
+            .map(|(k, p)| format!("{k} -> {}", p.display()))
+            .collect();
         self.list("Repos in scope", &v);
     }
 
@@ -184,8 +187,11 @@ impl Block {
         self.paths("Research docs", &e.research_docs);
         self.scope(&e.projects_in_scope);
         if !e.user_answers.is_empty() {
-            let v: Vec<String> =
-                e.user_answers.iter().map(|a| format!("{} {}: {}", a.id, a.question, a.answer)).collect();
+            let v: Vec<String> = e
+                .user_answers
+                .iter()
+                .map(|a| format!("{} {}: {}", a.id, a.question, a.answer))
+                .collect();
             self.list("User answers", &v);
         }
         self.opt("Findings", e.findings.as_deref());
@@ -450,7 +456,9 @@ impl SpawnParams for CodeReviewerParams {
         b.common(&self.common);
         b.opt("Review scope", self.review_scope.as_deref());
         match self.context {
-            Some(ReviewContext::Implementation) => b.line("Review context", "Review implementation code"),
+            Some(ReviewContext::Implementation) => {
+                b.line("Review context", "Review implementation code")
+            }
             Some(ReviewContext::Test) => b.line("Review context", "Review test code"),
             None => {}
         }
@@ -684,19 +692,27 @@ init_impl!(InitProposeParams, InitializerMode::Propose, |s, b| {
     b.paths("Scout findings", &s.scout_findings);
     b.path("Scout plan", &s.scout_plan);
 });
-init_impl!(InitGenerateSkillParams, InitializerMode::GenerateSkill, |s, b| {
-    b.line("Skill name", &s.skill_name);
-    b.line("Skill kind", &s.skill_kind);
-    b.line("Disposition", &s.disposition);
-    b.path("Proposal", &s.proposal);
-    b.paths("Scout findings", &s.scout_findings);
-});
-init_impl!(InitGenerateInventoryParams, InitializerMode::GenerateInventory, |s, b| {
-    b.line("Generated skills", &s.generated_skills);
-    b.line("Reused skills", &s.reused_skills);
-    b.path("Proposal", &s.proposal);
-    b.paths("Scout findings", &s.scout_findings);
-});
+init_impl!(
+    InitGenerateSkillParams,
+    InitializerMode::GenerateSkill,
+    |s, b| {
+        b.line("Skill name", &s.skill_name);
+        b.line("Skill kind", &s.skill_kind);
+        b.line("Disposition", &s.disposition);
+        b.path("Proposal", &s.proposal);
+        b.paths("Scout findings", &s.scout_findings);
+    }
+);
+init_impl!(
+    InitGenerateInventoryParams,
+    InitializerMode::GenerateInventory,
+    |s, b| {
+        b.line("Generated skills", &s.generated_skills);
+        b.line("Reused skills", &s.reused_skills);
+        b.path("Proposal", &s.proposal);
+        b.paths("Scout findings", &s.scout_findings);
+    }
+);
 
 // ---------------------------------------------------------------------------------------------
 // Runtime validation (harness executors)
@@ -725,7 +741,14 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     (
         "mode",
         &["Mode"],
-        Kind::Enum(&["detect", "adopt", "scout", "propose", "generate-skill", "generate-inventory"]),
+        Kind::Enum(&[
+            "detect",
+            "adopt",
+            "scout",
+            "propose",
+            "generate-skill",
+            "generate-inventory",
+        ]),
     ),
     ("user_focus", &["User focus"], Kind::Text),
     ("source_harness", &["Source harness"], Kind::Text),
@@ -743,8 +766,16 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("generated_skills", &["Generated skills"], Kind::Text),
     ("reused_skills", &["Reused skills"], Kind::Text),
     ("target", &["Target"], Kind::Path),
-    ("target_type", &["Target type"], Kind::Enum(&["spec", "plan"])),
-    ("source_check", &["Source check"], Kind::Enum(&["citations", "refetch"])),
+    (
+        "target_type",
+        &["Target type"],
+        Kind::Enum(&["spec", "plan"]),
+    ),
+    (
+        "source_check",
+        &["Source check"],
+        Kind::Enum(&["citations", "refetch"]),
+    ),
     ("prior_findings", &["Prior findings"], Kind::Text),
     ("spec_file", &["Spec file"], Kind::Path),
     ("phase_file", &["Phase file"], Kind::Path),
@@ -765,18 +796,34 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
 const COMMON: [&str; 4] = ["workspace_root", "repo_root", "session_dir", "repo_key"];
 
 /// `(required, one_of)` per agent, beyond the common four.
-fn contract(agent: AgentName, mode: Option<&str>) -> Result<(Vec<&'static str>, Vec<&'static str>), String> {
+fn contract(
+    agent: AgentName,
+    mode: Option<&str>,
+) -> Result<(Vec<&'static str>, Vec<&'static str>), String> {
     let one_of_work = vec!["phase_file", "no_plan"];
     Ok(match agent {
         AgentName::Explore | AgentName::GenerateSpec => (vec!["task"], vec![]),
-        AgentName::FactCheck => {
-            (vec!["target", "target_type", "prior_findings", "spec_file", "source_check"], vec![])
-        }
+        AgentName::FactCheck => (
+            vec![
+                "target",
+                "target_type",
+                "prior_findings",
+                "spec_file",
+                "source_check",
+            ],
+            vec![],
+        ),
         AgentName::Plan => (vec!["spec_file"], vec![]),
         AgentName::Implementer => (vec!["report_file"], one_of_work),
         AgentName::ExecutionPathAnalyzer => (vec!["implementer_report", "report_file"], vec![]),
-        AgentName::WriteTest => (vec!["implementer_report", "epa_report", "report_file"], one_of_work),
-        AgentName::CodeReviewer => (vec!["phase", "changed_files", "change_rationale"], one_of_work),
+        AgentName::WriteTest => (
+            vec!["implementer_report", "epa_report", "report_file"],
+            one_of_work,
+        ),
+        AgentName::CodeReviewer => (
+            vec!["phase", "changed_files", "change_rationale"],
+            one_of_work,
+        ),
         AgentName::PromptGeneration => (vec!["task", "target_files", "report_file"], vec![]),
         AgentName::ModuleDocumentation => (vec!["implementer_reports", "report_file"], vec![]),
         AgentName::QuickAnswer => (vec!["question"], vec![]),
@@ -787,10 +834,21 @@ fn contract(agent: AgentName, mode: Option<&str>) -> Result<(Vec<&'static str>, 
                 Some("scout") => vec!["slice", "slice_paths", "stack_reference", "scout_plan"],
                 Some("propose") => vec!["scout_findings", "scout_plan"],
                 Some("generate-skill") => {
-                    vec!["skill_name", "skill_kind", "disposition", "proposal", "scout_findings"]
+                    vec![
+                        "skill_name",
+                        "skill_kind",
+                        "disposition",
+                        "proposal",
+                        "scout_findings",
+                    ]
                 }
                 Some("generate-inventory") => {
-                    vec!["generated_skills", "reused_skills", "proposal", "scout_findings"]
+                    vec![
+                        "generated_skills",
+                        "reused_skills",
+                        "proposal",
+                        "scout_findings",
+                    ]
                 }
                 Some(other) => return Err(format!("`Mode: {other}` is not an initializer mode")),
                 None => return Err("missing required parameter `Mode:`".into()),
@@ -832,12 +890,17 @@ fn check(id: &str, kind: Kind, value: &str) -> Result<(), String> {
             let base = v.strip_suffix("-tests").unwrap_or(v);
             let ok = v == "none" || (!base.is_empty() && base.chars().all(|c| c.is_ascii_digit()));
             if !ok {
-                return Err(format!("`Phase:` must be `N`, `N-tests`, or `none`, got `{v}`"));
+                return Err(format!(
+                    "`Phase:` must be `N`, `N-tests`, or `none`, got `{v}`"
+                ));
             }
         }
         Kind::Enum(values) => {
             if !values.contains(&v) {
-                return Err(format!("`{id}` must be one of {}, got `{v}`", values.join(", ")));
+                return Err(format!(
+                    "`{id}` must be one of {}, got `{v}`",
+                    values.join(", ")
+                ));
             }
         }
         Kind::Path | Kind::Text => {}
@@ -866,26 +929,39 @@ pub fn parse_block(agent: AgentName, text: &str) -> Result<BTreeMap<String, Stri
             continue;
         }
         current = None;
-        let Some((label, rest)) = line.split_once(':') else { continue };
+        let Some((label, rest)) = line.split_once(':') else {
+            continue;
+        };
         if let Some((id, _)) = index.get(label.trim()) {
-            values.entry(id.to_string()).or_insert_with(|| rest.trim().to_string());
+            values
+                .entry(id.to_string())
+                .or_insert_with(|| rest.trim().to_string());
             current = Some(id.to_string());
         }
     }
     let (required, one_of) = contract(agent, values.get("mode").map(String::as_str))?;
     let kinds: BTreeMap<&str, Kind> = PARAMS.iter().map(|(id, _, k)| (*id, *k)).collect();
     for id in COMMON.iter().chain(required.iter()) {
-        let label = PARAMS.iter().find(|(p, _, _)| p == id).map(|(_, l, _)| l[0]).unwrap_or(id);
+        let label = PARAMS
+            .iter()
+            .find(|(p, _, _)| p == id)
+            .map(|(_, l, _)| l[0])
+            .unwrap_or(id);
         match values.get(*id) {
             None => return Err(format!("missing required parameter `{label}:`")),
             Some(v) => check(id, kinds[id], v)?,
         }
     }
     if !one_of.is_empty() {
-        let present: Vec<&&str> = one_of.iter().filter(|id| values.contains_key(**id)).collect();
+        let present: Vec<&&str> = one_of
+            .iter()
+            .filter(|id| values.contains_key(**id))
+            .collect();
         match present.len() {
             1 => check(present[0], kinds[*present[0]], &values[*present[0]])?,
-            0 => return Err("missing required parameter: one of `Phase file:` or `No plan:`".into()),
+            0 => {
+                return Err("missing required parameter: one of `Phase file:` or `No plan:`".into());
+            }
             _ => return Err("give exactly one of `Phase file:` or `No plan:`, not both".into()),
         }
     }

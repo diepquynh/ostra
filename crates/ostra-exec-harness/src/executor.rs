@@ -139,7 +139,11 @@ fn launch_error(message: String) -> String {
 }
 
 impl HarnessExecutor {
-    pub fn new(config: HarnessExecutorConfig, live: Arc<LiveRegistry>, ptys: Arc<PtyRegistry>) -> Self {
+    pub fn new(
+        config: HarnessExecutorConfig,
+        live: Arc<LiveRegistry>,
+        ptys: Arc<PtyRegistry>,
+    ) -> Self {
         HarnessExecutor {
             config: RwLock::new(config),
             live,
@@ -217,7 +221,11 @@ impl HarnessExecutor {
         if let Some(sid) = &plan.session_id {
             live.note_session(Some(sid.clone()), None);
         }
-        let log = TermLog::create(terminal_transcript(&spec.ctx.session_root, spec.id.as_str())).ok();
+        let log = TermLog::create(terminal_transcript(
+            &spec.ctx.session_root,
+            spec.id.as_str(),
+        ))
+        .ok();
         let pty = PtySession::spawn(
             &plan,
             cfg.cols,

@@ -30,7 +30,13 @@ pub struct ApiErr {
 
 impl ApiErr {
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        ApiErr { status, body: ApiError { error: message.into(), issues: vec![] } }
+        ApiErr {
+            status,
+            body: ApiError {
+                error: message.into(),
+                issues: vec![],
+            },
+        }
     }
     fn bad(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, message)
@@ -41,7 +47,10 @@ impl ApiErr {
     fn invalid(issues: Vec<ValidationIssue>) -> Self {
         ApiErr {
             status: StatusCode::UNPROCESSABLE_ENTITY,
-            body: ApiError { error: "The settings have problems. Fix them and save again.".into(), issues },
+            body: ApiError {
+                error: "The settings have problems. Fix them and save again.".into(),
+                issues,
+            },
         }
     }
     fn invalid_workspace(issues: Vec<ValidationIssue>) -> Self {
@@ -52,9 +61,19 @@ impl ApiErr {
     fn invalid_request(issues: Vec<ValidationIssue>, retry: &str) -> Self {
         let error = match issues.as_slice() {
             [one] => one.message.clone(),
-            _ => format!("Fix these problems and {retry} again: {}", issues.iter().map(|i| i.message.as_str()).collect::<Vec<_>>().join(" ")),
+            _ => format!(
+                "Fix these problems and {retry} again: {}",
+                issues
+                    .iter()
+                    .map(|i| i.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
         };
-        ApiErr { status: StatusCode::UNPROCESSABLE_ENTITY, body: ApiError { error, issues } }
+        ApiErr {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: ApiError { error, issues },
+        }
     }
 }
 
@@ -86,41 +105,67 @@ async fn guard(State(app): AppState, req: Request, next: Next) -> Response {
     let headers = req.headers();
     let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
     if !app.auth.allowed_host(host) {
-        return ApiErr::new(StatusCode::MISDIRECTED_REQUEST, "This host is not allowed.").into_response();
+        return ApiErr::new(StatusCode::MISDIRECTED_REQUEST, "This host is not allowed.")
+            .into_response();
     }
     let path = req.uri().path().to_string();
     // Harnesses always run on this machine, so the hook bridge and MCP shim refuse other peers
     // even when the server listens on every interface.
     if path.starts_with("/internal/")
-        && let Some(axum::extract::ConnectInfo(peer)) = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        && let Some(axum::extract::ConnectInfo(peer)) = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         && !crate::auth::is_local_address(peer.ip())
     {
-        return ApiErr::new(StatusCode::FORBIDDEN, "This endpoint accepts local connections only.").into_response();
+        return ApiErr::new(
+            StatusCode::FORBIDDEN,
+            "This endpoint accepts local connections only.",
+        )
+        .into_response();
     }
     let api = path.starts_with("/api/") || path == "/ws";
     if api {
         let origin = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok());
         if !app.auth.allowed_origin(origin) {
-            return ApiErr::new(StatusCode::FORBIDDEN, "This origin is not allowed.").into_response();
+            return ApiErr::new(StatusCode::FORBIDDEN, "This origin is not allowed.")
+                .into_response();
         }
         if path != "/api/auth/exchange" {
             let cookie = cookie_value(headers.get(header::COOKIE).and_then(|h| h.to_str().ok()));
             let sent = cookie.is_some();
             if !cookie.is_some_and(|c| app.auth.check_cookie(&c)) {
-                let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
-                let cookies_sent = headers.get(header::COOKIE).and_then(|h| h.to_str().ok()).map(|c| c.matches('=').count()).unwrap_or(0);
+                let peer = req
+                    .extensions()
+                    .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                    .map(|c| c.0);
+                let cookies_sent = headers
+                    .get(header::COOKIE)
+                    .and_then(|h| h.to_str().ok())
+                    .map(|c| c.matches('=').count())
+                    .unwrap_or(0);
                 tracing::info!(
                     "unauthorized {path}: session cookie {}; {cookies_sent} cookies sent; {}",
-                    if sent { "sent but not recognized" } else { "missing" },
+                    if sent {
+                        "sent but not recognized"
+                    } else {
+                        "missing"
+                    },
                     request_facts(headers, peer)
                 );
-                return ApiErr::new(StatusCode::UNAUTHORIZED, "Sign in with the URL the ostra command printed.").into_response();
+                return ApiErr::new(
+                    StatusCode::UNAUTHORIZED,
+                    "Sign in with the URL the ostra command printed.",
+                )
+                .into_response();
             }
         }
     }
     let mut res = next.run(req).await;
     let h = res.headers_mut();
-    h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    h.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
     res
@@ -131,18 +176,45 @@ pub fn router(app: Arc<App>) -> axum::Router {
     axum::Router::new()
         .route("/api/info", get(info))
         .route("/api/auth/exchange", post(exchange))
-        .route("/api/workspaces", get(list_workspaces).post(create_workspace))
-        .route("/api/workspaces/{ws}", get(get_workspace).patch(patch_workspace))
+        .route(
+            "/api/workspaces",
+            get(list_workspaces).post(create_workspace),
+        )
+        .route(
+            "/api/workspaces/{ws}",
+            get(get_workspace).patch(patch_workspace),
+        )
         .route("/api/workspaces/{ws}/validate", post(validate_workspace))
         .route("/api/workspaces/{ws}/projects", post(import_project))
-        .route("/api/workspaces/{ws}/projects/{key}", delete(remove_project))
-        .route("/api/workspaces/{ws}/projects/{key}/init", post(init_project))
+        .route(
+            "/api/workspaces/{ws}/projects/{key}",
+            delete(remove_project),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/init",
+            post(init_project),
+        )
         .route("/api/workspaces/{ws}/skills", get(skills_list))
-        .route("/api/workspaces/{ws}/projects/{key}/skills/{name}", get(skill_get).put(skill_save).delete(skill_delete))
-        .route("/api/workspaces/{ws}/projects/{key}/skills/{name}/adopt", post(skill_adopt))
-        .route("/api/workspaces/{ws}/projects/{key}/harness-skill", get(harness_skill_get))
-        .route("/api/workspaces/{ws}/projects/{key}/memory", get(memory_list).patch(memory_edit).delete(memory_delete))
-        .route("/api/workspaces/{ws}/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/skills/{name}",
+            get(skill_get).put(skill_save).delete(skill_delete),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/skills/{name}/adopt",
+            post(skill_adopt),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/harness-skill",
+            get(harness_skill_get),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/memory",
+            get(memory_list).patch(memory_edit).delete(memory_delete),
+        )
+        .route(
+            "/api/workspaces/{ws}/sessions",
+            get(list_sessions).post(create_session),
+        )
         .route("/api/workspaces/{ws}/cost", get(cost))
         .route("/api/workspaces/{ws}/ask", post(ask))
         .route("/api/sessions/{id}", get(get_session))
@@ -161,16 +233,37 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/fs/list", get(fs_list))
         .route("/api/environment", get(environment))
-        .route("/api/providers/{name}", axum::routing::patch(patch_provider))
+        .route(
+            "/api/providers/{name}",
+            axum::routing::patch(patch_provider),
+        )
         .route("/api/workspaces/validate", post(validate_new_workspace))
         .route("/api/onboarding", get(onboarding))
         .route("/api/onboarding/complete", post(complete_onboarding))
-        .route("/api/workspaces/{ws}/ui", get(get_ui_state).patch(patch_ui_state))
-        .route("/api/workspaces/{ws}/projects/{key}/tree", get(project_tree))
-        .route("/api/workspaces/{ws}/projects/{key}/file", get(project_file))
-        .route("/api/workspaces/{ws}/projects/{key}/files", get(project_files))
-        .route("/api/workspaces/{ws}/projects/{key}/diff", get(project_diff))
-        .route("/api/workspaces/{ws}/projects/{key}/changes", get(project_changes))
+        .route(
+            "/api/workspaces/{ws}/ui",
+            get(get_ui_state).patch(patch_ui_state),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/tree",
+            get(project_tree),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/file",
+            get(project_file),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/files",
+            get(project_files),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/diff",
+            get(project_diff),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/changes",
+            get(project_changes),
+        )
         .route("/api/fs", get(fs_browse))
         .route("/api/workspaces/{ws}/tree", get(workspace_tree))
         .route("/api/workspaces/{ws}/search", get(search))
@@ -187,7 +280,8 @@ pub fn router(app: Arc<App>) -> axum::Router {
 // ---------------------------------------------------------------------------------------------
 
 fn ws(app: &App, id: &str) -> Result<Arc<WorkspaceRt>, ApiErr> {
-    app.workspace(&WorkspaceId::from(id)).ok_or_else(|| ApiErr::not_found(format!("No workspace {id}.")))
+    app.workspace(&WorkspaceId::from(id))
+        .ok_or_else(|| ApiErr::not_found(format!("No workspace {id}.")))
 }
 
 fn ws_of_session(app: &App, id: &SessionId) -> Result<Arc<WorkspaceRt>, ApiErr> {
@@ -230,8 +324,17 @@ async fn info(State(app): AppState) -> Json<ServerInfo> {
 }
 
 /// Request facts worth logging when sign-in misbehaves. Never includes token or cookie values.
-fn request_facts(req_headers: &axum::http::HeaderMap, peer: Option<std::net::SocketAddr>) -> String {
-    let h = |name: &str| req_headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("-").to_string();
+fn request_facts(
+    req_headers: &axum::http::HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+) -> String {
+    let h = |name: &str| {
+        req_headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+            .to_string()
+    };
     format!(
         "peer={} host={} origin={} sec-fetch-site={} sec-fetch-mode={} sec-fetch-dest={} sec-purpose={} ua={:?}",
         peer.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
@@ -246,11 +349,20 @@ fn request_facts(req_headers: &axum::http::HeaderMap, peer: Option<std::net::Soc
 }
 
 async fn exchange(State(app): AppState, req: Request) -> Response {
-    let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|c| c.0);
     let facts = request_facts(req.headers(), peer);
     // The guard already accepted this Origin, so https here means a TLS proxy in front of Ostra.
-    let secure = req.headers().get(header::ORIGIN).and_then(|o| o.to_str().ok()).is_some_and(|o| o.to_ascii_lowercase().starts_with("https://"));
-    let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024).await.unwrap_or_default();
+    let secure = req
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|o| o.to_str().ok())
+        .is_some_and(|o| o.to_ascii_lowercase().starts_with("https://"));
+    let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024)
+        .await
+        .unwrap_or_default();
     let Ok(body) = serde_json::from_slice::<AuthExchange>(&bytes) else {
         tracing::info!("sign-in: unreadable body; {facts}");
         return ApiErr::bad("Send {\"token\": \"...\"}.").into_response();
@@ -280,22 +392,39 @@ async fn list_workspaces(State(app): AppState) -> Res<Vec<WorkspaceSummary>> {
                 let sessions = w.db.list_sessions().unwrap_or_default();
                 (
                     w.settings().projects.len() as u32,
-                    sessions.iter().filter(|s| matches!(s.status, SessionStatus::Running | SessionStatus::Waiting)).count() as u32,
+                    sessions
+                        .iter()
+                        .filter(|s| {
+                            matches!(s.status, SessionStatus::Running | SessionStatus::Waiting)
+                        })
+                        .count() as u32,
                 )
             }
             None => (0, 0),
         };
-        out.push(WorkspaceSummary { id: r.id, name: r.name, root: r.root.clone(), projects, active_sessions: active, available: rt.is_some() });
+        out.push(WorkspaceSummary {
+            id: r.id,
+            name: r.name,
+            root: r.root.clone(),
+            projects,
+            active_sessions: active,
+            available: rt.is_some(),
+        });
     }
     Ok(Json(out))
 }
 
-async fn create_workspace(State(app): AppState, Json(body): Json<CreateWorkspace>) -> Res<WorkspaceDetail> {
+async fn create_workspace(
+    State(app): AppState,
+    Json(body): Json<CreateWorkspace>,
+) -> Res<WorkspaceDetail> {
     refresh_env(&app).await;
     match crate::setup::create(&app, &body) {
         Ok(rt) => Ok(Json(rt.detail())),
         Err(crate::setup::CreateError::Invalid(issues)) => Err(ApiErr::invalid_workspace(issues)),
-        Err(crate::setup::CreateError::Failed(m)) => Err(ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m)),
+        Err(crate::setup::CreateError::Failed(m)) => {
+            Err(ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m))
+        }
     }
 }
 
@@ -306,7 +435,10 @@ pub(crate) async fn refresh_env(app: &App) {
     }
 }
 
-async fn validate_new_workspace(State(app): AppState, Json(body): Json<CreateWorkspace>) -> Res<Vec<ValidationIssue>> {
+async fn validate_new_workspace(
+    State(app): AppState,
+    Json(body): Json<CreateWorkspace>,
+) -> Res<Vec<ValidationIssue>> {
     refresh_env(&app).await;
     Ok(Json(crate::setup::validate(&app, &body)))
 }
@@ -315,17 +447,32 @@ async fn environment(State(app): AppState) -> Json<EnvironmentStatus> {
     Json(crate::setup::environment(&app).await)
 }
 
-async fn patch_provider(State(app): AppState, Path(name): Path<String>, Json(edit): Json<ProviderCredentialsEdit>) -> Res<ProviderStatus> {
-    if !matches!(name.as_str(), "anthropic" | "openai") || !app.shared.global().providers.contains_key(&name) {
-        return Err(ApiErr::not_found(format!("No provider {name} in the global config.")));
+async fn patch_provider(
+    State(app): AppState,
+    Path(name): Path<String>,
+    Json(edit): Json<ProviderCredentialsEdit>,
+) -> Res<ProviderStatus> {
+    if !matches!(name.as_str(), "anthropic" | "openai")
+        || !app.shared.global().providers.contains_key(&name)
+    {
+        return Err(ApiErr::not_found(format!(
+            "No provider {name} in the global config."
+        )));
     }
     let registry = &app.shared.registry;
     let saved = crate::credentials::apply(crate::credentials::load(registry, &name)?, &edit)
         .map_err(|issues| ApiErr::invalid_request(issues, "save the provider"))?;
     crate::credentials::save(registry, &name, &saved)?;
     app.shared.reload_providers()?;
-    let status = app.shared.providers.status().into_iter().find(|p| p.name == name);
-    status.map(Json).ok_or_else(|| ApiErr::not_found(format!("No provider {name} in the global config.")))
+    let status = app
+        .shared
+        .providers
+        .status()
+        .into_iter()
+        .find(|p| p.name == name);
+    status
+        .map(Json)
+        .ok_or_else(|| ApiErr::not_found(format!("No provider {name} in the global config.")))
 }
 
 async fn onboarding(State(app): AppState) -> Res<OnboardingState> {
@@ -341,7 +488,11 @@ async fn get_ui_state(State(app): AppState, Path(id): Path<String>) -> Res<Works
     Ok(Json(ws(&app, &id)?.ui_state()))
 }
 
-async fn patch_ui_state(State(app): AppState, Path(id): Path<String>, body: axum::body::Bytes) -> Res<WorkspaceUiState> {
+async fn patch_ui_state(
+    State(app): AppState,
+    Path(id): Path<String>,
+    body: axum::body::Bytes,
+) -> Res<WorkspaceUiState> {
     use crate::ui_state::UiStateError;
     ws(&app, &id)?.patch_ui_state(&body).map(Json).map_err(|e| {
         let status = match e {
@@ -358,37 +509,59 @@ async fn get_workspace(State(app): AppState, Path(id): Path<String>) -> Res<Work
     Ok(Json(ws(&app, &id)?.detail()))
 }
 
-async fn patch_workspace(State(app): AppState, Path(id): Path<String>, Json(settings): Json<WorkspaceSettings>) -> Res<WorkspaceDetail> {
+async fn patch_workspace(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(settings): Json<WorkspaceSettings>,
+) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
     w.save_settings(&settings).map_err(ApiErr::invalid)?;
     if let Some(r) = app.shared.registry.get_workspace(&w.id)?
         && r.name != settings.name
     {
-        app.shared.registry.rename_workspace(&w.id, &settings.name)?;
+        app.shared
+            .registry
+            .rename_workspace(&w.id, &settings.name)?;
     }
     Ok(Json(w.detail()))
 }
 
-async fn validate_workspace(State(app): AppState, Path(id): Path<String>, Json(settings): Json<WorkspaceSettings>) -> Res<Vec<ValidationIssue>> {
+async fn validate_workspace(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(settings): Json<WorkspaceSettings>,
+) -> Res<Vec<ValidationIssue>> {
     Ok(Json(ws(&app, &id)?.validate(&settings)))
 }
 
-async fn import_project(State(app): AppState, Path(id): Path<String>, Json(body): Json<ImportProject>) -> Res<WorkspaceDetail> {
+async fn import_project(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ImportProject>,
+) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
     w.import_project(&body).map_err(|e| match e {
-        crate::setup::CreateError::Invalid(issues) => ApiErr::invalid_request(issues, "import the project"),
+        crate::setup::CreateError::Invalid(issues) => {
+            ApiErr::invalid_request(issues, "import the project")
+        }
         crate::setup::CreateError::Failed(m) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m),
     })?;
     Ok(Json(w.detail()))
 }
 
-async fn remove_project(State(app): AppState, Path((id, key)): Path<(String, String)>) -> Res<WorkspaceDetail> {
+async fn remove_project(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
     w.remove_project(&key).map_err(ApiErr::not_found)?;
     Ok(Json(w.detail()))
 }
 
-async fn init_project(State(app): AppState, Path((id, key)): Path<(String, String)>) -> Res<SessionSummary> {
+async fn init_project(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<SessionSummary> {
     let w = ws(&app, &id)?;
     Ok(Json(w.engine.create_init_session(&key, None)?))
 }
@@ -397,7 +570,11 @@ async fn list_sessions(State(app): AppState, Path(id): Path<String>) -> Res<Vec<
     Ok(Json(ws(&app, &id)?.db.list_sessions()?))
 }
 
-async fn create_session(State(app): AppState, Path(id): Path<String>, Json(body): Json<CreateSession>) -> Res<SessionSummary> {
+async fn create_session(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<CreateSession>,
+) -> Res<SessionSummary> {
     Ok(Json(ws(&app, &id)?.engine.create_session(body)?))
 }
 
@@ -412,15 +589,27 @@ struct After {
     after: Option<i64>,
 }
 
-async fn session_events(State(app): AppState, Path(id): Path<String>, Query(q): Query<After>) -> Res<Vec<StoredEvent>> {
+async fn session_events(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<After>,
+) -> Res<Vec<StoredEvent>> {
     let sid = SessionId::from(id);
     let w = ws_of_session(&app, &sid)?;
     Ok(Json(w.db.events_after(&sid, q.after.unwrap_or(0))?))
 }
 
-async fn set_yolo(State(app): AppState, Path(id): Path<String>, Json(body): Json<SetYolo>) -> Res<SessionSummary> {
+async fn set_yolo(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetYolo>,
+) -> Res<SessionSummary> {
     let sid = SessionId::from(id);
-    Ok(Json(ws_of_session(&app, &sid)?.engine.set_yolo(&sid, body.enabled)?))
+    Ok(Json(
+        ws_of_session(&app, &sid)?
+            .engine
+            .set_yolo(&sid, body.enabled)?,
+    ))
 }
 
 async fn stop_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionSummary> {
@@ -428,21 +617,42 @@ async fn stop_session(State(app): AppState, Path(id): Path<String>) -> Res<Sessi
     Ok(Json(ws_of_session(&app, &sid)?.engine.stop_session(&sid)?))
 }
 
-async fn amend(State(app): AppState, Path(id): Path<String>, Json(body): Json<AmendRequest>) -> Res<SessionSummary> {
+async fn amend(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<AmendRequest>,
+) -> Res<SessionSummary> {
     let sid = SessionId::from(id);
-    Ok(Json(ws_of_session(&app, &sid)?.engine.amend(&sid, body.text)?))
+    Ok(Json(
+        ws_of_session(&app, &sid)?.engine.amend(&sid, body.text)?,
+    ))
 }
 
-async fn answer_gate(State(app): AppState, Path(id): Path<String>, Json(body): Json<AnswerGate>) -> Res<GateView> {
+async fn answer_gate(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<AnswerGate>,
+) -> Res<GateView> {
     let gid = GateId::from(id);
-    Ok(Json(ws_of_gate(&app, &gid)?.engine.answer_gate(&gid, body.answer)?))
+    Ok(Json(
+        ws_of_gate(&app, &gid)?
+            .engine
+            .answer_gate(&gid, body.answer)?,
+    ))
 }
 
-async fn override_decision(State(app): AppState, Path(id): Path<String>, Json(body): Json<OverrideDecision>) -> Res<DecisionView> {
+async fn override_decision(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<OverrideDecision>,
+) -> Res<DecisionView> {
     let did = DecisionId::from(id);
     let w = ws_of_decision(&app, &did)?;
     w.engine.override_decision(&did, body.output, body.reason)?;
-    Ok(Json(w.db.get_decision(&did)?.ok_or_else(|| ApiErr::not_found("decision"))?))
+    Ok(Json(
+        w.db.get_decision(&did)?
+            .ok_or_else(|| ApiErr::not_found("decision"))?,
+    ))
 }
 
 async fn get_execution(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView> {
@@ -453,7 +663,11 @@ async fn get_execution(State(app): AppState, Path(id): Path<String>) -> Res<Exec
     Ok(Json(v))
 }
 
-async fn activity(State(app): AppState, Path(id): Path<String>, Query(q): Query<After>) -> Res<Vec<ActivityItem>> {
+async fn activity(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<After>,
+) -> Res<Vec<ActivityItem>> {
     let eid = ExecutionId::from(id);
     let w = ws_of_execution(&app, &eid)?;
     Ok(Json(w.db.activity_after(&eid, q.after.unwrap_or(0))?))
@@ -482,21 +696,34 @@ const ARTIFACT_LIMIT: u64 = 4 * 1024 * 1024;
 
 /// Session-dir files only (HANDOVER 13).
 async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artifact> {
-    let path = std::fs::canonicalize(PathBuf::from(&q.path)).map_err(|_| ApiErr::not_found(format!("{} does not exist.", q.path)))?;
+    let path = std::fs::canonicalize(PathBuf::from(&q.path))
+        .map_err(|_| ApiErr::not_found(format!("{} does not exist.", q.path)))?;
     let allowed = app.all_workspaces().iter().any(|w| {
-        std::fs::canonicalize(paths::sessions_root(&w.root)).is_ok_and(|root| paths::is_inside(&root, &path))
+        std::fs::canonicalize(paths::sessions_root(&w.root))
+            .is_ok_and(|root| paths::is_inside(&root, &path))
     });
     if !allowed {
-        return Err(ApiErr::new(StatusCode::FORBIDDEN, "Only files inside a session directory can be opened here."));
+        return Err(ApiErr::new(
+            StatusCode::FORBIDDEN,
+            "Only files inside a session directory can be opened here.",
+        ));
     }
     let meta = std::fs::metadata(&path).map_err(|e| ApiErr::not_found(e.to_string()))?;
     if !meta.is_file() || meta.len() > ARTIFACT_LIMIT {
-        return Err(ApiErr::bad("That path is not a readable file of at most 4 MB."));
+        return Err(ApiErr::bad(
+            "That path is not a readable file of at most 4 MB.",
+        ));
     }
-    let content = std::fs::read_to_string(&path).map_err(|_| ApiErr::bad("The file is not text."))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|_| ApiErr::bad("The file is not text."))?;
     let headings = ostra_core::outline::headings(&content);
     let document = ostra_core::doc::load_view(&path);
-    Ok(Json(Artifact { path, content, headings, document }))
+    Ok(Json(Artifact {
+        path,
+        content,
+        headings,
+        document,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -506,7 +733,13 @@ struct DiffQuery {
 }
 
 async fn git_show(root: &std::path::Path, rev_path: &str) -> String {
-    let out = tokio::process::Command::new("git").arg("-C").arg(root).arg("show").arg(rev_path).output().await;
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("show")
+        .arg(rev_path)
+        .output()
+        .await;
     match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
         _ => String::new(),
@@ -514,13 +747,23 @@ async fn git_show(root: &std::path::Path, rev_path: &str) -> String {
 }
 
 /// The review loop's changed files against HEAD, for the ledger's diff view.
-async fn diff(State(app): AppState, Path(id): Path<String>, Query(q): Query<DiffQuery>) -> Res<Vec<DiffFile>> {
+async fn diff(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<DiffQuery>,
+) -> Res<Vec<DiffFile>> {
     let sid = SessionId::from(id);
     let w = ws_of_session(&app, &sid)?;
     let st = w.engine.state(&sid)?;
-    let root = st.project_path(&q.project).ok_or_else(|| ApiErr::not_found("No such project in this session."))?;
+    let root = st
+        .project_path(&q.project)
+        .ok_or_else(|| ApiErr::not_found("No such project in this session."))?;
     let mut files: std::collections::BTreeSet<String> = Default::default();
-    for p in st.phases.values().filter(|p| p.info.project == q.project && q.phase.is_none_or(|n| n == p.info.id)) {
+    for p in st
+        .phases
+        .values()
+        .filter(|p| p.info.project == q.project && q.phase.is_none_or(|n| n == p.info.id))
+    {
         files.extend(p.impl_loop.changed.iter().cloned());
         files.extend(p.test_loop.changed.iter().cloned());
     }
@@ -540,7 +783,9 @@ async fn diff(State(app): AppState, Path(id): Path<String>, Query(q): Query<Diff
 }
 
 fn memory_store(w: &WorkspaceRt, key: &str) -> Result<MemoryStore, ApiErr> {
-    let path = w.project_path(key).ok_or_else(|| ApiErr::not_found(format!("No project {key}.")))?;
+    let path = w
+        .project_path(key)
+        .ok_or_else(|| ApiErr::not_found(format!("No project {key}.")))?;
     Ok(MemoryStore::open(&paths::project_memory_db(&path))?)
 }
 
@@ -549,12 +794,24 @@ struct MemQuery {
     q: Option<String>,
 }
 
-async fn memory_list(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<MemQuery>) -> Res<Vec<Lesson>> {
+async fn memory_list(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<MemQuery>,
+) -> Res<Vec<Lesson>> {
     let w = ws(&app, &id)?;
-    Ok(Json(memory_store(&w, &key)?.list(q.q.as_deref(), 500, 0)?))
+    Ok(Json(memory_store(&w, &key)?.list(
+        q.q.as_deref(),
+        500,
+        0,
+    )?))
 }
 
-async fn memory_edit(State(app): AppState, Path((id, key)): Path<(String, String)>, Json(body): Json<LessonEdit>) -> Res<Lesson> {
+async fn memory_edit(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<LessonEdit>,
+) -> Res<Lesson> {
     let w = ws(&app, &id)?;
     let store = memory_store(&w, &key)?;
     if body.area.trim().is_empty() || body.lesson.trim().is_empty() {
@@ -579,7 +836,11 @@ struct IdQuery {
     id: i64,
 }
 
-async fn memory_delete(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<IdQuery>) -> Result<StatusCode, ApiErr> {
+async fn memory_delete(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<IdQuery>,
+) -> Result<StatusCode, ApiErr> {
     let w = ws(&app, &id)?;
     memory_store(&w, &key)?.delete(q.id)?;
     Ok(StatusCode::NO_CONTENT)
@@ -592,28 +853,46 @@ async fn skills_list(State(app): AppState, Path(id): Path<String>) -> Res<Vec<Pr
     Ok(Json(crate::skills::list(&w)))
 }
 
-async fn skill_get(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>) -> Res<SkillDoc> {
+async fn skill_get(
+    State(app): AppState,
+    Path((id, key, name)): Path<(String, String, String)>,
+) -> Res<SkillDoc> {
     let w = ws(&app, &id)?;
     Ok(Json(crate::skills::get(&w, &key, &name)?))
 }
 
-async fn skill_save(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>, Json(body): Json<SkillSave>) -> Res<SkillDoc> {
+async fn skill_save(
+    State(app): AppState,
+    Path((id, key, name)): Path<(String, String, String)>,
+    Json(body): Json<SkillSave>,
+) -> Res<SkillDoc> {
     let w = ws(&app, &id)?;
     Ok(Json(crate::skills::save(&w, &key, &name, &body)?))
 }
 
-async fn skill_delete(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>) -> Result<StatusCode, ApiErr> {
+async fn skill_delete(
+    State(app): AppState,
+    Path((id, key, name)): Path<(String, String, String)>,
+) -> Result<StatusCode, ApiErr> {
     let w = ws(&app, &id)?;
     crate::skills::delete(&w, &key, &name)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn skill_adopt(State(app): AppState, Path((id, key, name)): Path<(String, String, String)>, Json(body): Json<SkillAdopt>) -> Res<SkillDoc> {
+async fn skill_adopt(
+    State(app): AppState,
+    Path((id, key, name)): Path<(String, String, String)>,
+    Json(body): Json<SkillAdopt>,
+) -> Res<SkillDoc> {
     let w = ws(&app, &id)?;
     Ok(Json(crate::skills::adopt(&w, &key, &name, &body)?))
 }
 
-async fn harness_skill_get(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<PathQuery>) -> Res<SkillDoc> {
+async fn harness_skill_get(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<PathQuery>,
+) -> Res<SkillDoc> {
     let w = ws(&app, &id)?;
     Ok(Json(crate::skills::get_harness(&w, &key, &q.path)?))
 }
@@ -623,11 +902,19 @@ struct CostQuery {
     since: Option<String>,
 }
 
-async fn cost(State(app): AppState, Path(id): Path<String>, Query(q): Query<CostQuery>) -> Res<CostReport> {
+async fn cost(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<CostQuery>,
+) -> Res<CostReport> {
     let since = match q.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => Some(
             chrono::DateTime::parse_from_rfc3339(s)
-                .map_err(|_| ApiErr::bad(format!("`since` must be an RFC 3339 time such as 2026-09-24T00:00:00Z, not `{s}`.")))?
+                .map_err(|_| {
+                    ApiErr::bad(format!(
+                        "`since` must be an RFC 3339 time such as 2026-09-24T00:00:00Z, not `{s}`."
+                    ))
+                })?
                 .with_timezone(&chrono::Utc),
         ),
         None => None,
@@ -635,15 +922,24 @@ async fn cost(State(app): AppState, Path(id): Path<String>, Query(q): Query<Cost
     Ok(Json(ws(&app, &id)?.db.cost_report(since)?))
 }
 
-async fn ask(State(app): AppState, Path(id): Path<String>, Json(body): Json<AskQuestion>) -> Res<AskStarted> {
+async fn ask(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<AskQuestion>,
+) -> Res<AskStarted> {
     let w = ws(&app, &id)?;
     if body.question.trim().is_empty() {
         return Err(ApiErr::bad("Ask a question first."));
     }
-    Ok(Json(AskStarted { execution: w.engine.ask(body.question, body.session).await? }))
+    Ok(Json(AskStarted {
+        execution: w.engine.ask(body.question, body.session).await?,
+    }))
 }
 
-async fn push_subscribe(State(app): AppState, Json(body): Json<PushSubscription>) -> Result<StatusCode, ApiErr> {
+async fn push_subscribe(
+    State(app): AppState,
+    Json(body): Json<PushSubscription>,
+) -> Result<StatusCode, ApiErr> {
     if !body.endpoint.starts_with("https://") {
         return Err(ApiErr::bad("Push endpoints must use https."));
     }
@@ -657,10 +953,16 @@ struct FsQuery {
 }
 
 async fn fs_list(Query(q): Query<FsQuery>) -> Res<FsListing> {
-    let start = q.path.filter(|p| !p.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")));
-    let path = std::fs::canonicalize(&start).map_err(|_| ApiErr::not_found(format!("{} does not exist.", start.display())))?;
+    let start = q
+        .path
+        .filter(|p| !p.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")));
+    let path = std::fs::canonicalize(&start)
+        .map_err(|_| ApiErr::not_found(format!("{} does not exist.", start.display())))?;
     let mut entries = vec![];
-    let read = std::fs::read_dir(&path).map_err(|e| ApiErr::bad(format!("Cannot read {}: {e}", path.display())))?;
+    let read = std::fs::read_dir(&path)
+        .map_err(|e| ApiErr::bad(format!("Cannot read {}: {e}", path.display())))?;
     for e in read.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         if name.starts_with('.') {
@@ -670,37 +972,64 @@ async fn fs_list(Query(q): Query<FsQuery>) -> Res<FsListing> {
         if !p.is_dir() {
             continue;
         }
-        entries.push(FsEntry { is_git: p.join(".git").exists(), is_ostra_project: paths::project_inventory(&p).exists(), name, is_dir: true });
+        entries.push(FsEntry {
+            is_git: p.join(".git").exists(),
+            is_ostra_project: paths::project_inventory(&p).exists(),
+            name,
+            is_dir: true,
+        });
     }
     entries.sort_by_key(|e| e.name.to_lowercase());
-    Ok(Json(FsListing { parent: path.parent().map(|p| p.to_path_buf()), path, entries }))
+    Ok(Json(FsListing {
+        parent: path.parent().map(|p| p.to_path_buf()),
+        path,
+        entries,
+    }))
 }
 
 // Project files (read-only). The logic lives in `crate::files`.
 
-async fn project_tree(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<files::TreeQuery>) -> Res<ProjectTree> {
+async fn project_tree(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<files::TreeQuery>,
+) -> Res<ProjectTree> {
     let w = ws(&app, &id)?;
     Ok(Json(app.files.tree(&w, &key, q).await?))
 }
 
-async fn project_file(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<files::FileQuery>) -> Res<ProjectFile> {
+async fn project_file(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<files::FileQuery>,
+) -> Res<ProjectFile> {
     let w = ws(&app, &id)?;
     Ok(Json(app.files.file(&w, &key, &q.path).await?))
 }
 
 /// Responds with a [`FileIndex`].
-async fn project_files(State(app): AppState, Path((id, key)): Path<(String, String)>) -> Result<Response, ApiErr> {
+async fn project_files(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Result<Response, ApiErr> {
     let w = ws(&app, &id)?;
     let index = app.files.index(&w, &key).await?;
     Ok(Json(index.as_ref()).into_response())
 }
 
-async fn project_diff(State(app): AppState, Path((id, key)): Path<(String, String)>, Query(q): Query<files::DiffQuery>) -> Res<FileDiff> {
+async fn project_diff(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<files::DiffQuery>,
+) -> Res<FileDiff> {
     let w = ws(&app, &id)?;
     Ok(Json(app.files.diff(&w, &key, q).await?))
 }
 
-async fn project_changes(State(app): AppState, Path((id, key)): Path<(String, String)>) -> Res<Vec<ProjectChange>> {
+async fn project_changes(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<Vec<ProjectChange>> {
     let w = ws(&app, &id)?;
     Ok(Json(app.files.changes(&w, &key).await?))
 }
@@ -713,7 +1042,9 @@ fn blocking_failed(e: tokio::task::JoinError) -> ApiErr {
 
 async fn workspace_tree(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceTree> {
     let w = ws(&app, &id)?;
-    let tree = tokio::task::spawn_blocking(move || app.nav.tree(&w)).await.map_err(blocking_failed)??;
+    let tree = tokio::task::spawn_blocking(move || app.nav.tree(&w))
+        .await
+        .map_err(blocking_failed)??;
     Ok(Json(tree))
 }
 
@@ -723,18 +1054,34 @@ struct SearchQuery {
     limit: Option<usize>,
 }
 
-async fn search(State(app): AppState, Path(id): Path<String>, Query(q): Query<SearchQuery>) -> Res<SearchResults> {
+async fn search(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<SearchQuery>,
+) -> Res<SearchResults> {
     let w = ws(&app, &id)?;
-    Ok(Json(crate::nav::search::search(&app, &w, q.q.as_deref().unwrap_or(""), q.limit).await?))
+    Ok(Json(
+        crate::nav::search::search(&app, &w, q.q.as_deref().unwrap_or(""), q.limit).await?,
+    ))
 }
 
-async fn workspace_activity(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceActivity> {
+async fn workspace_activity(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Res<WorkspaceActivity> {
     let w = ws(&app, &id)?;
-    let activity = tokio::task::spawn_blocking(move || crate::nav::activity::build(&w, chrono::Local::now())).await.map_err(blocking_failed)??;
+    let activity =
+        tokio::task::spawn_blocking(move || crate::nav::activity::build(&w, chrono::Local::now()))
+            .await
+            .map_err(blocking_failed)??;
     Ok(Json(activity))
 }
 
 async fn fs_browse(State(app): AppState, Query(q): Query<files::BrowseQuery>) -> Json<FsBrowse> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-    Json(app.files.browse.browse(q.path.as_deref(), q.prefix.as_deref(), q.limit, &home))
+    Json(
+        app.files
+            .browse
+            .browse(q.path.as_deref(), q.prefix.as_deref(), q.limit, &home),
+    )
 }

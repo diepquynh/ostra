@@ -38,7 +38,9 @@ fn logged_in(h: HarnessKind) -> Option<bool> {
             if std::env::var_os("OPENAI_API_KEY").is_some() {
                 return Some(true);
             }
-            let codex_home = std::env::var_os("CODEX_HOME").map(PathBuf::from).unwrap_or_else(|| h_dir.join(".codex"));
+            let codex_home = std::env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| h_dir.join(".codex"));
             Some(codex_home.join("auth.json").exists())
         }
         HarnessKind::Grok | HarnessKind::Agy => None,
@@ -48,13 +50,20 @@ fn logged_in(h: HarnessKind) -> Option<bool> {
 async fn version(command: &str) -> Option<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(8),
-        tokio::process::Command::new(command).arg("--version").kill_on_drop(true).output(),
+        tokio::process::Command::new(command)
+            .arg("--version")
+            .kill_on_drop(true)
+            .output(),
     )
     .await
     .ok()?
     .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
-    text.lines().map(str::trim).find(|l| !l.is_empty()).map(String::from)
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    text.lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(String::from)
 }
 
 impl EnvStatus {
@@ -63,7 +72,11 @@ impl EnvStatus {
         for h in HarnessKind::ALL {
             let command = global.harness_command(h);
             let installed = which::which(&command).is_ok();
-            let v = if installed { version(&command).await } else { None };
+            let v = if installed {
+                version(&command).await
+            } else {
+                None
+            };
             harnesses.push(HarnessStatus {
                 harness: h,
                 command,
@@ -72,11 +85,18 @@ impl EnvStatus {
                 logged_in: if installed { logged_in(h) } else { Some(false) },
             });
         }
-        EnvStatus { harnesses, checked: Instant::now() }
+        EnvStatus {
+            harnesses,
+            checked: Instant::now(),
+        }
     }
 
     pub fn installed(&self) -> Vec<HarnessKind> {
-        self.harnesses.iter().filter(|h| h.installed).map(|h| h.harness).collect()
+        self.harnesses
+            .iter()
+            .filter(|h| h.installed)
+            .map(|h| h.harness)
+            .collect()
     }
 
     pub fn stale(&self) -> bool {

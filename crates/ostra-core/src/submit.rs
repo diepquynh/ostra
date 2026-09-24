@@ -84,7 +84,9 @@ pub enum Verdict {
     Error,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS, JsonSchema,
+)]
 #[serde(rename_all = "UPPERCASE")]
 #[ts(export)]
 pub enum Severity {
@@ -137,7 +139,15 @@ impl FactCheckSubmit {
         }
         self.findings
             .iter()
-            .map(|f| format!("{}, {}: {} {}", f.severity.as_str(), f.location, f.claim, f.issue))
+            .map(|f| {
+                format!(
+                    "{}, {}: {} {}",
+                    f.severity.as_str(),
+                    f.location,
+                    f.claim,
+                    f.issue
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -225,7 +235,11 @@ impl ReviewFinding {
             self.description.trim_end(),
             self.fix.trim_end()
         );
-        if let Some(g) = self.guidance.as_ref().filter(|_| self.severity == Severity::Blocker) {
+        if let Some(g) = self
+            .guidance
+            .as_ref()
+            .filter(|_| self.severity == Severity::Blocker)
+        {
             s.push_str(" Guidance: ");
             s.push_str(g.trim_end());
         }
@@ -320,7 +334,9 @@ pub fn submit_description(agent: AgentName) -> String {
 /// Validate a submit payload for an agent. Returns the parsed value or a message for the model.
 pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String> {
     fn check<T: serde::de::DeserializeOwned>(v: &serde_json::Value) -> Result<(), String> {
-        serde_json::from_value::<T>(v.clone()).map(|_| ()).map_err(|e| e.to_string())
+        serde_json::from_value::<T>(v.clone())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
     match agent {
         AgentName::Explore => check::<ExploreSubmit>(input),
@@ -329,10 +345,13 @@ pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<()
         AgentName::Plan => check::<PlanSubmit>(input),
         AgentName::Implementer => check::<ImplementerSubmit>(input),
         AgentName::CodeReviewer => {
-            let r: CodeReviewerSubmit = serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+            let r: CodeReviewerSubmit =
+                serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
             let has_blocker = r.findings.iter().any(|f| f.severity == Severity::Blocker);
             if has_blocker != r.security_block {
-                return Err("security_block must be true exactly when a BLOCKER finding is present".into());
+                return Err(
+                    "security_block must be true exactly when a BLOCKER finding is present".into(),
+                );
             }
             Ok(())
         }

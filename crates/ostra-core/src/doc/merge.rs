@@ -49,18 +49,26 @@ pub(crate) fn natural_cmp(a: &str, b: &str) -> Ordering {
 
 /// Merge `update` into `base` and drop every keyed item whose id is in `remove`. Keyed lists end
 /// in natural id order, so a new `R12` lands after `R11` wherever it was sent.
-pub fn apply_update(base: Option<Value>, update: &Value, remove: &[String]) -> Result<Value, MergeError> {
+pub fn apply_update(
+    base: Option<Value>,
+    update: &Value,
+    remove: &[String],
+) -> Result<Value, MergeError> {
     let mut doc = match base {
         Some(Value::Object(m)) => m,
         Some(_) => return Err(MergeError("The stored document is not an object.".into())),
         None => Map::new(),
     };
     let Value::Object(update) = update else {
-        return Err(MergeError("`update` must be an object of top-level document fields.".into()));
+        return Err(MergeError(
+            "`update` must be an object of top-level document fields.".into(),
+        ));
     };
     for (key, new) in update {
         match (doc.get_mut(key), new) {
-            (Some(Value::Array(old)), Value::Array(items)) if (keyed(old) || old.is_empty()) && keyed(items) => {
+            (Some(Value::Array(old)), Value::Array(items))
+                if (keyed(old) || old.is_empty()) && keyed(items) =>
+            {
                 for item in items {
                     let id = id_of(item);
                     match old.iter_mut().find(|o| id_of(o) == id) {
@@ -68,7 +76,9 @@ pub fn apply_update(base: Option<Value>, update: &Value, remove: &[String]) -> R
                         None => old.push(item.clone()),
                     }
                 }
-                old.sort_by(|a, b| natural_cmp(&id_of(a).unwrap_or_default(), &id_of(b).unwrap_or_default()));
+                old.sort_by(|a, b| {
+                    natural_cmp(&id_of(a).unwrap_or_default(), &id_of(b).unwrap_or_default())
+                });
             }
             _ => {
                 doc.insert(key.clone(), new.clone());
@@ -125,7 +135,12 @@ mod tests {
     #[test]
     fn numeric_ids_and_removal() {
         let base = json!({"phases": [{"id": 1}, {"id": 2}, {"id": 3}], "risks": []});
-        let out = apply_update(Some(base.clone()), &json!({"phases": [{"id": 2, "n": "x"}]}), &["3".into()]).unwrap();
+        let out = apply_update(
+            Some(base.clone()),
+            &json!({"phases": [{"id": 2, "n": "x"}]}),
+            &["3".into()],
+        )
+        .unwrap();
         assert_eq!(out["phases"], json!([{"id": 1}, {"id": 2, "n": "x"}]));
         let err = apply_update(Some(base), &json!({}), &["R9".into()]).unwrap_err();
         assert!(err.0.contains("R9"), "{err}");

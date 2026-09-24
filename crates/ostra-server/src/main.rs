@@ -2,7 +2,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "ostra", version, about = "Ostra: a local workspace that runs the engineering pipeline")]
+#[command(
+    name = "ostra",
+    version,
+    about = "Ostra: a local workspace that runs the engineering pipeline"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -63,7 +67,9 @@ enum Command {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
     match cli.command {
         Some(Command::Hook { args }) => {
             let code = runtime.block_on(ostra_server::bridge::hook_cli(args));
@@ -89,9 +95,18 @@ fn main() -> anyhow::Result<()> {
             if list.is_empty() {
                 println!("No browser is signed in.");
             }
-            let date = |s: u64| chrono::DateTime::from_timestamp(s as i64, 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
+            let date = |s: u64| {
+                chrono::DateTime::from_timestamp(s as i64, 0)
+                    .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
+                    .unwrap_or_default()
+            };
             for s in list {
-                println!("{}  signed in {}  expires {}", s.id, date(s.created), date(s.expires));
+                println!(
+                    "{}  signed in {}  expires {}",
+                    s.id,
+                    date(s.created),
+                    date(s.expires)
+                );
             }
             Ok(())
         }
@@ -113,18 +128,27 @@ fn main() -> anyhow::Result<()> {
 
 async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     use tracing_subscriber::fmt::writer::MakeWriterExt;
-    let filter = || tracing_subscriber::EnvFilter::try_from_env("OSTRA_LOG").unwrap_or_else(|_| "info".into());
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_env("OSTRA_LOG").unwrap_or_else(|_| "info".into())
+    };
     let dir = ostra_core::paths::data_dir();
     let _ = std::fs::create_dir_all(&dir);
     // Also keep a log file, so problems in a browser elsewhere can be read back later.
-    match std::fs::OpenOptions::new().create(true).append(true).open(dir.join("server.log")) {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("server.log"))
+    {
         Ok(file) => tracing_subscriber::fmt()
             .with_env_filter(filter())
             .with_target(false)
             .with_ansi(false)
             .with_writer(std::io::stdout.and(std::sync::Mutex::new(file)))
             .init(),
-        Err(_) => tracing_subscriber::fmt().with_env_filter(filter()).with_target(false).init(),
+        Err(_) => tracing_subscriber::fmt()
+            .with_env_filter(filter())
+            .with_target(false)
+            .init(),
     }
     let opts = ostra_server::app::ServeOptions {
         port: args.port,

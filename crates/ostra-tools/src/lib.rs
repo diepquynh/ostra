@@ -20,7 +20,9 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-pub use defs::{ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search};
+pub use defs::{
+    ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search,
+};
 
 /// Resolves an embedded skill name (for example `meta-author`) to its path and content.
 pub type SkillResolver = Arc<dyn Fn(&str) -> Option<(PathBuf, String)> + Send + Sync>;
@@ -61,11 +63,18 @@ pub struct ToolOutput {
 
 impl ToolOutput {
     pub(crate) fn ok(text: impl Into<String>) -> Self {
-        ToolOutput { text: text.into(), ..Default::default() }
+        ToolOutput {
+            text: text.into(),
+            ..Default::default()
+        }
     }
 
     pub(crate) fn err(text: impl Into<String>) -> Self {
-        ToolOutput { text: text.into(), is_error: true, ..Default::default() }
+        ToolOutput {
+            text: text.into(),
+            is_error: true,
+            ..Default::default()
+        }
     }
 }
 
@@ -78,7 +87,12 @@ impl ToolEnv {
             .user_agent(concat!("ostra/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_default();
-        ToolEnv { config, cwd: Mutex::new(cwd), read_files: Mutex::new(HashSet::new()), http }
+        ToolEnv {
+            config,
+            cwd: Mutex::new(cwd),
+            read_files: Mutex::new(HashSet::new()),
+            http,
+        }
     }
 
     pub fn config(&self) -> &ToolEnvConfig {
@@ -165,11 +179,14 @@ pub(crate) fn str_arg<'a>(input: &'a serde_json::Value, key: &str) -> Option<&'a
 }
 
 pub(crate) fn required<'a>(input: &'a serde_json::Value, key: &str) -> Result<&'a str, ToolOutput> {
-    str_arg(input, key).ok_or_else(|| ToolOutput::err(format!("Missing required parameter `{key}`.")))
+    str_arg(input, key)
+        .ok_or_else(|| ToolOutput::err(format!("Missing required parameter `{key}`.")))
 }
 
 pub(crate) fn u64_arg(input: &serde_json::Value, key: &str) -> Option<u64> {
-    input.get(key).and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f.max(0.0) as u64)))
+    input
+        .get(key)
+        .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f.max(0.0) as u64)))
 }
 
 pub(crate) fn bool_arg(input: &serde_json::Value, key: &str) -> Option<bool> {
@@ -193,7 +210,12 @@ pub(crate) mod testutil {
             memory_db: session.join("memory/knowledge.sqlite3"),
             memory_source: "implementer x_test".into(),
             skill_resolver: Arc::new(|name: &str| {
-                (name == "meta-author").then(|| (PathBuf::from("/assets/skills/meta-author/SKILL.md"), "# Meta".into()))
+                (name == "meta-author").then(|| {
+                    (
+                        PathBuf::from("/assets/skills/meta-author/SKILL.md"),
+                        "# Meta".into(),
+                    )
+                })
             }),
             repo_root: repo,
             session_dir: session,
@@ -201,6 +223,13 @@ pub(crate) mod testutil {
     }
 
     pub async fn run(env: &ToolEnv, tool: &str, input: serde_json::Value) -> ToolOutput {
-        execute(env, "c1", &ToolCall::new(tool, input), None, CancellationToken::new()).await
+        execute(
+            env,
+            "c1",
+            &ToolCall::new(tool, input),
+            None,
+            CancellationToken::new(),
+        )
+        .await
     }
 }

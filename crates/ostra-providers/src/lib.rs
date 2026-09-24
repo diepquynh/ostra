@@ -7,10 +7,10 @@ pub mod openai;
 mod retry;
 mod sse;
 
+use ostra_core::Effort;
 use ostra_core::api::{ProviderStatus, SavedProviderView};
 use ostra_core::config::{GlobalConfig, ProviderConfig, SavedCredentials};
 use ostra_core::exec::Usage;
-use ostra_core::Effort;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -36,11 +36,17 @@ pub struct SystemBlock {
 
 impl SystemBlock {
     pub fn new(text: impl Into<String>) -> Self {
-        SystemBlock { text: text.into(), cache: false }
+        SystemBlock {
+            text: text.into(),
+            cache: false,
+        }
     }
 
     pub fn cached(text: impl Into<String>) -> Self {
-        SystemBlock { text: text.into(), cache: true }
+        SystemBlock {
+            text: text.into(),
+            cache: true,
+        }
     }
 }
 
@@ -120,15 +126,24 @@ pub struct Message {
 
 impl Message {
     pub fn user_text(text: impl Into<String>) -> Self {
-        Message { role: Role::User, content: vec![Block::Text { text: text.into() }] }
+        Message {
+            role: Role::User,
+            content: vec![Block::Text { text: text.into() }],
+        }
     }
 
     pub fn assistant(content: Vec<Block>) -> Self {
-        Message { role: Role::Assistant, content }
+        Message {
+            role: Role::Assistant,
+            content,
+        }
     }
 
     pub fn tool_results(results: Vec<Block>) -> Self {
-        Message { role: Role::User, content: results }
+        Message {
+            role: Role::User,
+            content: results,
+        }
     }
 }
 
@@ -168,8 +183,16 @@ impl Block {
         Block::Text { text: text.into() }
     }
 
-    pub fn tool_result(tool_use_id: impl Into<String>, content: impl Into<String>, is_error: bool) -> Self {
-        Block::ToolResult { tool_use_id: tool_use_id.into(), content: content.into(), is_error }
+    pub fn tool_result(
+        tool_use_id: impl Into<String>,
+        content: impl Into<String>,
+        is_error: bool,
+    ) -> Self {
+        Block::ToolResult {
+            tool_use_id: tool_use_id.into(),
+            content: content.into(),
+            is_error,
+        }
     }
 }
 
@@ -177,10 +200,19 @@ impl Block {
 pub enum StreamEvent {
     TextDelta(String),
     ThinkingDelta(String),
-    ToolUseStarted { id: String, name: String },
-    ToolInputDelta { id: String, partial_json: String },
+    ToolUseStarted {
+        id: String,
+        name: String,
+    },
+    ToolInputDelta {
+        id: String,
+        partial_json: String,
+    },
     /// A provider-side tool ran (web search, web fetch). `summary` is its query or URL.
-    ServerToolUsed { name: String, summary: String },
+    ServerToolUsed {
+        name: String,
+        summary: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -245,11 +277,21 @@ pub enum ProviderError {
     #[error("request rejected ({status}): {message}")]
     InvalidRequest { status: u16, message: String },
     #[error("rate limited: {message}")]
-    RateLimited { message: String, retry_after: Option<u64> },
+    RateLimited {
+        message: String,
+        retry_after: Option<u64>,
+    },
     #[error("provider overloaded: {message}")]
-    Overloaded { message: String, retry_after: Option<u64> },
+    Overloaded {
+        message: String,
+        retry_after: Option<u64>,
+    },
     #[error("provider error ({status}): {message}")]
-    Server { status: u16, message: String, retry_after: Option<u64> },
+    Server {
+        status: u16,
+        message: String,
+        retry_after: Option<u64>,
+    },
     #[error("network error: {0}")]
     Network(String),
     /// The stream failed after output started, so it was not retried.
@@ -365,7 +407,9 @@ impl Default for Providers {
 
 impl fmt::Debug for Providers {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Providers").field("names", &self.map.read().keys().collect::<Vec<_>>()).finish()
+        f.debug_struct("Providers")
+            .field("names", &self.map.read().keys().collect::<Vec<_>>())
+            .finish()
     }
 }
 
@@ -383,16 +427,28 @@ fn saved_value(value: Option<&String>) -> Option<&str> {
 /// Look a key up in the environment, then what was saved from the browser, then the OS keychain.
 pub fn lookup_key(name: &str, cfg: &ProviderConfig, saved: &SavedCredentials) -> Option<KeyLookup> {
     if let Some((value, source)) = env_value(cfg.api_key_env.as_deref()) {
-        return Some(KeyLookup { key: ApiKey::new(value), source });
+        return Some(KeyLookup {
+            key: ApiKey::new(value),
+            source,
+        });
     }
     if let Some((value, source)) = env_value(cfg.auth_token_env.as_deref()) {
-        return Some(KeyLookup { key: ApiKey::bearer(value), source });
+        return Some(KeyLookup {
+            key: ApiKey::bearer(value),
+            source,
+        });
     }
     if let Some(value) = saved_value(saved.api_key.as_ref()) {
-        return Some(KeyLookup { key: ApiKey::new(value), source: "saved".into() });
+        return Some(KeyLookup {
+            key: ApiKey::new(value),
+            source: "saved".into(),
+        });
     }
     if let Some(value) = saved_value(saved.auth_token.as_ref()) {
-        return Some(KeyLookup { key: ApiKey::bearer(value), source: "saved".into() });
+        return Some(KeyLookup {
+            key: ApiKey::bearer(value),
+            source: "saved".into(),
+        });
     }
     let service = cfg.keychain_service.as_deref()?;
     let entry = keyring::Entry::new(service, name).ok()?;
@@ -400,11 +456,17 @@ pub fn lookup_key(name: &str, cfg: &ProviderConfig, saved: &SavedCredentials) ->
     if value.trim().is_empty() {
         return None;
     }
-    Some(KeyLookup { key: ApiKey::new(value.trim()), source: "keychain".into() })
+    Some(KeyLookup {
+        key: ApiKey::new(value.trim()),
+        source: "keychain".into(),
+    })
 }
 
 /// The base URL and where it came from: `config.toml`, then the environment, then what was saved.
-pub fn resolve_base_url(cfg: &ProviderConfig, saved: &SavedCredentials) -> (Option<String>, String) {
+pub fn resolve_base_url(
+    cfg: &ProviderConfig,
+    saved: &SavedCredentials,
+) -> (Option<String>, String) {
     if let Some(url) = saved_value(cfg.base_url.as_ref()) {
         return (Some(url.to_string()), "config".into());
     }
@@ -421,7 +483,10 @@ type Lookup<'a> = &'a dyn Fn(&str, &ProviderConfig, &SavedCredentials) -> Option
 
 impl Providers {
     pub fn empty() -> Self {
-        Providers { map: RwLock::new(BTreeMap::new()), statuses: RwLock::new(vec![]) }
+        Providers {
+            map: RwLock::new(BTreeMap::new()),
+            statuses: RwLock::new(vec![]),
+        }
     }
 
     /// Build from the global config and the saved credentials, reading keys from the environment,
@@ -447,7 +512,12 @@ impl Providers {
         self.rebuild(cfg, saved, &lookup_key);
     }
 
-    fn rebuild(&self, cfg: &GlobalConfig, saved: &BTreeMap<String, SavedCredentials>, lookup: Lookup<'_>) {
+    fn rebuild(
+        &self,
+        cfg: &GlobalConfig,
+        saved: &BTreeMap<String, SavedCredentials>,
+        lookup: Lookup<'_>,
+    ) {
         let mut map = BTreeMap::new();
         let mut statuses = vec![];
         let none = SavedCredentials::default();
@@ -458,7 +528,10 @@ impl Providers {
             statuses.push(ProviderStatus {
                 name: name.clone(),
                 has_key: found.is_some(),
-                source: found.as_ref().map(|k| k.source.clone()).unwrap_or_else(|| "none".into()),
+                source: found
+                    .as_ref()
+                    .map(|k| k.source.clone())
+                    .unwrap_or_else(|| "none".into()),
                 base_url: base_url.clone(),
                 base_url_source,
                 saved: SavedProviderView {
@@ -525,7 +598,10 @@ impl Providers {
     }
 
     /// Resolve a native `provider:model` string to the provider and the bare model id.
-    pub fn for_model(&self, provider_model: &str) -> Result<(Arc<dyn Provider>, String), ProviderError> {
+    pub fn for_model(
+        &self,
+        provider_model: &str,
+    ) -> Result<(Arc<dyn Provider>, String), ProviderError> {
         let (name, model) = provider_model
             .split_once(':')
             .filter(|(p, m)| !p.is_empty() && !m.is_empty())
@@ -557,7 +633,16 @@ pub async fn structured(
     schema: serde_json::Value,
     effort: Effort,
 ) -> Result<(serde_json::Value, Usage), ProviderError> {
-    structured_cancellable(provider, model, system, user, schema, effort, CancellationToken::new()).await
+    structured_cancellable(
+        provider,
+        model,
+        system,
+        user,
+        schema,
+        effort,
+        CancellationToken::new(),
+    )
+    .await
 }
 
 pub async fn structured_cancellable(
@@ -574,7 +659,8 @@ pub async fn structured_cancellable(
     req.messages = vec![Message::user_text(user)];
     req.tools = vec![ToolDef {
         name: DECIDE_TOOL.into(),
-        description: "Record your decision. Call this exactly once with the complete decision.".into(),
+        description: "Record your decision. Call this exactly once with the complete decision."
+            .into(),
         input_schema: schema,
         cache: true,
     }];
@@ -587,13 +673,19 @@ pub async fn structured_cancellable(
     for attempt in 0..2 {
         let resp = provider.chat(req.clone(), &noop, cancel.clone()).await?;
         usage.add(&resp.usage);
-        if let Some((_, _, input)) = resp.tool_uses().into_iter().find(|(_, name, _)| *name == DECIDE_TOOL) {
+        if let Some((_, _, input)) = resp
+            .tool_uses()
+            .into_iter()
+            .find(|(_, name, _)| *name == DECIDE_TOOL)
+        {
             return Ok((input.clone(), usage));
         }
         if resp.stop == StopReason::Refusal {
             return Err(ProviderError::Decode(format!(
                 "the model refused the decision{}",
-                resp.refusal_category.map(|c| format!(" (category {c})")).unwrap_or_default()
+                resp.refusal_category
+                    .map(|c| format!(" (category {c})"))
+                    .unwrap_or_default()
             )));
         }
         if attempt == 0 {
@@ -603,7 +695,9 @@ pub async fn structured_cancellable(
             ));
         }
     }
-    Err(ProviderError::Decode("the model did not call the `decide` tool".into()))
+    Err(ProviderError::Decode(
+        "the model did not call the `decide` tool".into(),
+    ))
 }
 
 /// Replace the content of all but the newest `keep` tool results with a short marker. Used by
@@ -630,7 +724,8 @@ pub fn clear_old_tool_results(messages: &mut [Message], keep: usize) -> usize {
     cleared
 }
 
-pub const CLEARED_MARKER: &str = "[Old tool result cleared to save context. Re-run the tool if you need it again.]";
+pub const CLEARED_MARKER: &str =
+    "[Old tool result cleared to save context. Re-run the tool if you need it again.]";
 
 #[cfg(test)]
 mod tests {
@@ -647,15 +742,28 @@ mod tests {
     fn registry_resolves_models() {
         let cfg = GlobalConfig::default();
         let providers = Providers::from_config_with(&cfg, &BTreeMap::new(), |name, _, _| {
-            (name == "anthropic").then(|| KeyLookup { key: ApiKey::new("k"), source: "env:TEST".into() })
+            (name == "anthropic").then(|| KeyLookup {
+                key: ApiKey::new("k"),
+                source: "env:TEST".into(),
+            })
         });
         let status = providers.status();
-        assert!(status.iter().any(|s| s.name == "anthropic" && s.has_key && s.source == "env:TEST"));
+        assert!(
+            status
+                .iter()
+                .any(|s| s.name == "anthropic" && s.has_key && s.source == "env:TEST")
+        );
         assert!(status.iter().any(|s| s.name == "openai" && !s.has_key));
         let (p, m) = providers.for_model("anthropic:claude-sonnet-5").unwrap();
         assert_eq!((p.name(), m.as_str()), ("anthropic", "claude-sonnet-5"));
-        assert!(matches!(providers.for_model("openai:gpt-5.6-sol"), Err(ProviderError::NoKey(_))));
-        assert!(matches!(providers.for_model("nope"), Err(ProviderError::BadModel(_))));
+        assert!(matches!(
+            providers.for_model("openai:gpt-5.6-sol"),
+            Err(ProviderError::NoKey(_))
+        ));
+        assert!(matches!(
+            providers.for_model("nope"),
+            Err(ProviderError::BadModel(_))
+        ));
         providers.register("mock", Arc::new(ScriptedProvider::new()));
         assert!(providers.for_model("mock:any").is_ok());
     }
@@ -664,15 +772,25 @@ mod tests {
     fn environment_overrides_saved_credentials() {
         let var = |suffix: &str| format!("OSTRA_TEST_{}_{suffix}", std::process::id());
         let (key_var, url_var) = (var("KEY"), var("URL"));
-        let cfg = ProviderConfig { api_key_env: Some(key_var.clone()), base_url_env: Some(url_var.clone()), ..Default::default() };
+        let cfg = ProviderConfig {
+            api_key_env: Some(key_var.clone()),
+            base_url_env: Some(url_var.clone()),
+            ..Default::default()
+        };
         let saved = SavedCredentials {
             base_url: Some("https://saved.example".into()),
             api_key: None,
             auth_token: Some("saved-token".into()),
         };
         let found = lookup_key("anthropic", &cfg, &saved).unwrap();
-        assert_eq!((found.source.as_str(), found.key.is_bearer()), ("saved", true));
-        assert_eq!(resolve_base_url(&cfg, &saved), (Some("https://saved.example".into()), "saved".into()));
+        assert_eq!(
+            (found.source.as_str(), found.key.is_bearer()),
+            ("saved", true)
+        );
+        assert_eq!(
+            resolve_base_url(&cfg, &saved),
+            (Some("https://saved.example".into()), "saved".into())
+        );
 
         // SAFETY: the variables are unique to this test.
         unsafe {
@@ -680,10 +798,19 @@ mod tests {
             std::env::set_var(&url_var, "https://env.example");
         }
         let found = lookup_key("anthropic", &cfg, &saved).unwrap();
-        assert_eq!((found.source, found.key.is_bearer()), (format!("env:{key_var}"), false));
-        assert_eq!(resolve_base_url(&cfg, &saved), (Some("https://env.example".into()), format!("env:{url_var}")));
+        assert_eq!(
+            (found.source, found.key.is_bearer()),
+            (format!("env:{key_var}"), false)
+        );
+        assert_eq!(
+            resolve_base_url(&cfg, &saved),
+            (Some("https://env.example".into()), format!("env:{url_var}"))
+        );
 
-        let pinned = ProviderConfig { base_url: Some("https://config.example".into()), ..cfg };
+        let pinned = ProviderConfig {
+            base_url: Some("https://config.example".into()),
+            ..cfg
+        };
         assert_eq!(resolve_base_url(&pinned, &saved).1, "config");
         unsafe {
             std::env::remove_var(&key_var);
@@ -697,23 +824,43 @@ mod tests {
         let providers = Providers::from_config_with(&cfg, &BTreeMap::new(), |_, _, _| None);
         providers.register("mock", Arc::new(ScriptedProvider::new()));
         let mut saved = BTreeMap::new();
-        saved.insert("openai".to_string(), SavedCredentials { api_key: Some("k".into()), ..Default::default() });
-        providers.rebuild(&cfg, &saved, &|_, _, s| s.api_key.clone().map(|k| KeyLookup { key: ApiKey::new(k), source: "saved".into() }));
+        saved.insert(
+            "openai".to_string(),
+            SavedCredentials {
+                api_key: Some("k".into()),
+                ..Default::default()
+            },
+        );
+        providers.rebuild(&cfg, &saved, &|_, _, s| {
+            s.api_key.clone().map(|k| KeyLookup {
+                key: ApiKey::new(k),
+                source: "saved".into(),
+            })
+        });
         assert!(providers.get("mock").is_some());
         assert!(providers.get("openai").is_some());
         let status = providers.status();
-        assert!(status.iter().any(|s| s.name == "openai" && s.source == "saved" && s.saved.has_api_key));
+        assert!(
+            status
+                .iter()
+                .any(|s| s.name == "openai" && s.source == "saved" && s.saved.has_api_key)
+        );
     }
 
     #[test]
     fn clears_old_results() {
         let mut msgs = vec![
             Message::tool_results(vec![Block::tool_result("a", "one", false)]),
-            Message::tool_results(vec![Block::tool_result("b", "two", false), Block::tool_result("c", "three", false)]),
+            Message::tool_results(vec![
+                Block::tool_result("b", "two", false),
+                Block::tool_result("c", "three", false),
+            ]),
         ];
         assert_eq!(clear_old_tool_results(&mut msgs, 1), 2);
         assert_eq!(clear_old_tool_results(&mut msgs, 1), 0);
-        assert!(matches!(&msgs[1].content[1], Block::ToolResult { content, .. } if content == "three"));
+        assert!(
+            matches!(&msgs[1].content[1], Block::ToolResult { content, .. } if content == "three")
+        );
     }
 
     #[tokio::test]
@@ -721,9 +868,16 @@ mod tests {
         let p = ScriptedProvider::new();
         p.push_text("I think the answer is low.");
         p.push_tool_use(DECIDE_TOOL, serde_json::json!({"stakes": "low"}));
-        let (v, _) = structured(&p, "m", "sys", "user", serde_json::json!({"type": "object"}), Effort::Low)
-            .await
-            .unwrap();
+        let (v, _) = structured(
+            &p,
+            "m",
+            "sys",
+            "user",
+            serde_json::json!({"type": "object"}),
+            Effort::Low,
+        )
+        .await
+        .unwrap();
         assert_eq!(v["stakes"], "low");
         let reqs = p.requests();
         assert_eq!(reqs.len(), 2);

@@ -405,16 +405,26 @@ pub fn check_write(
 }
 
 /// The `Document` tool's target: its owner writes it, inside this execution's session dir.
-pub fn check_document(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial> {
+pub fn check_document(
+    ctx: &ExecContext,
+    roots: &Roots,
+    target: &Path,
+    raw: &str,
+) -> Option<Denial> {
     if roots.is_protected(target) || roots.is_engine_state(target) {
         return check_write(ctx, roots, target, raw, None);
     }
-    let base = target.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let base = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     for (pattern, owner, why) in ARTIFACTS.iter() {
         if pattern.is_match(&base) && ctx.agent != *owner {
             return Some(deny(
                 ARTIFACT_OWNERSHIP,
-                format!("Leave \"{base}\" to {owner}: {why}. Say what should change in your report instead."),
+                format!(
+                    "Leave \"{base}\" to {owner}: {why}. Say what should change in your report instead."
+                ),
             ));
         }
     }

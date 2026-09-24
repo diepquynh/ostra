@@ -5,9 +5,9 @@ use crate::runner::EngineError;
 use crate::state::{DocsState, EpaState, ExecRecord, LoopNext, SessionState, WorkLoop};
 use ostra_core::agent::AgentName;
 use ostra_core::api::{
-    FactCheckView,
-    ArtifactRef, ChangedBy, DecisionView, ExecutionGroupView, ExecutionView, GateView, PendingGate, PhaseStatus, PhaseView,
-    SessionDetail, SessionStatus, SessionSummary, StageCard, StageStatus, TreeGroup, TreeRun, TreeSession,
+    ArtifactRef, ChangedBy, DecisionView, ExecutionGroupView, ExecutionView, FactCheckView,
+    GateView, PendingGate, PhaseStatus, PhaseView, SessionDetail, SessionStatus, SessionSummary,
+    StageCard, StageStatus, TreeGroup, TreeRun, TreeSession,
 };
 use ostra_core::event::{GatePayload, JudgeKind, SessionKind, numbered_run_label};
 use ostra_core::exec::ExecutionStatus;
@@ -21,7 +21,13 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 pub fn summary(s: &SessionState, workspace: &WorkspaceId, judge_cost: f64) -> SessionSummary {
-    let cost: f64 = s.executions.values().filter_map(|e| e.result.as_ref()).map(|r| r.usage.cost_usd).sum::<f64>() + judge_cost;
+    let cost: f64 = s
+        .executions
+        .values()
+        .filter_map(|e| e.result.as_ref())
+        .map(|r| r.usage.cost_usd)
+        .sum::<f64>()
+        + judge_cost;
     let open = s.open_gates().count() as u32;
     let running = s.running_executions().count();
     let status = if s.completed.is_some() {
@@ -66,10 +72,22 @@ pub fn inferred_stage(s: &SessionState) -> (Lane, String) {
     }
     if let Some(r) = s.running_executions().last() {
         let label = match &r.purpose {
-            ostra_core::event::ExecPurpose::Implement { phase, .. } => format!("Implementing phase {phase}"),
-            ostra_core::event::ExecPurpose::Review { phase, tests: false, iteration } => format!("Reviewing phase {phase}, pass {iteration}"),
-            ostra_core::event::ExecPurpose::Review { phase, tests: true, iteration } => format!("Reviewing tests of phase {phase}, pass {iteration}"),
-            ostra_core::event::ExecPurpose::WriteTest { phase, .. } => format!("Writing tests for phase {phase}"),
+            ostra_core::event::ExecPurpose::Implement { phase, .. } => {
+                format!("Implementing phase {phase}")
+            }
+            ostra_core::event::ExecPurpose::Review {
+                phase,
+                tests: false,
+                iteration,
+            } => format!("Reviewing phase {phase}, pass {iteration}"),
+            ostra_core::event::ExecPurpose::Review {
+                phase,
+                tests: true,
+                iteration,
+            } => format!("Reviewing tests of phase {phase}, pass {iteration}"),
+            ostra_core::event::ExecPurpose::WriteTest { phase, .. } => {
+                format!("Writing tests for phase {phase}")
+            }
             _ => stage_label(r.stage).to_string(),
         };
         return (r.stage.lane(), label);
@@ -81,7 +99,12 @@ pub fn inferred_stage(s: &SessionState) -> (Lane, String) {
 }
 
 fn first(s: &str) -> String {
-    s.lines().next().unwrap_or_default().chars().take(120).collect()
+    s.lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(120)
+        .collect()
 }
 
 pub fn stage_label(k: StageKind) -> &'static str {
@@ -125,10 +148,17 @@ pub fn stage_label(k: StageKind) -> &'static str {
 }
 
 fn exec_ids(s: &SessionState, f: impl Fn(&crate::state::ExecRecord) -> bool) -> Vec<ExecutionId> {
-    s.executions.values().filter(|e| f(e)).map(|e| e.id.clone()).collect()
+    s.executions
+        .values()
+        .filter(|e| f(e))
+        .map(|e| e.id.clone())
+        .collect()
 }
 
-fn gate_for(s: &SessionState, f: impl Fn(&GatePayload) -> bool) -> Option<&crate::state::GateRecord> {
+fn gate_for(
+    s: &SessionState,
+    f: impl Fn(&GatePayload) -> bool,
+) -> Option<&crate::state::GateRecord> {
     s.gates.values().rev().find(|g| f(&g.payload))
 }
 
@@ -154,7 +184,9 @@ fn loop_status(l: &WorkLoop) -> StageStatus {
         LoopNext::Idle => StageStatus::Pending,
         LoopNext::Done => StageStatus::Done,
         LoopNext::Blocked { .. } => StageStatus::Blocked,
-        LoopNext::CapReached { .. } | LoopNext::RescueGate { .. } | LoopNext::Failed { .. } => StageStatus::Waiting,
+        LoopNext::CapReached { .. } | LoopNext::RescueGate { .. } | LoopNext::Failed { .. } => {
+            StageStatus::Waiting
+        }
         _ => StageStatus::Running,
     }
 }
@@ -165,41 +197,89 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
     if let SessionKind::Init { project } = &s.kind {
         if let Some(i) = &s.init {
             let st = |exec: &Option<ExecutionId>, done: bool| {
-                if done { StageStatus::Done } else if exec.is_some() { StageStatus::Running } else { StageStatus::Pending }
+                if done {
+                    StageStatus::Done
+                } else if exec.is_some() {
+                    StageStatus::Running
+                } else {
+                    StageStatus::Pending
+                }
             };
-            let mut c = card(StageKind::Detect, "Detect the stack".into(), st(&i.detect, i.detect_result.is_some()));
+            let mut c = card(
+                StageKind::Detect,
+                "Detect the stack".into(),
+                st(&i.detect, i.detect_result.is_some()),
+            );
             c.project = Some(project.clone());
-            c.executions = exec_ids(s, |e| matches!(e.purpose, P::Init { mode: ostra_core::InitializerMode::Detect, .. }));
+            c.executions = exec_ids(s, |e| {
+                matches!(
+                    e.purpose,
+                    P::Init {
+                        mode: ostra_core::InitializerMode::Detect,
+                        ..
+                    }
+                )
+            });
             out.push(c);
             for x in &i.scouts {
-                let mut c = card(StageKind::Scout, format!("Scout {}", x.key), st(&x.exec, x.result.is_some()));
+                let mut c = card(
+                    StageKind::Scout,
+                    format!("Scout {}", x.key),
+                    st(&x.exec, x.result.is_some()),
+                );
                 c.executions = x.exec.iter().cloned().collect();
                 out.push(c);
             }
-            let mut c = card(StageKind::Propose, "Propose skills".into(), st(&i.propose, i.propose_result.is_some()));
+            let mut c = card(
+                StageKind::Propose,
+                "Propose skills".into(),
+                st(&i.propose, i.propose_result.is_some()),
+            );
             c.executions = i.propose.iter().cloned().collect();
             out.push(c);
             let mut c = card(
                 StageKind::SkillApproval,
                 "Approve skills".into(),
-                if i.decisions.is_some() { StageStatus::Done } else if i.approval_gate.is_some() { StageStatus::Waiting } else { StageStatus::Pending },
+                if i.decisions.is_some() {
+                    StageStatus::Done
+                } else if i.approval_gate.is_some() {
+                    StageStatus::Waiting
+                } else {
+                    StageStatus::Pending
+                },
             );
             c.gate = i.approval_gate.clone();
             out.push(c);
             for x in &i.generates {
-                let mut c = card(StageKind::GenerateSkill, format!("Generate {}", x.key), st(&x.exec, x.result.is_some()));
+                let mut c = card(
+                    StageKind::GenerateSkill,
+                    format!("Generate {}", x.key),
+                    st(&x.exec, x.result.is_some()),
+                );
                 c.executions = x.exec.iter().cloned().collect();
                 out.push(c);
             }
-            let mut c = card(StageKind::GenerateInventory, "Write the inventory".into(), st(&i.inventory, i.inventory_result.is_some()));
+            let mut c = card(
+                StageKind::GenerateInventory,
+                "Write the inventory".into(),
+                st(&i.inventory, i.inventory_result.is_some()),
+            );
             c.executions = i.inventory.iter().cloned().collect();
             out.push(c);
         }
         out.push(completion_card(s));
         return out;
     }
-    let classify_status = if s.category.is_some() { StageStatus::Done } else { StageStatus::Running };
-    let mut c = card(StageKind::Classify, "Classify the request".into(), classify_status);
+    let classify_status = if s.category.is_some() {
+        StageStatus::Done
+    } else {
+        StageStatus::Running
+    };
+    let mut c = card(
+        StageKind::Classify,
+        "Classify the request".into(),
+        classify_status,
+    );
     c.detail = s.category.map(|c| c.to_string());
     out.push(c);
     for t in &s.explore {
@@ -214,16 +294,29 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         } else {
             StageStatus::Pending
         };
-        let mut c = card(StageKind::Explore, format!("Research: {}", first(&t.task)), status);
+        let mut c = card(
+            StageKind::Explore,
+            format!("Research: {}", first(&t.task)),
+            status,
+        );
         c.project = Some(t.project.clone());
         c.executions = t.exec.iter().cloned().collect();
         c.gate = t.gate.clone();
-        c.detail = t.result.as_ref().map(|r| format!("{} sources, {} open questions", r.sources_retrieved, r.open_questions));
+        c.detail = t.result.as_ref().map(|r| {
+            format!(
+                "{} sources, {} open questions",
+                r.sources_retrieved, r.open_questions
+            )
+        });
         out.push(c);
     }
     let decisions_of = |k: JudgeKind| s.decisions.values().filter(|d| d.judge == k).count();
     if decisions_of(JudgeKind::Sufficiency) > 0 {
-        let mut c = card(StageKind::Sufficiency, "Check research coverage".into(), StageStatus::Done);
+        let mut c = card(
+            StageKind::Sufficiency,
+            "Check research coverage".into(),
+            StageStatus::Done,
+        );
         c.detail = Some(format!("{} rounds", s.sufficiency_rounds));
         out.push(c);
     }
@@ -232,13 +325,30 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         let mut c = card(
             StageKind::Spec,
             "Write the spec".into(),
-            if t.running.is_some() { StageStatus::Running } else if t.current.is_some() { StageStatus::Done } else { StageStatus::Failed },
+            if t.running.is_some() {
+                StageStatus::Running
+            } else if t.current.is_some() {
+                StageStatus::Done
+            } else {
+                StageStatus::Failed
+            },
         );
         c.executions = exec_ids(s, |e| matches!(e.purpose, P::Spec { .. }));
         c.detail = Some(format!("version {}", t.version));
         out.push(c);
-        if let Some(g) = gate_for(s, |p| matches!(p, GatePayload::OpenQuestions { artifact, .. } if artifact == "spec")) {
-            let mut c = card(StageKind::OpenQuestions, "Open questions".into(), if g.answer.is_some() { StageStatus::Done } else { StageStatus::Waiting });
+        if let Some(g) = gate_for(
+            s,
+            |p| matches!(p, GatePayload::OpenQuestions { artifact, .. } if artifact == "spec"),
+        ) {
+            let mut c = card(
+                StageKind::OpenQuestions,
+                "Open questions".into(),
+                if g.answer.is_some() {
+                    StageStatus::Done
+                } else {
+                    StageStatus::Waiting
+                },
+            );
             c.gate = Some(g.id.clone());
             out.push(c);
         }
@@ -247,24 +357,56 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             let mut c = card(
                 StageKind::FactCheckSpec,
                 "Fact-check the spec".into(),
-                if t.check_running.is_some() { StageStatus::Running } else if verdict == Some(Verdict::Pass) { StageStatus::Done } else { StageStatus::Running },
+                if t.check_running.is_some() {
+                    StageStatus::Running
+                } else if verdict == Some(Verdict::Pass) {
+                    StageStatus::Done
+                } else {
+                    StageStatus::Running
+                },
             );
-            c.executions = exec_ids(s, |e| matches!(e.purpose, P::FactCheck { target: ostra_core::event::FactTarget::Spec, .. }));
-            c.detail = t.check_for_current().map(|c| format!("{:?}, {} findings", c.verdict, c.findings.len()));
+            c.executions = exec_ids(s, |e| {
+                matches!(
+                    e.purpose,
+                    P::FactCheck {
+                        target: ostra_core::event::FactTarget::Spec,
+                        ..
+                    }
+                )
+            });
+            c.detail = t
+                .check_for_current()
+                .map(|c| format!("{:?}, {} findings", c.verdict, c.findings.len()));
             out.push(c);
         }
         if t.passed_current() && s.category != Some(ostra_core::pipeline::Category::Spec) {
-            let mut c = card(StageKind::SpecApproval, "Approve the spec".into(), if t.approved { StageStatus::Done } else { StageStatus::Waiting });
+            let mut c = card(
+                StageKind::SpecApproval,
+                "Approve the spec".into(),
+                if t.approved {
+                    StageStatus::Done
+                } else {
+                    StageStatus::Waiting
+                },
+            );
             c.gate = t.approval_gate.clone();
             out.push(c);
         }
     }
     if let Some((_, stakes)) = s.stakes {
-        let mut c = card(StageKind::Stakes, "Judge the stakes".into(), StageStatus::Done);
+        let mut c = card(
+            StageKind::Stakes,
+            "Judge the stakes".into(),
+            StageStatus::Done,
+        );
         c.detail = Some(format!("{stakes:?}"));
         out.push(c);
         if stakes == ostra_core::pipeline::Stakes::Low {
-            out.push(card(StageKind::Plan, "Plan skipped: low stakes".into(), StageStatus::Skipped));
+            out.push(card(
+                StageKind::Plan,
+                "Plan skipped: low stakes".into(),
+                StageStatus::Skipped,
+            ));
         }
     }
     let t = &s.plan;
@@ -272,7 +414,13 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         let mut c = card(
             StageKind::Plan,
             "Write the plan".into(),
-            if t.running.is_some() { StageStatus::Running } else if t.current.is_some() { StageStatus::Done } else { StageStatus::Failed },
+            if t.running.is_some() {
+                StageStatus::Running
+            } else if t.current.is_some() {
+                StageStatus::Done
+            } else {
+                StageStatus::Failed
+            },
         );
         c.executions = exec_ids(s, |e| matches!(e.purpose, P::Plan { .. }));
         out.push(c);
@@ -280,14 +428,36 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             let mut c = card(
                 StageKind::FactCheckPlan,
                 "Fact-check the plan".into(),
-                if t.passed_current() { StageStatus::Done } else { StageStatus::Running },
+                if t.passed_current() {
+                    StageStatus::Done
+                } else {
+                    StageStatus::Running
+                },
             );
-            c.executions = exec_ids(s, |e| matches!(e.purpose, P::FactCheck { target: ostra_core::event::FactTarget::Plan, .. }));
-            c.detail = t.check_for_current().map(|c| format!("{:?}, {} findings", c.verdict, c.findings.len()));
+            c.executions = exec_ids(s, |e| {
+                matches!(
+                    e.purpose,
+                    P::FactCheck {
+                        target: ostra_core::event::FactTarget::Plan,
+                        ..
+                    }
+                )
+            });
+            c.detail = t
+                .check_for_current()
+                .map(|c| format!("{:?}, {} findings", c.verdict, c.findings.len()));
             out.push(c);
         }
         if t.passed_current() {
-            let mut c = card(StageKind::PlanApproval, "Approve the plan".into(), if t.approved { StageStatus::Done } else { StageStatus::Waiting });
+            let mut c = card(
+                StageKind::PlanApproval,
+                "Approve the plan".into(),
+                if t.approved {
+                    StageStatus::Done
+                } else {
+                    StageStatus::Waiting
+                },
+            );
             c.gate = t.approval_gate.clone();
             out.push(c);
         }
@@ -295,8 +465,16 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
     let removed = removed_phases(s);
     for p in s.phases.values() {
         let id = p.info.id;
-        let status = if removed.contains(&id) { StageStatus::Skipped } else { loop_status(&p.impl_loop) };
-        let mut c = card(StageKind::Implement, format!("Phase {id}: {}", p.info.title), status);
+        let status = if removed.contains(&id) {
+            StageStatus::Skipped
+        } else {
+            loop_status(&p.impl_loop)
+        };
+        let mut c = card(
+            StageKind::Implement,
+            format!("Phase {id}: {}", p.info.title),
+            status,
+        );
         c.project = Some(p.info.project.clone());
         c.phase = Some(id);
         c.executions = exec_ids(s, |e| e.loop_key == Some((id, false)));
@@ -304,11 +482,19 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         c.detail = Some(format!(
             "{} review passes{}",
             p.impl_loop.iterations,
-            if p.impl_loop.blocker_open { ", BLOCKER open" } else { "" }
+            if p.impl_loop.blocker_open {
+                ", BLOCKER open"
+            } else {
+                ""
+            }
         ));
         out.push(c);
         if !matches!(p.epa, EpaState::NotStarted) || !p.test_loop.is_idle() {
-            let mut c = card(StageKind::WriteTest, format!("Tests for phase {id}"), loop_status(&p.test_loop));
+            let mut c = card(
+                StageKind::WriteTest,
+                format!("Tests for phase {id}"),
+                loop_status(&p.test_loop),
+            );
             if matches!(p.epa, EpaState::Running(_)) {
                 c.status = StageStatus::Running;
                 c.stage = StageKind::Epa;
@@ -316,13 +502,20 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             }
             c.project = Some(p.info.project.clone());
             c.phase = Some(id);
-            c.executions = exec_ids(s, |e| e.loop_key == Some((id, true)) || matches!(e.purpose, P::Epa { phase } if phase == id));
+            c.executions = exec_ids(s, |e| {
+                e.loop_key == Some((id, true))
+                    || matches!(e.purpose, P::Epa { phase } if phase == id)
+            });
             out.push(c);
         }
     }
     for (key, t) in &s.project_tracks {
         if let Some(f) = t.format {
-            let mut c = card(StageKind::Format, format!("Format {key}"), StageStatus::Done);
+            let mut c = card(
+                StageKind::Format,
+                format!("Format {key}"),
+                StageStatus::Done,
+            );
             c.project = Some(key.clone());
             c.detail = Some(match f {
                 None => "no format command".into(),
@@ -334,11 +527,21 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             let mut c = card(
                 StageKind::ClosingGate,
                 format!("Tests and docs for {key}"),
-                if t.closing.is_some() { StageStatus::Done } else { StageStatus::Waiting },
+                if t.closing.is_some() {
+                    StageStatus::Done
+                } else {
+                    StageStatus::Waiting
+                },
             );
             c.project = Some(key.clone());
             c.gate = t.closing_gate.clone();
-            c.detail = t.closing.map(|(a, b)| format!("tests {}, docs {}", if a { "yes" } else { "no" }, if b { "yes" } else { "no" }));
+            c.detail = t.closing.map(|(a, b)| {
+                format!(
+                    "tests {}, docs {}",
+                    if a { "yes" } else { "no" },
+                    if b { "yes" } else { "no" }
+                )
+            });
             out.push(c);
         }
         let docs_status = match &t.docs {
@@ -351,12 +554,23 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         if let Some(st) = docs_status {
             let mut c = card(StageKind::ModuleDocs, format!("Module docs for {key}"), st);
             c.project = Some(key.clone());
-            c.executions = exec_ids(s, |e| matches!(&e.purpose, P::ModuleDocs { project } if project == key));
+            c.executions = exec_ids(
+                s,
+                |e| matches!(&e.purpose, P::ModuleDocs { project } if project == key),
+            );
             out.push(c);
         }
     }
     if s.quick.exec.is_some() {
-        let mut c = card(StageKind::QuickAnswer, "Answer".into(), if s.quick.answer.is_some() { StageStatus::Done } else { StageStatus::Running });
+        let mut c = card(
+            StageKind::QuickAnswer,
+            "Answer".into(),
+            if s.quick.answer.is_some() {
+                StageStatus::Done
+            } else {
+                StageStatus::Running
+            },
+        );
         c.executions = s.quick.exec.iter().cloned().collect();
         out.push(c);
     }
@@ -392,9 +606,14 @@ pub fn phases(s: &SessionState) -> Vec<PhaseView> {
                 PhaseStatus::Passed
             } else if l.is_idle() {
                 PhaseStatus::Queued
-            } else if matches!(l.next, LoopNext::Review | LoopNext::Autofix { .. } | LoopNext::Stage)
-                || l.running.as_ref().is_some_and(|r| s.executions.get(r).is_some_and(|e| e.agent == ostra_core::AgentName::CodeReviewer))
-            {
+            } else if matches!(
+                l.next,
+                LoopNext::Review | LoopNext::Autofix { .. } | LoopNext::Stage
+            ) || l.running.as_ref().is_some_and(|r| {
+                s.executions
+                    .get(r)
+                    .is_some_and(|e| e.agent == ostra_core::AgentName::CodeReviewer)
+            }) {
                 PhaseStatus::Reviewing
             } else {
                 PhaseStatus::Implementing
@@ -423,43 +642,92 @@ pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
     let mut seen = HashSet::new();
     let mut add = |path: PathBuf, kind: &str, label: String, project: Option<String>| {
         if seen.insert(path.clone()) {
-            out.push(ArtifactRef { path, kind: kind.into(), label, project });
+            out.push(ArtifactRef {
+                path,
+                kind: kind.into(),
+                label,
+                project,
+            });
         }
     };
     for t in &s.explore {
         if let Some(r) = &t.result {
-            add(PathBuf::from(&r.research_path), "research", format!("Research: {}", first(&t.task)), Some(t.project.clone()));
+            add(
+                PathBuf::from(&r.research_path),
+                "research",
+                format!("Research: {}", first(&t.task)),
+                Some(t.project.clone()),
+            );
         }
     }
     if let Some(spec) = &s.spec.current {
         add(PathBuf::from(&spec.spec_path), "spec", "Spec".into(), None);
     }
     if let Some(plan) = &s.plan.current {
-        add(PathBuf::from(&plan.master_plan_path), "plan", "Master plan".into(), None);
+        add(
+            PathBuf::from(&plan.master_plan_path),
+            "plan",
+            "Master plan".into(),
+            None,
+        );
         for p in &plan.phases {
-            add(PathBuf::from(&p.file), "phase", format!("Phase {}: {}", p.id, p.title), Some(p.project.clone()));
+            add(
+                PathBuf::from(&p.file),
+                "phase",
+                format!("Phase {}: {}", p.id, p.title),
+                Some(p.project.clone()),
+            );
         }
     }
     for p in s.phases.values() {
         if let Some(r) = &p.implementer_report {
-            add(r.clone(), "report", format!("Implementer report, phase {}", p.info.id), Some(p.info.project.clone()));
+            add(
+                r.clone(),
+                "report",
+                format!("Implementer report, phase {}", p.info.id),
+                Some(p.info.project.clone()),
+            );
         }
         for tests in [false, true] {
             let ledger = s.ledger_path(&p.info.project, p.info.id, tests);
             if ledger.exists() {
-                add(ledger, "ledger", format!("Review ledger, phase {}{}", p.info.id, if tests { " tests" } else { "" }), Some(p.info.project.clone()));
+                add(
+                    ledger,
+                    "ledger",
+                    format!(
+                        "Review ledger, phase {}{}",
+                        p.info.id,
+                        if tests { " tests" } else { "" }
+                    ),
+                    Some(p.info.project.clone()),
+                );
             }
         }
         if let EpaState::Done(path) = &p.epa {
-            add(path.clone(), "report", format!("EPA report, phase {}", p.info.id), Some(p.info.project.clone()));
+            add(
+                path.clone(),
+                "report",
+                format!("EPA report, phase {}", p.info.id),
+                Some(p.info.project.clone()),
+            );
         }
         if let Some(r) = &p.test_loop.report {
-            add(r.clone(), "report", format!("Test report, phase {}", p.info.id), Some(p.info.project.clone()));
+            add(
+                r.clone(),
+                "report",
+                format!("Test report, phase {}", p.info.id),
+                Some(p.info.project.clone()),
+            );
         }
     }
     for (key, t) in &s.project_tracks {
         if let DocsState::Done(Some(p)) = &t.docs {
-            add(p.clone(), "report", format!("Module docs report, {key}"), Some(key.clone()));
+            add(
+                p.clone(),
+                "report",
+                format!("Module docs report, {key}"),
+                Some(key.clone()),
+            );
         }
     }
     if let Some((path, _)) = &s.completed {
@@ -472,12 +740,18 @@ pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
 /// same project in this session.
 pub fn run_labels(s: &SessionState) -> HashMap<ExecutionId, String> {
     let mut runs: Vec<&ExecRecord> = s.executions.values().collect();
-    runs.sort_by(|a, b| a.started_at.cmp(&b.started_at).then_with(|| a.id.cmp(&b.id)));
+    runs.sort_by(|a, b| {
+        a.started_at
+            .cmp(&b.started_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     let mut seen: HashMap<(AgentName, &str, String), u32> = HashMap::new();
     runs.into_iter()
         .map(|r| {
             let base = r.purpose.run_label();
-            let n = seen.entry((r.agent, r.project.as_str(), base.clone())).or_default();
+            let n = seen
+                .entry((r.agent, r.project.as_str(), base.clone()))
+                .or_default();
             *n += 1;
             (r.id.clone(), numbered_run_label(&base, *n))
         })
@@ -496,13 +770,21 @@ pub fn decorate(s: &SessionState, labels: &HashMap<ExecutionId, String>, e: &mut
         .open_gates()
         .filter(|g| g.payload.execution() == Some(&e.id))
         .max_by(|a, b| a.opened_at.cmp(&b.opened_at).then_with(|| a.id.cmp(&b.id)))
-        .map(|g| PendingGate { id: g.id.clone(), kind: g.payload.kind_str().to_string(), title: g.title.clone() });
+        .map(|g| PendingGate {
+            id: g.id.clone(),
+            kind: g.payload.kind_str().to_string(),
+            title: g.title.clone(),
+        });
 }
 
 /// Executions grouped by agent and project, in order of each group's first start.
 pub fn execution_groups(executions: &[ExecutionView]) -> Vec<ExecutionGroupView> {
     let mut sorted: Vec<&ExecutionView> = executions.iter().collect();
-    sorted.sort_by(|a, b| a.started_at.cmp(&b.started_at).then_with(|| a.id.cmp(&b.id)));
+    sorted.sort_by(|a, b| {
+        a.started_at
+            .cmp(&b.started_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
     let mut out: Vec<ExecutionGroupView> = vec![];
     let mut running: Vec<bool> = vec![];
     for e in sorted {
@@ -526,14 +808,22 @@ pub fn execution_groups(executions: &[ExecutionView]) -> Vec<ExecutionGroupView>
         g.cost_usd += e.usage.cost_usd;
         running[i] |= e.status == ExecutionStatus::Running;
         // A group is running while any of its runs is; otherwise it shows its latest run.
-        g.status = if running[i] { ExecutionStatus::Running } else { e.status };
+        g.status = if running[i] {
+            ExecutionStatus::Running
+        } else {
+            e.status
+        };
     }
     out
 }
 
 /// The session's node in the Sessions tree: its row, its executions grouped with numbered run
 /// labels, and its artifacts.
-pub fn tree_session(s: &SessionState, summary: &SessionSummary, mut executions: Vec<ExecutionView>) -> TreeSession {
+pub fn tree_session(
+    s: &SessionState,
+    summary: &SessionSummary,
+    mut executions: Vec<ExecutionView>,
+) -> TreeSession {
     let labels = run_labels(s);
     for e in executions.iter_mut() {
         if let Some(label) = labels.get(&e.id) {
@@ -541,7 +831,8 @@ pub fn tree_session(s: &SessionState, summary: &SessionSummary, mut executions: 
         }
     }
     let spent: f64 = executions.iter().map(|e| e.usage.cost_usd).sum();
-    let by_id: HashMap<&ExecutionId, &ExecutionView> = executions.iter().map(|e| (&e.id, e)).collect();
+    let by_id: HashMap<&ExecutionId, &ExecutionView> =
+        executions.iter().map(|e| (&e.id, e)).collect();
     let groups = execution_groups(&executions)
         .into_iter()
         .map(|g| TreeGroup {
@@ -549,7 +840,13 @@ pub fn tree_session(s: &SessionState, summary: &SessionSummary, mut executions: 
                 .executions
                 .iter()
                 .filter_map(|id| by_id.get(id))
-                .map(|e| TreeRun { id: e.id.clone(), run_label: e.run_label.clone(), status: e.status, stream: e.stream, summary: e.summary.clone() })
+                .map(|e| TreeRun {
+                    id: e.id.clone(),
+                    run_label: e.run_label.clone(),
+                    status: e.status,
+                    stream: e.stream,
+                    summary: e.summary.clone(),
+                })
                 .collect(),
             group: g.group,
             agent: g.agent,
@@ -578,14 +875,29 @@ pub fn file_changes(s: &SessionState, project: &str) -> BTreeMap<String, Changed
     let root = s.project_path(project);
     let mut out: BTreeMap<String, ChangedBy> = BTreeMap::new();
     for rec in s.executions.values().filter(|r| r.project == project) {
-        let (Some((phase, tests)), Some(result)) = (rec.loop_key, rec.result.as_ref()) else { continue };
-        let Some(files) = result.submit.as_ref().and_then(|v| v.get("changed_files")).and_then(|v| v.as_array()) else {
+        let (Some((phase, tests)), Some(result)) = (rec.loop_key, rec.result.as_ref()) else {
             continue;
         };
-        let staged = s.phases.get(&phase).is_some_and(|p| if tests { p.test_loop.staged } else { p.impl_loop.staged });
+        let Some(files) = result
+            .submit
+            .as_ref()
+            .and_then(|v| v.get("changed_files"))
+            .and_then(|v| v.as_array())
+        else {
+            continue;
+        };
+        let staged = s.phases.get(&phase).is_some_and(|p| {
+            if tests {
+                p.test_loop.staged
+            } else {
+                p.impl_loop.staged
+            }
+        });
         let at = rec.ended_at.unwrap_or(rec.started_at);
         for f in files.iter().filter_map(|f| f.as_str()) {
-            let Some(path) = project_relative(root.as_deref(), f) else { continue };
+            let Some(path) = project_relative(root.as_deref(), f) else {
+                continue;
+            };
             if out.get(&path).is_some_and(|c| c.at > at) {
                 continue;
             }
@@ -608,7 +920,14 @@ pub fn file_changes(s: &SessionState, project: &str) -> BTreeMap<String, Changed
 /// A reported path as project-relative with `/` separators; `None` when it leaves the project.
 fn project_relative(root: Option<&Path>, reported: &str) -> Option<String> {
     let p = Path::new(reported.trim());
-    let rel = if p.is_absolute() { ostra_core::paths::normalize(p).strip_prefix(ostra_core::paths::normalize(root?)).ok()?.to_path_buf() } else { p.to_path_buf() };
+    let rel = if p.is_absolute() {
+        ostra_core::paths::normalize(p)
+            .strip_prefix(ostra_core::paths::normalize(root?))
+            .ok()?
+            .to_path_buf()
+    } else {
+        p.to_path_buf()
+    };
     let mut parts = vec![];
     for c in rel.components() {
         match c {
@@ -629,7 +948,8 @@ pub fn detail(
     let mut executions = db.list_executions(&s.id)?;
     let labels = run_labels(s);
     for e in executions.iter_mut() {
-        e.has_terminal = matches!(e.executor, ostra_core::ExecutorKind::Harness(_)) && live.contains(&e.id);
+        e.has_terminal =
+            matches!(e.executor, ostra_core::ExecutorKind::Harness(_)) && live.contains(&e.id);
         decorate(s, &labels, e);
     }
     let execution_groups = execution_groups(&executions);
@@ -664,7 +984,10 @@ pub fn detail(
             at: d.at,
         })
         .collect();
-    let completion = s.completed.as_ref().and_then(|(p, _)| std::fs::read_to_string(p).ok());
+    let completion = s
+        .completed
+        .as_ref()
+        .and_then(|(p, _)| std::fs::read_to_string(p).ok());
     let cost: f64 = executions.iter().map(|e| e.usage.cost_usd).sum();
     let mut summary = summary(s, workspace, 0.0);
     summary.cost_usd = summary.cost_usd.max(cost);
@@ -693,7 +1016,11 @@ pub fn fact_checks(s: &SessionState) -> Vec<FactCheckView> {
                 version: c.version,
                 current: c.version == t.version,
                 verdict: c.result.as_ref().map(|r| r.verdict),
-                findings: c.result.as_ref().map(|r| r.findings.clone()).unwrap_or_default(),
+                findings: c
+                    .result
+                    .as_ref()
+                    .map(|r| r.findings.clone())
+                    .unwrap_or_default(),
             })
             .collect()
     }
@@ -706,7 +1033,9 @@ pub fn fact_checks(s: &SessionState) -> Vec<FactCheckView> {
 mod tests {
     use super::*;
     use ostra_core::ExecutorKind;
-    use ostra_core::event::{ExecPurpose, ProjectRef, SessionEvent, SessionOptions, StoredEvent, WorkKind};
+    use ostra_core::event::{
+        ExecPurpose, ProjectRef, SessionEvent, SessionOptions, StoredEvent, WorkKind,
+    };
     use ostra_core::exec::Usage;
     use ostra_core::ids::{DecisionId, GateId, SessionId};
     use serde_json::json;
@@ -716,7 +1045,11 @@ mod tests {
         events
             .into_iter()
             .enumerate()
-            .map(|(i, event)| StoredEvent { seq: i as i64 + 1, at: t0 + chrono::Duration::seconds(i as i64), event })
+            .map(|(i, event)| StoredEvent {
+                seq: i as i64 + 1,
+                at: t0 + chrono::Duration::seconds(i as i64),
+                event,
+            })
             .collect()
     }
 
@@ -725,7 +1058,10 @@ mod tests {
             kind,
             request: "Let customers cancel an order".into(),
             options: SessionOptions::default(),
-            projects: vec![ProjectRef { key: "backend".into(), path: PathBuf::from("/code/backend") }],
+            projects: vec![ProjectRef {
+                key: "backend".into(),
+                path: PathBuf::from("/code/backend"),
+            }],
             workspace_root: PathBuf::from("/ws"),
             session_root: PathBuf::from("/ws/.ostra/sessions/s1"),
         }
@@ -751,7 +1087,14 @@ mod tests {
         }
     }
 
-    fn view(id: &str, agent: AgentName, status: ExecutionStatus, at: i64, cost: f64, executor: ExecutorKind) -> ExecutionView {
+    fn view(
+        id: &str,
+        agent: AgentName,
+        status: ExecutionStatus,
+        at: i64,
+        cost: f64,
+        executor: ExecutorKind,
+    ) -> ExecutionView {
         ExecutionView {
             id: ExecutionId::from(id),
             session: Some(SessionId::from("s1")),
@@ -764,7 +1107,10 @@ mod tests {
             status,
             started_at: chrono::DateTime::from_timestamp(at, 0).unwrap(),
             ended_at: None,
-            usage: Usage { cost_usd: cost, ..Default::default() },
+            usage: Usage {
+                cost_usd: cost,
+                ..Default::default()
+            },
             report_path: None,
             native_session_id: None,
             spawn_block: String::new(),
@@ -784,12 +1130,25 @@ mod tests {
     #[test]
     fn titles_come_from_classify_and_init() {
         let id = SessionId::from("s1");
-        let init = SessionState::fold(id.clone(), &log(vec![created(SessionKind::Init { project: "web".into() })]));
-        assert_eq!(summary(&init, &WorkspaceId::from("w"), 0.0).title.as_deref(), Some("Initialize web"));
+        let init = SessionState::fold(
+            id.clone(),
+            &log(vec![created(SessionKind::Init {
+                project: "web".into(),
+            })]),
+        );
+        assert_eq!(
+            summary(&init, &WorkspaceId::from("w"), 0.0)
+                .title
+                .as_deref(),
+            Some("Initialize web")
+        );
 
         let d = DecisionId::new();
         let mut events = vec![created(SessionKind::Pipeline)];
-        assert_eq!(SessionState::fold(id.clone(), &log(events.clone())).title, None);
+        assert_eq!(
+            SessionState::fold(id.clone(), &log(events.clone())).title,
+            None
+        );
         events.push(SessionEvent::DecisionMade {
             id: d.clone(),
             judge: JudgeKind::Classify,
@@ -798,34 +1157,83 @@ mod tests {
             output: classify_output("  \"Order cancellation.\" "),
             reason: "r".into(),
         });
-        assert_eq!(SessionState::fold(id.clone(), &log(events.clone())).title.as_deref(), Some("Order cancellation"));
-        let over = |title: &str| SessionEvent::DecisionOverridden { id: d.clone(), output: classify_output(title), reason: "user".into() };
+        assert_eq!(
+            SessionState::fold(id.clone(), &log(events.clone()))
+                .title
+                .as_deref(),
+            Some("Order cancellation")
+        );
+        let over = |title: &str| SessionEvent::DecisionOverridden {
+            id: d.clone(),
+            output: classify_output(title),
+            reason: "user".into(),
+        };
         events.push(over("Cancel orders"));
-        assert_eq!(SessionState::fold(id.clone(), &log(events.clone())).title.as_deref(), Some("Cancel orders"));
+        assert_eq!(
+            SessionState::fold(id.clone(), &log(events.clone()))
+                .title
+                .as_deref(),
+            Some("Cancel orders")
+        );
         events.push(over(""));
-        assert_eq!(SessionState::fold(id, &log(events)).title.as_deref(), Some("Cancel orders"), "an override without a title keeps it");
+        assert_eq!(
+            SessionState::fold(id, &log(events)).title.as_deref(),
+            Some("Cancel orders"),
+            "an override without a title keeps it"
+        );
     }
 
     #[test]
     fn repeated_runs_are_numbered_per_agent_and_label() {
-        let fix = || ExecPurpose::Implement { phase: 1, work: WorkKind::Fix };
-        let review = |iteration| ExecPurpose::Review { phase: 1, tests: false, iteration };
+        let fix = || ExecPurpose::Implement {
+            phase: 1,
+            work: WorkKind::Fix,
+        };
+        let review = |iteration| ExecPurpose::Review {
+            phase: 1,
+            tests: false,
+            iteration,
+        };
         let s = SessionState::fold(
             SessionId::from("s1"),
             &log(vec![
                 created(SessionKind::Pipeline),
-                started("x_1", AgentName::GenerateSpec, ExecPurpose::Spec { round: 1 }),
-                started("x_2", AgentName::GenerateSpec, ExecPurpose::Spec { round: 2 }),
-                started("x_3", AgentName::Implementer, ExecPurpose::Implement { phase: 1, work: WorkKind::Initial }),
+                started(
+                    "x_1",
+                    AgentName::GenerateSpec,
+                    ExecPurpose::Spec { round: 1 },
+                ),
+                started(
+                    "x_2",
+                    AgentName::GenerateSpec,
+                    ExecPurpose::Spec { round: 2 },
+                ),
+                started(
+                    "x_3",
+                    AgentName::Implementer,
+                    ExecPurpose::Implement {
+                        phase: 1,
+                        work: WorkKind::Initial,
+                    },
+                ),
                 started("x_4", AgentName::CodeReviewer, review(1)),
                 started("x_5", AgentName::Implementer, fix()),
                 started("x_6", AgentName::CodeReviewer, review(2)),
                 started("x_7", AgentName::Implementer, fix()),
-                started("x_8", AgentName::Implementer, ExecPurpose::Implement { phase: 2, work: WorkKind::Initial }),
+                started(
+                    "x_8",
+                    AgentName::Implementer,
+                    ExecPurpose::Implement {
+                        phase: 2,
+                        work: WorkKind::Initial,
+                    },
+                ),
             ]),
         );
         let labels = run_labels(&s);
-        let got: Vec<&str> = (1..=8).map(|i| labels[&ExecutionId::from(format!("x_{i}"))].as_str()).collect();
+        let got: Vec<&str> = (1..=8)
+            .map(|i| labels[&ExecutionId::from(format!("x_{i}"))].as_str())
+            .collect();
         assert_eq!(
             got,
             [
@@ -845,21 +1253,74 @@ mod tests {
     fn groups_aggregate_status_and_cost_in_start_order() {
         let native = ExecutorKind::Native;
         let groups = execution_groups(&[
-            view("x_3", AgentName::Implementer, ExecutionStatus::Running, 30, 0.5, native),
-            view("x_1", AgentName::Implementer, ExecutionStatus::Ok, 10, 1.0, native),
-            view("x_2", AgentName::CodeReviewer, ExecutionStatus::Error, 20, 0.25, native),
-            view("x_4", AgentName::CodeReviewer, ExecutionStatus::Ok, 40, 0.25, native),
+            view(
+                "x_3",
+                AgentName::Implementer,
+                ExecutionStatus::Running,
+                30,
+                0.5,
+                native,
+            ),
+            view(
+                "x_1",
+                AgentName::Implementer,
+                ExecutionStatus::Ok,
+                10,
+                1.0,
+                native,
+            ),
+            view(
+                "x_2",
+                AgentName::CodeReviewer,
+                ExecutionStatus::Error,
+                20,
+                0.25,
+                native,
+            ),
+            view(
+                "x_4",
+                AgentName::CodeReviewer,
+                ExecutionStatus::Ok,
+                40,
+                0.25,
+                native,
+            ),
         ]);
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].group, "implementer:backend");
-        assert_eq!(groups[0].executions, [ExecutionId::from("x_1"), ExecutionId::from("x_3")]);
-        assert_eq!(groups[0].status, ExecutionStatus::Running, "a running run makes the group running");
+        assert_eq!(
+            groups[0].executions,
+            [ExecutionId::from("x_1"), ExecutionId::from("x_3")]
+        );
+        assert_eq!(
+            groups[0].status,
+            ExecutionStatus::Running,
+            "a running run makes the group running"
+        );
         assert_eq!(groups[0].cost_usd, 1.5);
         assert_eq!(groups[1].agent, AgentName::CodeReviewer);
-        assert_eq!(groups[1].status, ExecutionStatus::Ok, "otherwise the latest run decides");
+        assert_eq!(
+            groups[1].status,
+            ExecutionStatus::Ok,
+            "otherwise the latest run decides"
+        );
         let groups = execution_groups(&[
-            view("x_1", AgentName::Implementer, ExecutionStatus::Running, 10, 0.0, native),
-            view("x_2", AgentName::Implementer, ExecutionStatus::Error, 20, 0.0, native),
+            view(
+                "x_1",
+                AgentName::Implementer,
+                ExecutionStatus::Running,
+                10,
+                0.0,
+                native,
+            ),
+            view(
+                "x_2",
+                AgentName::Implementer,
+                ExecutionStatus::Error,
+                20,
+                0.0,
+                native,
+            ),
         ]);
         assert_eq!(groups[0].status, ExecutionStatus::Running);
     }
@@ -870,31 +1331,98 @@ mod tests {
             SessionId::from("s1"),
             &log(vec![
                 created(SessionKind::Pipeline),
-                started("x_1", AgentName::GenerateSpec, ExecPurpose::Spec { round: 1 }),
-                started("x_2", AgentName::Implementer, ExecPurpose::Implement { phase: 1, work: WorkKind::Initial }),
-                started("x_3", AgentName::GenerateSpec, ExecPurpose::Spec { round: 2 }),
+                started(
+                    "x_1",
+                    AgentName::GenerateSpec,
+                    ExecPurpose::Spec { round: 1 },
+                ),
+                started(
+                    "x_2",
+                    AgentName::Implementer,
+                    ExecPurpose::Implement {
+                        phase: 1,
+                        work: WorkKind::Initial,
+                    },
+                ),
+                started(
+                    "x_3",
+                    AgentName::GenerateSpec,
+                    ExecPurpose::Spec { round: 2 },
+                ),
             ]),
         );
         let mut row = summary(&s, &WorkspaceId::from("w"), 0.0);
         row.cost_usd = 0.5;
         row.title = Some("Cancel orders".into());
         let native = ExecutorKind::Native;
-        let mut spec2 = view("x_3", AgentName::GenerateSpec, ExecutionStatus::Running, 30, 0.25, native);
+        let mut spec2 = view(
+            "x_3",
+            AgentName::GenerateSpec,
+            ExecutionStatus::Running,
+            30,
+            0.25,
+            native,
+        );
         spec2.summary = Some("Write spec.md".into());
         let executions = vec![
-            view("x_1", AgentName::GenerateSpec, ExecutionStatus::Ok, 10, 1.0, native),
-            view("x_2", AgentName::Implementer, ExecutionStatus::Ok, 20, 0.5, ExecutorKind::Harness(ostra_core::HarnessKind::Codex)),
+            view(
+                "x_1",
+                AgentName::GenerateSpec,
+                ExecutionStatus::Ok,
+                10,
+                1.0,
+                native,
+            ),
+            view(
+                "x_2",
+                AgentName::Implementer,
+                ExecutionStatus::Ok,
+                20,
+                0.5,
+                ExecutorKind::Harness(ostra_core::HarnessKind::Codex),
+            ),
             spec2,
         ];
         let node = tree_session(&s, &row, executions);
         assert_eq!(node.title.as_deref(), Some("Cancel orders"));
         assert_eq!(node.request, "Let customers cancel an order");
         assert_eq!(node.cost_usd, 1.75, "the runs' spend wins over a stale row");
-        let groups: Vec<(&str, ExecutionStatus, f64)> = node.groups.iter().map(|g| (g.group.as_str(), g.status, g.cost_usd)).collect();
-        assert_eq!(groups, [("generate-spec:backend", ExecutionStatus::Running, 1.25), ("implementer:backend", ExecutionStatus::Ok, 0.5)]);
-        let runs: Vec<(&str, &str, ExecStream, Option<&str>)> =
-            node.groups[0].runs.iter().map(|r| (r.id.as_str(), r.run_label.as_str(), r.stream, r.summary.as_deref())).collect();
-        assert_eq!(runs, [("x_1", "Spec", ExecStream::Activity, None), ("x_3", "Spec · pass 2", ExecStream::Activity, Some("Write spec.md"))]);
+        let groups: Vec<(&str, ExecutionStatus, f64)> = node
+            .groups
+            .iter()
+            .map(|g| (g.group.as_str(), g.status, g.cost_usd))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                ("generate-spec:backend", ExecutionStatus::Running, 1.25),
+                ("implementer:backend", ExecutionStatus::Ok, 0.5)
+            ]
+        );
+        let runs: Vec<(&str, &str, ExecStream, Option<&str>)> = node.groups[0]
+            .runs
+            .iter()
+            .map(|r| {
+                (
+                    r.id.as_str(),
+                    r.run_label.as_str(),
+                    r.stream,
+                    r.summary.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            runs,
+            [
+                ("x_1", "Spec", ExecStream::Activity, None),
+                (
+                    "x_3",
+                    "Spec · pass 2",
+                    ExecStream::Activity,
+                    Some("Write spec.md")
+                )
+            ]
+        );
         assert_eq!(node.groups[1].runs[0].stream, ExecStream::Terminal);
         assert!(node.artifacts.is_empty());
     }
@@ -905,9 +1433,24 @@ mod tests {
         let mut s = SessionState::new(SessionId::from("s1"));
         s.session_root = tmp.path().to_path_buf();
         let harness = ExecutorKind::Harness(ostra_core::HarnessKind::Claude);
-        let mut h = view("x_h", AgentName::Implementer, ExecutionStatus::Ok, 1, 0.0, harness);
-        let mut n = view("x_n", AgentName::Implementer, ExecutionStatus::Ok, 2, 0.0, ExecutorKind::Native);
-        let labels = HashMap::from([(ExecutionId::from("x_h"), "Phase 1 · fix pass 2".to_string())]);
+        let mut h = view(
+            "x_h",
+            AgentName::Implementer,
+            ExecutionStatus::Ok,
+            1,
+            0.0,
+            harness,
+        );
+        let mut n = view(
+            "x_n",
+            AgentName::Implementer,
+            ExecutionStatus::Ok,
+            2,
+            0.0,
+            ExecutorKind::Native,
+        );
+        let labels =
+            HashMap::from([(ExecutionId::from("x_h"), "Phase 1 · fix pass 2".to_string())]);
         decorate(&s, &labels, &mut h);
         assert_eq!(h.run_label, "Phase 1 · fix pass 2");
         assert!(!h.has_transcript);
@@ -925,7 +1468,10 @@ mod tests {
     #[test]
     fn decorate_finds_the_project_folder_and_the_open_gate_of_an_execution() {
         let mut s = SessionState::new(SessionId::from("s1"));
-        s.projects.push(ProjectRef { key: "backend".into(), path: PathBuf::from("/code/backend") });
+        s.projects.push(ProjectRef {
+            key: "backend".into(),
+            path: PathBuf::from("/code/backend"),
+        });
         let t0 = chrono::DateTime::from_timestamp(100, 0).unwrap();
         let gate = |id: &str, execution: &str, at: i64, answered: bool| crate::state::GateRecord {
             id: GateId::from(id),
@@ -937,21 +1483,50 @@ mod tests {
                 project: "backend".into(),
                 error: "boom".into(),
             },
-            answer: answered.then(|| ostra_core::event::GateAnswer::Choice { option: "retry".into(), text: None }),
+            answer: answered.then(|| ostra_core::event::GateAnswer::Choice {
+                option: "retry".into(),
+                text: None,
+            }),
             source: None,
             reason: None,
             opened_at: t0 + chrono::Duration::seconds(at),
             answered_at: None,
         };
-        for g in [gate("g_old", "x_1", 1, false), gate("g_new", "x_1", 2, false), gate("g_done", "x_1", 3, true), gate("g_other", "x_2", 4, false)] {
+        for g in [
+            gate("g_old", "x_1", 1, false),
+            gate("g_new", "x_1", 2, false),
+            gate("g_done", "x_1", 3, true),
+            gate("g_other", "x_2", 4, false),
+        ] {
             s.gates.insert(g.id.clone(), g);
         }
-        let mut e = view("x_1", AgentName::Implementer, ExecutionStatus::Error, 1, 0.0, ExecutorKind::Native);
+        let mut e = view(
+            "x_1",
+            AgentName::Implementer,
+            ExecutionStatus::Error,
+            1,
+            0.0,
+            ExecutorKind::Native,
+        );
         decorate(&s, &HashMap::new(), &mut e);
         assert_eq!(e.repo_root, Some(PathBuf::from("/code/backend")));
         let pending = e.pending_gate.expect("an open gate names x_1");
-        assert_eq!((pending.id.as_str(), pending.kind.as_str(), pending.title.as_str()), ("g_new", "execution_failed", "Gate g_new"));
-        let mut quiet = view("x_3", AgentName::Implementer, ExecutionStatus::Ok, 1, 0.0, ExecutorKind::Native);
+        assert_eq!(
+            (
+                pending.id.as_str(),
+                pending.kind.as_str(),
+                pending.title.as_str()
+            ),
+            ("g_new", "execution_failed", "Gate g_new")
+        );
+        let mut quiet = view(
+            "x_3",
+            AgentName::Implementer,
+            ExecutionStatus::Ok,
+            1,
+            0.0,
+            ExecutorKind::Native,
+        );
         decorate(&s, &HashMap::new(), &mut quiet);
         assert_eq!(quiet.pending_gate, None);
     }

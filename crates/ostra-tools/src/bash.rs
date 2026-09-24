@@ -33,7 +33,11 @@ struct Capture {
 
 impl Capture {
     fn new() -> Self {
-        Capture { head: Vec::new(), tail: std::collections::VecDeque::new(), total: 0 }
+        Capture {
+            head: Vec::new(),
+            tail: std::collections::VecDeque::new(),
+            total: 0,
+        }
     }
 
     fn push(&mut self, bytes: &[u8]) {
@@ -102,7 +106,10 @@ fn kill_group(pid: Option<u32>) {
     }
 }
 
-fn spawn_reader<R: tokio::io::AsyncRead + Unpin + Send + 'static>(mut r: R, tx: mpsc::UnboundedSender<Vec<u8>>) {
+fn spawn_reader<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
+    mut r: R,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+) {
     tokio::spawn(async move {
         let mut buf = vec![0u8; 8192];
         loop {
@@ -139,13 +146,16 @@ pub async fn run(
     if command.trim().is_empty() {
         return ToolOutput::err("The command is empty.");
     }
-    let timeout_ms = u64_arg(input, "timeout").unwrap_or(DEFAULT_TIMEOUT_MS).clamp(1, MAX_TIMEOUT_MS);
+    let timeout_ms = u64_arg(input, "timeout")
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .clamp(1, MAX_TIMEOUT_MS);
     let mut cwd = env.cwd();
     if !cwd.is_dir() {
         cwd = env.config().repo_root.clone();
         env.set_cwd(cwd.clone());
     }
-    let pwd_file = std::env::temp_dir().join(format!("ostra-pwd-{}", uuid::Uuid::new_v4().simple()));
+    let pwd_file =
+        std::env::temp_dir().join(format!("ostra-pwd-{}", uuid::Uuid::new_v4().simple()));
 
     let mut cmd = tokio::process::Command::new("bash");
     cmd.arg("-c")
@@ -225,21 +235,37 @@ pub async fn run(
     let _ = std::fs::remove_file(&pwd_file);
 
     let text = capture.text();
-    let body = if text.trim().is_empty() { "(no output)".to_string() } else { text.trim_end().to_string() };
+    let body = if text.trim().is_empty() {
+        "(no output)".to_string()
+    } else {
+        text.trim_end().to_string()
+    };
     match end {
         End::Exited(status) => {
             let code = status.code();
             match code {
-                Some(0) => ToolOutput { exit_code: Some(0), ..ToolOutput::ok(body) },
-                Some(c) => ToolOutput { exit_code: Some(c), ..ToolOutput::err(format!("{body}\n\nExit code: {c}")) },
-                None => ToolOutput::err(format!("{body}\n\nThe command was terminated by a signal.")),
+                Some(0) => ToolOutput {
+                    exit_code: Some(0),
+                    ..ToolOutput::ok(body)
+                },
+                Some(c) => ToolOutput {
+                    exit_code: Some(c),
+                    ..ToolOutput::err(format!("{body}\n\nExit code: {c}"))
+                },
+                None => {
+                    ToolOutput::err(format!("{body}\n\nThe command was terminated by a signal."))
+                }
             }
         }
         End::TimedOut => ToolOutput::err(format!(
             "The command timed out after {timeout_ms} ms and was stopped. Output so far:\n{body}"
         )),
-        End::Cancelled => ToolOutput::err(format!("The command was cancelled. Output so far:\n{body}")),
-        End::WaitFailed(e) => ToolOutput::err(format!("Waiting for the command failed: {e}\n{body}")),
+        End::Cancelled => {
+            ToolOutput::err(format!("The command was cancelled. Output so far:\n{body}"))
+        }
+        End::WaitFailed(e) => {
+            ToolOutput::err(format!("Waiting for the command failed: {e}\n{body}"))
+        }
     }
 }
 
@@ -286,7 +312,12 @@ mod tests {
     async fn quoting_survives() {
         let d = tempfile::tempdir().unwrap();
         let env = env_in(d.path());
-        let out = run_tool(&env, "Bash", json!({"command": "printf '%s|' \"a b\" 'c\"d' $'e\\nf'"})).await;
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": "printf '%s|' \"a b\" 'c\"d' $'e\\nf'"}),
+        )
+        .await;
         assert_eq!(out.text, "a b|c\"d|e\nf|");
     }
 
@@ -339,7 +370,10 @@ mod tests {
             assert_eq!(id, "c9");
             s2.lock().unwrap().push_str(chunk);
         });
-        let call = ToolCall::new("Bash", json!({"command": "for i in $(seq 1 20000); do echo line$i; done"}));
+        let call = ToolCall::new(
+            "Bash",
+            json!({"command": "for i in $(seq 1 20000); do echo line$i; done"}),
+        );
         let out = crate::execute(&env, "c9", &call, Some(live), CancellationToken::new()).await;
         assert!(out.text.contains("truncated"));
         assert!(out.text.len() < 31_000);

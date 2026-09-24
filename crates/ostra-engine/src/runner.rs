@@ -9,17 +9,18 @@ use crate::services::{Notice, Services, SpawnEnv};
 use crate::state::{AUTO_FIXABLE_PARAM, SessionState};
 use crate::view;
 use ostra_core::agent::{AgentName, InitializerMode};
-use ostra_core::api::{ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary, TreeSession};
-use ostra_core::config::{
-    PermissionRules, ProjectProfile, RouteQuery, load_toml, resolve_route,
+use ostra_core::api::{
+    ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary,
+    TreeSession,
 };
+use ostra_core::config::{PermissionRules, ProjectProfile, RouteQuery, load_toml, resolve_route};
 use ostra_core::event::{
-    AnswerSource, CommandPurpose, ExecPurpose, GateAnswer, GatePayload, JudgeKind, ProjectRef, SessionEvent,
-    SessionKind, SessionOptions, StoredEvent,
+    AnswerSource, CommandPurpose, ExecPurpose, GateAnswer, GatePayload, JudgeKind, ProjectRef,
+    SessionEvent, SessionKind, SessionOptions, StoredEvent,
 };
 use ostra_core::exec::{
-    CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec, ExecutionStatus,
-    ResumeInfo,
+    CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
+    ExecutionStatus, ResumeInfo,
 };
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
@@ -38,10 +39,21 @@ use tokio::sync::{Notify, broadcast, oneshot};
 
 #[derive(Debug, Clone)]
 pub enum EngineNotice {
-    Event { session: SessionId, stored: StoredEvent },
-    Delta { execution: ExecutionId, item: ActivityItem },
-    ExecutionStatus { execution: ExecutionId, status: ExecutionStatus },
-    SessionUpdated { summary: SessionSummary },
+    Event {
+        session: SessionId,
+        stored: StoredEvent,
+    },
+    Delta {
+        execution: ExecutionId,
+        item: ActivityItem,
+    },
+    ExecutionStatus {
+        execution: ExecutionId,
+        status: ExecutionStatus,
+    },
+    SessionUpdated {
+        summary: SessionSummary,
+    },
     /// A project's init status may have changed: an init session started or ended.
     ProjectsChanged,
 }
@@ -101,7 +113,12 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 impl Engine {
-    pub fn new(workspace_root: PathBuf, workspace_id: WorkspaceId, db: WorkspaceDb, services: Arc<dyn Services>) -> Self {
+    pub fn new(
+        workspace_root: PathBuf,
+        workspace_id: WorkspaceId,
+        db: WorkspaceDb,
+        services: Arc<dyn Services>,
+    ) -> Self {
         let (tx, _) = broadcast::channel(4096);
         Engine {
             inner: Arc::new(Inner {
@@ -145,7 +162,8 @@ impl Engine {
             let live = self.inner.load(&summary.id)?;
             let (running, stale_gates, terminal) = {
                 let st = lock(&live.state);
-                let running: Vec<ExecutionId> = st.running_executions().map(|r| r.id.clone()).collect();
+                let running: Vec<ExecutionId> =
+                    st.running_executions().map(|r| r.id.clone()).collect();
                 let stale: Vec<GateId> = st
                     .open_gates()
                     .filter(|g| matches!(g.payload, GatePayload::Permission { .. }))
@@ -162,7 +180,8 @@ impl Engine {
                     result.native_session_id = view.native_session_id;
                 }
                 let _ = self.inner.db.finish_execution(&id, &result);
-                self.inner.append(&summary.id, SessionEvent::ExecutionFinished { id, result })?;
+                self.inner
+                    .append(&summary.id, SessionEvent::ExecutionFinished { id, result })?;
             }
             for g in stale_gates {
                 self.inner.append(
@@ -170,8 +189,12 @@ impl Engine {
                     SessionEvent::GateAnswered {
                         id: g,
                         source: AnswerSource::Engine,
-                        answer: GateAnswer::Permission { answer: PermissionAnswer::Deny },
-                        reason: Some("The execution that asked ended when the server restarted.".into()),
+                        answer: GateAnswer::Permission {
+                            answer: PermissionAnswer::Deny,
+                        },
+                        reason: Some(
+                            "The execution that asked ended when the server restarted.".into(),
+                        ),
                     },
                 )?;
             }
@@ -187,19 +210,35 @@ impl Engine {
         if req.request.trim().is_empty() {
             return Err(EngineError::Invalid("Describe the task first.".into()));
         }
-        self.start_session(SessionKind::Pipeline, req.request, req.options, &req.projects)
+        self.start_session(
+            SessionKind::Pipeline,
+            req.request,
+            req.options,
+            &req.projects,
+        )
     }
 
     /// Start the init flow for one project (HANDOVER 8.4).
-    pub fn create_init_session(&self, project: &str, focus: Option<String>) -> Result<SessionSummary, EngineError> {
+    pub fn create_init_session(
+        &self,
+        project: &str,
+        focus: Option<String>,
+    ) -> Result<SessionSummary, EngineError> {
         let settings = self.inner.services.workspace();
         if settings.project(project).is_none() {
-            return Err(EngineError::NotFound(format!("No project `{project}` in this workspace.")));
+            return Err(EngineError::NotFound(format!(
+                "No project `{project}` in this workspace."
+            )));
         }
         self.start_session(
-            SessionKind::Init { project: project.into() },
+            SessionKind::Init {
+                project: project.into(),
+            },
             focus.unwrap_or_default(),
-            SessionOptions { yolo: settings.yolo.default, ..Default::default() },
+            SessionOptions {
+                yolo: settings.yolo.default,
+                ..Default::default()
+            },
             &[project.to_string()],
         )
     }
@@ -215,8 +254,14 @@ impl Engine {
         if settings.yolo.default {
             options.yolo = true;
         }
-        let mut projects: Vec<ProjectRef> =
-            settings.projects.iter().map(|p| ProjectRef { key: p.key.clone(), path: p.path.clone() }).collect();
+        let mut projects: Vec<ProjectRef> = settings
+            .projects
+            .iter()
+            .map(|p| ProjectRef {
+                key: p.key.clone(),
+                path: p.path.clone(),
+            })
+            .collect();
         if matches!(kind, SessionKind::Pipeline) {
             // No pipeline task may target an uninitialized project (skill-init-guard.js).
             projects.retain(|p| paths::project_inventory(&p.path).exists());
@@ -226,9 +271,14 @@ impl Engine {
                 ));
             }
             if !pinned.is_empty() {
-                let unknown: Vec<&String> = pinned.iter().filter(|k| !projects.iter().any(|p| &p.key == *k)).collect();
+                let unknown: Vec<&String> = pinned
+                    .iter()
+                    .filter(|k| !projects.iter().any(|p| &p.key == *k))
+                    .collect();
                 if !unknown.is_empty() {
-                    return Err(EngineError::Invalid(format!("Pinned projects are unknown or not initialized: {unknown:?}")));
+                    return Err(EngineError::Invalid(format!(
+                        "Pinned projects are unknown or not initialized: {unknown:?}"
+                    )));
                 }
                 projects.sort_by_key(|p| !pinned.contains(&p.key));
             }
@@ -270,7 +320,10 @@ impl Engine {
             },
         )?;
         self.inner.ensure_driver(&id, live);
-        self.inner.db.get_session(&id)?.ok_or_else(|| EngineError::NotFound(id.to_string()))
+        self.inner
+            .db
+            .get_session(&id)?
+            .ok_or_else(|| EngineError::NotFound(id.to_string()))
     }
 
     pub fn state(&self, session: &SessionId) -> Result<SessionState, EngineError> {
@@ -280,7 +333,12 @@ impl Engine {
 
     pub fn detail(&self, session: &SessionId) -> Result<SessionDetail, EngineError> {
         let st = self.state(session)?;
-        view::detail(&st, &self.inner.db, &self.inner.workspace_id, self.live_executions())
+        view::detail(
+            &st,
+            &self.inner.db,
+            &self.inner.workspace_id,
+            self.live_executions(),
+        )
     }
 
     /// The session's Sessions tree node, built from its stored row. The fold is read in place.
@@ -292,7 +350,10 @@ impl Engine {
     }
 
     /// Numbered run labels of a session's executions.
-    pub fn run_labels(&self, session: &SessionId) -> Result<HashMap<ExecutionId, String>, EngineError> {
+    pub fn run_labels(
+        &self,
+        session: &SessionId,
+    ) -> Result<HashMap<ExecutionId, String>, EngineError> {
         let live = self.inner.load(session)?;
         let st = lock(&live.state);
         Ok(view::run_labels(&st))
@@ -303,70 +364,131 @@ impl Engine {
     }
 
     pub fn answer_gate(&self, gate: &GateId, answer: GateAnswer) -> Result<GateView, EngineError> {
-        let view = self.inner.db.get_gate(gate)?.ok_or_else(|| EngineError::NotFound(format!("gate {gate}")))?;
+        let view = self
+            .inner
+            .db
+            .get_gate(gate)?
+            .ok_or_else(|| EngineError::NotFound(format!("gate {gate}")))?;
         if view.answer.is_some() {
-            return Err(EngineError::Invalid("This gate was already answered.".into()));
+            return Err(EngineError::Invalid(
+                "This gate was already answered.".into(),
+            ));
         }
         validate_answer(&view.payload, &answer)?;
         if let GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. } = view.payload {
             let st = self.state(&view.session)?;
-            let passed = if matches!(view.payload, GatePayload::SpecApproval { .. }) { st.spec.passed_current() } else { st.plan.passed_current() };
+            let passed = if matches!(view.payload, GatePayload::SpecApproval { .. }) {
+                st.spec.passed_current()
+            } else {
+                st.plan.passed_current()
+            };
             if matches!(answer, GateAnswer::Approval { approved: true, .. }) && !passed {
-                return Err(EngineError::Invalid("Approval requires a fact-check PASS on this version.".into()));
+                return Err(EngineError::Invalid(
+                    "Approval requires a fact-check PASS on this version.".into(),
+                ));
             }
         }
-        if let (GatePayload::Permission { call, .. }, GateAnswer::Permission { answer: PermissionAnswer::AlwaysInWorkspace }) =
-            (&view.payload, &answer)
+        if let (
+            GatePayload::Permission { call, .. },
+            GateAnswer::Permission {
+                answer: PermissionAnswer::AlwaysInWorkspace,
+            },
+        ) = (&view.payload, &answer)
             && let Some(rule) = suggest_rule(call, &self.inner.workspace_root)
         {
             self.inner.services.add_allow_rule(&rule);
         }
         self.inner.append(
             &view.session,
-            SessionEvent::GateAnswered { id: gate.clone(), source: AnswerSource::User, answer: answer.clone(), reason: None },
+            SessionEvent::GateAnswered {
+                id: gate.clone(),
+                source: AnswerSource::User,
+                answer: answer.clone(),
+                reason: None,
+            },
         )?;
         if let GateAnswer::Permission { answer } = answer
             && let Some(tx) = lock(&self.inner.permission_waiters).remove(gate)
         {
             let _ = tx.send(answer);
         }
-        self.inner.db.get_gate(gate)?.ok_or_else(|| EngineError::NotFound(gate.to_string()))
+        self.inner
+            .db
+            .get_gate(gate)?
+            .ok_or_else(|| EngineError::NotFound(gate.to_string()))
     }
 
-    pub fn override_decision(&self, id: &DecisionId, output: Value, reason: String) -> Result<(), EngineError> {
-        let session = self.inner.db.decision_session(id)?.ok_or_else(|| EngineError::NotFound(format!("decision {id}")))?;
+    pub fn override_decision(
+        &self,
+        id: &DecisionId,
+        output: Value,
+        reason: String,
+    ) -> Result<(), EngineError> {
+        let session = self
+            .inner
+            .db
+            .decision_session(id)?
+            .ok_or_else(|| EngineError::NotFound(format!("decision {id}")))?;
         let st = self.state(&session)?;
-        let d = st.decisions.get(id).ok_or_else(|| EngineError::NotFound(format!("decision {id}")))?;
+        let d = st
+            .decisions
+            .get(id)
+            .ok_or_else(|| EngineError::NotFound(format!("decision {id}")))?;
         if !st.can_override(id) {
             return Err(EngineError::Invalid("Work that depends on this decision has already started, so it can no longer be overridden.".into()));
         }
         let valid = match d.judge {
-            JudgeKind::Classify => serde_json::from_value::<judge::ClassifyOut>(output.clone()).is_ok(),
+            JudgeKind::Classify => {
+                serde_json::from_value::<judge::ClassifyOut>(output.clone()).is_ok()
+            }
             JudgeKind::Stakes => serde_json::from_value::<judge::StakesOut>(output.clone()).is_ok(),
-            JudgeKind::Sufficiency => serde_json::from_value::<judge::SufficiencyOut>(output.clone()).is_ok(),
+            JudgeKind::Sufficiency => {
+                serde_json::from_value::<judge::SufficiencyOut>(output.clone()).is_ok()
+            }
             _ => false,
         };
         if !valid {
-            return Err(EngineError::Invalid("The override does not match the decision's output shape.".into()));
+            return Err(EngineError::Invalid(
+                "The override does not match the decision's output shape.".into(),
+            ));
         }
         self.inner.db.mark_overridden(id, &output, &reason)?;
-        self.inner.append(&session, SessionEvent::DecisionOverridden { id: id.clone(), output, reason })?;
+        self.inner.append(
+            &session,
+            SessionEvent::DecisionOverridden {
+                id: id.clone(),
+                output,
+                reason,
+            },
+        )?;
         Ok(())
     }
 
-    pub fn set_yolo(&self, session: &SessionId, enabled: bool) -> Result<SessionSummary, EngineError> {
-        self.inner.append(session, SessionEvent::YoloSet { enabled })?;
+    pub fn set_yolo(
+        &self,
+        session: &SessionId,
+        enabled: bool,
+    ) -> Result<SessionSummary, EngineError> {
+        self.inner
+            .append(session, SessionEvent::YoloSet { enabled })?;
         if enabled {
             // Takes effect from the next gate or tool call, including asks already waiting.
             let st = self.state(session)?;
-            for g in st.open_gates().filter(|g| matches!(g.payload, GatePayload::Permission { .. })) {
+            for g in st
+                .open_gates()
+                .filter(|g| matches!(g.payload, GatePayload::Permission { .. }))
+            {
                 let _ = self.inner.append(
                     session,
                     SessionEvent::GateAnswered {
                         id: g.id.clone(),
                         source: AnswerSource::Yolo,
-                        answer: GateAnswer::Permission { answer: PermissionAnswer::AllowOnce },
-                        reason: Some("YOLO was switched on, so every permission ask is allowed.".into()),
+                        answer: GateAnswer::Permission {
+                            answer: PermissionAnswer::AllowOnce,
+                        },
+                        reason: Some(
+                            "YOLO was switched on, so every permission ask is allowed.".into(),
+                        ),
                     },
                 );
                 if let Some(tx) = lock(&self.inner.permission_waiters).remove(&g.id) {
@@ -374,7 +496,10 @@ impl Engine {
                 }
             }
         }
-        self.inner.db.get_session(session)?.ok_or_else(|| EngineError::NotFound(session.to_string()))
+        self.inner
+            .db
+            .get_session(session)?
+            .ok_or_else(|| EngineError::NotFound(session.to_string()))
     }
 
     pub fn amend(&self, session: &SessionId, text: String) -> Result<SessionSummary, EngineError> {
@@ -382,10 +507,16 @@ impl Engine {
             return Err(EngineError::Invalid("Say what to add or change.".into()));
         }
         if self.state(session)?.is_terminal() {
-            return Err(EngineError::Invalid("This session has ended. Start a new task instead.".into()));
+            return Err(EngineError::Invalid(
+                "This session has ended. Start a new task instead.".into(),
+            ));
         }
-        self.inner.append(session, SessionEvent::RequestAmended { text })?;
-        self.inner.db.get_session(session)?.ok_or_else(|| EngineError::NotFound(session.to_string()))
+        self.inner
+            .append(session, SessionEvent::RequestAmended { text })?;
+        self.inner
+            .db
+            .get_session(session)?
+            .ok_or_else(|| EngineError::NotFound(session.to_string()))
     }
 
     /// Stop a session: cancel its running executions, deny its waiting permission asks, and end
@@ -393,9 +524,16 @@ impl Engine {
     pub fn stop_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError> {
         let st = self.state(session)?;
         if st.is_terminal() {
-            return Err(EngineError::Invalid("This session has already ended.".into()));
+            return Err(EngineError::Invalid(
+                "This session has already ended.".into(),
+            ));
         }
-        self.inner.append(session, SessionEvent::SessionFailed { error: STOPPED_BY_USER.into() })?;
+        self.inner.append(
+            session,
+            SessionEvent::SessionFailed {
+                error: STOPPED_BY_USER.into(),
+            },
+        )?;
         for r in st.running_executions() {
             if let Some((_, token)) = lock(&self.inner.execs).get(&r.id) {
                 token.cancel();
@@ -406,7 +544,10 @@ impl Engine {
                 let _ = tx.send(PermissionAnswer::Deny);
             }
         }
-        self.inner.db.get_session(session)?.ok_or_else(|| EngineError::NotFound(session.to_string()))
+        self.inner
+            .db
+            .get_session(session)?
+            .ok_or_else(|| EngineError::NotFound(session.to_string()))
     }
 
     pub fn cancel_execution(&self, id: &ExecutionId) -> Result<(), EngineError> {
@@ -415,15 +556,24 @@ impl Engine {
                 token.cancel();
                 Ok(())
             }
-            None => Err(EngineError::Invalid("This execution is not running.".into())),
+            None => Err(EngineError::Invalid(
+                "This execution is not running.".into(),
+            )),
         }
     }
 
     /// Resume a failed, cancelled, or interrupted execution: answer its failure gate with retry and
     /// hand the re-run the earlier execution to continue from.
     pub fn resume_execution(&self, id: &ExecutionId) -> Result<(), EngineError> {
-        let view = self.inner.db.get_execution(id)?.ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?;
-        let session = view.session.clone().ok_or_else(|| EngineError::Invalid("Side-panel answers cannot be resumed.".into()))?;
+        let view = self
+            .inner
+            .db
+            .get_execution(id)?
+            .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?;
+        let session = view
+            .session
+            .clone()
+            .ok_or_else(|| EngineError::Invalid("Side-panel answers cannot be resumed.".into()))?;
         let st = self.state(&session)?;
         let gate = st
             .open_gates()
@@ -433,17 +583,34 @@ impl Engine {
         if let Some(purpose) = &view.purpose {
             lock(&self.inner.resume_hints).insert(
                 purpose_key(purpose),
-                ResumeInfo { from: id.clone(), native_session_id: view.native_session_id.clone() },
+                ResumeInfo {
+                    from: id.clone(),
+                    native_session_id: view.native_session_id.clone(),
+                },
             );
         }
-        self.answer_gate(&gate, GateAnswer::Choice { option: "retry".into(), text: None })?;
+        self.answer_gate(
+            &gate,
+            GateAnswer::Choice {
+                option: "retry".into(),
+                text: None,
+            },
+        )?;
         Ok(())
     }
 
     /// A side-panel question (HANDOVER 12.3). Runs outside the pipeline and changes no state.
-    pub async fn ask(&self, question: String, session: Option<SessionId>) -> Result<ExecutionId, EngineError> {
+    pub async fn ask(
+        &self,
+        question: String,
+        session: Option<SessionId>,
+    ) -> Result<ExecutionId, EngineError> {
         let settings = self.inner.services.workspace();
-        let project = settings.projects.first().cloned().ok_or_else(|| EngineError::Invalid("Add a project first.".into()))?;
+        let project = settings
+            .projects
+            .first()
+            .cloned()
+            .ok_or_else(|| EngineError::Invalid("Add a project first.".into()))?;
         let mut context = String::new();
         context.push_str("# Projects in this workspace\n\n");
         for p in &settings.projects {
@@ -455,7 +622,12 @@ impl Engine {
             let d = view::artifacts(&st);
             context.push_str("\n# Artifacts of the session this was asked from\n\n");
             for a in d {
-                context.push_str(&format!("- {} ({}): {}\n", a.label, a.kind, a.path.display()));
+                context.push_str(&format!(
+                    "- {} ({}): {}\n",
+                    a.label,
+                    a.kind,
+                    a.path.display()
+                ));
             }
         }
         let id = ExecutionId::new();
@@ -465,13 +637,19 @@ impl Engine {
             .executor(ExecutorKind::Native)
             .ok_or_else(|| EngineError::Invalid("The native executor is not available.".into()))?;
         let inner = self.inner.clone();
-        let (token, host, spec) = inner.clone().prepare_quick(&id, &project.path, &project.key, question, context)?;
+        let (token, host, spec) =
+            inner
+                .clone()
+                .prepare_quick(&id, &project.path, &project.key, question, context)?;
         let exec_id = id.clone();
         tokio::spawn(async move {
             let result = executor.run(spec, host, token).await;
             let _ = inner.db.finish_execution(&exec_id, &result);
             lock(&inner.execs).remove(&exec_id);
-            let _ = inner.tx.send(EngineNotice::ExecutionStatus { execution: exec_id, status: result.status });
+            let _ = inner.tx.send(EngineNotice::ExecutionStatus {
+                execution: exec_id,
+                status: result.status,
+            });
         });
         Ok(id)
     }
@@ -489,7 +667,9 @@ pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usi
     }
     let st = SessionState::fold(session.clone(), &events);
     if st.is_terminal() {
-        return Err(EngineError::Invalid("This session has already ended.".into()));
+        return Err(EngineError::Invalid(
+            "This session has already ended.".into(),
+        ));
     }
     let running: Vec<ExecutionId> = st.running_executions().map(|r| r.id.clone()).collect();
     for id in &running {
@@ -500,9 +680,20 @@ pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usi
             result.native_session_id = view.native_session_id;
         }
         let _ = db.finish_execution(id, &result);
-        db.append_event(session, &SessionEvent::ExecutionFinished { id: id.clone(), result })?;
+        db.append_event(
+            session,
+            &SessionEvent::ExecutionFinished {
+                id: id.clone(),
+                result,
+            },
+        )?;
     }
-    db.append_event(session, &SessionEvent::SessionFailed { error: STOPPED_BY_USER.into() })?;
+    db.append_event(
+        session,
+        &SessionEvent::SessionFailed {
+            error: STOPPED_BY_USER.into(),
+        },
+    )?;
     db.update_session(
         session,
         &SessionUpdate {
@@ -517,7 +708,9 @@ pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usi
 
 fn purpose_key(p: &ExecPurpose) -> String {
     match p {
-        ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => format!("work:{phase}:false"),
+        ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
+            format!("work:{phase}:false")
+        }
         ExecPurpose::WriteTest { phase, .. } => format!("work:{phase}:true"),
         ExecPurpose::Review { phase, tests, .. } => format!("review:{phase}:{tests}"),
         other => serde_json::to_string(other).unwrap_or_default(),
@@ -527,34 +720,55 @@ fn purpose_key(p: &ExecPurpose) -> String {
 fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError> {
     let ok = matches!(
         (payload, answer),
-        (GatePayload::OpenQuestions { .. }, GateAnswer::Questions { .. })
-            | (GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. }, GateAnswer::Approval { .. })
+        (
+            GatePayload::OpenQuestions { .. },
+            GateAnswer::Questions { .. }
+        ) | (
+            GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. },
+            GateAnswer::Approval { .. }
+        ) | (
+            GatePayload::FactCheckRecurring { .. }
+                | GatePayload::ReviewCap { .. }
+                | GatePayload::Stuck { .. }
+                | GatePayload::PhaseBlocked { .. }
+                | GatePayload::HarnessFailure { .. }
+                | GatePayload::ExecutionFailed { .. }
+                | GatePayload::BudgetReached { .. },
+            GateAnswer::Choice { .. }
+        ) | (GatePayload::ClosingGate { .. }, GateAnswer::Closing { .. })
             | (
-                GatePayload::FactCheckRecurring { .. }
-                    | GatePayload::ReviewCap { .. }
-                    | GatePayload::Stuck { .. }
-                    | GatePayload::PhaseBlocked { .. }
-                    | GatePayload::HarnessFailure { .. }
-                    | GatePayload::ExecutionFailed { .. }
-                    | GatePayload::BudgetReached { .. },
-                GateAnswer::Choice { .. }
+                GatePayload::Permission { .. },
+                GateAnswer::Permission { .. }
             )
-            | (GatePayload::ClosingGate { .. }, GateAnswer::Closing { .. })
-            | (GatePayload::Permission { .. }, GateAnswer::Permission { .. })
             | (GatePayload::SkillApproval { .. }, GateAnswer::Skills { .. })
     );
     if !ok {
-        return Err(EngineError::Invalid("That answer does not fit this gate.".into()));
+        return Err(EngineError::Invalid(
+            "That answer does not fit this gate.".into(),
+        ));
     }
-    if let (GatePayload::OpenQuestions { questions, .. }, GateAnswer::Questions { answers }) = (payload, answer) {
+    if let (GatePayload::OpenQuestions { questions, .. }, GateAnswer::Questions { answers }) =
+        (payload, answer)
+    {
         for q in questions {
-            if !answers.iter().any(|a| a.id == q.id && !a.answer.trim().is_empty()) {
-                return Err(EngineError::Invalid(format!("Answer {} before continuing.", q.id)));
+            if !answers
+                .iter()
+                .any(|a| a.id == q.id && !a.answer.trim().is_empty())
+            {
+                return Err(EngineError::Invalid(format!(
+                    "Answer {} before continuing.",
+                    q.id
+                )));
             }
         }
     }
-    if let (GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. }, GateAnswer::Approval { approved: false, feedback }) =
-        (payload, answer)
+    if let (
+        GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. },
+        GateAnswer::Approval {
+            approved: false,
+            feedback,
+        },
+    ) = (payload, answer)
         && feedback.as_ref().is_none_or(|f| f.trim().is_empty())
     {
         return Err(EngineError::Invalid("Say what to change.".into()));
@@ -578,8 +792,15 @@ pub fn suggest_rule(call: &ToolCall, repo_root: &Path) -> Option<String> {
         }
         "Write" | "Edit" => {
             let path = PathBuf::from(call.str_field("file_path")?);
-            let rel = path.strip_prefix(repo_root).ok().map(|p| p.to_path_buf()).unwrap_or(path);
-            let dir = rel.parent().map(|p| p.display().to_string()).filter(|d| !d.is_empty());
+            let rel = path
+                .strip_prefix(repo_root)
+                .ok()
+                .map(|p| p.to_path_buf())
+                .unwrap_or(path);
+            let dir = rel
+                .parent()
+                .map(|p| p.display().to_string())
+                .filter(|d| !d.is_empty());
             Some(match dir {
                 Some(d) => format!("Edit({d}/**)"),
                 None => "Edit(*)".into(),
@@ -610,7 +831,10 @@ impl Inner {
             inflight: Mutex::new(HashSet::new()),
             driving: AtomicBool::new(false),
         });
-        Ok(lock(&self.sessions).entry(id.clone()).or_insert(live).clone())
+        Ok(lock(&self.sessions)
+            .entry(id.clone())
+            .or_insert(live)
+            .clone())
     }
 
     /// Append an event: store it, fold it, broadcast it, refresh the session row, wake the driver.
@@ -624,7 +848,8 @@ impl Inner {
             self.materialize(session, &event)?;
             st.apply(&stored);
             let init_changed = matches!(st.kind, SessionKind::Init { .. })
-                && (matches!(event, SessionEvent::SessionCreated { .. }) || (!was_terminal && st.is_terminal()));
+                && (matches!(event, SessionEvent::SessionCreated { .. })
+                    || (!was_terminal && st.is_terminal()));
             let cost = lock(&self.judge_cost).get(session).copied().unwrap_or(0.0);
             let summary = view::summary(&st, &self.workspace_id, cost);
             let _ = self.db.update_session(
@@ -654,7 +879,10 @@ impl Inner {
             }
             stored
         };
-        let _ = self.tx.send(EngineNotice::Event { session: session.clone(), stored: stored.clone() });
+        let _ = self.tx.send(EngineNotice::Event {
+            session: session.clone(),
+            stored: stored.clone(),
+        });
         self.push_for(session, &event);
         live.wake.notify_one();
         Ok(stored)
@@ -662,14 +890,40 @@ impl Inner {
 
     fn materialize(&self, session: &SessionId, event: &SessionEvent) -> Result<(), EngineError> {
         match event {
-            SessionEvent::GateOpened { id, title, explanation, payload } => {
-                self.db.upsert_gate(session, id, title, explanation, payload)?;
+            SessionEvent::GateOpened {
+                id,
+                title,
+                explanation,
+                payload,
+            } => {
+                self.db
+                    .upsert_gate(session, id, title, explanation, payload)?;
             }
-            SessionEvent::GateAnswered { id, source, answer, reason } => {
+            SessionEvent::GateAnswered {
+                id,
+                source,
+                answer,
+                reason,
+            } => {
                 let _ = self.db.answer_gate(id, *source, answer, reason.as_deref());
             }
-            SessionEvent::DecisionMade { id, judge, subject, input_summary, output, reason } => {
-                self.db.insert_decision(session, id, *judge, subject.as_deref(), input_summary, output, reason)?;
+            SessionEvent::DecisionMade {
+                id,
+                judge,
+                subject,
+                input_summary,
+                output,
+                reason,
+            } => {
+                self.db.insert_decision(
+                    session,
+                    id,
+                    *judge,
+                    subject.as_deref(),
+                    input_summary,
+                    output,
+                    reason,
+                )?;
             }
             _ => {}
         }
@@ -685,18 +939,31 @@ impl Inner {
                     return;
                 }
                 let body = match payload {
-                    GatePayload::HarnessFailure { harness, .. } => format!("{} needs you to log in.", harness.display_name()),
+                    GatePayload::HarnessFailure { harness, .. } => {
+                        format!("{} needs you to log in.", harness.display_name())
+                    }
                     GatePayload::Permission { reason, .. } => reason.clone(),
                     _ => "A step is waiting for your decision.".into(),
                 };
-                Notice { title: title.clone(), body, url, tag: format!("gate-{session}") }
+                Notice {
+                    title: title.clone(),
+                    body,
+                    url,
+                    tag: format!("gate-{session}"),
+                }
             }
-            SessionEvent::SessionCompleted { summary, .. } => {
-                Notice { title: "Session complete".into(), body: summary.clone(), url, tag: format!("done-{session}") }
-            }
-            SessionEvent::SessionFailed { error } => {
-                Notice { title: "Session stopped".into(), body: error.clone(), url, tag: format!("done-{session}") }
-            }
+            SessionEvent::SessionCompleted { summary, .. } => Notice {
+                title: "Session complete".into(),
+                body: summary.clone(),
+                url,
+                tag: format!("done-{session}"),
+            },
+            SessionEvent::SessionFailed { error } => Notice {
+                title: "Session stopped".into(),
+                body: error.clone(),
+                url,
+                tag: format!("done-{session}"),
+            },
             SessionEvent::PhaseBlocked { phase, reason, .. } => Notice {
                 title: format!("Phase {phase} is blocked"),
                 body: reason.clone(),
@@ -709,7 +976,10 @@ impl Inner {
     }
 
     fn sessions_yolo(&self, session: &SessionId) -> bool {
-        lock(&self.sessions).get(session).map(|l| lock(&l.state).yolo).unwrap_or(false)
+        lock(&self.sessions)
+            .get(session)
+            .map(|l| lock(&l.state).yolo)
+            .unwrap_or(false)
     }
 
     fn ensure_driver(self: &Arc<Self>, id: &SessionId, live: Arc<Live>) {
@@ -745,7 +1015,12 @@ impl Inner {
                 tokio::spawn(async move {
                     if let Err(e) = inner.perform(&sid, step).await {
                         tracing::error!(session = %sid, "step failed: {e}");
-                        let _ = inner.append(&sid, SessionEvent::Note { message: format!("A step failed: {e}") });
+                        let _ = inner.append(
+                            &sid,
+                            SessionEvent::Note {
+                                message: format!("A step failed: {e}"),
+                            },
+                        );
                     }
                     lock(&l.inflight).remove(&key);
                     l.wake.notify_one();
@@ -761,8 +1036,12 @@ impl Inner {
         let budget = self.services.workspace().limits.session_budget_usd;
         ctx.budget_usd = (budget > 0.0).then_some(budget);
         for p in &st.projects {
-            let profile: ProjectProfile = load_toml(&paths::project_profile(&p.path)).unwrap_or_default();
-            ctx.format_commands.insert(p.key.clone(), profile.commands.format.filter(|c| !c.trim().is_empty()));
+            let profile: ProjectProfile =
+                load_toml(&paths::project_profile(&p.path)).unwrap_or_default();
+            ctx.format_commands.insert(
+                p.key.clone(),
+                profile.commands.format.filter(|c| !c.trim().is_empty()),
+            );
         }
         ctx
     }
@@ -775,24 +1054,73 @@ impl Inner {
         match step {
             Step::Judge { judge, subject } => self.perform_judge(session, judge, subject).await,
             Step::Spawn(req) => self.perform_spawn(session, *req).await,
-            Step::OpenGate { title, explanation, payload } => {
-                self.append(session, SessionEvent::GateOpened { id: GateId::new(), title, explanation, payload })?;
+            Step::OpenGate {
+                title,
+                explanation,
+                payload,
+            } => {
+                self.append(
+                    session,
+                    SessionEvent::GateOpened {
+                        id: GateId::new(),
+                        title,
+                        explanation,
+                        payload,
+                    },
+                )?;
                 Ok(())
             }
             Step::YoloAnswer { gate } => self.perform_yolo(session, gate).await,
-            Step::Command { purpose, project, command, files } => {
-                self.perform_command(session, purpose, &project, command, files).await
-            }
-            Step::Autofix { project, phase, tests, findings } => {
-                let root = self.snapshot(session)?.project_path(&project).unwrap_or_default();
-                let (applied, failed) = tokio::task::spawn_blocking(move || autofix::apply_findings(&root, &findings))
+            Step::Command {
+                purpose,
+                project,
+                command,
+                files,
+            } => {
+                self.perform_command(session, purpose, &project, command, files)
                     .await
-                    .map_err(|e| EngineError::Invalid(e.to_string()))?;
-                self.append(session, SessionEvent::AutofixApplied { project, phase, tests, applied, failed })?;
+            }
+            Step::Autofix {
+                project,
+                phase,
+                tests,
+                findings,
+            } => {
+                let root = self
+                    .snapshot(session)?
+                    .project_path(&project)
+                    .unwrap_or_default();
+                let (applied, failed) =
+                    tokio::task::spawn_blocking(move || autofix::apply_findings(&root, &findings))
+                        .await
+                        .map_err(|e| EngineError::Invalid(e.to_string()))?;
+                self.append(
+                    session,
+                    SessionEvent::AutofixApplied {
+                        project,
+                        phase,
+                        tests,
+                        applied,
+                        failed,
+                    },
+                )?;
                 Ok(())
             }
-            Step::AnnounceBlocked { project, phase, tests, reason } => {
-                self.append(session, SessionEvent::PhaseBlocked { project, phase, tests, reason })?;
+            Step::AnnounceBlocked {
+                project,
+                phase,
+                tests,
+                reason,
+            } => {
+                self.append(
+                    session,
+                    SessionEvent::PhaseBlocked {
+                        project,
+                        phase,
+                        tests,
+                        reason,
+                    },
+                )?;
                 Ok(())
             }
             Step::Complete { report_markdown } => {
@@ -807,15 +1135,24 @@ impl Inner {
                     let problem = if !paths::project_inventory(&root).exists() {
                         Some("the initializer did not write .ostra/INVENTORY.md".to_string())
                     } else {
-                        ostra_core::config::load_toml_required::<ProjectProfile>(&paths::project_profile(&root))
-                            .err()
-                            .map(|e| format!("the generated .ostra/project.toml is not valid: {e}"))
+                        ostra_core::config::load_toml_required::<ProjectProfile>(
+                            &paths::project_profile(&root),
+                        )
+                        .err()
+                        .map(|e| format!("the generated .ostra/project.toml is not valid: {e}"))
                     };
                     if let Some(p) = problem {
-                        self.append(session, SessionEvent::SessionFailed { error: format!("Init did not finish: {p}. Run init again.") })?;
+                        self.append(
+                            session,
+                            SessionEvent::SessionFailed {
+                                error: format!("Init did not finish: {p}. Run init again."),
+                            },
+                        )?;
                         return Ok(());
                     }
-                    let _ = self.db.set_project_init_status(project, ostra_core::api::InitStatus::Initialized);
+                    let _ = self
+                        .db
+                        .set_project_init_status(project, ostra_core::api::InitStatus::Initialized);
                 }
                 let summary = md
                     .lines()
@@ -823,7 +1160,13 @@ impl Inner {
                     .find(|l| !l.is_empty())
                     .unwrap_or("Session complete")
                     .to_string();
-                self.append(session, SessionEvent::SessionCompleted { report_path: path, summary })?;
+                self.append(
+                    session,
+                    SessionEvent::SessionCompleted {
+                        report_path: path,
+                        summary,
+                    },
+                )?;
                 Ok(())
             }
             Step::Fail { error } => {
@@ -843,9 +1186,14 @@ impl Inner {
                 path: p.path.display().to_string(),
                 initialized: paths::project_inventory(&p.path).exists(),
                 stack: p.stack.clone().or_else(|| {
-                    let profile: ProjectProfile = load_toml(&paths::project_profile(&p.path)).ok()?;
+                    let profile: ProjectProfile =
+                        load_toml(&paths::project_profile(&p.path)).ok()?;
                     profile.stack.language.map(|l| {
-                        if profile.stack.frameworks.is_empty() { l } else { format!("{l}/{}", profile.stack.frameworks.join(",")) }
+                        if profile.stack.frameworks.is_empty() {
+                            l
+                        } else {
+                            format!("{l}/{}", profile.stack.frameworks.join(","))
+                        }
                     })
                 }),
             })
@@ -864,18 +1212,28 @@ impl Inner {
         validate: impl Fn(&Value) -> bool,
     ) -> Result<Value, EngineError> {
         let factory = self.services.factory();
-        let system = factory
-            .judge_prompt(kind.as_str())
-            .ok_or_else(|| EngineError::Invalid(format!("No prompt for the {} judge.", kind.as_str())))?;
+        let system = factory.judge_prompt(kind.as_str()).ok_or_else(|| {
+            EngineError::Invalid(format!("No prompt for the {} judge.", kind.as_str()))
+        })?;
         let global = self.services.global();
         let settings = self.services.workspace();
-        let route = resolve_route(&global, &settings, RouteQuery::new(ostra_core::agent::JUDGE_ROUTE, Tier::Fast))
-            .map_err(|e| EngineError::Invalid(e.0))?;
+        let route = resolve_route(
+            &global,
+            &settings,
+            RouteQuery::new(ostra_core::agent::JUDGE_ROUTE, Tier::Fast),
+        )
+        .map_err(|e| EngineError::Invalid(e.0))?;
         let mut last = String::new();
         for attempt in 0..3 {
             match self
                 .services
-                .judge(&route, &system, &input, schema.clone(), ostra_core::model::Effort::Low)
+                .judge(
+                    &route,
+                    &system,
+                    &input,
+                    schema.clone(),
+                    ostra_core::model::Effort::Low,
+                )
                 .await
             {
                 Ok((value, usage)) => {
@@ -901,31 +1259,56 @@ impl Inner {
             }
             tokio::time::sleep(std::time::Duration::from_millis(500 * (attempt + 1))).await;
         }
-        Err(EngineError::Invalid(format!("The {} judge call failed: {last}", kind.as_str())))
+        Err(EngineError::Invalid(format!(
+            "The {} judge call failed: {last}",
+            kind.as_str()
+        )))
     }
 
-    async fn perform_judge(self: &Arc<Self>, session: &SessionId, kind: JudgeKind, subject: Option<String>) -> Result<(), EngineError> {
+    async fn perform_judge(
+        self: &Arc<Self>,
+        session: &SessionId,
+        kind: JudgeKind,
+        subject: Option<String>,
+    ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
-        let (input, summary) = judge_input::judge_input(&st, kind, subject.as_deref(), &self.project_facts());
+        let (input, summary) =
+            judge_input::judge_input(&st, kind, subject.as_deref(), &self.project_facts());
         let schema = output_schema(kind, None);
         let validate = move |v: &Value| -> bool {
             match kind {
-                JudgeKind::Classify => serde_json::from_value::<judge::ClassifyOut>(v.clone()).is_ok(),
-                JudgeKind::Sufficiency => serde_json::from_value::<judge::SufficiencyOut>(v.clone()).is_ok(),
+                JudgeKind::Classify => {
+                    serde_json::from_value::<judge::ClassifyOut>(v.clone()).is_ok()
+                }
+                JudgeKind::Sufficiency => {
+                    serde_json::from_value::<judge::SufficiencyOut>(v.clone()).is_ok()
+                }
                 JudgeKind::Stakes => serde_json::from_value::<judge::StakesOut>(v.clone()).is_ok(),
-                JudgeKind::RouteAnswer => serde_json::from_value::<judge::RouteAnswerOut>(v.clone()).is_ok(),
+                JudgeKind::RouteAnswer => {
+                    serde_json::from_value::<judge::RouteAnswerOut>(v.clone()).is_ok()
+                }
                 JudgeKind::Rescue => serde_json::from_value::<judge::RescueOut>(v.clone()).is_ok(),
-                JudgeKind::ResolveReview => serde_json::from_value::<judge::ResolveReviewOut>(v.clone()).is_ok(),
-                JudgeKind::Completion => serde_json::from_value::<judge::CompletionOut>(v.clone()).is_ok(),
+                JudgeKind::ResolveReview => {
+                    serde_json::from_value::<judge::ResolveReviewOut>(v.clone()).is_ok()
+                }
+                JudgeKind::Completion => {
+                    serde_json::from_value::<judge::CompletionOut>(v.clone()).is_ok()
+                }
                 JudgeKind::YoloAnswer => true,
             }
         };
-        match self.call_judge(session, kind, subject, input, summary, schema, validate).await {
+        match self
+            .call_judge(session, kind, subject, input, summary, schema, validate)
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) => {
                 if kind == JudgeKind::Completion {
                     // The session's work is done; a report without prose beats no report.
-                    let md = format!("# Session complete\n\nThe completion judge failed ({e}), so this report lists the state only.\n\n{}", judge_input::judge_input(&st, JudgeKind::Completion, None, &[]).0);
+                    let md = format!(
+                        "# Session complete\n\nThe completion judge failed ({e}), so this report lists the state only.\n\n{}",
+                        judge_input::judge_input(&st, JudgeKind::Completion, None, &[]).0
+                    );
                     self.append(
                         session,
                         SessionEvent::DecisionMade {
@@ -939,45 +1322,102 @@ impl Inner {
                     )?;
                     return Ok(());
                 }
-                self.append(session, SessionEvent::SessionFailed { error: format!("{e}. Check that the judge route has a provider with a working API key.") })?;
+                self.append(
+                    session,
+                    SessionEvent::SessionFailed {
+                        error: format!(
+                            "{e}. Check that the judge route has a provider with a working API key."
+                        ),
+                    },
+                )?;
                 Ok(())
             }
         }
     }
 
-    async fn perform_yolo(self: &Arc<Self>, session: &SessionId, gate: GateId) -> Result<(), EngineError> {
+    async fn perform_yolo(
+        self: &Arc<Self>,
+        session: &SessionId,
+        gate: GateId,
+    ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
-        let Some(plan) = judge_input::yolo_plan(&st, &gate) else { return Ok(()) };
+        let Some(plan) = judge_input::yolo_plan(&st, &gate) else {
+            return Ok(());
+        };
         let (answer, reason) = match plan {
             YoloPlan::Fixed { answer, reason } => (answer, reason),
             YoloPlan::Judge { schema } => {
-                let (input, summary) = judge_input::judge_input(&st, JudgeKind::YoloAnswer, Some(gate.as_str()), &[]);
+                let (input, summary) =
+                    judge_input::judge_input(&st, JudgeKind::YoloAnswer, Some(gate.as_str()), &[]);
                 let full = output_schema(JudgeKind::YoloAnswer, Some(schema));
                 let value = match self
-                    .call_judge(session, JudgeKind::YoloAnswer, Some(gate.to_string()), input, summary, full, |_| true)
+                    .call_judge(
+                        session,
+                        JudgeKind::YoloAnswer,
+                        Some(gate.to_string()),
+                        input,
+                        summary,
+                        full,
+                        |_| true,
+                    )
                     .await
                 {
                     Ok(v) => v,
                     Err(e) => {
-                        self.append(session, SessionEvent::Note { message: format!("YOLO could not answer \"{}\": {e}. The gate waits for you.", st.gates.get(&gate).map(|g| g.title.as_str()).unwrap_or("a gate")) })?;
+                        self.append(
+                            session,
+                            SessionEvent::Note {
+                                message: format!(
+                                    "YOLO could not answer \"{}\": {e}. The gate waits for you.",
+                                    st.gates
+                                        .get(&gate)
+                                        .map(|g| g.title.as_str())
+                                        .unwrap_or("a gate")
+                                ),
+                            },
+                        )?;
                         return Ok(());
                     }
                 };
                 let reason = judge::reason_of(&value);
                 let st = self.snapshot(session)?;
-                match judge_input::yolo_answer_from_judge(&st, &gate, value.get("answer").unwrap_or(&Value::Null)) {
+                match judge_input::yolo_answer_from_judge(
+                    &st,
+                    &gate,
+                    value.get("answer").unwrap_or(&Value::Null),
+                ) {
                     Ok(a) => (a, reason),
                     Err(e) => {
-                        self.append(session, SessionEvent::Note { message: format!("The YOLO answer was refused: {e}. The gate waits for you.") })?;
+                        self.append(
+                            session,
+                            SessionEvent::Note {
+                                message: format!(
+                                    "The YOLO answer was refused: {e}. The gate waits for you."
+                                ),
+                            },
+                        )?;
                         return Ok(());
                     }
                 }
             }
         };
-        if self.snapshot(session)?.gates.get(&gate).is_some_and(|g| g.answer.is_some()) {
+        if self
+            .snapshot(session)?
+            .gates
+            .get(&gate)
+            .is_some_and(|g| g.answer.is_some())
+        {
             return Ok(());
         }
-        self.append(session, SessionEvent::GateAnswered { id: gate, source: AnswerSource::Yolo, answer, reason: Some(reason) })?;
+        self.append(
+            session,
+            SessionEvent::GateAnswered {
+                id: gate,
+                source: AnswerSource::Yolo,
+                answer,
+                reason: Some(reason),
+            },
+        )?;
         Ok(())
     }
 
@@ -989,12 +1429,20 @@ impl Inner {
         command: Option<String>,
         files: Vec<String>,
     ) -> Result<(), EngineError> {
-        let root = self.snapshot(session)?.project_path(project).unwrap_or_default();
+        let root = self
+            .snapshot(session)?
+            .project_path(project)
+            .unwrap_or_default();
         let (cmd_text, exit, tail) = match purpose {
             CommandPurpose::Format => match command {
-                None => (String::new(), None, "No format command in project.toml, so format was skipped.".to_string()),
+                None => (
+                    String::new(),
+                    None,
+                    "No format command in project.toml, so format was skipped.".to_string(),
+                ),
                 Some(cmd) => {
-                    let (code, out) = run_shell(&root, "bash", &["-c".into(), cmd.clone()], 600).await;
+                    let (code, out) =
+                        run_shell(&root, "bash", &["-c".into(), cmd.clone()], 600).await;
                     (cmd, code, out)
                 }
             },
@@ -1003,7 +1451,13 @@ impl Inner {
                     (String::new(), Some(0), "No files to stage.".to_string())
                 } else {
                     // Staging keeps each review focused on the unstaged diff (Step 2).
-                    let mut args: Vec<String> = vec!["-C".into(), root.display().to_string(), "add".into(), "-A".into(), "--".into()];
+                    let mut args: Vec<String> = vec![
+                        "-C".into(),
+                        root.display().to_string(),
+                        "add".into(),
+                        "-A".into(),
+                        "--".into(),
+                    ];
                     args.extend(files.iter().cloned());
                     let (code, out) = run_shell(&root, "git", &args, 60).await;
                     (format!("git {}", args.join(" ")), code, out)
@@ -1011,11 +1465,27 @@ impl Inner {
             }
             CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
         };
-        self.append(session, SessionEvent::CommandRan { purpose, project: project.into(), command: cmd_text, exit_code: exit, output_tail: tail })?;
+        self.append(
+            session,
+            SessionEvent::CommandRan {
+                purpose,
+                project: project.into(),
+                command: cmd_text,
+                exit_code: exit,
+                output_tail: tail,
+            },
+        )?;
         Ok(())
     }
 
-    fn record_denied(&self, session: &SessionId, req: &SpawnRequest, executor: ExecutorKind, model: String, error: String) -> Result<(), EngineError> {
+    fn record_denied(
+        &self,
+        session: &SessionId,
+        req: &SpawnRequest,
+        executor: ExecutorKind,
+        model: String,
+        error: String,
+    ) -> Result<(), EngineError> {
         let id = ExecutionId::new();
         self.append(
             session,
@@ -1043,7 +1513,12 @@ impl Inner {
     /// change applies to waiting spawns.
     async fn acquire_slot(self: &Arc<Self>) -> Slot {
         loop {
-            let limit = self.services.workspace().limits.max_parallel_executions.max(1) as usize;
+            let limit = self
+                .services
+                .workspace()
+                .limits
+                .max_parallel_executions
+                .max(1) as usize;
             {
                 let mut n = lock(&self.slots);
                 if *n < limit {
@@ -1051,11 +1526,17 @@ impl Inner {
                     return Slot(self.clone());
                 }
             }
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), self.slot_free.notified()).await;
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_secs(2), self.slot_free.notified())
+                    .await;
         }
     }
 
-    async fn perform_spawn(self: &Arc<Self>, session: &SessionId, req: SpawnRequest) -> Result<(), EngineError> {
+    async fn perform_spawn(
+        self: &Arc<Self>,
+        session: &SessionId,
+        req: SpawnRequest,
+    ) -> Result<(), EngineError> {
         let _slot = self.acquire_slot().await;
         let st = self.snapshot(session)?;
         if st.is_terminal() {
@@ -1066,20 +1547,49 @@ impl Inner {
         let factory = self.services.factory();
         let meta = factory.agent_meta(req.agent);
         let complexity = req.complexity();
-        let tier_override = matches!(req.purpose, ExecPurpose::Init { mode: InitializerMode::GenerateSkill, .. }).then_some(Tier::Advanced);
+        let tier_override = matches!(
+            req.purpose,
+            ExecPurpose::Init {
+                mode: InitializerMode::GenerateSkill,
+                ..
+            }
+        )
+        .then_some(Tier::Advanced);
         let executor_override = st.forced_executor(req.agent);
         let route = match resolve_route(
             &global,
             &settings,
-            RouteQuery { key: req.agent.as_str(), default_tier: meta.default_tier, complexity, tier_override, executor_override },
+            RouteQuery {
+                key: req.agent.as_str(),
+                default_tier: meta.default_tier,
+                complexity,
+                tier_override,
+                executor_override,
+            },
         ) {
             Ok(r) => r,
-            Err(e) => return self.record_denied(session, &req, ExecutorKind::Native, String::new(), format!("route: {}", e.0)),
+            Err(e) => {
+                return self.record_denied(
+                    session,
+                    &req,
+                    ExecutorKind::Native,
+                    String::new(),
+                    format!("route: {}", e.0),
+                );
+            }
         };
         let Some(executor) = self.services.executor(route.executor) else {
-            return self.record_denied(session, &req, route.executor, route.model, format!("The {} executor is not available.", route.executor));
+            return self.record_denied(
+                session,
+                &req,
+                route.executor,
+                route.model,
+                format!("The {} executor is not available.", route.executor),
+            );
         };
-        let repo_root = st.project_path(&req.project).unwrap_or_else(|| self.workspace_root.clone());
+        let repo_root = st
+            .project_path(&req.project)
+            .unwrap_or_else(|| self.workspace_root.clone());
         let profile: Option<ProjectProfile> = load_toml(&paths::project_profile(&repo_root)).ok();
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
         let _ = std::fs::create_dir_all(&req.session_dir);
@@ -1087,7 +1597,13 @@ impl Inner {
             && let Some(p) = &req.inputs.implementer_report
             && !p.exists()
         {
-            let _ = std::fs::write(p, format!("# Test request\n\nNo implementer ran in this session. The user asked for tests directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone. Cover the code the request names.\n", st.full_request()));
+            let _ = std::fs::write(
+                p,
+                format!(
+                    "# Test request\n\nNo implementer ran in this session. The user asked for tests directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone. Cover the code the request names.\n",
+                    st.full_request()
+                ),
+            );
         }
         let built = match factory.build(
             &req,
@@ -1101,14 +1617,28 @@ impl Inner {
             },
         ) {
             Ok(b) => b,
-            Err(e) => return self.record_denied(session, &req, route.executor, route.model, format!("spawn: {e}")),
+            Err(e) => {
+                return self.record_denied(
+                    session,
+                    &req,
+                    route.executor,
+                    route.model,
+                    format!("spawn: {e}"),
+                );
+            }
         };
         let mut params = built.params.clone();
         if matches!(req.purpose, ExecPurpose::Review { .. })
             && let Value::Object(map) = &mut params
         {
-            let ids = profile.as_ref().map(|p| p.auto_fixable_ids()).unwrap_or_default();
-            map.insert(AUTO_FIXABLE_PARAM.into(), serde_json::to_value(ids).unwrap_or_default());
+            let ids = profile
+                .as_ref()
+                .map(|p| p.auto_fixable_ids())
+                .unwrap_or_default();
+            map.insert(
+                AUTO_FIXABLE_PARAM.into(),
+                serde_json::to_value(ids).unwrap_or_default(),
+            );
         }
         let id = ExecutionId::new();
         let resume = lock(&self.resume_hints).remove(&purpose_key(&req.purpose));
@@ -1130,7 +1660,10 @@ impl Inner {
             phase: req.inputs.phase_value.clone(),
             yolo: st.yolo,
             permission_mode: settings.permissions.mode,
-            permissions: PermissionRules::merged(&[&global.permissions, &settings.permissions.rules()]),
+            permissions: PermissionRules::merged(&[
+                &global.permissions,
+                &settings.permissions.rules(),
+            ]),
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(&repo_root),
         };
@@ -1164,14 +1697,27 @@ impl Inner {
             report_path: built.report_file.clone(),
             native_session_id: None,
         })?;
-        let _ = self.tx.send(EngineNotice::ExecutionStatus { execution: id.clone(), status: ExecutionStatus::Running });
+        let _ = self.tx.send(EngineNotice::ExecutionStatus {
+            execution: id.clone(),
+            status: ExecutionStatus::Running,
+        });
         let token = CancellationToken::new();
         lock(&self.execs).insert(id.clone(), (Some(session.clone()), token.clone()));
-        let host = Arc::new(EngineHost { inner: self.clone(), session: Some(session.clone()), execution: id.clone(), repo_root: Some(repo_root.clone()) });
+        let host = Arc::new(EngineHost {
+            inner: self.clone(),
+            session: Some(session.clone()),
+            execution: id.clone(),
+            repo_root: Some(repo_root.clone()),
+        });
         let harness_session_id = match route.executor {
-            ExecutorKind::Harness(ostra_core::HarnessKind::Claude | ostra_core::HarnessKind::Grok) => {
-                Some(resume.as_ref().and_then(|r| r.native_session_id.clone()).unwrap_or_else(uuid_v4))
-            }
+            ExecutorKind::Harness(
+                ostra_core::HarnessKind::Claude | ostra_core::HarnessKind::Grok,
+            ) => Some(
+                resume
+                    .as_ref()
+                    .and_then(|r| r.native_session_id.clone())
+                    .unwrap_or_else(uuid_v4),
+            ),
             _ => None,
         };
         let spec = ExecutionSpec {
@@ -1191,15 +1737,35 @@ impl Inner {
         let result = executor.run(spec, host, token).await;
         lock(&self.execs).remove(&id);
         let _ = self.db.finish_execution(&id, &result);
-        let _ = self.tx.send(EngineNotice::ExecutionStatus { execution: id.clone(), status: result.status });
+        let _ = self.tx.send(EngineNotice::ExecutionStatus {
+            execution: id.clone(),
+            status: result.status,
+        });
         let block = matches!(req.purpose, ExecPurpose::Review { .. })
-            .then(|| result.submit.as_ref().and_then(|v| serde_json::from_value::<CodeReviewerSubmit>(v.clone()).ok()))
+            .then(|| {
+                result
+                    .submit
+                    .as_ref()
+                    .and_then(|v| serde_json::from_value::<CodeReviewerSubmit>(v.clone()).ok())
+            })
             .flatten()
             .filter(|r| r.security_block);
         self.append(session, SessionEvent::ExecutionFinished { id, result })?;
         if let (Some(review), ExecPurpose::Review { phase, tests, .. }) = (block, &req.purpose) {
-            let findings = review.findings.into_iter().filter(|f| f.severity == ostra_core::submit::Severity::Blocker).collect();
-            self.append(session, SessionEvent::SecurityBlock { project: req.project.clone(), phase: *phase, tests: *tests, findings })?;
+            let findings = review
+                .findings
+                .into_iter()
+                .filter(|f| f.severity == ostra_core::submit::Severity::Blocker)
+                .collect();
+            self.append(
+                session,
+                SessionEvent::SecurityBlock {
+                    project: req.project.clone(),
+                    phase: *phase,
+                    tests: *tests,
+                    findings,
+                },
+            )?;
         }
         Ok(())
     }
@@ -1216,8 +1782,12 @@ impl Inner {
         let settings = self.services.workspace();
         let factory = self.services.factory();
         let meta = factory.agent_meta(AgentName::QuickAnswer);
-        let route = resolve_route(&global, &settings, RouteQuery::new("quick-answer", meta.default_tier))
-            .map_err(|e| EngineError::Invalid(e.0))?;
+        let route = resolve_route(
+            &global,
+            &settings,
+            RouteQuery::new("quick-answer", meta.default_tier),
+        )
+        .map_err(|e| EngineError::Invalid(e.0))?;
         let system = factory
             .judge_prompt("__agent:quick-answer")
             .ok_or_else(|| EngineError::Invalid("The quick-answer prompt is missing.".into()))?;
@@ -1237,7 +1807,10 @@ impl Inner {
             phase: None,
             yolo: false,
             permission_mode: ostra_core::config::PermissionMode::Plan,
-            permissions: PermissionRules::merged(&[&global.permissions, &settings.permissions.rules()]),
+            permissions: PermissionRules::merged(&[
+                &global.permissions,
+                &settings.permissions.rules(),
+            ]),
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(repo_root),
         };
@@ -1257,7 +1830,12 @@ impl Inner {
         })?;
         let token = CancellationToken::new();
         lock(&self.execs).insert(id.clone(), (None, token.clone()));
-        let host = Arc::new(EngineHost { inner: self.clone(), session: None, execution: id.clone(), repo_root: Some(repo_root.to_path_buf()) });
+        let host = Arc::new(EngineHost {
+            inner: self.clone(),
+            session: None,
+            execution: id.clone(),
+            repo_root: Some(repo_root.to_path_buf()),
+        });
         let spec = ExecutionSpec {
             id: id.clone(),
             agent: AgentName::QuickAnswer,
@@ -1280,7 +1858,12 @@ fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-async fn run_shell(cwd: &Path, program: &str, args: &[String], timeout_secs: u64) -> (Option<i32>, String) {
+async fn run_shell(
+    cwd: &Path,
+    program: &str,
+    args: &[String],
+    timeout_secs: u64,
+) -> (Option<i32>, String) {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args).current_dir(cwd).kill_on_drop(true);
     let fut = cmd.output();
@@ -1320,9 +1903,9 @@ impl ExecutionHost for EngineHost {
     fn emit(&self, delta: ExecutionDelta) {
         let summary = match &delta {
             // The submit call ends every run, so the action before it says more.
-            ExecutionDelta::ToolCall { call, .. } if !call.tool.contains("submit_") => {
-                Some(ostra_core::api::tool_summary(call, self.repo_root.as_deref()))
-            }
+            ExecutionDelta::ToolCall { call, .. } if !call.tool.contains("submit_") => Some(
+                ostra_core::api::tool_summary(call, self.repo_root.as_deref()),
+            ),
             ExecutionDelta::Status { message } => Some(ostra_core::api::summary_line(message)),
             _ => None,
         };
@@ -1338,26 +1921,53 @@ impl ExecutionHost for EngineHost {
             if let Some(session) = &self.session
                 && let Ok(execs) = self.inner.db.list_executions(session)
             {
-                let judge = lock(&self.inner.judge_cost).get(session).copied().unwrap_or(0.0);
+                let judge = lock(&self.inner.judge_cost)
+                    .get(session)
+                    .copied()
+                    .unwrap_or(0.0);
                 let cost = execs.iter().map(|e| e.usage.cost_usd).sum::<f64>() + judge;
-                if let Ok(summary) = self.inner.db.update_session(session, &SessionUpdate { cost_usd: Some(cost), ..Default::default() }) {
+                if let Ok(summary) = self.inner.db.update_session(
+                    session,
+                    &SessionUpdate {
+                        cost_usd: Some(cost),
+                        ..Default::default()
+                    },
+                ) {
                     let _ = self.inner.tx.send(EngineNotice::SessionUpdated { summary });
                 }
             }
         }
         if let Ok(item) = self.inner.db.append_activity(&self.execution, &delta) {
-            let _ = self.inner.tx.send(EngineNotice::Delta { execution: self.execution.clone(), item });
+            let _ = self.inner.tx.send(EngineNotice::Delta {
+                execution: self.execution.clone(),
+                item,
+            });
         }
     }
 
-    async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer {
+    async fn ask_permission(
+        &self,
+        call: &ToolCall,
+        reason: &str,
+        rule: &RuleRef,
+    ) -> PermissionAnswer {
         let Some(session) = &self.session else {
             // Side-panel runs are read-only and never ask.
             return PermissionAnswer::Deny;
         };
-        let Ok(st) = self.inner.snapshot(session) else { return PermissionAnswer::Deny };
-        let agent = st.executions.get(&self.execution).map(|r| r.agent).unwrap_or(AgentName::Implementer);
-        let repo = st.executions.get(&self.execution).and_then(|r| st.project_path(&r.project)).unwrap_or_default();
+        let Ok(st) = self.inner.snapshot(session) else {
+            return PermissionAnswer::Deny;
+        };
+        let agent = st
+            .executions
+            .get(&self.execution)
+            .map(|r| r.agent)
+            .unwrap_or(AgentName::Implementer);
+        let repo = st
+            .executions
+            .get(&self.execution)
+            .and_then(|r| st.project_path(&r.project))
+            .unwrap_or_default();
         let gate = GateId::new();
         let payload = GatePayload::Permission {
             execution: self.execution.clone(),
@@ -1369,13 +1979,23 @@ impl ExecutionHost for EngineHost {
         };
         let title = format!("{agent} asks to run {}", call.tool);
         if st.yolo {
-            let _ = self.inner.append(session, SessionEvent::GateOpened { id: gate.clone(), title, explanation: reason.into(), payload });
+            let _ = self.inner.append(
+                session,
+                SessionEvent::GateOpened {
+                    id: gate.clone(),
+                    title,
+                    explanation: reason.into(),
+                    payload,
+                },
+            );
             let _ = self.inner.append(
                 session,
                 SessionEvent::GateAnswered {
                     id: gate,
                     source: AnswerSource::Yolo,
-                    answer: GateAnswer::Permission { answer: PermissionAnswer::AllowOnce },
+                    answer: GateAnswer::Permission {
+                        answer: PermissionAnswer::AllowOnce,
+                    },
                     reason: Some("Under YOLO every permission ask is allowed.".into()),
                 },
             );
@@ -1385,7 +2005,15 @@ impl ExecutionHost for EngineHost {
         lock(&self.inner.permission_waiters).insert(gate.clone(), tx);
         if self
             .inner
-            .append(session, SessionEvent::GateOpened { id: gate.clone(), title, explanation: reason.into(), payload })
+            .append(
+                session,
+                SessionEvent::GateOpened {
+                    id: gate.clone(),
+                    title,
+                    explanation: reason.into(),
+                    payload,
+                },
+            )
             .is_err()
         {
             lock(&self.inner.permission_waiters).remove(&gate);
@@ -1399,18 +2027,29 @@ impl ExecutionHost for EngineHost {
     }
 
     fn transcript(&self, execution: &ExecutionId) -> Vec<(String, Value)> {
-        self.inner.db.messages(execution).map(|m| m.into_iter().map(|m| (m.role, m.content)).collect()).unwrap_or_default()
+        self.inner
+            .db
+            .messages(execution)
+            .map(|m| m.into_iter().map(|m| (m.role, m.content)).collect())
+            .unwrap_or_default()
     }
 
     fn yolo(&self) -> bool {
-        self.session.as_ref().is_some_and(|s| self.inner.sessions_yolo(s))
+        self.session
+            .as_ref()
+            .is_some_and(|s| self.inner.sessions_yolo(s))
     }
 }
 
 impl Engine {
     pub fn execution(&self, id: &ExecutionId) -> Result<ExecutionView, EngineError> {
-        let mut v = self.inner.db.get_execution(id)?.ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?;
-        v.has_terminal = matches!(v.executor, ExecutorKind::Harness(_)) && lock(&self.inner.execs).contains_key(id);
+        let mut v = self
+            .inner
+            .db
+            .get_execution(id)?
+            .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?;
+        v.has_terminal = matches!(v.executor, ExecutorKind::Harness(_))
+            && lock(&self.inner.execs).contains_key(id);
         if let Some(session) = v.session.clone() {
             let st = self.state(&session)?;
             view::decorate(&st, &view::run_labels(&st), &mut v);

@@ -151,7 +151,11 @@ impl ExecutionResult {
     }
 
     pub fn with_status(status: ExecutionStatus) -> Self {
-        ExecutionResult { status, ..ExecutionResult::error("") }.clear_error()
+        ExecutionResult {
+            status,
+            ..ExecutionResult::error("")
+        }
+        .clear_error()
     }
 
     fn clear_error(mut self) -> Self {
@@ -165,16 +169,40 @@ impl ExecutionResult {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ExecutionDelta {
-    Text { text: String },
-    Thinking { text: String },
-    ToolCall { call_id: String, call: ToolCall },
-    Policy { call_id: String, decision: PolicyDecision },
+    Text {
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
+    ToolCall {
+        call_id: String,
+        call: ToolCall,
+    },
+    Policy {
+        call_id: String,
+        decision: PolicyDecision,
+    },
     /// Live output of a running shell command.
-    ToolOutput { call_id: String, chunk: String },
-    ToolResult { call_id: String, output: String, is_error: bool, duration_ms: u64 },
-    Usage { usage: Usage },
-    Status { message: String },
-    NativeSessionId { id: String },
+    ToolOutput {
+        call_id: String,
+        chunk: String,
+    },
+    ToolResult {
+        call_id: String,
+        output: String,
+        is_error: bool,
+        duration_ms: u64,
+    },
+    Usage {
+        usage: Usage,
+    },
+    Status {
+        message: String,
+    },
+    NativeSessionId {
+        id: String,
+    },
 }
 
 /// Callbacks an executor uses while it runs. Implemented by the engine.
@@ -183,7 +211,12 @@ pub trait ExecutionHost: Send + Sync {
     fn emit(&self, delta: ExecutionDelta);
 
     /// A permission ask. Waits for the browser answer, or answers at once under YOLO.
-    async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer;
+    async fn ask_permission(
+        &self,
+        call: &ToolCall,
+        reason: &str,
+        rule: &RuleRef,
+    ) -> PermissionAnswer;
 
     /// Persist one transcript message (native executions), so a Resume can continue from it.
     fn record_message(&self, _role: &str, _content: &serde_json::Value) {}

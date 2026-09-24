@@ -1,7 +1,8 @@
 use ostra_core::agent::AgentName;
 use ostra_core::api::{InitStatus, PushKeys, PushSubscription, SessionStatus};
 use ostra_core::event::{
-    AnswerSource, ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind, SessionOptions,
+    AnswerSource, ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind,
+    SessionOptions,
 };
 use ostra_core::exec::{ExecutionDelta, ExecutionResult, ExecutionStatus, Usage};
 use ostra_core::executor::{ExecutorKind, HarnessKind};
@@ -38,7 +39,10 @@ fn new_exec(db: &WorkspaceDb, session: Option<&SessionId>, executor: ExecutorKin
         id: id.clone(),
         session: session.cloned(),
         agent: AgentName::Implementer,
-        purpose: Some(ExecPurpose::Implement { phase: 1, work: ostra_core::event::WorkKind::Initial }),
+        purpose: Some(ExecPurpose::Implement {
+            phase: 1,
+            work: ostra_core::event::WorkKind::Initial,
+        }),
         stage: Some(StageKind::Implement),
         project: "backend".into(),
         executor,
@@ -80,7 +84,10 @@ fn sessions_create_update_list() {
     let all = db.list_sessions().unwrap();
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].id, second);
-    assert!(db.update_session(&SessionId::from("nope"), &SessionUpdate::default()).is_err());
+    assert!(
+        db.update_session(&SessionId::from("nope"), &SessionUpdate::default())
+            .is_err()
+    );
 }
 
 #[test]
@@ -88,11 +95,34 @@ fn session_title_is_stored() {
     let (_d, db) = db();
     let id = new_session(&db);
     assert_eq!(db.get_session(&id).unwrap().unwrap().title, None);
-    let s = db.update_session(&id, &SessionUpdate { title: Some(Some("Order cancellation".into())), ..Default::default() }).unwrap();
+    let s = db
+        .update_session(
+            &id,
+            &SessionUpdate {
+                title: Some(Some("Order cancellation".into())),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     assert_eq!(s.title.as_deref(), Some("Order cancellation"));
-    let s = db.update_session(&id, &SessionUpdate { cost_usd: Some(1.0), ..Default::default() }).unwrap();
-    assert_eq!(s.title.as_deref(), Some("Order cancellation"), "an update without a title keeps it");
-    assert_eq!(db.list_sessions().unwrap()[0].title.as_deref(), Some("Order cancellation"));
+    let s = db
+        .update_session(
+            &id,
+            &SessionUpdate {
+                cost_usd: Some(1.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        s.title.as_deref(),
+        Some("Order cancellation"),
+        "an update without a title keeps it"
+    );
+    assert_eq!(
+        db.list_sessions().unwrap()[0].title.as_deref(),
+        Some("Order cancellation")
+    );
 }
 
 #[test]
@@ -107,11 +137,22 @@ fn execution_view_carries_group_stream_and_summary() {
     assert_eq!(v.stream, ostra_core::executor::ExecStream::Activity);
     assert_eq!(v.summary, None);
     assert!(!v.has_transcript);
-    db.set_execution_summary(&native, "Edit src/lib.rs").unwrap();
-    assert_eq!(db.get_execution(&native).unwrap().unwrap().summary.as_deref(), Some("Edit src/lib.rs"));
+    db.set_execution_summary(&native, "Edit src/lib.rs")
+        .unwrap();
+    assert_eq!(
+        db.get_execution(&native)
+            .unwrap()
+            .unwrap()
+            .summary
+            .as_deref(),
+        Some("Edit src/lib.rs")
+    );
     let h = db.get_execution(&harness).unwrap().unwrap();
     assert_eq!(h.stream, ostra_core::executor::ExecStream::Terminal);
-    assert_eq!(db.list_executions(&s).unwrap()[0].summary.as_deref(), Some("Edit src/lib.rs"));
+    assert_eq!(
+        db.list_executions(&s).unwrap()[0].summary.as_deref(),
+        Some("Edit src/lib.rs")
+    );
 }
 
 #[test]
@@ -146,7 +187,12 @@ fn events_are_sequenced_per_session() {
         session_root: "/w/.ostra/sessions/a".into(),
     };
     assert_eq!(db.append_event(&a, &ev).unwrap().seq, 1);
-    assert_eq!(db.append_event(&a, &SessionEvent::YoloSet { enabled: true }).unwrap().seq, 2);
+    assert_eq!(
+        db.append_event(&a, &SessionEvent::YoloSet { enabled: true })
+            .unwrap()
+            .seq,
+        2
+    );
     assert_eq!(db.append_event(&b, &ev).unwrap().seq, 1);
     let all = db.events(&a).unwrap();
     assert_eq!(all.len(), 2);
@@ -166,7 +212,13 @@ fn concurrent_appends_get_distinct_seqs() {
             let s = s.clone();
             std::thread::spawn(move || {
                 for _ in 0..10 {
-                    db.append_event(&s, &SessionEvent::Note { message: "n".into() }).unwrap();
+                    db.append_event(
+                        &s,
+                        &SessionEvent::Note {
+                            message: "n".into(),
+                        },
+                    )
+                    .unwrap();
                 }
             })
         })
@@ -193,7 +245,13 @@ fn executions_lifecycle_and_restart() {
     db.set_native_session_id(&harness, "abc").unwrap();
     assert!(db.get_execution(&harness).unwrap().unwrap().can_resume);
 
-    let usage = Usage { input_tokens: 10, cache_read_tokens: 100, tool_calls: 4, cost_usd: 0.25, ..Default::default() };
+    let usage = Usage {
+        input_tokens: 10,
+        cache_read_tokens: 100,
+        tool_calls: 4,
+        cost_usd: 0.25,
+        ..Default::default()
+    };
     db.update_execution_usage(&native, &usage).unwrap();
     let result = ExecutionResult {
         status: ExecutionStatus::Ok,
@@ -217,25 +275,53 @@ fn executions_lifecycle_and_restart() {
     let interrupted = db.mark_running_interrupted().unwrap();
     assert_eq!(interrupted.len(), 2);
     assert!(db.running_executions().unwrap().is_empty());
-    assert_eq!(db.get_execution(&harness).unwrap().unwrap().status, ExecutionStatus::Interrupted);
+    assert_eq!(
+        db.get_execution(&harness).unwrap().unwrap().status,
+        ExecutionStatus::Interrupted
+    );
 }
 
 #[test]
 fn messages_and_activity() {
     let (_d, db) = db();
     let e = new_exec(&db, None, ExecutorKind::Native);
-    assert_eq!(db.append_message(&e, "user", &serde_json::json!([{"type":"text","text":"hi"}])).unwrap(), 1);
-    assert_eq!(db.append_message(&e, "assistant", &serde_json::json!([])).unwrap(), 2);
+    assert_eq!(
+        db.append_message(
+            &e,
+            "user",
+            &serde_json::json!([{"type":"text","text":"hi"}])
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        db.append_message(&e, "assistant", &serde_json::json!([]))
+            .unwrap(),
+        2
+    );
     let m = db.messages(&e).unwrap();
     assert_eq!(m[0].role, "user");
     assert_eq!(m[1].seq, 2);
 
-    let a = db.append_activity(&e, &ExecutionDelta::Text { text: "a".into() }).unwrap();
+    let a = db
+        .append_activity(&e, &ExecutionDelta::Text { text: "a".into() })
+        .unwrap();
     assert_eq!(a.seq, 1);
-    db.append_activity(&e, &ExecutionDelta::Status { message: "b".into() }).unwrap();
+    db.append_activity(
+        &e,
+        &ExecutionDelta::Status {
+            message: "b".into(),
+        },
+    )
+    .unwrap();
     let after = db.activity_after(&e, 1).unwrap();
     assert_eq!(after.len(), 1);
-    assert_eq!(after[0].delta, ExecutionDelta::Status { message: "b".into() });
+    assert_eq!(
+        after[0].delta,
+        ExecutionDelta::Status {
+            message: "b".into()
+        }
+    );
 }
 
 #[test]
@@ -243,14 +329,28 @@ fn gates_open_and_answer() {
     let (_d, db) = db();
     let s = new_session(&db);
     let g = GateId::new();
-    let payload = GatePayload::PhaseBlocked { project: "backend".into(), phase: 2, reason: "cap".into() };
-    db.upsert_gate(&s, &g, "Phase 2 blocked", "why", &payload).unwrap();
-    db.upsert_gate(&s, &g, "Phase 2 blocked again", "why", &payload).unwrap();
+    let payload = GatePayload::PhaseBlocked {
+        project: "backend".into(),
+        phase: 2,
+        reason: "cap".into(),
+    };
+    db.upsert_gate(&s, &g, "Phase 2 blocked", "why", &payload)
+        .unwrap();
+    db.upsert_gate(&s, &g, "Phase 2 blocked again", "why", &payload)
+        .unwrap();
     assert_eq!(db.open_gates(Some(&s)).unwrap().len(), 1);
-    assert_eq!(db.open_gates(None).unwrap()[0].title, "Phase 2 blocked again");
+    assert_eq!(
+        db.open_gates(None).unwrap()[0].title,
+        "Phase 2 blocked again"
+    );
     assert_eq!(db.get_session(&s).unwrap().unwrap().open_gates, 1);
-    let answer = GateAnswer::Choice { option: "leave".into(), text: None };
-    let v = db.answer_gate(&g, AnswerSource::User, &answer, None).unwrap();
+    let answer = GateAnswer::Choice {
+        option: "leave".into(),
+        text: None,
+    };
+    let v = db
+        .answer_gate(&g, AnswerSource::User, &answer, None)
+        .unwrap();
     assert_eq!(v.answer, Some(answer));
     assert_eq!(v.source, Some(AnswerSource::User));
     assert!(v.answered_at.is_some());
@@ -264,11 +364,22 @@ fn decisions_override() {
     let (_d, db) = db();
     let s = new_session(&db);
     let d = DecisionId::new();
-    db.insert_decision(&s, &d, JudgeKind::Stakes, None, "request", &serde_json::json!({"stakes":"low"}), "small").unwrap();
+    db.insert_decision(
+        &s,
+        &d,
+        JudgeKind::Stakes,
+        None,
+        "request",
+        &serde_json::json!({"stakes":"low"}),
+        "small",
+    )
+    .unwrap();
     let v = db.get_decision(&d).unwrap().unwrap();
     assert!(!v.overridden && v.can_override);
     db.set_can_override(&d, false).unwrap();
-    let v = db.mark_overridden(&d, &serde_json::json!({"stakes":"high"}), "user").unwrap();
+    let v = db
+        .mark_overridden(&d, &serde_json::json!({"stakes":"high"}), "user")
+        .unwrap();
     assert!(v.overridden && !v.can_override);
     assert_eq!(v.output["stakes"], "high");
     assert_eq!(db.decisions(&s).unwrap().len(), 1);
@@ -308,8 +419,14 @@ fn projects_crud() {
         stack: Some("typescript-node".into()),
     })
     .unwrap();
-    assert!(db.set_project_init_status("web", InitStatus::Initialized).unwrap());
-    assert_eq!(db.get_project("web").unwrap().unwrap().init_status, InitStatus::Initialized);
+    assert!(
+        db.set_project_init_status("web", InitStatus::Initialized)
+            .unwrap()
+    );
+    assert_eq!(
+        db.get_project("web").unwrap().unwrap().init_status,
+        InitStatus::Initialized
+    );
     assert_eq!(db.list_projects().unwrap().len(), 1);
     assert!(db.delete_project("web").unwrap());
     assert!(db.get_project("web").unwrap().is_none());
@@ -321,7 +438,12 @@ fn cost_report_groups() {
     let s = new_session(&db);
     for (cost, calls) in [(1.0, 4u64), (2.0, 6u64)] {
         let e = new_exec(&db, Some(&s), ExecutorKind::Native);
-        let usage = Usage { cache_read_tokens: 1000, tool_calls: calls, cost_usd: cost, ..Default::default() };
+        let usage = Usage {
+            cache_read_tokens: 1000,
+            tool_calls: calls,
+            cost_usd: cost,
+            ..Default::default()
+        };
         db.finish_execution(
             &e,
             &ExecutionResult {
@@ -343,7 +465,10 @@ fn cost_report_groups() {
     let recent = db.cost_report(Some(chrono::Utc::now() - hour)).unwrap();
     assert_eq!((recent.total.executions, recent.by_agent.len()), (3, 1));
     let later = db.cost_report(Some(chrono::Utc::now() + hour)).unwrap();
-    assert_eq!((later.total.executions, later.total.usage.cost_usd), (0, 0.0));
+    assert_eq!(
+        (later.total.executions, later.total.usage.cost_usd),
+        (0, 0.0)
+    );
     assert!(later.by_session.is_empty() && later.since.is_some());
     assert_eq!(r.total.usage.cost_usd, 3.0);
     assert_eq!(r.total.cache_reads_per_tool_call, 200.0);
@@ -371,16 +496,29 @@ fn registry_workspaces_push_kv() {
     let dir = tempfile::tempdir().unwrap();
     let reg = RegistryDb::open(&dir.path().join("registry.db")).unwrap();
     let id = WorkspaceId::new();
-    reg.add_workspace(&id, "shop", std::path::Path::new("/w/shop")).unwrap();
-    assert!(reg.add_workspace(&WorkspaceId::new(), "dup", std::path::Path::new("/w/shop")).is_err());
+    reg.add_workspace(&id, "shop", std::path::Path::new("/w/shop"))
+        .unwrap();
+    assert!(
+        reg.add_workspace(&WorkspaceId::new(), "dup", std::path::Path::new("/w/shop"))
+            .is_err()
+    );
     assert_eq!(reg.list_workspaces().unwrap().len(), 1);
-    assert_eq!(reg.workspace_by_root(std::path::Path::new("/w/shop")).unwrap().unwrap().id, id);
+    assert_eq!(
+        reg.workspace_by_root(std::path::Path::new("/w/shop"))
+            .unwrap()
+            .unwrap()
+            .id,
+        id
+    );
     assert!(reg.rename_workspace(&id, "store").unwrap());
     assert_eq!(reg.get_workspace(&id).unwrap().unwrap().name, "store");
 
     let sub = PushSubscription {
         endpoint: "https://push.example/1".into(),
-        keys: PushKeys { p256dh: "p".into(), auth: "a".into() },
+        keys: PushKeys {
+            p256dh: "p".into(),
+            auth: "a".into(),
+        },
     };
     reg.add_push_subscription(&sub, Some(&id)).unwrap();
     reg.add_push_subscription(&sub, None).unwrap();
@@ -418,7 +556,10 @@ fn meta_values_round_trip() {
     assert_eq!(db.meta_get("ui_state").unwrap(), None);
     db.meta_set("ui_state", "{\"a\":1}").unwrap();
     db.meta_set("ui_state", "{\"a\":2}").unwrap();
-    assert_eq!(db.meta_get("ui_state").unwrap().as_deref(), Some("{\"a\":2}"));
+    assert_eq!(
+        db.meta_get("ui_state").unwrap().as_deref(),
+        Some("{\"a\":2}")
+    );
 }
 
 #[test]
@@ -426,24 +567,66 @@ fn text_search_over_sessions_and_artifacts() {
     let (_d, db) = db();
     let id = new_session(&db);
     let hits = db.search_text("canc", 10).unwrap();
-    assert_eq!(hits.iter().map(|h| (h.kind.as_str(), h.reference.as_str())).collect::<Vec<_>>(), [("session", id.as_str())]);
+    assert_eq!(
+        hits.iter()
+            .map(|h| (h.kind.as_str(), h.reference.as_str()))
+            .collect::<Vec<_>>(),
+        [("session", id.as_str())]
+    );
     assert!(db.search_text("order", 10).unwrap().is_empty());
 
-    db.update_session(&id, &SessionUpdate { title: Some(Some("Order cancellation".into())), ..Default::default() }).unwrap();
+    db.update_session(
+        &id,
+        &SessionUpdate {
+            title: Some(Some("Order cancellation".into())),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let hits = db.search_text("ord canc", 10).unwrap();
     assert_eq!(hits.len(), 1, "every word must match, as a prefix");
     assert_eq!(hits[0].label, "Order cancellation");
     assert_eq!(hits[0].body, "add cancel");
 
-    db.index_artifact(&id, "/s/ostra-spec-1.md", "Spec", "Requirements\nRefund rules", 10).unwrap();
-    db.index_artifact(&id, "/s/ostra-spec-1.md", "Spec", "Requirements\nRefund policy", 20).unwrap();
+    db.index_artifact(
+        &id,
+        "/s/ostra-spec-1.md",
+        "Spec",
+        "Requirements\nRefund rules",
+        10,
+    )
+    .unwrap();
+    db.index_artifact(
+        &id,
+        "/s/ostra-spec-1.md",
+        "Spec",
+        "Requirements\nRefund policy",
+        20,
+    )
+    .unwrap();
     let hits = db.search_text("refund", 10).unwrap();
     assert_eq!(hits.len(), 1);
-    assert_eq!((hits[0].kind.as_str(), hits[0].reference.as_str(), hits[0].session.clone()), ("artifact", "/s/ostra-spec-1.md", id.clone()));
-    assert!(db.search_text("rules", 10).unwrap().is_empty(), "a reindex replaces the old text");
+    assert_eq!(
+        (
+            hits[0].kind.as_str(),
+            hits[0].reference.as_str(),
+            hits[0].session.clone()
+        ),
+        ("artifact", "/s/ostra-spec-1.md", id.clone())
+    );
+    assert!(
+        db.search_text("rules", 10).unwrap().is_empty(),
+        "a reindex replaces the old text"
+    );
     let indexed = db.indexed_artifacts(&id).unwrap();
-    assert_eq!(indexed.get("/s/ostra-spec-1.md"), Some(&("Spec".to_string(), 20)));
-    assert!(db.search_text("\"zz*) OR (", 10).unwrap().is_empty(), "query syntax in the text is quoted away");
+    assert_eq!(
+        indexed.get("/s/ostra-spec-1.md"),
+        Some(&("Spec".to_string(), 20))
+    );
+    assert!(
+        db.search_text("\"zz*) OR (", 10).unwrap().is_empty(),
+        "query syntax in the text is quoted away"
+    );
 }
 
 #[test]
@@ -467,7 +650,14 @@ fn spend_since_sums_executions_started_in_the_window() {
     let (_d, db) = db();
     let s = new_session(&db);
     let e = new_exec(&db, Some(&s), ExecutorKind::Native);
-    db.update_execution_usage(&e, &Usage { cost_usd: 1.25, ..Default::default() }).unwrap();
+    db.update_execution_usage(
+        &e,
+        &Usage {
+            cost_usd: 1.25,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let hour = chrono::Duration::hours(1);
     assert_eq!(db.spend_since(chrono::Utc::now() - hour).unwrap(), 1.25);
     assert_eq!(db.spend_since(chrono::Utc::now() + hour).unwrap(), 0.0);

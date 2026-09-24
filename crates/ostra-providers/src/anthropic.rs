@@ -2,8 +2,8 @@
 
 use crate::retry::{self, RetryPolicy, error_from_response, network_error};
 use crate::{
-    ApiKey, Block, ChatRequest, ChatResponse, EventSink, Message, Provider, ProviderError, Role, ServerTools,
-    StopReason, StreamEvent, ToolChoice, pricing, sse,
+    ApiKey, Block, ChatRequest, ChatResponse, EventSink, Message, Provider, ProviderError, Role,
+    ServerTools, StopReason, StreamEvent, ToolChoice, pricing, sse,
 };
 use futures::StreamExt;
 use ostra_core::Effort;
@@ -29,7 +29,9 @@ pub struct Anthropic {
 
 impl std::fmt::Debug for Anthropic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Anthropic").field("base_url", &self.base_url).finish_non_exhaustive()
+        f.debug_struct("Anthropic")
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
     }
 }
 
@@ -37,7 +39,10 @@ impl Anthropic {
     pub fn new(key: ApiKey, base_url: Option<String>) -> Self {
         Anthropic {
             key,
-            base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.into()).trim_end_matches('/').to_string(),
+            base_url: base_url
+                .unwrap_or_else(|| DEFAULT_BASE_URL.into())
+                .trim_end_matches('/')
+                .to_string(),
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(20))
                 .build()
@@ -82,9 +87,11 @@ struct Caps {
 fn is_model(model: &str, id: &str) -> bool {
     // A dated snapshot (`-20251001`) is the same model.
     model == id
-        || model
-            .strip_prefix(id)
-            .is_some_and(|rest| rest.len() == 9 && rest.starts_with('-') && rest[1..].chars().all(|c| c.is_ascii_digit()))
+        || model.strip_prefix(id).is_some_and(|rest| {
+            rest.len() == 9
+                && rest.starts_with('-')
+                && rest[1..].chars().all(|c| c.is_ascii_digit())
+        })
 }
 
 fn caps(model: &str) -> Caps {
@@ -95,20 +102,32 @@ fn caps(model: &str) -> Caps {
         new_web_tools: true,
         fallbacks,
     };
-    if is_model(model, "claude-fable-5-1") || is_model(model, "claude-mythos-5-1") || is_model(model, "claude-opus-5-5") {
+    if is_model(model, "claude-fable-5-1")
+        || is_model(model, "claude-mythos-5-1")
+        || is_model(model, "claude-opus-5-5")
+    {
         return full(false, true);
     }
     if is_model(model, "claude-opus-5") {
         return full(true, true);
     }
-    if ["claude-fable-5", "claude-mythos-5", "claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5"]
-        .iter()
-        .any(|id| is_model(model, id))
+    if [
+        "claude-fable-5",
+        "claude-mythos-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+        "claude-sonnet-5",
+    ]
+    .iter()
+    .any(|id| is_model(model, id))
     {
         return full(true, false);
     }
     if is_model(model, "claude-opus-4-6") || is_model(model, "claude-sonnet-4-6") {
-        return Caps { effort: EffortSupport::NoXhigh, ..full(true, false) };
+        return Caps {
+            effort: EffortSupport::NoXhigh,
+            ..full(true, false)
+        };
     }
     if is_model(model, "claude-opus-4-5") {
         return Caps {
@@ -119,7 +138,14 @@ fn caps(model: &str) -> Caps {
             fallbacks: false,
         };
     }
-    let older = ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-1", "claude-opus-4", "claude-sonnet-4", "claude-3"];
+    let older = [
+        "claude-haiku-4-5",
+        "claude-sonnet-4-5",
+        "claude-opus-4-1",
+        "claude-opus-4",
+        "claude-sonnet-4",
+        "claude-3",
+    ];
     if older.iter().any(|id| model.starts_with(id)) {
         return Caps {
             thinking: Thinking::Budget,
@@ -163,11 +189,20 @@ fn block_json(block: &Block) -> Option<Value> {
     Some(match block {
         Block::Text { text } if text.is_empty() => return None,
         Block::Text { text } => json!({"type": "text", "text": text}),
-        Block::Thinking { text, signature } => json!({"type": "thinking", "thinking": text, "signature": signature}),
+        Block::Thinking { text, signature } => {
+            json!({"type": "thinking", "thinking": text, "signature": signature})
+        }
         Block::RedactedThinking { data } => json!({"type": "redacted_thinking", "data": data}),
-        Block::ToolUse { id, name, input } => json!({"type": "tool_use", "id": id, "name": name, "input": input}),
-        Block::ToolResult { tool_use_id, content, is_error } => {
-            let mut v = json!({"type": "tool_result", "tool_use_id": tool_use_id, "content": content});
+        Block::ToolUse { id, name, input } => {
+            json!({"type": "tool_use", "id": id, "name": name, "input": input})
+        }
+        Block::ToolResult {
+            tool_use_id,
+            content,
+            is_error,
+        } => {
+            let mut v =
+                json!({"type": "tool_result", "tool_use_id": tool_use_id, "content": content});
             if *is_error {
                 v["is_error"] = json!(true);
             }
@@ -195,7 +230,9 @@ fn messages_json(messages: &[Message]) -> Vec<Value> {
         .collect();
     // Cache breakpoint on the most recent user turn.
     if let Some(last_user) = out.iter_mut().rev().find(|m| m["role"] == "user")
-        && let Some(last_block) = last_user["content"].as_array_mut().and_then(|c| c.last_mut())
+        && let Some(last_block) = last_user["content"]
+            .as_array_mut()
+            .and_then(|c| c.last_mut())
         && matches!(last_block["type"].as_str(), Some("text" | "tool_result"))
     {
         last_block["cache_control"] = cache_mark();
@@ -220,7 +257,13 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
     });
 
     if !req.system.is_empty() {
-        let flagged: Vec<usize> = req.system.iter().enumerate().filter(|(_, s)| s.cache).map(|(i, _)| i).collect();
+        let flagged: Vec<usize> = req
+            .system
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.cache)
+            .map(|(i, _)| i)
+            .collect();
         let marks: Vec<usize> = if flagged.is_empty() {
             vec![req.system.len() - 1]
         } else {
@@ -246,11 +289,19 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
 
     let mut tools: Vec<Value> = vec![];
     if req.server_tools.web_search {
-        let t = if caps.new_web_tools { "web_search_20260209" } else { "web_search_20250305" };
+        let t = if caps.new_web_tools {
+            "web_search_20260209"
+        } else {
+            "web_search_20250305"
+        };
         tools.push(json!({"type": t, "name": "web_search"}));
     }
     if req.server_tools.web_fetch {
-        let t = if caps.new_web_tools { "web_fetch_20260209" } else { "web_fetch_20250910" };
+        let t = if caps.new_web_tools {
+            "web_fetch_20260209"
+        } else {
+            "web_fetch_20250910"
+        };
         tools.push(json!({"type": t, "name": "web_fetch"}));
     }
     let client_tools = req.tools.len();
@@ -322,10 +373,20 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
 
 enum Partial {
     Text(String),
-    Thinking { text: String, signature: String },
+    Thinking {
+        text: String,
+        signature: String,
+    },
     Redacted(String),
-    ToolUse { id: String, name: String, json: String },
-    ServerToolUse { value: Value, json: String },
+    ToolUse {
+        id: String,
+        name: String,
+        json: String,
+    },
+    ServerToolUse {
+        value: Value,
+        json: String,
+    },
     Fallback,
     Other(Value),
 }
@@ -370,10 +431,16 @@ fn read_usage(u: &Value, usage: &mut Usage, web_searches: &mut u64) {
     if let Some(v) = get("cache_creation_input_tokens") {
         usage.cache_write_tokens = v;
     }
-    if let Some(v) = u.pointer("/cache_creation/ephemeral_1h_input_tokens").and_then(|v| v.as_u64()) {
+    if let Some(v) = u
+        .pointer("/cache_creation/ephemeral_1h_input_tokens")
+        .and_then(|v| v.as_u64())
+    {
         usage.cache_write_1h_tokens = v;
     }
-    if let Some(v) = u.pointer("/server_tool_use/web_search_requests").and_then(|v| v.as_u64()) {
+    if let Some(v) = u
+        .pointer("/server_tool_use/web_search_requests")
+        .and_then(|v| v.as_u64())
+    {
         *web_searches = v;
     }
 }
@@ -384,12 +451,21 @@ impl Accumulator {
     }
 
     /// Apply one event. Returns an error event's failure.
-    fn apply(&mut self, ev: &Value, on_event: EventSink<'_>, started: &AtomicBool) -> Result<(), ProviderError> {
+    fn apply(
+        &mut self,
+        ev: &Value,
+        on_event: EventSink<'_>,
+        started: &AtomicBool,
+    ) -> Result<(), ProviderError> {
         let index = ev.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
             "message_start" => {
                 if let Some(m) = ev.get("message") {
-                    self.model = m.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                    self.model = m
+                        .get("model")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
                     if let Some(u) = m.get("usage") {
                         read_usage(u, &mut self.usage, &mut self.web_searches);
                     }
@@ -398,7 +474,12 @@ impl Accumulator {
             "content_block_start" => {
                 started.store(true, Ordering::SeqCst);
                 let cb = ev.get("content_block").cloned().unwrap_or(Value::Null);
-                let s = |k: &str| cb.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let s = |k: &str| {
+                    cb.get(k)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                };
                 let partial = match cb.get("type").and_then(|t| t.as_str()).unwrap_or("") {
                     "text" => {
                         let t = s("text");
@@ -407,13 +488,26 @@ impl Accumulator {
                         }
                         Partial::Text(t)
                     }
-                    "thinking" => Partial::Thinking { text: s("thinking"), signature: s("signature") },
+                    "thinking" => Partial::Thinking {
+                        text: s("thinking"),
+                        signature: s("signature"),
+                    },
                     "redacted_thinking" => Partial::Redacted(s("data")),
                     "tool_use" => {
-                        on_event(StreamEvent::ToolUseStarted { id: s("id"), name: s("name") });
-                        Partial::ToolUse { id: s("id"), name: s("name"), json: String::new() }
+                        on_event(StreamEvent::ToolUseStarted {
+                            id: s("id"),
+                            name: s("name"),
+                        });
+                        Partial::ToolUse {
+                            id: s("id"),
+                            name: s("name"),
+                            json: String::new(),
+                        }
                     }
-                    "server_tool_use" => Partial::ServerToolUse { value: cb.clone(), json: String::new() },
+                    "server_tool_use" => Partial::ServerToolUse {
+                        value: cb.clone(),
+                        json: String::new(),
+                    },
                     "fallback" => Partial::Fallback,
                     _ => Partial::Other(cb.clone()),
                 };
@@ -421,9 +515,21 @@ impl Accumulator {
             }
             "content_block_delta" => {
                 let delta = ev.get("delta").cloned().unwrap_or(Value::Null);
-                let text = |k: &str| delta.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
-                let kind = delta.get("type").and_then(|t| t.as_str()).unwrap_or("").to_string();
-                let Some((_, Some(partial), _)) = self.slot(index) else { return Ok(()) };
+                let text = |k: &str| {
+                    delta
+                        .get(k)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                let kind = delta
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let Some((_, Some(partial), _)) = self.slot(index) else {
+                    return Ok(());
+                };
                 match (kind.as_str(), partial) {
                     ("text_delta", Partial::Text(t)) => {
                         let d = text("text");
@@ -435,39 +541,62 @@ impl Accumulator {
                         t.push_str(&d);
                         on_event(StreamEvent::ThinkingDelta(d));
                     }
-                    ("signature_delta", Partial::Thinking { signature, .. }) => signature.push_str(&text("signature")),
+                    ("signature_delta", Partial::Thinking { signature, .. }) => {
+                        signature.push_str(&text("signature"))
+                    }
                     ("input_json_delta", Partial::ToolUse { id, json, .. }) => {
                         let d = text("partial_json");
                         json.push_str(&d);
-                        on_event(StreamEvent::ToolInputDelta { id: id.clone(), partial_json: d });
+                        on_event(StreamEvent::ToolInputDelta {
+                            id: id.clone(),
+                            partial_json: d,
+                        });
                     }
-                    ("input_json_delta", Partial::ServerToolUse { json, .. }) => json.push_str(&text("partial_json")),
+                    ("input_json_delta", Partial::ServerToolUse { json, .. }) => {
+                        json.push_str(&text("partial_json"))
+                    }
                     _ => {}
                 }
             }
             "content_block_stop" => {
-                let Some(slot) = self.slot(index) else { return Ok(()) };
+                let Some(slot) = self.slot(index) else {
+                    return Ok(());
+                };
                 let block = match slot.1.take() {
                     Some(Partial::Text(text)) => Some(Block::Text { text }),
-                    Some(Partial::Thinking { text, signature }) => Some(Block::Thinking { text, signature }),
-                    Some(Partial::Redacted(data)) => Some(Block::RedactedThinking { data }),
-                    Some(Partial::ToolUse { id, name, json }) => {
-                        Some(Block::ToolUse { id, name, input: parse_tool_input(&json) })
+                    Some(Partial::Thinking { text, signature }) => {
+                        Some(Block::Thinking { text, signature })
                     }
+                    Some(Partial::Redacted(data)) => Some(Block::RedactedThinking { data }),
+                    Some(Partial::ToolUse { id, name, json }) => Some(Block::ToolUse {
+                        id,
+                        name,
+                        input: parse_tool_input(&json),
+                    }),
                     Some(Partial::ServerToolUse { mut value, json }) => {
                         if !json.trim().is_empty() {
                             value["input"] = parse_tool_input(&json);
                         }
-                        let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("server_tool").to_string();
+                        let name = value
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("server_tool")
+                            .to_string();
                         let summary = server_tool_summary(&value["input"]);
                         on_event(StreamEvent::ServerToolUsed { name, summary });
-                        Some(Block::Opaque { provider: "anthropic".into(), value })
+                        Some(Block::Opaque {
+                            provider: "anthropic".into(),
+                            value,
+                        })
                     }
                     Some(Partial::Fallback) => Some(Block::Opaque {
                         provider: "anthropic".into(),
                         value: json!({"type": "fallback"}),
                     }),
-                    Some(Partial::Other(value)) => Some(Block::Opaque { provider: "anthropic".into(), value }),
+                    Some(Partial::Other(value)) => Some(Block::Opaque {
+                        provider: "anthropic".into(),
+                        value,
+                    }),
                     None => None,
                 };
                 slot.2 = block;
@@ -476,7 +605,10 @@ impl Accumulator {
                 if let Some(reason) = ev.pointer("/delta/stop_reason").and_then(|v| v.as_str()) {
                     self.stop = Some(reason.to_string());
                 }
-                if let Some(cat) = ev.pointer("/delta/stop_details/category").and_then(|v| v.as_str()) {
+                if let Some(cat) = ev
+                    .pointer("/delta/stop_details/category")
+                    .and_then(|v| v.as_str())
+                {
                     self.refusal_category = Some(cat.to_string());
                 }
                 if let Some(u) = ev.get("usage") {
@@ -485,13 +617,33 @@ impl Accumulator {
             }
             "message_stop" => self.done = true,
             "error" => {
-                let kind = ev.pointer("/error/type").and_then(|v| v.as_str()).unwrap_or("error");
-                let message = ev.pointer("/error/message").and_then(|v| v.as_str()).unwrap_or(kind).to_string();
+                let kind = ev
+                    .pointer("/error/type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("error");
+                let message = ev
+                    .pointer("/error/message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(kind)
+                    .to_string();
                 return Err(match kind {
-                    "overloaded_error" => ProviderError::Overloaded { message, retry_after: None },
-                    "rate_limit_error" => ProviderError::RateLimited { message, retry_after: None },
-                    "api_error" => ProviderError::Server { status: 500, message, retry_after: None },
-                    _ => ProviderError::InvalidRequest { status: 400, message },
+                    "overloaded_error" => ProviderError::Overloaded {
+                        message,
+                        retry_after: None,
+                    },
+                    "rate_limit_error" => ProviderError::RateLimited {
+                        message,
+                        retry_after: None,
+                    },
+                    "api_error" => ProviderError::Server {
+                        status: 500,
+                        message,
+                        retry_after: None,
+                    },
+                    _ => ProviderError::InvalidRequest {
+                        status: 400,
+                        message,
+                    },
                 });
             }
             _ => {}
@@ -511,10 +663,20 @@ impl Accumulator {
             Some(other) => StopReason::Other(other.to_string()),
             None => StopReason::Other("unknown".into()),
         };
-        let model = if self.model.is_empty() { requested_model.to_string() } else { self.model };
+        let model = if self.model.is_empty() {
+            requested_model.to_string()
+        } else {
+            self.model
+        };
         let mut usage = self.usage;
         usage.cost_usd = pricing::cost(&model, &usage, self.web_searches);
-        ChatResponse { content, stop, usage, model, refusal_category: self.refusal_category }
+        ChatResponse {
+            content,
+            stop,
+            usage,
+            model,
+            refusal_category: self.refusal_category,
+        }
     }
 }
 
@@ -525,11 +687,16 @@ fn is_fallback(b: &Block) -> bool {
 /// After a mid-output fallback, drop thinking, tool use, and unpaired server tool use before the
 /// last `fallback` marker, so the declined partial is neither run nor echoed.
 fn strip_before_fallback(content: Vec<Block>) -> Vec<Block> {
-    let Some(boundary) = content.iter().rposition(is_fallback) else { return content };
+    let Some(boundary) = content.iter().rposition(is_fallback) else {
+        return content;
+    };
     let result_ids: Vec<String> = content
         .iter()
         .filter_map(|b| match b {
-            Block::Opaque { value, .. } => value.get("tool_use_id").and_then(|v| v.as_str()).map(str::to_string),
+            Block::Opaque { value, .. } => value
+                .get("tool_use_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             _ => None,
         })
         .collect();
@@ -544,7 +711,9 @@ fn strip_before_fallback(content: Vec<Block>) -> Vec<Block> {
                 return true;
             }
             match b {
-                Block::Thinking { .. } | Block::RedactedThinking { .. } | Block::ToolUse { .. } => false,
+                Block::Thinking { .. } | Block::RedactedThinking { .. } | Block::ToolUse { .. } => {
+                    false
+                }
                 Block::Opaque { value, .. } if value["type"] == "server_tool_use" => value
                     .get("id")
                     .and_then(|v| v.as_str())
@@ -566,7 +735,10 @@ impl Provider for Anthropic {
     }
 
     fn server_tools(&self, _model: &str) -> ServerTools {
-        ServerTools { web_search: true, web_fetch: true }
+        ServerTools {
+            web_search: true,
+            web_fetch: true,
+        }
     }
 
     async fn chat(
@@ -605,7 +777,9 @@ impl Provider for Anthropic {
                 }
             }
             if !acc.done {
-                return Err(ProviderError::Network("stream ended before message_stop".into()));
+                return Err(ProviderError::Network(
+                    "stream ended before message_stop".into(),
+                ));
             }
             Ok(acc.finish(&req.model))
         })
@@ -623,8 +797,18 @@ mod tests {
         r.system = vec![SystemBlock::new("a"), SystemBlock::new("b")];
         r.messages = vec![Message::user_text("hi")];
         r.tools = vec![
-            ToolDef { name: "Read".into(), description: "d".into(), input_schema: json!({"type":"object"}), cache: false },
-            ToolDef { name: "Bash".into(), description: "d".into(), input_schema: json!({"type":"object"}), cache: false },
+            ToolDef {
+                name: "Read".into(),
+                description: "d".into(),
+                input_schema: json!({"type":"object"}),
+                cache: false,
+            },
+            ToolDef {
+                name: "Bash".into(),
+                description: "d".into(),
+                input_schema: json!({"type":"object"}),
+                cache: false,
+            },
         ];
         r
     }
@@ -633,9 +817,15 @@ mod tests {
     fn adaptive_body() {
         let mut r = req("claude-sonnet-5");
         r.effort = Effort::Xhigh;
-        r.server_tools = ServerTools { web_search: true, web_fetch: true };
+        r.server_tools = ServerTools {
+            web_search: true,
+            web_fetch: true,
+        };
         let (b, betas) = request_body(&r);
-        assert_eq!(b["thinking"], json!({"type": "adaptive", "display": "summarized"}));
+        assert_eq!(
+            b["thinking"],
+            json!({"type": "adaptive", "display": "summarized"})
+        );
         assert_eq!(b["output_config"]["effort"], "xhigh");
         assert_eq!(b["system"][1]["cache_control"]["type"], "ephemeral");
         assert!(b["system"][0].get("cache_control").is_none());
@@ -643,7 +833,10 @@ mod tests {
         assert_eq!(b["tools"][1]["type"], "web_fetch_20260209");
         assert_eq!(b["tools"][3]["cache_control"]["type"], "ephemeral");
         assert!(b["tools"][2].get("cache_control").is_none());
-        assert_eq!(b["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(
+            b["messages"][0]["content"][0]["cache_control"]["type"],
+            "ephemeral"
+        );
         assert_eq!(b["messages"][0]["content"][0]["cache_control"]["ttl"], "1h");
         assert_eq!(b["system"][1]["cache_control"]["ttl"], "1h");
         assert_eq!(b["tools"][3]["cache_control"]["ttl"], "1h");
@@ -697,35 +890,69 @@ mod tests {
         r.messages = vec![
             Message::user_text("q"),
             Message::assistant(vec![
-                Block::Thinking { text: "t".into(), signature: "s".into() },
+                Block::Thinking {
+                    text: "t".into(),
+                    signature: "s".into(),
+                },
                 Block::text(""),
-                Block::ToolUse { id: "1".into(), name: "Read".into(), input: json!({"file_path": "/a"}) },
-                Block::Opaque { provider: "openai".into(), value: json!({"type": "reasoning"}) },
+                Block::ToolUse {
+                    id: "1".into(),
+                    name: "Read".into(),
+                    input: json!({"file_path": "/a"}),
+                },
+                Block::Opaque {
+                    provider: "openai".into(),
+                    value: json!({"type": "reasoning"}),
+                },
             ]),
             Message::tool_results(vec![Block::tool_result("1", "boom", true)]),
         ];
         let (b, betas) = request_body(&r);
         assert_eq!(betas, vec![CONTEXT_MANAGEMENT_BETA]);
-        assert_eq!(b["context_management"]["edits"][0]["type"], "clear_tool_uses_20250919");
+        assert_eq!(
+            b["context_management"]["edits"][0]["type"],
+            "clear_tool_uses_20250919"
+        );
         let asst = &b["messages"][1]["content"];
         assert_eq!(asst.as_array().unwrap().len(), 2);
         assert_eq!(asst[0]["signature"], "s");
         let res = &b["messages"][2]["content"][0];
         assert_eq!(res["is_error"], true);
         assert_eq!(res["cache_control"]["type"], "ephemeral");
-        assert!(b["messages"][0]["content"][0].get("cache_control").is_none());
+        assert!(
+            b["messages"][0]["content"][0]
+                .get("cache_control")
+                .is_none()
+        );
     }
 
     #[test]
     fn fallback_strips_declined_partial() {
         let content = vec![
-            Block::Thinking { text: "t".into(), signature: "s".into() },
+            Block::Thinking {
+                text: "t".into(),
+                signature: "s".into(),
+            },
             Block::text("partial "),
-            Block::ToolUse { id: "1".into(), name: "Read".into(), input: json!({}) },
-            Block::Opaque { provider: "anthropic".into(), value: json!({"type": "server_tool_use", "id": "s1"}) },
-            Block::Opaque { provider: "anthropic".into(), value: json!({"type": "fallback"}) },
+            Block::ToolUse {
+                id: "1".into(),
+                name: "Read".into(),
+                input: json!({}),
+            },
+            Block::Opaque {
+                provider: "anthropic".into(),
+                value: json!({"type": "server_tool_use", "id": "s1"}),
+            },
+            Block::Opaque {
+                provider: "anthropic".into(),
+                value: json!({"type": "fallback"}),
+            },
             Block::text("rest"),
-            Block::ToolUse { id: "2".into(), name: "Read".into(), input: json!({}) },
+            Block::ToolUse {
+                id: "2".into(),
+                name: "Read".into(),
+                input: json!({}),
+            },
         ];
         let out = strip_before_fallback(content);
         assert_eq!(out.len(), 3);
@@ -742,6 +969,9 @@ mod tests {
         });
         let (mut usage, mut searches) = (Usage::default(), 0);
         read_usage(&u, &mut usage, &mut searches);
-        assert_eq!((usage.cache_write_tokens, usage.cache_write_1h_tokens), (3000, 1000));
+        assert_eq!(
+            (usage.cache_write_tokens, usage.cache_write_1h_tokens),
+            (3000, 1000)
+        );
     }
 }

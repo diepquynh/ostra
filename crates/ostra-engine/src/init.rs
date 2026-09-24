@@ -19,16 +19,32 @@ pub const MAX_DEFAULT_GENERATE: usize = 8;
 /// `Stack reference:` is resolved by the spawn factory from this key to the extracted refs file.
 pub const STACK_REFERENCE_NAME: &str = "stack_reference_name";
 
-fn spawn(s: &SessionState, mode: InitializerMode, item: Option<String>, init: BTreeMap<String, String>) -> Step {
-    let project = s.init.as_ref().map(|i| i.project.clone()).unwrap_or_default();
-    let purpose = ExecPurpose::Init { mode, item: item.clone() };
+fn spawn(
+    s: &SessionState,
+    mode: InitializerMode,
+    item: Option<String>,
+    init: BTreeMap<String, String>,
+) -> Step {
+    let project = s
+        .init
+        .as_ref()
+        .map(|i| i.project.clone())
+        .unwrap_or_default();
+    let purpose = ExecPurpose::Init {
+        mode,
+        item: item.clone(),
+    };
     Step::Spawn(Box::new(SpawnRequest {
         agent: AgentName::Initializer,
         stage: crate::state::stage_of(&purpose),
         purpose,
         project: project.clone(),
         session_dir: s.project_session_dir(&project),
-        inputs: SpawnInputs { init, init_item: item, ..Default::default() },
+        inputs: SpawnInputs {
+            init,
+            init_item: item,
+            ..Default::default()
+        },
         resumes: None,
     }))
 }
@@ -47,9 +63,17 @@ pub fn slices(detect: &Value) -> Vec<(String, String, Vec<String>)> {
                     let paths = x
                         .get("paths")
                         .and_then(|p| p.as_array())
-                        .map(|p| p.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+                        .map(|p| {
+                            p.iter()
+                                .filter_map(|s| s.as_str().map(String::from))
+                                .collect()
+                        })
                         .unwrap_or_default();
-                    (str_at(x, "slug").to_string(), str_at(x, "descriptor").to_string(), paths)
+                    (
+                        str_at(x, "slug").to_string(),
+                        str_at(x, "descriptor").to_string(),
+                        paths,
+                    )
                 })
                 .filter(|(slug, _, _)| !slug.is_empty())
                 .take(MAX_SCOUTS)
@@ -68,8 +92,17 @@ pub fn proposals(propose: &Value) -> Vec<SkillProposal> {
             a.iter()
                 .map(|x| {
                     let existing = str_at(x, "status") == "existing";
-                    let recommend = x.get("recommend").and_then(|r| r.as_bool()).unwrap_or(false);
-                    let disposition = if existing { "reuse" } else if recommend { "generate" } else { "drop" };
+                    let recommend = x
+                        .get("recommend")
+                        .and_then(|r| r.as_bool())
+                        .unwrap_or(false);
+                    let disposition = if existing {
+                        "reuse"
+                    } else if recommend {
+                        "generate"
+                    } else {
+                        "drop"
+                    };
                     let description = [str_at(x, "description"), str_at(x, "rationale")]
                         .into_iter()
                         .filter(|t| !t.is_empty())
@@ -103,7 +136,10 @@ fn cap_generate(mut skills: Vec<SkillProposal>) -> Vec<SkillProposal> {
         kept += 1;
         if kept > MAX_DEFAULT_GENERATE {
             s.disposition = "drop".into();
-            s.description = format!("{} (Dropped by default to limit cost; choose generate to include it.)", s.description);
+            s.description = format!(
+                "{} (Dropped by default to limit cost; choose generate to include it.)",
+                s.description
+            );
         }
     }
     skills
@@ -112,7 +148,11 @@ fn cap_generate(mut skills: Vec<SkillProposal>) -> Vec<SkillProposal> {
 fn findings_list(i: &InitTrack) -> String {
     i.scouts
         .iter()
-        .filter_map(|x| x.result.as_ref().map(|r| str_at(r, "findings_path").to_string()))
+        .filter_map(|x| {
+            x.result
+                .as_ref()
+                .map(|r| str_at(r, "findings_path").to_string())
+        })
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
@@ -153,7 +193,10 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let reference = str_at(detect, "reference_name").to_string();
     let slices = slices(detect);
     if slices.is_empty() {
-        push(Step::Fail { error: "Detect found no slices to scout, so there is nothing to build skills from.".into() });
+        push(Step::Fail {
+            error: "Detect found no slices to scout, so there is nothing to build skills from."
+                .into(),
+        });
         return;
     }
     let mut scouts_done = true;
@@ -167,7 +210,14 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
                 let mut init = BTreeMap::new();
                 init.insert("Slice".into(), descriptor.clone());
                 init.insert("Slice paths".into(), paths.join("\n"));
-                init.insert(STACK_REFERENCE_NAME.into(), if reference.is_empty() { "_generic".into() } else { reference.clone() });
+                init.insert(
+                    STACK_REFERENCE_NAME.into(),
+                    if reference.is_empty() {
+                        "_generic".into()
+                    } else {
+                        reference.clone()
+                    },
+                );
                 init.insert("Scout plan".into(), scout_plan.clone());
                 push(spawn(s, InitializerMode::Scout, Some(slug.clone()), init));
             }
@@ -190,7 +240,10 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let Some(decisions) = &i.decisions else {
         let skills = proposals(propose);
         if skills.is_empty() {
-            push(Step::Fail { error: "Scouting found no recurring components, so there are no skills to propose.".into() });
+            push(Step::Fail {
+                error: "Scouting found no recurring components, so there are no skills to propose."
+                    .into(),
+            });
             return;
         }
         push(Step::OpenGate {
@@ -221,11 +274,19 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
                         let mut init = BTreeMap::new();
                         init.insert("Skill name".into(), name.clone());
                         init.insert("Skill kind".into(), kind.clone());
-                        init.insert("Component type".into(), component.as_str().unwrap_or("none").to_string());
+                        init.insert(
+                            "Component type".into(),
+                            component.as_str().unwrap_or("none").to_string(),
+                        );
                         init.insert("Disposition".into(), disposition.clone());
                         init.insert("Proposal".into(), proposal_path.clone());
                         init.insert("Scout findings".into(), findings.clone());
-                        push(spawn(s, InitializerMode::GenerateSkill, Some(name.clone()), init));
+                        push(spawn(
+                            s,
+                            InitializerMode::GenerateSkill,
+                            Some(name.clone()),
+                            init,
+                        ));
                     }
                 }
             }
@@ -241,8 +302,14 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let Some(inventory) = &i.inventory_result else {
         if i.inventory.is_none() {
             let mut init = BTreeMap::new();
-            init.insert("Generated skills".into(), serde_json::to_string(&generated).unwrap_or_default());
-            init.insert("Reused skills".into(), serde_json::to_string(&reused).unwrap_or_default());
+            init.insert(
+                "Generated skills".into(),
+                serde_json::to_string(&generated).unwrap_or_default(),
+            );
+            init.insert(
+                "Reused skills".into(),
+                serde_json::to_string(&reused).unwrap_or_default(),
+            );
             init.insert("Proposal".into(), proposal_path);
             init.insert("Scout findings".into(), findings);
             push(spawn(s, InitializerMode::GenerateInventory, None, init));
@@ -257,13 +324,16 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
         reused.len(),
         str_at(inventory, "report_path"),
     );
-    push(Step::Complete { report_markdown: Some(md) });
+    push(Step::Complete {
+        report_markdown: Some(md),
+    });
 }
 
 fn failed_gate(exec: &ExecutionId, project: &str, err: &str) -> Step {
     Step::OpenGate {
         title: "The initializer failed".into(),
-        explanation: "The execution ended without a usable result. Retry it, or abandon the init.".into(),
+        explanation: "The execution ended without a usable result. Retry it, or abandon the init."
+            .into(),
         payload: GatePayload::ExecutionFailed {
             execution: exec.clone(),
             agent: AgentName::Initializer,

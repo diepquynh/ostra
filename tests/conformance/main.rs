@@ -24,15 +24,27 @@ fn root() -> PathBuf {
 
 impl H {
     fn new(projects: &[&str], options: SessionOptions) -> H {
-        let mut h = H { id: SessionId::from("s1"), events: vec![], ctx: PlanCtx::default() };
+        let mut h = H {
+            id: SessionId::from("s1"),
+            events: vec![],
+            ctx: PlanCtx::default(),
+        };
         for p in projects {
-            h.ctx.format_commands.insert(p.to_string(), Some(format!("fmt-{p}")));
+            h.ctx
+                .format_commands
+                .insert(p.to_string(), Some(format!("fmt-{p}")));
         }
         h.ev(SessionEvent::SessionCreated {
             kind: SessionKind::Pipeline,
             request: "Add order cancellation".into(),
             options,
-            projects: projects.iter().map(|k| ProjectRef { key: k.to_string(), path: PathBuf::from(format!("/code/{k}")) }).collect(),
+            projects: projects
+                .iter()
+                .map(|k| ProjectRef {
+                    key: k.to_string(),
+                    path: PathBuf::from(format!("/code/{k}")),
+                })
+                .collect(),
             workspace_root: PathBuf::from("/ws"),
             session_root: root(),
         });
@@ -41,7 +53,11 @@ impl H {
 
     fn ev(&mut self, event: SessionEvent) {
         let seq = self.events.len() as i64 + 1;
-        self.events.push(StoredEvent { seq, at: chrono::Utc::now(), event });
+        self.events.push(StoredEvent {
+            seq,
+            at: chrono::Utc::now(),
+            event,
+        });
     }
 
     fn state(&self) -> SessionState {
@@ -63,14 +79,21 @@ impl H {
             judge,
             subject: subject.map(String::from),
             input_summary: String::new(),
-            reason: output.get("reason").and_then(|r| r.as_str()).unwrap_or_default().into(),
+            reason: output
+                .get("reason")
+                .and_then(|r| r.as_str())
+                .unwrap_or_default()
+                .into(),
             output,
         });
         id
     }
 
     fn classify(&mut self, category: &str, projects: &[&str]) {
-        let tasks: Vec<Value> = projects.iter().map(|p| json!({"project": p, "task": format!("research {p}")})).collect();
+        let tasks: Vec<Value> = projects
+            .iter()
+            .map(|p| json!({"project": p, "task": format!("research {p}")}))
+            .collect();
         self.decide(
             JudgeKind::Classify,
             None,
@@ -85,7 +108,12 @@ impl H {
                 Step::Spawn(r) if Step::Spawn(r.clone()).summary().starts_with(prefix) => Some(*r),
                 _ => None,
             })
-            .unwrap_or_else(|| panic!("no spawn step starting with `{prefix}` in {:?}", self.summaries()))
+            .unwrap_or_else(|| {
+                panic!(
+                    "no spawn step starting with `{prefix}` in {:?}",
+                    self.summaries()
+                )
+            })
     }
 
     fn start(&mut self, prefix: &str) -> (ExecutionId, SpawnRequest) {
@@ -134,18 +162,41 @@ impl H {
             .into_iter()
             .find(|s| s.summary() == format!("gate {kind}"))
             .unwrap_or_else(|| panic!("no gate {kind} in {:?}", self.summaries()));
-        let Step::OpenGate { title, explanation, payload } = step else { unreachable!() };
+        let Step::OpenGate {
+            title,
+            explanation,
+            payload,
+        } = step
+        else {
+            unreachable!()
+        };
         let id = GateId::new();
-        self.ev(SessionEvent::GateOpened { id: id.clone(), title, explanation, payload });
+        self.ev(SessionEvent::GateOpened {
+            id: id.clone(),
+            title,
+            explanation,
+            payload,
+        });
         id
     }
 
     fn answer(&mut self, gate: &GateId, answer: GateAnswer) {
-        self.ev(SessionEvent::GateAnswered { id: gate.clone(), source: AnswerSource::User, answer, reason: None });
+        self.ev(SessionEvent::GateAnswered {
+            id: gate.clone(),
+            source: AnswerSource::User,
+            answer,
+            reason: None,
+        });
     }
 
     fn command(&mut self, purpose: CommandPurpose, project: &str) {
-        self.ev(SessionEvent::CommandRan { purpose, project: project.into(), command: String::new(), exit_code: Some(0), output_tail: String::new() });
+        self.ev(SessionEvent::CommandRan {
+            purpose,
+            project: project.into(),
+            command: String::new(),
+            exit_code: Some(0),
+            output_tail: String::new(),
+        });
     }
 
     // --- Canned flows ----------------------------------------------------------------------
@@ -154,7 +205,10 @@ impl H {
         let mut h = H::new(projects, options);
         h.classify("IMPLEMENT", projects);
         for (i, _) in projects.iter().enumerate() {
-            h.run(&format!("spawn explore explore#{i}"), explore_submit(i, &[]));
+            h.run(
+                &format!("spawn explore explore#{i}"),
+                explore_submit(i, &[]),
+            );
         }
         h
     }
@@ -162,26 +216,54 @@ impl H {
     fn spec_approved(projects: &[&str], options: SessionOptions) -> H {
         let mut h = H::explored(projects, options);
         h.run("spawn generate-spec", spec_submit(0, 1));
-        h.run("spawn fact-check fact-check-spec", fact("PASS", "spec", &[]));
+        h.run(
+            "spawn fact-check fact-check-spec",
+            fact("PASS", "spec", &[]),
+        );
         let g = h.open_gate("spec_approval");
-        h.answer(&g, GateAnswer::Approval { approved: true, feedback: None });
+        h.answer(
+            &g,
+            GateAnswer::Approval {
+                approved: true,
+                feedback: None,
+            },
+        );
         h
     }
 
     fn plan_approved(projects: &[&str], phases: Value, options: SessionOptions) -> H {
         let mut h = H::spec_approved(projects, options);
-        h.decide(JudgeKind::Stakes, None, json!({"stakes": "high", "reason": "r"}));
+        h.decide(
+            JudgeKind::Stakes,
+            None,
+            json!({"stakes": "high", "reason": "r"}),
+        );
         h.run("spawn plan", plan_submit(phases));
-        h.run("spawn fact-check fact-check-plan", fact("PASS", "plan", &[]));
+        h.run(
+            "spawn fact-check fact-check-plan",
+            fact("PASS", "plan", &[]),
+        );
         let g = h.open_gate("plan_approval");
-        h.answer(&g, GateAnswer::Approval { approved: true, feedback: None });
+        h.answer(
+            &g,
+            GateAnswer::Approval {
+                approved: true,
+                feedback: None,
+            },
+        );
         h
     }
 
     /// Implement and pass review for one phase.
     fn pass_phase(&mut self, phase: u32) {
-        self.run(&format!("spawn implementer phase {phase} initial"), impl_submit(phase, &["src/a.rs"]));
-        self.run(&format!("spawn code-reviewer review phase {phase} #1"), review(&[]));
+        self.run(
+            &format!("spawn implementer phase {phase} initial"),
+            impl_submit(phase, &["src/a.rs"]),
+        );
+        self.run(
+            &format!("spawn code-reviewer review phase {phase} #1"),
+            review(&[]),
+        );
         let project = self.state().phases[&phase].info.project.clone();
         self.command(CommandPurpose::Stage, &project);
     }
@@ -203,7 +285,10 @@ fn spec_submit(questions: usize, evidence: u32) -> Value {
 }
 
 fn fact(verdict: &str, target: &str, findings: &[&str]) -> Value {
-    let f: Vec<Value> = findings.iter().map(|x| json!({"severity": "HIGH", "location": "L", "claim": "C", "issue": x})).collect();
+    let f: Vec<Value> = findings
+        .iter()
+        .map(|x| json!({"severity": "HIGH", "location": "L", "claim": "C", "issue": x}))
+        .collect();
     json!({"verdict": verdict, "target": target, "findings": f})
 }
 
@@ -254,7 +339,13 @@ fn d1_no_research_document_means_no_spec() {
     let (id, _) = h.start("spawn explore");
     h.finish(&id, ExecutionStatus::Denied, None);
     let g = h.open_gate("execution_failed");
-    h.answer(&g, GateAnswer::Choice { option: "abandon".into(), text: None });
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "abandon".into(),
+            text: None,
+        },
+    );
     assert_eq!(h.summaries(), vec!["fail"]);
 }
 
@@ -274,7 +365,10 @@ fn d2_spec_waits_for_running_explore() {
     let mut h = H::new(&["a", "b"], SessionOptions::default());
     h.classify("IMPLEMENT", &["a", "b"]);
     // Rule M1: both explores fan out at once.
-    assert_eq!(h.summaries(), vec!["spawn explore explore#0", "spawn explore explore#1"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn explore explore#0", "spawn explore explore#1"]
+    );
     h.run("spawn explore explore#0", explore_submit(0, &[]));
     h.start("spawn explore explore#1");
     assert_eq!(h.summaries(), Vec::<String>::new());
@@ -284,7 +378,10 @@ fn d2_spec_waits_for_running_explore() {
 fn d2_not_covered_goes_to_sufficiency_and_spec_gets_every_doc() {
     let mut h = H::new(&["p"], SessionOptions::default());
     h.classify("IMPLEMENT", &["p"]);
-    h.run("spawn explore explore#0", explore_submit(0, &["the web client"]));
+    h.run(
+        "spawn explore explore#0",
+        explore_submit(0, &["the web client"]),
+    );
     assert_eq!(h.summaries(), vec!["judge sufficiency 0"]);
     h.decide(JudgeKind::Sufficiency, Some("0"), json!({"items": [{"item": "the web client", "needed": true, "reason": "r", "task": {"project": "p", "task": "research the web client"}}], "reason": "r"}));
     assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
@@ -306,13 +403,29 @@ fn d3_questions_before_fact_check_and_answers_rerun_spec() {
     let g = h.open_gate("open_questions");
     assert_eq!(h.summaries(), Vec::<String>::new());
     let answers = vec![
-        QuestionAnswer { id: "Q1".into(), question: "Which?".into(), answer: "A".into() },
-        QuestionAnswer { id: "Q2".into(), question: "Which?".into(), answer: "B".into() },
+        QuestionAnswer {
+            id: "Q1".into(),
+            question: "Which?".into(),
+            answer: "A".into(),
+        },
+        QuestionAnswer {
+            id: "Q2".into(),
+            question: "Which?".into(),
+            answer: "B".into(),
+        },
     ];
-    h.answer(&g, GateAnswer::Questions { answers: answers.clone() });
+    h.answer(
+        &g,
+        GateAnswer::Questions {
+            answers: answers.clone(),
+        },
+    );
     let rerun = h.spawn_step("spawn generate-spec");
     assert_eq!(rerun.inputs.answers, answers);
-    assert!(rerun.inputs.spec_file.is_some(), "the rerun rewrites the spec in place");
+    assert!(
+        rerun.inputs.spec_file.is_some(),
+        "the rerun rewrites the spec in place"
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -325,18 +438,41 @@ fn d3a_prior_findings() {
     h.run("spawn generate-spec", spec_submit(0, 0));
     let first = h.spawn_step("spawn fact-check");
     assert_eq!(first.inputs.prior_findings.as_deref(), Some("none"));
-    h.run("spawn fact-check", fact("FAIL", "spec", &["step 2.3 calls a missing method"]));
+    h.run(
+        "spawn fact-check",
+        fact("FAIL", "spec", &["step 2.3 calls a missing method"]),
+    );
     let rerun = h.spawn_step("spawn generate-spec");
-    assert!(rerun.inputs.findings.as_deref().unwrap().contains("step 2.3 calls a missing method"));
+    assert!(
+        rerun
+            .inputs
+            .findings
+            .as_deref()
+            .unwrap()
+            .contains("step 2.3 calls a missing method")
+    );
     h.run("spawn generate-spec", spec_submit(0, 0));
     let second = h.spawn_step("spawn fact-check");
-    assert_eq!(second.inputs.prior_findings.as_deref(), Some("HIGH, L: C step 2.3 calls a missing method"));
+    assert_eq!(
+        second.inputs.prior_findings.as_deref(),
+        Some("HIGH, L: C step 2.3 calls a missing method")
+    );
     h.run("spawn fact-check", fact("PASS", "spec", &[]));
     let g = h.open_gate("spec_approval");
-    h.answer(&g, GateAnswer::Approval { approved: false, feedback: Some("Drop the retry logic".into()) });
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: false,
+            feedback: Some("Drop the retry logic".into()),
+        },
+    );
     h.run("spawn generate-spec", spec_submit(0, 0));
     let third = h.spawn_step("spawn fact-check");
-    assert_eq!(third.inputs.prior_findings.as_deref(), Some("no findings on the previous pass"), "a clean pass still makes a re-pass");
+    assert_eq!(
+        third.inputs.prior_findings.as_deref(),
+        Some("no findings on the previous pass"),
+        "a clean pass still makes a re-pass"
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -347,14 +483,32 @@ fn d3a_prior_findings() {
 fn d3b_source_check() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     h.run("spawn generate-spec", spec_submit(0, 2));
-    assert_eq!(h.spawn_step("spawn fact-check").inputs.source_check.as_deref(), Some("refetch"));
+    assert_eq!(
+        h.spawn_step("spawn fact-check")
+            .inputs
+            .source_check
+            .as_deref(),
+        Some("refetch")
+    );
     h.run("spawn fact-check", fact("FAIL", "spec", &["x"]));
     h.run("spawn generate-spec", spec_submit(0, 2));
-    assert_eq!(h.spawn_step("spawn fact-check").inputs.source_check.as_deref(), Some("citations"));
+    assert_eq!(
+        h.spawn_step("spawn fact-check")
+            .inputs
+            .source_check
+            .as_deref(),
+        Some("citations")
+    );
 
     let mut h = H::explored(&["p"], SessionOptions::default());
     h.run("spawn generate-spec", spec_submit(0, 0));
-    assert_eq!(h.spawn_step("spawn fact-check").inputs.source_check.as_deref(), Some("citations"));
+    assert_eq!(
+        h.spawn_step("spawn fact-check")
+            .inputs
+            .source_check
+            .as_deref(),
+        Some("citations")
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -365,23 +519,37 @@ fn d3b_source_check() {
 fn d4_plan_gets_only_the_spec() {
     let mut h = H::spec_approved(&["p"], SessionOptions::default());
     assert_eq!(h.summaries(), vec!["judge stakes"]);
-    h.decide(JudgeKind::Stakes, None, json!({"stakes": "medium", "reason": "r"}));
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "medium", "reason": "r"}),
+    );
     let plan = h.spawn_step("spawn plan");
     assert!(plan.inputs.research_docs.is_empty());
     assert!(plan.inputs.answers.is_empty());
     assert!(plan.inputs.task.is_none());
-    assert_eq!(plan.inputs.spec_file, Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md")));
+    assert_eq!(
+        plan.inputs.spec_file,
+        Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md"))
+    );
     assert_eq!(plan.session_dir, root());
 }
 
 #[test]
 fn stakes_low_skips_plan() {
     let mut h = H::spec_approved(&["p"], SessionOptions::default());
-    h.decide(JudgeKind::Stakes, None, json!({"stakes": "low", "reason": "small"}));
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "low", "reason": "small"}),
+    );
     let s = h.summaries();
     assert_eq!(s, vec!["spawn implementer phase 1 initial"]);
     let req = h.spawn_step("spawn implementer");
-    assert!(req.inputs.phase.as_ref().unwrap().file.is_none(), "Hard rule 13: no plan means No plan:");
+    assert!(
+        req.inputs.phase.as_ref().unwrap().file.is_none(),
+        "Hard rule 13: no plan means No plan:"
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -391,16 +559,36 @@ fn stakes_low_skips_plan() {
 #[test]
 fn d5_plan_fact_check_and_approval() {
     let mut h = H::spec_approved(&["p"], SessionOptions::default());
-    h.decide(JudgeKind::Stakes, None, json!({"stakes": "high", "reason": "r"}));
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
     h.run("spawn plan", plan_submit(one_phase()));
     let fc = h.spawn_step("spawn fact-check fact-check-plan");
     assert_eq!(fc.inputs.source_check.as_deref(), Some("citations"));
-    assert_eq!(fc.inputs.spec_file, Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md")));
+    assert_eq!(
+        fc.inputs.spec_file,
+        Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md"))
+    );
     assert!(fc.inputs.research_docs.is_empty());
-    h.run("spawn fact-check fact-check-plan", fact("FAIL", "plan", &["phase 5 missing"]));
+    h.run(
+        "spawn fact-check fact-check-plan",
+        fact("FAIL", "plan", &["phase 5 missing"]),
+    );
     let rerun = h.spawn_step("spawn plan");
-    assert!(rerun.inputs.findings.as_deref().unwrap().contains("phase 5 missing"));
-    assert!(!h.summaries().iter().any(|s| s == "gate plan_approval"), "no approval without PASS");
+    assert!(
+        rerun
+            .inputs
+            .findings
+            .as_deref()
+            .unwrap()
+            .contains("phase 5 missing")
+    );
+    assert!(
+        !h.summaries().iter().any(|s| s == "gate plan_approval"),
+        "no approval without PASS"
+    );
 }
 
 #[test]
@@ -410,8 +598,16 @@ fn approval_without_pass_is_ignored_by_the_fold() {
     h.run("spawn fact-check", fact("PASS", "spec", &[]));
     let g = h.open_gate("spec_approval");
     // A new spec version lands before the answer: its PASS no longer covers it.
-    h.ev(SessionEvent::RequestAmended { text: "also refunds".into() });
-    h.answer(&g, GateAnswer::Approval { approved: true, feedback: None });
+    h.ev(SessionEvent::RequestAmended {
+        text: "also refunds".into(),
+    });
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
     assert!(!h.state().spec.approved);
 }
 
@@ -433,11 +629,20 @@ fn d6_m2_m3_m5_scheduling() {
     assert_eq!(h.summaries(), vec!["spawn implementer phase 1 initial"]);
     h.pass_phase(1);
     // Ready phases in different projects run in parallel.
-    assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial", "spawn implementer phase 3 initial"]);
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn implementer phase 2 initial",
+            "spawn implementer phase 3 initial"
+        ]
+    );
     h.pass_phase(2);
     h.pass_phase(3);
     // Rule D8: api's last phase passed, so api formats while web keeps building.
-    assert_eq!(h.summaries(), vec!["spawn implementer phase 4 initial", "command format api"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn implementer phase 4 initial", "command format api"]
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -447,39 +652,91 @@ fn d6_m2_m3_m5_scheduling() {
 #[test]
 fn d8_t1_no_tests_between_phases_and_format_once() {
     let phases = json!([phase(1, "p", &[], "Required"), phase(2, "p", &[1], "Skip")]);
-    let mut h = H::plan_approved(&["p"], phases, SessionOptions { tests: true, ..Default::default() });
+    let mut h = H::plan_approved(
+        &["p"],
+        phases,
+        SessionOptions {
+            tests: true,
+            ..Default::default()
+        },
+    );
     h.pass_phase(1);
-    assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"], "T1: no EPA between phases");
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn implementer phase 2 initial"],
+        "T1: no EPA between phases"
+    );
     h.pass_phase(2);
     assert_eq!(h.summaries(), vec!["command format p"]);
     h.command(CommandPurpose::Format, "p");
     // T3: tests were requested, so the gate asks only about docs.
     let g = h.open_gate("closing_gate");
     let st = h.state();
-    let GatePayload::ClosingGate { items } = &st.gates[&g].payload else { panic!() };
+    let GatePayload::ClosingGate { items } = &st.gates[&g].payload else {
+        panic!()
+    };
     assert!(!items[0].ask_tests && items[0].ask_docs);
-    h.answer(&g, GateAnswer::Closing { items: vec![ClosingChoice { project: "p".into(), tests: false, docs: false }] });
+    h.answer(
+        &g,
+        GateAnswer::Closing {
+            items: vec![ClosingChoice {
+                project: "p".into(),
+                tests: false,
+                docs: false,
+            }],
+        },
+    );
     // T4: only the Required phase is covered.
-    assert_eq!(h.summaries(), vec!["spawn execution-path-analyzer epa phase 1"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn execution-path-analyzer epa phase 1"]
+    );
 }
 
 #[test]
 fn t4_epa_fans_out_and_write_test_is_serial() {
-    let phases = json!([phase(1, "p", &[], "Required"), phase(2, "p", &[1], "Required")]);
-    let mut h = H::plan_approved(&["p"], phases, SessionOptions { tests: true, docs: true, yolo: false });
+    let phases = json!([
+        phase(1, "p", &[], "Required"),
+        phase(2, "p", &[1], "Required")
+    ]);
+    let mut h = H::plan_approved(
+        &["p"],
+        phases,
+        SessionOptions {
+            tests: true,
+            docs: true,
+            yolo: false,
+        },
+    );
     h.pass_phase(1);
     h.pass_phase(2);
     h.command(CommandPurpose::Format, "p");
     // T3: both requested, so there is no gate at all.
-    assert_eq!(h.summaries(), vec!["spawn execution-path-analyzer epa phase 1", "spawn execution-path-analyzer epa phase 2"]);
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn execution-path-analyzer epa phase 1",
+            "spawn execution-path-analyzer epa phase 2"
+        ]
+    );
     let (e1, _) = h.start("spawn execution-path-analyzer epa phase 1");
     let (e2, _) = h.start("spawn execution-path-analyzer epa phase 2");
     h.finish(&e1, ExecutionStatus::Ok, Some(report("/e1")));
-    assert_eq!(h.summaries(), vec![] as Vec<String>, "write-test waits for every EPA");
+    assert_eq!(
+        h.summaries(),
+        vec![] as Vec<String>,
+        "write-test waits for every EPA"
+    );
     h.finish(&e2, ExecutionStatus::Ok, Some(report("/e2")));
-    assert_eq!(h.summaries(), vec!["spawn write-test write-test phase 1 initial"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn write-test write-test phase 1 initial"]
+    );
     h.run("spawn write-test write-test phase 1", report("/t1"));
-    assert_eq!(h.summaries(), vec!["spawn code-reviewer review phase 1 tests #1"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn code-reviewer review phase 1 tests #1"]
+    );
     let r = h.spawn_step("spawn code-reviewer");
     assert_eq!(r.inputs.phase_value.as_deref(), Some("1-tests"));
     assert_eq!(r.inputs.epa_report, Some(PathBuf::from("/e1")));
@@ -487,21 +744,36 @@ fn t4_epa_fans_out_and_write_test_is_serial() {
     // Test files are staged per phase after that phase's test review passes.
     assert_eq!(h.summaries(), vec!["command stage p"]);
     h.command(CommandPurpose::Stage, "p");
-    assert_eq!(h.summaries(), vec!["spawn write-test write-test phase 2 initial"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn write-test write-test phase 2 initial"]
+    );
 }
 
 #[test]
 fn t6_closing_gate_is_batched() {
-    let phases = json!([phase(1, "a", &[], "Required"), phase(2, "b", &[], "Required")]);
+    let phases = json!([
+        phase(1, "a", &[], "Required"),
+        phase(2, "b", &[], "Required")
+    ]);
     let mut h = H::plan_approved(&["a", "b"], phases, SessionOptions::default());
     h.pass_phase(1);
     h.pass_phase(2);
     h.command(CommandPurpose::Format, "a");
     h.command(CommandPurpose::Format, "b");
     let steps = h.steps();
-    let gates: Vec<&Step> = steps.iter().filter(|s| s.summary() == "gate closing_gate").collect();
+    let gates: Vec<&Step> = steps
+        .iter()
+        .filter(|s| s.summary() == "gate closing_gate")
+        .collect();
     assert_eq!(gates.len(), 1);
-    let Step::OpenGate { payload: GatePayload::ClosingGate { items }, .. } = gates[0] else { panic!() };
+    let Step::OpenGate {
+        payload: GatePayload::ClosingGate { items },
+        ..
+    } = gates[0]
+    else {
+        panic!()
+    };
     assert_eq!(items.len(), 2);
 }
 
@@ -521,12 +793,22 @@ fn t2_yolo_answers_the_closing_gate() {
 
 #[test]
 fn d9_blocked_phase_removes_dependents() {
-    let phases = json!([phase(1, "a", &[], "Required"), phase(2, "a", &[1], "Required"), phase(3, "b", &[], "Required")]);
+    let phases = json!([
+        phase(1, "a", &[], "Required"),
+        phase(2, "a", &[1], "Required"),
+        phase(3, "b", &[], "Required")
+    ]);
     let mut h = H::plan_approved(&["a", "b"], phases, SessionOptions::default());
     let (id, _) = h.start("spawn implementer phase 1");
     h.finish(&id, ExecutionStatus::Denied, None);
     let g = h.open_gate("execution_failed");
-    h.answer(&g, GateAnswer::Choice { option: "abandon".into(), text: None });
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "abandon".into(),
+            text: None,
+        },
+    );
     let s = h.summaries();
     assert!(s.contains(&"blocked phase 1".to_string()));
     assert!(s.contains(&"spawn implementer phase 3 initial".to_string()));
@@ -541,23 +823,57 @@ fn d9_blocked_phase_removes_dependents() {
 #[test]
 fn d10_change_at_plan_approval_goes_to_spec() {
     let mut h = H::spec_approved(&["p"], SessionOptions::default());
-    h.decide(JudgeKind::Stakes, None, json!({"stakes": "high", "reason": "r"}));
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
     h.run("spawn plan", plan_submit(one_phase()));
-    h.run("spawn fact-check fact-check-plan", fact("PASS", "plan", &[]));
+    h.run(
+        "spawn fact-check fact-check-plan",
+        fact("PASS", "plan", &[]),
+    );
     let g = h.open_gate("plan_approval");
-    h.answer(&g, GateAnswer::Approval { approved: false, feedback: Some("Drop the retry logic".into()) });
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: false,
+            feedback: Some("Drop the retry logic".into()),
+        },
+    );
     let spec = h.spawn_step("spawn generate-spec");
-    assert_eq!(spec.inputs.changes, vec!["Drop the retry logic".to_string()]);
+    assert_eq!(
+        spec.inputs.changes,
+        vec!["Drop the retry logic".to_string()]
+    );
     h.run("spawn generate-spec", spec_submit(0, 0));
-    h.run("spawn fact-check fact-check-spec", fact("PASS", "spec", &[]));
+    h.run(
+        "spawn fact-check fact-check-spec",
+        fact("PASS", "spec", &[]),
+    );
     let g = h.open_gate("spec_approval");
-    h.answer(&g, GateAnswer::Approval { approved: true, feedback: None });
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
     let plan = h.spawn_step("spawn plan");
-    assert!(plan.inputs.findings.is_none(), "a spec-change revision, not a FAIL re-run");
-    assert!(plan.inputs.target.is_some(), "the earlier plan is revised in place");
+    assert!(
+        plan.inputs.findings.is_none(),
+        "a spec-change revision, not a FAIL re-run"
+    );
+    assert!(
+        plan.inputs.target.is_some(),
+        "the earlier plan is revised in place"
+    );
     h.run("spawn plan", plan_submit(one_phase()));
     let check = h.spawn_step("spawn fact-check fact-check-plan");
-    assert_eq!(check.inputs.prior_findings.as_deref(), Some("no findings on the previous pass"));
+    assert_eq!(
+        check.inputs.prior_findings.as_deref(),
+        Some("no findings on the previous pass")
+    );
 }
 
 // D10: a spec revision gets only the input its spec does not reflect yet.
@@ -565,31 +881,50 @@ fn d10_change_at_plan_approval_goes_to_spec() {
 fn d10_spec_revision_gets_only_new_input() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let first = h.spawn_step("spawn generate-spec");
-    assert!(first.inputs.new_research_docs.is_empty(), "a first run reads every research document");
+    assert!(
+        first.inputs.new_research_docs.is_empty(),
+        "a first run reads every research document"
+    );
     h.run("spawn generate-spec", spec_submit(0, 0));
     h.run("spawn fact-check", fact("PASS", "spec", &[]));
     let g = h.open_gate("spec_approval");
-    h.answer(&g, GateAnswer::Approval { approved: false, feedback: Some("Drop the retry logic".into()) });
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: false,
+            feedback: Some("Drop the retry logic".into()),
+        },
+    );
     let rev = h.spawn_step("spawn generate-spec");
     assert_eq!(rev.inputs.changes, vec!["Drop the retry logic".to_string()]);
     h.run("spawn generate-spec", spec_submit(0, 0));
     h.run("spawn fact-check", fact("FAIL", "spec", &["x"]));
     let fix = h.spawn_step("spawn generate-spec");
-    assert!(fix.inputs.changes.is_empty(), "an applied change is not sent again");
+    assert!(
+        fix.inputs.changes.is_empty(),
+        "an applied change is not sent again"
+    );
     h.run("spawn generate-spec", spec_submit(0, 0));
-    h.ev(SessionEvent::RequestAmended { text: "also handle refunds".into() });
+    h.ev(SessionEvent::RequestAmended {
+        text: "also handle refunds".into(),
+    });
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let amended = h.spawn_step("spawn generate-spec");
     assert_eq!(amended.inputs.research_docs.len(), 2);
     assert_eq!(amended.inputs.new_research_docs.len(), 1);
-    assert_eq!(amended.inputs.changes, vec!["The user extended the request: also handle refunds".to_string()]);
+    assert_eq!(
+        amended.inputs.changes,
+        vec!["The user extended the request: also handle refunds".to_string()]
+    );
 }
 
 #[test]
 fn amendment_explores_the_new_part_first() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     h.run("spawn generate-spec", spec_submit(0, 0));
-    h.ev(SessionEvent::RequestAmended { text: "also handle refunds".into() });
+    h.ev(SessionEvent::RequestAmended {
+        text: "also handle refunds".into(),
+    });
     assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let spec = h.spawn_step("spawn generate-spec");
@@ -624,10 +959,20 @@ fn hard13_phase_spawns_carry_the_phase_file() {
 #[test]
 fn staging_after_review_passes() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
-    h.run("spawn implementer", impl_submit(1, &["src/a.rs", "src/b.rs"]));
+    h.run(
+        "spawn implementer",
+        impl_submit(1, &["src/a.rs", "src/b.rs"]),
+    );
     h.run("spawn code-reviewer", review(&[]));
     let steps = h.steps();
-    let Some(Step::Command { purpose: CommandPurpose::Stage, files, .. }) = steps.first() else { panic!("{:?}", h.summaries()) };
+    let Some(Step::Command {
+        purpose: CommandPurpose::Stage,
+        files,
+        ..
+    }) = steps.first()
+    else {
+        panic!("{:?}", h.summaries())
+    };
     assert_eq!(files, &vec!["src/a.rs".to_string(), "src/b.rs".to_string()]);
 }
 
@@ -636,20 +981,63 @@ fn review_loop_splits_autofix_fix_and_caps_at_three() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     h.run("spawn implementer", impl_submit(1, &["src/a.rs"]));
     // C1 is auto-fixable in this project; PHASE-REQ never is, whatever its Fix text.
-    h.run("spawn code-reviewer", review(&[finding("LOW", "C1"), finding("HIGH", "PHASE-REQ-1"), finding("LOW", "C9")]));
+    h.run(
+        "spawn code-reviewer",
+        review(&[
+            finding("LOW", "C1"),
+            finding("HIGH", "PHASE-REQ-1"),
+            finding("LOW", "C9"),
+        ]),
+    );
     assert_eq!(h.summaries(), vec!["autofix phase 1"]);
-    h.ev(SessionEvent::AutofixApplied { project: "p".into(), phase: 1, tests: false, applied: vec!["x".into()], failed: vec![] });
+    h.ev(SessionEvent::AutofixApplied {
+        project: "p".into(),
+        phase: 1,
+        tests: false,
+        applied: vec!["x".into()],
+        failed: vec![],
+    });
     let fix = h.spawn_step("spawn implementer phase 1 fix");
     let text = fix.inputs.instructions.unwrap();
-    assert!(text.contains("PHASE-REQ-1") && !text.contains("C9"), "only HIGH and MEDIUM go to the fix agent");
-    assert!(fix.inputs.ledger_file.unwrap().ends_with("ostra-review-ledger-phase-1.md"));
-    h.run("spawn implementer phase 1 fix", impl_submit(1, &["src/a.rs"]));
-    h.run("spawn code-reviewer review phase 1 #2", review(&[finding("HIGH", "R2")]));
-    h.run("spawn implementer phase 1 fix", impl_submit(1, &["src/a.rs"]));
-    h.run("spawn code-reviewer review phase 1 #3", review(&[finding("MEDIUM", "R3")]));
-    assert_eq!(h.summaries(), vec!["gate review_cap"], "the 4th pass is a gate");
+    assert!(
+        text.contains("PHASE-REQ-1") && !text.contains("C9"),
+        "only HIGH and MEDIUM go to the fix agent"
+    );
+    assert!(
+        fix.inputs
+            .ledger_file
+            .unwrap()
+            .ends_with("ostra-review-ledger-phase-1.md")
+    );
+    h.run(
+        "spawn implementer phase 1 fix",
+        impl_submit(1, &["src/a.rs"]),
+    );
+    h.run(
+        "spawn code-reviewer review phase 1 #2",
+        review(&[finding("HIGH", "R2")]),
+    );
+    h.run(
+        "spawn implementer phase 1 fix",
+        impl_submit(1, &["src/a.rs"]),
+    );
+    h.run(
+        "spawn code-reviewer review phase 1 #3",
+        review(&[finding("MEDIUM", "R3")]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["gate review_cap"],
+        "the 4th pass is a gate"
+    );
     let g = h.open_gate("review_cap");
-    h.answer(&g, GateAnswer::Choice { option: "another-pass".into(), text: None });
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "another-pass".into(),
+            text: None,
+        },
+    );
     assert_eq!(h.summaries(), vec!["spawn implementer phase 1 fix"]);
 }
 
@@ -670,26 +1058,56 @@ fn hard21_blocker_has_no_cap() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     h.run("spawn implementer", impl_submit(1, &["src/a.rs"]));
     for i in 1..=5 {
-        h.run(&format!("spawn code-reviewer review phase 1 #{i}"), review(&[finding("BLOCKER", "SEC-BLOCK-EXFIL"), finding("HIGH", "R1")]));
+        h.run(
+            &format!("spawn code-reviewer review phase 1 #{i}"),
+            review(&[finding("BLOCKER", "SEC-BLOCK-EXFIL"), finding("HIGH", "R1")]),
+        );
         let fix = h.spawn_step("spawn implementer phase 1 blockerfix");
         let text = fix.inputs.instructions.unwrap();
-        assert!(text.contains("SEC-BLOCK-EXFIL") && !text.contains("(R1)"), "only BLOCKER findings, with a removal instruction");
+        assert!(
+            text.contains("SEC-BLOCK-EXFIL") && !text.contains("(R1)"),
+            "only BLOCKER findings, with a removal instruction"
+        );
         assert!(text.contains("Remove"));
-        h.run("spawn implementer phase 1 blockerfix", impl_submit(1, &["src/a.rs"]));
+        h.run(
+            "spawn implementer phase 1 blockerfix",
+            impl_submit(1, &["src/a.rs"]),
+        );
     }
     assert!(!h.summaries().contains(&"gate review_cap".to_string()));
 }
 
 #[test]
 fn hard21_open_blocker_blocks_docs() {
-    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions { docs: true, tests: false, yolo: false });
+    let mut h = H::plan_approved(
+        &["p"],
+        one_phase(),
+        SessionOptions {
+            docs: true,
+            tests: false,
+            yolo: false,
+        },
+    );
     h.run("spawn implementer", impl_submit(1, &["src/a.rs"]));
-    h.run("spawn code-reviewer", review(&[finding("BLOCKER", "SEC-BLOCK-EXFIL")]));
+    h.run(
+        "spawn code-reviewer",
+        review(&[finding("BLOCKER", "SEC-BLOCK-EXFIL")]),
+    );
     let (id, _) = h.start("spawn implementer phase 1 blockerfix");
     h.finish(&id, ExecutionStatus::Denied, None);
     let g = h.open_gate("execution_failed");
-    h.answer(&g, GateAnswer::Choice { option: "abandon".into(), text: None });
-    assert!(!h.summaries().iter().any(|s| s.contains("module-documentation")));
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "abandon".into(),
+            text: None,
+        },
+    );
+    assert!(
+        !h.summaries()
+            .iter()
+            .any(|s| s.contains("module-documentation"))
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -708,7 +1126,13 @@ fn handoff_runs_prompt_generation_then_resumes() {
     assert_eq!(pg.inputs.task.as_deref(), Some("author the agent prompt"));
     h.run("spawn prompt-generation handoff", report("/pg"));
     let resume = h.spawn_step("spawn implementer phase 1 resume");
-    assert!(resume.inputs.instructions.unwrap().contains("wire it into step 3"));
+    assert!(
+        resume
+            .inputs
+            .instructions
+            .unwrap()
+            .contains("wire it into step 3")
+    );
 }
 
 #[test]
@@ -722,7 +1146,11 @@ fn stuck_goes_to_rescue_never_a_plain_retry() {
                      "stuck": {"diagnostic": "error[E0433]: failed to resolve: use of undeclared crate", "need": "the crate name"}})),
     );
     assert_eq!(h.summaries(), vec![format!("judge rescue {id}")]);
-    h.decide(JudgeKind::Rescue, Some(id.as_str()), json!({"action": "rerun", "fact": "The crate is `ostra_core`.", "reason": "r"}));
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "rerun", "fact": "The crate is `ostra_core`.", "reason": "r"}),
+    );
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
     let ctx = rerun.inputs.instructions.unwrap();
     assert!(ctx.contains("error[E0433]") && ctx.contains("ostra_core"));
@@ -738,7 +1166,13 @@ fn stuck_rescue_by_explore() {
     assert_eq!(ex.inputs.task.as_deref(), Some("find the working example"));
     h.run("spawn explore", explore_submit(9, &[]));
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
-    assert!(rerun.inputs.instructions.unwrap().contains("A targeted explore found"));
+    assert!(
+        rerun
+            .inputs
+            .instructions
+            .unwrap()
+            .contains("A targeted explore found")
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -747,29 +1181,67 @@ fn stuck_rescue_by_explore() {
 
 #[test]
 fn yolo_answers_gates_and_extends_review_budget() {
-    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions { yolo: true, ..Default::default() });
+    let mut h = H::plan_approved(
+        &["p"],
+        one_phase(),
+        SessionOptions {
+            yolo: true,
+            ..Default::default()
+        },
+    );
     h.run("spawn implementer", impl_submit(1, &["src/a.rs"]));
     for i in 1..=9 {
-        h.run(&format!("spawn code-reviewer review phase 1 #{i}"), review(&[finding("HIGH", "R1")]));
-        h.run("spawn implementer phase 1 fix", impl_submit(1, &["src/a.rs"]));
+        h.run(
+            &format!("spawn code-reviewer review phase 1 #{i}"),
+            review(&[finding("HIGH", "R1")]),
+        );
+        h.run(
+            "spawn implementer phase 1 fix",
+            impl_submit(1, &["src/a.rs"]),
+        );
     }
-    h.run("spawn code-reviewer review phase 1 #10", review(&[finding("HIGH", "R1"), finding("HIGH", "R2")]));
+    h.run(
+        "spawn code-reviewer review phase 1 #10",
+        review(&[finding("HIGH", "R1"), finding("HIGH", "R2")]),
+    );
     assert_eq!(h.summaries(), vec!["judge resolve-review phase:1"]);
     h.decide(JudgeKind::ResolveReview, Some("phase:1"), json!({"action": "fix", "instructions": [{"finding": "R1", "instruction": "do x"}], "reason": "r"}));
-    h.run("spawn implementer phase 1 fix", impl_submit(1, &["src/a.rs"]));
+    h.run(
+        "spawn implementer phase 1 fix",
+        impl_submit(1, &["src/a.rs"]),
+    );
     // One verification pass; it converged from 2 to 1 open, so another resolution round.
-    h.run("spawn code-reviewer review phase 1 #11", review(&[finding("HIGH", "R2")]));
+    h.run(
+        "spawn code-reviewer review phase 1 #11",
+        review(&[finding("HIGH", "R2")]),
+    );
     assert_eq!(h.summaries(), vec!["judge resolve-review phase:1"]);
-    h.decide(JudgeKind::ResolveReview, Some("phase:1"), json!({"action": "fix", "instructions": [], "reason": "r"}));
-    h.run("spawn implementer phase 1 fix", impl_submit(1, &["src/a.rs"]));
+    h.decide(
+        JudgeKind::ResolveReview,
+        Some("phase:1"),
+        json!({"action": "fix", "instructions": [], "reason": "r"}),
+    );
+    h.run(
+        "spawn implementer phase 1 fix",
+        impl_submit(1, &["src/a.rs"]),
+    );
     // Not converging (1 then 1): the phase is blocked and recorded, with no gate.
-    h.run("spawn code-reviewer review phase 1 #12", review(&[finding("HIGH", "R2")]));
+    h.run(
+        "spawn code-reviewer review phase 1 #12",
+        review(&[finding("HIGH", "R2")]),
+    );
     assert_eq!(h.summaries(), vec!["blocked phase 1"]);
 }
 
 #[test]
 fn yolo_gate_gets_a_yolo_answer_step() {
-    let mut h = H::explored(&["p"], SessionOptions { yolo: true, ..Default::default() });
+    let mut h = H::explored(
+        &["p"],
+        SessionOptions {
+            yolo: true,
+            ..Default::default()
+        },
+    );
     h.run("spawn generate-spec", spec_submit(1, 0));
     h.open_gate("open_questions");
     assert_eq!(h.summaries(), vec!["yolo-answer"]);
@@ -811,8 +1283,14 @@ fn quick_change_runs_one_native_pass_without_review() {
     assert_eq!(h.summaries(), vec!["spawn implementer phase 1 initial"]);
     let req = h.spawn_step("spawn implementer");
     assert_eq!(req.inputs.task.as_deref(), Some("Add order cancellation"));
-    assert_eq!(h.state().forced_executor(AgentName::Implementer), Some(ExecutorKind::Native));
-    h.run("spawn implementer phase 1 initial", impl_submit(1, &["src/a.rs"]));
+    assert_eq!(
+        h.state().forced_executor(AgentName::Implementer),
+        Some(ExecutorKind::Native)
+    );
+    h.run(
+        "spawn implementer phase 1 initial",
+        impl_submit(1, &["src/a.rs"]),
+    );
     assert_eq!(h.summaries(), vec!["command stage p"]);
     h.command(CommandPurpose::Stage, "p");
     assert_eq!(h.summaries(), vec!["judge completion"]);
@@ -837,7 +1315,10 @@ fn other_categories_follow_the_routing() {
 fn unit_test_category_skips_the_closing_gate() {
     let mut h = H::new(&["p"], SessionOptions::default());
     h.decide(JudgeKind::Classify, None, json!({"category": "UNIT_TEST", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": true, "docs": false}, "reason": "r"}));
-    assert_eq!(h.summaries(), vec!["spawn execution-path-analyzer epa phase 1"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn execution-path-analyzer epa phase 1"]
+    );
 }
 
 #[test]
@@ -852,7 +1333,10 @@ fn classify_override_before_work_starts() {
         output: json!({"category": "IMPLEMENT", "projects": ["p"], "explore_tasks": [{"project": "p", "task": "t"}], "opts_in": {"tests": false, "docs": false}, "reason": "user"}),
         reason: "user".into(),
     });
-    assert_eq!(h.state().category, Some(ostra_core::pipeline::Category::Implement));
+    assert_eq!(
+        h.state().category,
+        Some(ostra_core::pipeline::Category::Implement)
+    );
     h.start("spawn explore");
     let st = h.state();
     assert!(!st.can_override(st.classify.as_ref().unwrap()));
@@ -860,7 +1344,10 @@ fn classify_override_before_work_starts() {
 
 #[test]
 fn stage_kinds_map_to_lanes() {
-    assert_eq!(StageKind::FactCheckSpec.lane(), ostra_core::pipeline::Lane::Verification);
+    assert_eq!(
+        StageKind::FactCheckSpec.lane(),
+        ostra_core::pipeline::Lane::Verification
+    );
     let _ = AgentName::Explore;
 }
 
@@ -876,7 +1363,10 @@ fn spend(h: &mut H, prefix: &str, submit: Value, cost: f64) {
             status: ExecutionStatus::Ok,
             submit: Some(submit),
             final_text: String::new(),
-            usage: Usage { cost_usd: cost, ..Default::default() },
+            usage: Usage {
+                cost_usd: cost,
+                ..Default::default()
+            },
             native_session_id: None,
             error: None,
         },
@@ -885,15 +1375,31 @@ fn spend(h: &mut H, prefix: &str, submit: Value, cost: f64) {
 
 #[test]
 fn budget_pauses_spawns_until_raised() {
-    let mut h = H::new(&["p"], SessionOptions { yolo: true, ..Default::default() });
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
+            yolo: true,
+            ..Default::default()
+        },
+    );
     h.ctx.budget_usd = Some(1.0);
     h.classify("IMPLEMENT", &["p"]);
     spend(&mut h, "spawn explore", explore_submit(0, &[]), 1.5);
     // The spec spawn becomes a budget gate, and YOLO leaves it open.
     assert_eq!(h.summaries(), vec!["gate budget_reached"]);
     let g = h.open_gate("budget_reached");
-    assert_eq!(h.summaries(), Vec::<String>::new(), "no yolo-answer for a budget gate");
-    h.answer(&g, GateAnswer::Choice { option: "raise".into(), text: Some("5".into()) });
+    assert_eq!(
+        h.summaries(),
+        Vec::<String>::new(),
+        "no yolo-answer for a budget gate"
+    );
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "raise".into(),
+            text: Some("5".into()),
+        },
+    );
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
 }
 
@@ -904,7 +1410,13 @@ fn budget_stop_ends_the_session() {
     h.classify("IMPLEMENT", &["p"]);
     spend(&mut h, "spawn explore", explore_submit(0, &[]), 2.0);
     let g = h.open_gate("budget_reached");
-    h.answer(&g, GateAnswer::Choice { option: "stop".into(), text: None });
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "stop".into(),
+            text: None,
+        },
+    );
     assert!(h.state().failed.is_some());
     assert_eq!(h.summaries(), Vec::<String>::new());
 }
@@ -923,6 +1435,15 @@ fn init_generates_at_most_eight_skills_by_default() {
         .map(|i| json!({"name": format!("s{i}"), "kind": "creation", "status": "new", "recommend": true}))
         .collect();
     let proposals = ostra_engine::init::proposals(&json!({"skills": skills}));
-    assert_eq!(proposals.iter().filter(|p| p.disposition == "generate").count(), ostra_engine::init::MAX_DEFAULT_GENERATE);
-    assert_eq!(proposals.iter().filter(|p| p.disposition == "drop").count(), 4);
+    assert_eq!(
+        proposals
+            .iter()
+            .filter(|p| p.disposition == "generate")
+            .count(),
+        ostra_engine::init::MAX_DEFAULT_GENERATE
+    );
+    assert_eq!(
+        proposals.iter().filter(|p| p.disposition == "drop").count(),
+        4
+    );
 }

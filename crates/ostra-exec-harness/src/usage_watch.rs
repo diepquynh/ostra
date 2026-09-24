@@ -32,7 +32,12 @@ pub async fn follow(
     }
     let path = loop {
         let s = live.snapshot();
-        if let Some(p) = transcript::locate(harness, s.transcript_path.as_deref(), s.session_id.as_deref(), &home) {
+        if let Some(p) = transcript::locate(
+            harness,
+            s.transcript_path.as_deref(),
+            s.session_id.as_deref(),
+            &home,
+        ) {
             break p;
         }
         tokio::select! {
@@ -122,20 +127,44 @@ mod tests {
     async fn reports_usage_as_the_session_file_grows() {
         let tmp = tempfile::tempdir().unwrap();
         let file = tmp.path().join("s.jsonl");
-        let line = |id: &str| format!("{{\"type\":\"assistant\",\"message\":{{\"id\":\"{id}\",\"model\":\"claude-sonnet-5\",\"content\":[],\"usage\":{{\"input_tokens\":0,\"output_tokens\":100}}}}}}\n");
+        let line = |id: &str| {
+            format!(
+                "{{\"type\":\"assistant\",\"message\":{{\"id\":\"{id}\",\"model\":\"claude-sonnet-5\",\"content\":[],\"usage\":{{\"input_tokens\":0,\"output_tokens\":100}}}}}}\n"
+            )
+        };
         std::fs::write(&file, line("a")).unwrap();
-        let live = LiveRegistry::new().register(ExecutionId::new(), AgentName::Implementer, HarnessKind::Claude);
+        let live = LiveRegistry::new().register(
+            ExecutionId::new(),
+            AgentName::Implementer,
+            HarnessKind::Claude,
+        );
         live.note_session(None, Some(file.clone()));
         let host = Arc::new(Host::default());
         let stop = CancellationToken::new();
-        let task = tokio::spawn(follow(HarnessKind::Claude, tmp.path().into(), live, host.clone(), stop.clone()));
+        let task = tokio::spawn(follow(
+            HarnessKind::Claude,
+            tmp.path().into(),
+            live,
+            host.clone(),
+            stop.clone(),
+        ));
         until(&host, |u| u.last().is_some_and(|u| u.output_tokens == 100)).await;
-        std::fs::OpenOptions::new().append(true).open(&file).unwrap().write_all(line("b").as_bytes()).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(line("b").as_bytes())
+            .unwrap();
         until(&host, |u| u.last().is_some_and(|u| u.output_tokens == 200)).await;
         stop.cancel();
         task.await.unwrap();
         let n = host.0.lock().len();
-        std::fs::OpenOptions::new().append(true).open(&file).unwrap().write_all(line("c").as_bytes()).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap()
+            .write_all(line("c").as_bytes())
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(700)).await;
         assert_eq!(host.0.lock().len(), n, "nothing is reported after stop");
     }

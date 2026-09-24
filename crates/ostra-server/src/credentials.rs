@@ -26,18 +26,28 @@ pub fn load(registry: &RegistryDb, provider: &str) -> Result<SavedCredentials, S
     Ok(load_all(registry)?.remove(provider).unwrap_or_default())
 }
 
-pub fn save(registry: &RegistryDb, provider: &str, saved: &SavedCredentials) -> Result<(), StoreError> {
+pub fn save(
+    registry: &RegistryDb,
+    provider: &str,
+    saved: &SavedCredentials,
+) -> Result<(), StoreError> {
     let key = format!("{PREFIX}{provider}");
     if saved.is_empty() {
         registry.kv_delete(&key)?;
     } else {
-        registry.kv_set(&key, &serde_json::to_vec(saved).expect("credentials serialize"))?;
+        registry.kv_set(
+            &key,
+            &serde_json::to_vec(saved).expect("credentials serialize"),
+        )?;
     }
     Ok(())
 }
 
 fn issue(path: &str, message: impl Into<String>) -> ValidationIssue {
-    ValidationIssue { path: path.into(), message: message.into() }
+    ValidationIssue {
+        path: path.into(),
+        message: message.into(),
+    }
 }
 
 /// `None` keeps the field, an empty string clears it, and anything else replaces it.
@@ -49,7 +59,10 @@ fn merge(field: &mut Option<String>, edit: &Option<String>) {
 }
 
 /// Apply an edit on top of what is saved, and list every problem with the result.
-pub fn apply(mut saved: SavedCredentials, edit: &ProviderCredentialsEdit) -> Result<SavedCredentials, Vec<ValidationIssue>> {
+pub fn apply(
+    mut saved: SavedCredentials,
+    edit: &ProviderCredentialsEdit,
+) -> Result<SavedCredentials, Vec<ValidationIssue>> {
     merge(&mut saved.base_url, &edit.base_url);
     merge(&mut saved.api_key, &edit.api_key);
     merge(&mut saved.auth_token, &edit.auth_token);
@@ -60,12 +73,22 @@ pub fn apply(mut saved: SavedCredentials, edit: &ProviderCredentialsEdit) -> Res
             _ => issues.push(issue("base_url", "Enter the base URL as http:// or https:// followed by a host, for example https://api.anthropic.com.")),
         }
     }
-    for (path, value) in [("api_key", &saved.api_key), ("auth_token", &saved.auth_token)] {
-        if value.as_deref().is_some_and(|v| v.chars().any(|c| c.is_whitespace() || c.is_control())) {
+    for (path, value) in [
+        ("api_key", &saved.api_key),
+        ("auth_token", &saved.auth_token),
+    ] {
+        if value
+            .as_deref()
+            .is_some_and(|v| v.chars().any(|c| c.is_whitespace() || c.is_control()))
+        {
             issues.push(issue(path, "Paste the value without spaces or line breaks, because it is sent as an HTTP header."));
         }
     }
-    if issues.is_empty() { Ok(saved) } else { Err(issues) }
+    if issues.is_empty() {
+        Ok(saved)
+    } else {
+        Err(issues)
+    }
 }
 
 impl Shared {
@@ -83,8 +106,16 @@ mod tests {
 
     #[test]
     fn edits_merge_and_clear() {
-        let saved = SavedCredentials { base_url: Some("https://a.example".into()), api_key: Some("k".into()), auth_token: None };
-        let edit = ProviderCredentialsEdit { base_url: Some(" ".into()), auth_token: Some(" t ".into()), ..Default::default() };
+        let saved = SavedCredentials {
+            base_url: Some("https://a.example".into()),
+            api_key: Some("k".into()),
+            auth_token: None,
+        };
+        let edit = ProviderCredentialsEdit {
+            base_url: Some(" ".into()),
+            auth_token: Some(" t ".into()),
+            ..Default::default()
+        };
         let out = apply(saved, &edit).unwrap();
         assert_eq!(out.base_url, None);
         assert_eq!(out.api_key.as_deref(), Some("k"));
@@ -93,7 +124,11 @@ mod tests {
 
     #[test]
     fn bad_values_are_issues() {
-        let edit = ProviderCredentialsEdit { base_url: Some("api.example".into()), api_key: Some("a b".into()), ..Default::default() };
+        let edit = ProviderCredentialsEdit {
+            base_url: Some("api.example".into()),
+            api_key: Some("a b".into()),
+            ..Default::default()
+        };
         let issues = apply(SavedCredentials::default(), &edit).unwrap_err();
         let paths: Vec<_> = issues.iter().map(|i| i.path.as_str()).collect();
         assert_eq!(paths, ["base_url", "api_key"]);
@@ -102,7 +137,10 @@ mod tests {
     #[test]
     fn round_trips_through_the_registry() {
         let reg = RegistryDb::open_in_memory().unwrap();
-        let saved = SavedCredentials { api_key: Some("k".into()), ..Default::default() };
+        let saved = SavedCredentials {
+            api_key: Some("k".into()),
+            ..Default::default()
+        };
         save(&reg, "anthropic", &saved).unwrap();
         assert_eq!(load(&reg, "anthropic").unwrap(), saved);
         save(&reg, "anthropic", &SavedCredentials::default()).unwrap();

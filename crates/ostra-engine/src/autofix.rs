@@ -6,8 +6,16 @@ use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fix {
-    Replace { old: String, new: String, line: usize },
-    Add { text: String, line: usize, anchor: String },
+    Replace {
+        old: String,
+        new: String,
+        line: usize,
+    },
+    Add {
+        text: String,
+        line: usize,
+        anchor: String,
+    },
 }
 
 /// Backtick-delimited spans, in order. Double backticks delimit spans that contain a backtick.
@@ -39,7 +47,11 @@ fn spans(s: &str) -> Vec<(usize, usize, String)> {
 fn line_after(s: &str, marker: &str) -> Option<usize> {
     let idx = s.find(marker)?;
     let rest = &s[idx + marker.len()..];
-    let digits: String = rest.trim_start().chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = rest
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
     digits.parse().ok()
 }
 
@@ -53,12 +65,20 @@ pub fn parse_fix(fix: &str) -> Option<Fix> {
         }
         let tail = &text[sp[1].1..];
         let line = line_after(tail, "on line")?;
-        return Some(Fix::Replace { old: sp[0].2.clone(), new: sp[1].2.clone(), line });
+        return Some(Fix::Replace {
+            old: sp[0].2.clone(),
+            new: sp[1].2.clone(),
+            line,
+        });
     }
     if text.starts_with("Add") && sp.len() >= 2 {
         let between = &text[sp[0].1..sp[1].0];
         let line = line_after(between, "above line")?;
-        return Some(Fix::Add { text: sp[0].2.clone(), line, anchor: sp[1].2.clone() });
+        return Some(Fix::Add {
+            text: sp[0].2.clone(),
+            line,
+            anchor: sp[1].2.clone(),
+        });
     }
     None
 }
@@ -71,23 +91,40 @@ pub fn apply_fix(content: &str, fix: &Fix) -> Result<String, String> {
     let near = |line: usize, needle: &str, lines: &[String]| -> Option<usize> {
         let target = line.checked_sub(1)?;
         let order = [0i64, -1, 1, -2, 2];
-        order.iter().map(|d| target as i64 + d).filter(|i| *i >= 0 && (*i as usize) < lines.len()).map(|i| i as usize).find(|i| lines[*i].contains(needle))
+        order
+            .iter()
+            .map(|d| target as i64 + d)
+            .filter(|i| *i >= 0 && (*i as usize) < lines.len())
+            .map(|i| i as usize)
+            .find(|i| lines[*i].contains(needle))
     };
     match fix {
         Fix::Replace { old, new, line } => {
             if old.is_empty() {
                 return Err("the old text is empty".into());
             }
-            let idx = near(*line, old, &lines).ok_or_else(|| format!("`{old}` is not on or near line {line}"))?;
+            let idx = near(*line, old, &lines)
+                .ok_or_else(|| format!("`{old}` is not on or near line {line}"))?;
             if lines[idx].matches(old.as_str()).count() != 1 {
-                return Err(format!("`{old}` appears more than once on line {}", idx + 1));
+                return Err(format!(
+                    "`{old}` appears more than once on line {}",
+                    idx + 1
+                ));
             }
             lines[idx] = lines[idx].replacen(old.as_str(), new, 1);
         }
         Fix::Add { text, line, anchor } => {
-            let idx = near(*line, anchor.trim(), &lines).ok_or_else(|| format!("the anchor is not on or near line {line}"))?;
-            let indent: String = lines[idx].chars().take_while(|c| c.is_whitespace()).collect();
-            let added = if text.starts_with(char::is_whitespace) { text.clone() } else { format!("{indent}{text}") };
+            let idx = near(*line, anchor.trim(), &lines)
+                .ok_or_else(|| format!("the anchor is not on or near line {line}"))?;
+            let indent: String = lines[idx]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
+            let added = if text.starts_with(char::is_whitespace) {
+                text.clone()
+            } else {
+                format!("{indent}{text}")
+            };
             lines.insert(idx, added);
         }
     }
@@ -100,14 +137,21 @@ pub fn apply_fix(content: &str, fix: &Fix) -> Result<String, String> {
 
 /// Apply findings to files under `repo_root`. Returns (applied lines, failed (line, reason)).
 /// Findings in one file are applied bottom-up so line numbers stay valid.
-pub fn apply_findings(repo_root: &Path, findings: &[ReviewFinding]) -> (Vec<String>, Vec<(String, String)>) {
+pub fn apply_findings(
+    repo_root: &Path,
+    findings: &[ReviewFinding],
+) -> (Vec<String>, Vec<(String, String)>) {
     let mut applied = vec![];
     let mut failed = vec![];
-    let mut by_file: std::collections::BTreeMap<String, Vec<(&ReviewFinding, Fix)>> = Default::default();
+    let mut by_file: std::collections::BTreeMap<String, Vec<(&ReviewFinding, Fix)>> =
+        Default::default();
     for f in findings {
         match parse_fix(&f.fix) {
             Some(fix) => by_file.entry(f.file.clone()).or_default().push((f, fix)),
-            None => failed.push((f.line(), "the Fix text is not in an auto-fixable form".to_string())),
+            None => failed.push((
+                f.line(),
+                "the Fix text is not in an auto-fixable form".to_string(),
+            )),
         }
     }
     for (file, mut fixes) in by_file {
@@ -125,9 +169,11 @@ pub fn apply_findings(repo_root: &Path, findings: &[ReviewFinding]) -> (Vec<Stri
             }
             continue;
         };
-        fixes.sort_by_key(|(_, fix)| std::cmp::Reverse(match fix {
-            Fix::Replace { line, .. } | Fix::Add { line, .. } => *line,
-        }));
+        fixes.sort_by_key(|(_, fix)| {
+            std::cmp::Reverse(match fix {
+                Fix::Replace { line, .. } | Fix::Add { line, .. } => *line,
+            })
+        });
         let mut changed = false;
         for (f, fix) in fixes {
             match apply_fix(&content, &fix) {
@@ -153,25 +199,70 @@ mod tests {
     #[test]
     fn parses_both_forms() {
         assert_eq!(
-            parse_fix("Change `void process(UUID id) {` to `void process(final UUID id) {` on line 45."),
-            Some(Fix::Replace { old: "void process(UUID id) {".into(), new: "void process(final UUID id) {".into(), line: 45 })
+            parse_fix(
+                "Change `void process(UUID id) {` to `void process(final UUID id) {` on line 45."
+            ),
+            Some(Fix::Replace {
+                old: "void process(UUID id) {".into(),
+                new: "void process(final UUID id) {".into(),
+                line: 45
+            })
         );
         assert_eq!(
-            parse_fix("Fix: Add `// Publishes the event` above line 88: `this.publisher.publish(event);`."),
-            Some(Fix::Add { text: "// Publishes the event".into(), line: 88, anchor: "this.publisher.publish(event);".into() })
+            parse_fix(
+                "Fix: Add `// Publishes the event` above line 88: `this.publisher.publish(event);`."
+            ),
+            Some(Fix::Add {
+                text: "// Publishes the event".into(),
+                line: 88,
+                anchor: "this.publisher.publish(event);".into()
+            })
         );
         assert_eq!(parse_fix("Make the parameter immutable."), None);
-        assert_eq!(parse_fix("Change ``a `b` c`` to ``d`` on line 3."), Some(Fix::Replace { old: "a `b` c".into(), new: "d".into(), line: 3 }));
+        assert_eq!(
+            parse_fix("Change ``a `b` c`` to ``d`` on line 3."),
+            Some(Fix::Replace {
+                old: "a `b` c".into(),
+                new: "d".into(),
+                line: 3
+            })
+        );
     }
 
     #[test]
     fn applies_with_drift() {
         let src = "a\nb\n  let x = 1;\nd\n";
-        let out = apply_fix(src, &Fix::Replace { old: "let x".into(), new: "let y".into(), line: 2 }).unwrap();
+        let out = apply_fix(
+            src,
+            &Fix::Replace {
+                old: "let x".into(),
+                new: "let y".into(),
+                line: 2,
+            },
+        )
+        .unwrap();
         assert_eq!(out, "a\nb\n  let y = 1;\nd\n");
-        let out = apply_fix(src, &Fix::Add { text: "// note".into(), line: 3, anchor: "let x = 1;".into() }).unwrap();
+        let out = apply_fix(
+            src,
+            &Fix::Add {
+                text: "// note".into(),
+                line: 3,
+                anchor: "let x = 1;".into(),
+            },
+        )
+        .unwrap();
         assert_eq!(out, "a\nb\n  // note\n  let x = 1;\nd\n");
-        assert!(apply_fix(src, &Fix::Replace { old: "zzz".into(), new: "q".into(), line: 1 }).is_err());
+        assert!(
+            apply_fix(
+                src,
+                &Fix::Replace {
+                    old: "zzz".into(),
+                    new: "q".into(),
+                    line: 1
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -188,10 +279,17 @@ mod tests {
         };
         let (ok, bad) = apply_findings(
             dir.path(),
-            &[mk("Add `// top` above line 1: `one`."), mk("Change `three` to `3` on line 3."), mk("vague")],
+            &[
+                mk("Add `// top` above line 1: `one`."),
+                mk("Change `three` to `3` on line 3."),
+                mk("vague"),
+            ],
         );
         assert_eq!(ok.len(), 2);
         assert_eq!(bad.len(), 1);
-        assert_eq!(std::fs::read_to_string(dir.path().join("f.rs")).unwrap(), "// top\none\ntwo\n3\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.rs")).unwrap(),
+            "// top\none\ntwo\n3\n"
+        );
     }
 }

@@ -787,7 +787,13 @@ mod tests {
             .message
             .unwrap();
         assert_eq!(r["result"]["isError"], true);
-        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Document tool"), "{r}");
+        assert!(
+            r["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Document tool"),
+            "{r}"
+        );
         assert!(!exec.has_submit());
     }
 
@@ -817,8 +823,14 @@ mod tests {
     fn offline_shim_is_inert() {
         let r = offline_mcp(&json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})).unwrap();
         assert_eq!(r["result"]["tools"], json!([]));
-        let d = offline_mcp(&json!({"jsonrpc": "2.0", "id": 2, "method": "server/discover"})).unwrap();
-        assert!(!d["result"]["supportedVersions"].as_array().unwrap().contains(&json!("2026-07-28")));
+        let d =
+            offline_mcp(&json!({"jsonrpc": "2.0", "id": 2, "method": "server/discover"})).unwrap();
+        assert!(
+            !d["result"]["supportedVersions"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("2026-07-28"))
+        );
         assert!(
             offline_mcp(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
                 .is_none()

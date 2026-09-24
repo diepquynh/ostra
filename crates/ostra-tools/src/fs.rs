@@ -17,7 +17,10 @@ fn number_lines(lines: &[&str], first: usize) -> String {
     for (i, line) in lines.iter().enumerate() {
         let line = line.strip_suffix('\r').unwrap_or(line);
         let shown = if line.len() > MAX_LINE_CHARS {
-            format!("{}... [line truncated]", &line[..floor_boundary(line, MAX_LINE_CHARS)])
+            format!(
+                "{}... [line truncated]",
+                &line[..floor_boundary(line, MAX_LINE_CHARS)]
+            )
         } else {
             line.to_string()
         };
@@ -64,12 +67,22 @@ pub async fn read(env: &ToolEnv, input: &Value) -> ToolOutput {
     env.mark_read(&path);
     let text = String::from_utf8_lossy(&bytes);
     if text.is_empty() {
-        return ToolOutput::ok(format!("(The file {} exists and is empty.)", path.display()));
+        return ToolOutput::ok(format!(
+            "(The file {} exists and is empty.)",
+            path.display()
+        ));
     }
-    let lines: Vec<&str> = text.split_inclusive('\n').map(|l| l.strip_suffix('\n').unwrap_or(l)).collect();
+    let lines: Vec<&str> = text
+        .split_inclusive('\n')
+        .map(|l| l.strip_suffix('\n').unwrap_or(l))
+        .collect();
     let total = lines.len();
-    let offset = u64_arg(input, "offset").map(|o| o.max(1) as usize).unwrap_or(1);
-    let limit = u64_arg(input, "limit").map(|l| l.max(1) as usize).unwrap_or(DEFAULT_LINES);
+    let offset = u64_arg(input, "offset")
+        .map(|o| o.max(1) as usize)
+        .unwrap_or(1);
+    let limit = u64_arg(input, "limit")
+        .map(|l| l.max(1) as usize)
+        .unwrap_or(DEFAULT_LINES);
     if offset > total {
         return ToolOutput::ok(format!(
             "(The file has {total} lines; offset {offset} is past the end.)"
@@ -119,7 +132,10 @@ pub async fn write(env: &ToolEnv, input: &Value) -> ToolOutput {
         Some(_) => format!("The file {shown} has been updated."),
         None => format!("File created successfully at: {shown}"),
     };
-    ToolOutput { diff, ..ToolOutput::ok(text) }
+    ToolOutput {
+        diff,
+        ..ToolOutput::ok(text)
+    }
 }
 
 pub(crate) async fn write_file(path: &Path, content: &str) -> Result<(), String> {
@@ -128,7 +144,9 @@ pub(crate) async fn write_file(path: &Path, content: &str) -> Result<(), String>
             .await
             .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
     }
-    tokio::fs::write(path, content).await.map_err(|e| format!("Cannot write {}: {e}", path.display()))
+    tokio::fs::write(path, content)
+        .await
+        .map_err(|e| format!("Cannot write {}: {e}", path.display()))
 }
 
 fn snippet(content: &str, byte_pos: usize, inserted_lines: usize) -> String {
@@ -155,7 +173,9 @@ pub async fn edit(env: &ToolEnv, input: &Value) -> ToolOutput {
     let replace_all = bool_arg(input, "replace_all").unwrap_or(false);
     let path = env.resolve(raw);
     if old_string == new_string {
-        return ToolOutput::err("old_string and new_string are identical, so there is nothing to change.");
+        return ToolOutput::err(
+            "old_string and new_string are identical, so there is nothing to change.",
+        );
     }
     if !path.exists() {
         if old_string.is_empty() {
@@ -182,7 +202,9 @@ pub async fn edit(env: &ToolEnv, input: &Value) -> ToolOutput {
         Err(e) => return ToolOutput::err(format!("Cannot read {}: {e}", path.display())),
     };
     if old_string.is_empty() {
-        return ToolOutput::err("old_string is empty but the file already exists. Name the exact text to replace.");
+        return ToolOutput::err(
+            "old_string is empty but the file already exists. Name the exact text to replace.",
+        );
     }
     let count = content.matches(old_string).count();
     if count == 0 {
@@ -215,7 +237,10 @@ pub async fn edit(env: &ToolEnv, input: &Value) -> ToolOutput {
             snippet(&updated, first, new_string.matches('\n').count() + 1)
         )
     };
-    ToolOutput { diff: unified_diff(&shown, &content, &updated), ..ToolOutput::ok(text) }
+    ToolOutput {
+        diff: unified_diff(&shown, &content, &updated),
+        ..ToolOutput::ok(text)
+    }
 }
 
 #[cfg(test)]
@@ -232,7 +257,12 @@ mod tests {
         let out = run(&env, "Read", json!({"file_path": f})).await;
         assert!(!out.is_error);
         assert_eq!(out.text, "     1\tone\n     2\ttwo\n     3\tthree\n");
-        let out = run(&env, "Read", json!({"file_path": "a.txt", "offset": 2, "limit": 1})).await;
+        let out = run(
+            &env,
+            "Read",
+            json!({"file_path": "a.txt", "offset": 2, "limit": 1}),
+        )
+        .await;
         assert!(out.text.starts_with("     2\ttwo\n"));
         assert!(out.text.contains("Showing lines 2 to 2 of 3"));
         let out = run(&env, "Read", json!({"file_path": "missing.txt"})).await;
@@ -262,16 +292,31 @@ mod tests {
     async fn write_requires_prior_read_of_existing_file() {
         let d = tempfile::tempdir().unwrap();
         let env = env_in(d.path());
-        let out = run(&env, "Write", json!({"file_path": "new/dir/f.txt", "content": "hi\n"})).await;
+        let out = run(
+            &env,
+            "Write",
+            json!({"file_path": "new/dir/f.txt", "content": "hi\n"}),
+        )
+        .await;
         assert!(!out.is_error, "{}", out.text);
         assert!(out.text.contains("created"));
         assert!(out.diff.is_some());
         let existing = env.config().repo_root.join("e.txt");
         std::fs::write(&existing, "old").unwrap();
-        let out = run(&env, "Write", json!({"file_path": "e.txt", "content": "new"})).await;
+        let out = run(
+            &env,
+            "Write",
+            json!({"file_path": "e.txt", "content": "new"}),
+        )
+        .await;
         assert!(out.is_error);
         run(&env, "Read", json!({"file_path": "e.txt"})).await;
-        let out = run(&env, "Write", json!({"file_path": "e.txt", "content": "new"})).await;
+        let out = run(
+            &env,
+            "Write",
+            json!({"file_path": "e.txt", "content": "new"}),
+        )
+        .await;
         assert!(!out.is_error);
         assert_eq!(std::fs::read_to_string(existing).unwrap(), "new");
     }
@@ -298,14 +343,22 @@ mod tests {
         assert!(out.diff.as_deref().unwrap().contains("+let c = 3;"));
         let out = run(&env, "Edit", edit("= 1", "= 9", true)).await;
         assert!(!out.is_error);
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "let a = 9;\nlet b = 9;\nlet c = 3;\n");
+        assert_eq!(
+            std::fs::read_to_string(&f).unwrap(),
+            "let a = 9;\nlet b = 9;\nlet c = 3;\n"
+        );
     }
 
     #[tokio::test]
     async fn edit_with_empty_old_string_creates_new_file() {
         let d = tempfile::tempdir().unwrap();
         let env = env_in(d.path());
-        let out = run(&env, "Edit", json!({"file_path": "n.txt", "old_string": "", "new_string": "x"})).await;
+        let out = run(
+            &env,
+            "Edit",
+            json!({"file_path": "n.txt", "old_string": "", "new_string": "x"}),
+        )
+        .await;
         assert!(!out.is_error);
         assert!(env.config().repo_root.join("n.txt").exists());
     }

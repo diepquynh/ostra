@@ -23,12 +23,21 @@ pub struct Touch {
 /// Target paths of a canonical write tool call, as the model wrote them.
 pub fn write_targets(call: &ToolCall) -> Vec<PathBuf> {
     match call.tool.as_str() {
-        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => {
-            ["file_path", "notebook_path", "path"].iter().find_map(|k| call.str_field(k)).map(PathBuf::from).into_iter().collect()
-        }
+        "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => ["file_path", "notebook_path", "path"]
+            .iter()
+            .find_map(|k| call.str_field(k))
+            .map(PathBuf::from)
+            .into_iter()
+            .collect(),
         "ApplyPatch" => {
-            let patch = call.str_field("patch").or_else(|| call.str_field("input")).unwrap_or_default();
-            ostra_policy::apply_patch_paths(patch).into_iter().map(PathBuf::from).collect()
+            let patch = call
+                .str_field("patch")
+                .or_else(|| call.str_field("input"))
+                .unwrap_or_default();
+            ostra_policy::apply_patch_paths(patch)
+                .into_iter()
+                .map(PathBuf::from)
+                .collect()
         }
         _ => vec![],
     }
@@ -62,17 +71,32 @@ impl ToolWatch {
                         if pending.len() >= MAX_PENDING {
                             pending.clear();
                         }
-                        pending.insert((execution.clone(), call_id.clone()), (targets, call_cwd(call)));
+                        pending.insert(
+                            (execution.clone(), call_id.clone()),
+                            (targets, call_cwd(call)),
+                        );
                     }
                     None
                 }
-                ExecutionDelta::ToolResult { call_id, is_error, .. } => {
-                    let (paths, base) = self.pending.lock().remove(&(execution.clone(), call_id.clone()))?;
-                    (!is_error).then(|| Touch { workspace: Some(workspace.clone()), execution: execution.clone(), paths, base })
+                ExecutionDelta::ToolResult {
+                    call_id, is_error, ..
+                } => {
+                    let (paths, base) = self
+                        .pending
+                        .lock()
+                        .remove(&(execution.clone(), call_id.clone()))?;
+                    (!is_error).then(|| Touch {
+                        workspace: Some(workspace.clone()),
+                        execution: execution.clone(),
+                        paths,
+                        base,
+                    })
                 }
                 _ => None,
             },
-            EngineNotice::ExecutionStatus { execution, status } if *status != ExecutionStatus::Running => {
+            EngineNotice::ExecutionStatus { execution, status }
+                if *status != ExecutionStatus::Running =>
+            {
                 self.pending.lock().retain(|(e, _), _| e != execution);
                 None
             }
@@ -88,7 +112,14 @@ mod tests {
     use serde_json::json;
 
     fn delta(execution: &ExecutionId, delta: ExecutionDelta) -> EngineNotice {
-        EngineNotice::Delta { execution: execution.clone(), item: ActivityItem { seq: 1, at: chrono::Utc::now(), delta } }
+        EngineNotice::Delta {
+            execution: execution.clone(),
+            item: ActivityItem {
+                seq: 1,
+                at: chrono::Utc::now(),
+                delta,
+            },
+        }
     }
 
     #[test]
@@ -96,33 +127,88 @@ mod tests {
         let w = ToolWatch::default();
         let ws = WorkspaceId::from("ws_1");
         let x = ExecutionId::from("x_1");
-        let call = |id: &str, tool: &str, input: serde_json::Value| delta(&x, ExecutionDelta::ToolCall { call_id: id.into(), call: ToolCall::new(tool, input) });
-        let result = |id: &str, is_error: bool| delta(&x, ExecutionDelta::ToolResult { call_id: id.into(), output: String::new(), is_error, duration_ms: 1 });
+        let call = |id: &str, tool: &str, input: serde_json::Value| {
+            delta(
+                &x,
+                ExecutionDelta::ToolCall {
+                    call_id: id.into(),
+                    call: ToolCall::new(tool, input),
+                },
+            )
+        };
+        let result = |id: &str, is_error: bool| {
+            delta(
+                &x,
+                ExecutionDelta::ToolResult {
+                    call_id: id.into(),
+                    output: String::new(),
+                    is_error,
+                    duration_ms: 1,
+                },
+            )
+        };
 
-        assert_eq!(w.observe(&ws, &call("1", "Write", json!({"file_path": "src/a.rs", "content": ""}))), None);
+        assert_eq!(
+            w.observe(
+                &ws,
+                &call(
+                    "1",
+                    "Write",
+                    json!({"file_path": "src/a.rs", "content": ""})
+                )
+            ),
+            None
+        );
         let t = w.observe(&ws, &result("1", false)).unwrap();
         assert_eq!(t.paths, vec![PathBuf::from("src/a.rs")]);
         assert_eq!(t.workspace, Some(ws.clone()));
-        assert_eq!(w.observe(&ws, &result("1", false)), None, "a result pairs once");
+        assert_eq!(
+            w.observe(&ws, &result("1", false)),
+            None,
+            "a result pairs once"
+        );
 
         w.observe(&ws, &call("2", "Edit", json!({"file_path": "/p/b.rs"})));
-        assert_eq!(w.observe(&ws, &result("2", true)), None, "a failed edit changed nothing");
+        assert_eq!(
+            w.observe(&ws, &result("2", true)),
+            None,
+            "a failed edit changed nothing"
+        );
 
         w.observe(&ws, &call("3", "Read", json!({"file_path": "/p/b.rs"})));
         assert_eq!(w.observe(&ws, &result("3", false)), None);
 
         w.observe(&ws, &call("4", "ApplyPatch", json!({"patch": "*** Begin Patch\n*** Add File: n.rs\n+x\n*** End Patch", "cwd": "/p"})));
         let t = w.observe(&ws, &result("4", false)).unwrap();
-        assert_eq!((t.paths, t.base), (vec![PathBuf::from("n.rs")], Some(PathBuf::from("/p"))));
+        assert_eq!(
+            (t.paths, t.base),
+            (vec![PathBuf::from("n.rs")], Some(PathBuf::from("/p")))
+        );
 
         w.observe(&ws, &call("5", "Write", json!({"file_path": "c.rs"})));
-        w.observe(&ws, &EngineNotice::ExecutionStatus { execution: x.clone(), status: ExecutionStatus::Ok });
-        assert_eq!(w.observe(&ws, &result("5", false)), None, "an ended execution drops its pending calls");
+        w.observe(
+            &ws,
+            &EngineNotice::ExecutionStatus {
+                execution: x.clone(),
+                status: ExecutionStatus::Ok,
+            },
+        );
+        assert_eq!(
+            w.observe(&ws, &result("5", false)),
+            None,
+            "an ended execution drops its pending calls"
+        );
     }
 
     #[test]
     fn notebook_targets() {
-        assert_eq!(write_targets(&ToolCall::new("NotebookEdit", json!({"notebook_path": "/r/n.ipynb"}))), vec![PathBuf::from("/r/n.ipynb")]);
+        assert_eq!(
+            write_targets(&ToolCall::new(
+                "NotebookEdit",
+                json!({"notebook_path": "/r/n.ipynb"})
+            )),
+            vec![PathBuf::from("/r/n.ipynb")]
+        );
         assert!(write_targets(&ToolCall::new("Bash", json!({"command": "touch x"}))).is_empty());
     }
 }

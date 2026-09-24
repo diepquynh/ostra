@@ -137,7 +137,10 @@ pub const TITLE_CHARS: usize = 60;
 /// [`TITLE_CHARS`]. `None` when nothing is left.
 pub fn clean_title(raw: &str) -> Option<String> {
     let line = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    let line = line.trim_matches(|c: char| matches!(c, '"' | '\'' | '`')).trim_end_matches('.').trim();
+    let line = line
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`'))
+        .trim_end_matches('.')
+        .trim();
     let cut: String = line.chars().take(TITLE_CHARS).collect();
     let cut = cut.trim();
     (!cut.is_empty()).then(|| cut.to_string())
@@ -145,7 +148,11 @@ pub fn clean_title(raw: &str) -> Option<String> {
 
 /// Extract the `reason` every judge output carries.
 pub fn reason_of(output: &Value) -> String {
-    output.get("reason").and_then(|r| r.as_str()).unwrap_or_default().to_string()
+    output
+        .get("reason")
+        .and_then(|r| r.as_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 pub fn prompt_name(kind: JudgeKind) -> &'static str {
@@ -166,7 +173,8 @@ fn explore_task_schema() -> Value {
 /// Output schema for each judge's forced `decide` call. `answer_schema` is the gate-specific answer
 /// shape for the YOLO judge.
 pub fn output_schema(kind: JudgeKind, answer_schema: Option<Value>) -> Value {
-    let reason = json!({"type": "string", "description": "One or two sentences the user will read."});
+    let reason =
+        json!({"type": "string", "description": "One or two sentences the user will read."});
     match kind {
         JudgeKind::Classify => json!({
             "type": "object",
@@ -255,13 +263,24 @@ mod tests {
         assert!(c.opts_in.tests);
         assert_eq!(c.title, "");
         let v = json!({"category":"RESEARCH","projects":[],"opts_in":{"tests":false,"docs":false},"reason":"r","title":"Order cancellation flow"});
-        assert_eq!(serde_json::from_value::<ClassifyOut>(v).unwrap().title, "Order cancellation flow");
-        assert!(output_schema(JudgeKind::Classify, None)["required"].as_array().unwrap().contains(&json!("title")));
+        assert_eq!(
+            serde_json::from_value::<ClassifyOut>(v).unwrap().title,
+            "Order cancellation flow"
+        );
+        assert!(
+            output_schema(JudgeKind::Classify, None)["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("title"))
+        );
     }
 
     #[test]
     fn titles_are_cleaned() {
-        assert_eq!(clean_title("  \"Order   cancellation flow.\" ").as_deref(), Some("Order cancellation flow"));
+        assert_eq!(
+            clean_title("  \"Order   cancellation flow.\" ").as_deref(),
+            Some("Order cancellation flow")
+        );
         assert_eq!(clean_title(" \n "), None);
         let long = clean_title(&"word ".repeat(40)).unwrap();
         assert!(long.chars().count() <= TITLE_CHARS);

@@ -3,8 +3,8 @@
 
 use crate::retry::{self, RetryPolicy, error_from_response, network_error};
 use crate::{
-    ApiKey, Block, ChatRequest, ChatResponse, EventSink, Message, Provider, ProviderError, Role, ServerTools,
-    StopReason, StreamEvent, ToolChoice, pricing, sse,
+    ApiKey, Block, ChatRequest, ChatResponse, EventSink, Message, Provider, ProviderError, Role,
+    ServerTools, StopReason, StreamEvent, ToolChoice, pricing, sse,
 };
 use futures::StreamExt;
 use ostra_core::exec::Usage;
@@ -24,7 +24,9 @@ pub struct OpenAi {
 
 impl std::fmt::Debug for OpenAi {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OpenAi").field("base_url", &self.base_url).finish_non_exhaustive()
+        f.debug_struct("OpenAi")
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
     }
 }
 
@@ -32,7 +34,10 @@ impl OpenAi {
     pub fn new(key: ApiKey, base_url: Option<String>) -> Self {
         OpenAi {
             key,
-            base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.into()).trim_end_matches('/').to_string(),
+            base_url: base_url
+                .unwrap_or_else(|| DEFAULT_BASE_URL.into())
+                .trim_end_matches('/')
+                .to_string(),
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(20))
                 .build()
@@ -71,7 +76,14 @@ fn input_items(messages: &[Message]) -> Vec<Value> {
                     "name": name,
                     "arguments": input.to_string(),
                 })),
-                (_, Block::ToolResult { tool_use_id, content, is_error }) => {
+                (
+                    _,
+                    Block::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    },
+                ) => {
                     let output = if *is_error && !content.starts_with("Error") {
                         format!("Error: {content}")
                     } else {
@@ -79,7 +91,9 @@ fn input_items(messages: &[Message]) -> Vec<Value> {
                     };
                     items.push(json!({"type": "function_call_output", "call_id": tool_use_id, "output": output}));
                 }
-                (_, Block::Opaque { provider, value }) if provider == "openai" && value["type"] == "reasoning" => {
+                (_, Block::Opaque { provider, value })
+                    if provider == "openai" && value["type"] == "reasoning" =>
+                {
                     let mut item = json!({
                         "type": "reasoning",
                         "id": value["id"],
@@ -105,7 +119,12 @@ pub(crate) fn request_body(req: &ChatRequest) -> Value {
         "stream": true,
         "store": false,
     });
-    let instructions: Vec<&str> = req.system.iter().map(|s| s.text.as_str()).filter(|t| !t.is_empty()).collect();
+    let instructions: Vec<&str> = req
+        .system
+        .iter()
+        .map(|s| s.text.as_str())
+        .filter(|t| !t.is_empty())
+        .collect();
     if !instructions.is_empty() {
         body["instructions"] = json!(instructions.join("\n\n"));
     }
@@ -162,12 +181,25 @@ fn read_usage(u: &Value) -> Usage {
 
 fn message_text(item: &Value, refusal: &mut bool) -> String {
     let mut out = String::new();
-    for part in item.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+    for part in item
+        .get("content")
+        .and_then(|c| c.as_array())
+        .into_iter()
+        .flatten()
+    {
         match part.get("type").and_then(|t| t.as_str()) {
-            Some("output_text") => out.push_str(part.get("text").and_then(|t| t.as_str()).unwrap_or_default()),
+            Some("output_text") => out.push_str(
+                part.get("text")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_default(),
+            ),
             Some("refusal") => {
                 *refusal = true;
-                out.push_str(part.get("refusal").and_then(|t| t.as_str()).unwrap_or_default());
+                out.push_str(
+                    part.get("refusal")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default(),
+                );
             }
             _ => {}
         }
@@ -176,8 +208,18 @@ fn message_text(item: &Value, refusal: &mut bool) -> String {
 }
 
 impl Accumulator {
-    fn apply(&mut self, ev: &Value, on_event: EventSink<'_>, started: &AtomicBool) -> Result<(), ProviderError> {
-        let s = |k: &str| ev.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    fn apply(
+        &mut self,
+        ev: &Value,
+        on_event: EventSink<'_>,
+        started: &AtomicBool,
+    ) -> Result<(), ProviderError> {
+        let s = |k: &str| {
+            ev.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
         let output_index = ev.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
         match ev.get("type").and_then(|t| t.as_str()).unwrap_or("") {
             "response.created" | "response.in_progress" => {
@@ -207,19 +249,25 @@ impl Accumulator {
             "response.function_call_arguments.delta" => {
                 let item_id = s("item_id");
                 let id = self.call_ids.get(&item_id).cloned().unwrap_or(item_id);
-                on_event(StreamEvent::ToolInputDelta { id, partial_json: s("delta") });
+                on_event(StreamEvent::ToolInputDelta {
+                    id,
+                    partial_json: s("delta"),
+                });
             }
             "response.output_item.done" => {
                 let item = &ev["item"];
                 let block = match item["type"].as_str().unwrap_or("") {
-                    "message" => Some(Block::Text { text: message_text(item, &mut self.refusal) }),
+                    "message" => Some(Block::Text {
+                        text: message_text(item, &mut self.refusal),
+                    }),
                     "function_call" => {
                         let args = item["arguments"].as_str().unwrap_or("{}");
                         let input = if args.trim().is_empty() {
                             json!({})
                         } else {
-                            serde_json::from_str(args)
-                                .unwrap_or_else(|_| json!({ crate::anthropic::INVALID_INPUT_KEY: args }))
+                            serde_json::from_str(args).unwrap_or_else(
+                                |_| json!({ crate::anthropic::INVALID_INPUT_KEY: args }),
+                            )
                         };
                         Some(Block::ToolUse {
                             id: item["call_id"].as_str().unwrap_or_default().to_string(),
@@ -243,7 +291,10 @@ impl Accumulator {
                             .and_then(|v| v.as_str())
                             .unwrap_or_default()
                             .to_string();
-                        on_event(StreamEvent::ServerToolUsed { name: "web_search".into(), summary });
+                        on_event(StreamEvent::ServerToolUsed {
+                            name: "web_search".into(),
+                            summary,
+                        });
                         None
                     }
                     _ => None,
@@ -261,7 +312,10 @@ impl Accumulator {
                     self.usage = read_usage(u);
                 }
                 self.stop = Some(if ev["type"] == "response.incomplete" {
-                    match resp.pointer("/incomplete_details/reason").and_then(|v| v.as_str()) {
+                    match resp
+                        .pointer("/incomplete_details/reason")
+                        .and_then(|v| v.as_str())
+                    {
                         Some("max_output_tokens") => StopReason::MaxTokens,
                         Some("content_filter") => StopReason::Refusal,
                         Some(other) => StopReason::Other(other.to_string()),
@@ -269,7 +323,11 @@ impl Accumulator {
                     }
                 } else if self.refusal {
                     StopReason::Refusal
-                } else if self.items.values().any(|b| matches!(b, Block::ToolUse { .. })) {
+                } else if self
+                    .items
+                    .values()
+                    .any(|b| matches!(b, Block::ToolUse { .. }))
+                {
                     StopReason::ToolUse
                 } else {
                     StopReason::EndTurn
@@ -281,17 +339,31 @@ impl Accumulator {
                     .and_then(|v| v.as_str())
                     .unwrap_or("the response failed")
                     .to_string();
-                self.failure = Some(ProviderError::Server { status: 500, message, retry_after: None });
+                self.failure = Some(ProviderError::Server {
+                    status: 500,
+                    message,
+                    retry_after: None,
+                });
             }
             "error" => {
                 let message = s("message");
                 let code = s("code");
                 return Err(match code.as_str() {
-                    "rate_limit_exceeded" => ProviderError::RateLimited { message, retry_after: None },
+                    "rate_limit_exceeded" => ProviderError::RateLimited {
+                        message,
+                        retry_after: None,
+                    },
                     "server_error" | "server_is_overloaded" | "slow_down" => {
-                        ProviderError::Server { status: 500, message, retry_after: None }
+                        ProviderError::Server {
+                            status: 500,
+                            message,
+                            retry_after: None,
+                        }
                     }
-                    _ => ProviderError::InvalidRequest { status: 400, message: format!("{code}: {message}") },
+                    _ => ProviderError::InvalidRequest {
+                        status: 400,
+                        message: format!("{code}: {message}"),
+                    },
                 });
             }
             _ => {}
@@ -300,7 +372,11 @@ impl Accumulator {
     }
 
     fn finish(self, requested_model: &str) -> ChatResponse {
-        let model = if self.model.is_empty() { requested_model.to_string() } else { self.model };
+        let model = if self.model.is_empty() {
+            requested_model.to_string()
+        } else {
+            self.model
+        };
         let mut usage = self.usage;
         usage.cost_usd = pricing::cost(&model, &usage, self.web_searches);
         ChatResponse {
@@ -320,7 +396,10 @@ impl Provider for OpenAi {
     }
 
     fn server_tools(&self, _model: &str) -> ServerTools {
-        ServerTools { web_search: true, web_fetch: false }
+        ServerTools {
+            web_search: true,
+            web_fetch: false,
+        }
     }
 
     async fn chat(
@@ -357,7 +436,9 @@ impl Provider for OpenAi {
                 }
             }
             if acc.stop.is_none() {
-                return Err(ProviderError::Network("stream ended before response.completed".into()));
+                return Err(ProviderError::Network(
+                    "stream ended before response.completed".into(),
+                ));
             }
             Ok(acc.finish(&req.model))
         })
@@ -376,8 +457,16 @@ mod tests {
         let mut r = ChatRequest::new("gpt-5.6-terra");
         r.system = vec![SystemBlock::new("one"), SystemBlock::cached("two")];
         r.effort = Effort::Xhigh;
-        r.server_tools = ServerTools { web_search: true, web_fetch: true };
-        r.tools = vec![ToolDef { name: "Read".into(), description: "d".into(), input_schema: json!({"type":"object"}), cache: true }];
+        r.server_tools = ServerTools {
+            web_search: true,
+            web_fetch: true,
+        };
+        r.tools = vec![ToolDef {
+            name: "Read".into(),
+            description: "d".into(),
+            input_schema: json!({"type":"object"}),
+            cache: true,
+        }];
         r.tool_choice = ToolChoice::Tool("Read".into());
         r.messages = vec![
             Message::user_text("q"),
@@ -386,23 +475,39 @@ mod tests {
                     provider: "openai".into(),
                     value: json!({"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc", "status": "completed"}),
                 },
-                Block::Thinking { text: "x".into(), signature: "y".into() },
+                Block::Thinking {
+                    text: "x".into(),
+                    signature: "y".into(),
+                },
                 Block::text("calling"),
-                Block::ToolUse { id: "call_1".into(), name: "Read".into(), input: json!({"file_path": "/a"}) },
+                Block::ToolUse {
+                    id: "call_1".into(),
+                    name: "Read".into(),
+                    input: json!({"file_path": "/a"}),
+                },
             ]),
             Message::tool_results(vec![Block::tool_result("call_1", "nope", true)]),
         ];
         let b = request_body(&r);
         assert_eq!(b["instructions"], "one\n\ntwo");
-        assert_eq!(b["reasoning"], json!({"effort": "xhigh", "summary": "auto"}));
+        assert_eq!(
+            b["reasoning"],
+            json!({"effort": "xhigh", "summary": "auto"})
+        );
         assert_eq!(b["include"][0], "reasoning.encrypted_content");
         assert_eq!(b["store"], false);
         assert_eq!(b["tools"][1], json!({"type": "web_search"}));
         assert_eq!(b["tools"].as_array().unwrap().len(), 2);
-        assert_eq!(b["tool_choice"], json!({"type": "function", "name": "Read"}));
+        assert_eq!(
+            b["tool_choice"],
+            json!({"type": "function", "name": "Read"})
+        );
         let input = b["input"].as_array().unwrap();
         assert_eq!(input.len(), 5);
-        assert_eq!(input[1], json!({"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc"}));
+        assert_eq!(
+            input[1],
+            json!({"type": "reasoning", "id": "rs_1", "summary": [], "encrypted_content": "enc"})
+        );
         assert_eq!(input[3]["arguments"], "{\"file_path\":\"/a\"}");
         assert_eq!(input[4]["output"], "Error: nope");
     }

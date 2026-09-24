@@ -30,7 +30,12 @@ pub fn truncate_middle(s: &str, max: usize) -> String {
     let half = max / 2;
     let head = floor_boundary(s, half);
     let tail = ceil_boundary(s, s.len() - half);
-    format!("{}\n\n... [{} characters truncated] ...\n\n{}", &s[..head], s.len() - head - (s.len() - tail), &s[tail..])
+    format!(
+        "{}\n\n... [{} characters truncated] ...\n\n{}",
+        &s[..head],
+        s.len() - head - (s.len() - tail),
+        &s[tail..]
+    )
 }
 
 /// Keep the first `max` bytes, with a note.
@@ -39,7 +44,11 @@ pub fn truncate_end(s: &str, max: usize) -> String {
         return s.to_string();
     }
     let cut = floor_boundary(s, max);
-    format!("{}\n\n... [truncated: {} more characters]", &s[..cut], s.len() - cut)
+    format!(
+        "{}\n\n... [truncated: {} more characters]",
+        &s[..cut],
+        s.len() - cut
+    )
 }
 
 /// Unified diff for the Activity view, capped at 50000 bytes.

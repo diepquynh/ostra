@@ -45,7 +45,11 @@ pub fn nearest_dir(path: &Path) -> PathBuf {
 
 /// Filter names case-insensitively: names starting with `prefix` first, then names containing it,
 /// each group sorted. Returns at most `limit` names and whether more matched.
-pub fn filter_names<'a>(names: impl Iterator<Item = &'a str>, prefix: &str, limit: usize) -> (Vec<String>, bool) {
+pub fn filter_names<'a>(
+    names: impl Iterator<Item = &'a str>,
+    prefix: &str,
+    limit: usize,
+) -> (Vec<String>, bool) {
     let needle = prefix.to_lowercase();
     let mut starts = vec![];
     let mut contains = vec![];
@@ -60,7 +64,12 @@ pub fn filter_names<'a>(names: impl Iterator<Item = &'a str>, prefix: &str, limi
     starts.sort();
     contains.sort();
     let total = starts.len() + contains.len();
-    let out: Vec<String> = starts.into_iter().chain(contains).take(limit).map(|(_, n)| n.to_string()).collect();
+    let out: Vec<String> = starts
+        .into_iter()
+        .chain(contains)
+        .take(limit)
+        .map(|(_, n)| n.to_string())
+        .collect();
     (out, total > limit)
 }
 
@@ -96,16 +105,28 @@ impl BrowseCache {
             }
         }
         let names = Arc::new(names);
-        self.dirs.lock().insert(dir.to_path_buf(), (now, names.clone()));
+        self.dirs
+            .lock()
+            .insert(dir.to_path_buf(), (now, names.clone()));
         Some(names)
     }
 
-    pub fn browse(&self, raw: Option<&str>, prefix: Option<&str>, limit: Option<usize>, home: &Path) -> FsBrowse {
+    pub fn browse(
+        &self,
+        raw: Option<&str>,
+        prefix: Option<&str>,
+        limit: Option<usize>,
+        home: &Path,
+    ) -> FsBrowse {
         let expanded = expand(raw.unwrap_or(""), home);
         let prefix = prefix.unwrap_or("").trim();
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
         let exists = expanded.exists();
-        let path = if exists { std::fs::canonicalize(&expanded).unwrap_or(expanded) } else { expanded };
+        let path = if exists {
+            std::fs::canonicalize(&expanded).unwrap_or(expanded)
+        } else {
+            expanded
+        };
         let listed = path.is_dir().then(|| self.folders(&path)).flatten();
         let readable = listed.is_some();
         let nearest = if readable {
@@ -118,13 +139,21 @@ impl BrowseCache {
             Some(names) => {
                 // Dot folders appear only when the typed prefix asks for them.
                 let show_hidden = prefix.starts_with('.');
-                let visible = names.iter().map(String::as_str).filter(|n| show_hidden || !n.starts_with('.'));
+                let visible = names
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|n| show_hidden || !n.starts_with('.'));
                 let (names, truncated) = filter_names(visible, prefix, limit);
                 let entries = names
                     .into_iter()
                     .map(|name| {
                         let p = path.join(&name);
-                        FsEntry { is_git: p.join(".git").exists(), is_ostra_project: paths::project_inventory(&p).exists(), name, is_dir: true }
+                        FsEntry {
+                            is_git: p.join(".git").exists(),
+                            is_ostra_project: paths::project_inventory(&p).exists(),
+                            name,
+                            is_dir: true,
+                        }
                     })
                     .collect();
                 (entries, truncated)
@@ -164,9 +193,20 @@ mod tests {
 
     #[test]
     fn prefix_ordering_starts_with_then_contains() {
-        let names = ["Shop-admin", "billing-service", "shop", "workshop", "dotfiles", "shop-web", "eshop"];
+        let names = [
+            "Shop-admin",
+            "billing-service",
+            "shop",
+            "workshop",
+            "dotfiles",
+            "shop-web",
+            "eshop",
+        ];
         let (out, truncated) = filter_names(names.iter().copied(), "SHOP", 10);
-        assert_eq!(out, vec!["shop", "Shop-admin", "shop-web", "eshop", "workshop"]);
+        assert_eq!(
+            out,
+            vec!["shop", "Shop-admin", "shop-web", "eshop", "workshop"]
+        );
         assert!(!truncated);
         let (out, truncated) = filter_names(names.iter().copied(), "shop", 2);
         assert_eq!(out, vec!["shop", "Shop-admin"]);
@@ -196,17 +236,34 @@ mod tests {
         let b = cache.browse(Some("~/code"), None, None, &base);
         assert!(b.exists && b.readable);
         assert_eq!(b.nearest, base.join("code"));
-        let names: Vec<(&str, bool, bool)> = b.entries.iter().map(|e| (e.name.as_str(), e.is_git, e.is_ostra_project)).collect();
-        assert_eq!(names, vec![("shop", true, false), ("web", false, true)], "folders only, no dot folders");
+        let names: Vec<(&str, bool, bool)> = b
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.is_git, e.is_ostra_project))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("shop", true, false), ("web", false, true)],
+            "folders only, no dot folders"
+        );
 
         assert!(!b.is_git && !b.is_ostra_project);
         let shop = cache.browse(Some("~/code/shop"), None, None, &base);
-        assert!(shop.is_git && !shop.is_ostra_project, "the browsed folder itself is described");
+        assert!(
+            shop.is_git && !shop.is_ostra_project,
+            "the browsed folder itself is described"
+        );
         let web = cache.browse(Some("~/code/web"), None, None, &base);
         assert!(!web.is_git && web.is_ostra_project);
 
         let b = cache.browse(Some("~/code"), Some(".h"), None, &base);
-        assert_eq!(b.entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec![".hidden"]);
+        assert_eq!(
+            b.entries
+                .iter()
+                .map(|e| e.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![".hidden"]
+        );
 
         let b = cache.browse(Some("~/code/file.txt"), None, None, &base);
         assert!(b.exists && !b.readable);

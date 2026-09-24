@@ -14,14 +14,22 @@ pub struct RetryPolicy {
 
 impl Default for RetryPolicy {
     fn default() -> Self {
-        RetryPolicy { max_retries: 4, base_delay: Duration::from_millis(1000), max_delay: Duration::from_secs(60) }
+        RetryPolicy {
+            max_retries: 4,
+            base_delay: Duration::from_millis(1000),
+            max_delay: Duration::from_secs(60),
+        }
     }
 }
 
 impl RetryPolicy {
     /// Tiny delays for tests.
     pub fn fast(max_retries: u32) -> Self {
-        RetryPolicy { max_retries, base_delay: Duration::from_millis(1), max_delay: Duration::from_millis(5) }
+        RetryPolicy {
+            max_retries,
+            base_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(5),
+        }
     }
 
     fn delay(&self, attempt: u32, retry_after: Option<u64>) -> Duration {
@@ -57,7 +65,11 @@ where
             r = attempt() => r,
         };
         match result {
-            Err(e) if e.is_retryable() && !started.load(Ordering::SeqCst) && n < policy.max_retries => {
+            Err(e)
+                if e.is_retryable()
+                    && !started.load(Ordering::SeqCst)
+                    && n < policy.max_retries =>
+            {
                 let wait = policy.delay(n, e.retry_after());
                 tracing::warn!(attempt = n + 1, wait_ms = wait.as_millis() as u64, error = %e, "provider call failed; retrying");
                 tokio::select! {
@@ -86,14 +98,22 @@ fn retry_after_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
 pub(crate) fn error_message(body: &str) -> String {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| v.pointer("/error/message").and_then(|m| m.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.pointer("/error/message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| body.chars().take(300).collect())
 }
 
 pub(crate) fn error_type(body: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| v.pointer("/error/type").and_then(|m| m.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.pointer("/error/type")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
 }
 
 pub(crate) fn status_error(status: u16, body: &str, retry_after: Option<u64>) -> ProviderError {
@@ -101,10 +121,23 @@ pub(crate) fn status_error(status: u16, body: &str, retry_after: Option<u64>) ->
     let overloaded = error_type(body).as_deref() == Some("overloaded_error");
     match status {
         401 | 403 => ProviderError::Auth { status, message },
-        429 => ProviderError::RateLimited { message, retry_after },
-        529 => ProviderError::Overloaded { message, retry_after },
-        _ if overloaded => ProviderError::Overloaded { message, retry_after },
-        408 | 409 | 500..=599 => ProviderError::Server { status, message, retry_after },
+        429 => ProviderError::RateLimited {
+            message,
+            retry_after,
+        },
+        529 => ProviderError::Overloaded {
+            message,
+            retry_after,
+        },
+        _ if overloaded => ProviderError::Overloaded {
+            message,
+            retry_after,
+        },
+        408 | 409 | 500..=599 => ProviderError::Server {
+            status,
+            message,
+            retry_after,
+        },
         _ => ProviderError::InvalidRequest { status, message },
     }
 }
@@ -127,28 +160,55 @@ mod tests {
 
     #[test]
     fn maps_statuses() {
-        assert!(matches!(status_error(429, "{}", Some(2)), ProviderError::RateLimited { retry_after: Some(2), .. }));
-        assert!(matches!(status_error(529, "", None), ProviderError::Overloaded { .. }));
         assert!(matches!(
-            status_error(500, r#"{"error":{"type":"overloaded_error","message":"busy"}}"#, None),
+            status_error(429, "{}", Some(2)),
+            ProviderError::RateLimited {
+                retry_after: Some(2),
+                ..
+            }
+        ));
+        assert!(matches!(
+            status_error(529, "", None),
             ProviderError::Overloaded { .. }
         ));
-        assert!(matches!(status_error(401, "", None), ProviderError::Auth { .. }));
-        let e = status_error(400, r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#, None);
-        assert!(matches!(e, ProviderError::InvalidRequest { status: 400, ref message } if message == "bad"));
+        assert!(matches!(
+            status_error(
+                500,
+                r#"{"error":{"type":"overloaded_error","message":"busy"}}"#,
+                None
+            ),
+            ProviderError::Overloaded { .. }
+        ));
+        assert!(matches!(
+            status_error(401, "", None),
+            ProviderError::Auth { .. }
+        ));
+        let e = status_error(
+            400,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#,
+            None,
+        );
+        assert!(
+            matches!(e, ProviderError::InvalidRequest { status: 400, ref message } if message == "bad")
+        );
     }
 
     #[tokio::test]
     async fn retries_then_succeeds() {
         let calls = AtomicU32::new(0);
         let started = AtomicBool::new(false);
-        let r = run(RetryPolicy::fast(3), &CancellationToken::new(), &started, || async {
-            if calls.fetch_add(1, Ordering::SeqCst) < 2 {
-                Err(ProviderError::Network("reset".into()))
-            } else {
-                Ok(7)
-            }
-        })
+        let r = run(
+            RetryPolicy::fast(3),
+            &CancellationToken::new(),
+            &started,
+            || async {
+                if calls.fetch_add(1, Ordering::SeqCst) < 2 {
+                    Err(ProviderError::Network("reset".into()))
+                } else {
+                    Ok(7)
+                }
+            },
+        )
         .await;
         assert_eq!(r.unwrap(), 7);
         assert_eq!(calls.load(Ordering::SeqCst), 3);
@@ -158,10 +218,18 @@ mod tests {
     async fn no_retry_after_output_started() {
         let calls = AtomicU32::new(0);
         let started = AtomicBool::new(true);
-        let r: Result<(), _> = run(RetryPolicy::fast(3), &CancellationToken::new(), &started, || async {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Err(ProviderError::Overloaded { message: "x".into(), retry_after: None })
-        })
+        let r: Result<(), _> = run(
+            RetryPolicy::fast(3),
+            &CancellationToken::new(),
+            &started,
+            || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(ProviderError::Overloaded {
+                    message: "x".into(),
+                    retry_after: None,
+                })
+            },
+        )
         .await;
         assert!(matches!(r, Err(ProviderError::Stream(_))));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -171,10 +239,18 @@ mod tests {
     async fn gives_up_on_non_retryable() {
         let calls = AtomicU32::new(0);
         let started = AtomicBool::new(false);
-        let r: Result<(), _> = run(RetryPolicy::fast(3), &CancellationToken::new(), &started, || async {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Err(ProviderError::InvalidRequest { status: 400, message: "x".into() })
-        })
+        let r: Result<(), _> = run(
+            RetryPolicy::fast(3),
+            &CancellationToken::new(),
+            &started,
+            || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err(ProviderError::InvalidRequest {
+                    status: 400,
+                    message: "x".into(),
+                })
+            },
+        )
         .await;
         assert!(r.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 1);

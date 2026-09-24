@@ -107,20 +107,50 @@ pub enum WorkKind {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ExecPurpose {
-    Explore { task: u32 },
-    Spec { round: u32 },
-    FactCheck { target: FactTarget, pass: u32 },
-    Plan { round: u32 },
-    Implement { phase: u32, work: WorkKind },
+    Explore {
+        task: u32,
+    },
+    Spec {
+        round: u32,
+    },
+    FactCheck {
+        target: FactTarget,
+        pass: u32,
+    },
+    Plan {
+        round: u32,
+    },
+    Implement {
+        phase: u32,
+        work: WorkKind,
+    },
     /// `tests` marks the closing test loop (`Phase: N-tests`).
-    Review { phase: u32, tests: bool, iteration: u32 },
-    Epa { phase: u32 },
-    WriteTest { phase: u32, work: WorkKind },
-    ModuleDocs { project: String },
-    PromptGen { handoff_for: Option<ExecutionId> },
-    Verify { phase: u32 },
+    Review {
+        phase: u32,
+        tests: bool,
+        iteration: u32,
+    },
+    Epa {
+        phase: u32,
+    },
+    WriteTest {
+        phase: u32,
+        work: WorkKind,
+    },
+    ModuleDocs {
+        project: String,
+    },
+    PromptGen {
+        handoff_for: Option<ExecutionId>,
+    },
+    Verify {
+        phase: u32,
+    },
     QuickAnswer,
-    Init { mode: InitializerMode, item: Option<String> },
+    Init {
+        mode: InitializerMode,
+        item: Option<String>,
+    },
 }
 
 impl ExecPurpose {
@@ -137,17 +167,28 @@ impl ExecPurpose {
         match self {
             ExecPurpose::Explore { task } => format!("Research task {}", task + 1),
             ExecPurpose::Spec { .. } => "Spec".into(),
-            ExecPurpose::FactCheck { target: FactTarget::Spec, .. } => "Spec check".into(),
-            ExecPurpose::FactCheck { target: FactTarget::Plan, .. } => "Plan check".into(),
+            ExecPurpose::FactCheck {
+                target: FactTarget::Spec,
+                ..
+            } => "Spec check".into(),
+            ExecPurpose::FactCheck {
+                target: FactTarget::Plan,
+                ..
+            } => "Plan check".into(),
             ExecPurpose::Plan { .. } => "Plan".into(),
             ExecPurpose::Implement { phase, work: w } => format!("Phase {phase}{}", work(w)),
             ExecPurpose::Review { phase, tests, .. } => {
-                format!("Phase {phase}{} · review pass", if *tests { " tests" } else { "" })
+                format!(
+                    "Phase {phase}{} · review pass",
+                    if *tests { " tests" } else { "" }
+                )
             }
             ExecPurpose::Epa { phase } => format!("Phase {phase}"),
             ExecPurpose::WriteTest { phase, work: w } => format!("Phase {phase}{}", work(w)),
             ExecPurpose::ModuleDocs { .. } => "Module docs".into(),
-            ExecPurpose::PromptGen { handoff_for: Some(_) } => "Handoff prompt".into(),
+            ExecPurpose::PromptGen {
+                handoff_for: Some(_),
+            } => "Handoff prompt".into(),
             ExecPurpose::PromptGen { handoff_for: None } => "Prompt".into(),
             ExecPurpose::Verify { phase } => format!("Phase {phase} · verification"),
             ExecPurpose::QuickAnswer => "Answer".into(),
@@ -156,7 +197,9 @@ impl ExecPurpose {
                 InitializerMode::Adopt => "Adopt a bootstrap".into(),
                 InitializerMode::Scout => format!("Scout {}", item(i)).trim_end().to_string(),
                 InitializerMode::Propose => "Propose skills".into(),
-                InitializerMode::GenerateSkill => format!("Skill {}", item(i)).trim_end().to_string(),
+                InitializerMode::GenerateSkill => {
+                    format!("Skill {}", item(i)).trim_end().to_string()
+                }
                 InitializerMode::GenerateInventory => "Inventory".into(),
             },
         }
@@ -202,7 +245,11 @@ pub enum GatePayload {
         findings: Vec<FactCheckFinding>,
     },
     /// The same fact-check finding keeps recurring.
-    FactCheckRecurring { target: FactTarget, passes: u32, findings: Vec<FactCheckFinding> },
+    FactCheckRecurring {
+        target: FactTarget,
+        passes: u32,
+        findings: Vec<FactCheckFinding>,
+    },
     ReviewCap {
         project: String,
         phase: u32,
@@ -220,8 +267,14 @@ pub enum GatePayload {
         diagnostic: String,
         need: String,
     },
-    PhaseBlocked { project: String, phase: u32, reason: String },
-    ClosingGate { items: Vec<ClosingItem> },
+    PhaseBlocked {
+        project: String,
+        phase: u32,
+        reason: String,
+    },
+    ClosingGate {
+        items: Vec<ClosingItem>,
+    },
     Permission {
         execution: ExecutionId,
         agent: AgentName,
@@ -231,13 +284,28 @@ pub enum GatePayload {
         /// The rule "always in this workspace" would add.
         suggestion: Option<String>,
     },
-    HarnessFailure { execution: ExecutionId, harness: HarnessKind, error: String },
-    SkillApproval { project: String, skills: Vec<SkillProposal> },
+    HarnessFailure {
+        execution: ExecutionId,
+        harness: HarnessKind,
+        error: String,
+    },
+    SkillApproval {
+        project: String,
+        skills: Vec<SkillProposal>,
+    },
     /// An execution failed or was cancelled. Answer `retry` or `abandon`.
-    ExecutionFailed { execution: ExecutionId, agent: AgentName, project: String, error: String },
+    ExecutionFailed {
+        execution: ExecutionId,
+        agent: AgentName,
+        project: String,
+        error: String,
+    },
     /// The session reached its budget. Answer `raise` (with the extra dollars as `text`) or `stop`.
     /// YOLO never answers it, because spending more is the user's decision.
-    BudgetReached { spent_usd: f64, budget_usd: f64 },
+    BudgetReached {
+        spent_usd: f64,
+        budget_usd: f64,
+    },
 }
 
 impl GatePayload {
@@ -246,8 +314,14 @@ impl GatePayload {
             GatePayload::OpenQuestions { .. } => StageKind::OpenQuestions,
             GatePayload::SpecApproval { .. } => StageKind::SpecApproval,
             GatePayload::PlanApproval { .. } => StageKind::PlanApproval,
-            GatePayload::FactCheckRecurring { target: FactTarget::Spec, .. } => StageKind::FactCheckSpec,
-            GatePayload::FactCheckRecurring { target: FactTarget::Plan, .. } => StageKind::FactCheckPlan,
+            GatePayload::FactCheckRecurring {
+                target: FactTarget::Spec,
+                ..
+            } => StageKind::FactCheckSpec,
+            GatePayload::FactCheckRecurring {
+                target: FactTarget::Plan,
+                ..
+            } => StageKind::FactCheckPlan,
             GatePayload::ReviewCap { tests: false, .. } => StageKind::Review,
             GatePayload::ReviewCap { tests: true, .. } => StageKind::TestReview,
             GatePayload::Stuck { .. } => StageKind::Rescue,
@@ -318,17 +392,31 @@ pub struct SkillProposal {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export)]
 pub enum GateAnswer {
-    Questions { answers: Vec<QuestionAnswer> },
+    Questions {
+        answers: Vec<QuestionAnswer>,
+    },
     /// `feedback` with `approved: false` is a change request.
-    Approval { approved: bool, feedback: Option<String> },
+    Approval {
+        approved: bool,
+        feedback: Option<String>,
+    },
     /// For review cap (`another-pass`, `stop`), fact-check recurring (`another-round`, `stop`),
     /// stuck (`fact`, `block`), phase blocked (`retry`, `leave`), harness failure (`retry`,
     /// `native`), execution failed (`retry`, `abandon`), budget reached (`raise`, `stop`). `text`
     /// carries a stated fact, instructions, or the extra budget in dollars.
-    Choice { option: String, text: Option<String> },
-    Closing { items: Vec<ClosingChoice> },
-    Permission { answer: PermissionAnswer },
-    Skills { decisions: Vec<SkillDecision> },
+    Choice {
+        option: String,
+        text: Option<String>,
+    },
+    Closing {
+        items: Vec<ClosingChoice>,
+    },
+    Permission {
+        answer: PermissionAnswer,
+    },
+    Skills {
+        decisions: Vec<SkillDecision>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -381,8 +469,12 @@ pub enum SessionEvent {
         session_root: PathBuf,
     },
     /// The user extended or changed the request (Rules D2, D10).
-    RequestAmended { text: String },
-    YoloSet { enabled: bool },
+    RequestAmended {
+        text: String,
+    },
+    YoloSet {
+        enabled: bool,
+    },
     DecisionMade {
         id: DecisionId,
         judge: JudgeKind,
@@ -417,8 +509,16 @@ pub enum SessionEvent {
         /// Execution this one resumes, if any.
         resumes: Option<ExecutionId>,
     },
-    ExecutionFinished { id: ExecutionId, result: ExecutionResult },
-    GateOpened { id: GateId, title: String, explanation: String, payload: GatePayload },
+    ExecutionFinished {
+        id: ExecutionId,
+        result: ExecutionResult,
+    },
+    GateOpened {
+        id: GateId,
+        title: String,
+        explanation: String,
+        payload: GatePayload,
+    },
     GateAnswered {
         id: GateId,
         source: AnswerSource,
@@ -441,15 +541,29 @@ pub enum SessionEvent {
         /// Findings that could not be applied mechanically, with the reason.
         failed: Vec<(String, String)>,
     },
-    SecurityBlock { project: String, phase: u32, tests: bool, findings: Vec<ReviewFinding> },
-    PhaseBlocked { project: String, phase: u32, tests: bool, reason: String },
-    Note { message: String },
+    SecurityBlock {
+        project: String,
+        phase: u32,
+        tests: bool,
+        findings: Vec<ReviewFinding>,
+    },
+    PhaseBlocked {
+        project: String,
+        phase: u32,
+        tests: bool,
+        reason: String,
+    },
+    Note {
+        message: String,
+    },
     SessionCompleted {
         #[ts(type = "string")]
         report_path: PathBuf,
         summary: String,
     },
-    SessionFailed { error: String },
+    SessionFailed {
+        error: String,
+    },
 }
 
 /// A stored event with its sequence number and time.
@@ -471,14 +585,32 @@ mod tests {
         assert_eq!(imp(WorkKind::Initial).run_label(), "Phase 2");
         assert_eq!(imp(WorkKind::Fix).run_label(), "Phase 2 · fix pass");
         assert_eq!(ExecPurpose::Spec { round: 3 }.run_label(), "Spec");
-        assert_eq!(ExecPurpose::Review { phase: 1, tests: true, iteration: 2 }.run_label(), "Phase 1 tests · review pass");
-        assert_eq!(ExecPurpose::Explore { task: 0 }.run_label(), "Research task 1");
         assert_eq!(
-            ExecPurpose::Init { mode: InitializerMode::Scout, item: Some("api".into()) }.run_label(),
+            ExecPurpose::Review {
+                phase: 1,
+                tests: true,
+                iteration: 2
+            }
+            .run_label(),
+            "Phase 1 tests · review pass"
+        );
+        assert_eq!(
+            ExecPurpose::Explore { task: 0 }.run_label(),
+            "Research task 1"
+        );
+        assert_eq!(
+            ExecPurpose::Init {
+                mode: InitializerMode::Scout,
+                item: Some("api".into())
+            }
+            .run_label(),
             "Scout api"
         );
         assert_eq!(numbered_run_label("Phase 1", 1), "Phase 1");
         assert_eq!(numbered_run_label("Spec", 2), "Spec · pass 2");
-        assert_eq!(numbered_run_label("Phase 1 · fix pass", 3), "Phase 1 · fix pass 3");
+        assert_eq!(
+            numbered_run_label("Phase 1 · fix pass", 3),
+            "Phase 1 · fix pass 3"
+        );
     }
 }

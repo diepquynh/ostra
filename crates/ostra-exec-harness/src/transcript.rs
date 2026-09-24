@@ -67,21 +67,40 @@ enum Tally {
 impl Tally {
     fn new(harness: HarnessKind) -> Tally {
         match harness {
-            HarnessKind::Claude => Tally::Claude { messages: vec![], by_id: HashMap::new(), last_message: None },
-            HarnessKind::Codex => Tally::Codex { model: String::new(), seen: Usage::default(), usage: Usage::default(), last_message: None },
-            HarnessKind::Grok => Tally::Grok { usage: Usage::default() },
+            HarnessKind::Claude => Tally::Claude {
+                messages: vec![],
+                by_id: HashMap::new(),
+                last_message: None,
+            },
+            HarnessKind::Codex => Tally::Codex {
+                model: String::new(),
+                seen: Usage::default(),
+                usage: Usage::default(),
+                last_message: None,
+            },
+            HarnessKind::Grok => Tally::Grok {
+                usage: Usage::default(),
+            },
             HarnessKind::Agy => Tally::Agy { last_message: None },
         }
     }
 
     fn feed(&mut self, v: &Value) {
         match self {
-            Tally::Claude { messages, by_id, last_message } => {
+            Tally::Claude {
+                messages,
+                by_id,
+                last_message,
+            } => {
                 if v.get("type").and_then(Value::as_str) != Some("assistant") {
                     return;
                 }
                 let Some(msg) = v.get("message") else { return };
-                if let Some(t) = msg.get("content").and_then(text_blocks).filter(|t| !t.trim().is_empty()) {
+                if let Some(t) = msg
+                    .get("content")
+                    .and_then(text_blocks)
+                    .filter(|t| !t.trim().is_empty())
+                {
                     *last_message = Some(t);
                 }
                 let Some(u) = msg.get("usage") else { return };
@@ -95,7 +114,8 @@ impl Tally {
                     ..Default::default()
                 };
                 let model = msg.get("model").and_then(Value::as_str).unwrap_or_default();
-                usage.cost_usd = pricing::cost(model, &usage, n("/server_tool_use/web_search_requests"));
+                usage.cost_usd =
+                    pricing::cost(model, &usage, n("/server_tool_use/web_search_requests"));
                 match msg.get("id").and_then(Value::as_str) {
                     Some(id) => match by_id.get(id) {
                         Some(&i) => messages[i] = usage,
@@ -107,25 +127,44 @@ impl Tally {
                     None => messages.push(usage),
                 }
             }
-            Tally::Codex { model, seen, usage, last_message } => {
+            Tally::Codex {
+                model,
+                seen,
+                usage,
+                last_message,
+            } => {
                 let payload = v.get("payload").unwrap_or(&Value::Null);
-                match (v.get("type").and_then(Value::as_str), payload.get("type").and_then(Value::as_str)) {
+                match (
+                    v.get("type").and_then(Value::as_str),
+                    payload.get("type").and_then(Value::as_str),
+                ) {
                     (Some("turn_context"), _) => {
                         if let Some(m) = payload.get("model").and_then(Value::as_str) {
                             *model = m.to_string();
                         }
                     }
-                    (Some("response_item"), Some("message")) if payload.get("role").and_then(Value::as_str) == Some("assistant") => {
-                        if let Some(t) = payload.get("content").and_then(text_blocks).filter(|t| !t.trim().is_empty()) {
+                    (Some("response_item"), Some("message"))
+                        if payload.get("role").and_then(Value::as_str) == Some("assistant") =>
+                    {
+                        if let Some(t) = payload
+                            .get("content")
+                            .and_then(text_blocks)
+                            .filter(|t| !t.trim().is_empty())
+                        {
                             *last_message = Some(t);
                         }
                     }
                     (Some("event_msg"), Some("token_count")) => {
-                        let Some(total) = payload.pointer("/info/total_token_usage") else { return };
+                        let Some(total) = payload.pointer("/info/total_token_usage") else {
+                            return;
+                        };
                         let n = |k: &str| total.get(k).and_then(Value::as_u64).unwrap_or(0);
-                        let (cached, written) = (n("cached_input_tokens"), n("cache_write_input_tokens"));
+                        let (cached, written) =
+                            (n("cached_input_tokens"), n("cache_write_input_tokens"));
                         let now = Usage {
-                            input_tokens: n("input_tokens").saturating_sub(cached).saturating_sub(written),
+                            input_tokens: n("input_tokens")
+                                .saturating_sub(cached)
+                                .saturating_sub(written),
                             output_tokens: n("output_tokens"),
                             cache_read_tokens: cached,
                             cache_write_tokens: written,
@@ -134,8 +173,12 @@ impl Tally {
                         let mut delta = Usage {
                             input_tokens: now.input_tokens.saturating_sub(seen.input_tokens),
                             output_tokens: now.output_tokens.saturating_sub(seen.output_tokens),
-                            cache_read_tokens: now.cache_read_tokens.saturating_sub(seen.cache_read_tokens),
-                            cache_write_tokens: now.cache_write_tokens.saturating_sub(seen.cache_write_tokens),
+                            cache_read_tokens: now
+                                .cache_read_tokens
+                                .saturating_sub(seen.cache_read_tokens),
+                            cache_write_tokens: now
+                                .cache_write_tokens
+                                .saturating_sub(seen.cache_write_tokens),
                             ..Default::default()
                         };
                         delta.cost_usd = pricing::cost(model, &delta, 0);
@@ -146,7 +189,9 @@ impl Tally {
                 }
             }
             Tally::Grok { usage } => {
-                let Some(update) = v.pointer("/params/update") else { return };
+                let Some(update) = v.pointer("/params/update") else {
+                    return;
+                };
                 if update.get("sessionUpdate").and_then(Value::as_str) != Some("turn_completed") {
                     return;
                 }
@@ -154,7 +199,9 @@ impl Tally {
                 let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
                 let (cached, written) = (n("cachedReadTokens"), n("cacheCreationTokens"));
                 usage.add(&Usage {
-                    input_tokens: n("inputTokens").saturating_sub(cached).saturating_sub(written),
+                    input_tokens: n("inputTokens")
+                        .saturating_sub(cached)
+                        .saturating_sub(written),
                     output_tokens: n("outputTokens"),
                     cache_read_tokens: cached,
                     cache_write_tokens: written,
@@ -164,7 +211,10 @@ impl Tally {
             }
             Tally::Agy { last_message } => {
                 if v.get("type").and_then(Value::as_str) == Some("PLANNER_RESPONSE")
-                    && let Some(t) = v.get("content").and_then(Value::as_str).filter(|t| !t.trim().is_empty())
+                    && let Some(t) = v
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .filter(|t| !t.trim().is_empty())
                 {
                     *last_message = Some(t.to_string());
                 }
@@ -174,14 +224,34 @@ impl Tally {
 
     fn facts(&self) -> TranscriptFacts {
         match self {
-            Tally::Claude { messages, last_message, .. } => {
+            Tally::Claude {
+                messages,
+                last_message,
+                ..
+            } => {
                 let mut usage = Usage::default();
                 messages.iter().for_each(|m| usage.add(m));
-                TranscriptFacts { last_message: last_message.clone(), usage }
+                TranscriptFacts {
+                    last_message: last_message.clone(),
+                    usage,
+                }
             }
-            Tally::Codex { usage, last_message, .. } => TranscriptFacts { last_message: last_message.clone(), usage: *usage },
-            Tally::Grok { usage } => TranscriptFacts { last_message: None, usage: *usage },
-            Tally::Agy { last_message } => TranscriptFacts { last_message: last_message.clone(), usage: Usage::default() },
+            Tally::Codex {
+                usage,
+                last_message,
+                ..
+            } => TranscriptFacts {
+                last_message: last_message.clone(),
+                usage: *usage,
+            },
+            Tally::Grok { usage } => TranscriptFacts {
+                last_message: None,
+                usage: *usage,
+            },
+            Tally::Agy { last_message } => TranscriptFacts {
+                last_message: last_message.clone(),
+                usage: Usage::default(),
+            },
         }
     }
 }
@@ -199,7 +269,13 @@ pub struct TranscriptReader {
 
 impl TranscriptReader {
     pub fn new(harness: HarnessKind, path: PathBuf) -> Self {
-        TranscriptReader { harness, path, offset: 0, partial: vec![], tally: Tally::new(harness) }
+        TranscriptReader {
+            harness,
+            path,
+            offset: 0,
+            partial: vec![],
+            tally: Tally::new(harness),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -208,7 +284,9 @@ impl TranscriptReader {
 
     /// Read what was appended. Returns whether any line was added.
     pub fn poll(&mut self) -> bool {
-        let Ok(mut file) = std::fs::File::open(&self.path) else { return false };
+        let Ok(mut file) = std::fs::File::open(&self.path) else {
+            return false;
+        };
         let len = file.metadata().map(|m| m.len()).unwrap_or(0);
         if len < self.offset {
             // The file was replaced or truncated: start over.
@@ -218,7 +296,9 @@ impl TranscriptReader {
             return false;
         }
         let mut buf = vec![];
-        let Ok(n) = file.read_to_end(&mut buf) else { return false };
+        let Ok(n) = file.read_to_end(&mut buf) else {
+            return false;
+        };
         self.offset += n as u64;
         self.partial.extend_from_slice(&buf);
         let mut added = false;
@@ -280,8 +360,16 @@ pub fn agy_facts(path: &Path) -> TranscriptFacts {
 
 /// Grok Build's `updates.jsonl` for a session: next to the transcript its hooks name, or found
 /// by session id under `~/.grok/sessions/<cwd>/`.
-pub fn find_grok_updates(home: &Path, transcript: Option<&Path>, session_id: Option<&str>) -> Option<PathBuf> {
-    if let Some(p) = transcript.and_then(Path::parent).map(|d| d.join("updates.jsonl")).filter(|p| p.exists()) {
+pub fn find_grok_updates(
+    home: &Path,
+    transcript: Option<&Path>,
+    session_id: Option<&str>,
+) -> Option<PathBuf> {
+    if let Some(p) = transcript
+        .and_then(Path::parent)
+        .map(|d| d.join("updates.jsonl"))
+        .filter(|p| p.exists())
+    {
         return Some(p);
     }
     let root = std::env::var_os("GROK_HOME")
@@ -339,19 +427,34 @@ pub fn find_claude_transcript(home: &Path, session_id: &str) -> Option<PathBuf> 
 }
 
 /// The session file that carries a harness's usage, once it exists.
-pub fn locate(harness: HarnessKind, transcript: Option<&Path>, session_id: Option<&str>, home: &Path) -> Option<PathBuf> {
+pub fn locate(
+    harness: HarnessKind,
+    transcript: Option<&Path>,
+    session_id: Option<&str>,
+    home: &Path,
+) -> Option<PathBuf> {
     match harness {
         HarnessKind::Grok => find_grok_updates(home, transcript, session_id),
-        _ => transcript.map(Path::to_path_buf).filter(|p| p.exists()).or_else(|| match (harness, session_id) {
-            (HarnessKind::Claude, Some(s)) => find_claude_transcript(home, s),
-            (HarnessKind::Codex, Some(s)) => find_codex_rollout(home, s),
-            _ => None,
-        }),
+        _ => transcript
+            .map(Path::to_path_buf)
+            .filter(|p| p.exists())
+            .or_else(|| match (harness, session_id) {
+                (HarnessKind::Claude, Some(s)) => find_claude_transcript(home, s),
+                (HarnessKind::Codex, Some(s)) => find_codex_rollout(home, s),
+                _ => None,
+            }),
     }
 }
 
-pub fn facts(harness: HarnessKind, transcript: Option<&Path>, session_id: Option<&str>, home: &Path) -> TranscriptFacts {
-    locate(harness, transcript, session_id, home).map(|p| read_all(harness, &p)).unwrap_or_default()
+pub fn facts(
+    harness: HarnessKind,
+    transcript: Option<&Path>,
+    session_id: Option<&str>,
+    home: &Path,
+) -> TranscriptFacts {
+    locate(harness, transcript, session_id, home)
+        .map(|p| read_all(harness, &p))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -412,7 +515,11 @@ mod tests {
         use std::io::Write;
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("t.jsonl");
-        let line = |id: &str, out: u64| format!(r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-sonnet-5","content":[],"usage":{{"input_tokens":0,"output_tokens":{out}}}}}}}"#);
+        let line = |id: &str, out: u64| {
+            format!(
+                r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-sonnet-5","content":[],"usage":{{"input_tokens":0,"output_tokens":{out}}}}}}}"#
+            )
+        };
         std::fs::write(&p, format!("{}\n", line("a", 1_000_000))).unwrap();
         let mut r = TranscriptReader::new(HarnessKind::Claude, p.clone());
         assert!(r.poll());
@@ -428,7 +535,11 @@ mod tests {
         assert!((r.facts().usage.cost_usd - 30.0).abs() < 1e-9);
         std::fs::write(&p, format!("{}\n", line("c", 5))).unwrap();
         assert!(r.poll());
-        assert_eq!(r.facts().usage.output_tokens, 5, "a replaced file starts over");
+        assert_eq!(
+            r.facts().usage.output_tokens,
+            5,
+            "a replaced file starts over"
+        );
     }
 
     #[test]
@@ -437,13 +548,27 @@ mod tests {
         let dir = tmp.path().join(".grok/sessions/%2Frepo/01a0-s");
         std::fs::create_dir_all(&dir).unwrap();
         let turn = |input: u64, cached: u64, ticks: u64| {
-            format!(r#"{{"method":"session/update","params":{{"sessionId":"01a0-s","update":{{"sessionUpdate":"turn_completed","usage":{{"inputTokens":{input},"outputTokens":10,"cachedReadTokens":{cached},"cacheCreationTokens":0,"costUsdTicks":{ticks}}}}}}}}}"#)
+            format!(
+                r#"{{"method":"session/update","params":{{"sessionId":"01a0-s","update":{{"sessionUpdate":"turn_completed","usage":{{"inputTokens":{input},"outputTokens":10,"cachedReadTokens":{cached},"cacheCreationTokens":0,"costUsdTicks":{ticks}}}}}}}}}"#
+            )
         };
         let lines = [r#"{"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk"}}}"#.to_string(), turn(100, 60, 5_000_000_000), turn(50, 50, 2_500_000_000)];
         std::fs::write(dir.join("updates.jsonl"), lines.join("\n")).unwrap();
         let _g = crate::launch::tests::EnvGuard::unset("GROK_HOME");
-        let f = facts(HarnessKind::Grok, Some(&dir.join("chat_history.jsonl")), None, tmp.path());
-        assert_eq!((f.usage.input_tokens, f.usage.cache_read_tokens, f.usage.output_tokens), (40, 110, 20));
+        let f = facts(
+            HarnessKind::Grok,
+            Some(&dir.join("chat_history.jsonl")),
+            None,
+            tmp.path(),
+        );
+        assert_eq!(
+            (
+                f.usage.input_tokens,
+                f.usage.cache_read_tokens,
+                f.usage.output_tokens
+            ),
+            (40, 110, 20)
+        );
         assert!((f.usage.cost_usd - 0.75).abs() < 1e-9);
         let by_id = facts(HarnessKind::Grok, None, Some("01a0-s"), tmp.path());
         assert_eq!(by_id.usage, f.usage);
@@ -455,12 +580,35 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("t.jsonl");
         let usage = r#""usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":3000000,"cache_creation":{"ephemeral_5m_input_tokens":2000000,"ephemeral_1h_input_tokens":1000000}}"#;
-        let line = |block: &str| format!(r#"{{"type":"assistant","message":{{"id":"msg_1","model":"claude-opus-5","content":[{block}],{usage}}}}}"#);
-        std::fs::write(&p, [line(r#"{"type":"thinking","thinking":""}"#), line(r#"{"type":"text","text":"hi"}"#)].join("\n")).unwrap();
+        let line = |block: &str| {
+            format!(
+                r#"{{"type":"assistant","message":{{"id":"msg_1","model":"claude-opus-5","content":[{block}],{usage}}}}}"#
+            )
+        };
+        std::fs::write(
+            &p,
+            [
+                line(r#"{"type":"thinking","thinking":""}"#),
+                line(r#"{"type":"text","text":"hi"}"#),
+            ]
+            .join("\n"),
+        )
+        .unwrap();
         let f = claude_facts(&p);
-        assert_eq!((f.usage.input_tokens, f.usage.cache_write_tokens, f.usage.cache_write_1h_tokens), (1_000_000, 3_000_000, 1_000_000));
+        assert_eq!(
+            (
+                f.usage.input_tokens,
+                f.usage.cache_write_tokens,
+                f.usage.cache_write_1h_tokens
+            ),
+            (1_000_000, 3_000_000, 1_000_000)
+        );
         // Opus 5: $5 input, $6.25 per 5-minute write, $10 per 1-hour write, per million.
-        assert!((f.usage.cost_usd - (5.0 + 2.0 * 6.25 + 10.0)).abs() < 1e-9, "{}", f.usage.cost_usd);
+        assert!(
+            (f.usage.cost_usd - (5.0 + 2.0 * 6.25 + 10.0)).abs() < 1e-9,
+            "{}",
+            f.usage.cost_usd
+        );
     }
 
     #[test]
@@ -469,7 +617,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("r.jsonl");
         let count = |input: u64, cached: u64, output: u64| {
-            format!(r#"{{"type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output},"reasoning_output_tokens":1}}}}}}}}"#)
+            format!(
+                r#"{{"type":"event_msg","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output},"reasoning_output_tokens":1}}}}}}}}"#
+            )
         };
         let lines = [
             r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#.to_string(),
@@ -479,8 +629,19 @@ mod tests {
         ];
         std::fs::write(&p, lines.join("\n")).unwrap();
         let f = codex_facts(&p);
-        assert_eq!((f.usage.input_tokens, f.usage.cache_read_tokens, f.usage.output_tokens), (200_000, 50_000, 50_000));
+        assert_eq!(
+            (
+                f.usage.input_tokens,
+                f.usage.cache_read_tokens,
+                f.usage.output_tokens
+            ),
+            (200_000, 50_000, 50_000)
+        );
         // Terra below its 272k context tier: $2 input, $0.2 cached, $12 output, per million.
-        assert!((f.usage.cost_usd - (0.4 + 0.01 + 0.6)).abs() < 1e-9, "{}", f.usage.cost_usd);
+        assert!(
+            (f.usage.cost_usd - (0.4 + 0.01 + 0.6)).abs() < 1e-9,
+            "{}",
+            f.usage.cost_usd
+        );
     }
 }

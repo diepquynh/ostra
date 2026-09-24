@@ -26,7 +26,12 @@ impl ExecutionHost for FakeHost {
     fn emit(&self, delta: ExecutionDelta) {
         self.deltas.lock().push(delta);
     }
-    async fn ask_permission(&self, call: &ToolCall, _reason: &str, _rule: &RuleRef) -> PermissionAnswer {
+    async fn ask_permission(
+        &self,
+        call: &ToolCall,
+        _reason: &str,
+        _rule: &RuleRef,
+    ) -> PermissionAnswer {
         self.asks.lock().push(call.clone());
         self.answer.lock().unwrap_or(PermissionAnswer::Deny)
     }
@@ -34,7 +39,11 @@ impl ExecutionHost for FakeHost {
         self.messages.lock().push((role.into(), content.clone()));
     }
     fn transcript(&self, execution: &ExecutionId) -> Vec<(String, Value)> {
-        self.transcripts.lock().get(execution).cloned().unwrap_or_default()
+        self.transcripts
+            .lock()
+            .get(execution)
+            .cloned()
+            .unwrap_or_default()
     }
     fn yolo(&self) -> bool {
         self.yolo
@@ -60,16 +69,30 @@ fn fixture() -> Fixture {
     }
     std::fs::create_dir_all(repo.join(".ostra")).unwrap();
     std::fs::write(repo.join("main.txt"), "hello\n").unwrap();
-    Fixture { _dir: dir, repo, session, outside }
+    Fixture {
+        _dir: dir,
+        repo,
+        session,
+        outside,
+    }
 }
 
-fn spec(f: &Fixture, agent: AgentName, mode: PermissionMode, caps: Vec<Capability>) -> ExecutionSpec {
+fn spec(
+    f: &Fixture,
+    agent: AgentName,
+    mode: PermissionMode,
+    caps: Vec<Capability>,
+) -> ExecutionSpec {
     let id = ExecutionId::new();
     let report = f.session.join("ostra-implementer-phase-1.md");
     ExecutionSpec {
         id: id.clone(),
         agent,
-        route: ResolvedRoute { executor: ExecutorKind::Native, model: "mock:test".into(), tier: None },
+        route: ResolvedRoute {
+            executor: ExecutorKind::Native,
+            model: "mock:test".into(),
+            tier: None,
+        },
         effort: Effort::Medium,
         system_prompt: "You are a test agent.".into(),
         first_message: "Do the task.".into(),
@@ -82,7 +105,17 @@ fn spec(f: &Fixture, agent: AgentName, mode: PermissionMode, caps: Vec<Capabilit
             agent,
             initializer_mode: None,
             executor: ExecutorKind::Native,
-            workspace_root: f.session.parent().unwrap().parent().unwrap().parent().unwrap().parent().unwrap().to_path_buf(),
+            workspace_root: f
+                .session
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf(),
             repo_root: f.repo.clone(),
             project_key: "app".into(),
             session_dir: f.session.clone(),
@@ -109,7 +142,14 @@ fn executor(p: ScriptedProvider) -> (NativeExecutor, Arc<ScriptedProvider>) {
 }
 
 fn impl_caps() -> Vec<Capability> {
-    vec![Capability::Read, Capability::Write, Capability::Edit, Capability::Shell, Capability::Report, Capability::Memory]
+    vec![
+        Capability::Read,
+        Capability::Write,
+        Capability::Edit,
+        Capability::Shell,
+        Capability::Report,
+        Capability::Memory,
+    ]
 }
 
 fn submit_ok(report: &Path) -> Value {
@@ -123,7 +163,9 @@ fn tool_results(req: &ChatRequest) -> Vec<(String, bool)> {
             m.content
                 .iter()
                 .filter_map(|b| match b {
-                    Block::ToolResult { content, is_error, .. } => Some((content.clone(), *is_error)),
+                    Block::ToolResult {
+                        content, is_error, ..
+                    } => Some((content.clone(), *is_error)),
                     _ => None,
                 })
                 .collect()
@@ -134,11 +176,22 @@ fn tool_results(req: &ChatRequest) -> Vec<(String, bool)> {
 #[tokio::test]
 async fn reads_is_denied_outside_scope_reports_and_submits() {
     let f = fixture();
-    let s = spec(&f, AgentName::Implementer, PermissionMode::AcceptEdits, impl_caps());
+    let s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::AcceptEdits,
+        impl_caps(),
+    );
     let report = s.ctx.report_file.clone().unwrap();
     let p = ScriptedProvider::new();
-    p.push_tool_use("Read", json!({"file_path": f.repo.join("main.txt").display().to_string()}));
-    p.push_tool_use("Write", json!({"file_path": f.outside.join("x.txt").display().to_string(), "content": "no"}));
+    p.push_tool_use(
+        "Read",
+        json!({"file_path": f.repo.join("main.txt").display().to_string()}),
+    );
+    p.push_tool_use(
+        "Write",
+        json!({"file_path": f.outside.join("x.txt").display().to_string(), "content": "no"}),
+    );
     p.push_tool_use("Report", json!({"content": "# Report\nDone."}));
     p.push_tool_use("submit_implementer", submit_ok(&report));
     let (exec, p) = executor(p);
@@ -152,7 +205,13 @@ async fn reads_is_denied_outside_scope_reports_and_submits() {
     assert!(*is_err && denied.starts_with("Denied by guard"), "{denied}");
     assert!(!f.outside.join("x.txt").exists());
     assert!(std::fs::read_to_string(&report).unwrap().contains("Done."));
-    assert!(host.deltas.lock().iter().any(|d| matches!(d, ExecutionDelta::Policy { decision: PolicyDecision::Deny { .. }, .. })));
+    assert!(host.deltas.lock().iter().any(|d| matches!(
+        d,
+        ExecutionDelta::Policy {
+            decision: PolicyDecision::Deny { .. },
+            ..
+        }
+    )));
     assert_eq!(r.usage.tool_calls, 3);
     assert!(host.messages.lock().len() >= 8);
 }
@@ -160,13 +219,20 @@ async fn reads_is_denied_outside_scope_reports_and_submits() {
 #[tokio::test]
 async fn invalid_submit_is_retried() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::QuickAnswer, PermissionMode::Default, vec![Capability::Read]);
+    let mut s = spec(
+        &f,
+        AgentName::QuickAnswer,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
     s.ctx.report_file = None;
     let p = ScriptedProvider::new();
     p.push_tool_use("submit_quick_answer", json!({"sources": []}));
     p.push_tool_use("submit_quick_answer", json!({"answer": "a", "sources": []}));
     let (exec, p) = executor(p);
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Ok);
     let (msg, is_err) = &tool_results(&p.requests()[1])[0];
     assert!(*is_err && msg.contains("invalid"), "{msg}");
@@ -175,7 +241,12 @@ async fn invalid_submit_is_retried() {
 #[tokio::test]
 async fn explore_submits_only_after_its_document() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::Explore, PermissionMode::Default, vec![Capability::Read, Capability::Document]);
+    let mut s = spec(
+        &f,
+        AgentName::Explore,
+        PermissionMode::Default,
+        vec![Capability::Read, Capability::Document],
+    );
     s.ctx.report_file = None;
     let md = f.session.join("ostra-research-1-greeting.md");
     let submit = json!({"research_path": md, "scope_covered": "a", "findings_summary": "b", "sources_retrieved": 0, "open_questions": 0, "not_covered": []});
@@ -187,26 +258,47 @@ async fn explore_submits_only_after_its_document() {
     );
     p.push_tool_use("submit_explore", submit);
     let (exec, p) = executor(p);
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Ok);
     let reqs = p.requests();
-    assert!(reqs[0].tools.iter().any(|t| t.name == "Document" && t.input_schema["$defs"].get("Document").is_some()));
+    assert!(
+        reqs[0]
+            .tools
+            .iter()
+            .any(|t| t.name == "Document" && t.input_schema["$defs"].get("Document").is_some())
+    );
     let (msg, is_err) = &tool_results(&reqs[1])[0];
     assert!(*is_err && msg.contains("Document tool"), "{msg}");
     let (msg, is_err) = &tool_results(&reqs[2])[0];
-    assert!(!*is_err && msg.contains("Wrote the research document"), "{msg}");
-    assert!(std::fs::read_to_string(&md).unwrap().starts_with("# Research: Greeting"));
+    assert!(
+        !*is_err && msg.contains("Wrote the research document"),
+        "{msg}"
+    );
+    assert!(
+        std::fs::read_to_string(&md)
+            .unwrap()
+            .starts_with("# Research: Greeting")
+    );
 }
 
 #[tokio::test]
 async fn missing_submit_gets_one_reminder() {
     let f = fixture();
-    let s = spec(&f, AgentName::Explore, PermissionMode::Default, vec![Capability::Read]);
+    let s = spec(
+        &f,
+        AgentName::Explore,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
     let p = ScriptedProvider::new();
     p.push_text("I am done.");
     p.push_text("Really done.");
     let (exec, p) = executor(p);
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Ok);
     assert!(r.submit.is_none());
     assert_eq!(r.final_text, "Really done.");
@@ -218,16 +310,30 @@ async fn missing_submit_gets_one_reminder() {
 
 #[tokio::test]
 async fn permission_ask_allow_and_deny() {
-    for (answer, expect_written) in [(PermissionAnswer::AllowOnce, true), (PermissionAnswer::Deny, false)] {
+    for (answer, expect_written) in [
+        (PermissionAnswer::AllowOnce, true),
+        (PermissionAnswer::Deny, false),
+    ] {
         let f = fixture();
-        let mut s = spec(&f, AgentName::Implementer, PermissionMode::Default, impl_caps());
+        let mut s = spec(
+            &f,
+            AgentName::Implementer,
+            PermissionMode::Default,
+            impl_caps(),
+        );
         s.ctx.report_file = None;
         let target = f.repo.join("new.txt");
         let p = ScriptedProvider::new();
-        p.push_tool_use("Write", json!({"file_path": target.display().to_string(), "content": "x"}));
+        p.push_tool_use(
+            "Write",
+            json!({"file_path": target.display().to_string(), "content": "x"}),
+        );
         p.push_tool_use("submit_implementer", json!({"status": "ok", "report_path": "", "changed_files": ["new.txt"], "summary": "s"}));
         let (exec, _) = executor(p);
-        let host = Arc::new(FakeHost { answer: Mutex::new(Some(answer)), ..Default::default() });
+        let host = Arc::new(FakeHost {
+            answer: Mutex::new(Some(answer)),
+            ..Default::default()
+        });
         let r = exec.run(s, host.clone(), CancellationToken::new()).await;
         assert_eq!(r.status, ExecutionStatus::Ok);
         assert_eq!(host.asks.lock().len(), 1);
@@ -238,14 +344,28 @@ async fn permission_ask_allow_and_deny() {
 #[tokio::test]
 async fn yolo_skips_asks() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::Implementer, PermissionMode::Default, impl_caps());
+    let mut s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Default,
+        impl_caps(),
+    );
     s.ctx.report_file = None;
     let target = f.repo.join("y.txt");
     let p = ScriptedProvider::new();
-    p.push_tool_use("Write", json!({"file_path": target.display().to_string(), "content": "x"}));
-    p.push_tool_use("submit_implementer", json!({"status": "ok", "report_path": "", "changed_files": [], "summary": "s"}));
+    p.push_tool_use(
+        "Write",
+        json!({"file_path": target.display().to_string(), "content": "x"}),
+    );
+    p.push_tool_use(
+        "submit_implementer",
+        json!({"status": "ok", "report_path": "", "changed_files": [], "summary": "s"}),
+    );
     let (exec, _) = executor(p);
-    let host = Arc::new(FakeHost { yolo: true, ..Default::default() });
+    let host = Arc::new(FakeHost {
+        yolo: true,
+        ..Default::default()
+    });
     exec.run(s, host.clone(), CancellationToken::new()).await;
     assert!(host.asks.lock().is_empty());
     assert!(target.exists());
@@ -254,7 +374,12 @@ async fn yolo_skips_asks() {
 #[tokio::test]
 async fn cancel_is_immediate() {
     let f = fixture();
-    let s = spec(&f, AgentName::Implementer, PermissionMode::Bypass, impl_caps());
+    let s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Bypass,
+        impl_caps(),
+    );
     let p = ScriptedProvider::new();
     p.push_tool_use("Bash", json!({"command": "sleep 30"}));
     let (exec, _) = executor(p);
@@ -273,12 +398,19 @@ async fn cancel_is_immediate() {
 #[tokio::test]
 async fn timeout_is_an_error() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::Implementer, PermissionMode::Bypass, impl_caps());
+    let mut s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Bypass,
+        impl_caps(),
+    );
     s.timeout_secs = 1;
     let p = ScriptedProvider::new();
     p.push_tool_use("Bash", json!({"command": "sleep 30"}));
     let (exec, _) = executor(p);
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Error);
     assert!(r.error.unwrap().contains("timed out after 1 s"));
 }
@@ -286,10 +418,18 @@ async fn timeout_is_an_error() {
 #[tokio::test]
 async fn resumes_from_transcript() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::QuickAnswer, PermissionMode::Default, vec![Capability::Read]);
+    let mut s = spec(
+        &f,
+        AgentName::QuickAnswer,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
     s.ctx.report_file = None;
     let from = ExecutionId::new();
-    s.resume = Some(ostra_core::exec::ResumeInfo { from: from.clone(), native_session_id: None });
+    s.resume = Some(ostra_core::exec::ResumeInfo {
+        from: from.clone(),
+        native_session_id: None,
+    });
     let host = FakeHost::default();
     host.transcripts.lock().insert(
         from,
@@ -306,7 +446,9 @@ async fn resumes_from_transcript() {
     let req = &p.requests()[0];
     assert_eq!(req.messages.len(), 3);
     let last = &req.messages[2];
-    assert!(matches!(&last.content[0], Block::ToolResult { tool_use_id, is_error: true, .. } if tool_use_id == "t1"));
+    assert!(
+        matches!(&last.content[0], Block::ToolResult { tool_use_id, is_error: true, .. } if tool_use_id == "t1")
+    );
     assert!(matches!(&last.content[1], Block::Text { text } if text.contains("interrupted")));
 }
 
@@ -314,49 +456,90 @@ async fn resumes_from_transcript() {
 async fn build_streak_recalls_lessons() {
     let f = fixture();
     let script = f.repo.join("build.sh");
-    std::fs::write(&script, "#!/bin/sh\necho \"error[E0425]: cannot find value x in this scope\"\nexit 1\n").unwrap();
-    std::fs::write(f.repo.join(".ostra/project.toml"), "[commands]\nbuild = \"sh build.sh\"\n").unwrap();
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho \"error[E0425]: cannot find value x in this scope\"\nexit 1\n",
+    )
+    .unwrap();
+    std::fs::write(
+        f.repo.join(".ostra/project.toml"),
+        "[commands]\nbuild = \"sh build.sh\"\n",
+    )
+    .unwrap();
     let mem = MemoryStore::open(&f.repo.join(".ostra/memory/knowledge.sqlite3")).unwrap();
-    mem.record("app", "error E0425 cannot find value means the import is missing", "test").unwrap();
-    let s = spec(&f, AgentName::Implementer, PermissionMode::Bypass, impl_caps());
+    mem.record(
+        "app",
+        "error E0425 cannot find value means the import is missing",
+        "test",
+    )
+    .unwrap();
+    let s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Bypass,
+        impl_caps(),
+    );
     let report = s.ctx.report_file.clone().unwrap();
     let p = ScriptedProvider::new();
     p.push_tool_use("Bash", json!({"command": "sh build.sh"}));
     p.push_tool_use("Bash", json!({"command": "sh build.sh"}));
     p.push_tool_use("submit_implementer", json!({"status": "stuck", "report_path": report.display().to_string(), "changed_files": [], "summary": "s", "stuck": {"diagnostic": "E0425", "need": "the import"}}));
     let (exec, p) = executor(p);
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Stuck);
     let reqs = p.requests();
     let first = &tool_results(&reqs[1])[0].0;
     assert!(!first.contains("Lessons recorded"), "{first}");
     let second = &tool_results(&reqs[2])[0].0;
-    assert!(second.contains("Lessons recorded earlier") && second.contains("import is missing"), "{second}");
+    assert!(
+        second.contains("Lessons recorded earlier") && second.contains("import is missing"),
+        "{second}"
+    );
     assert!(r.usage.build_ms > 0 || r.usage.tool_calls == 2);
 }
 
 #[tokio::test]
 async fn submit_needs_the_report_file() {
     let f = fixture();
-    let s = spec(&f, AgentName::Implementer, PermissionMode::AcceptEdits, impl_caps());
+    let s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::AcceptEdits,
+        impl_caps(),
+    );
     let report = s.ctx.report_file.clone().unwrap();
     let p = ScriptedProvider::new();
     p.push_tool_use("submit_implementer", submit_ok(&report));
     p.push_tool_use("Report", json!({"content": "r"}));
     p.push_tool_use("submit_implementer", submit_ok(&report));
     let (exec, p) = executor(p);
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Ok);
-    assert!(tool_results(&p.requests()[1])[0].0.contains("before you call"));
+    assert!(
+        tool_results(&p.requests()[1])[0]
+            .0
+            .contains("before you call")
+    );
 }
 
 #[tokio::test]
 async fn missing_provider_is_a_clear_error() {
     let f = fixture();
-    let mut s = spec(&f, AgentName::Explore, PermissionMode::Default, vec![Capability::Read]);
+    let mut s = spec(
+        &f,
+        AgentName::Explore,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
     s.route.model = "anthropic:claude-sonnet-5".into();
     let exec = NativeExecutor::new(Arc::new(Providers::empty()), Arc::new(|_: &str| None));
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Error);
     assert!(r.error.unwrap().contains("no API key"));
 }
@@ -364,12 +547,22 @@ async fn missing_provider_is_a_clear_error() {
 #[tokio::test]
 async fn pause_turn_and_refusal() {
     let f = fixture();
-    let s = spec(&f, AgentName::Explore, PermissionMode::Default, vec![Capability::Read]);
+    let s = spec(
+        &f,
+        AgentName::Explore,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
     let p = ScriptedProvider::new();
-    p.push(response(vec![Block::text("searching")], StopReason::PauseTurn));
+    p.push(response(
+        vec![Block::text("searching")],
+        StopReason::PauseTurn,
+    ));
     p.push(response(vec![Block::text("no")], StopReason::Refusal));
     let (exec, p) = executor(p);
-    let r = exec.run(s, Arc::new(FakeHost::default()), CancellationToken::new()).await;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Error);
     assert!(r.error.unwrap().contains("refused"));
     assert_eq!(p.requests().len(), 2);
@@ -378,7 +571,10 @@ async fn pause_turn_and_refusal() {
 #[test]
 fn coalescer_chunks() {
     let host = Arc::new(FakeHost::default());
-    let c = Coalescer { host: host.clone(), buf: Mutex::new((false, String::new())) };
+    let c = Coalescer {
+        host: host.clone(),
+        buf: Mutex::new((false, String::new())),
+    };
     for _ in 0..10 {
         c.push(false, "abc");
     }

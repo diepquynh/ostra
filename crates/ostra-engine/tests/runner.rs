@@ -7,7 +7,8 @@ use ostra_core::api::{CreateSession, SessionStatus};
 use ostra_core::config::{GlobalConfig, ProjectEntry, ResolvedRoute, WorkspaceSettings};
 use ostra_core::event::{ExecPurpose, JudgeKind, SessionEvent, SessionOptions};
 use ostra_core::exec::{
-    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec, ExecutionStatus, Executor, Usage,
+    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
+    ExecutionStatus, Executor, Usage,
 };
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
@@ -31,7 +32,10 @@ impl Services for Fake {
     fn global(&self) -> GlobalConfig {
         let mut g = GlobalConfig::default();
         for t in g.tiers.values_mut() {
-            if t.fast.as_deref().is_some_and(|m| m.starts_with("anthropic:")) {
+            if t.fast
+                .as_deref()
+                .is_some_and(|m| m.starts_with("anthropic:"))
+            {
                 t.fast = Some("mock:fast".into());
                 t.balanced = Some("mock:balanced".into());
                 t.advanced = Some("mock:advanced".into());
@@ -49,8 +53,17 @@ impl Services for Fake {
     fn factory(&self) -> Arc<dyn SpawnFactory> {
         Arc::new(AgentsFactory)
     }
-    async fn judge(&self, _route: &ResolvedRoute, system: &str, user: &str, schema: Value, _e: Effort) -> Result<(Value, Usage), String> {
-        let out = if system.contains("\"category\"") || user.contains("# Toggles from the New task form") {
+    async fn judge(
+        &self,
+        _route: &ResolvedRoute,
+        system: &str,
+        user: &str,
+        schema: Value,
+        _e: Effort,
+    ) -> Result<(Value, Usage), String> {
+        let out = if system.contains("\"category\"")
+            || user.contains("# Toggles from the New task form")
+        {
             json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "research"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code.", "title": "Greeting"})
         } else if schema["properties"].get("stakes").is_some() {
             json!({"stakes": "high", "reason": "Touches two layers."})
@@ -59,8 +72,12 @@ impl Services for Fake {
         } else if schema["properties"].get("answer").is_some() {
             let kind = &schema["properties"]["answer"]["properties"]["kind"]["const"];
             match kind.as_str() {
-                Some("approval") => json!({"answer": {"kind": "approval", "approved": true}, "reason": "The fact-check passed."}),
-                Some("questions") => json!({"answer": {"kind": "questions", "answers": [{"id": "Q1", "question": "Which?", "answer": "A"}]}, "reason": "Recommended."}),
+                Some("approval") => {
+                    json!({"answer": {"kind": "approval", "approved": true}, "reason": "The fact-check passed."})
+                }
+                Some("questions") => {
+                    json!({"answer": {"kind": "questions", "answers": [{"id": "Q1", "question": "Which?", "answer": "A"}]}, "reason": "Recommended."})
+                }
                 _ => json!({"answer": {"kind": "choice", "option": "block"}, "reason": "r"}),
             }
         } else {
@@ -84,16 +101,30 @@ struct Scripted {
 
 #[async_trait]
 impl Executor for Scripted {
-    async fn run(&self, spec: ExecutionSpec, host: Arc<dyn ExecutionHost>, _cancel: CancellationToken) -> ExecutionResult {
-        host.emit(ExecutionDelta::Text { text: format!("{} running", spec.agent) });
+    async fn run(
+        &self,
+        spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        _cancel: CancellationToken,
+    ) -> ExecutionResult {
+        host.emit(ExecutionDelta::Text {
+            text: format!("{} running", spec.agent),
+        });
         host.emit(ExecutionDelta::ToolCall {
             call_id: "c1".into(),
-            call: ostra_core::policy::ToolCall::new("Read", json!({"file_path": spec.ctx.repo_root.join("src.txt")})),
+            call: ostra_core::policy::ToolCall::new(
+                "Read",
+                json!({"file_path": spec.ctx.repo_root.join("src.txt")}),
+            ),
         });
         let sess = spec.ctx.session_dir.clone();
         let purpose = self.runs.lock().unwrap().len();
         let _ = purpose;
-        self.runs.lock().unwrap().push((spec.agent, ExecPurpose::QuickAnswer, spec.first_message.clone()));
+        self.runs.lock().unwrap().push((
+            spec.agent,
+            ExecPurpose::QuickAnswer,
+            spec.first_message.clone(),
+        ));
         let root = spec.ctx.session_root.clone();
         let spec_path = root.join("ostra-spec-1.md");
         let plan_path = root.join("ostra-plan-1.md");
@@ -107,7 +138,9 @@ impl Executor for Scripted {
                 std::fs::write(&spec_path, "# Spec").unwrap();
                 json!({"spec_path": spec_path, "open_questions": [], "external_evidence_rows": 0, "deliverables": 1, "requirements": 2, "summary": "spec"})
             }
-            AgentName::FactCheck => json!({"verdict": "PASS", "target": if spec.first_message.contains("Target type: plan") { "plan" } else { "spec" }, "findings": []}),
+            AgentName::FactCheck => {
+                json!({"verdict": "PASS", "target": if spec.first_message.contains("Target type: plan") { "plan" } else { "spec" }, "findings": []})
+            }
             AgentName::Plan => {
                 std::fs::write(&plan_path, "# Plan").unwrap();
                 let phase = root.join("ostra-plan-1-phase-1.md");
@@ -120,14 +153,19 @@ impl Executor for Scripted {
                 std::fs::write(&report, "# Report").unwrap();
                 json!({"status": "ok", "report_path": report, "changed_files": ["src.txt"], "summary": "done"})
             }
-            AgentName::CodeReviewer => json!({"findings": [], "security_block": false, "ledger_path": "/l", "summary": "passed"}),
+            AgentName::CodeReviewer => {
+                json!({"findings": [], "security_block": false, "ledger_path": "/l", "summary": "passed"})
+            }
             other => return ExecutionResult::error(format!("unexpected agent {other}")),
         };
         ExecutionResult {
             status: ExecutionStatus::Ok,
             submit: Some(submit),
             final_text: "done".into(),
-            usage: Usage { cost_usd: 0.01, ..Default::default() },
+            usage: Usage {
+                cost_usd: 0.01,
+                ..Default::default()
+            },
             native_session_id: None,
             error: None,
         }
@@ -138,7 +176,11 @@ fn project(dir: &Path) -> PathBuf {
     let p = dir.join("app");
     std::fs::create_dir_all(p.join(".ostra")).unwrap();
     std::fs::write(p.join(".ostra/INVENTORY.md"), "# Inventory").unwrap();
-    std::fs::write(p.join(".ostra/project.toml"), "[commands]\nformat = \"true\"\n").unwrap();
+    std::fs::write(
+        p.join(".ostra/project.toml"),
+        "[commands]\nformat = \"true\"\n",
+    )
+    .unwrap();
     p
 }
 
@@ -149,16 +191,30 @@ async fn implement_session_runs_to_completion_under_yolo() {
     let ws_root = dir.path().join("ws");
     std::fs::create_dir_all(&ws_root).unwrap();
     let mut ws = WorkspaceSettings::seeded("t");
-    ws.projects.push(ProjectEntry { key: "app".into(), path: app.clone(), stack: None });
-    let exec = Arc::new(Scripted { root: app.clone(), runs: Mutex::new(vec![]) });
-    let services = Arc::new(Fake { ws, executor: exec.clone(), notices: Mutex::new(vec![]) });
+    ws.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app.clone(),
+        stack: None,
+    });
+    let exec = Arc::new(Scripted {
+        root: app.clone(),
+        runs: Mutex::new(vec![]),
+    });
+    let services = Arc::new(Fake {
+        ws,
+        executor: exec.clone(),
+        notices: Mutex::new(vec![]),
+    });
     let db = WorkspaceDb::open_in_memory().unwrap();
     let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
     let mut rx = engine.subscribe();
     let summary = engine
         .create_session(CreateSession {
             request: "Add a greeting".into(),
-            options: SessionOptions { yolo: true, ..Default::default() },
+            options: SessionOptions {
+                yolo: true,
+                ..Default::default()
+            },
             projects: vec![],
         })
         .unwrap();
@@ -168,7 +224,17 @@ async fn implement_session_runs_to_completion_under_yolo() {
         if st.is_terminal() {
             break;
         }
-        assert!(tokio::time::Instant::now() < deadline, "timed out; events: {:#?}", engine.db().events(&summary.id).unwrap().iter().map(|e| format!("{:?}", e.event)).collect::<Vec<_>>());
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out; events: {:#?}",
+            engine
+                .db()
+                .events(&summary.id)
+                .unwrap()
+                .iter()
+                .map(|e| format!("{:?}", e.event))
+                .collect::<Vec<_>>()
+        );
         let _ = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
     }
     let st = engine.state(&summary.id).unwrap();
@@ -182,7 +248,10 @@ async fn implement_session_runs_to_completion_under_yolo() {
         })
         .collect();
     assert!(decisions.contains(&JudgeKind::Classify));
-    assert!(decisions.contains(&JudgeKind::YoloAnswer), "approvals were answered by the YOLO judge");
+    assert!(
+        decisions.contains(&JudgeKind::YoloAnswer),
+        "approvals were answered by the YOLO judge"
+    );
     let agents: Vec<AgentName> = exec.runs.lock().unwrap().iter().map(|r| r.0).collect();
     assert_eq!(
         agents,
@@ -206,21 +275,56 @@ async fn implement_session_runs_to_completion_under_yolo() {
     let detail = engine.detail(&summary.id).unwrap();
     assert_eq!(summary.title.as_deref(), Some("Greeting"));
     assert_eq!(detail.summary.title.as_deref(), Some("Greeting"));
-    let imp = detail.executions.iter().find(|e| e.agent == AgentName::Implementer).unwrap();
+    let imp = detail
+        .executions
+        .iter()
+        .find(|e| e.agent == AgentName::Implementer)
+        .unwrap();
     assert_eq!(imp.group, "implementer:app");
     assert_eq!(imp.run_label, "Phase 1");
     assert_eq!(imp.stream, ostra_core::executor::ExecStream::Activity);
     assert_eq!(imp.summary.as_deref(), Some("Read src.txt"));
     assert!(!imp.has_transcript);
-    let checks: Vec<&str> = detail.executions.iter().filter(|e| e.agent == AgentName::FactCheck).map(|e| e.run_label.as_str()).collect();
+    let checks: Vec<&str> = detail
+        .executions
+        .iter()
+        .filter(|e| e.agent == AgentName::FactCheck)
+        .map(|e| e.run_label.as_str())
+        .collect();
     assert_eq!(checks, ["Spec check", "Plan check"]);
-    let groups: Vec<&str> = detail.execution_groups.iter().map(|g| g.group.as_str()).collect();
-    assert_eq!(groups, ["explore:app", "generate-spec:app", "fact-check:app", "plan:app", "implementer:app", "code-reviewer:app"]);
+    let groups: Vec<&str> = detail
+        .execution_groups
+        .iter()
+        .map(|g| g.group.as_str())
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            "explore:app",
+            "generate-spec:app",
+            "fact-check:app",
+            "plan:app",
+            "implementer:app",
+            "code-reviewer:app"
+        ]
+    );
     assert_eq!(detail.execution_groups[2].executions.len(), 2);
-    assert!(detail.execution_groups.iter().all(|g| g.status == ExecutionStatus::Ok));
+    assert!(
+        detail
+            .execution_groups
+            .iter()
+            .all(|g| g.status == ExecutionStatus::Ok)
+    );
     assert_eq!(engine.execution(&imp.id).unwrap().run_label, "Phase 1");
     assert!(detail.completion.unwrap().contains("Everything ran"));
-    assert!(services.notices.lock().unwrap().iter().any(|n| n.title == "Session complete"));
+    assert!(
+        services
+            .notices
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|n| n.title == "Session complete")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -231,10 +335,26 @@ async fn init_session_start_and_end_notify_project_changes() {
     let ws_root = dir.path().join("ws");
     std::fs::create_dir_all(&ws_root).unwrap();
     let mut ws = WorkspaceSettings::seeded("t");
-    ws.projects.push(ProjectEntry { key: "app".into(), path: app.clone(), stack: None });
-    let exec = Arc::new(Scripted { root: app, runs: Mutex::new(vec![]) });
-    let services = Arc::new(Fake { ws, executor: exec, notices: Mutex::new(vec![]) });
-    let engine = Engine::new(ws_root, WorkspaceId::new(), WorkspaceDb::open_in_memory().unwrap(), services);
+    ws.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app.clone(),
+        stack: None,
+    });
+    let exec = Arc::new(Scripted {
+        root: app,
+        runs: Mutex::new(vec![]),
+    });
+    let services = Arc::new(Fake {
+        ws,
+        executor: exec,
+        notices: Mutex::new(vec![]),
+    });
+    let engine = Engine::new(
+        ws_root,
+        WorkspaceId::new(),
+        WorkspaceDb::open_in_memory().unwrap(),
+        services,
+    );
     let mut rx = engine.subscribe();
     let summary = engine.create_init_session("app", None).unwrap();
     engine.stop_session(&summary.id).unwrap();

@@ -37,7 +37,11 @@ pub fn contain(root: &Path, raw: &str) -> Result<Contained, String> {
         }
     }
     let rel = parts.join("/");
-    let lexical = if rel.is_empty() { root.to_path_buf() } else { root.join(&rel) };
+    let lexical = if rel.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(&rel)
+    };
     // Same rule as the write-scope guard: follow symlinks of the longest existing prefix, then
     // require the result inside the root, so a link cannot lead out of the project.
     let real = paths::resolve(root, Path::new(&rel));
@@ -54,7 +58,12 @@ fn outside() -> String {
 fn walker(dir: &Path) -> ignore::WalkBuilder {
     let mut b = ignore::WalkBuilder::new(dir);
     // The same ignore sources as the Grep and Glob tools, so the dock and the agents agree.
-    b.hidden(false).git_ignore(true).git_exclude(true).git_global(true).parents(true).require_git(false);
+    b.hidden(false)
+        .git_ignore(true)
+        .git_exclude(true)
+        .git_global(true)
+        .parents(true)
+        .require_git(false);
     b
 }
 
@@ -62,7 +71,11 @@ fn walker(dir: &Path) -> ignore::WalkBuilder {
 fn kept_children(dir: &Path) -> HashSet<OsString> {
     let mut b = walker(dir);
     b.max_depth(Some(1));
-    b.build().flatten().filter(|e| e.depth() == 1).map(|e| e.file_name().to_os_string()).collect()
+    b.build()
+        .flatten()
+        .filter(|e| e.depth() == 1)
+        .map(|e| e.file_name().to_os_string())
+        .collect()
 }
 
 /// Whether an ignore rule excludes `rel` itself or one of its parent folders.
@@ -74,7 +87,9 @@ pub fn is_ignored(root: &Path, rel: &str) -> bool {
     let depth = rel.split('/').count();
     let chain = target.clone();
     let mut b = walker(root);
-    b.max_depth(Some(depth)).follow_links(true).filter_entry(move |e| chain.starts_with(e.path()));
+    b.max_depth(Some(depth))
+        .follow_links(true)
+        .filter_entry(move |e| chain.starts_with(e.path()));
     !b.build().flatten().any(|e| e.path() == target)
 }
 
@@ -97,23 +112,62 @@ pub struct Listing {
 /// List `dir` (already contained) depth-first down to `depth` levels. Folders sort before files;
 /// `.git` is never listed, dotfiles only with `hidden`. Symlinked and ignored folders are listed
 /// but not entered.
-pub fn list(root: &Path, dir: &Contained, depth: u32, hidden: bool, cap: usize) -> Result<Listing, String> {
-    let meta = std::fs::metadata(&dir.real).map_err(|_| format!("{} does not exist.", display(&dir.rel)))?;
+pub fn list(
+    root: &Path,
+    dir: &Contained,
+    depth: u32,
+    hidden: bool,
+    cap: usize,
+) -> Result<Listing, String> {
+    let meta = std::fs::metadata(&dir.real)
+        .map_err(|_| format!("{} does not exist.", display(&dir.rel)))?;
     if !meta.is_dir() {
-        return Err(format!("{} is a file. Open it with the file endpoint.", display(&dir.rel)));
+        return Err(format!(
+            "{} is a file. Open it with the file endpoint.",
+            display(&dir.rel)
+        ));
     }
-    let mut out = Listing { entries: vec![], truncated: false };
-    walk_dir(&dir.lexical, &dir.rel, depth.max(1), hidden, is_ignored(root, &dir.rel), cap, &mut out);
+    let mut out = Listing {
+        entries: vec![],
+        truncated: false,
+    };
+    walk_dir(
+        &dir.lexical,
+        &dir.rel,
+        depth.max(1),
+        hidden,
+        is_ignored(root, &dir.rel),
+        cap,
+        &mut out,
+    );
     Ok(out)
 }
 
 fn display(rel: &str) -> String {
-    if rel.is_empty() { "The project root".into() } else { rel.to_string() }
+    if rel.is_empty() {
+        "The project root".into()
+    } else {
+        rel.to_string()
+    }
 }
 
-fn walk_dir(dir: &Path, rel: &str, depth: u32, hidden: bool, parent_ignored: bool, cap: usize, out: &mut Listing) {
-    let Ok(read) = std::fs::read_dir(dir) else { return };
-    let kept = if parent_ignored { HashSet::new() } else { kept_children(dir) };
+fn walk_dir(
+    dir: &Path,
+    rel: &str,
+    depth: u32,
+    hidden: bool,
+    parent_ignored: bool,
+    cap: usize,
+    out: &mut Listing,
+) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let kept = if parent_ignored {
+        HashSet::new()
+    } else {
+        kept_children(dir)
+    };
     let mut rows: Vec<(RawEntry, PathBuf)> = vec![];
     for e in read.flatten() {
         let name = e.file_name();
@@ -122,20 +176,40 @@ fn walk_dir(dir: &Path, rel: &str, depth: u32, hidden: bool, parent_ignored: boo
             continue;
         }
         let is_symlink = e.file_type().is_ok_and(|t| t.is_symlink());
-        let meta = e.metadata().ok().filter(|_| !is_symlink).or_else(|| std::fs::metadata(e.path()).ok());
+        let meta = e
+            .metadata()
+            .ok()
+            .filter(|_| !is_symlink)
+            .or_else(|| std::fs::metadata(e.path()).ok());
         let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
         let entry = RawEntry {
-            rel: if rel.is_empty() { name_s.clone() } else { format!("{rel}/{name_s}") },
+            rel: if rel.is_empty() {
+                name_s.clone()
+            } else {
+                format!("{rel}/{name_s}")
+            },
             name: name_s,
             is_dir,
             is_symlink,
-            size: meta.as_ref().filter(|m| !m.is_dir()).map(|m| m.len()).unwrap_or(0),
-            modified: meta.as_ref().and_then(|m| m.modified().ok()).map(chrono::DateTime::<chrono::Utc>::from),
+            size: meta
+                .as_ref()
+                .filter(|m| !m.is_dir())
+                .map(|m| m.len())
+                .unwrap_or(0),
+            modified: meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .map(chrono::DateTime::<chrono::Utc>::from),
             ignored: parent_ignored || !kept.contains(&name),
         };
         rows.push((entry, e.path()));
     }
-    rows.sort_by(|(a, _), (b, _)| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())).then_with(|| a.name.cmp(&b.name)));
+    rows.sort_by(|(a, _), (b, _)| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.name.cmp(&b.name))
+    });
     for (entry, path) in rows {
         if out.entries.len() >= cap {
             out.truncated = true;
@@ -157,16 +231,25 @@ pub fn index(root: &Path, cap: usize) -> (Vec<String>, bool) {
     let mut out = vec![];
     let mut truncated = false;
     for e in b.build().flatten() {
-        let is_file = e.file_type().is_some_and(|t| t.is_file() || (t.is_symlink() && e.path().is_file()));
+        let is_file = e
+            .file_type()
+            .is_some_and(|t| t.is_file() || (t.is_symlink() && e.path().is_file()));
         if !is_file {
             continue;
         }
-        let Ok(rel) = e.path().strip_prefix(root) else { continue };
+        let Ok(rel) = e.path().strip_prefix(root) else {
+            continue;
+        };
         if out.len() >= cap {
             truncated = true;
             break;
         }
-        out.push(rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"));
+        out.push(
+            rel.components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
+        );
     }
     out.sort();
     (out, truncated)
@@ -187,16 +270,33 @@ pub fn looks_binary(bytes: &[u8]) -> bool {
 
 /// Read a contained file as text up to `cap` bytes, or report it binary.
 pub fn read(file: &Contained, cap: usize) -> Result<FileRead, String> {
-    let meta = std::fs::metadata(&file.real).map_err(|_| format!("{} does not exist.", display(&file.rel)))?;
+    let meta = std::fs::metadata(&file.real)
+        .map_err(|_| format!("{} does not exist.", display(&file.rel)))?;
     if meta.is_dir() {
-        return Err(format!("{} is a folder. List it with the tree endpoint.", display(&file.rel)));
+        return Err(format!(
+            "{} is a folder. List it with the tree endpoint.",
+            display(&file.rel)
+        ));
     }
-    let mut f = std::fs::File::open(&file.real).map_err(|e| format!("Cannot read {}: {e}", file.rel))?;
+    let mut f =
+        std::fs::File::open(&file.real).map_err(|e| format!("Cannot read {}: {e}", file.rel))?;
     let mut buf = Vec::with_capacity((meta.len() as usize).min(cap + 1));
-    (&mut f).take(cap as u64 + 1).read_to_end(&mut buf).map_err(|e| format!("Cannot read {}: {e}", file.rel))?;
-    let modified = meta.modified().ok().map(chrono::DateTime::<chrono::Utc>::from);
+    (&mut f)
+        .take(cap as u64 + 1)
+        .read_to_end(&mut buf)
+        .map_err(|e| format!("Cannot read {}: {e}", file.rel))?;
+    let modified = meta
+        .modified()
+        .ok()
+        .map(chrono::DateTime::<chrono::Utc>::from);
     if looks_binary(&buf) {
-        return Ok(FileRead { content: None, binary: true, size: meta.len(), truncated: false, modified });
+        return Ok(FileRead {
+            content: None,
+            binary: true,
+            size: meta.len(),
+            truncated: false,
+            modified,
+        });
     }
     let truncated = buf.len() > cap;
     buf.truncate(cap);
@@ -208,7 +308,13 @@ pub fn read(file: &Contained, cap: usize) -> Result<FileRead, String> {
             buf.truncate(e.valid_up_to());
         }
     }
-    Ok(FileRead { content: Some(String::from_utf8_lossy(&buf).to_string()), binary: false, size: meta.len(), truncated, modified })
+    Ok(FileRead {
+        content: Some(String::from_utf8_lossy(&buf).to_string()),
+        binary: false,
+        size: meta.len(),
+        truncated,
+        modified,
+    })
 }
 
 #[cfg(test)]
@@ -227,9 +333,15 @@ mod tests {
     fn containment_refuses_parent_escapes() {
         let (_d, root) = root();
         assert_eq!(contain(&root, "src/lib.rs").unwrap().rel, "src/lib.rs");
-        assert_eq!(contain(&root, "./src/../src/lib.rs").unwrap().rel, "src/lib.rs");
+        assert_eq!(
+            contain(&root, "./src/../src/lib.rs").unwrap().rel,
+            "src/lib.rs"
+        );
         assert_eq!(contain(&root, "").unwrap().rel, "");
-        assert_eq!(contain(&root, "src/new/not-yet.rs").unwrap().real, root.join("src/new/not-yet.rs"));
+        assert_eq!(
+            contain(&root, "src/new/not-yet.rs").unwrap().real,
+            root.join("src/new/not-yet.rs")
+        );
         assert!(contain(&root, "..").is_err());
         assert!(contain(&root, "src/../../proj2/x").is_err());
         assert!(contain(&root, "/etc/passwd").is_err());
@@ -249,7 +361,11 @@ mod tests {
         assert!(contain(&root, "link/key").is_err());
         assert!(contain(&root, "key-link").is_err());
         assert!(contain(&root, "link/missing/deeper").is_err());
-        assert_eq!(contain(&root, "inner/lib.rs").unwrap().real, root.join("src/lib.rs"), "a link that stays inside is allowed");
+        assert_eq!(
+            contain(&root, "inner/lib.rs").unwrap().real,
+            root.join("src/lib.rs"),
+            "a link that stays inside is allowed"
+        );
     }
 
     #[test]
@@ -265,19 +381,49 @@ mod tests {
 
         let top = contain(&root, "").unwrap();
         let l = list(&root, &top, 1, false, 100).unwrap();
-        let names: Vec<(&str, bool, bool)> = l.entries.iter().map(|e| (e.name.as_str(), e.is_dir, e.ignored)).collect();
-        assert_eq!(names, vec![("src", true, false), ("target", true, true), ("README.md", false, false), ("run.log", false, true)]);
+        let names: Vec<(&str, bool, bool)> = l
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.is_dir, e.ignored))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("src", true, false),
+                ("target", true, true),
+                ("README.md", false, false),
+                ("run.log", false, true)
+            ]
+        );
 
         let l = list(&root, &top, 1, true, 100).unwrap();
         let names: Vec<&str> = l.entries.iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec![".ostra", "src", "target", ".gitignore", "README.md", "run.log"], ".git is never listed");
+        assert_eq!(
+            names,
+            vec![
+                ".ostra",
+                "src",
+                "target",
+                ".gitignore",
+                "README.md",
+                "run.log"
+            ],
+            ".git is never listed"
+        );
 
         let l = list(&root, &top, 2, false, 100).unwrap();
         let rels: Vec<&str> = l.entries.iter().map(|e| e.rel.as_str()).collect();
-        assert_eq!(rels, vec!["src", "src/lib.rs", "target", "README.md", "run.log"], "ignored folders are not entered");
+        assert_eq!(
+            rels,
+            vec!["src", "src/lib.rs", "target", "README.md", "run.log"],
+            "ignored folders are not entered"
+        );
 
         let inside = list(&root, &contain(&root, "target").unwrap(), 1, false, 100).unwrap();
-        assert!(inside.entries.iter().all(|e| e.ignored), "entries of an ignored folder are ignored");
+        assert!(
+            inside.entries.iter().all(|e| e.ignored),
+            "entries of an ignored folder are ignored"
+        );
         assert!(is_ignored(&root, "target/debug/app"));
         assert!(!is_ignored(&root, "src/lib.rs"));
 
@@ -310,7 +456,11 @@ mod tests {
         std::fs::write(root.join("big.txt"), "é".repeat(10)).unwrap();
         std::fs::write(root.join("img.bin"), [0x89, 0x50, 0x00, 0x01]).unwrap();
         let r = read(&contain(&root, "big.txt").unwrap(), 5).unwrap();
-        assert_eq!(r.content.as_deref(), Some("éé"), "cut on a character boundary");
+        assert_eq!(
+            r.content.as_deref(),
+            Some("éé"),
+            "cut on a character boundary"
+        );
         assert!(r.truncated);
         assert_eq!(r.size, 20);
         let r = read(&contain(&root, "img.bin").unwrap(), 1024).unwrap();

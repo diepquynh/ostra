@@ -31,7 +31,10 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub fn new(tool: impl Into<String>, input: serde_json::Value) -> Self {
-        ToolCall { tool: tool.into(), input }
+        ToolCall {
+            tool: tool.into(),
+            input,
+        }
     }
 
     pub fn str_field(&self, key: &str) -> Option<&str> {
@@ -66,10 +69,16 @@ pub struct RuleRef {
 
 impl RuleRef {
     pub fn guard(rule: &str) -> Self {
-        RuleRef { layer: "guard".into(), rule: rule.into() }
+        RuleRef {
+            layer: "guard".into(),
+            rule: rule.into(),
+        }
     }
     pub fn permission(rule: &str) -> Self {
-        RuleRef { layer: "permission".into(), rule: rule.into() }
+        RuleRef {
+            layer: "permission".into(),
+            rule: rule.into(),
+        }
     }
 }
 
@@ -92,10 +101,16 @@ impl PolicyDecision {
         PolicyDecision::Allow { rule: None }
     }
     pub fn deny(rule: RuleRef, reason: impl Into<String>) -> Self {
-        PolicyDecision::Deny { reason: reason.into(), rule }
+        PolicyDecision::Deny {
+            reason: reason.into(),
+            rule,
+        }
     }
     pub fn ask(rule: RuleRef, reason: impl Into<String>) -> Self {
-        PolicyDecision::Ask { reason: reason.into(), rule }
+        PolicyDecision::Ask {
+            reason: reason.into(),
+            rule,
+        }
     }
     pub fn is_allow(&self) -> bool {
         matches!(self, PolicyDecision::Allow { .. })

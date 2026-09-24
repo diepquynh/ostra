@@ -3,10 +3,13 @@
 use crate::app::Shared;
 use crate::services::ServerServices;
 use ostra_core::agent::{AgentName, JUDGE_ROUTE};
-use ostra_core::api::{AgentInfo, ImportProject, InitStatus, ProjectView, ProviderStatus, WorkspaceDetail};
+use ostra_core::api::{
+    AgentInfo, ImportProject, InitStatus, ProjectView, ProviderStatus, WorkspaceDetail,
+};
 use ostra_core::config::{
-    Environment, GlobalConfig, ProjectEntry, ProjectProfile, RouteQuery, ValidationIssue, WorkspaceSettings, load_toml,
-    load_toml_required, resolve_executor, resolve_route, save_toml, validate_workspace,
+    Environment, GlobalConfig, ProjectEntry, ProjectProfile, RouteQuery, ValidationIssue,
+    WorkspaceSettings, load_toml, load_toml_required, resolve_executor, resolve_route, save_toml,
+    validate_workspace,
 };
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Tier;
@@ -29,52 +32,90 @@ pub fn default_tier(key: &str) -> Tier {
     if key == JUDGE_ROUTE {
         return Tier::Fast;
     }
-    key.parse().map(|a| ostra_agents::agent_def(a).default_tier).unwrap_or(Tier::Balanced)
+    key.parse()
+        .map(|a| ostra_agents::agent_def(a).default_tier)
+        .unwrap_or(Tier::Balanced)
 }
 
 /// Machine facts that settings validation needs.
 pub fn environment(shared: &Shared) -> Environment {
     Environment {
         installed_harnesses: shared.env.read().installed(),
-        providers_with_keys: shared.providers.status().into_iter().filter(|p| p.has_key).map(|p| p.name).collect(),
+        providers_with_keys: shared
+            .providers
+            .status()
+            .into_iter()
+            .filter(|p| p.has_key)
+            .map(|p| p.name)
+            .collect(),
     }
 }
 
 /// Settings validation: routes, harness availability, keys, projects, and permission rules.
-pub fn validate_settings(global: &GlobalConfig, env: &Environment, settings: &WorkspaceSettings) -> Vec<ValidationIssue> {
+pub fn validate_settings(
+    global: &GlobalConfig,
+    env: &Environment,
+    settings: &WorkspaceSettings,
+) -> Vec<ValidationIssue> {
     let mut issues = validate_workspace(global, settings, env, default_tier);
-    let lists = [("allow", &settings.permissions.allow), ("ask", &settings.permissions.ask), ("deny", &settings.permissions.deny)];
+    let lists = [
+        ("allow", &settings.permissions.allow),
+        ("ask", &settings.permissions.ask),
+        ("deny", &settings.permissions.deny),
+    ];
     for (name, list) in lists {
         for (i, rule) in list.iter().enumerate() {
             if let Err(e) = ostra_policy::validate_rule(rule) {
-                issues.push(ValidationIssue { path: format!("permissions.{name}[{i}]"), message: e });
+                issues.push(ValidationIssue {
+                    path: format!("permissions.{name}[{i}]"),
+                    message: e,
+                });
             }
         }
     }
     for (i, p) in settings.projects.iter().enumerate() {
         // A relative path already has its own issue from `validate_workspace`.
         if p.path.is_absolute() && !p.path.is_dir() {
-            issues.push(ValidationIssue { path: format!("projects[{i}].path"), message: format!("{} is not a folder.", p.path.display()) });
+            issues.push(ValidationIssue {
+                path: format!("projects[{i}].path"),
+                message: format!("{} is not a folder.", p.path.display()),
+            });
         }
     }
     issues
 }
 
 fn field_issue(path: &str, message: String) -> ValidationIssue {
-    ValidationIssue { path: path.into(), message }
+    ValidationIssue {
+        path: path.into(),
+        message,
+    }
 }
 
 /// The settings entry an import request adds, or every problem with the request, each on its
 /// field: `key`, `path`, or `stack`.
-pub fn import_entry(settings: &WorkspaceSettings, root: &Path, req: &ImportProject) -> Result<ProjectEntry, Vec<ValidationIssue>> {
+pub fn import_entry(
+    settings: &WorkspaceSettings,
+    root: &Path,
+    req: &ImportProject,
+) -> Result<ProjectEntry, Vec<ValidationIssue>> {
     let mut issues = vec![];
     let key = req.key.trim();
     if !is_project_key(key) {
         issues.push(field_issue("key", format!("`{key}` is not a project key. Use lowercase letters, digits, and dashes, starting with a letter or digit.")));
     } else if settings.project(key).is_some() {
-        issues.push(field_issue("key", format!("A project named `{key}` already exists in this workspace. Choose another key.")));
+        issues.push(field_issue(
+            "key",
+            format!(
+                "A project named `{key}` already exists in this workspace. Choose another key."
+            ),
+        ));
     }
-    let stack = req.stack.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let stack = req
+        .stack
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     if let Some(s) = stack.filter(|s| !is_stack_name(s)) {
         issues.push(field_issue("stack", stack_issue(s)));
     }
@@ -84,25 +125,41 @@ pub fn import_entry(settings: &WorkspaceSettings, root: &Path, req: &ImportProje
     } else {
         match std::fs::canonicalize(&req.path) {
             Err(_) => {
-                issues.push(field_issue("path", format!("{} does not exist.", req.path.display())));
+                issues.push(field_issue(
+                    "path",
+                    format!("{} does not exist.", req.path.display()),
+                ));
                 None
             }
             Ok(p) if !p.is_dir() => {
-                issues.push(field_issue("path", format!("{} is not a folder.", p.display())));
+                issues.push(field_issue(
+                    "path",
+                    format!("{} is not a folder.", p.display()),
+                ));
                 None
             }
             Ok(p) => {
                 if let Some(other) = settings.projects.iter().find(|o| o.path == p) {
-                    issues.push(field_issue("path", format!("That folder is already imported as `{}`.", other.key)));
+                    issues.push(field_issue(
+                        "path",
+                        format!("That folder is already imported as `{}`.", other.key),
+                    ));
                 } else if paths::is_inside(&root.join(paths::RUNTIME_DIR), &p) {
-                    issues.push(field_issue("path", "A project cannot live inside the workspace's .ostra directory.".into()));
+                    issues.push(field_issue(
+                        "path",
+                        "A project cannot live inside the workspace's .ostra directory.".into(),
+                    ));
                 }
                 Some(p)
             }
         }
     };
     match path {
-        Some(path) if issues.is_empty() => Ok(ProjectEntry { key: key.to_string(), path, stack: stack.map(str::to_string) }),
+        Some(path) if issues.is_empty() => Ok(ProjectEntry {
+            key: key.to_string(),
+            path,
+            stack: stack.map(str::to_string),
+        }),
         _ => Err(issues),
     }
 }
@@ -115,7 +172,11 @@ pub fn git_branch(project: &Path) -> Option<String> {
     let dir = if dot.is_file() {
         let text = std::fs::read_to_string(&dot).ok()?;
         let target = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
-        if target.is_absolute() { target } else { project.join(target) }
+        if target.is_absolute() {
+            target
+        } else {
+            project.join(target)
+        }
     } else {
         dot
     };
@@ -136,7 +197,15 @@ pub fn agent_infos(global: &GlobalConfig, settings: &WorkspaceSettings) -> Vec<A
             let def = ostra_agents::agent_def(name);
             let q = RouteQuery::new(name.as_str(), def.default_tier);
             let resolved = resolve_route(global, settings, q).ok();
-            let default_route = resolve_route(global, settings, RouteQuery { tier_override: Some(def.default_tier), ..q }).ok();
+            let default_route = resolve_route(
+                global,
+                settings,
+                RouteQuery {
+                    tier_override: Some(def.default_tier),
+                    ..q
+                },
+            )
+            .ok();
             let executor = resolve_executor(settings, name.as_str(), None);
             AgentInfo {
                 name,
@@ -163,9 +232,19 @@ impl WorkspaceRt {
     pub fn open(shared: Arc<Shared>, id: WorkspaceId, root: &Path) -> anyhow::Result<Self> {
         let db = WorkspaceDb::open(&paths::workspace_db(root))?;
         db.set_workspace_id(&id)?;
-        let services = Arc::new(ServerServices { shared: shared.clone(), root: root.to_path_buf(), workspace: id.clone() });
+        let services = Arc::new(ServerServices {
+            shared: shared.clone(),
+            root: root.to_path_buf(),
+            workspace: id.clone(),
+        });
         let engine = Engine::new(root.to_path_buf(), id.clone(), db.clone(), services);
-        let rt = WorkspaceRt { id, root: root.to_path_buf(), db, engine, shared };
+        let rt = WorkspaceRt {
+            id,
+            root: root.to_path_buf(),
+            db,
+            engine,
+            shared,
+        };
         rt.sync_projects();
         Ok(rt)
     }
@@ -190,8 +269,12 @@ impl WorkspaceRt {
         if !issues.is_empty() {
             return Err(issues);
         }
-        save_toml(&paths::workspace_toml(&self.root), settings)
-            .map_err(|e| vec![ValidationIssue { path: String::new(), message: e.to_string() }])?;
+        save_toml(&paths::workspace_toml(&self.root), settings).map_err(|e| {
+            vec![ValidationIssue {
+                path: String::new(),
+                message: e.to_string(),
+            }]
+        })?;
         self.sync_projects();
         Ok(())
     }
@@ -205,8 +288,17 @@ impl WorkspaceRt {
             }
         }
         for p in &settings.projects {
-            let status = if paths::project_inventory(&p.path).exists() { InitStatus::Initialized } else { InitStatus::NotInitialized };
-            let _ = self.db.upsert_project(&ProjectRow { key: p.key.clone(), path: p.path.clone(), init_status: status, stack: p.stack.clone() });
+            let status = if paths::project_inventory(&p.path).exists() {
+                InitStatus::Initialized
+            } else {
+                InitStatus::NotInitialized
+            };
+            let _ = self.db.upsert_project(&ProjectRow {
+                key: p.key.clone(),
+                path: p.path.clone(),
+                init_status: status,
+                stack: p.stack.clone(),
+            });
         }
     }
 
@@ -217,7 +309,13 @@ impl WorkspaceRt {
             .list_sessions()
             .unwrap_or_default()
             .into_iter()
-            .filter(|s| matches!(s.status, ostra_core::api::SessionStatus::Running | ostra_core::api::SessionStatus::Waiting))
+            .filter(|s| {
+                matches!(
+                    s.status,
+                    ostra_core::api::SessionStatus::Running
+                        | ostra_core::api::SessionStatus::Waiting
+                )
+            })
             .filter_map(|s| match s.kind {
                 ostra_core::event::SessionKind::Init { project } => Some(project),
                 _ => None,
@@ -237,8 +335,10 @@ impl WorkspaceRt {
                 } else {
                     InitStatus::NotInitialized
                 };
-                let profile: Option<ProjectProfile> =
-                    paths::project_profile(&p.path).exists().then(|| load_toml(&paths::project_profile(&p.path)).ok()).flatten();
+                let profile: Option<ProjectProfile> = paths::project_profile(&p.path)
+                    .exists()
+                    .then(|| load_toml(&paths::project_profile(&p.path)).ok())
+                    .flatten();
                 ProjectView {
                     key: p.key.clone(),
                     path: p.path.clone(),
@@ -246,7 +346,10 @@ impl WorkspaceRt {
                     ultracode_bootstrap: exists && ultracode_bootstrap(&p.path),
                     is_git: p.path.join(".git").exists(),
                     git_branch: if exists { git_branch(&p.path) } else { None },
-                    stack: p.stack.clone().or_else(|| profile.as_ref().and_then(|pr| pr.stack.language.clone())),
+                    stack: p
+                        .stack
+                        .clone()
+                        .or_else(|| profile.as_ref().and_then(|pr| pr.stack.language.clone())),
                     profile,
                 }
             })
@@ -256,9 +359,11 @@ impl WorkspaceRt {
     /// Add a project. Refusals name the request field they are about: `key`, `path`, or `stack`.
     pub fn import_project(&self, req: &ImportProject) -> Result<(), crate::setup::CreateError> {
         let mut settings = self.settings();
-        let entry = import_entry(&settings, &self.root, req).map_err(crate::setup::CreateError::Invalid)?;
+        let entry =
+            import_entry(&settings, &self.root, req).map_err(crate::setup::CreateError::Invalid)?;
         settings.projects.push(entry);
-        save_toml(&paths::workspace_toml(&self.root), &settings).map_err(|e| crate::setup::CreateError::Failed(e.to_string()))?;
+        save_toml(&paths::workspace_toml(&self.root), &settings)
+            .map_err(|e| crate::setup::CreateError::Failed(e.to_string()))?;
         self.sync_projects();
         Ok(())
     }
@@ -306,11 +411,19 @@ mod tests {
     use ostra_core::executor::{ExecutorKind, HarnessKind};
 
     fn request(path: &Path, key: &str, stack: Option<&str>) -> ImportProject {
-        ImportProject { path: path.to_path_buf(), key: key.into(), stack: stack.map(str::to_string) }
+        ImportProject {
+            path: path.to_path_buf(),
+            key: key.into(),
+            stack: stack.map(str::to_string),
+        }
     }
 
     fn fields(r: Result<ProjectEntry, Vec<ValidationIssue>>) -> Vec<String> {
-        r.err().unwrap_or_default().into_iter().map(|i| i.path).collect()
+        r.err()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| i.path)
+            .collect()
     }
 
     #[test]
@@ -322,21 +435,75 @@ mod tests {
         std::fs::create_dir_all(&app).unwrap();
         std::fs::write(base.join("file.txt"), "x").unwrap();
         let mut settings = WorkspaceSettings::seeded("ws");
-        settings.projects.push(ProjectEntry { key: "api".into(), path: base.join("api"), stack: None });
+        settings.projects.push(ProjectEntry {
+            key: "api".into(),
+            path: base.join("api"),
+            stack: None,
+        });
 
         let ok = import_entry(&settings, &root, &request(&app, " app ", Some(" "))).unwrap();
-        assert_eq!((ok.key.as_str(), ok.path.clone(), ok.stack.clone()), ("app", app.clone(), None));
-        assert_eq!(import_entry(&settings, &root, &request(&app, "app", Some("rust-axum"))).unwrap().stack.as_deref(), Some("rust-axum"));
+        assert_eq!(
+            (ok.key.as_str(), ok.path.clone(), ok.stack.clone()),
+            ("app", app.clone(), None)
+        );
+        assert_eq!(
+            import_entry(&settings, &root, &request(&app, "app", Some("rust-axum")))
+                .unwrap()
+                .stack
+                .as_deref(),
+            Some("rust-axum")
+        );
 
-        assert_eq!(fields(import_entry(&settings, &root, &request(&app, "App", Some("Go Lang")))), ["key", "stack"]);
-        assert_eq!(fields(import_entry(&settings, &root, &request(&app, "api", None))), ["key"]);
-        assert_eq!(fields(import_entry(&settings, &root, &request(Path::new("rel"), "b", None))), ["path"]);
-        assert_eq!(fields(import_entry(&settings, &root, &request(&base.join("nope"), "b", None))), ["path"]);
-        assert_eq!(fields(import_entry(&settings, &root, &request(&base.join("file.txt"), "b", None))), ["path"]);
-        assert_eq!(fields(import_entry(&settings, &root, &request(&root.join(".ostra/inner"), "b", None))), ["path"]);
+        assert_eq!(
+            fields(import_entry(
+                &settings,
+                &root,
+                &request(&app, "App", Some("Go Lang"))
+            )),
+            ["key", "stack"]
+        );
+        assert_eq!(
+            fields(import_entry(&settings, &root, &request(&app, "api", None))),
+            ["key"]
+        );
+        assert_eq!(
+            fields(import_entry(
+                &settings,
+                &root,
+                &request(Path::new("rel"), "b", None)
+            )),
+            ["path"]
+        );
+        assert_eq!(
+            fields(import_entry(
+                &settings,
+                &root,
+                &request(&base.join("nope"), "b", None)
+            )),
+            ["path"]
+        );
+        assert_eq!(
+            fields(import_entry(
+                &settings,
+                &root,
+                &request(&base.join("file.txt"), "b", None)
+            )),
+            ["path"]
+        );
+        assert_eq!(
+            fields(import_entry(
+                &settings,
+                &root,
+                &request(&root.join(".ostra/inner"), "b", None)
+            )),
+            ["path"]
+        );
         settings.projects.push(ok);
         let again = import_entry(&settings, &root, &request(&app, "other", None)).unwrap_err();
-        assert_eq!((again[0].path.as_str(), again[0].message.as_str()), ("path", "That folder is already imported as `app`."));
+        assert_eq!(
+            (again[0].path.as_str(), again[0].message.as_str()),
+            ("path", "That folder is already imported as `app`.")
+        );
     }
 
     #[test]
@@ -347,8 +514,16 @@ mod tests {
         std::fs::create_dir_all(p.join(".git")).unwrap();
         std::fs::write(p.join(".git/HEAD"), "ref: refs/heads/feature/login\n").unwrap();
         assert_eq!(git_branch(p).as_deref(), Some("feature/login"));
-        std::fs::write(p.join(".git/HEAD"), "3f2a9c1d0e4b5a6978877665544332211aabbccd\n").unwrap();
-        assert_eq!(git_branch(p).as_deref(), Some("3f2a9c1"), "a detached HEAD shows its short id");
+        std::fs::write(
+            p.join(".git/HEAD"),
+            "3f2a9c1d0e4b5a6978877665544332211aabbccd\n",
+        )
+        .unwrap();
+        assert_eq!(
+            git_branch(p).as_deref(),
+            Some("3f2a9c1"),
+            "a detached HEAD shows its short id"
+        );
         std::fs::write(p.join(".git/HEAD"), "garbage").unwrap();
         assert_eq!(git_branch(p), None);
 
@@ -357,32 +532,65 @@ mod tests {
         std::fs::create_dir_all(&wt).unwrap();
         std::fs::write(p.join("gitdirs/wt/HEAD"), "ref: refs/heads/topic\n").unwrap();
         std::fs::write(wt.join(".git"), "gitdir: ../gitdirs/wt\n").unwrap();
-        assert_eq!(git_branch(&wt).as_deref(), Some("topic"), "a .git file points at the real git dir");
+        assert_eq!(
+            git_branch(&wt).as_deref(),
+            Some("topic"),
+            "a .git file points at the real git dir"
+        );
     }
 
     #[test]
     fn agent_infos_resolve_current_and_default_routes() {
         let global = GlobalConfig::default();
         let mut settings = WorkspaceSettings::seeded("x");
-        settings.routing.model.by_agent.insert("plan".into(), "fast".into());
-        settings.routing.executor.by_agent.insert("implementer".into(), ExecutorKind::Harness(HarnessKind::Codex));
+        settings
+            .routing
+            .model
+            .by_agent
+            .insert("plan".into(), "fast".into());
+        settings.routing.executor.by_agent.insert(
+            "implementer".into(),
+            ExecutorKind::Harness(HarnessKind::Codex),
+        );
         settings.routing.model.by_agent.remove("explore");
         let infos = agent_infos(&global, &settings);
         assert_eq!(infos.len(), AgentName::ALL.len());
         let get = |n: AgentName| infos.iter().find(|i| i.name == n).unwrap();
 
         let plan = get(AgentName::Plan);
-        assert_eq!((plan.label.as_str(), plan.default_tier), ("Plan", Tier::Advanced));
-        assert_eq!(plan.resolved.as_ref().map(|r| (r.tier, r.model.as_str())), Some((Some(Tier::Fast), "anthropic:claude-haiku-4-5-20251001")));
-        assert_eq!(plan.default_route.as_ref().map(|r| r.model.as_str()), Some("anthropic:claude-opus-5-5"), "Agent default is the agent's own tier");
+        assert_eq!(
+            (plan.label.as_str(), plan.default_tier),
+            ("Plan", Tier::Advanced)
+        );
+        assert_eq!(
+            plan.resolved.as_ref().map(|r| (r.tier, r.model.as_str())),
+            Some((Some(Tier::Fast), "anthropic:claude-haiku-4-5-20251001"))
+        );
+        assert_eq!(
+            plan.default_route.as_ref().map(|r| r.model.as_str()),
+            Some("anthropic:claude-opus-5-5"),
+            "Agent default is the agent's own tier"
+        );
         assert!(plan.capabilities.contains(&ostra_core::Capability::Read));
 
         let imp = get(AgentName::Implementer);
-        assert_eq!(imp.resolved.as_ref().map(|r| r.executor), Some(ExecutorKind::Harness(HarnessKind::Codex)));
-        assert_eq!(imp.default_effort, ostra_agents::effort_for(AgentName::Implementer, ExecutorKind::Harness(HarnessKind::Codex)));
+        assert_eq!(
+            imp.resolved.as_ref().map(|r| r.executor),
+            Some(ExecutorKind::Harness(HarnessKind::Codex))
+        );
+        assert_eq!(
+            imp.default_effort,
+            ostra_agents::effort_for(
+                AgentName::Implementer,
+                ExecutorKind::Harness(HarnessKind::Codex)
+            )
+        );
 
         let explore = get(AgentName::Explore);
-        assert_eq!(explore.resolved, None, "a route that does not resolve is null");
+        assert_eq!(
+            explore.resolved, None,
+            "a route that does not resolve is null"
+        );
         assert!(explore.default_route.is_some());
     }
 }

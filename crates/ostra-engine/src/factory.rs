@@ -31,7 +31,10 @@ fn work_source(phase: Option<&PhaseInfo>, category: Option<Category>) -> WorkSou
 }
 
 fn work_extras(inputs: &SpawnInputs) -> Extras {
-    let mut e = Extras { ledger_file: inputs.ledger_file.clone(), ..Default::default() };
+    let mut e = Extras {
+        ledger_file: inputs.ledger_file.clone(),
+        ..Default::default()
+    };
     match inputs.work {
         Some(WorkKind::Fix | WorkKind::BlockerFix) => e.findings = inputs.instructions.clone(),
         Some(WorkKind::Rescue) => e.rescue_context = inputs.instructions.clone(),
@@ -57,17 +60,34 @@ fn required(value: Option<PathBuf>, what: &str) -> Result<PathBuf, String> {
 }
 
 fn init_list(inputs: &SpawnInputs, key: &str) -> Vec<PathBuf> {
-    inputs.init.get(key).map(|v| v.lines().filter(|l| !l.trim().is_empty()).map(PathBuf::from).collect()).unwrap_or_default()
+    inputs
+        .init
+        .get(key)
+        .map(|v| {
+            v.lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn init_str(inputs: &SpawnInputs, key: &str) -> Result<String, String> {
-    inputs.init.get(key).cloned().ok_or_else(|| format!("missing {key}"))
+    inputs
+        .init
+        .get(key)
+        .cloned()
+        .ok_or_else(|| format!("missing {key}"))
 }
 
 impl SpawnFactory for AgentsFactory {
     fn agent_meta(&self, agent: AgentName) -> AgentMeta {
         let d = ostra_agents::agent_def(agent);
-        AgentMeta { default_tier: d.default_tier, capabilities: d.capabilities.clone(), timeout_secs: d.timeout_secs }
+        AgentMeta {
+            default_tier: d.default_tier,
+            capabilities: d.capabilities.clone(),
+            timeout_secs: d.timeout_secs,
+        }
     }
 
     fn judge_prompt(&self, name: &str) -> Option<String> {
@@ -116,7 +136,11 @@ impl SpawnFactory for AgentsFactory {
                 },
                 prior_findings: i.prior_findings.clone().unwrap_or_else(|| "none".into()),
                 spec_file: required(i.spec_file.clone(), "spec file")?,
-                source_check: if i.source_check.as_deref() == Some("refetch") { SourceCheck::Refetch } else { SourceCheck::Citations },
+                source_check: if i.source_check.as_deref() == Some("refetch") {
+                    SourceCheck::Refetch
+                } else {
+                    SourceCheck::Citations
+                },
                 research_docs: i.research_docs.clone(),
             }),
             AgentName::Plan => Box::new(PlanParams {
@@ -142,7 +166,11 @@ impl SpawnFactory for AgentsFactory {
                     work: work_source(i.phase.as_ref(), s.category),
                     // Staging keeps each review on its own change (Step 2).
                     review_scope: Some("unstaged".into()),
-                    context: Some(if tests { ReviewContext::Test } else { ReviewContext::Implementation }),
+                    context: Some(if tests {
+                        ReviewContext::Test
+                    } else {
+                        ReviewContext::Implementation
+                    }),
                     epa_report: i.epa_report.clone(),
                 })
             }
@@ -184,13 +212,22 @@ impl SpawnFactory for AgentsFactory {
             AgentName::QuickAnswer => Box::new(QuickAnswerParams {
                 common,
                 question: i.question.clone().ok_or("missing question")?,
-                projects_in_scope: s.projects.iter().map(|p| (p.key.clone(), p.path.clone())).collect(),
+                projects_in_scope: s
+                    .projects
+                    .iter()
+                    .map(|p| (p.key.clone(), p.path.clone()))
+                    .collect(),
                 session_artifacts: vec![],
             }),
             AgentName::Initializer => {
-                let ExecPurpose::Init { mode, .. } = &req.purpose else { return Err("initializer without a mode".into()) };
+                let ExecPurpose::Init { mode, .. } = &req.purpose else {
+                    return Err("initializer without a mode".into());
+                };
                 match mode {
-                    InitializerMode::Detect => Box::new(InitDetectParams { common, user_focus: i.init.get("User focus").cloned() }),
+                    InitializerMode::Detect => Box::new(InitDetectParams {
+                        common,
+                        user_focus: i.init.get("User focus").cloned(),
+                    }),
                     InitializerMode::Adopt => Box::new(InitAdoptParams {
                         common,
                         source_harness: "ultracode".into(),
@@ -200,8 +237,14 @@ impl SpawnFactory for AgentsFactory {
                     InitializerMode::Scout => Box::new(InitScoutParams {
                         common,
                         slice: init_str(i, "Slice")?,
-                        slice_paths: init_str(i, "Slice paths")?.lines().map(String::from).collect(),
-                        stack_reference: ostra_agents::reference_path(&init_str(i, STACK_REFERENCE_NAME)?),
+                        slice_paths: init_str(i, "Slice paths")?
+                            .lines()
+                            .map(String::from)
+                            .collect(),
+                        stack_reference: ostra_agents::reference_path(&init_str(
+                            i,
+                            STACK_REFERENCE_NAME,
+                        )?),
                         scout_plan: PathBuf::from(init_str(i, "Scout plan")?),
                     }),
                     InitializerMode::Propose => Box::new(InitProposeParams {
@@ -240,15 +283,20 @@ impl SpawnFactory for AgentsFactory {
                 instructions: &instructions,
             },
         );
-        let system_prompt = ostra_agents::render_prompt(req.agent, env.executor).map_err(|e| e.to_string())?;
+        let system_prompt =
+            ostra_agents::render_prompt(req.agent, env.executor).map_err(|e| e.to_string())?;
         Ok(BuiltSpawn {
             system_prompt,
             first_message,
             spawn_block: block,
             params: params.to_json(),
             report_file: params.report_file().map(PathBuf::from),
-            effort: ostra_core::config::resolve_effort(env.settings, req.agent.as_str(), req.complexity())
-                .unwrap_or_else(|| ostra_agents::effort_for(req.agent, env.executor)),
+            effort: ostra_core::config::resolve_effort(
+                env.settings,
+                req.agent.as_str(),
+                req.complexity(),
+            )
+            .unwrap_or_else(|| ostra_agents::effort_for(req.agent, env.executor)),
         })
     }
 }

@@ -15,7 +15,9 @@ pub fn is_stack_name(value: &str) -> bool {
 
 /// Why a stack value is refused.
 pub fn stack_issue(value: &str) -> String {
-    format!("`{value}` is not a stack name. Pick a listed stack, or leave it empty so the initializer detects it from the code.")
+    format!(
+        "`{value}` is not a stack name. Pick a listed stack, or leave it empty so the initializer detects it from the code."
+    )
 }
 
 /// Suggest a project key from a folder name, the way init-kit Step 0 does.
@@ -35,7 +37,11 @@ pub fn suggest_project_key(folder: &str) -> String {
     while out.ends_with('-') {
         out.pop();
     }
-    if out.is_empty() { "project".to_string() } else { out }
+    if out.is_empty() {
+        "project".to_string()
+    } else {
+        out
+    }
 }
 
 /// Topic slug for artifact names: lowercase words joined by dashes, at most `max` chars.

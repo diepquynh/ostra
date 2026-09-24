@@ -230,6 +230,9 @@ async fn main() {
     let transcript = ostra_core::paths::terminal_transcript(&spec.ctx.session_root, id.as_str());
     let host = Arc::new(Host(log.clone()));
     let result = exec.run(spec, host, CancellationToken::new()).await;
-    let _ = std::fs::copy(transcript, dir.join(format!("{harness}{suffix}-terminal.bin")));
+    let _ = std::fs::copy(
+        transcript,
+        dir.join(format!("{harness}{suffix}-terminal.bin")),
+    );
     println!("{}", serde_json::to_string_pretty(&result).unwrap());
 }

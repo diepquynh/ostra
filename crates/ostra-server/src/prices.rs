@@ -18,7 +18,10 @@ pub fn cache_path(data_dir: &Path) -> PathBuf {
 /// Install the cached catalog, if there is one, then keep it fresh in the background.
 pub fn start(data_dir: &Path) {
     let path = cache_path(data_dir);
-    if let Some(c) = std::fs::read_to_string(&path).ok().and_then(|t| Catalog::from_models_dev(&t).ok()) {
+    if let Some(c) = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| Catalog::from_models_dev(&t).ok())
+    {
         pricing::install(c);
     }
     let url = std::env::var(URL_ENV).unwrap_or_else(|_| MODELS_DEV_URL.to_string());
@@ -32,7 +35,9 @@ pub fn start(data_dir: &Path) {
                 _ => match refresh(&url, &path).await {
                     Ok(()) => REFRESH_EVERY,
                     Err(e) => {
-                        tracing::warn!("fetching model prices from {url} failed, keeping the cached prices: {e}");
+                        tracing::warn!(
+                            "fetching model prices from {url} failed, keeping the cached prices: {e}"
+                        );
                         RETRY_AFTER
                     }
                 },
@@ -43,7 +48,12 @@ pub fn start(data_dir: &Path) {
 }
 
 fn age(path: &Path) -> Option<Duration> {
-    std::fs::metadata(path).ok()?.modified().ok()?.elapsed().ok()
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()
 }
 
 async fn refresh(url: &str, path: &Path) -> anyhow::Result<()> {
@@ -74,7 +84,8 @@ mod tests {
     async fn refresh_caches_what_parses_and_keeps_the_old_file_otherwise() {
         let tmp = tempfile::tempdir().unwrap();
         let path = cache_path(tmp.path());
-        let good = r#"{"anthropic":{"models":{"claude-sonnet-5":{"cost":{"input":2,"output":10}}}}}"#;
+        let good =
+            r#"{"anthropic":{"models":{"claude-sonnet-5":{"cost":{"input":2,"output":10}}}}}"#;
         let app = axum::Router::new()
             .route("/good", axum::routing::get(move || async move { good }))
             .route("/bad", axum::routing::get(|| async { "{}" }));
@@ -84,6 +95,10 @@ mod tests {
         refresh(&format!("{base}/good"), &path).await.unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), good);
         assert!(refresh(&format!("{base}/bad"), &path).await.is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), good, "an empty catalog does not replace the cache");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            good,
+            "an empty catalog does not replace the cache"
+        );
     }
 }

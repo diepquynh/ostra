@@ -6,15 +6,15 @@ use futures::future::join_all;
 use ostra_core::agent::AgentName;
 use ostra_core::config::{ProjectProfile, load_toml};
 use ostra_core::exec::{
-    CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec, ExecutionStatus,
-    Executor, Usage,
+    CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
+    ExecutionStatus, Executor, Usage,
 };
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, ToolCall, ToolOutcome};
 use ostra_policy::{ExecutionPolicy, Observation, PolicyInputs};
 use ostra_providers::{
-    Block, ChatRequest, ChatResponse, Message, Provider, ProviderError, Providers, Role, ServerTools, StopReason,
-    StreamEvent, SystemBlock, ToolChoice, ToolDef,
+    Block, ChatRequest, ChatResponse, Message, Provider, ProviderError, Providers, Role,
+    ServerTools, StopReason, StreamEvent, SystemBlock, ToolChoice, ToolDef,
 };
 use ostra_store::MemoryStore;
 use ostra_tools::{SkillResolver, ToolEnv, ToolEnvConfig};
@@ -44,13 +44,21 @@ pub struct NativeExecutor {
 
 impl NativeExecutor {
     pub fn new(providers: Arc<Providers>, skill_resolver: SkillResolver) -> Self {
-        NativeExecutor { providers, skill_resolver }
+        NativeExecutor {
+            providers,
+            skill_resolver,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl Executor for NativeExecutor {
-    async fn run(&self, spec: ExecutionSpec, host: Arc<dyn ExecutionHost>, cancel: CancellationToken) -> ExecutionResult {
+    async fn run(
+        &self,
+        spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        cancel: CancellationToken,
+    ) -> ExecutionResult {
         let usage = Arc::new(Mutex::new(Usage::default()));
         let inner = cancel.child_token();
         let budget = Duration::from_secs(spec.timeout_secs.max(1));
@@ -76,9 +84,13 @@ impl Executor for NativeExecutor {
         result.usage = *usage.lock();
         if outcome == ExecutionStatus::Error {
             result.error = Some(format!("timed out after {timeout_secs} s"));
-            host.emit(ExecutionDelta::Status { message: format!("Timed out after {timeout_secs} s.") });
+            host.emit(ExecutionDelta::Status {
+                message: format!("Timed out after {timeout_secs} s."),
+            });
         } else {
-            host.emit(ExecutionDelta::Status { message: "Cancelled.".into() });
+            host.emit(ExecutionDelta::Status {
+                message: "Cancelled.".into(),
+            });
         }
         result
     }
@@ -96,14 +108,24 @@ struct Run {
 /// What processing one turn's tool calls produced.
 enum TurnEnd {
     Continue(Vec<Block>),
-    Submitted { results: Vec<Block>, submit: Value, status: ExecutionStatus },
+    Submitted {
+        results: Vec<Block>,
+        submit: Value,
+        status: ExecutionStatus,
+    },
 }
 
 fn policy_inputs(ctx: &ExecContext) -> PolicyInputs {
-    let profile: ProjectProfile = load_toml(&paths::project_profile(&ctx.repo_root)).unwrap_or_default();
+    let profile: ProjectProfile =
+        load_toml(&paths::project_profile(&ctx.repo_root)).unwrap_or_default();
     let c = &profile.commands;
     let some = |v: &[&Option<String>]| -> Vec<String> {
-        v.iter().filter_map(|s| s.as_deref()).map(str::trim).filter(|s| !s.is_empty() && *s != "—").map(String::from).collect()
+        v.iter()
+            .filter_map(|s| s.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "—")
+            .map(String::from)
+            .collect()
     };
     PolicyInputs {
         build_commands: some(&[&c.build, &c.test, &c.test_one, &c.lint, &c.typecheck]),
@@ -139,7 +161,10 @@ fn transcript_chars(messages: &[Message]) -> usize {
 
 /// Read-only tools whose calls in one turn may run concurrently.
 fn is_concurrent(name: &str) -> bool {
-    matches!(name, "Read" | "Grep" | "Glob" | "WebFetch" | "MemoryRecall" | "Skill")
+    matches!(
+        name,
+        "Read" | "Grep" | "Glob" | "WebFetch" | "MemoryRecall" | "Skill"
+    )
 }
 
 /// Buffers streamed deltas so the Activity log gets readable chunks, not one row per token.
@@ -174,7 +199,11 @@ impl Coalescer {
     }
 
     fn send(&self, thinking: bool, text: String) {
-        self.host.emit(if thinking { ExecutionDelta::Thinking { text } } else { ExecutionDelta::Text { text } });
+        self.host.emit(if thinking {
+            ExecutionDelta::Thinking { text }
+        } else {
+            ExecutionDelta::Text { text }
+        });
     }
 }
 
@@ -210,34 +239,47 @@ pub fn rebuild_transcript(transcript: &[(String, Value)]) -> Vec<Message> {
                 .content
                 .iter()
                 .filter_map(|b| match b {
-                    Block::ToolUse { id, .. } => Some(Block::tool_result(id.clone(), "Interrupted: this call did not finish.", true)),
+                    Block::ToolUse { id, .. } => Some(Block::tool_result(
+                        id.clone(),
+                        "Interrupted: this call did not finish.",
+                        true,
+                    )),
                     _ => None,
                 })
                 .collect();
             let mut content = open;
             content.push(note);
-            messages.push(Message { role: Role::User, content });
+            messages.push(Message {
+                role: Role::User,
+                content,
+            });
         }
         Some(_) => {
             if let Some(last) = messages.last_mut() {
                 last.content.push(note);
             }
         }
-        None => messages.push(Message { role: Role::User, content: vec![note] }),
+        None => messages.push(Message {
+            role: Role::User,
+            content: vec![note],
+        }),
     }
     messages
 }
 
 impl Run {
     fn fail(&self, message: String) -> ExecutionResult {
-        self.host.emit(ExecutionDelta::Status { message: message.clone() });
+        self.host.emit(ExecutionDelta::Status {
+            message: message.clone(),
+        });
         let mut r = ExecutionResult::error(message);
         r.usage = *self.usage.lock();
         r
     }
 
     fn record(&self, m: &Message) {
-        self.host.record_message(role_str(m.role), &content_json(&m.content));
+        self.host
+            .record_message(role_str(m.role), &content_json(&m.content));
     }
 
     fn add_usage(&self, u: &Usage) {
@@ -281,18 +323,32 @@ impl Run {
         let mut tools: Vec<ToolDef> = ostra_tools::definitions(caps)
             .into_iter()
             .filter(|d| !(server_fetch && d.name == "WebFetch"))
-            .map(|d| ToolDef { name: d.name, description: d.description, input_schema: d.input_schema, cache: false })
+            .map(|d| ToolDef {
+                name: d.name,
+                description: d.description,
+                input_schema: d.input_schema,
+                cache: false,
+            })
             .collect();
         if caps.contains(&ostra_core::Capability::Document)
             && let Some(d) = ostra_tools::document_tool_definition(spec.agent)
         {
-            tools.push(ToolDef { name: d.name, description: d.description, input_schema: d.input_schema, cache: false });
+            tools.push(ToolDef {
+                name: d.name,
+                description: d.description,
+                input_schema: d.input_schema,
+                cache: false,
+            });
         }
         let submit_def = ostra_tools::submit_tool_definition(spec.agent);
         tools.push(ToolDef {
             name: submit_def.name,
             description: submit_def.description,
-            input_schema: if spec.submit_schema.is_null() { submit_def.input_schema } else { spec.submit_schema.clone() },
+            input_schema: if spec.submit_schema.is_null() {
+                submit_def.input_schema
+            } else {
+                spec.submit_schema.clone()
+            },
             cache: true,
         });
 
@@ -311,7 +367,10 @@ impl Run {
             self.record(m);
         }
 
-        let coalescer = Arc::new(Coalescer { host: self.host.clone(), buf: Mutex::new((false, String::new())) });
+        let coalescer = Arc::new(Coalescer {
+            host: self.host.clone(),
+            buf: Mutex::new((false, String::new())),
+        });
         let mut final_text = String::new();
         let mut reminded = false;
         let mut continues = 0;
@@ -356,15 +415,25 @@ impl Run {
             match &resp.stop {
                 StopReason::PauseTurn => continue,
                 StopReason::Refusal => {
-                    let cat = resp.refusal_category.map(|c| format!(" (category {c})")).unwrap_or_default();
-                    return self.fail(format!("The model refused to continue{cat}: {}", text.trim()));
+                    let cat = resp
+                        .refusal_category
+                        .map(|c| format!(" (category {c})"))
+                        .unwrap_or_default();
+                    return self.fail(format!(
+                        "The model refused to continue{cat}: {}",
+                        text.trim()
+                    ));
                 }
                 StopReason::MaxTokens if !has_tools => {
                     if continues >= MAX_TOKEN_CONTINUES {
-                        return self.fail("The model kept hitting its output limit without finishing.".into());
+                        return self.fail(
+                            "The model kept hitting its output limit without finishing.".into(),
+                        );
                     }
                     continues += 1;
-                    let m = Message::user_text("You reached the output limit. Continue from exactly where you stopped.");
+                    let m = Message::user_text(
+                        "You reached the output limit. Continue from exactly where you stopped.",
+                    );
                     self.record(&m);
                     messages.push(m);
                     continue;
@@ -392,7 +461,11 @@ impl Run {
                     self.record(&m);
                     messages.push(m);
                 }
-                TurnEnd::Submitted { results, submit, status } => {
+                TurnEnd::Submitted {
+                    results,
+                    submit,
+                    status,
+                } => {
                     self.record(&Message::tool_results(results));
                     let mut r = ExecutionResult::with_status(status);
                     r.submit = Some(submit);
@@ -402,10 +475,17 @@ impl Run {
                 }
             }
         }
-        self.fail(format!("The run passed {MAX_TURNS} model turns without calling {submit_name}."))
+        self.fail(format!(
+            "The run passed {MAX_TURNS} model turns without calling {submit_name}."
+        ))
     }
 
-    async fn chat(&self, provider: &dyn Provider, req: ChatRequest, coalescer: &Arc<Coalescer>) -> Result<ChatResponse, ProviderError> {
+    async fn chat(
+        &self,
+        provider: &dyn Provider,
+        req: ChatRequest,
+        coalescer: &Arc<Coalescer>,
+    ) -> Result<ChatResponse, ProviderError> {
         let c = coalescer.clone();
         let host = self.host.clone();
         let sink = move |e: StreamEvent| match e {
@@ -413,7 +493,9 @@ impl Run {
             StreamEvent::ThinkingDelta(t) => c.push(true, &t),
             StreamEvent::ServerToolUsed { name, summary } => {
                 c.flush();
-                host.emit(ExecutionDelta::Status { message: format!("{name}: {summary}") });
+                host.emit(ExecutionDelta::Status {
+                    message: format!("{name}: {summary}"),
+                });
             }
             _ => {}
         };
@@ -422,9 +504,18 @@ impl Run {
         r
     }
 
-    async fn run_tools(&self, resp: &ChatResponse, policy: &ExecutionPolicy, env: &ToolEnv, submit_name: &str) -> TurnEnd {
-        let calls: Vec<(String, String, Value)> =
-            resp.tool_uses().into_iter().map(|(id, name, input)| (id.to_string(), name.to_string(), input.clone())).collect();
+    async fn run_tools(
+        &self,
+        resp: &ChatResponse,
+        policy: &ExecutionPolicy,
+        env: &ToolEnv,
+        submit_name: &str,
+    ) -> TurnEnd {
+        let calls: Vec<(String, String, Value)> = resp
+            .tool_uses()
+            .into_iter()
+            .map(|(id, name, input)| (id.to_string(), name.to_string(), input.clone()))
+            .collect();
         let mut results: Vec<Option<Block>> = vec![None; calls.len()];
         let mut i = 0;
         while i < calls.len() {
@@ -435,10 +526,18 @@ impl Run {
                         results[i] = Some(block);
                         for (j, (oid, _, _)) in calls.iter().enumerate() {
                             if results[j].is_none() {
-                                results[j] = Some(Block::tool_result(oid.clone(), "Not run: the run ended with the submit call.", true));
+                                results[j] = Some(Block::tool_result(
+                                    oid.clone(),
+                                    "Not run: the run ended with the submit call.",
+                                    true,
+                                ));
                             }
                         }
-                        return TurnEnd::Submitted { results: results.into_iter().flatten().collect(), submit: input.clone(), status };
+                        return TurnEnd::Submitted {
+                            results: results.into_iter().flatten().collect(),
+                            submit: input.clone(),
+                            status,
+                        };
                     }
                     Err(block) => {
                         results[i] = Some(block);
@@ -452,7 +551,12 @@ impl Run {
                 while j < calls.len() && is_concurrent(&calls[j].1) {
                     j += 1;
                 }
-                let outs = join_all(calls[i..j].iter().map(|(id, name, input)| self.tool(id, name, input, policy, env))).await;
+                let outs = join_all(
+                    calls[i..j]
+                        .iter()
+                        .map(|(id, name, input)| self.tool(id, name, input, policy, env)),
+                )
+                .await;
                 for (k, out) in outs.into_iter().enumerate() {
                     results[i + k] = Some(out);
                 }
@@ -465,24 +569,48 @@ impl Run {
         TurnEnd::Continue(results.into_iter().flatten().collect())
     }
 
-    fn submit(&self, id: &str, name: &str, input: &Value, policy: &ExecutionPolicy) -> Result<(Block, ExecutionStatus), Block> {
+    fn submit(
+        &self,
+        id: &str,
+        name: &str,
+        input: &Value,
+        policy: &ExecutionPolicy,
+    ) -> Result<(Block, ExecutionStatus), Block> {
         let call = ToolCall::new(name, input.clone());
-        self.host.emit(ExecutionDelta::ToolCall { call_id: id.into(), call: call.clone() });
+        self.host.emit(ExecutionDelta::ToolCall {
+            call_id: id.into(),
+            call: call.clone(),
+        });
         let err = |text: String| {
-            self.host.emit(ExecutionDelta::ToolResult { call_id: id.into(), output: truncate(&text, EMIT_LIMIT), is_error: true, duration_ms: 0 });
+            self.host.emit(ExecutionDelta::ToolResult {
+                call_id: id.into(),
+                output: truncate(&text, EMIT_LIMIT),
+                is_error: true,
+                duration_ms: 0,
+            });
             Block::tool_result(id, text, true)
         };
         if input.get("__invalid_json").is_some() {
-            return Err(err(format!("The {name} input was not valid JSON. Call {name} again with a valid object.")));
+            return Err(err(format!(
+                "The {name} input was not valid JSON. Call {name} again with a valid object."
+            )));
         }
         policy.set_yolo(self.host.yolo());
         let decision = policy.check(&call);
-        self.host.emit(ExecutionDelta::Policy { call_id: id.into(), decision: decision.clone() });
+        self.host.emit(ExecutionDelta::Policy {
+            call_id: id.into(),
+            decision: decision.clone(),
+        });
         if let PolicyDecision::Deny { reason, rule } = decision {
-            return Err(err(format!("Denied by {} `{}`: {reason}", rule.layer, rule.rule)));
+            return Err(err(format!(
+                "Denied by {} `{}`: {reason}",
+                rule.layer, rule.rule
+            )));
         }
         if let Err(e) = ostra_core::submit::validate_submit(self.spec.agent, input) {
-            return Err(err(format!("The {name} input is invalid: {e}. Fix it and call {name} again.")));
+            return Err(err(format!(
+                "The {name} input is invalid: {e}. Fix it and call {name} again."
+            )));
         }
         if let Err(e) = ostra_core::doc::check_submit(self.spec.agent, input) {
             return Err(err(format!("{e} Nothing was recorded.")));
@@ -502,20 +630,43 @@ impl Run {
                 report.display()
             )));
         }
-        self.host.emit(ExecutionDelta::ToolResult { call_id: id.into(), output: "Result received.".into(), is_error: false, duration_ms: 0 });
+        self.host.emit(ExecutionDelta::ToolResult {
+            call_id: id.into(),
+            output: "Result received.".into(),
+            is_error: false,
+            duration_ms: 0,
+        });
         Ok((Block::tool_result(id, "Result received.", false), status))
     }
 
-    async fn tool(&self, id: &str, name: &str, input: &Value, policy: &ExecutionPolicy, env: &ToolEnv) -> Block {
+    async fn tool(
+        &self,
+        id: &str,
+        name: &str,
+        input: &Value,
+        policy: &ExecutionPolicy,
+        env: &ToolEnv,
+    ) -> Block {
         let call = ToolCall::new(name, input.clone());
-        self.host.emit(ExecutionDelta::ToolCall { call_id: id.into(), call: call.clone() });
+        self.host.emit(ExecutionDelta::ToolCall {
+            call_id: id.into(),
+            call: call.clone(),
+        });
         self.usage.lock().tool_calls += 1;
         let err = |text: String| {
-            self.host.emit(ExecutionDelta::ToolResult { call_id: id.into(), output: truncate(&text, EMIT_LIMIT), is_error: true, duration_ms: 0 });
+            self.host.emit(ExecutionDelta::ToolResult {
+                call_id: id.into(),
+                output: truncate(&text, EMIT_LIMIT),
+                is_error: true,
+                duration_ms: 0,
+            });
             Block::tool_result(id, text, true)
         };
         if let Some(raw) = input.get("__invalid_json") {
-            return err(format!("The tool input was not valid JSON, so the call did not run: {}", truncate(&raw.to_string(), 500)));
+            return err(format!(
+                "The tool input was not valid JSON, so the call did not run: {}",
+                truncate(&raw.to_string(), 500)
+            ));
         }
         policy.set_yolo(self.host.yolo());
         // The Bash tool keeps its own working directory, so the guards resolve relative write
@@ -529,36 +680,60 @@ impl Run {
             _ => call.clone(),
         };
         let decision = policy.check(&checked);
-        self.host.emit(ExecutionDelta::Policy { call_id: id.into(), decision: decision.clone() });
+        self.host.emit(ExecutionDelta::Policy {
+            call_id: id.into(),
+            decision: decision.clone(),
+        });
         match decision {
-            PolicyDecision::Deny { reason, rule } => return err(format!("Denied by {} `{}`: {reason}", rule.layer, rule.rule)),
-            PolicyDecision::Ask { reason, rule } => match self.host.ask_permission(&call, &reason, &rule).await {
-                PermissionAnswer::AllowOnce => {}
-                PermissionAnswer::AlwaysInWorkspace => {
-                    if let Some(rule) = policy.allow_rule_suggestion(&call) {
-                        policy.add_session_allow(rule);
+            PolicyDecision::Deny { reason, rule } => {
+                return err(format!(
+                    "Denied by {} `{}`: {reason}",
+                    rule.layer, rule.rule
+                ));
+            }
+            PolicyDecision::Ask { reason, rule } => {
+                match self.host.ask_permission(&call, &reason, &rule).await {
+                    PermissionAnswer::AllowOnce => {}
+                    PermissionAnswer::AlwaysInWorkspace => {
+                        if let Some(rule) = policy.allow_rule_suggestion(&call) {
+                            policy.add_session_allow(rule);
+                        }
+                    }
+                    PermissionAnswer::Deny => {
+                        return err(format!(
+                            "The user denied this call ({reason}). Continue without it, or explain in your report why it is needed."
+                        ));
                     }
                 }
-                PermissionAnswer::Deny => {
-                    return err(format!("The user denied this call ({reason}). Continue without it, or explain in your report why it is needed."));
-                }
-            },
+            }
             PolicyDecision::Allow { .. } => {}
         }
         let host = self.host.clone();
         let live: ostra_tools::LiveOutput = Arc::new(move |call_id: &str, chunk: &str| {
-            host.emit(ExecutionDelta::ToolOutput { call_id: call_id.into(), chunk: chunk.into() });
+            host.emit(ExecutionDelta::ToolOutput {
+                call_id: call_id.into(),
+                chunk: chunk.into(),
+            });
         });
         let out = ostra_tools::execute(env, id, &call, Some(live), self.cancel.clone()).await;
         if name == "Bash" {
             let cmd = call.str_field("command").unwrap_or_default();
             let inputs = policy_inputs(&self.spec.ctx);
-            let configured: Vec<String> = inputs.build_commands.into_iter().chain(inputs.test_commands).collect();
+            let configured: Vec<String> = inputs
+                .build_commands
+                .into_iter()
+                .chain(inputs.test_commands)
+                .collect();
             if ostra_policy::build::is_build_command(cmd, &configured) {
                 self.usage.lock().build_ms += out.duration_ms;
             }
         }
-        let outcome = ToolOutcome { output: out.text.clone(), is_error: out.is_error, exit_code: out.exit_code, result_known: true };
+        let outcome = ToolOutcome {
+            output: out.text.clone(),
+            is_error: out.is_error,
+            exit_code: out.exit_code,
+            result_known: true,
+        };
         let mut text = out.text.clone();
         for obs in policy.observe(&call, &outcome) {
             match obs {
@@ -567,13 +742,22 @@ impl Run {
                     text.push_str(&note);
                 }
                 Observation::RecallLessons { query } => {
-                    let lessons = MemoryStore::open(&self.spec.ctx.memory_db).and_then(|m| m.recall(None, Some(&query), 5));
+                    let lessons = MemoryStore::open(&self.spec.ctx.memory_db)
+                        .and_then(|m| m.recall(None, Some(&query), 5));
                     if let Ok(lessons) = lessons
                         && !lessons.is_empty()
                     {
-                        text.push_str("\n\nLessons recorded earlier that may apply to this failure:\n");
+                        text.push_str(
+                            "\n\nLessons recorded earlier that may apply to this failure:\n",
+                        );
                         for (n, l) in lessons.iter().enumerate() {
-                            text.push_str(&format!("{}. [{}] {} (source: {})\n", n + 1, l.area, l.lesson, l.source));
+                            text.push_str(&format!(
+                                "{}. [{}] {} (source: {})\n",
+                                n + 1,
+                                l.area,
+                                l.lesson,
+                                l.source
+                            ));
                         }
                     }
                 }

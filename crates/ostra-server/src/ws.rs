@@ -26,9 +26,18 @@ const TERM_QUEUE: usize = 64;
 /// How often an open socket re-checks its sign-in, so a revoked or expired cookie disconnects.
 const RECHECK: Duration = Duration::from_secs(30);
 
-pub async fn handler(State(app): State<Arc<App>>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
-    let cookie = crate::auth::cookie_value(headers.get(header::COOKIE).and_then(|h| h.to_str().ok())).unwrap_or_default();
-    upgrade.max_message_size(MAX_MESSAGE).max_frame_size(MAX_MESSAGE).on_upgrade(move |socket| run(app, socket, cookie))
+pub async fn handler(
+    State(app): State<Arc<App>>,
+    headers: HeaderMap,
+    upgrade: WebSocketUpgrade,
+) -> Response {
+    let cookie =
+        crate::auth::cookie_value(headers.get(header::COOKIE).and_then(|h| h.to_str().ok()))
+            .unwrap_or_default();
+    upgrade
+        .max_message_size(MAX_MESSAGE)
+        .max_frame_size(MAX_MESSAGE)
+        .on_upgrade(move |socket| run(app, socket, cookie))
 }
 
 /// Channels a notice goes to, and the frame to send.
@@ -38,23 +47,45 @@ fn route(msg: &HubMsg) -> Routed {
     match &msg.notice {
         EngineNotice::Event { session, stored } => (
             vec![format!("session:{session}")],
-            ServerMsg::SessionEvent { session: session.clone(), seq: stored.seq, at: stored.at, event: stored.event.clone() },
+            ServerMsg::SessionEvent {
+                session: session.clone(),
+                seq: stored.seq,
+                at: stored.at,
+                event: stored.event.clone(),
+            },
         ),
         EngineNotice::Delta { execution, item } => (
             vec![format!("execution:{execution}")],
-            ServerMsg::ExecutionDelta { execution: execution.clone(), seq: item.seq, at: item.at, delta: item.delta.clone() },
+            ServerMsg::ExecutionDelta {
+                execution: execution.clone(),
+                seq: item.seq,
+                at: item.at,
+                delta: item.delta.clone(),
+            },
         ),
         EngineNotice::ExecutionStatus { execution, status } => (
             vec![format!("execution:{execution}")],
-            ServerMsg::ExecutionStatus { execution: execution.clone(), status: *status },
+            ServerMsg::ExecutionStatus {
+                execution: execution.clone(),
+                status: *status,
+            },
         ),
         EngineNotice::SessionUpdated { summary } => (
-            vec![format!("session:{}", summary.id), format!("workspace:{}", msg.workspace), "home".into()],
-            ServerMsg::SessionUpdated { summary: summary.clone() },
+            vec![
+                format!("session:{}", summary.id),
+                format!("workspace:{}", msg.workspace),
+                "home".into(),
+            ],
+            ServerMsg::SessionUpdated {
+                summary: summary.clone(),
+            },
         ),
-        EngineNotice::ProjectsChanged => {
-            (vec![format!("workspace:{}", msg.workspace)], ServerMsg::WorkspaceUpdated { workspace: msg.workspace.clone() })
-        }
+        EngineNotice::ProjectsChanged => (
+            vec![format!("workspace:{}", msg.workspace)],
+            ServerMsg::WorkspaceUpdated {
+                workspace: msg.workspace.clone(),
+            },
+        ),
     }
 }
 
@@ -79,7 +110,12 @@ pub fn stored_transcript(app: &App, id: &ExecutionId) -> Option<Vec<u8>> {
 /// Feed `term:<id>` to one socket: the live screen and everything after it, a fresh screen after
 /// falling behind, and the stored transcript when no PTY is running. Waits for a run that has not
 /// started its PTY yet.
-async fn stream_terminal(app: Arc<App>, ptys: Arc<PtyRegistry>, id: ExecutionId, out: mpsc::Sender<Vec<u8>>) {
+async fn stream_terminal(
+    app: Arc<App>,
+    ptys: Arc<PtyRegistry>,
+    id: ExecutionId,
+    out: mpsc::Sender<Vec<u8>>,
+) {
     let mut inserted = ptys.inserted();
     let mut first = true;
     loop {
@@ -87,7 +123,10 @@ async fn stream_terminal(app: Arc<App>, ptys: Arc<PtyRegistry>, id: ExecutionId,
         let Some(pty) = ptys.get(&id) else {
             if std::mem::take(&mut first) {
                 let (app, tid) = (app.clone(), id.clone());
-                let stored = tokio::task::spawn_blocking(move || stored_transcript(&app, &tid)).await.ok().flatten();
+                let stored = tokio::task::spawn_blocking(move || stored_transcript(&app, &tid))
+                    .await
+                    .ok()
+                    .flatten();
                 if let Some(bytes) = stored
                     && out.send(frame(id.as_str(), &bytes)).await.is_err()
                 {
@@ -140,7 +179,13 @@ async fn send(socket: &mut WebSocket, msg: &ServerMsg) -> bool {
 }
 
 async fn error(socket: &mut WebSocket, message: &str) -> bool {
-    send(socket, &ServerMsg::Error { message: message.into() }).await
+    send(
+        socket,
+        &ServerMsg::Error {
+            message: message.into(),
+        },
+    )
+    .await
 }
 
 async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {

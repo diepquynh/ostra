@@ -20,10 +20,14 @@ pub(crate) fn parse_time_opt(s: Option<&str>) -> Result<Option<DateTime<Utc>>, S
 pub(crate) fn enum_str<T: Serialize>(value: &T) -> Result<String, StoreError> {
     match serde_json::to_value(value)? {
         serde_json::Value::String(s) => Ok(s),
-        other => Err(StoreError::Invalid(format!("expected a string enum, got {other}"))),
+        other => Err(StoreError::Invalid(format!(
+            "expected a string enum, got {other}"
+        ))),
     }
 }
 
 pub(crate) fn enum_from<T: DeserializeOwned>(s: &str) -> Result<T, StoreError> {
-    Ok(serde_json::from_value(serde_json::Value::String(s.to_string()))?)
+    Ok(serde_json::from_value(serde_json::Value::String(
+        s.to_string(),
+    ))?)
 }

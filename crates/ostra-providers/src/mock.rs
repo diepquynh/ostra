@@ -1,7 +1,9 @@
 //! A scripted provider for tests: queued responses in order, or a responder function when
 //! executions run in parallel and order is not fixed.
 
-use crate::{Block, ChatRequest, ChatResponse, EventSink, Provider, ProviderError, StopReason, StreamEvent};
+use crate::{
+    Block, ChatRequest, ChatResponse, EventSink, Provider, ProviderError, StopReason, StreamEvent,
+};
 use ostra_core::exec::Usage;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
@@ -68,7 +70,11 @@ impl ScriptedProvider {
     pub fn push_tool_uses(&self, calls: Vec<(&str, serde_json::Value)>) {
         let content = calls
             .into_iter()
-            .map(|(name, input)| Block::ToolUse { id: self.tool_id(), name: name.into(), input })
+            .map(|(name, input)| Block::ToolUse {
+                id: self.tool_id(),
+                name: name.into(),
+                input,
+            })
             .collect();
         self.push(response(content, StopReason::ToolUse));
     }
@@ -89,12 +95,25 @@ impl ScriptedProvider {
 
 /// A response with the given content and stop reason and zero usage.
 pub fn response(content: Vec<Block>, stop: StopReason) -> ChatResponse {
-    ChatResponse { content, stop, usage: Usage::default(), model: "mock".into(), refusal_category: None }
+    ChatResponse {
+        content,
+        stop,
+        usage: Usage::default(),
+        model: "mock".into(),
+        refusal_category: None,
+    }
 }
 
 /// A tool-use response, for responders.
 pub fn tool_use_response(id: &str, name: &str, input: serde_json::Value) -> ChatResponse {
-    response(vec![Block::ToolUse { id: id.into(), name: name.into(), input }], StopReason::ToolUse)
+    response(
+        vec![Block::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input,
+        }],
+        StopReason::ToolUse,
+    )
 }
 
 #[async_trait::async_trait]
@@ -117,15 +136,23 @@ impl Provider for ScriptedProvider {
         let result = match (next, &self.responder) {
             (Some(r), _) => r,
             (None, Some(f)) => f(&req),
-            (None, None) => Err(ProviderError::Decode("the scripted provider has no response left".into())),
+            (None, None) => Err(ProviderError::Decode(
+                "the scripted provider has no response left".into(),
+            )),
         }?;
         for block in &result.content {
             match block {
                 Block::Text { text } => on_event(StreamEvent::TextDelta(text.clone())),
                 Block::Thinking { text, .. } => on_event(StreamEvent::ThinkingDelta(text.clone())),
                 Block::ToolUse { id, name, input } => {
-                    on_event(StreamEvent::ToolUseStarted { id: id.clone(), name: name.clone() });
-                    on_event(StreamEvent::ToolInputDelta { id: id.clone(), partial_json: input.to_string() });
+                    on_event(StreamEvent::ToolUseStarted {
+                        id: id.clone(),
+                        name: name.clone(),
+                    });
+                    on_event(StreamEvent::ToolInputDelta {
+                        id: id.clone(),
+                        partial_json: input.to_string(),
+                    });
                 }
                 _ => {}
             }
@@ -141,14 +168,23 @@ mod tests {
     #[tokio::test]
     async fn queue_then_responder() {
         let p = ScriptedProvider::new().with_responder(|req| {
-            Ok(response(vec![Block::text(format!("echo {}", req.model))], StopReason::EndTurn))
+            Ok(response(
+                vec![Block::text(format!("echo {}", req.model))],
+                StopReason::EndTurn,
+            ))
         });
         p.push_tool_use("Read", serde_json::json!({"file_path": "/x"}));
         let seen = Mutex::new(vec![]);
         let sink = |e: StreamEvent| seen.lock().push(e);
-        let r1 = p.chat(ChatRequest::new("m1"), &sink, CancellationToken::new()).await.unwrap();
+        let r1 = p
+            .chat(ChatRequest::new("m1"), &sink, CancellationToken::new())
+            .await
+            .unwrap();
         assert_eq!(r1.stop, StopReason::ToolUse);
-        let r2 = p.chat(ChatRequest::new("m2"), &sink, CancellationToken::new()).await.unwrap();
+        let r2 = p
+            .chat(ChatRequest::new("m2"), &sink, CancellationToken::new())
+            .await
+            .unwrap();
         assert_eq!(r2.text(), "echo m2");
         assert_eq!(p.requests().len(), 2);
         assert_eq!(seen.lock().len(), 3);

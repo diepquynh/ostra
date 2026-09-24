@@ -16,7 +16,10 @@ pub fn windows<Tz: TimeZone>(now: &DateTime<Tz>) -> (DateTime<Utc>, DateTime<Utc
         // A midnight skipped by a daylight saving change falls back to the first hour that exists.
         tz.from_local_datetime(&naive)
             .earliest()
-            .or_else(|| tz.from_local_datetime(&(naive + chrono::Duration::hours(1))).earliest())
+            .or_else(|| {
+                tz.from_local_datetime(&(naive + chrono::Duration::hours(1)))
+                    .earliest()
+            })
             .map(|t| t.with_timezone(&Utc))
             .unwrap_or_else(|| now.with_timezone(&Utc))
     };
@@ -25,32 +28,61 @@ pub fn windows<Tz: TimeZone>(now: &DateTime<Tz>) -> (DateTime<Utc>, DateTime<Utc
     (midnight(today), midnight(week))
 }
 
-pub fn build<Tz: TimeZone>(w: &WorkspaceRt, now: DateTime<Tz>) -> Result<WorkspaceActivity, ApiErr> {
+pub fn build<Tz: TimeZone>(
+    w: &WorkspaceRt,
+    now: DateTime<Tz>,
+) -> Result<WorkspaceActivity, ApiErr> {
     let mut labels: HashMap<SessionId, HashMap<ExecutionId, String>> = HashMap::new();
-    let running = w
-        .db
-        .running_executions()?
-        .into_iter()
-        .map(|e| {
-            let label = e
-                .session
-                .as_ref()
-                .and_then(|s| labels.entry(s.clone()).or_insert_with(|| w.engine.run_labels(s).unwrap_or_default()).get(&e.id).cloned())
-                .unwrap_or(e.run_label);
-            RunningExecution { id: e.id, session: e.session, agent: e.agent, project: e.project, run_label: label, stream: e.stream, summary: e.summary }
-        })
-        .collect();
+    let running =
+        w.db.running_executions()?
+            .into_iter()
+            .map(|e| {
+                let label = e
+                    .session
+                    .as_ref()
+                    .and_then(|s| {
+                        labels
+                            .entry(s.clone())
+                            .or_insert_with(|| w.engine.run_labels(s).unwrap_or_default())
+                            .get(&e.id)
+                            .cloned()
+                    })
+                    .unwrap_or(e.run_label);
+                RunningExecution {
+                    id: e.id,
+                    session: e.session,
+                    agent: e.agent,
+                    project: e.project,
+                    run_label: label,
+                    stream: e.stream,
+                    summary: e.summary,
+                }
+            })
+            .collect();
     let mut titles: HashMap<SessionId, Option<String>> = HashMap::new();
-    let open_gates = w
-        .db
-        .open_gates(None)?
-        .into_iter()
-        .map(|g| {
-            let session_title =
-                titles.entry(g.session.clone()).or_insert_with(|| w.db.get_session(&g.session).ok().flatten().and_then(|s| s.title)).clone();
-            OpenGateRef { kind: g.payload.kind_str().to_string(), id: g.id, session: g.session, session_title, title: g.title, opened_at: g.opened_at }
-        })
-        .collect();
+    let open_gates =
+        w.db.open_gates(None)?
+            .into_iter()
+            .map(|g| {
+                let session_title = titles
+                    .entry(g.session.clone())
+                    .or_insert_with(|| {
+                        w.db.get_session(&g.session)
+                            .ok()
+                            .flatten()
+                            .and_then(|s| s.title)
+                    })
+                    .clone();
+                OpenGateRef {
+                    kind: g.payload.kind_str().to_string(),
+                    id: g.id,
+                    session: g.session,
+                    session_title,
+                    title: g.title,
+                    opened_at: g.opened_at,
+                }
+            })
+            .collect();
     let (today, week) = windows(&now);
     Ok(WorkspaceActivity {
         running,
@@ -78,6 +110,10 @@ mod tests {
         let west = FixedOffset::west_opt(7 * 3600).unwrap();
         let (today, week) = windows(&west.with_ymd_and_hms(2026, 3, 2, 23, 59, 0).unwrap());
         assert_eq!(today, Utc.with_ymd_and_hms(2026, 3, 2, 7, 0, 0).unwrap());
-        assert_eq!(week, Utc.with_ymd_and_hms(2026, 2, 24, 7, 0, 0).unwrap(), "the week crosses the month end");
+        assert_eq!(
+            week,
+            Utc.with_ymd_and_hms(2026, 2, 24, 7, 0, 0).unwrap(),
+            "the week crosses the month end"
+        );
     }
 }

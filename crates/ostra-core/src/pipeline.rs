@@ -137,13 +137,14 @@ impl StageKind {
     pub fn lane(self) -> Lane {
         use StageKind::*;
         match self {
-            Intake | Classify | Explore | Sufficiency | QuickAnswer | Detect | Scout => Lane::Research,
+            Intake | Classify | Explore | Sufficiency | QuickAnswer | Detect | Scout => {
+                Lane::Research
+            }
             Spec | OpenQuestions | Propose | SkillApproval => Lane::Requirements,
             FactCheckSpec | FactCheckPlan | SpecApproval => Lane::Verification,
             Stakes | Plan | PlanApproval => Lane::Design,
-            Implement | Autofix | Handoff | Rescue | Verify | PromptGen | GenerateSkill | GenerateInventory => {
-                Lane::Build
-            }
+            Implement | Autofix | Handoff | Rescue | Verify | PromptGen | GenerateSkill
+            | GenerateInventory => Lane::Build,
             Review | Staging | Format => Lane::Review,
             ClosingGate | Epa | WriteTest | TestReview => Lane::Test,
             ModuleDocs => Lane::Docs,

@@ -1,7 +1,9 @@
 //! The engine's view of the server: settings, executors, judges, push, protected paths.
 
 use crate::app::Shared;
-use ostra_core::config::{GlobalConfig, ResolvedRoute, WorkspaceSettings, load_toml_required, save_toml};
+use ostra_core::config::{
+    GlobalConfig, ResolvedRoute, WorkspaceSettings, load_toml_required, save_toml,
+};
 use ostra_core::exec::{Executor, Usage};
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
@@ -22,7 +24,8 @@ pub struct ServerServices {
 
 impl ServerServices {
     fn settings(&self) -> WorkspaceSettings {
-        load_toml_required(&paths::workspace_toml(&self.root)).unwrap_or_else(|_| WorkspaceSettings::seeded("workspace"))
+        load_toml_required(&paths::workspace_toml(&self.root))
+            .unwrap_or_else(|_| WorkspaceSettings::seeded("workspace"))
     }
 }
 
@@ -55,8 +58,14 @@ impl Services for ServerServices {
         schema: Value,
         effort: Effort,
     ) -> Result<(Value, Usage), String> {
-        let (provider, model) = self.shared.providers.for_model(&route.model).map_err(|e| e.to_string())?;
-        ostra_providers::structured(provider.as_ref(), &model, system, user, schema, effort).await.map_err(|e| e.to_string())
+        let (provider, model) = self
+            .shared
+            .providers
+            .for_model(&route.model)
+            .map_err(|e| e.to_string())?;
+        ostra_providers::structured(provider.as_ref(), &model, system, user, schema, effort)
+            .await
+            .map_err(|e| e.to_string())
     }
 
     fn notify(&self, notice: Notice) {
@@ -66,15 +75,30 @@ impl Services for ServerServices {
         let shared = self.shared.clone();
         let workspace = self.workspace.clone();
         tokio::spawn(async move {
-            let subs = shared.registry.list_push_subscriptions().unwrap_or_default();
+            let subs = shared
+                .registry
+                .list_push_subscriptions()
+                .unwrap_or_default();
             let url = format!("/w/{workspace}{}", notice.url);
-            let payload = Notification { title: notice.title, body: notice.body, url, tag: notice.tag };
-            for s in subs.into_iter().filter(|s| s.workspace.as_ref().is_none_or(|w| *w == workspace)) {
+            let payload = Notification {
+                title: notice.title,
+                body: notice.body,
+                url,
+                tag: notice.tag,
+            };
+            for s in subs
+                .into_iter()
+                .filter(|s| s.workspace.as_ref().is_none_or(|w| *w == workspace))
+            {
                 match shared.notifier.send(&s.subscription, &payload).await {
                     Ok(SendOutcome::Gone) => {
-                        let _ = shared.registry.remove_push_subscription(&s.subscription.endpoint);
+                        let _ = shared
+                            .registry
+                            .remove_push_subscription(&s.subscription.endpoint);
                     }
-                    Ok(SendOutcome::Failed { status, message }) => tracing::warn!("push failed ({status:?}): {message}"),
+                    Ok(SendOutcome::Failed { status, message }) => {
+                        tracing::warn!("push failed ({status:?}): {message}")
+                    }
                     Ok(SendOutcome::Delivered) => {}
                     Err(e) => tracing::warn!("push error: {e}"),
                 }

@@ -58,8 +58,16 @@ fn capability_key(c: Capability) -> &'static str {
 }
 
 impl Mapping {
-    pub(crate) fn tool(&self, capability: &str, executor: ExecutorKind, agent: AgentName) -> Option<String> {
-        let value = self.capabilities.get(capability)?.get(executor.tier_table())?;
+    pub(crate) fn tool(
+        &self,
+        capability: &str,
+        executor: ExecutorKind,
+        agent: AgentName,
+    ) -> Option<String> {
+        let value = self
+            .capabilities
+            .get(capability)?
+            .get(executor.tier_table())?;
         Some(value.replace("{agent}", &agent.snake()))
     }
 
@@ -73,7 +81,9 @@ impl Mapping {
     ) -> BTreeMap<&'static str, String> {
         let mut ctx = BTreeMap::new();
         for (token, key) in TOKENS {
-            let value = self.tool(key, executor, agent).unwrap_or_else(|| key.to_string());
+            let value = self
+                .tool(key, executor, agent)
+                .unwrap_or_else(|| key.to_string());
             ctx.insert(token, value);
         }
         ctx.insert("assets_dir", assets_dir.display().to_string());
@@ -82,7 +92,12 @@ impl Mapping {
 
     /// The section that opens a harness executor's prompt: which tool serves each capability the
     /// agent has, and how to load skills and call Ostra's tools on that harness.
-    pub(crate) fn vocabulary(&self, agent: AgentName, harness: HarnessKind, caps: &[Capability]) -> String {
+    pub(crate) fn vocabulary(
+        &self,
+        agent: AgentName,
+        harness: HarnessKind,
+        caps: &[Capability],
+    ) -> String {
         let executor = ExecutorKind::Harness(harness);
         let table = harness.as_str();
         let mut out = String::new();

@@ -114,7 +114,11 @@ impl PtySession {
             .name(format!("pty-write-{}", pid.unwrap_or(0)))
             .spawn(move || {
                 for bytes in queued {
-                    if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                    if writer
+                        .write_all(&bytes)
+                        .and_then(|_| writer.flush())
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -185,10 +189,9 @@ impl PtySession {
                 std::io::ErrorKind::WouldBlock,
                 "the program is not reading its terminal input",
             ),
-            TrySendError::Disconnected(_) => std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "the terminal is closed",
-            ),
+            TrySendError::Disconnected(_) => {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the terminal is closed")
+            }
         })
     }
 
@@ -568,7 +571,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_zero_size_resize_is_clamped() {
-        let pty = PtySession::spawn(&sh("printf 'up\\n'; sleep 5"), 0, 0, Box::new(|_| {})).unwrap();
+        let pty =
+            PtySession::spawn(&sh("printf 'up\\n'; sleep 5"), 0, 0, Box::new(|_| {})).unwrap();
         pty.resize(0, 0);
         pty.resize(u16::MAX, u16::MAX);
         wait_for(&pty, "up").await;
@@ -588,15 +592,24 @@ mod tests {
         let (snap, mut rx) = pty.stream();
         let text = String::from_utf8_lossy(&snap).into_owned();
         assert!(text.starts_with("\x1bc"));
-        assert!(text.contains("line1\r\n"), "the scrollback is replayed: {text:?}");
+        assert!(
+            text.contains("line1\r\n"),
+            "the scrollback is replayed: {text:?}"
+        );
         assert!(!text.contains("after-"));
         pty.write(b"go\r").unwrap();
         let mut seen = String::new();
         while !seen.contains("after-go") {
-            let chunk = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+            let chunk = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
             seen.push_str(&String::from_utf8_lossy(&chunk));
         }
-        assert!(!seen.contains("line60"), "nothing from before the snapshot repeats: {seen:?}");
+        assert!(
+            !seen.contains("line60"),
+            "nothing from before the snapshot repeats: {seen:?}"
+        );
         pty.terminate(Duration::from_millis(200)).await;
     }
 

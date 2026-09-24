@@ -25,7 +25,10 @@ pub enum AgentsError {
     #[error("parsing asset `{path}`: {message}")]
     Parse { path: String, message: String },
     #[error("rendering `{path}`: {source}")]
-    Template { path: String, source: minijinja::Error },
+    Template {
+        path: String,
+        source: minijinja::Error,
+    },
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -53,8 +56,10 @@ struct AgentToml {
 
 pub(crate) fn asset_text(path: &str) -> Result<String, AgentsError> {
     let file = Assets::get(path).ok_or_else(|| AgentsError::Missing(path.to_string()))?;
-    String::from_utf8(file.data.into_owned())
-        .map_err(|e| AgentsError::Parse { path: path.to_string(), message: e.to_string() })
+    String::from_utf8(file.data.into_owned()).map_err(|e| AgentsError::Parse {
+        path: path.to_string(),
+        message: e.to_string(),
+    })
 }
 
 fn leak(s: String) -> &'static str {
@@ -65,8 +70,11 @@ fn load_defs() -> Result<BTreeMap<AgentName, AgentDef>, AgentsError> {
     let mut out = BTreeMap::new();
     for agent in AgentName::ALL {
         let path = format!("agents/{}/agent.toml", agent.as_str());
-        let raw: AgentToml = toml::from_str(&asset_text(&path)?)
-            .map_err(|e| AgentsError::Parse { path: path.clone(), message: e.to_string() })?;
+        let raw: AgentToml =
+            toml::from_str(&asset_text(&path)?).map_err(|e| AgentsError::Parse {
+                path: path.clone(),
+                message: e.to_string(),
+            })?;
         out.insert(
             agent,
             AgentDef {
@@ -84,7 +92,9 @@ fn load_defs() -> Result<BTreeMap<AgentName, AgentDef>, AgentsError> {
 
 fn defs() -> &'static BTreeMap<AgentName, AgentDef> {
     static DEFS: OnceLock<BTreeMap<AgentName, AgentDef>> = OnceLock::new();
-    DEFS.get_or_init(|| load_defs().unwrap_or_else(|e| panic!("embedded agent definitions are invalid: {e}")))
+    DEFS.get_or_init(|| {
+        load_defs().unwrap_or_else(|e| panic!("embedded agent definitions are invalid: {e}"))
+    })
 }
 
 /// The definition of one agent. Embedded assets are validated by this crate's tests, so a missing
@@ -117,12 +127,16 @@ pub fn set_assets_dir(dir: PathBuf) -> bool {
 
 /// Directory agents read references and bundled skills from: `<data_dir>/assets` unless set.
 pub fn assets_dir() -> PathBuf {
-    ASSETS_DIR.get().cloned().unwrap_or_else(|| ostra_core::paths::data_dir().join("assets"))
+    ASSETS_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| ostra_core::paths::data_dir().join("assets"))
 }
 
 fn fill_assets_dir(text: &str, dir: &Path) -> String {
     let d = dir.display().to_string();
-    text.replace("{{assets_dir}}", &d).replace("{{ assets_dir }}", &d)
+    text.replace("{{assets_dir}}", &d)
+        .replace("{{ assets_dir }}", &d)
 }
 
 /// Write every embedded reference and bundled skill under `dir` (`refs/<name>.md`,
@@ -203,7 +217,9 @@ pub fn stack_names() -> Vec<String> {
     let mut names: Vec<String> = reference_names()
         .into_iter()
         .filter(|n| !n.starts_with('_'))
-        .filter(|n| asset_text(&format!("refs/{n}.md")).is_ok_and(|t| t.starts_with("# Stack Reference:")))
+        .filter(|n| {
+            asset_text(&format!("refs/{n}.md")).is_ok_and(|t| t.starts_with("# Stack Reference:"))
+        })
         .collect();
     names.sort();
     names
@@ -217,7 +233,10 @@ pub fn embedded_skill(name: &str) -> Option<&'static str> {
             let dir = assets_dir();
             Assets::iter()
                 .filter_map(|p| {
-                    let skill = p.strip_prefix("skills/")?.strip_suffix("/SKILL.md")?.to_string();
+                    let skill = p
+                        .strip_prefix("skills/")?
+                        .strip_suffix("/SKILL.md")?
+                        .to_string();
                     Some((skill, leak(fill_assets_dir(&asset_text(&p).ok()?, &dir))))
                 })
                 .collect()
@@ -260,7 +279,11 @@ fn render_str(
     let mut env = minijinja::Environment::new();
     env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
     env.set_keep_trailing_newline(true);
-    env.render_str(source, ctx).map_err(|source| AgentsError::Template { path: path.to_string(), source })
+    env.render_str(source, ctx)
+        .map_err(|source| AgentsError::Template {
+            path: path.to_string(),
+            source,
+        })
 }
 
 #[cfg(test)]

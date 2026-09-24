@@ -4,7 +4,9 @@ use ts_rs::TS;
 
 macro_rules! id_type {
     ($name:ident, $prefix:literal) => {
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
+        #[derive(
+            Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS,
+        )]
         #[ts(export, type = "string")]
         pub struct $name(pub String);
 

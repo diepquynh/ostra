@@ -111,13 +111,21 @@ fn relevant_modules<'p>(map: &'p [ModuleRow], hints: &[String]) -> Vec<&'p Modul
         .filter(|row| {
             let stem = row.glob.replace('*', "");
             let stem = stem.trim_end_matches('/');
-            stem.len() >= 3 && hints.iter().any(|h| h.contains(stem) || stem.contains(h.as_str()))
+            stem.len() >= 3
+                && hints
+                    .iter()
+                    .any(|h| h.contains(stem) || stem.contains(h.as_str()))
         })
         .take(MAX_MODULE_ROWS)
         .collect()
 }
 
-fn skill_rows(agent: AgentName, skills: &[SkillEntry], inventory: &str, repo_root: &Path) -> Vec<String> {
+fn skill_rows(
+    agent: AgentName,
+    skills: &[SkillEntry],
+    inventory: &str,
+    repo_root: &Path,
+) -> Vec<String> {
     skills
         .iter()
         .filter(|s| !s.path.is_empty())
@@ -167,7 +175,10 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
                 bits.push(format!("- language {l}"));
             }
             if !profile.stack.frameworks.is_empty() {
-                bits.push(format!("- frameworks {}", profile.stack.frameworks.join(", ")));
+                bits.push(format!(
+                    "- frameworks {}",
+                    profile.stack.frameworks.join(", ")
+                ));
             }
             if let Some(b) = &profile.stack.build_tool {
                 bits.push(format!("- build tool {b}"));
@@ -181,8 +192,12 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         }
 
         if wanted.contains(&Section::Commands) {
-            let rows: Vec<String> =
-                profile.commands.entries().iter().map(|(k, v)| format!("- **{k}**: `{v}`")).collect();
+            let rows: Vec<String> = profile
+                .commands
+                .entries()
+                .iter()
+                .map(|(k, v)| format!("- **{k}**: `{v}`"))
+                .collect();
             if !rows.is_empty() {
                 body.push(format!(
                     "### Commands: use these exact strings\nSubstitute `{{MODULE}}`, `{{TEST}}`, and `{{PATH}}` \
@@ -195,10 +210,17 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         if wanted.contains(&Section::Testing) && !profile.test_types.is_empty() {
             let mut rows = vec![];
             for (name, t) in &profile.test_types {
-                let cmd = t.command_one.as_deref().or(t.command.as_deref()).unwrap_or("none");
+                let cmd = t
+                    .command_one
+                    .as_deref()
+                    .or(t.command.as_deref())
+                    .unwrap_or("none");
                 rows.push(format!("- **{name}**: `{cmd}`"));
                 if !t.matches.is_empty() && t.matches.iter().any(|m| !stated_in(&inventory, m)) {
-                    rows.push(format!("  - applies to {}", truncate(&t.matches.join("; "), 150)));
+                    rows.push(format!(
+                        "  - applies to {}",
+                        truncate(&t.matches.join("; "), 150)
+                    ));
                 }
                 if let Some(n) = t.note.as_deref().filter(|n| !stated_in(&inventory, n)) {
                     rows.push(format!("  - {}", truncate(n, 190)));
@@ -207,7 +229,10 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
                     rows.push(format!("  - reports at {}", truncate(r, 90)));
                 }
             }
-            body.push(format!("### Test types: pick the runner by what you are testing\n{}", rows.join("\n")));
+            body.push(format!(
+                "### Test types: pick the runner by what you are testing\n{}",
+                rows.join("\n")
+            ));
         }
 
         if wanted.contains(&Section::Skills) {
@@ -227,14 +252,21 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
             if let Some(n) = c.naming.as_deref().filter(|n| !stated_in(&inventory, n)) {
                 rows.push(format!("- Naming: {}", truncate(n, 190)));
             }
-            if let Some(k) = c.immutability_keyword.as_deref().filter(|k| !stated_in(&inventory, k)) {
+            if let Some(k) = c
+                .immutability_keyword
+                .as_deref()
+                .filter(|k| !stated_in(&inventory, k))
+            {
                 rows.push(format!("- Immutability: {}", truncate(k, 90)));
             }
             for note in c.notes.iter().filter(|n| !stated_in(&inventory, n)) {
                 rows.push(format!("- {}", truncate(note, 190)));
             }
             if !rows.is_empty() {
-                body.push(format!("### Conventions not stated in the inventory tables\n{}", rows.join("\n")));
+                body.push(format!(
+                    "### Conventions not stated in the inventory tables\n{}",
+                    rows.join("\n")
+                ));
             }
         }
 
@@ -247,7 +279,12 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
                 .filter(|r| !r.id.is_empty() && !r.rule.is_empty())
                 .map(|r| {
                     let fix = if r.auto_fixable { ", auto-fixable" } else { "" };
-                    format!("- **{}** ({}{fix}): {}", r.id, r.severity, truncate(&r.rule, 170))
+                    format!(
+                        "- **{}** ({}{fix}): {}",
+                        r.id,
+                        r.severity,
+                        truncate(&r.rule, 170)
+                    )
                 })
                 .collect();
             if !rows.is_empty() {
@@ -260,15 +297,21 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         }
 
         if wanted.contains(&Section::Modules) {
-            let rows: Vec<String> = relevant_modules(&profile.module_map, &scope_hints(input.prompt))
-                .into_iter()
-                .map(|r| match &r.reference {
-                    Some(reference) => format!("- `{}`: {} (reference: {reference})", r.glob, r.area),
-                    None => format!("- `{}`: {}", r.glob, r.area),
-                })
-                .collect();
+            let rows: Vec<String> =
+                relevant_modules(&profile.module_map, &scope_hints(input.prompt))
+                    .into_iter()
+                    .map(|r| match &r.reference {
+                        Some(reference) => {
+                            format!("- `{}`: {} (reference: {reference})", r.glob, r.area)
+                        }
+                        None => format!("- `{}`: {}", r.glob, r.area),
+                    })
+                    .collect();
             if !rows.is_empty() {
-                body.push(format!("### Module map rows covering the paths in your task\n{}", rows.join("\n")));
+                body.push(format!(
+                    "### Module map rows covering the paths in your task\n{}",
+                    rows.join("\n")
+                ));
             }
         }
 
@@ -291,7 +334,11 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         }
     }
 
-    let instructions: Vec<&String> = input.instructions.iter().filter(|s| !s.trim().is_empty()).collect();
+    let instructions: Vec<&String> = input
+        .instructions
+        .iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect();
     if !instructions.is_empty() {
         let lines: Vec<String> = instructions.iter().map(|s| s.trim().to_string()).collect();
         out.push(format!(
@@ -301,7 +348,11 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         ));
     }
 
-    if out.is_empty() { None } else { Some(out.join("\n\n")) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out.join("\n\n"))
+    }
 }
 
 /// The first message with the brief appended. Idempotent: a message that already carries a brief is

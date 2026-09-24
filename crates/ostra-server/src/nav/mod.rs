@@ -71,7 +71,10 @@ impl Nav {
             }
             // Tool calls and status messages change the execution's summary line.
             EngineNotice::Delta { execution, item } => {
-                if matches!(item.delta, ExecutionDelta::ToolCall { .. } | ExecutionDelta::Status { .. }) {
+                if matches!(
+                    item.delta,
+                    ExecutionDelta::ToolCall { .. } | ExecutionDelta::Status { .. }
+                ) {
                     w.dirty_execs.insert(execution.clone());
                     w.activity_dirty = true;
                 }
@@ -93,7 +96,10 @@ impl Nav {
         let summaries = w.db.list_sessions()?;
         let (mut cached, dirty) = {
             let all = self.workspaces.lock();
-            all.get(&w.id).filter(|n| !n.all_dirty).map(|n| (n.nodes.clone(), n.dirty.clone())).unwrap_or_default()
+            all.get(&w.id)
+                .filter(|n| !n.all_dirty)
+                .map(|n| (n.nodes.clone(), n.dirty.clone()))
+                .unwrap_or_default()
         };
         let mut fresh = vec![];
         let mut sessions = Vec::with_capacity(summaries.len());
@@ -101,7 +107,9 @@ impl Nav {
             match cached.remove(&s.id) {
                 Some(node) if !dirty.contains(&s.id) => sessions.push(node),
                 old => {
-                    let Ok(node) = w.engine.tree_session(s) else { continue };
+                    let Ok(node) = w.engine.tree_session(s) else {
+                        continue;
+                    };
                     index_artifacts(w, &node);
                     // A dirty node stays unstored, so the next tick still pushes it.
                     if old.is_none() && !dirty.contains(&s.id) {
@@ -118,7 +126,11 @@ impl Nav {
                 n.nodes.entry(node.id.clone()).or_insert(node);
             }
         }
-        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| b.id.cmp(&a.id)));
+        sessions.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.id.cmp(&a.id))
+        });
         Ok(WorkspaceTree { sessions })
     }
 
@@ -140,20 +152,35 @@ impl Nav {
                     (e, s)
                 })
                 .collect();
-            (std::mem::take(&mut n.dirty), execs, std::mem::take(&mut n.all_dirty), due)
+            (
+                std::mem::take(&mut n.dirty),
+                execs,
+                std::mem::take(&mut n.all_dirty),
+                due,
+            )
         };
         let mut targets: HashSet<SessionId> = sessions;
         for (exec, cached) in execs {
-            let session = cached.or_else(|| w.db.get_execution(&exec).ok().flatten().and_then(|v| v.session));
+            let session = cached.or_else(|| {
+                w.db.get_execution(&exec)
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.session)
+            });
             targets.extend(session);
         }
         let summaries = if all_dirty {
             w.db.list_sessions().unwrap_or_default()
         } else {
-            targets.iter().filter_map(|id| w.db.get_session(id).ok().flatten()).collect()
+            targets
+                .iter()
+                .filter_map(|id| w.db.get_session(id).ok().flatten())
+                .collect()
         };
         for s in summaries {
-            let Ok(node) = w.engine.tree_session(&s) else { continue };
+            let Ok(node) = w.engine.tree_session(&s) else {
+                continue;
+            };
             index_artifacts(w, &node);
             let changed = {
                 let mut all = self.workspaces.lock();
@@ -166,12 +193,20 @@ impl Nav {
                 }
             };
             if changed {
-                let msg = ServerMsg::TreePatch { workspace: w.id.clone(), session: node };
-                let _ = app.push.send(Pushed { channels: workspace_channel(&w.id), msg });
+                let msg = ServerMsg::TreePatch {
+                    workspace: w.id.clone(),
+                    session: node,
+                };
+                let _ = app.push.send(Pushed {
+                    channels: workspace_channel(&w.id),
+                    msg,
+                });
             }
         }
         if activity_due {
-            let Ok(activity) = activity::build(w, chrono::Local::now()) else { return };
+            let Ok(activity) = activity::build(w, chrono::Local::now()) else {
+                return;
+            };
             let changed = {
                 let mut all = self.workspaces.lock();
                 let n = all.entry(w.id.clone()).or_default();
@@ -184,19 +219,39 @@ impl Nav {
                 }
             };
             if changed {
-                let msg = ServerMsg::Activity { workspace: w.id.clone(), activity };
-                let _ = app.push.send(Pushed { channels: workspace_channel(&w.id), msg });
+                let msg = ServerMsg::Activity {
+                    workspace: w.id.clone(),
+                    activity,
+                };
+                let _ = app.push.send(Pushed {
+                    channels: workspace_channel(&w.id),
+                    msg,
+                });
             }
         }
     }
 }
 
-fn session_of_cached(nodes: &HashMap<SessionId, TreeSession>, exec: &ExecutionId) -> Option<SessionId> {
-    nodes.values().find(|n| n.groups.iter().any(|g| g.runs.iter().any(|r| &r.id == exec))).map(|n| n.id.clone())
+fn session_of_cached(
+    nodes: &HashMap<SessionId, TreeSession>,
+    exec: &ExecutionId,
+) -> Option<SessionId> {
+    nodes
+        .values()
+        .find(|n| {
+            n.groups
+                .iter()
+                .any(|g| g.runs.iter().any(|r| &r.id == exec))
+        })
+        .map(|n| n.id.clone())
 }
 
 fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
-    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Index each artifact's label, file name, and headings for search, skipping files whose label and
@@ -211,13 +266,22 @@ pub fn index_artifacts(w: &WorkspaceRt, node: &TreeSession) {
         if !a.path.is_absolute() {
             continue;
         }
-        let Ok(meta) = std::fs::metadata(&a.path) else { continue };
+        let Ok(meta) = std::fs::metadata(&a.path) else {
+            continue;
+        };
         let mtime = mtime_ms(&meta);
         let path = a.path.to_string_lossy().to_string();
-        if indexed.get(&path).is_some_and(|(label, m)| *label == a.label && *m == mtime) {
+        if indexed
+            .get(&path)
+            .is_some_and(|(label, m)| *label == a.label && *m == mtime)
+        {
             continue;
         }
-        let mut body = a.path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+        let mut body = a
+            .path
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
         if meta.len() <= ARTIFACT_INDEX_CAP
             && let Ok(text) = std::fs::read_to_string(&a.path)
         {

@@ -14,14 +14,19 @@ pub fn global_config_path() -> PathBuf {
     if let Ok(p) = std::env::var("OSTRA_CONFIG") {
         return PathBuf::from(p);
     }
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("ostra").join("config.toml")
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ostra")
+        .join("config.toml")
 }
 
 pub fn data_dir() -> PathBuf {
     if let Ok(p) = std::env::var("OSTRA_DATA_DIR") {
         return PathBuf::from(p);
     }
-    dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("ostra")
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("ostra")
 }
 
 pub fn registry_db_path() -> PathBuf {
@@ -61,7 +66,9 @@ pub fn session_state_dir(session_root: &Path) -> PathBuf {
 
 /// Per-execution harness dir: hook config, MCP registration, and the terminal transcript.
 pub fn harness_execution_dir(session_root: &Path, execution: &str) -> PathBuf {
-    session_state_dir(session_root).join("harness").join(execution)
+    session_state_dir(session_root)
+        .join("harness")
+        .join(execution)
 }
 
 /// Raw PTY bytes of a harness execution, kept so an ended run can be replayed.
@@ -86,7 +93,9 @@ pub fn project_skills_dir(project: &Path) -> PathBuf {
 }
 
 pub fn project_memory_db(project: &Path) -> PathBuf {
-    project_runtime(project).join("memory").join("knowledge.sqlite3")
+    project_runtime(project)
+        .join("memory")
+        .join("knowledge.sqlite3")
 }
 
 /// Declared report names. The engine names every report so later stages can predict them.
@@ -122,7 +131,11 @@ pub mod report {
             let base = v.strip_suffix("-tests").unwrap_or(&v);
             !base.is_empty() && base.chars().all(|c| c.is_ascii_digit())
         };
-        if is_phase { format!("ostra-review-ledger-phase-{v}.md") } else { "ostra-review-ledger.md".into() }
+        if is_phase {
+            format!("ostra-review-ledger-phase-{v}.md")
+        } else {
+            "ostra-review-ledger.md".into()
+        }
     }
     pub fn security_sentinel() -> String {
         "ostra-security-block.json".into()
@@ -155,12 +168,19 @@ pub fn normalize(path: &Path) -> PathBuf {
 /// Resolve `target` against `cwd` and normalize. Follows symlinks of the longest existing prefix
 /// so a link cannot escape a root.
 pub fn resolve(cwd: &Path, target: &Path) -> PathBuf {
-    let joined = if target.is_absolute() { target.to_path_buf() } else { cwd.join(target) };
+    let joined = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        cwd.join(target)
+    };
     let joined = normalize(&joined);
     let mut existing = joined.clone();
     let mut rest = vec![];
     while !existing.exists() {
-        match (existing.file_name().map(|n| n.to_os_string()), existing.parent()) {
+        match (
+            existing.file_name().map(|n| n.to_os_string()),
+            existing.parent(),
+        ) {
             (Some(name), Some(parent)) => {
                 rest.push(name);
                 existing = parent.to_path_buf();
@@ -182,7 +202,10 @@ mod tests {
     #[test]
     fn ledger_names() {
         assert_eq!(report::review_ledger("3"), "ostra-review-ledger-phase-3.md");
-        assert_eq!(report::review_ledger("3-tests"), "ostra-review-ledger-phase-3-tests.md");
+        assert_eq!(
+            report::review_ledger("3-tests"),
+            "ostra-review-ledger-phase-3-tests.md"
+        );
         assert_eq!(report::review_ledger("none"), "ostra-review-ledger.md");
         assert_eq!(report::review_ledger("-tests"), "ostra-review-ledger.md");
     }

@@ -39,14 +39,23 @@ pub async fn run(root: &Path, args: &[&str], cap: usize) -> Option<GitOutput> {
     let mut stdout = child.stdout.take()?;
     let work = async {
         let mut buf = Vec::new();
-        (&mut stdout).take(cap as u64 + 1).read_to_end(&mut buf).await.ok()?;
+        (&mut stdout)
+            .take(cap as u64 + 1)
+            .read_to_end(&mut buf)
+            .await
+            .ok()?;
         let truncated = buf.len() > cap;
         buf.truncate(cap);
         if truncated {
             let _ = child.start_kill();
         }
         let status = child.wait().await.ok()?;
-        Some(GitOutput { stdout: buf, success: status.success(), differs: status.code() == Some(1), truncated })
+        Some(GitOutput {
+            stdout: buf,
+            success: status.success(),
+            differs: status.code() == Some(1),
+            truncated,
+        })
     };
     tokio::time::timeout(GIT_TIMEOUT, work).await.ok().flatten()
 }
@@ -55,7 +64,8 @@ pub async fn run(root: &Path, args: &[&str], cap: usize) -> Option<GitOutput> {
 /// project is not in a git work tree.
 pub async fn prefix(root: &Path) -> Option<String> {
     let out = run(root, &["rev-parse", "--show-prefix"], 64 * 1024).await?;
-    out.success.then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    out.success
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
 /// Per-file git state of one project, with paths relative to the project root.
@@ -74,19 +84,29 @@ impl GitStatus {
         if let Some(f) = self.files.get(rel) {
             return Some(*f);
         }
-        self.untracked_dirs.iter().any(|d| under(rel, d)).then_some((GitMark::Untracked, false))
+        self.untracked_dirs
+            .iter()
+            .any(|d| under(rel, d))
+            .then_some((GitMark::Untracked, false))
     }
 
     /// A folder's own mark (only `?` for an untracked folder) and whether anything under it changed.
     pub fn dir(&self, rel: &str) -> (Option<GitMark>, bool) {
-        if self.untracked_dirs.iter().any(|d| d == rel || under(rel, d)) {
+        if self
+            .untracked_dirs
+            .iter()
+            .any(|d| d == rel || under(rel, d))
+        {
             return (Some(GitMark::Untracked), true);
         }
         let changed = if rel.is_empty() {
             !self.files.is_empty() || !self.untracked_dirs.is_empty()
         } else {
             let start = format!("{rel}/");
-            self.files.range(start.clone()..).next().is_some_and(|(k, _)| k.starts_with(&start))
+            self.files
+                .range(start.clone()..)
+                .next()
+                .is_some_and(|(k, _)| k.starts_with(&start))
                 || self.untracked_dirs.iter().any(|d| d.starts_with(&start))
         };
         (None, changed)
@@ -94,7 +114,14 @@ impl GitStatus {
 
     /// Every changed file and untracked folder, as `(path, mark, staged)`.
     pub fn changed(&self) -> impl Iterator<Item = (&str, GitMark, bool)> {
-        self.files.iter().map(|(p, (m, s))| (p.as_str(), *m, *s)).chain(self.untracked_dirs.iter().map(|d| (d.as_str(), GitMark::Untracked, false)))
+        self.files
+            .iter()
+            .map(|(p, (m, s))| (p.as_str(), *m, *s))
+            .chain(
+                self.untracked_dirs
+                    .iter()
+                    .map(|d| (d.as_str(), GitMark::Untracked, false)),
+            )
     }
 }
 
@@ -105,11 +132,25 @@ fn under(path: &str, dir: &str) -> bool {
 /// Load the status of the project at `root`. A folder outside any git work tree yields an empty
 /// status with `repo: false`.
 pub async fn status(root: &Path) -> GitStatus {
-    let Some(prefix) = prefix(root).await else { return GitStatus::default() };
-    let args = ["status", "--porcelain=v2", "-z", "--untracked-files=normal", "--ignore-submodules=dirty", "--", "."];
+    let Some(prefix) = prefix(root).await else {
+        return GitStatus::default();
+    };
+    let args = [
+        "status",
+        "--porcelain=v2",
+        "-z",
+        "--untracked-files=normal",
+        "--ignore-submodules=dirty",
+        "--",
+        ".",
+    ];
     match run(root, &args, 32 * 1024 * 1024).await {
         Some(out) if out.success => parse_porcelain_v2(&out.stdout, &prefix),
-        _ => GitStatus { repo: true, prefix, ..Default::default() },
+        _ => GitStatus {
+            repo: true,
+            prefix,
+            ..Default::default()
+        },
     }
 }
 
@@ -126,11 +167,17 @@ fn mark(x: u8, y: u8) -> GitMark {
 /// Parse `git status --porcelain=v2 -z` output. Paths in it are relative to the repository root;
 /// `prefix` is the project's place in the repository, and entries outside it are dropped.
 pub fn parse_porcelain_v2(out: &[u8], prefix: &str) -> GitStatus {
-    let mut st = GitStatus { repo: true, prefix: prefix.to_string(), ..Default::default() };
+    let mut st = GitStatus {
+        repo: true,
+        prefix: prefix.to_string(),
+        ..Default::default()
+    };
     let mut records = out.split(|b| *b == 0).filter(|r| !r.is_empty());
     let local = |p: &[u8]| -> Option<String> {
         let p = String::from_utf8_lossy(p);
-        p.strip_prefix(prefix).filter(|s| !s.is_empty()).map(str::to_string)
+        p.strip_prefix(prefix)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
     };
     while let Some(rec) = records.next() {
         let fields = |n: usize| rec.splitn(n, |b| *b == b' ').collect::<Vec<_>>();
@@ -146,18 +193,26 @@ pub fn parse_porcelain_v2(out: &[u8], prefix: &str) -> GitStatus {
                     // The rename's source path follows as its own NUL-terminated record.
                     records.next();
                 }
-                let (Some(xy), Some(path)) = (f.get(1), f.get(n - 1)) else { continue };
+                let (Some(xy), Some(path)) = (f.get(1), f.get(n - 1)) else {
+                    continue;
+                };
                 if xy.len() != 2 || f.len() != n {
                     continue;
                 }
                 let (x, y) = (xy[0], xy[1]);
-                let entry = if rec[0] == b'u' { (GitMark::Modified, false) } else { (mark(x, y), x != b'.') };
+                let entry = if rec[0] == b'u' {
+                    (GitMark::Modified, false)
+                } else {
+                    (mark(x, y), x != b'.')
+                };
                 if let Some(p) = local(path) {
                     st.files.insert(p, entry);
                 }
             }
             b'?' => {
-                let Some(p) = rec.get(2..).and_then(local) else { continue };
+                let Some(p) = rec.get(2..).and_then(local) else {
+                    continue;
+                };
                 match p.strip_suffix('/') {
                     Some(dir) => st.untracked_dirs.push(dir.to_string()),
                     None => {
@@ -176,7 +231,9 @@ pub fn valid_base(base: &str) -> bool {
     !base.is_empty()
         && base.len() <= 200
         && !base.starts_with('-')
-        && base.bytes().all(|b| b.is_ascii_alphanumeric() || b"._/~^@{}-".contains(&b))
+        && base
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._/~^@{}-".contains(&b))
 }
 
 /// Resolve `base` to a commit id. A repository with no commits yet compares `HEAD` against the
@@ -194,26 +251,79 @@ pub async fn resolve_base(root: &Path, base: &str) -> Result<String, String> {
     {
         return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
     }
-    Err(format!("No commit named `{base}` in this repository. Use a commit, branch, or tag that exists."))
+    Err(format!(
+        "No commit named `{base}` in this repository. Use a commit, branch, or tag that exists."
+    ))
 }
 
 /// The diff of one project-relative file against the resolved `base`, or against nothing when the
 /// file is untracked. Returns the parsed diff and whether output hit `cap`.
-pub async fn diff_file(root: &Path, rel: &str, base: &str, untracked: bool, cap: usize) -> Option<(ParsedDiff, bool)> {
+pub async fn diff_file(
+    root: &Path,
+    rel: &str,
+    base: &str,
+    untracked: bool,
+    cap: usize,
+) -> Option<(ParsedDiff, bool)> {
     let out = if untracked {
-        run(root, &["diff", "--no-color", "--no-ext-diff", "--no-index", "--", "/dev/null", rel], cap).await?
+        run(
+            root,
+            &[
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-index",
+                "--",
+                "/dev/null",
+                rel,
+            ],
+            cap,
+        )
+        .await?
     } else {
-        run(root, &["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U3", base, "--", rel], cap).await?
+        run(
+            root,
+            &[
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-renames",
+                "-U3",
+                base,
+                "--",
+                rel,
+            ],
+            cap,
+        )
+        .await?
     };
-    (out.success || out.differs || out.truncated).then(|| (parse_unified(&String::from_utf8_lossy(&out.stdout)), out.truncated))
+    (out.success || out.differs || out.truncated).then(|| {
+        (
+            parse_unified(&String::from_utf8_lossy(&out.stdout)),
+            out.truncated,
+        )
+    })
 }
 
 /// Added and removed line counts per tracked file against the resolved `base`.
-pub async fn numstat(root: &Path, base: &str, rels: &[String], prefix: &str) -> BTreeMap<String, (u32, u32)> {
+pub async fn numstat(
+    root: &Path,
+    base: &str,
+    rels: &[String],
+    prefix: &str,
+) -> BTreeMap<String, (u32, u32)> {
     if rels.is_empty() {
         return BTreeMap::new();
     }
-    let mut args: Vec<&str> = vec!["diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", base, "--"];
+    let mut args: Vec<&str> = vec![
+        "diff",
+        "--numstat",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        base,
+        "--",
+    ];
     args.extend(rels.iter().map(String::as_str));
     match run(root, &args, 8 * 1024 * 1024).await {
         Some(out) if out.success => parse_numstat_z(&out.stdout, prefix),
@@ -241,7 +351,14 @@ fn hunk_header(line: &str) -> Option<DiffHunk> {
     };
     let (old_start, old_lines) = range(old)?;
     let (new_start, new_lines) = range(new)?;
-    Some(DiffHunk { old_start, old_lines, new_start, new_lines, header: header.trim().to_string(), lines: vec![] })
+    Some(DiffHunk {
+        old_start,
+        old_lines,
+        new_start,
+        new_lines,
+        header: header.trim().to_string(),
+        lines: vec![],
+    })
 }
 
 /// Parse the unified diff of one file (`git diff` output) into hunks with line numbers.
@@ -286,7 +403,12 @@ pub fn parse_unified(text: &str) -> ParsedDiff {
             DiffLineKind::Del => out.removed += 1,
             DiffLineKind::Context => {}
         }
-        hunk.lines.push(DiffLine { kind, text: text.strip_suffix('\r').unwrap_or(text).to_string(), old_no: o, new_no: n });
+        hunk.lines.push(DiffLine {
+            kind,
+            text: text.strip_suffix('\r').unwrap_or(text).to_string(),
+            old_no: o,
+            new_no: n,
+        });
     }
     out
 }
@@ -302,7 +424,9 @@ pub fn parse_numstat_z(out: &[u8], prefix: &str) -> BTreeMap<String, (u32, u32)>
         }
         let text = String::from_utf8_lossy(rec);
         let mut parts = text.splitn(3, '\t');
-        let (Some(a), Some(r), Some(path)) = (parts.next(), parts.next(), parts.next()) else { continue };
+        let (Some(a), Some(r), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
         let path = if path.is_empty() {
             records.next();
             match records.next() {
@@ -312,8 +436,13 @@ pub fn parse_numstat_z(out: &[u8], prefix: &str) -> BTreeMap<String, (u32, u32)>
         } else {
             path.to_string()
         };
-        let Some(local) = path.strip_prefix(prefix) else { continue };
-        map.insert(local.to_string(), (a.parse().unwrap_or(0), r.parse().unwrap_or(0)));
+        let Some(local) = path.strip_prefix(prefix) else {
+            continue;
+        };
+        map.insert(
+            local.to_string(),
+            (a.parse().unwrap_or(0), r.parse().unwrap_or(0)),
+        );
     }
     map
 }
@@ -337,14 +466,25 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         assert!(st.repo);
         assert_eq!(st.file("a.txt"), Some((GitMark::Modified, false)));
         assert_eq!(st.file("moved name.txt"), Some((GitMark::Renamed, true)));
-        assert_eq!(st.file("top.txt"), None, "the rename source is not an entry");
+        assert_eq!(
+            st.file("top.txt"),
+            None,
+            "the rename source is not an entry"
+        );
         assert_eq!(st.file("new.rs"), Some((GitMark::Added, true)));
         assert_eq!(st.file("gone.rs"), Some((GitMark::Deleted, true)));
         assert_eq!(st.file("conflict.rs"), Some((GitMark::Modified, false)));
         assert_eq!(st.file("notes.md"), Some((GitMark::Untracked, false)));
-        assert_eq!(st.file("scratch/deep/f.txt"), Some((GitMark::Untracked, false)));
+        assert_eq!(
+            st.file("scratch/deep/f.txt"),
+            Some((GitMark::Untracked, false))
+        );
         assert_eq!(st.file("scratchy.txt"), None);
-        assert_eq!(st.file("x.rs"), None, "entries outside the project prefix are dropped");
+        assert_eq!(
+            st.file("x.rs"),
+            None,
+            "entries outside the project prefix are dropped"
+        );
         assert_eq!(st.dir("scratch"), (Some(GitMark::Untracked), true));
         assert_eq!(st.dir(""), (None, true));
         assert_eq!(st.dir("target"), (None, false));
@@ -353,7 +493,10 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
 
     #[test]
     fn porcelain_folder_changes() {
-        let st = parse_porcelain_v2(b"1 .M N... 100644 100644 100644 a a src/lib/x.rs\0? docs/new/\0", "");
+        let st = parse_porcelain_v2(
+            b"1 .M N... 100644 100644 100644 a a src/lib/x.rs\0? docs/new/\0",
+            "",
+        );
         assert_eq!(st.dir("src"), (None, true));
         assert_eq!(st.dir("src/lib"), (None, true));
         assert_eq!(st.dir("sr"), (None, false));
@@ -370,9 +513,16 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         assert_eq!((d.added, d.removed), (2, 2));
         assert_eq!(d.hunks.len(), 2);
         let h = &d.hunks[0];
-        assert_eq!((h.old_start, h.old_lines, h.new_start, h.new_lines), (1, 3, 1, 4));
+        assert_eq!(
+            (h.old_start, h.old_lines, h.new_start, h.new_lines),
+            (1, 3, 1, 4)
+        );
         assert_eq!(h.header, "fn main() {");
-        let rows: Vec<(DiffLineKind, &str, Option<u32>, Option<u32>)> = h.lines.iter().map(|l| (l.kind, l.text.as_str(), l.old_no, l.new_no)).collect();
+        let rows: Vec<(DiffLineKind, &str, Option<u32>, Option<u32>)> = h
+            .lines
+            .iter()
+            .map(|l| (l.kind, l.text.as_str(), l.old_no, l.new_no))
+            .collect();
         assert_eq!(
             rows,
             vec![
@@ -384,14 +534,19 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
             ]
         );
         let h2 = &d.hunks[1];
-        assert_eq!((h2.old_start, h2.old_lines, h2.new_start, h2.new_lines), (10, 1, 11, 0));
+        assert_eq!(
+            (h2.old_start, h2.old_lines, h2.new_start, h2.new_lines),
+            (10, 1, 11, 0)
+        );
         assert_eq!(h2.lines.len(), 1, "the no-newline marker is not a line");
         assert_eq!(h2.lines[0].old_no, Some(10));
     }
 
     #[test]
     fn unified_diff_binary() {
-        let d = parse_unified("diff --git a/x.png b/x.png\nindex 1..2 100644\nBinary files a/x.png and b/x.png differ\n");
+        let d = parse_unified(
+            "diff --git a/x.png b/x.png\nindex 1..2 100644\nBinary files a/x.png and b/x.png differ\n",
+        );
         assert!(d.binary);
         assert!(d.hunks.is_empty());
     }
@@ -412,8 +567,17 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         let dir = tempfile::tempdir().unwrap();
         let repo = std::fs::canonicalize(dir.path()).unwrap();
         let git = |args: &[&str]| {
-            let out = std::process::Command::new("git").args(["-c", "user.name=t", "-c", "user.email=t@t"]).args(args).current_dir(&repo).output().unwrap();
-            assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         };
         git(&["init", "-q"]);
         std::fs::create_dir_all(repo.join("app/src")).unwrap();
@@ -436,7 +600,9 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
 
         let head = resolve_base(&app, "HEAD").await.unwrap();
         assert!(resolve_base(&app, "no-such-branch").await.is_err());
-        let (d, truncated) = diff_file(&app, "src/a.rs", &head, false, 1 << 20).await.unwrap();
+        let (d, truncated) = diff_file(&app, "src/a.rs", &head, false, 1 << 20)
+            .await
+            .unwrap();
         assert!(!truncated);
         assert_eq!((d.added, d.removed, d.hunks.len()), (1, 1, 1));
         let (d, _) = diff_file(&app, "new.txt", "", true, 1 << 20).await.unwrap();
@@ -445,7 +611,11 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         assert_eq!(counts.get("src/a.rs"), Some(&(1, 1)));
 
         let outside = tempfile::tempdir().unwrap();
-        assert_eq!(status(outside.path()).await, GitStatus::default(), "a folder outside git has no status and no error");
+        assert_eq!(
+            status(outside.path()).await,
+            GitStatus::default(),
+            "a folder outside git has no status and no error"
+        );
     }
 
     #[test]

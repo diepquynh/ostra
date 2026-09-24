@@ -7,10 +7,12 @@
 
 use crate::agent::{AgentName, Capability};
 use crate::config::{
-    ExecutorRouting, PermissionMode, PermissionRules, ProjectProfile, ResolvedRoute, Routing, ValidationIssue, WorkspaceSettings,
+    ExecutorRouting, PermissionMode, PermissionRules, ProjectProfile, ResolvedRoute, Routing,
+    ValidationIssue, WorkspaceSettings,
 };
 use crate::event::{
-    AnswerSource, ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind, SessionOptions,
+    AnswerSource, ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind,
+    SessionOptions,
 };
 use crate::exec::{ExecutionDelta, ExecutionStatus, Usage};
 use crate::executor::{ExecStream, ExecutorKind, HarnessKind};
@@ -202,7 +204,9 @@ pub struct ProviderCredentialsEdit {
 
 impl std::fmt::Debug for ProviderCredentialsEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProviderCredentialsEdit").field("base_url", &self.base_url).finish_non_exhaustive()
+        f.debug_struct("ProviderCredentialsEdit")
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
     }
 }
 
@@ -271,7 +275,10 @@ impl RoutingPreset {
         routing.executor = ExecutorRouting::default();
         if let Some(h) = self.harness() {
             for agent in Self::HARNESS_AGENTS {
-                routing.executor.by_agent.insert(agent.to_string(), ExecutorKind::Harness(h));
+                routing
+                    .executor
+                    .by_agent
+                    .insert(agent.to_string(), ExecutorKind::Harness(h));
             }
         }
     }
@@ -780,7 +787,16 @@ pub fn summary_line(text: &str) -> String {
 /// The summary line of a tool call: its tool and main argument, for example `Edit src/lib.rs` or
 /// `Bash npm test`. Paths under `root` are shown relative to it.
 pub fn tool_summary(call: &ToolCall, root: Option<&std::path::Path>) -> String {
-    const KEYS: [&str; 8] = ["file_path", "command", "pattern", "url", "path", "query", "skill", "notebook_path"];
+    const KEYS: [&str; 8] = [
+        "file_path",
+        "command",
+        "pattern",
+        "url",
+        "path",
+        "query",
+        "skill",
+        "notebook_path",
+    ];
     let Some(arg) = KEYS.iter().find_map(|k| call.str_field(k)) else {
         return summary_line(&call.tool);
     };
@@ -1123,10 +1139,21 @@ pub struct ProjectChange {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ClientMsg {
-    Subscribe { channel: String },
-    Unsubscribe { channel: String },
-    TermInput { execution: ExecutionId, data: String },
-    TermResize { execution: ExecutionId, cols: u16, rows: u16 },
+    Subscribe {
+        channel: String,
+    },
+    Unsubscribe {
+        channel: String,
+    },
+    TermInput {
+        execution: ExecutionId,
+        data: String,
+    },
+    TermResize {
+        execution: ExecutionId,
+        cols: u16,
+        rows: u16,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1134,24 +1161,57 @@ pub enum ClientMsg {
 #[ts(export)]
 pub enum ServerMsg {
     /// An engine event appended to a session.
-    SessionEvent { session: SessionId, seq: i64, at: DateTime<Utc>, event: SessionEvent },
+    SessionEvent {
+        session: SessionId,
+        seq: i64,
+        at: DateTime<Utc>,
+        event: SessionEvent,
+    },
     /// Streamed activity of one execution.
-    ExecutionDelta { execution: ExecutionId, seq: i64, at: DateTime<Utc>, delta: ExecutionDelta },
-    ExecutionStatus { execution: ExecutionId, status: ExecutionStatus },
-    SessionUpdated { summary: SessionSummary },
-    WorkspaceUpdated { workspace: WorkspaceId },
-    HarnessStatus { statuses: Vec<HarnessStatus> },
-    Subscribed { channel: String },
-    Error { message: String },
+    ExecutionDelta {
+        execution: ExecutionId,
+        seq: i64,
+        at: DateTime<Utc>,
+        delta: ExecutionDelta,
+    },
+    ExecutionStatus {
+        execution: ExecutionId,
+        status: ExecutionStatus,
+    },
+    SessionUpdated {
+        summary: SessionSummary,
+    },
+    WorkspaceUpdated {
+        workspace: WorkspaceId,
+    },
+    HarnessStatus {
+        statuses: Vec<HarnessStatus>,
+    },
+    Subscribed {
+        channel: String,
+    },
+    Error {
+        message: String,
+    },
     /// Files an execution wrote in a project, on `workspace:<id>`. Paths are project-relative;
     /// changes are coalesced over a short window.
-    ProjectFsChanged { workspace: WorkspaceId, key: String, paths: Vec<String> },
+    ProjectFsChanged {
+        workspace: WorkspaceId,
+        key: String,
+        paths: Vec<String>,
+    },
     /// A session node of the Sessions tree changed or appeared, on `workspace:<id>`. Replace the
     /// node with the same id. At most four per second per session.
-    TreePatch { workspace: WorkspaceId, session: TreeSession },
+    TreePatch {
+        workspace: WorkspaceId,
+        session: TreeSession,
+    },
     /// The workspace's running executions, open gates, or spend changed, on `workspace:<id>`. At
     /// most two per second.
-    Activity { workspace: WorkspaceId, activity: WorkspaceActivity },
+    Activity {
+        workspace: WorkspaceId,
+        activity: WorkspaceActivity,
+    },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1241,7 +1301,10 @@ mod tests {
     #[test]
     fn routing_presets_move_only_implementers() {
         let mut ws = WorkspaceSettings::seeded("x");
-        ws.routing.executor.by_agent.insert("plan".into(), ExecutorKind::Harness(HarnessKind::Grok));
+        ws.routing
+            .executor
+            .by_agent
+            .insert("plan".into(), ExecutorKind::Harness(HarnessKind::Grok));
         RoutingPreset::Codex.apply(&mut ws.routing);
         let codex = ExecutorKind::Harness(HarnessKind::Codex);
         for c in Complexity::ALL {
@@ -1249,17 +1312,31 @@ mod tests {
             assert_eq!(resolve_executor(&ws, "write-test", Some(c)), codex);
         }
         assert_eq!(resolve_executor(&ws, "plan", None), ExecutorKind::Native);
-        assert_eq!(resolve_executor(&ws, "code-reviewer", None), ExecutorKind::Native);
-        let route = resolve_route(&GlobalConfig::default(), &ws, RouteQuery::new("implementer", Tier::Balanced)).unwrap();
+        assert_eq!(
+            resolve_executor(&ws, "code-reviewer", None),
+            ExecutorKind::Native
+        );
+        let route = resolve_route(
+            &GlobalConfig::default(),
+            &ws,
+            RouteQuery::new("implementer", Tier::Balanced),
+        )
+        .unwrap();
         assert_eq!(route.model, "gpt-5.6-luna");
 
         RoutingPreset::Claude.apply(&mut ws.routing);
-        assert_eq!(resolve_executor(&ws, "implementer", None), ExecutorKind::Harness(HarnessKind::Claude));
+        assert_eq!(
+            resolve_executor(&ws, "implementer", None),
+            ExecutorKind::Harness(HarnessKind::Claude)
+        );
         assert_eq!(ws.routing.executor.by_agent.len(), 2);
 
         RoutingPreset::Native.apply(&mut ws.routing);
         assert!(ws.routing.executor.by_agent.is_empty());
-        assert_eq!(ws.routing.model, WorkspaceSettings::seeded("x").routing.model);
+        assert_eq!(
+            ws.routing.model,
+            WorkspaceSettings::seeded("x").routing.model
+        );
     }
 
     #[test]
@@ -1267,14 +1344,27 @@ mod tests {
         assert_eq!(AgentName::CodeReviewer.label(), "Code reviewer");
         assert_eq!(AgentName::Explore.label(), "Explore");
         let x = ExecutionId::from("x_1");
-        let failed = GatePayload::ExecutionFailed { execution: x.clone(), agent: AgentName::Plan, project: "a".into(), error: "e".into() };
+        let failed = GatePayload::ExecutionFailed {
+            execution: x.clone(),
+            agent: AgentName::Plan,
+            project: "a".into(),
+            error: "e".into(),
+        };
         assert_eq!(failed.execution(), Some(&x));
-        assert_eq!(GatePayload::BudgetReached { spent_usd: 1.0, budget_usd: 1.0 }.execution(), None);
+        assert_eq!(
+            GatePayload::BudgetReached {
+                spent_usd: 1.0,
+                budget_usd: 1.0
+            }
+            .execution(),
+            None
+        );
     }
 
     #[test]
     fn create_body_accepts_the_old_shape() {
-        let body: CreateWorkspace = serde_json::from_str(r#"{"name": "a", "root": "/tmp/a"}"#).unwrap();
+        let body: CreateWorkspace =
+            serde_json::from_str(r#"{"name": "a", "root": "/tmp/a"}"#).unwrap();
         assert_eq!(body.projects, None);
         assert_eq!(body.routing_preset, None);
         let full: CreateWorkspace = serde_json::from_str(
@@ -1288,12 +1378,24 @@ mod tests {
 
     #[test]
     fn summary_lines() {
-        let edit = ToolCall::new("Edit", serde_json::json!({"file_path": "/code/app/src/orders/state.rs", "old_string": "a"}));
-        assert_eq!(tool_summary(&edit, Some(std::path::Path::new("/code/app"))), "Edit src/orders/state.rs");
-        assert_eq!(tool_summary(&edit, None), "Edit /code/app/src/orders/state.rs");
+        let edit = ToolCall::new(
+            "Edit",
+            serde_json::json!({"file_path": "/code/app/src/orders/state.rs", "old_string": "a"}),
+        );
+        assert_eq!(
+            tool_summary(&edit, Some(std::path::Path::new("/code/app"))),
+            "Edit src/orders/state.rs"
+        );
+        assert_eq!(
+            tool_summary(&edit, None),
+            "Edit /code/app/src/orders/state.rs"
+        );
         let bash = ToolCall::new("Bash", serde_json::json!({"command": "npm run\n  test"}));
         assert_eq!(tool_summary(&bash, None), "Bash npm run test");
-        assert_eq!(tool_summary(&ToolCall::new("TodoWrite", serde_json::json!({})), None), "TodoWrite");
+        assert_eq!(
+            tool_summary(&ToolCall::new("TodoWrite", serde_json::json!({})), None),
+            "TodoWrite"
+        );
         let long = summary_line(&"x".repeat(500));
         assert_eq!(long.chars().count(), SUMMARY_CHARS);
         assert!(long.ends_with('…'));

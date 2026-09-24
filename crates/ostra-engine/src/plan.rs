@@ -5,7 +5,8 @@
 use crate::state::*;
 use ostra_core::agent::AgentName;
 use ostra_core::event::{
-    ClosingItem, CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, SessionKind, WorkKind,
+    ClosingItem, CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, SessionKind,
+    WorkKind,
 };
 use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::{ExecutionId, GateId};
@@ -77,34 +78,84 @@ pub struct SpawnRequest {
 impl SpawnRequest {
     /// The phase complexity routes see. `None` outside a phase; a phase without a file is `Low`.
     pub fn complexity(&self) -> Option<Complexity> {
-        self.inputs.phase.as_ref().map(|p| if p.file.is_some() { p.complexity } else { Complexity::Low })
+        self.inputs.phase.as_ref().map(|p| {
+            if p.file.is_some() {
+                p.complexity
+            } else {
+                Complexity::Low
+            }
+        })
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "step", rename_all = "snake_case")]
 pub enum Step {
-    Judge { judge: JudgeKind, subject: Option<String> },
+    Judge {
+        judge: JudgeKind,
+        subject: Option<String>,
+    },
     Spawn(Box<SpawnRequest>),
-    OpenGate { title: String, explanation: String, payload: GatePayload },
-    YoloAnswer { gate: GateId },
-    Command { purpose: CommandPurpose, project: String, command: Option<String>, files: Vec<String> },
-    Autofix { project: String, phase: u32, tests: bool, findings: Vec<ReviewFinding> },
-    AnnounceBlocked { project: String, phase: u32, tests: bool, reason: String },
-    Complete { report_markdown: Option<String> },
-    Fail { error: String },
+    OpenGate {
+        title: String,
+        explanation: String,
+        payload: GatePayload,
+    },
+    YoloAnswer {
+        gate: GateId,
+    },
+    Command {
+        purpose: CommandPurpose,
+        project: String,
+        command: Option<String>,
+        files: Vec<String>,
+    },
+    Autofix {
+        project: String,
+        phase: u32,
+        tests: bool,
+        findings: Vec<ReviewFinding>,
+    },
+    AnnounceBlocked {
+        project: String,
+        phase: u32,
+        tests: bool,
+        reason: String,
+    },
+    Complete {
+        report_markdown: Option<String>,
+    },
+    Fail {
+        error: String,
+    },
 }
 
 impl Step {
     /// Identity used by the runner so a step already in flight is not started twice.
     pub fn key(&self) -> String {
         match self {
-            Step::Judge { judge, subject } => format!("judge:{}:{}", judge.as_str(), subject.clone().unwrap_or_default()),
-            Step::Spawn(s) => format!("spawn:{}", serde_json::to_string(&s.purpose).unwrap_or_default()),
-            Step::OpenGate { payload, .. } => format!("gate:{}:{}", payload.kind_str(), gate_owner(payload)),
+            Step::Judge { judge, subject } => format!(
+                "judge:{}:{}",
+                judge.as_str(),
+                subject.clone().unwrap_or_default()
+            ),
+            Step::Spawn(s) => format!(
+                "spawn:{}",
+                serde_json::to_string(&s.purpose).unwrap_or_default()
+            ),
+            Step::OpenGate { payload, .. } => {
+                format!("gate:{}:{}", payload.kind_str(), gate_owner(payload))
+            }
             Step::YoloAnswer { gate } => format!("yolo:{gate}"),
-            Step::Command { purpose, project, .. } => format!("cmd:{purpose:?}:{project}"),
-            Step::Autofix { project, phase, tests, .. } => format!("autofix:{project}:{phase}:{tests}"),
+            Step::Command {
+                purpose, project, ..
+            } => format!("cmd:{purpose:?}:{project}"),
+            Step::Autofix {
+                project,
+                phase,
+                tests,
+                ..
+            } => format!("autofix:{project}:{phase}:{tests}"),
             Step::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
@@ -121,8 +172,13 @@ impl Step {
             Step::Spawn(s) => format!("spawn {} {}", s.agent, purpose_summary(&s.purpose)),
             Step::OpenGate { payload, .. } => format!("gate {}", payload.kind_str()),
             Step::YoloAnswer { .. } => "yolo-answer".into(),
-            Step::Command { purpose, project, .. } => format!("command {purpose:?} {project}").to_lowercase(),
-            Step::Autofix { phase, tests, .. } => format!("autofix phase {phase}{}", if *tests { " tests" } else { "" }),
+            Step::Command {
+                purpose, project, ..
+            } => format!("command {purpose:?} {project}").to_lowercase(),
+            Step::Autofix { phase, tests, .. } => format!(
+                "autofix phase {phase}{}",
+                if *tests { " tests" } else { "" }
+            ),
             Step::AnnounceBlocked { phase, .. } => format!("blocked phase {phase}"),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
@@ -137,18 +193,34 @@ fn purpose_summary(p: &ExecPurpose) -> String {
         ExecPurpose::FactCheck { target, pass } => format!("fact-check-{}#{pass}", target.as_str()),
         ExecPurpose::Plan { round } => format!("plan#{round}"),
         ExecPurpose::Implement { phase, work } => format!("phase {phase} {work:?}").to_lowercase(),
-        ExecPurpose::Review { phase, tests, iteration } => {
-            format!("review phase {phase}{} #{iteration}", if *tests { " tests" } else { "" })
+        ExecPurpose::Review {
+            phase,
+            tests,
+            iteration,
+        } => {
+            format!(
+                "review phase {phase}{} #{iteration}",
+                if *tests { " tests" } else { "" }
+            )
         }
         ExecPurpose::Epa { phase } => format!("epa phase {phase}"),
-        ExecPurpose::WriteTest { phase, work } => format!("write-test phase {phase} {work:?}").to_lowercase(),
+        ExecPurpose::WriteTest { phase, work } => {
+            format!("write-test phase {phase} {work:?}").to_lowercase()
+        }
         ExecPurpose::ModuleDocs { project } => format!("docs {project}"),
         ExecPurpose::PromptGen { handoff_for } => {
-            if handoff_for.is_some() { "handoff".into() } else { "prompt".into() }
+            if handoff_for.is_some() {
+                "handoff".into()
+            } else {
+                "prompt".into()
+            }
         }
         ExecPurpose::Verify { phase } => format!("verify phase {phase}"),
         ExecPurpose::QuickAnswer => "quick-answer".into(),
-        ExecPurpose::Init { mode, item } => format!("init {mode}{}", item.as_ref().map(|i| format!(" {i}")).unwrap_or_default()),
+        ExecPurpose::Init { mode, item } => format!(
+            "init {mode}{}",
+            item.as_ref().map(|i| format!(" {i}")).unwrap_or_default()
+        ),
     }
 }
 
@@ -162,9 +234,15 @@ fn gate_owner(p: &GatePayload) -> String {
         | GatePayload::HarnessFailure { execution, .. }
         | GatePayload::Permission { execution, .. } => execution.to_string(),
         GatePayload::PhaseBlocked { phase, .. } => phase.to_string(),
-        GatePayload::ClosingGate { items } => items.iter().map(|i| i.project.as_str()).collect::<Vec<_>>().join(","),
+        GatePayload::ClosingGate { items } => items
+            .iter()
+            .map(|i| i.project.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
         GatePayload::SkillApproval { project, .. } => project.clone(),
-        GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. } | GatePayload::BudgetReached { .. } => String::new(),
+        GatePayload::SpecApproval { .. }
+        | GatePayload::PlanApproval { .. }
+        | GatePayload::BudgetReached { .. } => String::new(),
     }
 }
 
@@ -176,7 +254,11 @@ pub struct Planner<'a> {
 
 /// Compute the next steps for a session.
 pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step> {
-    let mut p = Planner { s, ctx, out: vec![] };
+    let mut p = Planner {
+        s,
+        ctx,
+        out: vec![],
+    };
     p.run();
     p.out
 }
@@ -197,7 +279,10 @@ impl<'a> Planner<'a> {
                         explanation: format!(
                             "This session has spent ${spent:.2} of its ${limit:.2} budget, so no new execution starts. Raise the budget to continue, or stop the session."
                         ),
-                        payload: GatePayload::BudgetReached { spent_usd: spent, budget_usd: limit },
+                        payload: GatePayload::BudgetReached {
+                            spent_usd: spent,
+                            budget_usd: limit,
+                        },
                     };
                     let key = step.key();
                     if !self.out.iter().any(|s| s.key() == key) {
@@ -213,7 +298,14 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn spawn(&mut self, agent: AgentName, purpose: ExecPurpose, project: &str, session_dir: PathBuf, inputs: SpawnInputs) {
+    fn spawn(
+        &mut self,
+        agent: AgentName,
+        purpose: ExecPurpose,
+        project: &str,
+        session_dir: PathBuf,
+        inputs: SpawnInputs,
+    ) {
         let stage = stage_of(&purpose);
         self.push(Step::Spawn(Box::new(SpawnRequest {
             agent,
@@ -226,8 +318,17 @@ impl<'a> Planner<'a> {
         })));
     }
 
-    fn gate(&mut self, title: impl Into<String>, explanation: impl Into<String>, payload: GatePayload) {
-        self.push(Step::OpenGate { title: title.into(), explanation: explanation.into(), payload });
+    fn gate(
+        &mut self,
+        title: impl Into<String>,
+        explanation: impl Into<String>,
+        payload: GatePayload,
+    ) {
+        self.push(Step::OpenGate {
+            title: title.into(),
+            explanation: explanation.into(),
+            payload,
+        });
     }
 
     fn run(&mut self) {
@@ -240,7 +341,10 @@ impl<'a> Planner<'a> {
         if s.yolo {
             for g in s.open_gates() {
                 // A budget is never raised by YOLO: spending more is the user's decision.
-                if !matches!(g.payload, GatePayload::Permission { .. } | GatePayload::BudgetReached { .. }) {
+                if !matches!(
+                    g.payload,
+                    GatePayload::Permission { .. } | GatePayload::BudgetReached { .. }
+                ) {
                     self.push(Step::YoloAnswer { gate: g.id.clone() });
                 }
             }
@@ -251,7 +355,10 @@ impl<'a> Planner<'a> {
         }
         let Some(category) = s.category else {
             if s.classify.is_none() {
-                self.push(Step::Judge { judge: JudgeKind::Classify, subject: None });
+                self.push(Step::Judge {
+                    judge: JudgeKind::Classify,
+                    subject: None,
+                });
             }
             return;
         };
@@ -279,7 +386,10 @@ impl<'a> Planner<'a> {
                     return;
                 }
                 let Some((_, stakes)) = s.stakes else {
-                    self.push(Step::Judge { judge: JudgeKind::Stakes, subject: None });
+                    self.push(Step::Judge {
+                        judge: JudgeKind::Stakes,
+                        subject: None,
+                    });
                     return;
                 };
                 if stakes != Stakes::Low && !self.plan_flow() {
@@ -327,9 +437,20 @@ impl<'a> Planner<'a> {
         for t in &s.explore {
             if t.exec.is_none() && !t.abandoned && t.failed.is_none() {
                 // Rule M1: read-only stages fan out; every ready explore spawns at once.
-                let inputs = SpawnInputs { task: Some(t.task.clone()), ..Default::default() };
-                self.spawn(AgentName::Explore, ExploreRef(t.idx).purpose(), &t.project, s.project_session_dir(&t.project), inputs);
-            } else if let (Some(err), None, Some(exec), false) = (&t.failed, &t.gate, &t.exec, t.abandoned) {
+                let inputs = SpawnInputs {
+                    task: Some(t.task.clone()),
+                    ..Default::default()
+                };
+                self.spawn(
+                    AgentName::Explore,
+                    ExploreRef(t.idx).purpose(),
+                    &t.project,
+                    s.project_session_dir(&t.project),
+                    inputs,
+                );
+            } else if let (Some(err), None, Some(exec), false) =
+                (&t.failed, &t.gate, &t.exec, t.abandoned)
+            {
                 self.exec_failed_gate(exec, AgentName::Explore, &t.project, err);
             }
         }
@@ -338,8 +459,11 @@ impl<'a> Planner<'a> {
     /// Rule D2: no explore running and no needed `Not covered` item left unjudged.
     fn explore_complete(&mut self) -> bool {
         let s = self.s;
-        let tasks: Vec<&ExploreTask> =
-            s.explore.iter().filter(|t| !matches!(t.origin, ExploreOrigin::Rescue { .. })).collect();
+        let tasks: Vec<&ExploreTask> = s
+            .explore
+            .iter()
+            .filter(|t| !matches!(t.origin, ExploreOrigin::Rescue { .. }))
+            .collect();
         if tasks.iter().any(|t| !t.finished()) {
             return false;
         }
@@ -348,13 +472,23 @@ impl<'a> Planner<'a> {
             .filter(|t| !t.judged && t.result.as_ref().is_some_and(|r| !r.not_covered.is_empty()))
             .collect();
         if !unjudged.is_empty() && s.sufficiency_rounds < SUFFICIENCY_ROUNDS {
-            let subject = unjudged.iter().map(|t| t.idx.to_string()).collect::<Vec<_>>().join(",");
-            self.push(Step::Judge { judge: JudgeKind::Sufficiency, subject: Some(subject) });
+            let subject = unjudged
+                .iter()
+                .map(|t| t.idx.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            self.push(Step::Judge {
+                judge: JudgeKind::Sufficiency,
+                subject: Some(subject),
+            });
             return false;
         }
         if s.research_docs().is_empty() {
             // Rule D1: with no research document, the spec is not entered.
-            if matches!(s.category, Some(Category::Research | Category::Spec | Category::Plan | Category::Implement)) {
+            if matches!(
+                s.category,
+                Some(Category::Research | Category::Spec | Category::Plan | Category::Implement)
+            ) {
                 self.push(Step::Fail {
                     error: "Every research task failed or was abandoned, so there is no research document to write a spec from.".into(),
                 });
@@ -375,24 +509,45 @@ impl<'a> Planner<'a> {
         let t = &s.spec;
         let primary = s.primary();
         if t.stopped {
-            self.push(Step::Fail { error: "The spec stage was stopped.".into() });
+            self.push(Step::Fail {
+                error: "The spec stage was stopped.".into(),
+            });
             return false;
         }
-        if t.busy() || t.questions_gate.is_some() || t.approval_gate.is_some() || t.recurring_gate.is_some() {
+        if t.busy()
+            || t.questions_gate.is_some()
+            || t.approval_gate.is_some()
+            || t.recurring_gate.is_some()
+        {
             return false;
         }
         if let Some(err) = &t.failed {
             if t.failed_gate.is_none()
                 && let Some(exec) = t.check_running.clone().or_else(|| t.runs.last().cloned())
             {
-                let exec = last_exec_of(s, |p| matches!(p, ExecPurpose::Spec { .. } | ExecPurpose::FactCheck { target: FactTarget::Spec, .. })).unwrap_or(exec);
+                let exec = last_exec_of(s, |p| {
+                    matches!(
+                        p,
+                        ExecPurpose::Spec { .. }
+                            | ExecPurpose::FactCheck {
+                                target: FactTarget::Spec,
+                                ..
+                            }
+                    )
+                })
+                .unwrap_or(exec);
                 self.exec_failed_gate(&exec, AgentName::GenerateSpec, &primary, err);
             }
             return false;
         }
         if t.current.is_none() || t.needs_run {
-            if t.pending_findings.is_some() && t.consecutive_fails >= FACTCHECK_RECURRING_LIMIT + t.fail_limit_extra {
-                let findings = t.check_for_current().map(|c| c.findings.clone()).unwrap_or_default();
+            if t.pending_findings.is_some()
+                && t.consecutive_fails >= FACTCHECK_RECURRING_LIMIT + t.fail_limit_extra
+            {
+                let findings = t
+                    .check_for_current()
+                    .map(|c| c.findings.clone())
+                    .unwrap_or_default();
                 self.gate(
                     "The spec fact-check keeps failing",
                     format!(
@@ -412,7 +567,11 @@ impl<'a> Planner<'a> {
                 answers: t.pending_answers(),
                 changes: t.pending_changes(),
                 new_research_docs: match t.current {
-                    Some(_) => s.research_docs().into_iter().filter(|d| !t.applied.docs.contains(d)).collect(),
+                    Some(_) => s
+                        .research_docs()
+                        .into_iter()
+                        .filter(|d| !t.applied.docs.contains(d))
+                        .collect(),
                     None => vec![],
                 },
                 findings: t.pending_findings.clone(),
@@ -422,7 +581,13 @@ impl<'a> Planner<'a> {
                 ..Default::default()
             };
             let round = t.runs.len() as u32 + 1;
-            self.spawn(AgentName::GenerateSpec, ExecPurpose::Spec { round }, &primary, s.session_root.clone(), inputs);
+            self.spawn(
+                AgentName::GenerateSpec,
+                ExecPurpose::Spec { round },
+                &primary,
+                s.session_root.clone(),
+                inputs,
+            );
             return false;
         }
         let Some(spec) = &t.current else { return false };
@@ -444,7 +609,11 @@ impl<'a> Planner<'a> {
             None => {
                 let first = !t.has_pass();
                 // Rule D3b: refetch only on a spec's first pass with External Evidence rows.
-                let source_check = if first && spec.external_evidence_rows > 0 { "refetch" } else { "citations" };
+                let source_check = if first && spec.external_evidence_rows > 0 {
+                    "refetch"
+                } else {
+                    "citations"
+                };
                 let pass = t.checks.len() as u32 + 1;
                 let inputs = SpawnInputs {
                     target: Some(spec_path.clone()),
@@ -457,7 +626,10 @@ impl<'a> Planner<'a> {
                 };
                 self.spawn(
                     AgentName::FactCheck,
-                    ExecPurpose::FactCheck { target: FactTarget::Spec, pass },
+                    ExecPurpose::FactCheck {
+                        target: FactTarget::Spec,
+                        pass,
+                    },
                     &primary,
                     s.session_root.clone(),
                     inputs,
@@ -489,7 +661,11 @@ impl<'a> Planner<'a> {
     }
 
     fn scope_paths(&self) -> Vec<(String, PathBuf)> {
-        self.s.scope.iter().filter_map(|k| self.s.project_path(k).map(|p| (k.clone(), p))).collect()
+        self.s
+            .scope
+            .iter()
+            .filter_map(|k| self.s.project_path(k).map(|p| (k.clone(), p)))
+            .collect()
     }
 
     // -------------------------------------------------------------------------------------
@@ -501,17 +677,34 @@ impl<'a> Planner<'a> {
         let t = &s.plan;
         let primary = s.primary();
         if t.stopped {
-            self.push(Step::Fail { error: "The plan stage was stopped.".into() });
+            self.push(Step::Fail {
+                error: "The plan stage was stopped.".into(),
+            });
             return false;
         }
-        if t.busy() || t.questions_gate.is_some() || t.approval_gate.is_some() || t.recurring_gate.is_some() {
+        if t.busy()
+            || t.questions_gate.is_some()
+            || t.approval_gate.is_some()
+            || t.recurring_gate.is_some()
+        {
             return false;
         }
-        let Some(spec) = &s.spec.current else { return false };
+        let Some(spec) = &s.spec.current else {
+            return false;
+        };
         let spec_path = PathBuf::from(&spec.spec_path);
         if let Some(err) = &t.failed {
             if t.failed_gate.is_none()
-                && let Some(exec) = last_exec_of(s, |p| matches!(p, ExecPurpose::Plan { .. } | ExecPurpose::FactCheck { target: FactTarget::Plan, .. }))
+                && let Some(exec) = last_exec_of(s, |p| {
+                    matches!(
+                        p,
+                        ExecPurpose::Plan { .. }
+                            | ExecPurpose::FactCheck {
+                                target: FactTarget::Plan,
+                                ..
+                            }
+                    )
+                })
             {
                 self.exec_failed_gate(&exec, AgentName::Plan, &primary, err);
             }
@@ -522,7 +715,10 @@ impl<'a> Planner<'a> {
                 && !t.invalidated
                 && t.consecutive_fails >= FACTCHECK_RECURRING_LIMIT + t.fail_limit_extra
             {
-                let findings = t.check_for_current().map(|c| c.findings.clone()).unwrap_or_default();
+                let findings = t
+                    .check_for_current()
+                    .map(|c| c.findings.clone())
+                    .unwrap_or_default();
                 self.gate(
                     "The plan fact-check keeps failing",
                     format!("The fact-check has failed {} times in a row. Choose whether to run another round, add guidance, or stop.", t.consecutive_fails),
@@ -536,12 +732,25 @@ impl<'a> Planner<'a> {
             let inputs = SpawnInputs {
                 spec_file: Some(spec_path),
                 projects_in_scope: self.scope_paths(),
-                findings: if t.invalidated { None } else { t.pending_findings.clone() },
-                target: t.current.as_ref().map(|c| PathBuf::from(&c.master_plan_path)),
+                findings: if t.invalidated {
+                    None
+                } else {
+                    t.pending_findings.clone()
+                },
+                target: t
+                    .current
+                    .as_ref()
+                    .map(|c| PathBuf::from(&c.master_plan_path)),
                 ..Default::default()
             };
             let round = t.runs.len() as u32 + 1;
-            self.spawn(AgentName::Plan, ExecPurpose::Plan { round }, &primary, s.session_root.clone(), inputs);
+            self.spawn(
+                AgentName::Plan,
+                ExecPurpose::Plan { round },
+                &primary,
+                s.session_root.clone(),
+                inputs,
+            );
             return false;
         }
         let Some(plan) = &t.current else { return false };
@@ -568,7 +777,10 @@ impl<'a> Planner<'a> {
                 };
                 self.spawn(
                     AgentName::FactCheck,
-                    ExecPurpose::FactCheck { target: FactTarget::Plan, pass },
+                    ExecPurpose::FactCheck {
+                        target: FactTarget::Plan,
+                        pass,
+                    },
                     &primary,
                     s.session_root.clone(),
                     inputs,
@@ -625,13 +837,21 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn loop_work(&mut self, p: &PhaseRun, tests: bool, kind: WorkKind, instructions: Option<String>) {
+    fn loop_work(
+        &mut self,
+        p: &PhaseRun,
+        tests: bool,
+        kind: WorkKind,
+        instructions: Option<String>,
+    ) {
         let s = self.s;
         let l = if tests { &p.test_loop } else { &p.impl_loop };
         let project = p.info.project.clone();
         let dir = s.project_session_dir(&project);
         let phase = p.info.id;
-        let agent = if matches!(kind, WorkKind::Initial) || (matches!(kind, WorkKind::Rerun | WorkKind::Resume) && l.work_count <= 1) {
+        let agent = if matches!(kind, WorkKind::Initial)
+            || (matches!(kind, WorkKind::Rerun | WorkKind::Resume) && l.work_count <= 1)
+        {
             l.work_agent
         } else {
             l.fix_agent
@@ -667,7 +887,10 @@ impl<'a> Planner<'a> {
             _ => {
                 inputs.report_file = Some(dir.join(report::implementer(&phase_str)));
                 if s.category == Some(Category::Verify) {
-                    inputs.task = Some(format!("Verification request: {}\nRun the project's test command and report the result.", s.full_request()));
+                    inputs.task = Some(format!(
+                        "Verification request: {}\nRun the project's test command and report the result.",
+                        s.full_request()
+                    ));
                     ExecPurpose::Verify { phase }
                 } else {
                     if p.info.file.is_none() {
@@ -691,10 +914,16 @@ impl<'a> Planner<'a> {
         let dir = s.project_session_dir(&project);
         match &l.next {
             LoopNext::Idle | LoopNext::Done => {}
-            LoopNext::Work { kind, instructions } => self.loop_work(p, tests, *kind, instructions.clone()),
+            LoopNext::Work { kind, instructions } => {
+                self.loop_work(p, tests, *kind, instructions.clone())
+            }
             LoopNext::Review => {
                 let iteration = l.iterations + 1;
-                let phase_value = if tests { format!("{phase}-tests") } else { phase.to_string() };
+                let phase_value = if tests {
+                    format!("{phase}-tests")
+                } else {
+                    phase.to_string()
+                };
                 let rationale = l.rationale.clone().unwrap_or_else(|| match &p.info.file {
                     Some(_) => format!("Phase {phase}: {}", p.info.title),
                     None => s.full_request(),
@@ -715,17 +944,39 @@ impl<'a> Planner<'a> {
                     },
                     ..Default::default()
                 };
-                self.spawn(AgentName::CodeReviewer, ExecPurpose::Review { phase, tests, iteration }, &project, dir, inputs);
+                self.spawn(
+                    AgentName::CodeReviewer,
+                    ExecPurpose::Review {
+                        phase,
+                        tests,
+                        iteration,
+                    },
+                    &project,
+                    dir,
+                    inputs,
+                );
             }
             LoopNext::Autofix { apply, .. } => {
-                self.push(Step::Autofix { project, phase, tests, findings: apply.clone() });
+                self.push(Step::Autofix {
+                    project,
+                    phase,
+                    tests,
+                    findings: apply.clone(),
+                });
             }
             LoopNext::Rescue { exec, .. } => {
-                self.push(Step::Judge { judge: JudgeKind::Rescue, subject: Some(exec.to_string()) });
+                self.push(Step::Judge {
+                    judge: JudgeKind::Rescue,
+                    subject: Some(exec.to_string()),
+                });
             }
             LoopNext::RescueExplore { .. } => {}
             LoopNext::RescueGate { exec, stuck } => {
-                let agent = s.executions.get(exec).map(|r| r.agent).unwrap_or(AgentName::Implementer);
+                let agent = s
+                    .executions
+                    .get(exec)
+                    .map(|r| r.agent)
+                    .unwrap_or(AgentName::Implementer);
                 self.gate(
                     format!("Phase {phase} is stuck"),
                     "The agent hit its retry ceiling on the same failure and needs a fact only you can give. State the missing fact, or leave the phase blocked.",
@@ -740,7 +991,10 @@ impl<'a> Planner<'a> {
                 );
             }
             LoopNext::AwaitRoute { gate, .. } => {
-                self.push(Step::Judge { judge: JudgeKind::RouteAnswer, subject: Some(gate.to_string()) });
+                self.push(Step::Judge {
+                    judge: JudgeKind::RouteAnswer,
+                    subject: Some(gate.to_string()),
+                });
             }
             LoopNext::Handoff { exec, handoff } => {
                 let inputs = SpawnInputs {
@@ -753,12 +1007,23 @@ impl<'a> Planner<'a> {
                     report_file: Some(dir.join(report::prompt_gen(s.prompt_gens + 1))),
                     ..Default::default()
                 };
-                self.spawn(AgentName::PromptGeneration, ExecPurpose::PromptGen { handoff_for: Some(exec.clone()) }, &project, dir, inputs);
+                self.spawn(
+                    AgentName::PromptGeneration,
+                    ExecPurpose::PromptGen {
+                        handoff_for: Some(exec.clone()),
+                    },
+                    &project,
+                    dir,
+                    inputs,
+                );
             }
             LoopNext::CapReached { findings } => {
                 if s.yolo {
                     // YOLO toggled on while the loop waited at its cap.
-                    self.push(Step::Judge { judge: JudgeKind::ResolveReview, subject: Some(loop_key_str((phase, tests))) });
+                    self.push(Step::Judge {
+                        judge: JudgeKind::ResolveReview,
+                        subject: Some(loop_key_str((phase, tests))),
+                    });
                 } else {
                     self.gate(
                         format!("Review of phase {phase} reached its cap"),
@@ -779,19 +1044,36 @@ impl<'a> Planner<'a> {
                 }
             }
             LoopNext::Resolve { .. } => {
-                self.push(Step::Judge { judge: JudgeKind::ResolveReview, subject: Some(loop_key_str((phase, tests))) });
+                self.push(Step::Judge {
+                    judge: JudgeKind::ResolveReview,
+                    subject: Some(loop_key_str((phase, tests))),
+                });
             }
             LoopNext::Stage => {
                 let files: Vec<String> = l.changed.iter().cloned().collect();
-                self.push(Step::Command { purpose: CommandPurpose::Stage, project, command: None, files });
+                self.push(Step::Command {
+                    purpose: CommandPurpose::Stage,
+                    project,
+                    command: None,
+                    files,
+                });
             }
             LoopNext::Failed { exec, error } => {
-                let agent = s.executions.get(exec).map(|r| r.agent).unwrap_or(l.work_agent);
+                let agent = s
+                    .executions
+                    .get(exec)
+                    .map(|r| r.agent)
+                    .unwrap_or(l.work_agent);
                 self.exec_failed_gate(exec, agent, &project, error);
             }
             LoopNext::Blocked { reason } => {
                 if !l.announced_block {
-                    self.push(Step::AnnounceBlocked { project: project.clone(), phase, tests, reason: reason.clone() });
+                    self.push(Step::AnnounceBlocked {
+                        project: project.clone(),
+                        phase,
+                        tests,
+                        reason: reason.clone(),
+                    });
                 } else if !s.yolo && !l.block_gate_answered && p.blocked_gate.is_none() {
                     // Rule D9: report the blocked phase and ask how to proceed.
                     self.gate(
@@ -804,7 +1086,13 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn exec_failed_gate(&mut self, exec: &ExecutionId, agent: AgentName, project: &str, error: &str) {
+    fn exec_failed_gate(
+        &mut self,
+        exec: &ExecutionId,
+        agent: AgentName,
+        project: &str,
+        error: &str,
+    ) {
         if let Some(rest) = error.strip_prefix("harness-") {
             let harness = match self.s.executions.get(exec).map(|r| r.executor) {
                 Some(ostra_core::ExecutorKind::Harness(h)) => h,
@@ -834,7 +1122,11 @@ impl<'a> Planner<'a> {
     // -------------------------------------------------------------------------------------
 
     fn project_phases(&self, project: &str) -> Vec<&'a PhaseRun> {
-        self.s.phases.values().filter(|p| p.info.project == project).collect()
+        self.s
+            .phases
+            .values()
+            .filter(|p| p.info.project == project)
+            .collect()
     }
 
     fn project_code_done(&self, project: &str, removed: &BTreeSet<u32>) -> bool {
@@ -852,8 +1144,11 @@ impl<'a> Planner<'a> {
             if !self.project_code_done(key, &removed) {
                 continue;
             }
-            let passed: Vec<&PhaseRun> =
-                self.project_phases(key).into_iter().filter(|p| p.impl_loop.is_done()).collect();
+            let passed: Vec<&PhaseRun> = self
+                .project_phases(key)
+                .into_iter()
+                .filter(|p| p.impl_loop.is_done())
+                .collect();
             if passed.is_empty() {
                 continue;
             }
@@ -861,7 +1156,12 @@ impl<'a> Planner<'a> {
             // Rule D8: format runs once per project after its last phase, not gated.
             if track.format.is_none() {
                 let command = self.ctx.format_commands.get(key).cloned().flatten();
-                self.push(Step::Command { purpose: CommandPurpose::Format, project: key.clone(), command, files: vec![] });
+                self.push(Step::Command {
+                    purpose: CommandPurpose::Format,
+                    project: key.clone(),
+                    command,
+                    files: vec![],
+                });
                 continue;
             }
             let closing = match track.closing {
@@ -884,7 +1184,11 @@ impl<'a> Planner<'a> {
                     }
                 }
             };
-            let tests_done = if closing.0 { self.test_stage(key, &passed) } else { true };
+            let tests_done = if closing.0 {
+                self.test_stage(key, &passed)
+            } else {
+                true
+            };
             if closing.1 && tests_done {
                 self.docs_stage(key, &passed);
             }
@@ -906,8 +1210,11 @@ impl<'a> Planner<'a> {
     fn test_stage(&mut self, project: &str, passed: &[&'a PhaseRun]) -> bool {
         let s = self.s;
         // Rule T4: Required phases are covered; no plan means the whole change is covered.
-        let covered: Vec<&PhaseRun> =
-            passed.iter().copied().filter(|p| p.info.file.is_none() || p.info.test_policy == TestPolicy::Required).collect();
+        let covered: Vec<&PhaseRun> = passed
+            .iter()
+            .copied()
+            .filter(|p| p.info.file.is_none() || p.info.test_policy == TestPolicy::Required)
+            .collect();
         let dir = s.project_session_dir(project);
         let mut all_epa_done = true;
         for p in &covered {
@@ -920,13 +1227,26 @@ impl<'a> Planner<'a> {
                         report_file: Some(dir.join(report::epa(&p.info.id.to_string()))),
                         ..Default::default()
                     };
-                    self.spawn(AgentName::ExecutionPathAnalyzer, ExecPurpose::Epa { phase: p.info.id }, project, dir.clone(), inputs);
+                    self.spawn(
+                        AgentName::ExecutionPathAnalyzer,
+                        ExecPurpose::Epa { phase: p.info.id },
+                        project,
+                        dir.clone(),
+                        inputs,
+                    );
                 }
                 EpaState::Running(_) => all_epa_done = false,
-                EpaState::Failed { exec, error, gate, .. } => {
+                EpaState::Failed {
+                    exec, error, gate, ..
+                } => {
                     all_epa_done = false;
                     if gate.is_none() {
-                        self.exec_failed_gate(exec, AgentName::ExecutionPathAnalyzer, project, error);
+                        self.exec_failed_gate(
+                            exec,
+                            AgentName::ExecutionPathAnalyzer,
+                            project,
+                            error,
+                        );
                     }
                 }
                 EpaState::Done(_) | EpaState::Abandoned => {}
@@ -958,26 +1278,39 @@ impl<'a> Planner<'a> {
         let s = self.s;
         let track = &s.project_tracks[project];
         // Hard rule 21: an open BLOCKER blocks module documentation.
-        if passed.iter().any(|p| p.impl_loop.blocker_open || p.test_loop.blocker_open) {
+        if passed
+            .iter()
+            .any(|p| p.impl_loop.blocker_open || p.test_loop.blocker_open)
+        {
             return;
         }
         match &track.docs {
             DocsState::NotStarted => {
                 let dir = s.project_session_dir(project);
                 let inputs = SpawnInputs {
-                    implementer_reports: passed.iter().filter_map(|p| p.implementer_report.clone()).collect(),
+                    implementer_reports: passed
+                        .iter()
+                        .filter_map(|p| p.implementer_report.clone())
+                        .collect(),
                     report_file: Some(dir.join(report::module_docs())),
                     ..Default::default()
                 };
                 self.spawn(
                     AgentName::ModuleDocumentation,
-                    ExecPurpose::ModuleDocs { project: project.to_string() },
+                    ExecPurpose::ModuleDocs {
+                        project: project.to_string(),
+                    },
                     project,
                     dir,
                     inputs,
                 );
             }
-            DocsState::Failed { exec, error, gate: None, .. } => {
+            DocsState::Failed {
+                exec,
+                error,
+                gate: None,
+                ..
+            } => {
                 let (exec, error) = (exec.clone(), error.clone());
                 self.exec_failed_gate(&exec, AgentName::ModuleDocumentation, project, &error);
             }
@@ -995,7 +1328,11 @@ impl<'a> Planner<'a> {
             if !self.project_code_done(key, &removed) {
                 return false;
             }
-            let passed: Vec<&PhaseRun> = self.project_phases(key).into_iter().filter(|p| p.impl_loop.is_done()).collect();
+            let passed: Vec<&PhaseRun> = self
+                .project_phases(key)
+                .into_iter()
+                .filter(|p| p.impl_loop.is_done())
+                .collect();
             if passed.is_empty() {
                 continue;
             }
@@ -1003,23 +1340,32 @@ impl<'a> Planner<'a> {
             if track.format.is_none() {
                 return false;
             }
-            let Some((tests, docs)) = track.closing.or_else(|| {
-                (s.tests_requested() && s.docs_requested()).then_some((true, true))
-            }) else {
+            let Some((tests, docs)) = track
+                .closing
+                .or_else(|| (s.tests_requested() && s.docs_requested()).then_some((true, true)))
+            else {
                 return false;
             };
             if tests {
-                let covered = passed.iter().filter(|p| p.info.file.is_none() || p.info.test_policy == TestPolicy::Required);
+                let covered = passed.iter().filter(|p| {
+                    p.info.file.is_none() || p.info.test_policy == TestPolicy::Required
+                });
                 for p in covered {
                     let epa_ok = matches!(p.epa, EpaState::Done(_) | EpaState::Abandoned);
-                    if !epa_ok || (!matches!(p.epa, EpaState::Abandoned) && !p.test_loop.is_terminal()) {
+                    if !epa_ok
+                        || (!matches!(p.epa, EpaState::Abandoned) && !p.test_loop.is_terminal())
+                    {
                         return false;
                     }
                 }
             }
             if docs {
-                let blocked_by_blocker = passed.iter().any(|p| p.impl_loop.blocker_open || p.test_loop.blocker_open);
-                if !blocked_by_blocker && !matches!(track.docs, DocsState::Done(_) | DocsState::Abandoned) {
+                let blocked_by_blocker = passed
+                    .iter()
+                    .any(|p| p.impl_loop.blocker_open || p.test_loop.blocker_open);
+                if !blocked_by_blocker
+                    && !matches!(track.docs, DocsState::Done(_) | DocsState::Abandoned)
+                {
                     return false;
                 }
             }
@@ -1037,13 +1383,20 @@ impl<'a> Planner<'a> {
             return;
         }
         match &s.completion_decision {
-            None => self.push(Step::Judge { judge: JudgeKind::Completion, subject: None }),
+            None => self.push(Step::Judge {
+                judge: JudgeKind::Completion,
+                subject: None,
+            }),
             Some(id) => {
-                let md = s
-                    .decisions
-                    .get(id)
-                    .and_then(|d| d.output.get("report_markdown").and_then(|v| v.as_str()).map(String::from));
-                self.push(Step::Complete { report_markdown: md });
+                let md = s.decisions.get(id).and_then(|d| {
+                    d.output
+                        .get("report_markdown")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                });
+                self.push(Step::Complete {
+                    report_markdown: md,
+                });
             }
         }
     }
@@ -1052,7 +1405,9 @@ impl<'a> Planner<'a> {
         let s = self.s;
         let q = &s.quick;
         if let Some(a) = &q.answer {
-            self.push(Step::Complete { report_markdown: Some(a.answer.clone()) });
+            self.push(Step::Complete {
+                report_markdown: Some(a.answer.clone()),
+            });
             return;
         }
         if q.running {
@@ -1072,8 +1427,17 @@ impl<'a> Planner<'a> {
         }
         if q.exec.is_none() {
             let primary = s.primary();
-            let inputs = SpawnInputs { question: Some(s.full_request()), ..Default::default() };
-            self.spawn(AgentName::QuickAnswer, ExecPurpose::QuickAnswer, &primary, s.session_root.clone(), inputs);
+            let inputs = SpawnInputs {
+                question: Some(s.full_request()),
+                ..Default::default()
+            };
+            self.spawn(
+                AgentName::QuickAnswer,
+                ExecPurpose::QuickAnswer,
+                &primary,
+                s.session_root.clone(),
+                inputs,
+            );
         }
     }
 
@@ -1095,7 +1459,11 @@ impl ExploreRef {
 }
 
 fn last_exec_of(s: &SessionState, f: impl Fn(&ExecPurpose) -> bool) -> Option<ExecutionId> {
-    s.executions.values().filter(|r| f(&r.purpose)).max_by_key(|r| r.id.clone()).map(|r| r.id.clone())
+    s.executions
+        .values()
+        .filter(|r| f(&r.purpose))
+        .max_by_key(|r| r.id.clone())
+        .map(|r| r.id.clone())
 }
 
 /// Phase Index rows as the approval card shows them.
@@ -1108,7 +1476,11 @@ pub fn plan_phase_infos(plan: &ostra_core::submit::PlanSubmit) -> Vec<PhaseInfo>
             project: p.project.clone(),
             title: p.title.clone(),
             complexity: p.complexity.parse().unwrap_or_default(),
-            test_policy: if p.test_policy.eq_ignore_ascii_case("skip") { TestPolicy::Skip } else { TestPolicy::Required },
+            test_policy: if p.test_policy.eq_ignore_ascii_case("skip") {
+                TestPolicy::Skip
+            } else {
+                TestPolicy::Required
+            },
             depends_on: Some(p.depends_on.clone()),
             file: Some(PathBuf::from(&p.file)),
             test_rationale: p.test_rationale.clone(),
@@ -1121,28 +1493,47 @@ pub fn plan_phase_infos(plan: &ostra_core::submit::PlanSubmit) -> Vec<PhaseInfo>
 pub fn deps_passed(s: &SessionState, p: &PhaseRun) -> bool {
     let deps: Vec<u32> = match &p.info.depends_on {
         Some(d) => d.clone(),
-        None => s.phases.keys().copied().filter(|id| *id < p.info.id).collect(),
+        None => s
+            .phases
+            .keys()
+            .copied()
+            .filter(|id| *id < p.info.id)
+            .collect(),
     };
-    deps.iter().all(|d| s.phases.get(d).is_some_and(|dp| dp.impl_loop.is_done()))
+    deps.iter()
+        .all(|d| s.phases.get(d).is_some_and(|dp| dp.impl_loop.is_done()))
 }
 
 /// Rule D9: every phase that depends, directly or transitively, on a blocked phase is removed
 /// from the queue. Independent phases continue.
 pub fn removed_phases(s: &SessionState) -> BTreeSet<u32> {
-    let mut failed: BTreeSet<u32> =
-        s.phases.values().filter(|p| p.impl_loop.is_blocked()).map(|p| p.info.id).collect();
+    let mut failed: BTreeSet<u32> = s
+        .phases
+        .values()
+        .filter(|p| p.impl_loop.is_blocked())
+        .map(|p| p.info.id)
+        .collect();
     let mut removed = BTreeSet::new();
     loop {
         let mut changed = false;
         for p in s.phases.values() {
-            if failed.contains(&p.info.id) || removed.contains(&p.info.id) || !p.impl_loop.is_idle() {
+            if failed.contains(&p.info.id) || removed.contains(&p.info.id) || !p.impl_loop.is_idle()
+            {
                 continue;
             }
             let deps: Vec<u32> = match &p.info.depends_on {
                 Some(d) => d.clone(),
-                None => s.phases.keys().copied().filter(|id| *id < p.info.id).collect(),
+                None => s
+                    .phases
+                    .keys()
+                    .copied()
+                    .filter(|id| *id < p.info.id)
+                    .collect(),
             };
-            if deps.iter().any(|d| failed.contains(d) || removed.contains(d)) {
+            if deps
+                .iter()
+                .any(|d| failed.contains(d) || removed.contains(d))
+            {
                 removed.insert(p.info.id);
                 changed = true;
             }

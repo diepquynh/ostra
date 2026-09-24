@@ -2,14 +2,14 @@
 //! the same events always produce the same state, so a restart replays and continues.
 
 use crate::judge::{
-    AnswerRoute, ClassifyOut, OptsIn, RescueAction, RescueOut, ResolveAction, ResolveReviewOut, RouteAnswerOut,
-    StakesOut, SufficiencyOut, clean_title,
+    AnswerRoute, ClassifyOut, OptsIn, RescueAction, RescueOut, ResolveAction, ResolveReviewOut,
+    RouteAnswerOut, StakesOut, SufficiencyOut, clean_title,
 };
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
 use ostra_core::event::{
-    AnswerSource, CommandPurpose, ExecPurpose, FactTarget, GateAnswer, GatePayload, JudgeKind, ProjectRef,
-    SessionEvent, SessionKind, SessionOptions, StoredEvent, WorkKind,
+    AnswerSource, CommandPurpose, ExecPurpose, FactTarget, GateAnswer, GatePayload, JudgeKind,
+    ProjectRef, SessionEvent, SessionKind, SessionOptions, StoredEvent, WorkKind,
 };
 use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
@@ -17,9 +17,9 @@ use ostra_core::model::Complexity;
 use ostra_core::paths;
 use ostra_core::pipeline::{Category, PhaseInfo, QuestionAnswer, StageKind, Stakes, TestPolicy};
 use ostra_core::submit::{
-    CodeReviewerSubmit, ExploreSubmit, FactCheckSubmit, GenerateSpecSubmit, HandoffInfo, ImplementerSubmit,
-    InitializerSubmit, PlanSubmit, QuickAnswerSubmit, ReportSubmit, ReviewFinding, Severity, StuckInfo, SubmitStatus,
-    Verdict,
+    CodeReviewerSubmit, ExploreSubmit, FactCheckSubmit, GenerateSpecSubmit, HandoffInfo,
+    ImplementerSubmit, InitializerSubmit, PlanSubmit, QuickAnswerSubmit, ReportSubmit,
+    ReviewFinding, Severity, StuckInfo, SubmitStatus, Verdict,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -163,7 +163,8 @@ impl<T> ArtifactTrack<T> {
     }
 
     pub fn passed_current(&self) -> bool {
-        self.check_for_current().is_some_and(|c| c.verdict == Verdict::Pass)
+        self.check_for_current()
+            .is_some_and(|c| c.verdict == Verdict::Pass)
     }
 
     /// Findings of the previous pass over this artifact, or `none` on its first pass (Rule D3a).
@@ -182,12 +183,20 @@ impl<T> ArtifactTrack<T> {
 
     /// Answers the current artifact does not reflect yet: all of them before the first artifact.
     pub fn pending_answers(&self) -> Vec<QuestionAnswer> {
-        let from = if self.current.is_some() { self.applied.answers } else { 0 };
+        let from = if self.current.is_some() {
+            self.applied.answers
+        } else {
+            0
+        };
         self.answers.get(from..).unwrap_or_default().to_vec()
     }
 
     pub fn pending_changes(&self) -> Vec<String> {
-        let from = if self.current.is_some() { self.applied.changes } else { 0 };
+        let from = if self.current.is_some() {
+            self.applied.changes
+        } else {
+            0
+        };
         self.changes.get(from..).unwrap_or_default().to_vec()
     }
 
@@ -197,7 +206,11 @@ impl<T> ArtifactTrack<T> {
 
     fn start_check(&mut self, id: &ExecutionId) {
         self.check_running = Some(id.clone());
-        self.checks.push(FactCheckPass { exec: id.clone(), version: self.version, result: None });
+        self.checks.push(FactCheckPass {
+            exec: id.clone(),
+            version: self.version,
+            result: None,
+        });
     }
 
     fn revoke_approval(&mut self) {
@@ -210,21 +223,52 @@ impl<T> ArtifactTrack<T> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoopNext {
     Idle,
-    Work { kind: WorkKind, instructions: Option<String> },
+    Work {
+        kind: WorkKind,
+        instructions: Option<String>,
+    },
     Review,
-    Autofix { apply: Vec<ReviewFinding>, remaining: Vec<ReviewFinding> },
-    Rescue { exec: ExecutionId, stuck: StuckInfo },
-    RescueExplore { task: u32, stuck: StuckInfo },
-    RescueGate { exec: ExecutionId, stuck: StuckInfo },
+    Autofix {
+        apply: Vec<ReviewFinding>,
+        remaining: Vec<ReviewFinding>,
+    },
+    Rescue {
+        exec: ExecutionId,
+        stuck: StuckInfo,
+    },
+    RescueExplore {
+        task: u32,
+        stuck: StuckInfo,
+    },
+    RescueGate {
+        exec: ExecutionId,
+        stuck: StuckInfo,
+    },
     /// A gate answer with free text waits for the Route answer judge.
-    AwaitRoute { gate: GateId, text: String, then: WorkKind },
-    Handoff { exec: ExecutionId, handoff: HandoffInfo },
-    CapReached { findings: Vec<ReviewFinding> },
-    Resolve { findings: Vec<ReviewFinding> },
+    AwaitRoute {
+        gate: GateId,
+        text: String,
+        then: WorkKind,
+    },
+    Handoff {
+        exec: ExecutionId,
+        handoff: HandoffInfo,
+    },
+    CapReached {
+        findings: Vec<ReviewFinding>,
+    },
+    Resolve {
+        findings: Vec<ReviewFinding>,
+    },
     Stage,
-    Failed { exec: ExecutionId, error: String },
+    Failed {
+        exec: ExecutionId,
+        error: String,
+    },
     Done,
-    Blocked { reason: String },
+    Blocked {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -320,7 +364,11 @@ impl WorkLoop {
     /// Decide what follows a review whose HIGH and MEDIUM findings are `remaining`.
     fn after_findings(&mut self, remaining: Vec<ReviewFinding>, yolo: bool, fix_ledger: &str) {
         if remaining.is_empty() {
-            self.next = if self.stage { LoopNext::Stage } else { LoopNext::Done };
+            self.next = if self.stage {
+                LoopNext::Stage
+            } else {
+                LoopNext::Done
+            };
             return;
         }
         if self.iterations >= self.effective_cap(yolo) {
@@ -331,7 +379,9 @@ impl WorkLoop {
                     Some(before) => remaining.len() < before,
                 };
                 self.next = if self.resolve_rounds == 0 || converging {
-                    LoopNext::Resolve { findings: remaining }
+                    LoopNext::Resolve {
+                        findings: remaining,
+                    }
                 } else {
                     LoopNext::Blocked {
                         reason: format!(
@@ -342,11 +392,16 @@ impl WorkLoop {
                     }
                 };
             } else {
-                self.next = LoopNext::CapReached { findings: remaining };
+                self.next = LoopNext::CapReached {
+                    findings: remaining,
+                };
             }
             return;
         }
-        self.next = LoopNext::Work { kind: WorkKind::Fix, instructions: Some(fix_instructions(&remaining, fix_ledger)) };
+        self.next = LoopNext::Work {
+            kind: WorkKind::Fix,
+            instructions: Some(fix_instructions(&remaining, fix_ledger)),
+        };
     }
 }
 
@@ -374,7 +429,9 @@ pub fn blocker_instructions(findings: &[ReviewFinding], ledger: &str) -> String 
         s.push_str(&f.line());
         s.push('\n');
     }
-    s.push_str(&format!("\nRecord each removal in the review ledger at {ledger}."));
+    s.push_str(&format!(
+        "\nRecord each removal in the review ledger at {ledger}."
+    ));
     s
 }
 
@@ -383,7 +440,12 @@ pub enum EpaState {
     NotStarted,
     Running(ExecutionId),
     Done(PathBuf),
-    Failed { exec: ExecutionId, error: String, gate: Option<GateId>, retries: u32 },
+    Failed {
+        exec: ExecutionId,
+        error: String,
+        gate: Option<GateId>,
+        retries: u32,
+    },
     Abandoned,
 }
 
@@ -402,7 +464,12 @@ pub enum DocsState {
     NotStarted,
     Running(ExecutionId),
     Done(Option<PathBuf>),
-    Failed { exec: ExecutionId, error: String, gate: Option<GateId>, retries: u32 },
+    Failed {
+        exec: ExecutionId,
+        error: String,
+        gate: Option<GateId>,
+        retries: u32,
+    },
     Abandoned,
 }
 
@@ -417,7 +484,12 @@ pub struct ProjectTrack {
 
 impl Default for ProjectTrack {
     fn default() -> Self {
-        ProjectTrack { format: None, closing_gate: None, closing: None, docs: DocsState::NotStarted }
+        ProjectTrack {
+            format: None,
+            closing_gate: None,
+            closing: None,
+            docs: DocsState::NotStarted,
+        }
     }
 }
 
@@ -551,18 +623,24 @@ pub struct SessionState {
 }
 
 fn parse<T: serde::de::DeserializeOwned>(v: &Option<Value>) -> Option<T> {
-    v.as_ref().and_then(|v| serde_json::from_value(v.clone()).ok())
+    v.as_ref()
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
 fn is_instruction_file(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
-    p.ends_with(".md") || p.ends_with(".mdx") || p.ends_with(".txt") || p.ends_with(".toml") && p.contains("agent")
+    p.ends_with(".md")
+        || p.ends_with(".mdx")
+        || p.ends_with(".txt")
+        || p.ends_with(".toml") && p.contains("agent")
 }
 
 /// Map an execution purpose to the work loop it belongs to.
 fn purpose_loop(purpose: &ExecPurpose) -> Option<(u32, bool)> {
     match purpose {
-        ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => Some((*phase, false)),
+        ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
+            Some((*phase, false))
+        }
         ExecPurpose::WriteTest { phase, .. } => Some((*phase, true)),
         ExecPurpose::Review { phase, tests, .. } => Some((*phase, *tests)),
         _ => None,
@@ -573,8 +651,14 @@ pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
     match purpose {
         ExecPurpose::Explore { .. } => StageKind::Explore,
         ExecPurpose::Spec { .. } => StageKind::Spec,
-        ExecPurpose::FactCheck { target: FactTarget::Spec, .. } => StageKind::FactCheckSpec,
-        ExecPurpose::FactCheck { target: FactTarget::Plan, .. } => StageKind::FactCheckPlan,
+        ExecPurpose::FactCheck {
+            target: FactTarget::Spec,
+            ..
+        } => StageKind::FactCheckSpec,
+        ExecPurpose::FactCheck {
+            target: FactTarget::Plan,
+            ..
+        } => StageKind::FactCheckPlan,
         ExecPurpose::Plan { .. } => StageKind::Plan,
         ExecPurpose::Implement { .. } => StageKind::Implement,
         ExecPurpose::Review { tests: false, .. } => StageKind::Review,
@@ -582,12 +666,16 @@ pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
         ExecPurpose::Epa { .. } => StageKind::Epa,
         ExecPurpose::WriteTest { .. } => StageKind::WriteTest,
         ExecPurpose::ModuleDocs { .. } => StageKind::ModuleDocs,
-        ExecPurpose::PromptGen { handoff_for: Some(_) } => StageKind::Handoff,
+        ExecPurpose::PromptGen {
+            handoff_for: Some(_),
+        } => StageKind::Handoff,
         ExecPurpose::PromptGen { handoff_for: None } => StageKind::PromptGen,
         ExecPurpose::Verify { .. } => StageKind::Verify,
         ExecPurpose::QuickAnswer => StageKind::QuickAnswer,
         ExecPurpose::Init { mode, .. } => match mode {
-            ostra_core::InitializerMode::Detect | ostra_core::InitializerMode::Adopt => StageKind::Detect,
+            ostra_core::InitializerMode::Detect | ostra_core::InitializerMode::Adopt => {
+                StageKind::Detect
+            }
             ostra_core::InitializerMode::Scout => StageKind::Scout,
             ostra_core::InitializerMode::Propose => StageKind::Propose,
             ostra_core::InitializerMode::GenerateSkill => StageKind::GenerateSkill,
@@ -665,12 +753,19 @@ impl SessionState {
     }
 
     pub fn project_path(&self, key: &str) -> Option<PathBuf> {
-        self.projects.iter().find(|p| p.key == key).map(|p| p.path.clone())
+        self.projects
+            .iter()
+            .find(|p| p.key == key)
+            .map(|p| p.path.clone())
     }
 
     /// The primary project: the first in scope. Cross-project stages carry its key.
     pub fn primary(&self) -> String {
-        self.scope.first().cloned().or_else(|| self.projects.first().map(|p| p.key.clone())).unwrap_or_default()
+        self.scope
+            .first()
+            .cloned()
+            .or_else(|| self.projects.first().map(|p| p.key.clone()))
+            .unwrap_or_default()
     }
 
     pub fn project_session_dir(&self, key: &str) -> PathBuf {
@@ -679,7 +774,10 @@ impl SessionState {
 
     /// Research documents, oldest run first, including superseded ones (Rule D2).
     pub fn research_docs(&self) -> Vec<PathBuf> {
-        self.explore.iter().filter_map(|t| t.result.as_ref().map(|r| PathBuf::from(&r.research_path))).collect()
+        self.explore
+            .iter()
+            .filter_map(|t| t.result.as_ref().map(|r| PathBuf::from(&r.research_path)))
+            .collect()
     }
 
     pub fn open_gates(&self) -> impl Iterator<Item = &GateRecord> {
@@ -692,7 +790,11 @@ impl SessionState {
 
     /// What finished executions spent. Running executions are counted when they finish.
     pub fn spent_usd(&self) -> f64 {
-        self.executions.values().filter_map(|e| e.result.as_ref()).map(|r| r.usage.cost_usd).sum()
+        self.executions
+            .values()
+            .filter_map(|e| e.result.as_ref())
+            .map(|r| r.usage.cost_usd)
+            .sum()
     }
 
     pub fn tests_requested(&self) -> bool {
@@ -704,19 +806,37 @@ impl SessionState {
     }
 
     pub fn ledger_path(&self, project: &str, phase: u32, tests: bool) -> PathBuf {
-        let value = if tests { format!("{phase}-tests") } else { phase.to_string() };
-        self.project_session_dir(project).join(paths::report::review_ledger(&value))
+        let value = if tests {
+            format!("{phase}-tests")
+        } else {
+            phase.to_string()
+        };
+        self.project_session_dir(project)
+            .join(paths::report::review_ledger(&value))
     }
 
     fn loop_mut(&mut self, key: (u32, bool)) -> Option<&mut WorkLoop> {
-        self.phases.get_mut(&key.0).map(|p| if key.1 { &mut p.test_loop } else { &mut p.impl_loop })
+        self.phases.get_mut(&key.0).map(|p| {
+            if key.1 {
+                &mut p.test_loop
+            } else {
+                &mut p.impl_loop
+            }
+        })
     }
 
     pub fn loop_ref(&self, key: (u32, bool)) -> Option<&WorkLoop> {
-        self.phases.get(&key.0).map(|p| if key.1 { &p.test_loop } else { &p.impl_loop })
+        self.phases
+            .get(&key.0)
+            .map(|p| if key.1 { &p.test_loop } else { &p.impl_loop })
     }
 
-    fn auto_fixable(&self, _project: &str, finding: &ReviewFinding, autofix_ids: &BTreeSet<String>) -> bool {
+    fn auto_fixable(
+        &self,
+        _project: &str,
+        finding: &ReviewFinding,
+        autofix_ids: &BTreeSet<String>,
+    ) -> bool {
         finding.severity != Severity::Blocker
             && !finding.rule.starts_with("SEC-BLOCK")
             && !finding.rule.starts_with("PHASE-REQ")
@@ -732,7 +852,14 @@ impl SessionState {
         self.updated_at = stored.at;
         let at = stored.at;
         match &stored.event {
-            SessionEvent::SessionCreated { kind, request, options, projects, workspace_root, session_root } => {
+            SessionEvent::SessionCreated {
+                kind,
+                request,
+                options,
+                projects,
+                workspace_root,
+                session_root,
+            } => {
                 self.created = true;
                 self.created_at = at;
                 self.kind = kind.clone();
@@ -745,12 +872,22 @@ impl SessionState {
                 if let SessionKind::Init { project } = kind {
                     self.scope = vec![project.clone()];
                     self.title = Some(format!("Initialize {project}"));
-                    self.init = Some(InitTrack { project: project.clone(), ..Default::default() });
+                    self.init = Some(InitTrack {
+                        project: project.clone(),
+                        ..Default::default()
+                    });
                 }
             }
             SessionEvent::RequestAmended { text } => self.on_amended(text),
             SessionEvent::YoloSet { enabled } => self.yolo = *enabled,
-            SessionEvent::DecisionMade { id, judge, subject, input_summary, output, reason } => {
+            SessionEvent::DecisionMade {
+                id,
+                judge,
+                subject,
+                input_summary,
+                output,
+                reason,
+            } => {
                 self.decisions.insert(
                     id.clone(),
                     DecisionRecord {
@@ -767,7 +904,9 @@ impl SessionState {
                 self.on_decision(id, *judge, subject.as_deref(), output, false);
             }
             SessionEvent::DecisionOverridden { id, output, reason } => {
-                let Some(d) = self.decisions.get_mut(id) else { return };
+                let Some(d) = self.decisions.get_mut(id) else {
+                    return;
+                };
                 d.output = output.clone();
                 d.reason = reason.clone();
                 d.overridden = true;
@@ -788,9 +927,9 @@ impl SessionState {
                 resumes,
             } => {
                 let loop_key = match purpose {
-                    ExecPurpose::PromptGen { handoff_for: Some(x) } => {
-                        self.executions.get(x).and_then(|r| r.loop_key)
-                    }
+                    ExecPurpose::PromptGen {
+                        handoff_for: Some(x),
+                    } => self.executions.get(x).and_then(|r| r.loop_key),
                     ExecPurpose::PromptGen { handoff_for: None } => Some((1, false)),
                     other => purpose_loop(other),
                 };
@@ -817,13 +956,20 @@ impl SessionState {
                 self.on_started(id, purpose, loop_key);
             }
             SessionEvent::ExecutionFinished { id, result } => {
-                let Some(rec) = self.executions.get_mut(id) else { return };
+                let Some(rec) = self.executions.get_mut(id) else {
+                    return;
+                };
                 rec.result = Some(result.clone());
                 rec.ended_at = Some(at);
                 let rec = rec.clone();
                 self.on_finished(&rec, result);
             }
-            SessionEvent::GateOpened { id, title, explanation, payload } => {
+            SessionEvent::GateOpened {
+                id,
+                title,
+                explanation,
+                payload,
+            } => {
                 self.gates.insert(
                     id.clone(),
                     GateRecord {
@@ -840,8 +986,15 @@ impl SessionState {
                 );
                 self.on_gate_opened(id, payload);
             }
-            SessionEvent::GateAnswered { id, source, answer, reason } => {
-                let Some(g) = self.gates.get_mut(id) else { return };
+            SessionEvent::GateAnswered {
+                id,
+                source,
+                answer,
+                reason,
+            } => {
+                let Some(g) = self.gates.get_mut(id) else {
+                    return;
+                };
                 if g.answer.is_some() {
                     return;
                 }
@@ -852,17 +1005,30 @@ impl SessionState {
                 let payload = g.payload.clone();
                 self.on_gate_answered(id, &payload, answer);
             }
-            SessionEvent::CommandRan { purpose, project, exit_code, .. } => match purpose {
+            SessionEvent::CommandRan {
+                purpose,
+                project,
+                exit_code,
+                ..
+            } => match purpose {
                 CommandPurpose::Format => {
-                    self.project_tracks.entry(project.clone()).or_default().format = Some(*exit_code);
+                    self.project_tracks
+                        .entry(project.clone())
+                        .or_default()
+                        .format = Some(*exit_code);
                 }
                 CommandPurpose::Stage => {
                     let key = self
                         .phases
                         .iter()
-                        .flat_map(|(id, p)| [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)])
+                        .flat_map(|(id, p)| {
+                            [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)]
+                        })
                         .find(|(k, l)| {
-                            self.phases.get(&k.0).is_some_and(|p| &p.info.project == project) && l.next == LoopNext::Stage
+                            self.phases
+                                .get(&k.0)
+                                .is_some_and(|p| &p.info.project == project)
+                                && l.next == LoopNext::Stage
                         })
                         .map(|(k, _)| k);
                     if let Some(key) = key
@@ -874,10 +1040,22 @@ impl SessionState {
                 }
                 CommandPurpose::Autofix => {}
             },
-            SessionEvent::AutofixApplied { phase, tests, failed, .. } => {
+            SessionEvent::AutofixApplied {
+                phase,
+                tests,
+                failed,
+                ..
+            } => {
                 let yolo = self.yolo;
-                let project = self.phases.get(phase).map(|p| p.info.project.clone()).unwrap_or_default();
-                let ledger = self.ledger_path(&project, *phase, *tests).display().to_string();
+                let project = self
+                    .phases
+                    .get(phase)
+                    .map(|p| p.info.project.clone())
+                    .unwrap_or_default();
+                let ledger = self
+                    .ledger_path(&project, *phase, *tests)
+                    .display()
+                    .to_string();
                 if let Some(l) = self.loop_mut((*phase, *tests))
                     && let LoopNext::Autofix { apply, remaining } = l.next.clone()
                 {
@@ -893,16 +1071,26 @@ impl SessionState {
                 }
             }
             SessionEvent::SecurityBlock { .. } => {}
-            SessionEvent::PhaseBlocked { phase, tests, reason, .. } => {
+            SessionEvent::PhaseBlocked {
+                phase,
+                tests,
+                reason,
+                ..
+            } => {
                 if let Some(l) = self.loop_mut((*phase, *tests)) {
                     l.announced_block = true;
                     if !l.is_blocked() {
-                        l.next = LoopNext::Blocked { reason: reason.clone() };
+                        l.next = LoopNext::Blocked {
+                            reason: reason.clone(),
+                        };
                     }
                 }
             }
             SessionEvent::Note { message } => self.notes.push(message.clone()),
-            SessionEvent::SessionCompleted { report_path, summary } => {
+            SessionEvent::SessionCompleted {
+                report_path,
+                summary,
+            } => {
                 self.completed = Some((report_path.clone(), summary.clone()));
             }
             SessionEvent::SessionFailed { error } => self.failed = Some(error.clone()),
@@ -937,7 +1125,8 @@ impl SessionState {
         self.spec.changes.push(text);
         self.spec.needs_run = true;
         self.spec.revoke_approval();
-        if self.plan.current.is_some() || self.plan.running.is_some() || !self.plan.runs.is_empty() {
+        if self.plan.current.is_some() || self.plan.running.is_some() || !self.plan.runs.is_empty()
+        {
             self.plan.revoke_approval();
             self.plan.invalidated = true;
         }
@@ -950,7 +1139,10 @@ impl SessionState {
         }
         // Rule D2: research the new part before the spec is written again.
         let project = self.primary();
-        if matches!(self.category, Some(Category::Research | Category::Spec | Category::Plan | Category::Implement)) {
+        if matches!(
+            self.category,
+            Some(Category::Research | Category::Spec | Category::Plan | Category::Implement)
+        ) {
             self.push_explore(
                 project,
                 format!(
@@ -970,7 +1162,12 @@ impl SessionState {
         if let Some(t) = clean_title(&out.title) {
             self.title = Some(t);
         }
-        let mut scope: Vec<String> = out.projects.iter().filter(|p| self.valid_project(p)).cloned().collect();
+        let mut scope: Vec<String> = out
+            .projects
+            .iter()
+            .filter(|p| self.valid_project(p))
+            .cloned()
+            .collect();
         scope.dedup();
         if scope.is_empty()
             && let Some(p) = self.projects.first()
@@ -981,7 +1178,10 @@ impl SessionState {
         self.opts_in = out.opts_in;
         self.explore.retain(|t| t.origin != ExploreOrigin::Classify);
         self.phases.clear();
-        let explores = matches!(out.category, Category::Research | Category::Spec | Category::Plan | Category::Implement);
+        let explores = matches!(
+            out.category,
+            Category::Research | Category::Spec | Category::Plan | Category::Implement
+        );
         if explores {
             let mut tasks: Vec<(String, String)> = out
                 .explore_tasks
@@ -991,7 +1191,11 @@ impl SessionState {
                 .collect();
             if tasks.is_empty() {
                 // Rule D1: the spec derives its criteria from research, so there is always one.
-                tasks = self.scope.iter().map(|p| (p.clone(), self.full_request())).collect();
+                tasks = self
+                    .scope
+                    .iter()
+                    .map(|p| (p.clone(), self.full_request()))
+                    .collect();
             }
             for (project, task) in tasks {
                 self.push_explore(project, task, ExploreOrigin::Classify);
@@ -1002,7 +1206,8 @@ impl SessionState {
             Category::Verify => {
                 for (i, key) in scope.iter().enumerate() {
                     let id = i as u32 + 1;
-                    let mut l = WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                    let mut l =
+                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
                     l.review = ReviewMode::Never;
                     l.stage = false;
                     self.insert_phase(inline_phase(id, key, "Verification", i), l);
@@ -1011,29 +1216,35 @@ impl SessionState {
             Category::UnitTest => {
                 for (i, key) in scope.iter().enumerate() {
                     let id = i as u32 + 1;
-                    let mut l = WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                    let mut l =
+                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
                     l.next = LoopNext::Done;
-                    let report = self.project_session_dir(key).join(paths::report::unit_test_request());
+                    let report = self
+                        .project_session_dir(key)
+                        .join(paths::report::unit_test_request());
                     self.insert_phase(inline_phase(id, key, "Tests requested by the user", i), l);
                     if let Some(p) = self.phases.get_mut(&id) {
                         p.implementer_report = Some(report);
                         p.info.depends_on = Some(vec![]);
                     }
-                    self.project_tracks.entry(key.clone()).or_default().closing = Some((true, false));
+                    self.project_tracks.entry(key.clone()).or_default().closing =
+                        Some((true, false));
                     self.project_tracks.entry(key.clone()).or_default().format = Some(None);
                 }
             }
             // Quick change (HANDOVER 8.2): one pass per project, no review, staged when it changed files.
             Category::QuickChange => {
                 for (i, key) in scope.iter().enumerate() {
-                    let mut l = WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                    let mut l =
+                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
                     l.review = ReviewMode::Never;
                     self.insert_phase(inline_phase(i as u32 + 1, key, "Quick change", i), l);
                 }
             }
             Category::Prompt => {
                 if let Some(key) = scope.first() {
-                    let mut l = WorkLoop::new(false, AgentName::PromptGeneration, AgentName::Implementer);
+                    let mut l =
+                        WorkLoop::new(false, AgentName::PromptGeneration, AgentName::Implementer);
                     l.review = ReviewMode::IfCodeChanged;
                     self.insert_phase(inline_phase(1, key, "Prompt change", 0), l);
                 }
@@ -1062,24 +1273,38 @@ impl SessionState {
     }
 
     fn any_phase_started(&self) -> bool {
-        self.phases.values().any(|p| !p.impl_loop.is_idle() && p.impl_loop.work_count > 0)
+        self.phases
+            .values()
+            .any(|p| !p.impl_loop.is_idle() && p.impl_loop.work_count > 0)
     }
 
     /// Whether overriding a decision can still change what happens (HANDOVER 8.3 override button).
     pub fn can_override(&self, id: &DecisionId) -> bool {
-        let Some(d) = self.decisions.get(id) else { return false };
+        let Some(d) = self.decisions.get(id) else {
+            return false;
+        };
         if self.is_terminal() {
             return false;
         }
         match d.judge {
-            JudgeKind::Classify => !self.any_explore_started() && self.phases.values().all(|p| p.impl_loop.work_count == 0),
+            JudgeKind::Classify => {
+                !self.any_explore_started()
+                    && self.phases.values().all(|p| p.impl_loop.work_count == 0)
+            }
             JudgeKind::Stakes => self.plan.runs.is_empty() && !self.any_phase_started(),
             JudgeKind::Sufficiency => self.spec.runs.is_empty(),
             _ => false,
         }
     }
 
-    fn on_decision(&mut self, id: &DecisionId, judge: JudgeKind, subject: Option<&str>, output: &Value, overriding: bool) {
+    fn on_decision(
+        &mut self,
+        id: &DecisionId,
+        judge: JudgeKind,
+        subject: Option<&str>,
+        output: &Value,
+        overriding: bool,
+    ) {
         match judge {
             JudgeKind::Classify => {
                 if overriding && !self.can_override_classify_now() {
@@ -1090,12 +1315,17 @@ impl SessionState {
                     self.apply_classify(&out);
                 } else if !overriding {
                     self.classify = Some(id.clone());
-                    self.failed = Some("The Classify judge returned output that does not match its schema.".into());
+                    self.failed = Some(
+                        "The Classify judge returned output that does not match its schema.".into(),
+                    );
                 }
             }
             JudgeKind::Sufficiency => {
-                let covered: Vec<u32> =
-                    subject.unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                let covered: Vec<u32> = subject
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter_map(|s| s.trim().parse().ok())
+                    .collect();
                 if !overriding {
                     self.sufficiency_rounds += 1;
                 }
@@ -1103,7 +1333,8 @@ impl SessionState {
                     t.judged = true;
                 }
                 if overriding {
-                    self.explore.retain(|t| !(t.origin == ExploreOrigin::Sufficiency && t.exec.is_none()));
+                    self.explore
+                        .retain(|t| !(t.origin == ExploreOrigin::Sufficiency && t.exec.is_none()));
                 }
                 if let Ok(out) = serde_json::from_value::<SufficiencyOut>(output.clone()) {
                     for item in out.items.into_iter().filter(|i| i.needed) {
@@ -1129,20 +1360,41 @@ impl SessionState {
                         // queued in order because there is no graph to read (Rule M5).
                         let scope = self.scope.clone();
                         for (i, key) in scope.iter().enumerate() {
-                            let l = WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
-                            self.insert_phase(inline_phase(i as u32 + 1, key, "Implementation", i), l);
+                            let l = WorkLoop::new(
+                                false,
+                                AgentName::Implementer,
+                                AgentName::Implementer,
+                            );
+                            self.insert_phase(
+                                inline_phase(i as u32 + 1, key, "Implementation", i),
+                                l,
+                            );
                         }
                     }
                 }
             }
             JudgeKind::Rescue => {
-                let Some(exec) = subject.map(ExecutionId::from) else { return };
-                let Ok(out) = serde_json::from_value::<RescueOut>(output.clone()) else { return };
+                let Some(exec) = subject.map(ExecutionId::from) else {
+                    return;
+                };
+                let Ok(out) = serde_json::from_value::<RescueOut>(output.clone()) else {
+                    return;
+                };
                 let key = self.executions.get(&exec).and_then(|r| r.loop_key);
                 let Some(key) = key else { return };
-                let project = self.phases.get(&key.0).map(|p| p.info.project.clone()).unwrap_or_default();
+                let project = self
+                    .phases
+                    .get(&key.0)
+                    .map(|p| p.info.project.clone())
+                    .unwrap_or_default();
                 let next = self.loop_ref(key).map(|l| l.next.clone());
-                let Some(LoopNext::Rescue { exec: stuck_exec, stuck }) = next else { return };
+                let Some(LoopNext::Rescue {
+                    exec: stuck_exec,
+                    stuck,
+                }) = next
+                else {
+                    return;
+                };
                 if stuck_exec != exec {
                     return;
                 }
@@ -1150,14 +1402,30 @@ impl SessionState {
                     RescueAction::Explore => {
                         let (p, task) = match out.explore_task {
                             Some(t) if self.valid_project(&t.project) => (t.project, t.task),
-                            _ => (project, format!("Find the fact this agent needs.\nNeed: {}\nDiagnostic:\n{}", stuck.need, stuck.diagnostic)),
+                            _ => (
+                                project,
+                                format!(
+                                    "Find the fact this agent needs.\nNeed: {}\nDiagnostic:\n{}",
+                                    stuck.need, stuck.diagnostic
+                                ),
+                            ),
                         };
-                        let idx = self.push_explore(p, task, ExploreOrigin::Rescue { phase: key.0, tests: key.1 });
+                        let idx = self.push_explore(
+                            p,
+                            task,
+                            ExploreOrigin::Rescue {
+                                phase: key.0,
+                                tests: key.1,
+                            },
+                        );
                         LoopNext::RescueExplore { task: idx, stuck }
                     }
                     RescueAction::Rerun => LoopNext::Work {
                         kind: WorkKind::Rescue,
-                        instructions: Some(rescue_context(&stuck, out.fact.as_deref().unwrap_or(&out.reason))),
+                        instructions: Some(rescue_context(
+                            &stuck,
+                            out.fact.as_deref().unwrap_or(&out.reason),
+                        )),
                     },
                     RescueAction::Gate => LoopNext::RescueGate { exec, stuck },
                 };
@@ -1166,44 +1434,82 @@ impl SessionState {
                 }
             }
             JudgeKind::ResolveReview => {
-                let Some(key) = subject.and_then(parse_loop_key) else { return };
-                let Ok(out) = serde_json::from_value::<ResolveReviewOut>(output.clone()) else { return };
-                let project = self.phases.get(&key.0).map(|p| p.info.project.clone()).unwrap_or_default();
-                let ledger = self.ledger_path(&project, key.0, key.1).display().to_string();
+                let Some(key) = subject.and_then(parse_loop_key) else {
+                    return;
+                };
+                let Ok(out) = serde_json::from_value::<ResolveReviewOut>(output.clone()) else {
+                    return;
+                };
+                let project = self
+                    .phases
+                    .get(&key.0)
+                    .map(|p| p.info.project.clone())
+                    .unwrap_or_default();
+                let ledger = self
+                    .ledger_path(&project, key.0, key.1)
+                    .display()
+                    .to_string();
                 let Some(l) = self.loop_mut(key) else { return };
-                let LoopNext::Resolve { findings } = l.next.clone() else { return };
+                let LoopNext::Resolve { findings } = l.next.clone() else {
+                    return;
+                };
                 match out.action {
                     ResolveAction::Fix => {
                         l.resolve_rounds += 1;
                         l.open_before_resolve = Some(findings.len());
                         // One verification pass per resolution round (review-cap.js).
                         l.extra_cap += 1;
-                        let mut text = String::from("Resolve these review findings with the instructions given for each:\n");
+                        let mut text = String::from(
+                            "Resolve these review findings with the instructions given for each:\n",
+                        );
                         for i in &out.instructions {
-                            text.push_str(&format!("- Finding: {}\n  Instruction: {}\n", i.finding, i.instruction));
+                            text.push_str(&format!(
+                                "- Finding: {}\n  Instruction: {}\n",
+                                i.finding, i.instruction
+                            ));
                         }
                         if out.instructions.is_empty() {
                             text = fix_instructions(&findings, &ledger);
                         } else {
                             text.push_str(&format!("\nRecord a FIXED or WONTFIX line for each in the review ledger at {ledger}."));
                         }
-                        l.next = LoopNext::Work { kind: WorkKind::Fix, instructions: Some(text) };
+                        l.next = LoopNext::Work {
+                            kind: WorkKind::Fix,
+                            instructions: Some(text),
+                        };
                     }
                     ResolveAction::Block => {
                         l.next = LoopNext::Blocked {
-                            reason: format!("The engine could not resolve the open review findings: {}. Ledger: {ledger}", out.reason),
+                            reason: format!(
+                                "The engine could not resolve the open review findings: {}. Ledger: {ledger}",
+                                out.reason
+                            ),
                         };
                     }
                 }
             }
             JudgeKind::RouteAnswer => {
-                let Some(gate) = subject.map(GateId::from) else { return };
-                let Ok(out) = serde_json::from_value::<RouteAnswerOut>(output.clone()) else { return };
-                let target = self.phases.iter().flat_map(|(id, p)| [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)]).find_map(|(k, l)| match &l.next {
-                    LoopNext::AwaitRoute { gate: g, text, then } if *g == gate => Some((k, text.clone(), *then)),
-                    _ => None,
-                });
-                let Some((key, text, then)) = target else { return };
+                let Some(gate) = subject.map(GateId::from) else {
+                    return;
+                };
+                let Ok(out) = serde_json::from_value::<RouteAnswerOut>(output.clone()) else {
+                    return;
+                };
+                let target = self
+                    .phases
+                    .iter()
+                    .flat_map(|(id, p)| [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)])
+                    .find_map(|(k, l)| match &l.next {
+                        LoopNext::AwaitRoute {
+                            gate: g,
+                            text,
+                            then,
+                        } if *g == gate => Some((k, text.clone(), *then)),
+                        _ => None,
+                    });
+                let Some((key, text, then)) = target else {
+                    return;
+                };
                 match out.route {
                     AnswerRoute::RequirementChange => {
                         // Rule D10: stop the phase and restart at the spec.
@@ -1216,7 +1522,10 @@ impl SessionState {
                     }
                     AnswerRoute::ImplementationDetail | AnswerRoute::StageChoice => {
                         if let Some(l) = self.loop_mut(key) {
-                            l.next = LoopNext::Work { kind: then, instructions: Some(text) };
+                            l.next = LoopNext::Work {
+                                kind: then,
+                                instructions: Some(text),
+                            };
                         }
                     }
                 }
@@ -1229,14 +1538,20 @@ impl SessionState {
     /// The executor an agent must run on regardless of routing: native after a harness failure,
     /// and native for a quick change, which skips the harness startup cost.
     pub fn forced_executor(&self, agent: AgentName) -> Option<ostra_core::ExecutorKind> {
-        (self.native_fallback.contains(&agent) || self.category == Some(Category::QuickChange)).then_some(ostra_core::ExecutorKind::Native)
+        (self.native_fallback.contains(&agent) || self.category == Some(Category::QuickChange))
+            .then_some(ostra_core::ExecutorKind::Native)
     }
 
     fn can_override_classify_now(&self) -> bool {
         !self.any_explore_started() && self.phases.values().all(|p| p.impl_loop.work_count == 0)
     }
 
-    fn on_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose, loop_key: Option<(u32, bool)>) {
+    fn on_started(
+        &mut self,
+        id: &ExecutionId,
+        purpose: &ExecPurpose,
+        loop_key: Option<(u32, bool)>,
+    ) {
         match purpose {
             ExecPurpose::Explore { task } => {
                 if let Some(t) = self.explore.get_mut(*task as usize) {
@@ -1251,7 +1566,11 @@ impl SessionState {
                 t.running = Some(id.clone());
                 t.runs.push(id.clone());
                 t.needs_run = false;
-                t.sent = InputMark { answers: t.answers.len(), changes: t.changes.len(), docs };
+                t.sent = InputMark {
+                    answers: t.answers.len(),
+                    changes: t.changes.len(),
+                    docs,
+                };
             }
             ExecPurpose::Plan { .. } => {
                 self.plan.running = Some(id.clone());
@@ -1264,19 +1583,18 @@ impl SessionState {
                     self.plan.consecutive_fails = 0;
                 }
             }
-            ExecPurpose::FactCheck { target, .. } => {
-                match target {
-                    FactTarget::Spec => self.spec.start_check(id),
-                    FactTarget::Plan => self.plan.start_check(id),
-                }
-            }
+            ExecPurpose::FactCheck { target, .. } => match target {
+                FactTarget::Spec => self.spec.start_check(id),
+                FactTarget::Plan => self.plan.start_check(id),
+            },
             ExecPurpose::Epa { phase } => {
                 if let Some(p) = self.phases.get_mut(phase) {
                     p.epa = EpaState::Running(id.clone());
                 }
             }
             ExecPurpose::ModuleDocs { project } => {
-                self.project_tracks.entry(project.clone()).or_default().docs = DocsState::Running(id.clone());
+                self.project_tracks.entry(project.clone()).or_default().docs =
+                    DocsState::Running(id.clone());
             }
             ExecPurpose::QuickAnswer => {
                 self.quick.exec = Some(id.clone());
@@ -1287,15 +1605,24 @@ impl SessionState {
             _ => {}
         }
         if let Some(key) = loop_key {
-            let is_handoff = matches!(purpose, ExecPurpose::PromptGen { handoff_for: Some(_) });
+            let is_handoff = matches!(
+                purpose,
+                ExecPurpose::PromptGen {
+                    handoff_for: Some(_)
+                }
+            );
             if matches!(purpose, ExecPurpose::PromptGen { .. }) {
                 self.prompt_gens += u32::from(is_handoff);
             }
             if let Some(l) = self.loop_mut(key) {
                 l.running = Some(id.clone());
                 l.in_flight = Some(l.next.clone());
-                if matches!(purpose, ExecPurpose::Implement { .. } | ExecPurpose::WriteTest { .. } | ExecPurpose::Verify { .. })
-                    || matches!(purpose, ExecPurpose::PromptGen { handoff_for: None })
+                if matches!(
+                    purpose,
+                    ExecPurpose::Implement { .. }
+                        | ExecPurpose::WriteTest { .. }
+                        | ExecPurpose::Verify { .. }
+                ) || matches!(purpose, ExecPurpose::PromptGen { handoff_for: None })
                 {
                     l.work_count += 1;
                 }
@@ -1305,12 +1632,17 @@ impl SessionState {
 
     fn on_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
         let status = result.status;
-        let error = result.error.clone().unwrap_or_else(|| format!("execution ended with status {status:?}"));
+        let error = result
+            .error
+            .clone()
+            .unwrap_or_else(|| format!("execution ended with status {status:?}"));
         match &rec.purpose {
             ExecPurpose::Explore { task } => {
                 let idx = *task as usize;
                 let parsed: Option<ExploreSubmit> = parse(&result.submit);
-                let Some(t) = self.explore.get_mut(idx) else { return };
+                let Some(t) = self.explore.get_mut(idx) else {
+                    return;
+                };
                 t.running = false;
                 match (status, parsed) {
                     (ExecutionStatus::Ok, Some(sub)) => t.result = Some(sub),
@@ -1329,14 +1661,20 @@ impl SessionState {
                 if let (ExploreOrigin::Rescue { phase, tests }, Some(sub)) = (origin, summary) {
                     let task_idx = *task;
                     if let Some(l) = self.loop_mut((phase, tests))
-                        && let LoopNext::RescueExplore { task: waiting, stuck } = l.next.clone()
+                        && let LoopNext::RescueExplore {
+                            task: waiting,
+                            stuck,
+                        } = l.next.clone()
                         && waiting == task_idx
                     {
                         let fact = format!(
                             "A targeted explore found: {}\nResearch document: {}",
                             sub.findings_summary, sub.research_path
                         );
-                        l.next = LoopNext::Work { kind: WorkKind::Rescue, instructions: Some(rescue_context(&stuck, &fact)) };
+                        l.next = LoopNext::Work {
+                            kind: WorkKind::Rescue,
+                            instructions: Some(rescue_context(&stuck, &fact)),
+                        };
                     }
                 }
             }
@@ -1352,7 +1690,11 @@ impl SessionState {
                         self.spec.error_retries = 0;
                     }
                     (ExecutionStatus::Interrupted, _) => self.spec.needs_run = true,
-                    _ => artifact_error(&mut self.spec, status, missing_submit(status, &error, result)),
+                    _ => artifact_error(
+                        &mut self.spec,
+                        status,
+                        missing_submit(status, &error, result),
+                    ),
                 }
             }
             ExecPurpose::Plan { .. } => {
@@ -1366,15 +1708,23 @@ impl SessionState {
                         self.plan.error_retries = 0;
                     }
                     (ExecutionStatus::Interrupted, _) => self.plan.needs_run = true,
-                    _ => artifact_error(&mut self.plan, status, missing_submit(status, &error, result)),
+                    _ => artifact_error(
+                        &mut self.plan,
+                        status,
+                        missing_submit(status, &error, result),
+                    ),
                 }
             }
             ExecPurpose::FactCheck { target, .. } => {
                 let parsed: Option<FactCheckSubmit> = parse(&result.submit);
                 let (checks, failed_msg) = (parsed, missing_submit(status, &error, result));
                 match target {
-                    FactTarget::Spec => fact_finished(&mut self.spec, &rec.id, status, checks, failed_msg),
-                    FactTarget::Plan => fact_finished(&mut self.plan, &rec.id, status, checks, failed_msg),
+                    FactTarget::Spec => {
+                        fact_finished(&mut self.spec, &rec.id, status, checks, failed_msg)
+                    }
+                    FactTarget::Plan => {
+                        fact_finished(&mut self.plan, &rec.id, status, checks, failed_msg)
+                    }
                 }
             }
             ExecPurpose::Epa { phase } => {
@@ -1390,7 +1740,12 @@ impl SessionState {
                         ExecutionStatus::Ok => EpaState::Done(report.unwrap_or_default()),
                         ExecutionStatus::Interrupted => EpaState::NotStarted,
                         ExecutionStatus::Error if retries < ERROR_RETRIES => EpaState::NotStarted,
-                        _ => EpaState::Failed { exec: rec.id.clone(), error: error.clone(), gate: None, retries: retries + 1 },
+                        _ => EpaState::Failed {
+                            exec: rec.id.clone(),
+                            error: error.clone(),
+                            gate: None,
+                            retries: retries + 1,
+                        },
                     };
                 }
             }
@@ -1399,7 +1754,12 @@ impl SessionState {
                 t.docs = match status {
                     ExecutionStatus::Ok => DocsState::Done(rec.report_path.clone()),
                     ExecutionStatus::Interrupted => DocsState::NotStarted,
-                    _ => DocsState::Failed { exec: rec.id.clone(), error, gate: None, retries: 1 },
+                    _ => DocsState::Failed {
+                        exec: rec.id.clone(),
+                        error,
+                        gate: None,
+                        retries: 1,
+                    },
                 };
             }
             ExecPurpose::QuickAnswer => {
@@ -1407,13 +1767,18 @@ impl SessionState {
                 match (status, parse::<QuickAnswerSubmit>(&result.submit)) {
                     (ExecutionStatus::Ok, Some(a)) => self.quick.answer = Some(a),
                     (ExecutionStatus::Ok, None) if !result.final_text.trim().is_empty() => {
-                        self.quick.answer = Some(QuickAnswerSubmit { answer: result.final_text.clone(), sources: vec![] })
+                        self.quick.answer = Some(QuickAnswerSubmit {
+                            answer: result.final_text.clone(),
+                            sources: vec![],
+                        })
                     }
                     (ExecutionStatus::Interrupted, _) => self.quick.exec = None,
                     _ => self.quick.failed = Some(error),
                 }
             }
-            ExecPurpose::Init { mode, item } => self.init_finished(&rec.id, *mode, item.clone(), status, result, error),
+            ExecPurpose::Init { mode, item } => {
+                self.init_finished(&rec.id, *mode, item.clone(), status, result, error)
+            }
             _ => {}
         }
         if let Some(key) = rec.loop_key {
@@ -1423,8 +1788,15 @@ impl SessionState {
 
     fn loop_finished(&mut self, key: (u32, bool), rec: &ExecRecord, result: &ExecutionResult) {
         let yolo = self.yolo;
-        let project = self.phases.get(&key.0).map(|p| p.info.project.clone()).unwrap_or_default();
-        let ledger = self.ledger_path(&project, key.0, key.1).display().to_string();
+        let project = self
+            .phases
+            .get(&key.0)
+            .map(|p| p.info.project.clone())
+            .unwrap_or_default();
+        let ledger = self
+            .ledger_path(&project, key.0, key.1)
+            .display()
+            .to_string();
         // Recorded at spawn from the project's Review Rule Set, so the fold stays a pure function
         // of the event log.
         let autofix_ids: BTreeSet<String> = rec
@@ -1433,16 +1805,39 @@ impl SessionState {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         let status = result.status;
-        let error = result.error.clone().unwrap_or_else(|| format!("execution ended with status {status:?}"));
+        let error = result
+            .error
+            .clone()
+            .unwrap_or_else(|| format!("execution ended with status {status:?}"));
         let is_review = matches!(rec.purpose, ExecPurpose::Review { .. });
-        let is_handoff = matches!(rec.purpose, ExecPurpose::PromptGen { handoff_for: Some(_) });
-        let review_findings: Option<CodeReviewerSubmit> = if is_review { parse(&result.submit) } else { None };
+        let is_handoff = matches!(
+            rec.purpose,
+            ExecPurpose::PromptGen {
+                handoff_for: Some(_)
+            }
+        );
+        let review_findings: Option<CodeReviewerSubmit> = if is_review {
+            parse(&result.submit)
+        } else {
+            None
+        };
         let auto: Vec<bool> = review_findings
             .as_ref()
-            .map(|r| r.findings.iter().map(|f| self.auto_fixable(&project, f, &autofix_ids)).collect())
+            .map(|r| {
+                r.findings
+                    .iter()
+                    .map(|f| self.auto_fixable(&project, f, &autofix_ids))
+                    .collect()
+            })
             .unwrap_or_default();
-        let Some(phase) = self.phases.get_mut(&key.0) else { return };
-        let l = if key.1 { &mut phase.test_loop } else { &mut phase.impl_loop };
+        let Some(phase) = self.phases.get_mut(&key.0) else {
+            return;
+        };
+        let l = if key.1 {
+            &mut phase.test_loop
+        } else {
+            &mut phase.impl_loop
+        };
         if l.running.as_ref() != Some(&rec.id) {
             return;
         }
@@ -1452,36 +1847,65 @@ impl SessionState {
         if status == ExecutionStatus::Interrupted {
             // Re-run with the same spawn block (HANDOVER 11.2).
             l.next = match in_flight {
-                LoopNext::Work { instructions, .. } => LoopNext::Work { kind: WorkKind::Rerun, instructions },
-                LoopNext::Idle => LoopNext::Work { kind: WorkKind::Rerun, instructions: None },
+                LoopNext::Work { instructions, .. } => LoopNext::Work {
+                    kind: WorkKind::Rerun,
+                    instructions,
+                },
+                LoopNext::Idle => LoopNext::Work {
+                    kind: WorkKind::Rerun,
+                    instructions: None,
+                },
                 other => other,
             };
             return;
         }
-        let failed_hard = !matches!(status, ExecutionStatus::Ok | ExecutionStatus::Stuck | ExecutionStatus::Handoff);
+        let failed_hard = !matches!(
+            status,
+            ExecutionStatus::Ok | ExecutionStatus::Stuck | ExecutionStatus::Handoff
+        );
         if failed_hard {
-            if status == ExecutionStatus::Error && l.error_retries < ERROR_RETRIES && !error.starts_with("harness-") {
+            if status == ExecutionStatus::Error
+                && l.error_retries < ERROR_RETRIES
+                && !error.starts_with("harness-")
+            {
                 l.error_retries += 1;
                 l.next = match in_flight {
-                    LoopNext::Idle => LoopNext::Work { kind: WorkKind::Rerun, instructions: None },
-                    LoopNext::Work { instructions, .. } => LoopNext::Work { kind: WorkKind::Rerun, instructions },
+                    LoopNext::Idle => LoopNext::Work {
+                        kind: WorkKind::Rerun,
+                        instructions: None,
+                    },
+                    LoopNext::Work { instructions, .. } => LoopNext::Work {
+                        kind: WorkKind::Rerun,
+                        instructions,
+                    },
                     other => other,
                 };
             } else {
-                l.next = LoopNext::Failed { exec: rec.id.clone(), error };
+                l.next = LoopNext::Failed {
+                    exec: rec.id.clone(),
+                    error,
+                };
             }
             return;
         }
 
         if is_review {
             let Some(review) = review_findings else {
-                l.next = LoopNext::Failed { exec: rec.id.clone(), error: missing_submit(status, &error, result) };
+                l.next = LoopNext::Failed {
+                    exec: rec.id.clone(),
+                    error: missing_submit(status, &error, result),
+                };
                 return;
             };
             l.error_retries = 0;
             l.iterations += 1;
             l.last_review = Some(review.clone());
-            if review.security_block || review.findings.iter().any(|f| f.severity == Severity::Blocker) {
+            if review.security_block
+                || review
+                    .findings
+                    .iter()
+                    .any(|f| f.severity == Severity::Blocker)
+            {
                 // Hard rule 21: BLOCKER findings go alone to the fix agent, with no cap.
                 l.blocker_open = true;
                 l.next = LoopNext::Work {
@@ -1521,7 +1945,10 @@ impl SessionState {
                         handoff.request, handoff.resume_instructions
                     )),
                 },
-                _ => LoopNext::Failed { exec: rec.id.clone(), error: missing_submit(status, &error, result) },
+                _ => LoopNext::Failed {
+                    exec: rec.id.clone(),
+                    error: missing_submit(status, &error, result),
+                },
             };
             return;
         }
@@ -1530,10 +1957,25 @@ impl SessionState {
         let sub: Option<ImplementerSubmit> = parse(&result.submit);
         let report_sub: Option<ReportSubmit> = parse(&result.submit);
         let (sub_status, changed, report, stuck, handoff) = match (sub, report_sub) {
-            (Some(s), _) => (s.status, s.changed_files, Some(s.report_path), s.stuck, s.handoff),
-            (None, Some(r)) => (r.status, r.changed_files, Some(r.report_path), r.stuck, None),
+            (Some(s), _) => (
+                s.status,
+                s.changed_files,
+                Some(s.report_path),
+                s.stuck,
+                s.handoff,
+            ),
+            (None, Some(r)) => (
+                r.status,
+                r.changed_files,
+                Some(r.report_path),
+                r.stuck,
+                None,
+            ),
             (None, None) => {
-                l.next = LoopNext::Failed { exec: rec.id.clone(), error: missing_submit(status, &error, result) };
+                l.next = LoopNext::Failed {
+                    exec: rec.id.clone(),
+                    error: missing_submit(status, &error, result),
+                };
                 return;
             }
         };
@@ -1547,17 +1989,29 @@ impl SessionState {
         } else if !key.1 && rec.report_path.is_some() {
             phase.implementer_report = rec.report_path.clone();
         }
-        let l = if key.1 { &mut phase.test_loop } else { &mut phase.impl_loop };
+        let l = if key.1 {
+            &mut phase.test_loop
+        } else {
+            &mut phase.impl_loop
+        };
         match sub_status {
             SubmitStatus::Stuck => {
                 let stuck = stuck.unwrap_or(StuckInfo {
                     diagnostic: result.final_text.clone(),
                     need: "The agent reported STUCK without a diagnostic.".into(),
                 });
-                l.next = LoopNext::Rescue { exec: rec.id.clone(), stuck };
+                l.next = LoopNext::Rescue {
+                    exec: rec.id.clone(),
+                    stuck,
+                };
             }
             SubmitStatus::Handoff => match handoff {
-                Some(h) => l.next = LoopNext::Handoff { exec: rec.id.clone(), handoff: h },
+                Some(h) => {
+                    l.next = LoopNext::Handoff {
+                        exec: rec.id.clone(),
+                        handoff: h,
+                    }
+                }
                 None => {
                     l.next = LoopNext::Failed {
                         exec: rec.id.clone(),
@@ -1572,12 +2026,16 @@ impl SessionState {
                     ReviewMode::IfCodeChanged => l.changed.iter().any(|f| !is_instruction_file(f)),
                 };
                 l.rationale = match &in_flight {
-                    LoopNext::Work { instructions: Some(i), kind } if *kind != WorkKind::Initial => Some(i.clone()),
+                    LoopNext::Work {
+                        instructions: Some(i),
+                        kind,
+                    } if *kind != WorkKind::Initial => Some(i.clone()),
                     _ => None,
                 };
                 l.next = if review {
                     LoopNext::Review
-                } else if l.stage && !l.changed.is_empty() && l.review != ReviewMode::IfCodeChanged {
+                } else if l.stage && !l.changed.is_empty() && l.review != ReviewMode::IfCodeChanged
+                {
                     LoopNext::Stage
                 } else {
                     LoopNext::Done
@@ -1587,7 +2045,9 @@ impl SessionState {
     }
 
     fn owner_of_exec_gate(&mut self, exec: &ExecutionId, gate: &GateId) {
-        let Some(rec) = self.executions.get(exec).cloned() else { return };
+        let Some(rec) = self.executions.get(exec).cloned() else {
+            return;
+        };
         if let Some(key) = rec.loop_key {
             if let Some(l) = self.loop_mut(key) {
                 l.gate = Some(gate.clone());
@@ -1600,12 +2060,16 @@ impl SessionState {
                     t.gate = Some(gate.clone());
                 }
             }
-            ExecPurpose::Spec { .. } | ExecPurpose::FactCheck { target: FactTarget::Spec, .. } => {
-                self.spec.failed_gate = Some(gate.clone())
-            }
-            ExecPurpose::Plan { .. } | ExecPurpose::FactCheck { target: FactTarget::Plan, .. } => {
-                self.plan.failed_gate = Some(gate.clone())
-            }
+            ExecPurpose::Spec { .. }
+            | ExecPurpose::FactCheck {
+                target: FactTarget::Spec,
+                ..
+            } => self.spec.failed_gate = Some(gate.clone()),
+            ExecPurpose::Plan { .. }
+            | ExecPurpose::FactCheck {
+                target: FactTarget::Plan,
+                ..
+            } => self.plan.failed_gate = Some(gate.clone()),
             ExecPurpose::Epa { phase } => {
                 if let Some(p) = self.phases.get_mut(phase)
                     && let EpaState::Failed { gate: g, .. } = &mut p.epa
@@ -1614,7 +2078,9 @@ impl SessionState {
                 }
             }
             ExecPurpose::ModuleDocs { project } => {
-                if let DocsState::Failed { gate: g, .. } = &mut self.project_tracks.entry(project.clone()).or_default().docs {
+                if let DocsState::Failed { gate: g, .. } =
+                    &mut self.project_tracks.entry(project.clone()).or_default().docs
+                {
                     *g = Some(gate.clone());
                 }
             }
@@ -1662,10 +2128,15 @@ impl SessionState {
             }
             GatePayload::Stuck { execution, .. }
             | GatePayload::ExecutionFailed { execution, .. }
-            | GatePayload::HarnessFailure { execution, .. } => self.owner_of_exec_gate(execution, id),
+            | GatePayload::HarnessFailure { execution, .. } => {
+                self.owner_of_exec_gate(execution, id)
+            }
             GatePayload::ClosingGate { items } => {
                 for item in items {
-                    self.project_tracks.entry(item.project.clone()).or_default().closing_gate = Some(id.clone());
+                    self.project_tracks
+                        .entry(item.project.clone())
+                        .or_default()
+                        .closing_gate = Some(id.clone());
                 }
             }
             GatePayload::SkillApproval { .. } => {
@@ -1680,7 +2151,10 @@ impl SessionState {
 
     fn on_gate_answered(&mut self, id: &GateId, payload: &GatePayload, answer: &GateAnswer) {
         let choice = match answer {
-            GateAnswer::Choice { option, text } => Some((option.as_str(), text.clone().filter(|t| !t.trim().is_empty()))),
+            GateAnswer::Choice { option, text } => Some((
+                option.as_str(),
+                text.clone().filter(|t| !t.trim().is_empty()),
+            )),
             _ => None,
         };
         match payload {
@@ -1698,7 +2172,9 @@ impl SessionState {
                             .map(|a| format!("{} {}\nAnswer: {}", a.id, a.question, a.answer))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        self.requirement_change(format!("Answers to the plan's clarifying questions:\n{text}"));
+                        self.requirement_change(format!(
+                            "Answers to the plan's clarifying questions:\n{text}"
+                        ));
                     }
                 } else {
                     self.spec.questions_gate = None;
@@ -1712,14 +2188,19 @@ impl SessionState {
                 let current = self.spec.approval_gate.as_ref() == Some(id) && !self.spec.needs_run;
                 self.spec.approval_gate = None;
                 match answer {
-                    GateAnswer::Approval { approved: true, .. } if current && self.spec.passed_current() => {
+                    GateAnswer::Approval { approved: true, .. }
+                        if current && self.spec.passed_current() =>
+                    {
                         self.spec.approved = true;
                         self.spec.approved_version = self.spec.version;
                         if self.plan.invalidated {
                             self.plan.needs_run = true;
                         }
                     }
-                    GateAnswer::Approval { feedback: Some(text), .. } if !text.trim().is_empty() => {
+                    GateAnswer::Approval {
+                        feedback: Some(text),
+                        ..
+                    } if !text.trim().is_empty() => {
                         self.spec.changes.push(text.clone());
                         self.spec.needs_run = true;
                     }
@@ -1727,15 +2208,22 @@ impl SessionState {
                 }
             }
             GatePayload::PlanApproval { .. } => {
-                let current = self.plan.approval_gate.as_ref() == Some(id) && !self.plan.needs_run && !self.plan.invalidated;
+                let current = self.plan.approval_gate.as_ref() == Some(id)
+                    && !self.plan.needs_run
+                    && !self.plan.invalidated;
                 self.plan.approval_gate = None;
                 match answer {
-                    GateAnswer::Approval { approved: true, .. } if current && self.plan.passed_current() => {
+                    GateAnswer::Approval { approved: true, .. }
+                        if current && self.plan.passed_current() =>
+                    {
                         self.plan.approved = true;
                         self.plan.approved_version = self.plan.version;
                         self.adopt_plan_phases();
                     }
-                    GateAnswer::Approval { feedback: Some(text), .. } if !text.trim().is_empty() => {
+                    GateAnswer::Approval {
+                        feedback: Some(text),
+                        ..
+                    } if !text.trim().is_empty() => {
                         // Rule D10: a change after the plan exists goes into the spec first.
                         self.requirement_change(text.clone());
                     }
@@ -1776,9 +2264,21 @@ impl SessionState {
                     }
                 }
             }
-            GatePayload::ReviewCap { phase, tests, findings, .. } => {
-                let project = self.phases.get(phase).map(|p| p.info.project.clone()).unwrap_or_default();
-                let ledger = self.ledger_path(&project, *phase, *tests).display().to_string();
+            GatePayload::ReviewCap {
+                phase,
+                tests,
+                findings,
+                ..
+            } => {
+                let project = self
+                    .phases
+                    .get(phase)
+                    .map(|p| p.info.project.clone())
+                    .unwrap_or_default();
+                let ledger = self
+                    .ledger_path(&project, *phase, *tests)
+                    .display()
+                    .to_string();
                 if let Some(l) = self.loop_mut((*phase, *tests)) {
                     l.gate = None;
                     match choice {
@@ -1788,11 +2288,17 @@ impl SessionState {
                             if let Some(t) = text {
                                 instr.push_str(&format!("\n\nThe user added: {t}"));
                             }
-                            l.next = LoopNext::Work { kind: WorkKind::Fix, instructions: Some(instr) };
+                            l.next = LoopNext::Work {
+                                kind: WorkKind::Fix,
+                                instructions: Some(instr),
+                            };
                         }
                         _ => {
                             l.next = LoopNext::Blocked {
-                                reason: format!("The review loop reached its cap with {} findings open. Ledger: {ledger}", findings.len()),
+                                reason: format!(
+                                    "The review loop reached its cap with {} findings open. Ledger: {ledger}",
+                                    findings.len()
+                                ),
                             };
                             l.announced_block = false;
                             l.block_gate_answered = true;
@@ -1816,7 +2322,9 @@ impl SessionState {
                                 }
                             }
                             _ => {
-                                l.next = LoopNext::Blocked { reason: format!("Stuck: {}", stuck.need) };
+                                l.next = LoopNext::Blocked {
+                                    reason: format!("Stuck: {}", stuck.need),
+                                };
                                 l.block_gate_answered = true;
                             }
                         }
@@ -1824,7 +2332,10 @@ impl SessionState {
                 }
             }
             GatePayload::PhaseBlocked { phase, .. } => {
-                let tests = self.phases.get(phase).is_some_and(|p| p.test_loop.is_blocked() && !p.impl_loop.is_blocked());
+                let tests = self
+                    .phases
+                    .get(phase)
+                    .is_some_and(|p| p.test_loop.is_blocked() && !p.impl_loop.is_blocked());
                 if let Some(p) = self.phases.get_mut(phase) {
                     p.blocked_gate = None;
                 }
@@ -1838,11 +2349,30 @@ impl SessionState {
                         l.resolve_rounds = 0;
                         l.open_before_resolve = None;
                         l.next = match text {
-                            Some(t) => LoopNext::AwaitRoute { gate: id.clone(), text: t, then: WorkKind::Fix },
-                            None => LoopNext::Work { kind: WorkKind::Fix, instructions: l.last_review.as_ref().map(|r| {
-                                let hm: Vec<ReviewFinding> = r.findings.iter().filter(|f| matches!(f.severity, Severity::High | Severity::Medium | Severity::Blocker)).cloned().collect();
-                                fix_instructions(&hm, "the review ledger")
-                            }) },
+                            Some(t) => LoopNext::AwaitRoute {
+                                gate: id.clone(),
+                                text: t,
+                                then: WorkKind::Fix,
+                            },
+                            None => LoopNext::Work {
+                                kind: WorkKind::Fix,
+                                instructions: l.last_review.as_ref().map(|r| {
+                                    let hm: Vec<ReviewFinding> = r
+                                        .findings
+                                        .iter()
+                                        .filter(|f| {
+                                            matches!(
+                                                f.severity,
+                                                Severity::High
+                                                    | Severity::Medium
+                                                    | Severity::Blocker
+                                            )
+                                        })
+                                        .cloned()
+                                        .collect();
+                                    fix_instructions(&hm, "the review ledger")
+                                }),
+                            },
                         };
                     }
                 }
@@ -1855,14 +2385,23 @@ impl SessionState {
                 let (opt_tests, opt_docs) = (self.tests_requested(), self.docs_requested());
                 for item in items {
                     let c = choices.iter().find(|c| c.project == item.project);
-                    let tests = if item.ask_tests { c.is_some_and(|c| c.tests) } else { opt_tests };
-                    let docs = if item.ask_docs { c.is_some_and(|c| c.docs) } else { opt_docs };
+                    let tests = if item.ask_tests {
+                        c.is_some_and(|c| c.tests)
+                    } else {
+                        opt_tests
+                    };
+                    let docs = if item.ask_docs {
+                        c.is_some_and(|c| c.docs)
+                    } else {
+                        opt_docs
+                    };
                     let t = self.project_tracks.entry(item.project.clone()).or_default();
                     t.closing = Some((tests, docs));
                     t.closing_gate = None;
                 }
             }
-            GatePayload::ExecutionFailed { execution, .. } | GatePayload::HarnessFailure { execution, .. } => {
+            GatePayload::ExecutionFailed { execution, .. }
+            | GatePayload::HarnessFailure { execution, .. } => {
                 if let GatePayload::HarnessFailure { .. } = payload
                     && let Some(("native", _)) = choice
                     && let Some(r) = self.executions.get(execution)
@@ -1875,11 +2414,19 @@ impl SessionState {
             GatePayload::SkillApproval { .. } => {
                 if let (Some(i), GateAnswer::Skills { decisions }) = (self.init.as_mut(), answer) {
                     i.approval_gate = None;
-                    i.decisions = Some(decisions.iter().map(|d| (d.name.clone(), d.disposition.clone())).collect());
+                    i.decisions = Some(
+                        decisions
+                            .iter()
+                            .map(|d| (d.name.clone(), d.disposition.clone()))
+                            .collect(),
+                    );
                 }
             }
             GatePayload::Permission { .. } => {}
-            GatePayload::BudgetReached { spent_usd, budget_usd } => {
+            GatePayload::BudgetReached {
+                spent_usd,
+                budget_usd,
+            } => {
                 self.budget_gate = None;
                 match choice {
                     Some(("raise", text)) => {
@@ -1891,14 +2438,20 @@ impl SessionState {
                             .unwrap_or(budget_usd.max(1.0));
                         self.budget_raised += extra + (spent_usd - budget_usd).max(0.0);
                     }
-                    _ => self.failed = Some(format!("Stopped at the session budget after spending ${spent_usd:.2}.")),
+                    _ => {
+                        self.failed = Some(format!(
+                            "Stopped at the session budget after spending ${spent_usd:.2}."
+                        ))
+                    }
                 }
             }
         }
     }
 
     fn exec_gate_answered(&mut self, execution: &ExecutionId, retry: bool) {
-        let Some(rec) = self.executions.get(execution).cloned() else { return };
+        let Some(rec) = self.executions.get(execution).cloned() else {
+            return;
+        };
         if let Some(key) = rec.loop_key {
             if let Some(l) = self.loop_mut(key) {
                 l.gate = None;
@@ -1907,10 +2460,15 @@ impl SessionState {
                         l.error_retries = 0;
                         match rec.purpose {
                             ExecPurpose::Review { .. } => LoopNext::Review,
-                            _ => LoopNext::Work { kind: WorkKind::Rerun, instructions: l.rationale.clone() },
+                            _ => LoopNext::Work {
+                                kind: WorkKind::Rerun,
+                                instructions: l.rationale.clone(),
+                            },
                         }
                     } else {
-                        LoopNext::Blocked { reason: format!("{} failed and the user abandoned it.", rec.agent) }
+                        LoopNext::Blocked {
+                            reason: format!("{} failed and the user abandoned it.", rec.agent),
+                        }
                     };
                 }
             }
@@ -1929,20 +2487,39 @@ impl SessionState {
                     }
                 }
             }
-            ExecPurpose::Spec { .. } | ExecPurpose::FactCheck { target: FactTarget::Spec, .. } => {
-                exec_retry(&mut self.spec, retry, matches!(rec.purpose, ExecPurpose::Spec { .. }))
-            }
-            ExecPurpose::Plan { .. } | ExecPurpose::FactCheck { target: FactTarget::Plan, .. } => {
-                exec_retry(&mut self.plan, retry, matches!(rec.purpose, ExecPurpose::Plan { .. }))
-            }
+            ExecPurpose::Spec { .. }
+            | ExecPurpose::FactCheck {
+                target: FactTarget::Spec,
+                ..
+            } => exec_retry(
+                &mut self.spec,
+                retry,
+                matches!(rec.purpose, ExecPurpose::Spec { .. }),
+            ),
+            ExecPurpose::Plan { .. }
+            | ExecPurpose::FactCheck {
+                target: FactTarget::Plan,
+                ..
+            } => exec_retry(
+                &mut self.plan,
+                retry,
+                matches!(rec.purpose, ExecPurpose::Plan { .. }),
+            ),
             ExecPurpose::Epa { phase } => {
                 if let Some(p) = self.phases.get_mut(phase) {
-                    p.epa = if retry { EpaState::NotStarted } else { EpaState::Abandoned };
+                    p.epa = if retry {
+                        EpaState::NotStarted
+                    } else {
+                        EpaState::Abandoned
+                    };
                 }
             }
             ExecPurpose::ModuleDocs { project } => {
-                self.project_tracks.entry(project.clone()).or_default().docs =
-                    if retry { DocsState::NotStarted } else { DocsState::Abandoned };
+                self.project_tracks.entry(project.clone()).or_default().docs = if retry {
+                    DocsState::NotStarted
+                } else {
+                    DocsState::Abandoned
+                };
             }
             ExecPurpose::QuickAnswer => {
                 if retry {
@@ -1964,7 +2541,8 @@ impl SessionState {
                     }
                 }
                 if abandoned {
-                    self.failed = Some("The init was abandoned after an initializer step failed.".into());
+                    self.failed =
+                        Some("The init was abandoned after an initializer step failed.".into());
                 }
             }
             _ => {}
@@ -1973,16 +2551,30 @@ impl SessionState {
 
     /// Replace the phase set with the approved plan's phases (Rules D6, D7).
     fn adopt_plan_phases(&mut self) {
-        let Some(plan) = self.plan.current.clone() else { return };
+        let Some(plan) = self.plan.current.clone() else {
+            return;
+        };
         let old = std::mem::take(&mut self.phases);
-        self.superseded_phases.extend(old.into_values().filter(|p| p.impl_loop.work_count > 0));
+        self.superseded_phases
+            .extend(old.into_values().filter(|p| p.impl_loop.work_count > 0));
         for p in &plan.phases {
-            let complexity = p.complexity.parse::<Complexity>().unwrap_or(Complexity::Medium);
-            let test_policy = if p.test_policy.trim().eq_ignore_ascii_case("skip") { TestPolicy::Skip } else { TestPolicy::Required };
+            let complexity = p
+                .complexity
+                .parse::<Complexity>()
+                .unwrap_or(Complexity::Medium);
+            let test_policy = if p.test_policy.trim().eq_ignore_ascii_case("skip") {
+                TestPolicy::Skip
+            } else {
+                TestPolicy::Required
+            };
             // Rule M5: a dependency on a phase that does not exist is unreadable, so it depends
             // on every earlier phase.
             let ids: BTreeSet<u32> = plan.phases.iter().map(|x| x.id).collect();
-            let depends_on = if p.depends_on.iter().all(|d| ids.contains(d) && *d != p.id) { Some(p.depends_on.clone()) } else { None };
+            let depends_on = if p.depends_on.iter().all(|d| ids.contains(d) && *d != p.id) {
+                Some(p.depends_on.clone())
+            } else {
+                None
+            };
             let info = PhaseInfo {
                 id: p.id,
                 deliverable: Some(p.deliverable.clone()).filter(|d| !d.is_empty()),
@@ -1995,19 +2587,33 @@ impl SessionState {
                 test_rationale: p.test_rationale.clone(),
             };
             let valid = self.valid_project(&info.project);
-            self.insert_phase(info, WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer));
+            self.insert_phase(
+                info,
+                WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer),
+            );
             if !valid && let Some(ph) = self.phases.get_mut(&p.id) {
-                ph.impl_loop.next = LoopNext::Blocked { reason: format!("The plan names project `{}`, which is not in this workspace.", ph.info.project) };
+                ph.impl_loop.next = LoopNext::Blocked {
+                    reason: format!(
+                        "The plan names project `{}`, which is not in this workspace.",
+                        ph.info.project
+                    ),
+                };
             }
         }
-        self.project_tracks.retain(|k, _| self.phases.values().any(|p| &p.info.project == k));
+        self.project_tracks
+            .retain(|k, _| self.phases.values().any(|p| &p.info.project == k));
     }
 
     // -----------------------------------------------------------------------------------------
     // Init flow
     // -----------------------------------------------------------------------------------------
 
-    fn init_started(&mut self, id: &ExecutionId, mode: ostra_core::InitializerMode, item: Option<String>) {
+    fn init_started(
+        &mut self,
+        id: &ExecutionId,
+        mode: ostra_core::InitializerMode,
+        item: Option<String>,
+    ) {
         use ostra_core::InitializerMode as M;
         let Some(i) = self.init.as_mut() else { return };
         match mode {
@@ -2017,10 +2623,18 @@ impl SessionState {
             M::GenerateInventory => i.inventory = Some(id.clone()),
             M::Scout | M::GenerateSkill => {
                 let key = item.unwrap_or_default();
-                let list = if mode == M::Scout { &mut i.scouts } else { &mut i.generates };
+                let list = if mode == M::Scout {
+                    &mut i.scouts
+                } else {
+                    &mut i.generates
+                };
                 match list.iter_mut().find(|x| x.key == key) {
                     Some(x) => x.exec = Some(id.clone()),
-                    None => list.push(InitItem { key, exec: Some(id.clone()), result: None }),
+                    None => list.push(InitItem {
+                        key,
+                        exec: Some(id.clone()),
+                        result: None,
+                    }),
                 }
             }
         }
@@ -2038,11 +2652,16 @@ impl SessionState {
         use ostra_core::InitializerMode as M;
         let parsed: Option<InitializerSubmit> = parse(&result.submit);
         let Some(i) = self.init.as_mut() else { return };
-        let ok = status == ExecutionStatus::Ok && parsed.as_ref().is_some_and(|p| p.status == SubmitStatus::Ok);
+        let ok = status == ExecutionStatus::Ok
+            && parsed
+                .as_ref()
+                .is_some_and(|p| p.status == SubmitStatus::Ok);
         if !ok {
             let retry_key = format!("{mode}:{}", item.clone().unwrap_or_default());
             let retries = i.retries.entry(retry_key).or_insert(0);
-            if (status == ExecutionStatus::Interrupted) || (status == ExecutionStatus::Error && *retries < ERROR_RETRIES) {
+            if (status == ExecutionStatus::Interrupted)
+                || (status == ExecutionStatus::Error && *retries < ERROR_RETRIES)
+            {
                 if status == ExecutionStatus::Error {
                     *retries += 1;
                 }
@@ -2050,7 +2669,11 @@ impl SessionState {
             } else {
                 let msg = match parsed {
                     Some(p) if p.status == SubmitStatus::Stuck => {
-                        format!("{}: {}", p.summary, p.stuck.map(|s| s.need).unwrap_or_default())
+                        format!(
+                            "{}: {}",
+                            p.summary,
+                            p.stuck.map(|s| s.need).unwrap_or_default()
+                        )
                     }
                     _ => missing_submit(status, &error, result),
                 };
@@ -2069,7 +2692,11 @@ impl SessionState {
             M::Propose => i.propose_result = Some(value),
             M::GenerateInventory => i.inventory_result = Some(value),
             M::Scout | M::GenerateSkill => {
-                let list = if mode == M::Scout { &mut i.scouts } else { &mut i.generates };
+                let list = if mode == M::Scout {
+                    &mut i.scouts
+                } else {
+                    &mut i.generates
+                };
                 if let Some(x) = list.iter_mut().find(|x| x.exec.as_ref() == Some(id)) {
                     x.result = Some(value);
                 }
@@ -2178,7 +2805,8 @@ fn fact_finished<T>(
 fn missing_submit(status: ExecutionStatus, error: &str, result: &ExecutionResult) -> String {
     match status {
         ExecutionStatus::Ok if result.submit.is_none() => {
-            "The agent finished without calling its submit tool, so Ostra has no result to read.".into()
+            "The agent finished without calling its submit tool, so Ostra has no result to read."
+                .into()
         }
         ExecutionStatus::Ok => "The agent's submit payload did not match its schema.".into(),
         _ => error.to_string(),
@@ -2194,7 +2822,11 @@ pub fn rescue_context(stuck: &StuckInfo, fact: &str) -> String {
 }
 
 pub fn loop_key_str(key: (u32, bool)) -> String {
-    if key.1 { format!("phase:{}:tests", key.0) } else { format!("phase:{}", key.0) }
+    if key.1 {
+        format!("phase:{}:tests", key.0)
+    } else {
+        format!("phase:{}", key.0)
+    }
 }
 
 pub fn parse_loop_key(s: &str) -> Option<(u32, bool)> {

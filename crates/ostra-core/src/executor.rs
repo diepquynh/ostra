@@ -14,8 +14,12 @@ pub enum HarnessKind {
 }
 
 impl HarnessKind {
-    pub const ALL: [HarnessKind; 4] =
-        [HarnessKind::Claude, HarnessKind::Codex, HarnessKind::Grok, HarnessKind::Agy];
+    pub const ALL: [HarnessKind; 4] = [
+        HarnessKind::Claude,
+        HarnessKind::Codex,
+        HarnessKind::Grok,
+        HarnessKind::Agy,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -115,7 +119,9 @@ impl FromStr for ExecutorKind {
         }
         match s.strip_prefix("harness:") {
             Some(h) => Ok(ExecutorKind::Harness(h.parse()?)),
-            None => Err(format!("unknown executor `{s}`: use `native` or `harness:<claude|codex|grok|agy>`")),
+            None => Err(format!(
+                "unknown executor `{s}`: use `native` or `harness:<claude|codex|grok|agy>`"
+            )),
         }
     }
 }
@@ -151,6 +157,9 @@ mod tests {
         for h in HarnessKind::ALL {
             assert_eq!(ExecutorKind::Harness(h).stream(), ExecStream::Terminal);
         }
-        assert_eq!(serde_json::to_string(&ExecStream::Terminal).unwrap(), "\"terminal\"");
+        assert_eq!(
+            serde_json::to_string(&ExecStream::Terminal).unwrap(),
+            "\"terminal\""
+        );
     }
 }

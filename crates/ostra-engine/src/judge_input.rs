@@ -55,15 +55,26 @@ pub fn judge_input(
                     "- `{}` at {}{}{}",
                     p.key,
                     p.path,
-                    p.stack.as_ref().map(|s| format!(", stack {s}")).unwrap_or_default(),
-                    if p.initialized { "" } else { " (not initialized: no pipeline task may target it)" }
+                    p.stack
+                        .as_ref()
+                        .map(|s| format!(", stack {s}"))
+                        .unwrap_or_default(),
+                    if p.initialized {
+                        ""
+                    } else {
+                        " (not initialized: no pipeline task may target it)"
+                    }
                 );
             }
             let summary = format!("Request: {}", first_line(&request));
             (m, summary)
         }
         JudgeKind::Sufficiency => {
-            let covered: Vec<u32> = subject.unwrap_or_default().split(',').filter_map(|x| x.parse().ok()).collect();
+            let covered: Vec<u32> = subject
+                .unwrap_or_default()
+                .split(',')
+                .filter_map(|x| x.parse().ok())
+                .collect();
             let _ = writeln!(m, "# Request\n\n{request}\n\n# Research returned\n");
             for t in &s.explore {
                 let Some(r) = &t.result else { continue };
@@ -80,9 +91,29 @@ pub fn judge_input(
                     m.push('\n');
                 }
             }
-            let _ = writeln!(m, "Project keys you may target: {}", s.projects.iter().map(|p| p.key.as_str()).collect::<Vec<_>>().join(", "));
-            let n: usize = s.explore.iter().filter(|t| covered.contains(&t.idx)).filter_map(|t| t.result.as_ref()).map(|r| r.not_covered.len()).sum();
-            (m, format!("{n} Not covered items across {} research documents", covered.len()))
+            let _ = writeln!(
+                m,
+                "Project keys you may target: {}",
+                s.projects
+                    .iter()
+                    .map(|p| p.key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let n: usize = s
+                .explore
+                .iter()
+                .filter(|t| covered.contains(&t.idx))
+                .filter_map(|t| t.result.as_ref())
+                .map(|r| r.not_covered.len())
+                .sum();
+            (
+                m,
+                format!(
+                    "{n} Not covered items across {} research documents",
+                    covered.len()
+                ),
+            )
         }
         JudgeKind::Stakes => {
             let _ = writeln!(m, "# Request\n\n{request}\n");
@@ -106,16 +137,26 @@ pub fn judge_input(
                 .values()
                 .flat_map(|p| [&p.impl_loop, &p.test_loop])
                 .find_map(|l| match &l.next {
-                    LoopNext::AwaitRoute { gate: g, text, .. } if Some(g.as_str()) == subject => Some(text.clone()),
+                    LoopNext::AwaitRoute { gate: g, text, .. } if Some(g.as_str()) == subject => {
+                        Some(text.clone())
+                    }
                     _ => None,
                 })
                 .unwrap_or_default();
             let _ = writeln!(m, "# Request\n\n{request}\n");
             if let Some(spec) = &s.spec.current {
-                let _ = writeln!(m, "# Current spec summary\n\n{}\nSpec file: {}\n", spec.summary, spec.spec_path);
+                let _ = writeln!(
+                    m,
+                    "# Current spec summary\n\n{}\nSpec file: {}\n",
+                    spec.summary, spec.spec_path
+                );
             }
             if let Some(g) = gate {
-                let _ = writeln!(m, "# The question that was asked\n\n{}\n{}\n", g.title, g.explanation);
+                let _ = writeln!(
+                    m,
+                    "# The question that was asked\n\n{}\n{}\n",
+                    g.title, g.explanation
+                );
             }
             let _ = writeln!(m, "# The user's answer\n\n{text}");
             (m, format!("Answer: {}", first_line(&text)))
@@ -123,40 +164,86 @@ pub fn judge_input(
         JudgeKind::Rescue => {
             let exec = subject.map(ExecutionId::from);
             let rec = exec.as_ref().and_then(|e| s.executions.get(e));
-            let stuck = rec.and_then(|r| r.loop_key).and_then(|k| s.loop_ref(k)).and_then(|l| match &l.next {
-                LoopNext::Rescue { stuck, .. } => Some(stuck.clone()),
-                _ => None,
-            });
+            let stuck = rec
+                .and_then(|r| r.loop_key)
+                .and_then(|k| s.loop_ref(k))
+                .and_then(|l| match &l.next {
+                    LoopNext::Rescue { stuck, .. } => Some(stuck.clone()),
+                    _ => None,
+                });
             let _ = writeln!(m, "# Request\n\n{request}\n");
             if let Some(r) = rec {
                 let _ = writeln!(m, "# Stuck agent\n\n{} in project `{}`", r.agent, r.project);
                 if let Some(k) = r.loop_key
                     && let Some(p) = s.phases.get(&k.0)
                 {
-                    let _ = writeln!(m, "Phase {}: {}{}", p.info.id, p.info.title, p.info.file.as_ref().map(|f| format!(" ({})", f.display())).unwrap_or_default());
+                    let _ = writeln!(
+                        m,
+                        "Phase {}: {}{}",
+                        p.info.id,
+                        p.info.title,
+                        p.info
+                            .file
+                            .as_ref()
+                            .map(|f| format!(" ({})", f.display()))
+                            .unwrap_or_default()
+                    );
                 }
             }
             if let Some(st) = &stuck {
-                let _ = writeln!(m, "\n# Diagnostic, verbatim\n\n{}\n\n# What it needs\n\n{}", st.diagnostic, st.need);
+                let _ = writeln!(
+                    m,
+                    "\n# Diagnostic, verbatim\n\n{}\n\n# What it needs\n\n{}",
+                    st.diagnostic, st.need
+                );
             }
             let previous: Vec<String> = s
                 .decisions
                 .values()
                 .filter(|d| d.judge == JudgeKind::Rescue)
-                .map(|d| format!("- {}: {}", d.output.get("action").and_then(|a| a.as_str()).unwrap_or("?"), d.reason))
+                .map(|d| {
+                    format!(
+                        "- {}: {}",
+                        d.output
+                            .get("action")
+                            .and_then(|a| a.as_str())
+                            .unwrap_or("?"),
+                        d.reason
+                    )
+                })
                 .collect();
             if !previous.is_empty() {
-                let _ = writeln!(m, "\n# Earlier rescues in this session\n\n{}", previous.join("\n"));
+                let _ = writeln!(
+                    m,
+                    "\n# Earlier rescues in this session\n\n{}",
+                    previous.join("\n")
+                );
             }
-            (m, format!("STUCK: {}", stuck.map(|s| first_line(&s.need)).unwrap_or_default()))
+            (
+                m,
+                format!(
+                    "STUCK: {}",
+                    stuck.map(|s| first_line(&s.need)).unwrap_or_default()
+                ),
+            )
         }
         JudgeKind::ResolveReview => {
             let key = subject.and_then(parse_loop_key);
             let l = key.and_then(|k| s.loop_ref(k));
-            let project = key.and_then(|k| s.phases.get(&k.0)).map(|p| p.info.project.clone()).unwrap_or_default();
+            let project = key
+                .and_then(|k| s.phases.get(&k.0))
+                .map(|p| p.info.project.clone())
+                .unwrap_or_default();
             let _ = writeln!(m, "# Review loop at its budget under YOLO\n");
             if let (Some(k), Some(l)) = (key, l) {
-                let _ = writeln!(m, "Phase {}{}; review passes so far: {}; resolution rounds: {}", k.0, if k.1 { " (tests)" } else { "" }, l.iterations, l.resolve_rounds);
+                let _ = writeln!(
+                    m,
+                    "Phase {}{}; review passes so far: {}; resolution rounds: {}",
+                    k.0,
+                    if k.1 { " (tests)" } else { "" },
+                    l.iterations,
+                    l.resolve_rounds
+                );
                 if let LoopNext::Resolve { findings } = &l.next {
                     let _ = writeln!(m, "\n# Open findings\n");
                     for f in findings {
@@ -164,7 +251,12 @@ pub fn judge_input(
                     }
                 }
                 let ledger = s.ledger_path(&project, k.0, k.1);
-                let _ = writeln!(m, "\n# Review ledger ({})\n\n{}", ledger.display(), excerpt(&ledger));
+                let _ = writeln!(
+                    m,
+                    "\n# Review ledger ({})\n\n{}",
+                    ledger.display(),
+                    excerpt(&ledger)
+                );
                 if let Some(p) = s.phases.get(&k.0).and_then(|p| p.info.file.clone()) {
                     let _ = writeln!(m, "\n# Phase file ({})\n\n{}", p.display(), excerpt(&p));
                 }
@@ -176,13 +268,21 @@ pub fn judge_input(
             let _ = writeln!(m, "# Request\n\n{request}\n");
             if let Some(g) = gate {
                 let _ = writeln!(m, "# Gate: {}\n\n{}\n", g.title, g.explanation);
-                let _ = writeln!(m, "```json\n{}\n```\n", serde_json::to_string_pretty(&g.payload).unwrap_or_default());
+                let _ = writeln!(
+                    m,
+                    "```json\n{}\n```\n",
+                    serde_json::to_string_pretty(&g.payload).unwrap_or_default()
+                );
                 match &g.payload {
                     GatePayload::OpenQuestions { .. } => {
                         let _ = writeln!(m, "# Research findings\n");
                         for t in &s.explore {
                             if let Some(r) = &t.result {
-                                let _ = writeln!(m, "- {} ({}): {}", r.research_path, t.project, r.findings_summary);
+                                let _ = writeln!(
+                                    m,
+                                    "- {} ({}): {}",
+                                    r.research_path, t.project, r.findings_summary
+                                );
                             }
                         }
                     }
@@ -203,13 +303,25 @@ pub fn judge_input(
 
 fn first_line(s: &str) -> String {
     let l = s.lines().next().unwrap_or_default();
-    if l.len() > 160 { format!("{}...", &l[..l.char_indices().nth(157).map(|(i, _)| i).unwrap_or(l.len())]) } else { l.to_string() }
+    if l.len() > 160 {
+        format!(
+            "{}...",
+            &l[..l.char_indices().nth(157).map(|(i, _)| i).unwrap_or(l.len())]
+        )
+    } else {
+        l.to_string()
+    }
 }
 
 fn completion_input(s: &SessionState) -> (String, String) {
     let mut m = String::new();
     let _ = writeln!(m, "# Request\n\n{}\n", s.full_request());
-    let _ = writeln!(m, "Category: {}\nYOLO: {}\n", s.category.map(|c| c.to_string()).unwrap_or_default(), s.yolo);
+    let _ = writeln!(
+        m,
+        "Category: {}\nYOLO: {}\n",
+        s.category.map(|c| c.to_string()).unwrap_or_default(),
+        s.yolo
+    );
     if s.category == Some(Category::QuickAnswer) {
         return (m, "Quick answer".into());
     }
@@ -226,14 +338,25 @@ fn completion_input(s: &SessionState) -> (String, String) {
         }
     }
     if let Some(spec) = &s.spec.current {
-        let _ = writeln!(m, "\n# Spec\n\n{} ({}). Approved: {}.", spec.spec_path, spec.summary, s.spec.approved);
+        let _ = writeln!(
+            m,
+            "\n# Spec\n\n{} ({}). Approved: {}.",
+            spec.spec_path, spec.summary, s.spec.approved
+        );
     }
     match (&s.stakes, &s.plan.current) {
         (Some((_, st)), None) => {
-            let _ = writeln!(m, "\n# Plan\n\nStakes {st:?}: the plan stage was skipped and the change ran inline.");
+            let _ = writeln!(
+                m,
+                "\n# Plan\n\nStakes {st:?}: the plan stage was skipped and the change ran inline."
+            );
         }
         (_, Some(plan)) => {
-            let _ = writeln!(m, "\n# Plan\n\n{} ({})", plan.master_plan_path, plan.summary);
+            let _ = writeln!(
+                m,
+                "\n# Plan\n\n{} ({})",
+                plan.master_plan_path, plan.summary
+            );
         }
         _ => {}
     }
@@ -245,12 +368,21 @@ fn completion_input(s: &SessionState) -> (String, String) {
                 "removed because a phase it depends on failed".to_string()
             } else {
                 match &p.impl_loop.next {
-                    LoopNext::Done => format!("passed review after {} passes", p.impl_loop.iterations),
+                    LoopNext::Done => {
+                        format!("passed review after {} passes", p.impl_loop.iterations)
+                    }
                     LoopNext::Blocked { reason } => format!("BLOCKED: {reason}"),
                     other => format!("{other:?}"),
                 }
             };
-            let _ = writeln!(m, "- Phase {} ({}, {}): {}. {status}", p.info.id, p.info.project, p.info.title, p.info.test_policy_label());
+            let _ = writeln!(
+                m,
+                "- Phase {} ({}, {}): {}. {status}",
+                p.info.id,
+                p.info.project,
+                p.info.title,
+                p.info.test_policy_label()
+            );
             if !p.impl_loop.leftover_low.is_empty() {
                 for f in &p.impl_loop.leftover_low {
                     let _ = writeln!(m, "  - LOW finding left open: {}", f.line());
@@ -262,7 +394,10 @@ fn completion_input(s: &SessionState) -> (String, String) {
             let tests = match (&p.epa, &p.test_loop.next) {
                 (EpaState::NotStarted, _) => None,
                 (EpaState::Abandoned, _) => Some("test stage abandoned".to_string()),
-                (_, LoopNext::Done) => Some(format!("tests written and reviewed ({} passes)", p.test_loop.iterations)),
+                (_, LoopNext::Done) => Some(format!(
+                    "tests written and reviewed ({} passes)",
+                    p.test_loop.iterations
+                )),
                 (_, LoopNext::Blocked { reason }) => Some(format!("tests BLOCKED: {reason}")),
                 _ => Some("tests incomplete".into()),
             };
@@ -272,15 +407,25 @@ fn completion_input(s: &SessionState) -> (String, String) {
         }
         let _ = writeln!(m, "\n# Closing stages per project\n");
         for (k, t) in &s.project_tracks {
-            let closing = t.closing.map(|(a, b)| format!("tests {}, docs {}", yes(a), yes(b))).unwrap_or_else(|| "not reached".into());
+            let closing = t
+                .closing
+                .map(|(a, b)| format!("tests {}, docs {}", yes(a), yes(b)))
+                .unwrap_or_else(|| "not reached".into());
             let docs = match &t.docs {
-                DocsState::Done(p) => format!("docs written ({})", p.as_ref().map(|p| p.display().to_string()).unwrap_or_default()),
+                DocsState::Done(p) => format!(
+                    "docs written ({})",
+                    p.as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
+                ),
                 DocsState::Abandoned => "docs abandoned".into(),
                 DocsState::NotStarted => "docs not run".into(),
                 _ => "docs incomplete".into(),
             };
             let format = match t.format {
-                Some(None) => "no format command in project.toml, so format was skipped".to_string(),
+                Some(None) => {
+                    "no format command in project.toml, so format was skipped".to_string()
+                }
                 Some(Some(0)) => "the format command ran and exited 0".to_string(),
                 Some(Some(code)) => format!("format exited {code}"),
                 None => "format not run".into(),
@@ -292,13 +437,28 @@ fn completion_input(s: &SessionState) -> (String, String) {
         .gates
         .values()
         .filter(|g| g.source == Some(AnswerSource::Yolo))
-        .map(|g| format!("- {} (gate {}): {}", g.title, g.id, g.reason.clone().unwrap_or_default()))
+        .map(|g| {
+            format!(
+                "- {} (gate {}): {}",
+                g.title,
+                g.id,
+                g.reason.clone().unwrap_or_default()
+            )
+        })
         .collect();
     if !yolo.is_empty() {
         let _ = writeln!(m, "\n# Decided for you under YOLO\n\n{}", yolo.join("\n"));
     }
     if !s.notes.is_empty() {
-        let _ = writeln!(m, "\n# Notes\n\n{}", s.notes.iter().map(|n| format!("- {n}")).collect::<Vec<_>>().join("\n"));
+        let _ = writeln!(
+            m,
+            "\n# Notes\n\n{}",
+            s.notes
+                .iter()
+                .map(|n| format!("- {n}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
     }
     (m, "Session state at completion".into())
 }
@@ -315,7 +475,10 @@ impl PolicyLabel for ostra_core::pipeline::PhaseInfo {
     fn test_policy_label(&self) -> String {
         match self.test_policy {
             TestPolicy::Required => "tests Required".into(),
-            TestPolicy::Skip => format!("tests Skip ({})", self.test_rationale.clone().unwrap_or_default()),
+            TestPolicy::Skip => format!(
+                "tests Skip ({})",
+                self.test_rationale.clone().unwrap_or_default()
+            ),
         }
     }
 }
@@ -331,7 +494,10 @@ pub enum YoloPlan {
 pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
     let g = s.gates.get(gate)?;
     let choice = |option: &str, reason: &str| YoloPlan::Fixed {
-        answer: GateAnswer::Choice { option: option.into(), text: None },
+        answer: GateAnswer::Choice {
+            option: option.into(),
+            text: None,
+        },
         reason: reason.into(),
     };
     Some(match &g.payload {
@@ -428,27 +594,47 @@ pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
 
 /// Turn the YOLO judge's `answer` into a gate answer, enforcing what must stay true: approval
 /// only with a fact-check PASS, and every question answered.
-pub fn yolo_answer_from_judge(s: &SessionState, gate: &GateId, answer: &Value) -> Result<GateAnswer, String> {
+pub fn yolo_answer_from_judge(
+    s: &SessionState,
+    gate: &GateId,
+    answer: &Value,
+) -> Result<GateAnswer, String> {
     let g = s.gates.get(gate).ok_or("unknown gate")?;
     match &g.payload {
         GatePayload::OpenQuestions { questions, .. } => {
-            let answers: Vec<QuestionAnswer> = serde_json::from_value(answer.get("answers").cloned().unwrap_or(Value::Null))
-                .map_err(|e| format!("answers: {e}"))?;
+            let answers: Vec<QuestionAnswer> =
+                serde_json::from_value(answer.get("answers").cloned().unwrap_or(Value::Null))
+                    .map_err(|e| format!("answers: {e}"))?;
             let complete: Vec<QuestionAnswer> = questions
                 .iter()
                 .map(|q| {
-                    answers.iter().find(|a| a.id == q.id).cloned().unwrap_or_else(|| QuestionAnswer {
-                        id: q.id.clone(),
-                        question: q.question.clone(),
-                        answer: q.options.get(q.recommended).map(|o| o.label.clone()).unwrap_or_default(),
-                    })
+                    answers
+                        .iter()
+                        .find(|a| a.id == q.id)
+                        .cloned()
+                        .unwrap_or_else(|| QuestionAnswer {
+                            id: q.id.clone(),
+                            question: q.question.clone(),
+                            answer: q
+                                .options
+                                .get(q.recommended)
+                                .map(|o| o.label.clone())
+                                .unwrap_or_default(),
+                        })
                 })
                 .collect();
             Ok(GateAnswer::Questions { answers: complete })
         }
         GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. } => {
-            let approved = answer.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
-            let feedback = answer.get("feedback").and_then(|v| v.as_str()).map(String::from).filter(|f| !f.trim().is_empty());
+            let approved = answer
+                .get("approved")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let feedback = answer
+                .get("feedback")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .filter(|f| !f.trim().is_empty());
             let passed = match &g.payload {
                 GatePayload::SpecApproval { .. } => s.spec.passed_current(),
                 _ => s.plan.passed_current(),
@@ -462,9 +648,21 @@ pub fn yolo_answer_from_judge(s: &SessionState, gate: &GateId, answer: &Value) -
             Ok(GateAnswer::Approval { approved, feedback })
         }
         GatePayload::Stuck { .. } => {
-            let option = answer.get("option").and_then(|v| v.as_str()).unwrap_or("block").to_string();
-            let text = answer.get("text").and_then(|v| v.as_str()).map(String::from).filter(|t| !t.trim().is_empty());
-            let option = if option == "fact" && text.is_none() { "block".into() } else { option };
+            let option = answer
+                .get("option")
+                .and_then(|v| v.as_str())
+                .unwrap_or("block")
+                .to_string();
+            let text = answer
+                .get("text")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .filter(|t| !t.trim().is_empty());
+            let option = if option == "fact" && text.is_none() {
+                "block".into()
+            } else {
+                option
+            };
             Ok(GateAnswer::Choice { option, text })
         }
         _ => Err("this gate is answered without the judge".into()),

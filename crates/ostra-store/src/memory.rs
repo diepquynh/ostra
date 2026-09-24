@@ -65,7 +65,9 @@ pub fn fts_query_from_text(text: &str) -> String {
 impl MemoryStore {
     /// Creates the directory and schema if needed.
     pub fn open(db_path: &Path) -> Result<Self, StoreError> {
-        let store = MemoryStore { path: db_path.to_path_buf() };
+        let store = MemoryStore {
+            path: db_path.to_path_buf(),
+        };
         store.conn()?;
         Ok(store)
     }
@@ -98,7 +100,12 @@ impl MemoryStore {
 
     /// Buckets, most relevant first: lessons in `area` (and `area::*`) ranked by the query or by
     /// recency; then global text matches as fill; then, with neither, the most recent overall.
-    pub fn recall(&self, area: Option<&str>, query: Option<&str>, limit: usize) -> Result<Vec<Lesson>, StoreError> {
+    pub fn recall(
+        &self,
+        area: Option<&str>,
+        query: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Lesson>, StoreError> {
         if !self.path.exists() {
             return Ok(vec![]);
         }
@@ -120,16 +127,24 @@ impl MemoryStore {
             let mut st = conn.prepare(&format!(
                 "SELECT {cols} FROM lessons l WHERE l.area = ?1 OR l.area LIKE ?2 ORDER BY l.created_at DESC"
             ))?;
-            buckets.push(st.query_map(params![area, format!("{area}::%")], row_to_lesson)?.collect::<Result<_, _>>()?);
+            buckets.push(
+                st.query_map(params![area, format!("{area}::%")], row_to_lesson)?
+                    .collect::<Result<_, _>>()?,
+            );
         }
         if let Some(fts) = fts.as_deref() {
             let mut st = conn.prepare(&format!(
                 "SELECT {cols} FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
                  WHERE lessons_fts MATCH ?1 ORDER BY bm25(lessons_fts)"
             ))?;
-            buckets.push(st.query_map(params![fts], row_to_lesson)?.collect::<Result<_, _>>()?);
+            buckets.push(
+                st.query_map(params![fts], row_to_lesson)?
+                    .collect::<Result<_, _>>()?,
+            );
         } else if area.is_none() {
-            let mut st = conn.prepare(&format!("SELECT {cols} FROM lessons l ORDER BY l.created_at DESC"))?;
+            let mut st = conn.prepare(&format!(
+                "SELECT {cols} FROM lessons l ORDER BY l.created_at DESC"
+            ))?;
             buckets.push(st.query_map([], row_to_lesson)?.collect::<Result<_, _>>()?);
         }
         let mut seen = std::collections::HashSet::new();
@@ -153,12 +168,20 @@ impl MemoryStore {
             return Ok(false);
         }
         let conn = self.conn()?;
-        let n = conn.execute("DELETE FROM lessons WHERE area = ?1 AND lesson = ?2", params![area, lesson])?;
+        let n = conn.execute(
+            "DELETE FROM lessons WHERE area = ?1 AND lesson = ?2",
+            params![area, lesson],
+        )?;
         Ok(n > 0)
     }
 
     /// For the memory browser: every lesson, or those matching `query`, newest first.
-    pub fn list(&self, query: Option<&str>, limit: usize, offset: usize) -> Result<Vec<Lesson>, StoreError> {
+    pub fn list(
+        &self,
+        query: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<Lesson>, StoreError> {
         if !self.path.exists() {
             return Ok(vec![]);
         }
@@ -171,13 +194,15 @@ impl MemoryStore {
                     "SELECT {cols} FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
                      WHERE lessons_fts MATCH ?1 ORDER BY bm25(lessons_fts) LIMIT ?2 OFFSET ?3"
                 ))?;
-                st.query_map(params![fts, limit as i64, offset as i64], row_to_lesson)?.collect::<Result<_, _>>()?
+                st.query_map(params![fts, limit as i64, offset as i64], row_to_lesson)?
+                    .collect::<Result<_, _>>()?
             }
             None => {
                 let mut st = conn.prepare(&format!(
                     "SELECT {cols} FROM lessons l ORDER BY l.created_at DESC LIMIT ?1 OFFSET ?2"
                 ))?;
-                st.query_map(params![limit as i64, offset as i64], row_to_lesson)?.collect::<Result<_, _>>()?
+                st.query_map(params![limit as i64, offset as i64], row_to_lesson)?
+                    .collect::<Result<_, _>>()?
             }
         };
         Ok(rows)
@@ -221,8 +246,16 @@ mod tests {
     #[test]
     fn dedupes_on_area_and_lesson() {
         let (_d, s) = store();
-        assert_eq!(s.record("orders", "cancel needs ownership check", "explore").unwrap(), 1);
-        assert_eq!(s.record("orders", "cancel needs ownership check", "implementer").unwrap(), 1);
+        assert_eq!(
+            s.record("orders", "cancel needs ownership check", "explore")
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            s.record("orders", "cancel needs ownership check", "implementer")
+                .unwrap(),
+            1
+        );
         let got = s.recall(Some("orders"), None, 8).unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].source, "implementer");
@@ -231,8 +264,10 @@ mod tests {
     #[test]
     fn area_scope_then_global_fill() {
         let (_d, s) = store();
-        s.record("orders::Service", "refund validates ownership", "a").unwrap();
-        s.record("billing", "ownership lives in billing too", "a").unwrap();
+        s.record("orders::Service", "refund validates ownership", "a")
+            .unwrap();
+        s.record("billing", "ownership lives in billing too", "a")
+            .unwrap();
         s.record("web", "unrelated lesson", "a").unwrap();
         let got = s.recall(Some("orders"), Some("ownership"), 8).unwrap();
         assert_eq!(got[0].area, "orders::Service");
@@ -258,7 +293,10 @@ mod tests {
         s.record("a", "x", "s").unwrap();
         let id = s.list(None, 10, 0).unwrap()[0].id;
         let l = s.update(id, "b", "z").unwrap();
-        assert_eq!((l.area.as_str(), l.lesson.as_str(), l.source.as_str()), ("b", "z", "user"));
+        assert_eq!(
+            (l.area.as_str(), l.lesson.as_str(), l.source.as_str()),
+            ("b", "z", "user")
+        );
         assert_eq!(s.list(Some("z"), 10, 0).unwrap().len(), 1);
         assert!(s.delete(id).unwrap());
         assert!(s.list(None, 10, 0).unwrap().is_empty());
@@ -267,7 +305,9 @@ mod tests {
     #[test]
     fn missing_store_recalls_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        let s = MemoryStore { path: dir.path().join("none.sqlite3") };
+        let s = MemoryStore {
+            path: dir.path().join("none.sqlite3"),
+        };
         assert!(s.recall(None, Some("x"), 8).unwrap().is_empty());
         assert!(!s.forget("a", "b").unwrap());
     }

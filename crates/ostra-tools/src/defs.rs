@@ -10,7 +10,11 @@ pub struct ToolDefinition {
 }
 
 fn def(name: &str, description: &str, input_schema: Value) -> ToolDefinition {
-    ToolDefinition { name: name.into(), description: description.into(), input_schema }
+    ToolDefinition {
+        name: name.into(),
+        description: description.into(),
+        input_schema,
+    }
 }
 
 const READ: &str = "Reads a file from the local filesystem.
@@ -260,7 +264,10 @@ fn memory_recall_def() -> ToolDefinition {
 pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition> {
     let kind = ostra_core::doc::DocKind::for_agent(agent)?;
     let mut schema = kind.schema();
-    let defs = schema.as_object_mut().and_then(|m| m.remove("$defs")).unwrap_or_else(|| json!({}));
+    let defs = schema
+        .as_object_mut()
+        .and_then(|m| m.remove("$defs"))
+        .unwrap_or_else(|| json!({}));
     if let Some(m) = schema.as_object_mut() {
         m.remove("$schema");
     }
@@ -326,7 +333,13 @@ mod tests {
 
     #[test]
     fn maps_capabilities_and_skips_web_search() {
-        let caps = [Capability::Read, Capability::Shell, Capability::WebSearch, Capability::Read, Capability::MemoryRecall];
+        let caps = [
+            Capability::Read,
+            Capability::Shell,
+            Capability::WebSearch,
+            Capability::Read,
+            Capability::MemoryRecall,
+        ];
         let names: Vec<String> = definitions(&caps).into_iter().map(|d| d.name).collect();
         assert_eq!(names, ["Read", "Bash", "MemoryRecall"]);
         assert!(wants_web_search(&caps));
@@ -336,8 +349,16 @@ mod tests {
     #[test]
     fn every_capability_has_a_native_name_match() {
         for c in [
-            Capability::Read, Capability::Write, Capability::Edit, Capability::Shell, Capability::SearchText,
-            Capability::Glob, Capability::Skill, Capability::WebFetch, Capability::Report, Capability::Memory,
+            Capability::Read,
+            Capability::Write,
+            Capability::Edit,
+            Capability::Shell,
+            Capability::SearchText,
+            Capability::Glob,
+            Capability::Skill,
+            Capability::WebFetch,
+            Capability::Report,
+            Capability::Memory,
             Capability::MemoryRecall,
         ] {
             let d = definitions(&[c]);
@@ -349,12 +370,24 @@ mod tests {
     #[test]
     fn descriptions_follow_writing_rules() {
         let caps: Vec<Capability> = vec![
-            Capability::Read, Capability::Write, Capability::Edit, Capability::Shell, Capability::SearchText,
-            Capability::Glob, Capability::Skill, Capability::WebFetch, Capability::Report, Capability::Memory,
+            Capability::Read,
+            Capability::Write,
+            Capability::Edit,
+            Capability::Shell,
+            Capability::SearchText,
+            Capability::Glob,
+            Capability::Skill,
+            Capability::WebFetch,
+            Capability::Report,
+            Capability::Memory,
             Capability::MemoryRecall,
         ];
         for d in definitions(&caps) {
-            assert!(!d.description.contains('\u{2014}'), "{} has an em dash", d.name);
+            assert!(
+                !d.description.contains('\u{2014}'),
+                "{} has an em dash",
+                d.name
+            );
         }
     }
 
