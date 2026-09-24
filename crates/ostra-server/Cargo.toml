@@ -45,6 +45,7 @@ open.workspace = true
 parking_lot.workspace = true
 if-addrs.workspace = true
 ignore.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

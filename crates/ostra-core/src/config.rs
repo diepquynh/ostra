@@ -4,7 +4,7 @@
 
 use crate::agent::{AgentName, JUDGE_ROUTE, route_keys};
 use crate::executor::{ExecutorKind, HarnessKind};
-use crate::model::{Complexity, Tier};
+use crate::model::{Complexity, Effort, Tier};
 use crate::slug::{is_project_key, is_stack_name, stack_issue};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -38,10 +38,37 @@ pub struct ProviderConfig {
     pub auth_token_env: Option<String>,
     /// OS keychain service name to read the key from when the variables are unset.
     pub keychain_service: Option<String>,
-    /// Override for the API base URL (tests, proxies).
+    /// Override for the API base URL (tests, proxies). Wins over the variable and the saved URL.
     pub base_url: Option<String>,
-    /// Environment variable holding the base URL, used when `base_url` is unset.
+    /// Environment variable holding the base URL, used when `base_url` is unset. It wins over the
+    /// URL saved from the browser.
     pub base_url_env: Option<String>,
+}
+
+/// Provider credentials entered in the browser and kept in the registry, not in `config.toml`.
+/// The variables named in [`ProviderConfig`] override them.
+#[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SavedCredentials {
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub auth_token: Option<String>,
+}
+
+impl std::fmt::Debug for SavedCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SavedCredentials")
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "***"))
+            .field("auth_token", &self.auth_token.as_ref().map(|_| "***"))
+            .finish()
+    }
+}
+
+impl SavedCredentials {
+    pub fn is_empty(&self) -> bool {
+        self.base_url.is_none() && self.api_key.is_none() && self.auth_token.is_none()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
@@ -269,8 +296,59 @@ pub struct ProjectEntry {
 pub struct Routing {
     pub executor: ExecutorRouting,
     pub model: ModelRouting,
-    /// Reasoning effort per agent, overriding the agent definition's default.
-    pub effort: BTreeMap<String, crate::model::Effort>,
+    /// Reasoning effort, overriding the agent definition's default.
+    pub effort: EffortRouting,
+}
+
+/// Reasoning effort per agent and per phase complexity. `byPhaseComplexity` wins over `byAgent`.
+/// A flat table of agent to effort, the older form, reads as `byAgent`.
+#[derive(Debug, Clone, PartialEq, Serialize, TS, Default)]
+#[ts(export)]
+pub struct EffortRouting {
+    #[serde(rename = "byAgent")]
+    #[ts(rename = "byAgent")]
+    pub by_agent: BTreeMap<String, Effort>,
+    #[serde(rename = "byPhaseComplexity")]
+    #[ts(rename = "byPhaseComplexity")]
+    pub by_phase_complexity: BTreeMap<String, BTreeMap<Complexity, Effort>>,
+}
+
+impl<'de> Deserialize<'de> for EffortRouting {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Split {
+            #[serde(default, rename = "byAgent")]
+            by_agent: BTreeMap<String, Effort>,
+            #[serde(default, rename = "byPhaseComplexity")]
+            by_phase_complexity: BTreeMap<String, BTreeMap<Complexity, Effort>>,
+        }
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Form {
+            Split(Split),
+            Flat(BTreeMap<String, Effort>),
+        }
+        let form = Form::deserialize(d).map_err(|_| {
+            serde::de::Error::custom("routing.effort takes `byAgent` and `byPhaseComplexity` tables of low, medium, high, xhigh, or max")
+        })?;
+        Ok(match form {
+            Form::Split(s) => EffortRouting { by_agent: s.by_agent, by_phase_complexity: s.by_phase_complexity },
+            Form::Flat(by_agent) => EffortRouting { by_agent, by_phase_complexity: BTreeMap::new() },
+        })
+    }
+}
+
+/// The effort a route key's settings ask for, or `None` for the agent definition's default.
+pub fn resolve_effort(ws: &WorkspaceSettings, key: &str, complexity: Option<Complexity>) -> Option<Effort> {
+    let effort = &ws.routing.effort;
+    let complexity = complexity.unwrap_or_default();
+    effort
+        .by_phase_complexity
+        .get(key)
+        .and_then(|m| m.get(&complexity))
+        .or_else(|| effort.by_agent.get(key))
+        .copied()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
@@ -358,7 +436,9 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
     ("routing.model", "Which model or tier each agent uses"),
     ("routing.model.byAgent", "Model or tier per agent"),
     ("routing.model.byPhaseComplexity", "Model or tier per agent and phase complexity"),
-    ("routing.effort", "Reasoning effort per agent"),
+    ("routing.effort", "Reasoning effort for each agent"),
+    ("routing.effort.byAgent", "Reasoning effort per agent"),
+    ("routing.effort.byPhaseComplexity", "Reasoning effort per agent and phase complexity"),
     ("instructions.all", "Instructions every agent receives"),
     ("instructions.agents", "Instructions per agent"),
     ("yolo.default", "Start new sessions in YOLO mode"),
@@ -406,7 +486,7 @@ impl WorkspaceSettings {
             routing: Routing {
                 executor: ExecutorRouting::default(),
                 model: ModelRouting { by_agent, by_phase_complexity: by_phase },
-                effort: BTreeMap::new(),
+                effort: EffortRouting::default(),
             },
             instructions: Instructions::default(),
             yolo: YoloSettings::default(),
@@ -637,9 +717,17 @@ pub fn validate_workspace(
             issues.push(issue(format!("routing.model.byAgent.{key}"), format!("`{key}` is not an agent.")));
         }
     }
-    for key in ws.routing.effort.keys() {
+    for key in ws.routing.effort.by_agent.keys() {
         if !AgentName::ALL.iter().any(|a| a.as_str() == key) {
-            issues.push(issue(format!("routing.effort.{key}"), format!("`{key}` is not an agent.")));
+            issues.push(issue(format!("routing.effort.byAgent.{key}"), format!("`{key}` is not an agent.")));
+        }
+    }
+    for key in ws.routing.effort.by_phase_complexity.keys() {
+        if !AgentName::ALL.iter().any(|a| a.as_str() == key && a.routes_by_complexity()) {
+            issues.push(issue(
+                format!("routing.effort.byPhaseComplexity.{key}"),
+                format!("`{key}` does not run per plan phase; set its effort under `byAgent`."),
+            ));
         }
     }
     if ws.limits.max_parallel_executions == 0 {
@@ -1024,6 +1112,40 @@ deny = ["Bash(git push *)"]
         )
         .unwrap();
         assert_eq!(r.model, "anthropic:claude-opus-5-5");
+    }
+
+    #[test]
+    fn effort_by_phase_complexity_wins_over_by_agent() {
+        let ws: WorkspaceSettings = toml::from_str(
+            "name = \"x\"\n[routing.effort.byAgent]\nimplementer = \"medium\"\nplan = \"high\"\n\
+             [routing.effort.byPhaseComplexity.implementer]\nhigh = \"max\"\n",
+        )
+        .unwrap();
+        assert_eq!(resolve_effort(&ws, "implementer", Some(Complexity::High)), Some(Effort::Max));
+        assert_eq!(resolve_effort(&ws, "implementer", Some(Complexity::Low)), Some(Effort::Medium));
+        assert_eq!(resolve_effort(&ws, "implementer", None), Some(Effort::Medium));
+        assert_eq!(resolve_effort(&ws, "plan", None), Some(Effort::High));
+        assert_eq!(resolve_effort(&ws, "explore", None), None);
+        let back: WorkspaceSettings = toml::from_str(&toml::to_string(&ws).unwrap()).unwrap();
+        assert_eq!(back.routing.effort, ws.routing.effort);
+    }
+
+    #[test]
+    fn flat_effort_table_reads_as_by_agent() {
+        let ws: WorkspaceSettings = toml::from_str("name = \"x\"\n[routing.effort]\nplan = \"high\"\n").unwrap();
+        assert_eq!(ws.routing.effort.by_agent.get("plan"), Some(&Effort::High));
+        assert!(toml::from_str::<WorkspaceSettings>("name = \"x\"\n[routing.effort]\nplan = \"huge\"\n").is_err());
+    }
+
+    #[test]
+    fn effort_by_phase_complexity_needs_a_phase_agent() {
+        let mut ws = WorkspaceSettings::seeded("x");
+        ws.routing.effort.by_phase_complexity.insert("plan".into(), BTreeMap::from([(Complexity::High, Effort::Max)]));
+        ws.routing.effort.by_phase_complexity.insert("write-test".into(), BTreeMap::from([(Complexity::High, Effort::Max)]));
+        let env = Environment { installed_harnesses: vec![], providers_with_keys: vec!["anthropic".into()] };
+        let issues = validate_workspace(&GlobalConfig::default(), &ws, &env, tier);
+        let paths: Vec<_> = issues.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(paths, ["routing.effort.byPhaseComplexity.plan"]);
     }
 
     #[test]

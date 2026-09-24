@@ -124,6 +124,12 @@ pub fn stop_offline(session: &str) -> anyhow::Result<usize> {
         anyhow::bail!("The Ostra server is running. Stop the session from its board (or POST /api/sessions/{session}/stop), or stop the server first.");
     }
     let registry = RegistryDb::open(&paths::registry_db_path())?;
+    // The registry holds provider keys saved from the browser.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(paths::registry_db_path(), std::fs::Permissions::from_mode(0o600))?;
+    }
     let id = ostra_core::ids::SessionId::from(session);
     for w in registry.list_workspaces()? {
         let db_path = paths::workspace_db(&w.root);
@@ -211,10 +217,16 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     let global: GlobalConfig = load_toml(&global_path).with_context(|| format!("reading {}", global_path.display()))?;
     std::fs::create_dir_all(paths::data_dir())?;
     let registry = RegistryDb::open(&paths::registry_db_path())?;
+    // The registry holds provider keys saved from the browser.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(paths::registry_db_path(), std::fs::Permissions::from_mode(0o600))?;
+    }
     let assets = paths::data_dir().join("assets");
     ostra_agents::set_assets_dir(assets.clone());
     ostra_agents::materialize_assets(&assets).map_err(|e| anyhow::anyhow!("writing assets: {e}"))?;
-    let providers = Arc::new(Providers::from_config(&global));
+    let providers = Arc::new(Providers::from_config(&global, &crate::credentials::load_all(&registry)?));
     let native = Arc::new(NativeExecutor::new(providers.clone(), skill_resolver()));
     let notifier = Arc::new(Notifier::new(vapid_keys(&registry)?, "mailto:ostra@localhost".into()));
     let env = EnvStatus::detect(&global).await;

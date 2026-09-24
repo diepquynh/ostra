@@ -21,6 +21,7 @@ import {
   type LaneState,
 } from "../../design";
 import { ImportForm } from "./ImportForm";
+import { ProviderCredentials } from "./ProviderCredentials";
 import { listFolders, useFolderInfo } from "./folders";
 import type { Wizard } from "./useWizard";
 import {
@@ -173,7 +174,10 @@ function StepCheck({ w }: { w: Wizard }) {
   const anyKey = e?.providers.some((p) => p.has_key) ?? true;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <StepHead title="Check this machine" text="Ostra reads provider keys from the environment or the OS keychain. Keys never reach the browser." />
+      <StepHead
+        title="Check this machine"
+        text="Ostra reads provider keys from the environment, the keys saved below, or the OS keychain. Environment variables take precedence. Saved keys never come back to the browser."
+      />
       {!e ? (
         <div style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)" }}>
           <Spinner size={12} /> Checking this machine…
@@ -182,8 +186,8 @@ function StepCheck({ w }: { w: Wizard }) {
         <>
           {!anyKey && (
             <Banner tone="bad">
-              No model provider has a usable API key. Set <code>ANTHROPIC_API_KEY</code> or <code>OPENAI_API_KEY</code> in the environment that starts{" "}
-              <code>ostra</code>, then restart it.
+              No model provider has a usable API key. Save one below, or set <code>ANTHROPIC_API_KEY</code> or <code>OPENAI_API_KEY</code> in the environment
+              that starts <code>ostra</code> and restart it.
             </Banner>
           )}
           <div>
@@ -202,6 +206,12 @@ function StepCheck({ w }: { w: Wizard }) {
                 />
               ))}
             </div>
+          </div>
+          <div>
+            <div className="os-section-label" style={{ marginBottom: 6 }}>
+              Provider keys and base URLs
+            </div>
+            <ProviderCredentials providers={e.providers} onSaved={w.env.reload} />
           </div>
           <div>
             <div className="os-section-label" style={{ marginBottom: 6 }}>

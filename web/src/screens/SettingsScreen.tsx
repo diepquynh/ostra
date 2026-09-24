@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, HttpError } from "../api";
 import type { ValidationIssue, WorkspaceDetail } from "../api/types";
-import { Banner, Button, Tabs } from "../design";
+import { Banner, Button, Panel, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
+import { ProviderCredentials } from "./setup/ProviderCredentials";
 import { flash, Loading, Page, useAfterPaint, useAnchor } from "./workspace/Page";
 import {
   anchorCandidates,
@@ -239,7 +240,14 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
       />
       {tab === "general" && <GeneralSection {...props} />}
       {tab === "projects" && <ProjectsSection {...props} onAdd={addProject} stacks={detail.stacks} />}
-      {tab === "routing" && <RoutingSection {...props} harnesses={detail.harnesses} agentInfo={detail.agents} />}
+      {tab === "routing" && (
+        <>
+          <RoutingSection {...props} harnesses={detail.harnesses} agentInfo={detail.agents} />
+          <Panel title="Native providers" subtitle="saved for every workspace on this machine; environment variables take precedence">
+            <ProviderCredentials providers={detail.providers} onSaved={onSaved} />
+          </Panel>
+        </>
+      )}
       {tab === "permissions" && <PermissionsSection {...props} global={detail.global_permissions} />}
       {tab === "instructions" && <InstructionsSection {...props} />}
       {tab === "notifications" && <NotificationsSection {...props} />}

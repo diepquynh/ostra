@@ -277,6 +277,23 @@ export const mockApi: Api = {
   fsBrowse: (opts = {}) => delay(mockBrowse(opts.path, opts.prefix, opts.limit)),
 
   environment: () => delay({ providers: f.workspaceDetail.providers, harnesses: f.workspaceDetail.harnesses, stacks: f.workspaceDetail.stacks }),
+  saveProvider: (name, edit) => {
+    const p = f.workspaceDetail.providers.find((x) => x.name === name);
+    if (!p) return Promise.reject(new HttpError(404, `No provider ${name} in the global config.`, []));
+    const set = (v: string | undefined, cur: boolean) => (v === undefined ? cur : v.trim() !== "");
+    if (edit.base_url !== undefined) p.saved.base_url = edit.base_url.trim() || null;
+    p.saved.has_api_key = set(edit.api_key, p.saved.has_api_key);
+    p.saved.has_auth_token = set(edit.auth_token, p.saved.has_auth_token);
+    if (!p.source.startsWith("env:")) {
+      p.has_key = p.saved.has_api_key || p.saved.has_auth_token;
+      p.source = p.has_key ? "saved" : "none";
+    }
+    if (!p.base_url_source.startsWith("env:")) {
+      p.base_url = p.saved.base_url;
+      p.base_url_source = p.saved.base_url ? "saved" : "default";
+    }
+    return delay({ ...p, saved: { ...p.saved } });
+  },
   validateNewWorkspace: (body) => delay(mockValidateCreate(body, firstRun() ? [] : f.workspaces.map((w) => w.root)), 250),
   onboarding: () => delay(firstRun() ? { onboarded_at: null, workspaces: 0 } : { onboarded_at: "2026-09-01T09:00:00Z", workspaces: f.workspaces.length }),
   completeOnboarding: () => delay({ onboarded_at: new Date().toISOString(), workspaces: f.workspaces.length }),

@@ -2,7 +2,7 @@
 //! loop, policy, tools, and git staging. The model plays each agent: it writes its files with the
 //! Write tool, then calls its submit tool.
 
-use ostra_core::api::{
+use ostra_core::api::{ProviderStatus, 
     ApiError, Artifact, CostReport, DiffFile, DiffLineKind, EnvironmentStatus, ExecutionView, FileDiff, FileIndex, FsBrowse, GitMark,
     Heading, OnboardingState, ProjectChange, ProjectFile, ProjectSkills, ProjectTree, SkillDoc, SkillOrigin, ServerMsg, SessionDetail, SessionStatus, SessionSummary,
     UI_STATE_MAX_BYTES, UiTab, SearchKind, SearchResults, WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree, WorkspaceUiState,
@@ -584,6 +584,43 @@ async fn onboarding_flag_and_ui_state_round_trip() {
     assert_eq!(client.patch(&ui).json(&json!([1, 2])).send().await.unwrap().status(), 400);
     let unchanged: WorkspaceUiState = client.get(&ui).send().await.unwrap().json().await.unwrap();
     assert_eq!(unchanged, stored);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn provider_credentials_saved_from_the_browser() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { app, base, client } = boot(dir.path()).await;
+    // Point the variables somewhere unset, so this machine's own keys do not interfere.
+    let mut global = GlobalConfig::default();
+    let openai = global.providers.get_mut("openai").unwrap();
+    openai.api_key_env = Some("OSTRA_E2E_UNSET_KEY".into());
+    openai.base_url_env = Some("OSTRA_E2E_UNSET_URL".into());
+    save_toml(&dir.path().join("config.toml"), &global).unwrap();
+
+    let url = format!("{base}/api/providers/openai");
+    let r = client.patch(&url).json(&json!({"base_url": "https://gw.example/v1", "api_key": "sk-e2e-secret"})).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let body = r.text().await.unwrap();
+    assert!(!body.contains("sk-e2e-secret"), "{body}");
+    let status: ProviderStatus = serde_json::from_str(&body).unwrap();
+    assert_eq!((status.has_key, status.source.as_str()), (true, "saved"));
+    assert_eq!((status.base_url.as_deref(), status.base_url_source.as_str()), (Some("https://gw.example/v1"), "saved"));
+    assert!(status.saved.has_api_key && !status.saved.has_auth_token);
+    assert!(app.shared.providers.get("openai").is_some());
+    assert!(app.shared.providers.get("mock").is_some(), "registered providers survive a reload");
+
+    let r = client.patch(&url).json(&json!({"base_url": "gw.example", "api_key": "two words"})).send().await.unwrap();
+    assert_eq!(r.status(), 422);
+    let err: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(err["issues"].as_array().unwrap().len(), 2);
+
+    let status: ProviderStatus = client.patch(&url).json(&json!({"api_key": ""})).send().await.unwrap().json().await.unwrap();
+    assert!(!status.has_key && !status.saved.has_api_key);
+    assert_eq!(status.saved.base_url.as_deref(), Some("https://gw.example/v1"));
+    assert!(app.shared.providers.get("openai").is_none());
+
+    assert_eq!(client.patch(format!("{base}/api/providers/nope")).json(&json!({})).send().await.unwrap().status(), 404);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

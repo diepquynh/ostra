@@ -258,12 +258,7 @@ impl SpawnFactory for AgentsFactory {
             spawn_block: block,
             params: params.to_json(),
             report_file: params.report_file().map(PathBuf::from),
-            effort: env
-                .settings
-                .routing
-                .effort
-                .get(req.agent.as_str())
-                .copied()
+            effort: ostra_core::config::resolve_effort(env.settings, req.agent.as_str(), req.complexity())
                 .unwrap_or_else(|| ostra_agents::effort_for(req.agent, env.executor)),
         })
     }

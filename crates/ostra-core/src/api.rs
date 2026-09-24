@@ -166,8 +166,44 @@ pub struct HarnessStatus {
 pub struct ProviderStatus {
     pub name: String,
     pub has_key: bool,
-    /// Where the key came from: `env:NAME`, `keychain`, or `none`.
+    /// Where the key came from: `env:NAME`, `saved`, `keychain`, `registered`, or `none`.
     pub source: String,
+    /// The base URL requests go to. `None` means the provider's own.
+    pub base_url: Option<String>,
+    /// Where the base URL came from: `config`, `env:NAME`, `saved`, or `default`.
+    pub base_url_source: String,
+    /// What was saved from the browser. Secrets are reported only as present.
+    pub saved: SavedProviderView,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
+#[ts(export)]
+pub struct SavedProviderView {
+    pub base_url: Option<String>,
+    pub has_api_key: bool,
+    pub has_auth_token: bool,
+}
+
+/// `PATCH /api/providers/{name}`: an absent field keeps its saved value and an empty string
+/// clears it. Environment variables still take precedence over what is saved here.
+#[derive(Clone, PartialEq, Serialize, Deserialize, TS, Default)]
+#[ts(export)]
+pub struct ProviderCredentialsEdit {
+    #[serde(default)]
+    #[ts(optional)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub auth_token: Option<String>,
+}
+
+impl std::fmt::Debug for ProviderCredentialsEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderCredentialsEdit").field("base_url", &self.base_url).finish_non_exhaustive()
+    }
 }
 
 /// `GET /api/environment`: what this machine offers, checked before any workspace exists.

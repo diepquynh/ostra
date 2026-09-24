@@ -23,7 +23,7 @@ use ostra_core::exec::{
 };
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
-use ostra_core::model::{Complexity, Tier};
+use ostra_core::model::Tier;
 use ostra_core::paths;
 use ostra_core::pipeline::Category;
 use ostra_core::policy::{PermissionAnswer, RuleRef, ToolCall};
@@ -1065,7 +1065,7 @@ impl Inner {
         let settings = self.services.workspace();
         let factory = self.services.factory();
         let meta = factory.agent_meta(req.agent);
-        let complexity = req.inputs.phase.as_ref().map(|p| if p.file.is_some() { p.complexity } else { Complexity::Low });
+        let complexity = req.complexity();
         let tier_override = matches!(req.purpose, ExecPurpose::Init { mode: InitializerMode::GenerateSkill, .. }).then_some(Tier::Advanced);
         let executor_override = st.native_fallback.contains(&req.agent).then_some(ExecutorKind::Native);
         let route = match resolve_route(

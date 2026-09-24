@@ -8,8 +8,8 @@ pub mod pricing;
 mod retry;
 mod sse;
 
-use ostra_core::api::ProviderStatus;
-use ostra_core::config::{GlobalConfig, ProviderConfig};
+use ostra_core::api::{ProviderStatus, SavedProviderView};
+use ostra_core::config::{GlobalConfig, ProviderConfig, SavedCredentials};
 use ostra_core::exec::Usage;
 use ostra_core::Effort;
 use parking_lot::RwLock;
@@ -346,7 +346,7 @@ impl fmt::Display for ApiKey {
 // Registry
 // ---------------------------------------------------------------------------------------------
 
-/// A resolved key and where it came from (`env:NAME` or `keychain`).
+/// A resolved key and where it came from (`env:NAME`, `saved`, or `keychain`).
 pub struct KeyLookup {
     pub key: ApiKey,
     pub source: String,
@@ -370,19 +370,30 @@ impl fmt::Debug for Providers {
     }
 }
 
-/// Look a key up in the environment, then the OS keychain.
-pub fn lookup_key(name: &str, cfg: &ProviderConfig) -> Option<KeyLookup> {
-    if let Some(var) = cfg.api_key_env.as_deref()
-        && let Ok(value) = std::env::var(var)
-        && !value.trim().is_empty()
-    {
-        return Some(KeyLookup { key: ApiKey::new(value.trim()), source: format!("env:{var}") });
+fn env_value(var: Option<&str>) -> Option<(String, String)> {
+    let var = var?;
+    let value = std::env::var(var).ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| (value.to_string(), format!("env:{var}")))
+}
+
+fn saved_value(value: Option<&String>) -> Option<&str> {
+    value.map(|v| v.trim()).filter(|v| !v.is_empty())
+}
+
+/// Look a key up in the environment, then what was saved from the browser, then the OS keychain.
+pub fn lookup_key(name: &str, cfg: &ProviderConfig, saved: &SavedCredentials) -> Option<KeyLookup> {
+    if let Some((value, source)) = env_value(cfg.api_key_env.as_deref()) {
+        return Some(KeyLookup { key: ApiKey::new(value), source });
     }
-    if let Some(var) = cfg.auth_token_env.as_deref()
-        && let Ok(value) = std::env::var(var)
-        && !value.trim().is_empty()
-    {
-        return Some(KeyLookup { key: ApiKey::bearer(value.trim()), source: format!("env:{var}") });
+    if let Some((value, source)) = env_value(cfg.auth_token_env.as_deref()) {
+        return Some(KeyLookup { key: ApiKey::bearer(value), source });
+    }
+    if let Some(value) = saved_value(saved.api_key.as_ref()) {
+        return Some(KeyLookup { key: ApiKey::new(value), source: "saved".into() });
+    }
+    if let Some(value) = saved_value(saved.auth_token.as_ref()) {
+        return Some(KeyLookup { key: ApiKey::bearer(value), source: "saved".into() });
     }
     let service = cfg.keychain_service.as_deref()?;
     let entry = keyring::Entry::new(service, name).ok()?;
@@ -393,31 +404,71 @@ pub fn lookup_key(name: &str, cfg: &ProviderConfig) -> Option<KeyLookup> {
     Some(KeyLookup { key: ApiKey::new(value.trim()), source: "keychain".into() })
 }
 
+/// The base URL and where it came from: `config.toml`, then the environment, then what was saved.
+pub fn resolve_base_url(cfg: &ProviderConfig, saved: &SavedCredentials) -> (Option<String>, String) {
+    if let Some(url) = saved_value(cfg.base_url.as_ref()) {
+        return (Some(url.to_string()), "config".into());
+    }
+    if let Some((url, source)) = env_value(cfg.base_url_env.as_deref()) {
+        return (Some(url), source);
+    }
+    if let Some(url) = saved_value(saved.base_url.as_ref()) {
+        return (Some(url.to_string()), "saved".into());
+    }
+    (None, "default".into())
+}
+
+type Lookup<'a> = &'a dyn Fn(&str, &ProviderConfig, &SavedCredentials) -> Option<KeyLookup>;
+
 impl Providers {
     pub fn empty() -> Self {
         Providers { map: RwLock::new(BTreeMap::new()), statuses: RwLock::new(vec![]) }
     }
 
-    /// Build from the global config, reading keys from the environment or the OS keychain.
-    pub fn from_config(cfg: &GlobalConfig) -> Self {
-        Providers::from_config_with(cfg, lookup_key)
+    /// Build from the global config and the saved credentials, reading keys from the environment,
+    /// the saved credentials, or the OS keychain.
+    pub fn from_config(cfg: &GlobalConfig, saved: &BTreeMap<String, SavedCredentials>) -> Self {
+        Providers::from_config_with(cfg, saved, lookup_key)
     }
 
-    /// Build from the global config with a custom key lookup (tests).
-    pub fn from_config_with(cfg: &GlobalConfig, lookup: impl Fn(&str, &ProviderConfig) -> Option<KeyLookup>) -> Self {
+    /// Build with a custom key lookup (tests).
+    pub fn from_config_with(
+        cfg: &GlobalConfig,
+        saved: &BTreeMap<String, SavedCredentials>,
+        lookup: impl Fn(&str, &ProviderConfig, &SavedCredentials) -> Option<KeyLookup>,
+    ) -> Self {
         let providers = Providers::empty();
+        providers.rebuild(cfg, saved, &lookup);
+        providers
+    }
+
+    /// Rebuild in place after the config or the saved credentials change. Executors hold this
+    /// registry, so the next model call uses the new keys. Registered providers are kept.
+    pub fn reload(&self, cfg: &GlobalConfig, saved: &BTreeMap<String, SavedCredentials>) {
+        self.rebuild(cfg, saved, &lookup_key);
+    }
+
+    fn rebuild(&self, cfg: &GlobalConfig, saved: &BTreeMap<String, SavedCredentials>, lookup: Lookup<'_>) {
+        let mut map = BTreeMap::new();
         let mut statuses = vec![];
+        let none = SavedCredentials::default();
         for (name, pcfg) in &cfg.providers {
-            let found = lookup(name, pcfg);
+            let s = saved.get(name).unwrap_or(&none);
+            let found = lookup(name, pcfg, s);
+            let (base_url, base_url_source) = resolve_base_url(pcfg, s);
             statuses.push(ProviderStatus {
                 name: name.clone(),
                 has_key: found.is_some(),
                 source: found.as_ref().map(|k| k.source.clone()).unwrap_or_else(|| "none".into()),
+                base_url: base_url.clone(),
+                base_url_source,
+                saved: SavedProviderView {
+                    base_url: s.base_url.clone(),
+                    has_api_key: s.api_key.is_some(),
+                    has_auth_token: s.auth_token.is_some(),
+                },
             });
             let Some(found) = found else { continue };
-            let base_url = pcfg.base_url.clone().or_else(|| {
-                pcfg.base_url_env.as_deref().and_then(|v| std::env::var(v).ok()).filter(|u| !u.trim().is_empty())
-            });
             let provider: Arc<dyn Provider> = match name.as_str() {
                 "anthropic" => Arc::new(anthropic::Anthropic::new(found.key, base_url)),
                 "openai" => Arc::new(openai::OpenAi::new(found.key, base_url)),
@@ -426,10 +477,19 @@ impl Providers {
                     continue;
                 }
             };
-            providers.map.write().insert(name.clone(), provider);
+            map.insert(name.clone(), provider);
         }
-        *providers.statuses.write() = statuses;
-        providers
+        let mut cur_statuses = self.statuses.write();
+        let mut cur_map = self.map.write();
+        for s in cur_statuses.iter().filter(|s| s.source == "registered") {
+            if let Some(p) = cur_map.get(&s.name) {
+                map.insert(s.name.clone(), p.clone());
+                statuses.retain(|x| x.name != s.name);
+                statuses.push(s.clone());
+            }
+        }
+        *cur_map = map;
+        *cur_statuses = statuses;
     }
 
     pub fn get(&self, name: &str) -> Option<Arc<dyn Provider>> {
@@ -444,7 +504,14 @@ impl Providers {
                 s.has_key = true;
                 s.source = "registered".into();
             }
-            None => statuses.push(ProviderStatus { name: name.clone(), has_key: true, source: "registered".into() }),
+            None => statuses.push(ProviderStatus {
+                name: name.clone(),
+                has_key: true,
+                source: "registered".into(),
+                base_url: None,
+                base_url_source: "default".into(),
+                saved: SavedProviderView::default(),
+            }),
         }
         self.map.write().insert(name, provider);
     }
@@ -580,7 +647,7 @@ mod tests {
     #[test]
     fn registry_resolves_models() {
         let cfg = GlobalConfig::default();
-        let providers = Providers::from_config_with(&cfg, |name, _| {
+        let providers = Providers::from_config_with(&cfg, &BTreeMap::new(), |name, _, _| {
             (name == "anthropic").then(|| KeyLookup { key: ApiKey::new("k"), source: "env:TEST".into() })
         });
         let status = providers.status();
@@ -592,6 +659,51 @@ mod tests {
         assert!(matches!(providers.for_model("nope"), Err(ProviderError::BadModel(_))));
         providers.register("mock", Arc::new(ScriptedProvider::new()));
         assert!(providers.for_model("mock:any").is_ok());
+    }
+
+    #[test]
+    fn environment_overrides_saved_credentials() {
+        let var = |suffix: &str| format!("OSTRA_TEST_{}_{suffix}", std::process::id());
+        let (key_var, url_var) = (var("KEY"), var("URL"));
+        let cfg = ProviderConfig { api_key_env: Some(key_var.clone()), base_url_env: Some(url_var.clone()), ..Default::default() };
+        let saved = SavedCredentials {
+            base_url: Some("https://saved.example".into()),
+            api_key: None,
+            auth_token: Some("saved-token".into()),
+        };
+        let found = lookup_key("anthropic", &cfg, &saved).unwrap();
+        assert_eq!((found.source.as_str(), found.key.is_bearer()), ("saved", true));
+        assert_eq!(resolve_base_url(&cfg, &saved), (Some("https://saved.example".into()), "saved".into()));
+
+        // SAFETY: the variables are unique to this test.
+        unsafe {
+            std::env::set_var(&key_var, "env-key");
+            std::env::set_var(&url_var, "https://env.example");
+        }
+        let found = lookup_key("anthropic", &cfg, &saved).unwrap();
+        assert_eq!((found.source, found.key.is_bearer()), (format!("env:{key_var}"), false));
+        assert_eq!(resolve_base_url(&cfg, &saved), (Some("https://env.example".into()), format!("env:{url_var}")));
+
+        let pinned = ProviderConfig { base_url: Some("https://config.example".into()), ..cfg };
+        assert_eq!(resolve_base_url(&pinned, &saved).1, "config");
+        unsafe {
+            std::env::remove_var(&key_var);
+            std::env::remove_var(&url_var);
+        }
+    }
+
+    #[test]
+    fn reload_keeps_registered_providers() {
+        let cfg = GlobalConfig::default();
+        let providers = Providers::from_config_with(&cfg, &BTreeMap::new(), |_, _, _| None);
+        providers.register("mock", Arc::new(ScriptedProvider::new()));
+        let mut saved = BTreeMap::new();
+        saved.insert("openai".to_string(), SavedCredentials { api_key: Some("k".into()), ..Default::default() });
+        providers.rebuild(&cfg, &saved, &|_, _, s| s.api_key.clone().map(|k| KeyLookup { key: ApiKey::new(k), source: "saved".into() }));
+        assert!(providers.get("mock").is_some());
+        assert!(providers.get("openai").is_some());
+        let status = providers.status();
+        assert!(status.iter().any(|s| s.name == "openai" && s.source == "saved" && s.saved.has_api_key));
     }
 
     #[test]

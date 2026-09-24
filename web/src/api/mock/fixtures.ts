@@ -40,7 +40,7 @@ export const settings: WorkspaceSettings = {
     { key: "web", path: "/home/me/code/shop-web", stack: "typescript-node" },
   ],
   routing: {
-    effort: {},
+    effort: { byAgent: {}, byPhaseComplexity: {} },
     executor: {
       byAgent: { implementer: "harness:codex", "write-test": "harness:codex" },
       byPhaseComplexity: { implementer: { low: "harness:codex", medium: "harness:codex", high: "native" } },
@@ -111,8 +111,15 @@ export const workspaceDetail: WorkspaceDetail = {
     { harness: "agy", command: "agy", installed: false, version: null, logged_in: null },
   ],
   providers: [
-    { name: "anthropic", has_key: true, source: "env:ANTHROPIC_API_KEY" },
-    { name: "openai", has_key: false, source: "none" },
+    {
+      name: "anthropic",
+      has_key: true,
+      source: "env:ANTHROPIC_API_KEY",
+      base_url: null,
+      base_url_source: "default",
+      saved: { base_url: null, has_api_key: false, has_auth_token: false },
+    },
+    { name: "openai", has_key: false, source: "none", base_url: null, base_url_source: "default", saved: { base_url: null, has_api_key: false, has_auth_token: false } },
   ],
   validation: [],
   agents,

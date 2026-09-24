@@ -9,6 +9,7 @@ use ostra_core::event::{
 };
 use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::{ExecutionId, GateId};
+use ostra_core::model::Complexity;
 use ostra_core::paths::report;
 use ostra_core::pipeline::{Category, PhaseInfo, QuestionAnswer, StageKind, Stakes, TestPolicy};
 use ostra_core::submit::{ReviewFinding, Severity, Verdict};
@@ -69,6 +70,13 @@ pub struct SpawnRequest {
     pub session_dir: PathBuf,
     pub inputs: SpawnInputs,
     pub resumes: Option<ExecutionId>,
+}
+
+impl SpawnRequest {
+    /// The phase complexity routes see. `None` outside a phase; a phase without a file is `Low`.
+    pub fn complexity(&self) -> Option<Complexity> {
+        self.inputs.phase.as_ref().map(|p| if p.file.is_some() { p.complexity } else { Complexity::Low })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -15,10 +15,11 @@ auth_token_env: string | null,
  */
 keychain_service: string | null, 
 /**
- * Override for the API base URL (tests, proxies).
+ * Override for the API base URL (tests, proxies). Wins over the variable and the saved URL.
  */
 base_url: string | null, 
 /**
- * Environment variable holding the base URL, used when `base_url` is unset.
+ * Environment variable holding the base URL, used when `base_url` is unset. It wins over the
+ * URL saved from the browser.
  */
 base_url_env: string | null, };

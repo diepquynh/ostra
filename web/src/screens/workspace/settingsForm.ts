@@ -28,6 +28,8 @@ export type SettingsForm = {
   complexityModel: Record<string, Record<Complexity, ModelField>>;
   /** Agent to effort; `""` keeps the agent definition's default. */
   effort: Record<string, string>;
+  /** Agent to complexity to effort; `""` follows the agent's effort. */
+  complexityEffort: Record<string, Record<Complexity, string>>;
   instructionsAll: string;
   instructionsAgents: Record<string, string>;
   yolo: boolean;
@@ -129,6 +131,7 @@ export function complexityAgents(s: WorkspaceSettings): string[] {
   const keys = new Set<string>(COMPLEXITY_AGENTS);
   Object.keys(s.routing.executor.byPhaseComplexity).forEach((k) => keys.add(k));
   Object.keys(s.routing.model.byPhaseComplexity).forEach((k) => keys.add(k));
+  Object.keys(s.routing.effort.byPhaseComplexity).forEach((k) => keys.add(k));
   return [...keys];
 }
 
@@ -142,11 +145,14 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
   }
   const complexityExecutor: SettingsForm["complexityExecutor"] = {};
   const complexityModel: SettingsForm["complexityModel"] = {};
+  const complexityEffort: SettingsForm["complexityEffort"] = {};
   for (const a of complexityAgents(s)) {
     const ex = s.routing.executor.byPhaseComplexity[a] ?? {};
     const mo = s.routing.model.byPhaseComplexity[a] ?? {};
+    const ef = s.routing.effort.byPhaseComplexity[a] ?? {};
     complexityExecutor[a] = { low: ex.low ?? "", medium: ex.medium ?? "", high: ex.high ?? "" };
     complexityModel[a] = { low: modelToField(mo.low), medium: modelToField(mo.medium), high: modelToField(mo.high) };
+    complexityEffort[a] = { low: ef.low ?? "", medium: ef.medium ?? "", high: ef.high ?? "" };
   }
   return {
     name: s.name,
@@ -155,7 +161,8 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
     model,
     complexityExecutor,
     complexityModel,
-    effort: { ...s.routing.effort },
+    effort: { ...s.routing.effort.byAgent },
+    complexityEffort,
     instructionsAll: s.instructions.all ?? "",
     instructionsAgents: { ...s.instructions.agents },
     yolo: s.yolo.default,
@@ -213,8 +220,13 @@ export function fromForm(form: SettingsForm, base: WorkspaceSettings): { setting
     if (Object.keys(m).length) s.routing.model.byPhaseComplexity[a] = m;
   }
 
-  s.routing.effort = {};
-  for (const [k, e] of Object.entries(form.effort)) if (e) s.routing.effort[k] = e as Effort;
+  s.routing.effort = { byAgent: {}, byPhaseComplexity: {} };
+  for (const [k, e] of Object.entries(form.effort)) if (e) s.routing.effort.byAgent[k] = e as Effort;
+  for (const [a, byC] of Object.entries(form.complexityEffort)) {
+    const m: Partial<Record<Complexity, Effort>> = {};
+    for (const c of COMPLEXITIES) if (byC[c]) m[c] = byC[c] as Effort;
+    if (Object.keys(m).length) s.routing.effort.byPhaseComplexity[a] = m;
+  }
 
   s.instructions.all = form.instructionsAll.trim() ? form.instructionsAll : null;
   s.instructions.agents = {};
@@ -271,11 +283,12 @@ export function fieldIds(form: SettingsForm): string[] {
   const ids = ["name", "yolo.default", "limits.max_parallel_executions", "limits.session_budget_usd", "projects", "instructions.all", "notifications.push"];
   ids.push("permissions.mode", "permissions.allow", "permissions.ask", "permissions.deny");
   form.projects.forEach((_, i) => ids.push(`projects[${i}]`));
-  for (const k of routeKeys(form)) ids.push(`routing.executor.byAgent.${k}`, `routing.model.byAgent.${k}`, `routing.effort.${k}`, `instructions.agents.${k}`);
-  for (const k of Object.keys(form.effort)) ids.push(`routing.effort.${k}`);
+  for (const k of routeKeys(form)) ids.push(`routing.executor.byAgent.${k}`, `routing.model.byAgent.${k}`, `routing.effort.byAgent.${k}`, `instructions.agents.${k}`);
+  for (const k of Object.keys(form.effort)) ids.push(`routing.effort.byAgent.${k}`);
   for (const a of Object.keys(form.complexityModel))
-    for (const c of COMPLEXITIES) ids.push(`routing.executor.byPhaseComplexity.${a}.${c}`, `routing.model.byPhaseComplexity.${a}.${c}`);
-  ids.push("routing.executor.byPhaseComplexity", "routing.model.byPhaseComplexity");
+    for (const c of COMPLEXITIES)
+      ids.push(`routing.executor.byPhaseComplexity.${a}.${c}`, `routing.model.byPhaseComplexity.${a}.${c}`, `routing.effort.byPhaseComplexity.${a}.${c}`);
+  ids.push("routing.executor.byPhaseComplexity", "routing.model.byPhaseComplexity", "routing.effort.byPhaseComplexity");
   return [...new Set(ids)];
 }
 
@@ -311,6 +324,8 @@ const ALIASES: Record<string, string> = {
   "routing.model": "routing.byAgent",
   "routing.model.byAgent": "routing.byAgent",
   "routing.effort": "routing.byAgent",
+  "routing.effort.byAgent": "routing.byAgent",
+  "routing.effort.byPhaseComplexity": "routing.byPhaseComplexity",
   "routing.executor.byPhaseComplexity": "routing.byPhaseComplexity",
   "routing.model.byPhaseComplexity": "routing.byPhaseComplexity",
   limits: "limits",

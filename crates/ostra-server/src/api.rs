@@ -161,6 +161,7 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/fs/list", get(fs_list))
         .route("/api/environment", get(environment))
+        .route("/api/providers/{name}", axum::routing::patch(patch_provider))
         .route("/api/workspaces/validate", post(validate_new_workspace))
         .route("/api/onboarding", get(onboarding))
         .route("/api/onboarding/complete", post(complete_onboarding))
@@ -312,6 +313,19 @@ async fn validate_new_workspace(State(app): AppState, Json(body): Json<CreateWor
 
 async fn environment(State(app): AppState) -> Json<EnvironmentStatus> {
     Json(crate::setup::environment(&app).await)
+}
+
+async fn patch_provider(State(app): AppState, Path(name): Path<String>, Json(edit): Json<ProviderCredentialsEdit>) -> Res<ProviderStatus> {
+    if !matches!(name.as_str(), "anthropic" | "openai") || !app.shared.global().providers.contains_key(&name) {
+        return Err(ApiErr::not_found(format!("No provider {name} in the global config.")));
+    }
+    let registry = &app.shared.registry;
+    let saved = crate::credentials::apply(crate::credentials::load(registry, &name)?, &edit)
+        .map_err(|issues| ApiErr::invalid_request(issues, "save the provider"))?;
+    crate::credentials::save(registry, &name, &saved)?;
+    app.shared.reload_providers()?;
+    let status = app.shared.providers.status().into_iter().find(|p| p.name == name);
+    status.map(Json).ok_or_else(|| ApiErr::not_found(format!("No provider {name} in the global config.")))
 }
 
 async fn onboarding(State(app): AppState) -> Res<OnboardingState> {

@@ -163,7 +163,7 @@ async fn cancellation_stops_at_once() {
 #[tokio::test]
 #[ignore = "live: needs ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN"]
 async fn live_smoke() {
-    let providers = ostra_providers::Providers::from_config(&ostra_core::config::GlobalConfig::default());
+    let providers = ostra_providers::Providers::from_config(&ostra_core::config::GlobalConfig::default(), &Default::default());
     let Some(p) = providers.get("anthropic") else {
         assert!(std::env::var("OSTRA_LIVE_REQUIRE").is_err(), "no anthropic provider configured");
         return;

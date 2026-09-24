@@ -9,6 +9,10 @@ stage and answer a small set of named judgment questions.
   rules and measured facts. Read it for behavior; never copy its code.
 - Priority: the Rust backend. The React UI in `web/` will be redesigned later with Claude Design, so do not
   polish it. Keep it compiling against API changes and nothing more.
+- Sync every frontend UI change to the Claude Design project, because the redesign starts from that project
+  and drifts otherwise. When a change touches `web/`, finish by asking the user to run `/design-sync` for it
+  and list the screens that changed. The target and the method (targeted edits to `ui_kits/console/*`, never
+  the converter) are in `.design-sync/NOTES.md`; add a dated line there for each sync.
 
 ## Crates and the direction of dependencies
 

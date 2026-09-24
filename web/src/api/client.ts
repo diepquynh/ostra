@@ -30,6 +30,8 @@ import type {
 } from "./types";
 import type { DiffFile } from "./gen/DiffFile";
 import type { EnvironmentStatus } from "./gen/EnvironmentStatus";
+import type { ProviderCredentialsEdit } from "./gen/ProviderCredentialsEdit";
+import type { ProviderStatus } from "./gen/ProviderStatus";
 import type { FileDiff } from "./gen/FileDiff";
 import type { FileIndex } from "./gen/FileIndex";
 import type { FsBrowse } from "./gen/FsBrowse";
@@ -168,6 +170,7 @@ export const httpApi = {
     request<FsBrowse>("GET", `/api/fs${q(opts)}`, undefined, init.signal),
 
   environment: () => request<EnvironmentStatus>("GET", "/api/environment"),
+  saveProvider: (name: string, edit: ProviderCredentialsEdit) => request<ProviderStatus>("PATCH", `/api/providers/${enc(name)}`, edit),
   validateNewWorkspace: (body: CreateWorkspace) => request<ValidationIssue[]>("POST", "/api/workspaces/validate", body),
   onboarding: () => request<OnboardingState>("GET", "/api/onboarding"),
   completeOnboarding: () => request<OnboardingState>("POST", "/api/onboarding/complete"),

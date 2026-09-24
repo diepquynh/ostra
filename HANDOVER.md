@@ -171,6 +171,10 @@ api_key_env = "ANTHROPIC_API_KEY"
 [providers.openai]
 api_key_env = "OPENAI_API_KEY"
 
+# A base URL and an API key or auth token can also be saved from the browser. They live in the registry
+# database, never in this file or a response. Order for the key: the environment variables, then the saved
+# key, then the keychain. Order for the base URL: `base_url` here, then `base_url_env`, then the saved URL.
+
 # Tier to model, per executor. Native entries are provider:model.
 [tiers.native]
 fast     = "anthropic:claude-haiku-4-5-20251001"
@@ -270,6 +274,13 @@ low = "fast"
 medium = "fast"
 high = "balanced"
 
+# Reasoning effort: low | medium | high | xhigh | max. Absent keeps the agent's `agent.toml` effort.
+[routing.effort.byAgent]
+plan = "high"
+
+[routing.effort.byPhaseComplexity.implementer]
+high = "xhigh"
+
 [instructions]
 all = "Write British English in comments and docs."
 
@@ -291,8 +302,9 @@ push = true
 
 Routing rules, carried from `UC/hooks/model-router.js` and `UC/docs/model-routing.md`:
 
-- `byPhaseComplexity` wins over `byAgent`. The complexity comes from the phase file's `**Complexity:**` line.
-  Work with no phase file counts as `low`.
+- `byPhaseComplexity` wins over `byAgent`, for executor, model, and effort alike. The complexity comes from
+  the phase file's `**Complexity:**` line. Work with no phase file counts as `low`. Only the implementer and
+  write-test route by complexity.
 - A tier value may also be a concrete model, or `{ native = "...", codex = "..." }` for an explicit
   per-executor choice. There is no silent fallback: a route that does not resolve is a settings validation
   error shown at save time, not at spawn time.

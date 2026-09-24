@@ -34,7 +34,7 @@ describe("settings form round trip", () => {
     s.routing.model.byAgent.plan = { native: "anthropic:claude-opus-5-5", codex: "gpt-5.6-sol" };
     s.routing.model.byAgent.explore = "anthropic:claude-sonnet-5";
     s.routing.model.byAgent.mystery = "fast";
-    s.routing.effort = { plan: "high", explore: "low" };
+    s.routing.effort = { byAgent: { plan: "high", explore: "low" }, byPhaseComplexity: { implementer: { high: "xhigh" } } };
     s.extra = "kept";
     const f = toForm(s);
     expect(f.model.plan).toEqual({ kind: "per-executor", text: "native = anthropic:claude-opus-5-5, codex = gpt-5.6-sol" });
@@ -55,6 +55,7 @@ describe("settings form round trip", () => {
     f.complexityModel["write-test"].medium = pickModel(f.complexityModel["write-test"].medium, "unset");
     f.complexityModel["write-test"].high = pickModel(f.complexityModel["write-test"].high, "unset");
     f.effort.explore = "max";
+    f.complexityEffort.implementer.high = "max";
     f.instructionsAll = "  ";
     f.instructionsAgents.implementer = "";
     f.instructionsAgents.plan = "Name every risk.";
@@ -75,7 +76,7 @@ describe("settings form round trip", () => {
     expect("judge" in out.routing.model.byAgent).toBe(false);
     expect(out.routing.executor.byPhaseComplexity).toEqual({ implementer: { low: "harness:codex", medium: "harness:codex" } });
     expect(out.routing.model.byPhaseComplexity).toEqual({ implementer: { low: "fast", medium: "fast", high: "balanced" } });
-    expect(out.routing.effort).toEqual({ explore: "max" });
+    expect(out.routing.effort).toEqual({ byAgent: { explore: "max" }, byPhaseComplexity: { implementer: { high: "max" } } });
     expect(out.instructions).toEqual({ all: null, agents: { plan: "Name every risk." } });
     expect(out.permissions).toEqual({ mode: "acceptEdits", allow: ["Bash(cargo *)", "Bash(npm run test *)"], ask: [], deny: [] });
     expect(out.yolo.default).toBe(true);
@@ -125,7 +126,8 @@ describe("issue paths", () => {
   it("land on the most specific field", () => {
     expect(fieldForIssue("routing.model.byAgent.plan", fields)).toBe("routing.model.byAgent.plan");
     expect(fieldForIssue("routing.executor.byAgent.judge", fields)).toBe("routing.executor.byAgent.judge");
-    expect(fieldForIssue("routing.effort.explore", fields)).toBe("routing.effort.explore");
+    expect(fieldForIssue("routing.effort.byAgent.explore", fields)).toBe("routing.effort.byAgent.explore");
+    expect(fieldForIssue("routing.effort.byPhaseComplexity.implementer.low", fields)).toBe("routing.effort.byPhaseComplexity.implementer.low");
     expect(fieldForIssue("projects[1].key", fields)).toBe("projects[1]");
     expect(fieldForIssue("projects[7].path", fields)).toBe("projects");
     expect(fieldForIssue("routing.model.byPhaseComplexity.implementer.high", fields)).toBe("routing.model.byPhaseComplexity.implementer.high");

@@ -319,7 +319,7 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
                 label: "Effort",
                 width: 130,
                 render: ({ id }) => (
-                  <Anchor id={`routing.effort.${id}`}>
+                  <Anchor id={`routing.effort.byAgent.${id}`}>
                     {id === "judge" ? (
                       <span className="wp-mono" style={{ color: "var(--text-muted)" }}>
                         fixed
@@ -334,7 +334,7 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
                         options={withCurrent([{ value: "", label: effortDefaultLabel(info(id)) }, ...EFFORTS.map((e) => ({ value: e, label: e }))], form.effort[id] ?? "")}
                       />
                     )}
-                    <FieldIssues issues={issues(`routing.effort.${id}`)} />
+                    <FieldIssues issues={issues(`routing.effort.byAgent.${id}`)} />
                   </Anchor>
                 ),
               },
@@ -397,10 +397,39 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
                   );
                 },
               },
+              {
+                key: "effort",
+                label: "Effort",
+                width: 150,
+                render: (r) => {
+                  const path = `routing.effort.byPhaseComplexity.${r.agent}.${r.c}`;
+                  const current = form.complexityEffort[r.agent]?.[r.c] ?? "";
+                  return (
+                    <Anchor id={path}>
+                      <Select
+                        size="sm"
+                        aria-label={`Effort for ${r.agent} at ${r.c} complexity`}
+                        style={{ width: 150 }}
+                        value={current}
+                        onChange={(e) =>
+                          update((f) => {
+                            f.complexityEffort[r.agent] ??= { low: "", medium: "", high: "" };
+                            f.complexityEffort[r.agent][r.c] = e.target.value;
+                          })
+                        }
+                        options={withCurrent([{ value: "", label: "Same as the agent effort" }, ...EFFORTS.map((e) => ({ value: e, label: e }))], current)}
+                      />
+                      <FieldIssues issues={issues(path)} />
+                    </Anchor>
+                  );
+                },
+              },
             ]}
           />
           <div style={{ padding: "0 12px" }}>
-            <FieldIssues issues={[...issues("routing.executor.byPhaseComplexity"), ...issues("routing.model.byPhaseComplexity")]} />
+            <FieldIssues
+              issues={[...issues("routing.executor.byPhaseComplexity"), ...issues("routing.model.byPhaseComplexity"), ...issues("routing.effort.byPhaseComplexity")]}
+            />
           </div>
         </Panel>
       </Anchor>
