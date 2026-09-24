@@ -34,5 +34,6 @@ whole pane with `overflow: hidden`. Every other screen scrolls inside the pane.
   `useProjectChanges(ws, key)`, `useProjectFsChanges(ws, key, cb)`, `useWorkspaces()`, `useSocketState()`,
   `useSearch(ws, q)`. Older helpers stay in `lib/hooks.ts`: `useAsync`, `useChannel`, `useThrottled`.
 - Resource ids and URLs: `lib/resource.ts` (`parseResource`, `resourcePath`, `resourceFromPath`, `fileId`).
-- The Monaco diff (`artifact/MonacoDiff.tsx`) and xterm (`execution/XtermScreen.tsx`) load with `lazy()`, so they
+- The Monaco diff (`artifact/MonacoDiff.tsx`), the file editor (`project/code/FileEditor.tsx`, both set up through
+  `components/monaco.ts`), and xterm (`execution/XtermScreen.tsx`) load with `lazy()`, so they
   stay out of the main chunk. Import them only through their lazy wrappers.

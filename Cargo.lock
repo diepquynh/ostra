@@ -2298,6 +2298,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ostra-code"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ostra-core",
+ "parking_lot",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ostra-core"
 version = "0.1.0"
 dependencies = [
@@ -2461,6 +2476,7 @@ dependencies = [
  "mime_guess",
  "open",
  "ostra-agents",
+ "ostra-code",
  "ostra-core",
  "ostra-engine",
  "ostra-exec-harness",

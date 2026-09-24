@@ -318,6 +318,29 @@ pub struct ProjectEntry {
     /// Stack chosen in project settings, used to seed skills for an empty folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stack: Option<String>,
+    /// An external program that answers code navigation for the Files view in place of the
+    /// built-in tokenizer index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub code_provider: Option<CodeProviderConfig>,
+}
+
+/// `[projects.code_provider]`: the program Ostra runs once per request, with one JSON request on
+/// stdin and the answer on stdout (`ostra_core::code::ProviderRequest`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeProviderConfig {
+    /// Program and arguments, run in the project folder.
+    pub command: Vec<String>,
+    /// Seconds one request may take before Ostra answers with the built-in provider.
+    #[serde(default = "default_provider_timeout")]
+    pub timeout_secs: u32,
+}
+
+pub const MAX_PROVIDER_TIMEOUT: u32 = 120;
+
+fn default_provider_timeout() -> u32 {
+    10
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
@@ -826,6 +849,20 @@ pub fn validate_workspace(
         {
             issues.push(issue(format!("projects[{i}].stack"), stack_issue(stack)));
         }
+        if let Some(cp) = &p.code_provider {
+            if cp.command.first().is_none_or(|c| c.trim().is_empty()) {
+                issues.push(issue(
+                    format!("projects[{i}].code_provider.command"),
+                    "Name the provider program as the first item of command.".into(),
+                ));
+            }
+            if cp.timeout_secs == 0 || cp.timeout_secs > MAX_PROVIDER_TIMEOUT {
+                issues.push(issue(
+                    format!("projects[{i}].code_provider.timeout_secs"),
+                    format!("Use a timeout from 1 to {MAX_PROVIDER_TIMEOUT} seconds."),
+                ));
+            }
+        }
     }
 
     for key in ws.routing.executor.by_agent.keys() {
@@ -1252,6 +1289,7 @@ deny = ["Bash(git push *)"]
                 key: key.into(),
                 path: PathBuf::from(format!("/code/{key}")),
                 stack: stack.map(str::to_string),
+                code_provider: None,
             });
         }
         let env = Environment {
@@ -1297,6 +1335,34 @@ deny = ["Bash(git push *)"]
             providers_with_keys: vec!["anthropic".into()],
         };
         assert_eq!(validate_workspace(&g, &ws, &env, tier), vec![]);
+    }
+
+    #[test]
+    fn code_provider_parses_and_validates() {
+        let ws: WorkspaceSettings = toml::from_str(
+            "name = \"x\"\n[[projects]]\nkey = \"a\"\npath = \"/a\"\n\
+             code_provider = { command = [\"ctags-nav\", \"--json\"] }\n\
+             [[projects]]\nkey = \"b\"\npath = \"/b\"\n\
+             code_provider = { command = [\" \"], timeout_secs = 0 }\n",
+        )
+        .unwrap();
+        let a = ws.projects[0].code_provider.as_ref().unwrap();
+        assert_eq!((a.command.len(), a.timeout_secs), (2, 10));
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
+        let paths: Vec<String> = validate_workspace(&GlobalConfig::default(), &ws, &env, tier)
+            .into_iter()
+            .map(|i| i.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "projects[1].code_provider.command",
+                "projects[1].code_provider.timeout_secs"
+            ]
+        );
     }
 
     #[test]

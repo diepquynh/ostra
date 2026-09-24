@@ -10,7 +10,9 @@ use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
+use ostra_code::Answer;
 use ostra_core::api::*;
+use ostra_core::code::{CodeDeps, CodeFile, CodeSymbols, CodeUsages};
 use ostra_core::config::{ValidationIssue, WorkspaceSettings};
 use ostra_core::event::StoredEvent;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
@@ -43,6 +45,20 @@ impl ApiErr {
     }
     fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, message)
+    }
+    /// A 409 naming the request field that no longer matches the server's state.
+    pub fn conflict_on(field: &str, message: impl Into<String>) -> Self {
+        let message = message.into();
+        ApiErr {
+            status: StatusCode::CONFLICT,
+            body: ApiError {
+                error: message.clone(),
+                issues: vec![ValidationIssue {
+                    path: field.into(),
+                    message,
+                }],
+            },
+        }
     }
     fn invalid(issues: Vec<ValidationIssue>) -> Self {
         ApiErr {
@@ -263,7 +279,14 @@ pub fn router(app: Arc<App>) -> axum::Router {
         )
         .route(
             "/api/workspaces/{ws}/projects/{key}/file",
-            get(project_file),
+            // JSON escaping can double a text at the edit cap, past axum's 2 MB default.
+            get(project_file)
+                .put(save_project_file)
+                .layer(axum::extract::DefaultBodyLimit::max(8 * files::TEXT_CAP)),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/mkdir",
+            post(project_mkdir),
         )
         .route(
             "/api/workspaces/{ws}/projects/{key}/files",
@@ -272,6 +295,22 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route(
             "/api/workspaces/{ws}/projects/{key}/diff",
             get(project_diff),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/code/file",
+            get(code_file),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/code/usages",
+            get(code_usages),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/code/deps",
+            get(code_deps),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/code/symbols",
+            get(code_symbols),
         )
         .route(
             "/api/workspaces/{ws}/projects/{key}/changes",
@@ -1139,6 +1178,28 @@ async fn project_file(
     Ok(Json(app.files.file(&w, &key, &q.path).await?))
 }
 
+async fn project_mkdir(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<CreateProjectFolder>,
+) -> Res<ProjectTree> {
+    let w = ws(&app, &id)?;
+    let (rel, listing) = app.files.mkdir(&w, &key, &body.path).await?;
+    files::announce_save(&app, &w.id, &key, &rel);
+    Ok(Json(listing))
+}
+
+async fn save_project_file(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<SaveProjectFile>,
+) -> Res<ProjectFile> {
+    let w = ws(&app, &id)?;
+    let saved = app.files.save(&w, &key, body).await?;
+    files::announce_save(&app, &w.id, &key, &saved.path);
+    Ok(Json(saved))
+}
+
 /// Responds with a [`FileIndex`].
 async fn project_files(
     State(app): AppState,
@@ -1164,6 +1225,95 @@ async fn project_changes(
 ) -> Res<Vec<ProjectChange>> {
     let w = ws(&app, &id)?;
     Ok(Json(app.files.changes(&w, &key).await?))
+}
+
+// Code navigation. The logic lives in `crate::code` and `ostra-code`.
+
+#[derive(Deserialize)]
+struct CodePathQuery {
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct CodeUsagesQuery {
+    symbol: String,
+    path: Option<String>,
+    line: Option<u32>,
+    col: Option<u32>,
+    limit: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct CodeSymbolsQuery {
+    q: Option<String>,
+    limit: Option<u32>,
+}
+
+async fn ask_code(app: &App, id: &str, key: &str, ask: crate::code::Ask) -> Result<Answer, ApiErr> {
+    let w = ws(app, id)?;
+    app.code.ask(&app.files, &w, key, ask).await
+}
+
+fn wrong_answer() -> ApiErr {
+    ApiErr::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "The code provider answered a different request.",
+    )
+}
+
+async fn code_file(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<CodePathQuery>,
+) -> Res<CodeFile> {
+    match ask_code(&app, &id, &key, crate::code::Ask::File { path: q.path }).await? {
+        Answer::File(f) => Ok(Json(f)),
+        _ => Err(wrong_answer()),
+    }
+}
+
+async fn code_usages(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<CodeUsagesQuery>,
+) -> Res<CodeUsages> {
+    let ask = crate::code::Ask::Usages {
+        symbol: q.symbol,
+        path: q.path,
+        line: q.line,
+        col: q.col,
+        limit: q.limit,
+    };
+    match ask_code(&app, &id, &key, ask).await? {
+        Answer::Usages(u) => Ok(Json(u)),
+        _ => Err(wrong_answer()),
+    }
+}
+
+async fn code_deps(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<CodePathQuery>,
+) -> Res<CodeDeps> {
+    match ask_code(&app, &id, &key, crate::code::Ask::Deps { path: q.path }).await? {
+        Answer::Deps(d) => Ok(Json(d)),
+        _ => Err(wrong_answer()),
+    }
+}
+
+async fn code_symbols(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<CodeSymbolsQuery>,
+) -> Res<CodeSymbols> {
+    let ask = crate::code::Ask::Symbols {
+        query: q.q.unwrap_or_default(),
+        limit: q.limit,
+    };
+    match ask_code(&app, &id, &key, ask).await? {
+        Answer::Symbols(s) => Ok(Json(s)),
+        _ => Err(wrong_answer()),
+    }
 }
 
 // Navigation. The logic lives in `crate::nav`.

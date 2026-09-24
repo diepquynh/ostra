@@ -97,6 +97,7 @@ async fn recovery_keeps_usage_and_reruns() {
         key: "app".into(),
         path: app,
         stack: None,
+        code_provider: None,
     });
     let services = Arc::new(Fake { ws });
     let db = WorkspaceDb::open(&dir.path().join("workspace.db")).unwrap();
@@ -181,6 +182,7 @@ async fn offline_stop_prevents_rerun_on_recovery() {
         key: "app".into(),
         path: app,
         stack: None,
+        code_provider: None,
     });
     let services = Arc::new(Fake { ws });
     let path = dir.path().join("workspace.db");

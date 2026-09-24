@@ -130,6 +130,8 @@ pub struct App {
     pub dev: bool,
     /// Project file trees, reads, diffs, the file name index, and write tracking.
     pub files: Arc<Files>,
+    /// Display tokens, outline, usages, and dependencies for the Files view.
+    pub code: crate::code::Code,
     pub push: broadcast::Sender<Pushed>,
     /// The Sessions tree, search, and workspace activity.
     pub nav: Arc<crate::nav::Nav>,
@@ -312,6 +314,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         hub,
         dev: opts.dev,
         files: Arc::new(Files::new(touches)),
+        code: Default::default(),
         push,
         nav: Default::default(),
     });

@@ -3,6 +3,7 @@ import type { TreeGroup, TreeSession } from "../api/nav";
 import type { ExecutionStatus, ProjectView, SessionStatus } from "../api/types";
 import { Chip, IconButton, Input, Spinner, StatusDot, Tabs, TreeItem, TreeSection, type Tone } from "../design";
 import { formatCost, humanize } from "../lib/format";
+import type { OpenOptions } from "../lib/nav";
 import { parseResource } from "../lib/resource";
 import { FilesPanel } from "./FilesPanel";
 import { sessionLabel } from "./meta";
@@ -47,7 +48,7 @@ function sessionOf(activeId: string | null, sessions: TreeSession[]): string | n
   return null;
 }
 
-type OpenFn = (id: string, opts?: { preview?: boolean }) => void;
+type OpenFn = (id: string, opts?: OpenOptions) => void;
 
 function GroupRows({ g, activeId, open, expanded, toggle }: { g: TreeGroup; activeId: string | null; open: OpenFn; expanded: (k: string, d: boolean) => boolean; toggle: (k: string, d: boolean) => void }) {
   if (g.runs.length === 1) {
@@ -255,7 +256,7 @@ export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, pr
           project={filesProject}
           setProject={setFilesProject}
           selected={selectedFile}
-          onOpenFile={(key, path) => open(`file:${key}:${path}`, { preview: true })}
+          onOpenFile={(key, path, opts) => open(`file:${key}:${path}`, opts?.edit ? { anchor: "edit" } : { preview: true })}
           onOpenProject={(key) => open(`project:${key}`)}
           onAddProject={onAddProject}
         />

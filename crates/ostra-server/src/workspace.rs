@@ -165,7 +165,12 @@ pub fn import_entry(
         }
     };
     match path {
-        Some(path) if issues.is_empty() => Ok(ProjectEntry { key, path, stack }),
+        Some(path) if issues.is_empty() => Ok(ProjectEntry {
+            key,
+            path,
+            stack,
+            code_provider: None,
+        }),
         _ => Err(issues),
     }
 }
@@ -446,6 +451,7 @@ mod tests {
             key: "api".into(),
             path: base.join("api"),
             stack: None,
+            code_provider: None,
         });
 
         let ok = import_entry(&settings, &root, &request(&app, " app ", Some(" "))).unwrap();

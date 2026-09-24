@@ -273,7 +273,78 @@ export function mockFile(key: string, path: string): ProjectFile {
   const n = nodeAt(key, path);
   if (!n || n.dir) throw new Error(`${path} is not a file in project \`${key}\`.`);
   const content = n.binary ? null : (n.code ?? stub(path));
-  return { path, content, binary: !!n.binary, size: sizeOf(n, path), truncated: false, modified: modifiedFor(path, !!n.git), git: n.git ?? null, staged: !!n.by?.staged, changed_by: changedBy(n) };
+  return {
+    path,
+    content,
+    binary: !!n.binary,
+    size: sizeOf(n, path),
+    truncated: false,
+    modified: modifiedFor(path, !!n.git),
+    git: n.git ?? null,
+    staged: !!n.by?.staged,
+    changed_by: changedBy(n),
+    hash: content === null ? null : mockHash(content),
+    read_only: null,
+  };
+}
+
+/** A stable stand-in for the server's SHA-256: FNV-1a over the text, hex. */
+export function mockHash(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Write a mock file in memory. Throws a 409-shaped error when `baseHash` is not the current hash. */
+const conflict = (message: string, field: string) => Object.assign(new Error(message), { status: 409, issues: [{ path: field, message }] });
+
+/** The folder at `path`, creating missing folders on the way. */
+function ensureDir(key: string, path: string): Node {
+  let cur: Node = { name: "", dir: true, children: (TREES[key] ??= []) };
+  for (const seg of path.split("/").filter(Boolean)) {
+    let next = (cur.children ??= []).find((c) => c.name === seg);
+    if (!next) {
+      next = { name: seg, dir: true, children: [] };
+      cur.children.push(next);
+    }
+    if (!next.dir) throw Object.assign(new Error(`${seg} is a file, not a folder.`), { status: 400 });
+    cur = next;
+  }
+  return cur;
+}
+
+const splitPath = (path: string) => {
+  const segs = path.split("/").filter(Boolean);
+  return { parent: segs.slice(0, -1).join("/"), name: segs[segs.length - 1] ?? "" };
+};
+
+export function mockMkdir(key: string, path: string): ProjectTree {
+  if (nodeAt(key, path)) throw conflict(`${path} already exists. Choose another name.`, "path");
+  ensureDir(key, path);
+  return mockTree(key, splitPath(path).parent, true);
+}
+
+export function mockSaveFile(key: string, path: string, content: string, baseHash: string | null): ProjectFile {
+  if (baseHash === null) {
+    if (nodeAt(key, path)) throw conflict(`${path} already exists. Open it and edit that version.`, "base_hash");
+    const { parent, name } = splitPath(path);
+    ensureDir(key, parent).children!.push({ name, code: content, git: "?" });
+    return mockFile(key, path);
+  }
+  const n = nodeAt(key, path);
+  if (!n || n.dir) throw Object.assign(new Error(`${path} is not a file in project \`${key}\`.`), { status: 404 });
+  const current = mockFile(key, path).hash;
+  if (baseHash !== current) {
+    throw Object.assign(new Error("The file changed since you opened it. Reload it, then apply your change again."), {
+      status: 409,
+      issues: [{ path: "base_hash", message: "The file changed on disk." }],
+    });
+  }
+  n.code = content;
+  return mockFile(key, path);
 }
 
 function walk(nodes: Node[], base: string, out: { path: string; node: Node }[]) {
@@ -385,3 +456,9 @@ export function mockBrowse(path = "~", prefix = "", limit = 200): FsBrowse {
     is_ostra_project: !!self?.is_ostra_project,
   };
 }
+
+/** Every text file of a mock project with its body, for the mock code provider. */
+export const mockTexts = (key: string) =>
+  walk(TREES[key] ?? [], "", [])
+    .filter((f) => !f.node.binary)
+    .map((f) => ({ path: f.path, code: f.node.code ?? stub(f.path) }));

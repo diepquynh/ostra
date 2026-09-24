@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod api;
+pub mod code;
 pub mod config;
 pub mod doc;
 pub mod event;

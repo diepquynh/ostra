@@ -32,6 +32,10 @@ import type {
   WorkspaceSettings,
   WorkspaceSummary,
 } from "./types";
+import type { CodeDeps } from "./gen/CodeDeps";
+import type { CodeFile } from "./gen/CodeFile";
+import type { CodeSymbols } from "./gen/CodeSymbols";
+import type { CodeUsages } from "./gen/CodeUsages";
 import type { DiffFile } from "./gen/DiffFile";
 import type { EnvironmentStatus } from "./gen/EnvironmentStatus";
 import type { HarnessSetupAction } from "./gen/HarnessSetupAction";
@@ -44,6 +48,7 @@ import type { FsBrowse } from "./gen/FsBrowse";
 import type { OnboardingState } from "./gen/OnboardingState";
 import type { ProjectChange } from "./gen/ProjectChange";
 import type { ProjectFile } from "./gen/ProjectFile";
+import type { SaveProjectFile } from "./gen/SaveProjectFile";
 import type { ProjectTree } from "./gen/ProjectTree";
 import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
 import type { ArtifactWithHeadings, SearchResults, WorkspaceActivity, WorkspaceTree } from "./nav";
@@ -196,10 +201,20 @@ export const httpApi = {
     request<ProjectTree>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/tree${q({ path: opts.path, depth: opts.depth, hidden: opts.hidden ? "true" : undefined })}`),
   projectFile: (ws: string, key: string, path: string) =>
     request<ProjectFile>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/file${q({ path })}`),
+  createProjectFolder: (ws: string, key: string, path: string) =>
+    request<ProjectTree>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/mkdir`, { path }),
+  saveProjectFile: (ws: string, key: string, body: SaveProjectFile) =>
+    request<ProjectFile>("PUT", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/file`, body),
   projectFiles: (ws: string, key: string) => request<FileIndex>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/files`),
   projectDiff: (ws: string, key: string, path: string, base?: string) =>
     request<FileDiff>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/diff${q({ path, base })}`),
   projectChanges: (ws: string, key: string) => request<ProjectChange[]>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/changes`),
+  codeFile: (ws: string, key: string, path: string) => request<CodeFile>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/file${q({ path })}`),
+  codeUsages: (ws: string, key: string, symbol: string, at: { path?: string; line?: number; col?: number; limit?: number } = {}) =>
+    request<CodeUsages>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/usages${q({ symbol, ...at })}`),
+  codeDeps: (ws: string, key: string, path: string) => request<CodeDeps>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/deps${q({ path })}`),
+  codeSymbols: (ws: string, key: string, query: string, limit = 50) =>
+    request<CodeSymbols>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/symbols${q({ q: query, limit })}`),
 
   tree: (ws: string) => request<WorkspaceTree>("GET", `/api/workspaces/${enc(ws)}/tree`),
   search: (ws: string, query: string, limit = 30) => request<SearchResults>("GET", `/api/workspaces/${enc(ws)}/search${q({ q: query, limit })}`),

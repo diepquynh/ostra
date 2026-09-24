@@ -261,6 +261,13 @@ pub struct FileRead {
     pub size: u64,
     pub truncated: bool,
     pub modified: Option<chrono::DateTime<chrono::Utc>>,
+    /// SHA-256 of the whole file, set only when the text is the complete, valid UTF-8 file.
+    pub hash: Option<String>,
+}
+
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(bytes))
 }
 
 /// NUL in the first 8 KiB means binary, the same test git uses.
@@ -296,9 +303,11 @@ pub fn read(file: &Contained, cap: usize) -> Result<FileRead, String> {
             size: meta.len(),
             truncated: false,
             modified,
+            hash: None,
         });
     }
     let truncated = buf.len() > cap;
+    let hash = (!truncated && std::str::from_utf8(&buf).is_ok()).then(|| sha256_hex(&buf));
     buf.truncate(cap);
     if truncated {
         // Cut at the last complete UTF-8 sequence so the cap does not leave a broken character.
@@ -314,6 +323,7 @@ pub fn read(file: &Contained, cap: usize) -> Result<FileRead, String> {
         size: meta.len(),
         truncated,
         modified,
+        hash,
     })
 }
 

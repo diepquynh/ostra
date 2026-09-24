@@ -13,4 +13,13 @@ content: string | null, binary: boolean, size: number,
 /**
  * The text was cut at the size cap.
  */
-truncated: boolean, modified: string | null, git: GitMark | null, staged: boolean, changed_by: ChangedBy | null, };
+truncated: boolean, modified: string | null, git: GitMark | null, staged: boolean, changed_by: ChangedBy | null, 
+/**
+ * SHA-256 of the bytes on disk, hex. Send it back as `base_hash` when saving. Null when the
+ * file cannot be edited in the browser: binary, cut at the size cap, or not valid UTF-8.
+ */
+hash: string | null, 
+/**
+ * Why a save is refused right now, such as a running execution writing this file.
+ */
+read_only: string | null, };

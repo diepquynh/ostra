@@ -1,12 +1,17 @@
-import { useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router";
 import { api } from "../api";
 import type { ChangedBy } from "../api/types";
 import { Markdown } from "../components/Markdown";
-import { Banner, Breadcrumbs, Button, CodeView, Icon, IconButton, Spinner, Tabs, type TabItem } from "../design";
+import { Banner, Breadcrumbs, Button, Icon, IconButton, Spinner, Tabs, type TabItem } from "../design";
 import { humanize } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges, useWorkspaceTree } from "../lib/live";
 import { useNav, useShell } from "../lib/nav";
+import { CodePane, takeCarried } from "./project/code/CodePane";
+import { SourceView, type SymbolRef } from "./project/code/SourceView";
+import { lineFromHash } from "./project/code/tokens";
+import { useFileEdit } from "./project/code/useFileEdit";
 import { DiffPane } from "./project/DiffPane";
 import { extOf, fmtSize, GIT_MARK, modifiedLabel } from "./project/files";
 
@@ -18,6 +23,8 @@ export type FileScreenProps = {
 };
 
 type View = "file" | "rendered" | "diff";
+
+const FileEditor = lazy(() => import("./project/code/FileEditor"));
 
 /** "Implementer · Phase 2" or "Write-test · Phase 3 tests". */
 export function changedByLabel(c: ChangedBy): string {
@@ -40,9 +47,11 @@ const barStyle = {
 const linkStyle = { background: "none", border: 0, padding: 0, font: "inherit", fontWeight: 500, color: "var(--text-primary)", cursor: "pointer" } as const;
 
 /**
- * Resource `file:<key>:<path>`: a read-only file using the whole center pane, rendered markdown for `.md`,
+ * Resource `file:<key>:<path>`: a project file using the whole center pane, rendered markdown for `.md`,
  * or its Changes view (unified diff against HEAD) when a session touched it. Refreshes when the file
- * changes on disk. Scrolls its own content.
+ * changes on disk. Scrolls its own content. The File view colors text with the project's code provider, and the
+ * code pane beside it shows the outline, usages of a clicked name, and dependencies. A `#L<n>` hash marks a line.
+ * Edit mode saves through the hash the edit started from and shows a conflict when the file changed on disk.
  */
 export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
   const nav = useNav();
@@ -53,10 +62,26 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
   const diff = useAsync(() => (changed ? api.projectDiff(ws, projectKey, path) : Promise.resolve(null)), [ws, projectKey, path, changed]);
   const [mode, setMode] = useState<View | null>(null);
   const [copied, setCopied] = useState(false);
+  const code = useAsync(() => api.codeFile(ws, projectKey, path), [ws, projectKey, path]);
+  const [selected, setSelected] = useState<SymbolRef | null>(() => takeCarried(projectKey, path));
+  const [goto, setGoto] = useState<{ line: number; n: number } | null>(null);
+  const [paneOpen, setPaneOpen] = useState<boolean | null>(null);
+  const hash = useLocation().hash;
+  const hashLine = lineFromHash(hash);
+  const edit = useFileEdit(ws, projectKey, path, file);
+  // `#edit`, from creating the file in the Files panel, opens it in edit mode once.
+  const autoEdit = useRef(hash === "#edit");
+  useEffect(() => {
+    const f = file.data;
+    if (!autoEdit.current || !f || f.hash === null || f.read_only) return;
+    autoEdit.current = false;
+    edit.start();
+  }, [file.data, edit]);
   useProjectFsChanges(ws, projectKey, (paths) => {
     if (paths.includes(path)) {
       file.reload();
       diff.reload();
+      code.reload();
     }
   });
 
@@ -67,11 +92,32 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
   const views: TabItem[] = [{ id: "file", label: "File", icon: "file-text" }];
   if (md && f?.content) views.push({ id: "rendered", label: "Rendered", icon: "book-open" });
   if (d) views.push({ id: "diff", label: "Changes", icon: "file-diff" });
-  const view: View = mode && views.some((v) => v.id === mode) ? mode : d ? "diff" : "file";
+  const view: View = edit.editing ? "file" : mode && views.some((v) => v.id === mode) ? mode : d ? "diff" : "file";
   const lines = f?.content ? f.content.replace(/\n$/, "").split("\n").length : null;
   const by = f?.changed_by ?? d?.changed_by ?? null;
   const session = by ? tree.sessions.find((s) => s.id === by.session) : null;
   const segs = path.split("/");
+  const c = code.data?.path === path ? code.data : null;
+  const canPane = view === "file" && !!f && !f.binary && !edit.editing;
+  const canEdit = view === "file" && !!f && f.hash !== null && !edit.editing;
+  const showPane = canPane && (paneOpen ?? !!c?.language);
+  const gotoLine = (line: number) => {
+    setMode("file");
+    setGoto((g) => ({ line, n: (g?.n ?? 0) + 1 }));
+  };
+
+  useEffect(() => {
+    if (!edit.editing) return;
+    // Cmd/Ctrl+S outside the editor saves too, instead of the browser's save dialog.
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        edit.save();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [edit]);
 
   const copy = () => {
     void navigator.clipboard?.writeText(path).then(() => {
@@ -94,7 +140,24 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
             <span style={{ color: "var(--diff-add-fg)" }}>+{d.added}</span> <span style={{ color: "var(--diff-del-fg)" }}>−{d.removed}</span>
           </span>
         )}
-        {views.length > 1 && <Tabs variant="segmented" label="View" value={view} onChange={(v) => setMode(v as View)} tabs={views} />}
+        {views.length > 1 && !edit.editing && <Tabs variant="segmented" label="View" value={view} onChange={(v) => setMode(v as View)} tabs={views} />}
+        {edit.editing && (
+          <>
+            {edit.dirty && (
+              <span style={{ color: "var(--warn)", fontSize: "var(--text-sm)", whiteSpace: "nowrap" }} title="Unsaved changes">
+                ● unsaved
+              </span>
+            )}
+            <Button size="sm" variant={edit.confirmDiscard ? "danger" : "ghost"} onClick={edit.discard}>
+              {!edit.dirty ? "Done" : edit.confirmDiscard ? "Discard changes?" : "Discard"}
+            </Button>
+            <Button size="sm" variant="primary" icon="check" kbd="⌘S" disabled={!edit.dirty || edit.saving || edit.conflict || !!f?.read_only} onClick={edit.save}>
+              {edit.saving ? "Saving…" : "Save"}
+            </Button>
+          </>
+        )}
+        {canEdit && <IconButton size="sm" icon="pencil" label={f?.read_only ?? "Edit this file"} disabled={!!f?.read_only} onClick={edit.start} />}
+        {canPane && <IconButton size="sm" icon="panel-right" active={showPane} label={showPane ? "Hide the code pane" : "Show the code pane"} onClick={() => setPaneOpen(!showPane)} />}
         <IconButton size="sm" icon="message-square" label="Ask about this file" onClick={() => shell.openDock(`About ${projectKey}/${path}: `)} />
         <IconButton size="sm" icon={copied ? "check" : "copy"} label={copied ? "Copied" : "Copy path"} onClick={copy} />
       </div>
@@ -115,43 +178,101 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
           <span style={{ color: "var(--text-muted)", whiteSpace: "nowrap" }}>against {d?.base ?? "HEAD"}</span>
         </div>
       )}
-      <div className="os-rise" key={view} style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        {file.error ? (
-          <div style={{ padding: 16 }}>
-            <Banner tone="bad" actions={<Button size="sm" onClick={file.reload}>Try again</Button>}>
-              {file.error.message}
-            </Banner>
-          </div>
-        ) : !f ? (
-          <div style={{ padding: 20, display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)" }}>
-            <Spinner size={11} /> Reading the file…
-          </div>
-        ) : f.binary ? (
-          <div style={{ padding: 20, color: "var(--text-muted)" }}>Binary file, {fmtSize(f.size)}. No preview.</div>
-        ) : (
-          <>
-            {f.truncated && view !== "diff" && (
-              <div style={{ padding: "8px 12px 0" }}>
-                <Banner tone="info">Showing the start of the file. At {fmtSize(f.size)} it is larger than the size Ostra reads for the browser.</Banner>
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <div className="os-rise" key={view} style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
+          {file.error ? (
+            <div style={{ padding: 16 }}>
+              <Banner tone="bad" actions={<Button size="sm" onClick={file.reload}>Try again</Button>}>
+                {file.error.message}
+              </Banner>
+            </div>
+          ) : !f ? (
+            <div style={{ padding: 20, display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)" }}>
+              <Spinner size={11} /> Reading the file…
+            </div>
+          ) : edit.editing ? (
+            <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+              {edit.conflict && (
+                <div style={{ padding: "8px 12px 0" }}>
+                  <Banner
+                    tone="warn"
+                    actions={
+                      <>
+                        <Button size="sm" onClick={edit.reload}>
+                          Reload
+                        </Button>
+                        <Button size="sm" variant="danger" onClick={edit.overwrite} disabled={edit.saving}>
+                          Overwrite
+                        </Button>
+                      </>
+                    }
+                  >
+                    This file changed on disk after you started editing. Reload to take the disk version and drop your changes, or overwrite it with yours.
+                  </Banner>
+                </div>
+              )}
+              {f.read_only && (
+                <div style={{ padding: "8px 12px 0" }}>
+                  <Banner tone="info">{f.read_only}</Banner>
+                </div>
+              )}
+              {edit.error && (
+                <div style={{ padding: "8px 12px 0" }}>
+                  <Banner tone="bad">{edit.error}</Banner>
+                </div>
+              )}
+              <div style={{ flex: 1, minHeight: 0, paddingTop: edit.conflict || edit.error || f.read_only ? 8 : 0 }}>
+                <Suspense
+                  fallback={
+                    <div style={{ padding: 20, display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)" }}>
+                      <Spinner size={11} /> Loading the editor…
+                    </div>
+                  }
+                >
+                  <FileEditor path={path} value={edit.draft} onChange={edit.change} theme={shell.theme} onSave={edit.save} />
+                </Suspense>
               </div>
-            )}
-            {view === "diff" && d ? (
-              <>
-                {d.truncated && (
-                  <div style={{ padding: "8px 12px 0" }}>
-                    <Banner tone="info">The diff is cut at the size cap. The first changes are shown.</Banner>
-                  </div>
-                )}
-                <DiffPane hunks={d.hunks} />
-              </>
-            ) : view === "rendered" ? (
-              <div style={{ padding: "20px 28px 40px" }}>
-                <Markdown text={f.content ?? ""} className="os-prose" />
-              </div>
-            ) : (
-              <CodeView flush language={ext} code={f.content ?? ""} />
-            )}
-          </>
+            </div>
+          ) : f.binary ? (
+            <div style={{ padding: 20, color: "var(--text-muted)" }}>Binary file, {fmtSize(f.size)}. No preview.</div>
+          ) : (
+            <>
+              {f.truncated && view !== "diff" && (
+                <div style={{ padding: "8px 12px 0" }}>
+                  <Banner tone="info">Showing the start of the file. At {fmtSize(f.size)} it is larger than the size Ostra reads for the browser.</Banner>
+                </div>
+              )}
+              {view === "diff" && d ? (
+                <>
+                  {d.truncated && (
+                    <div style={{ padding: "8px 12px 0" }}>
+                      <Banner tone="info">The diff is cut at the size cap. The first changes are shown.</Banner>
+                    </div>
+                  )}
+                  <DiffPane hunks={d.hunks} />
+                </>
+              ) : view === "rendered" ? (
+                <div style={{ padding: "20px 28px 40px" }}>
+                  <Markdown text={f.content ?? ""} className="os-prose" />
+                </div>
+              ) : (
+                <SourceView
+                  code={f.content ?? ""}
+                  file={c}
+                  language={ext}
+                  selected={selected?.name ?? null}
+                  onSymbol={setSelected}
+                  highlightLine={goto?.line ?? hashLine}
+                  scrollNonce={goto?.n}
+                />
+              )}
+            </>
+          )}
+        </div>
+        {showPane && (
+          <aside style={{ width: 320, flex: "none", borderLeft: "1px solid var(--border-subtle)", minHeight: 0, background: "var(--surface-panel)" }} aria-label="Code navigation">
+            <CodePane ws={ws} projectKey={projectKey} path={path} file={c} fileError={code.error} selected={selected} onSelect={setSelected} onGoto={gotoLine} />
+          </aside>
         )}
       </div>
       {f && (
@@ -177,7 +298,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
           {f.git && <span style={{ color: GIT_MARK[f.git].color }}>{GIT_MARK[f.git].word}{f.staged ? ", staged" : ""}</span>}
           {f.truncated && <span>cut at the size cap</span>}
           <span style={{ flex: 1 }} />
-          <span>read-only</span>
+          <span>{edit.editing ? (edit.dirty ? "unsaved changes" : "editing") : "read-only"}</span>
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
-//! Read-only project files for the Files dock: folder trees with ignore and git marks, capped file
-//! reads, the file name index, per-file diffs, change attribution to session executions, and live
-//! `project_fs_changed` messages. Nothing here writes to a project.
+//! Project files for the Files dock: folder trees with ignore and git marks, capped file reads,
+//! the file name index, per-file diffs, change attribution to session executions, and live
+//! `project_fs_changed` messages. The only write is `save`, one file from the browser's editor,
+//! checked against the hash the edit started from.
 
 pub mod browse;
 pub mod git;
@@ -15,7 +16,7 @@ use chrono::{DateTime, Utc};
 use git::GitStatus;
 use ostra_core::api::{
     ChangedBy, FileDiff, FileIndex, GitMark, ProjectChange, ProjectFile, ProjectTree,
-    ProjectTreeEntry, ServerMsg,
+    ProjectTreeEntry, SaveProjectFile, ServerMsg,
 };
 use ostra_core::event::ExecPurpose;
 use ostra_core::exec::ExecutionStatus;
@@ -49,7 +50,7 @@ const GIT_TTL: Duration = Duration::from_secs(5);
 const ATTRIBUTION_TTL: Duration = Duration::from_secs(3);
 const DEBOUNCE: Duration = Duration::from_millis(150);
 
-type ProjectId = (WorkspaceId, String);
+pub type ProjectId = (WorkspaceId, String);
 /// Project-relative path to the execution that last wrote it, and when.
 type LiveWrites = HashMap<String, (ExecutionId, DateTime<Utc>)>;
 
@@ -129,7 +130,7 @@ fn internal(e: impl std::fmt::Display) -> ApiErr {
 }
 
 /// The canonical root of a workspace project.
-fn project_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr> {
+pub(crate) fn project_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr> {
     let path = w
         .project_path(key)
         .ok_or_else(|| not_found(format!("No project `{key}` in this workspace.")))?;
@@ -141,7 +142,7 @@ fn project_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr> {
     })
 }
 
-fn contain(root: &Path, raw: &str) -> Result<tree::Contained, ApiErr> {
+pub(crate) fn contain(root: &Path, raw: &str) -> Result<tree::Contained, ApiErr> {
     tree::contain(root, raw).map_err(|m| ApiErr::new(StatusCode::FORBIDDEN, m))
 }
 
@@ -182,6 +183,10 @@ pub struct Files {
     watch: watch::ToolWatch,
     pub browse: browse::BrowseCache,
     touches: mpsc::UnboundedSender<Touch>,
+    /// When the user last saved each file from the browser. A save supersedes older attribution.
+    user_edits: Mutex<HashMap<ProjectId, HashMap<String, DateTime<Utc>>>>,
+    /// Serializes saves, so a hash check and its write are not split by another save.
+    saving: tokio::sync::Mutex<()>,
 }
 
 impl Files {
@@ -194,6 +199,8 @@ impl Files {
             watch: Default::default(),
             browse: Default::default(),
             touches,
+            user_edits: Default::default(),
+            saving: Default::default(),
         }
     }
 
@@ -282,10 +289,20 @@ impl Files {
                 }
             }
         }
+        if let Some(edits) = self.user_edits.lock().get(&id) {
+            map.retain(|path, by| edits.get(path).is_none_or(|at| *at < by.at));
+        }
         let live = self.live.lock().get(&id).cloned().unwrap_or_default();
         let mut views = HashMap::new();
         for (path, (exec, at)) in live {
-            if map.get(&path).is_some_and(|c| c.at >= at) {
+            if map.get(&path).is_some_and(|c| c.at >= at)
+                || self
+                    .user_edits
+                    .lock()
+                    .get(&id)
+                    .and_then(|e| e.get(&path))
+                    .is_some_and(|u| *u >= at)
+            {
                 continue;
             }
             let view = views
@@ -398,6 +415,7 @@ impl Files {
         let git = self.git_status(w, key, &root).await;
         let (mark, staged) = mark_fields(&git, &file.rel);
         let changed_by = self.attribution(w, key, &root).get(&file.rel).cloned();
+        let read_only = read_only_reason(w, &root, &file, changed_by.as_ref());
         Ok(ProjectFile {
             path: file.rel,
             content: read.content,
@@ -408,7 +426,95 @@ impl Files {
             git: mark,
             staged,
             changed_by,
+            hash: read.hash,
+            read_only,
         })
+    }
+
+    /// Create a folder and its missing parents. Answers its project-relative path and its
+    /// parent's listing.
+    pub async fn mkdir(
+        &self,
+        w: &WorkspaceRt,
+        key: &str,
+        raw: &str,
+    ) -> Result<(String, ProjectTree), ApiErr> {
+        let root = project_root(w, key)?;
+        let dir = contain(&root, raw)?;
+        if dir.rel.is_empty() {
+            return Err(bad("Name the folder to create with path."));
+        }
+        if let Some(why) = read_only_reason(w, &root, &dir, None) {
+            return Err(ApiErr::new(StatusCode::FORBIDDEN, why));
+        }
+        if dir.real.exists() {
+            return Err(ApiErr::conflict_on(
+                "path",
+                format!("{} already exists. Choose another name.", dir.rel),
+            ));
+        }
+        std::fs::create_dir_all(&dir.real)
+            .map_err(|e| bad(format!("Cannot create {}: {e}", dir.rel)))?;
+        self.invalidate(&w.id, key);
+        let parent = dir.rel.rsplit_once('/').map_or("", |(p, _)| p).to_string();
+        let listing = self
+            .tree(
+                w,
+                key,
+                TreeQuery {
+                    path: Some(parent),
+                    depth: Some(1),
+                    hidden: Some(true),
+                },
+            )
+            .await?;
+        Ok((dir.rel, listing))
+    }
+
+    /// Write one file from the browser when the disk still holds the version the edit started
+    /// from. Returns the file as saved. The caller announces the change.
+    pub async fn save(
+        &self,
+        w: &WorkspaceRt,
+        key: &str,
+        body: SaveProjectFile,
+    ) -> Result<ProjectFile, ApiErr> {
+        let root = project_root(w, key)?;
+        let file = contain(&root, &body.path)?;
+        if file.rel.is_empty() || file.real.is_dir() {
+            return Err(bad("Name a file with path. Folders cannot be saved."));
+        }
+        if body.content.len() > TEXT_CAP {
+            return Err(bad(format!(
+                "The text is larger than {} MB, the size Ostra edits in the browser.",
+                TEXT_CAP / (1024 * 1024)
+            )));
+        }
+        let changed_by = self.attribution(w, key, &root).get(&file.rel).cloned();
+        if let Some(why) = read_only_reason(w, &root, &file, changed_by.as_ref()) {
+            let status = if changed_by.is_some_and(|c| c.running) {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::FORBIDDEN
+            };
+            return Err(ApiErr::new(status, why));
+        }
+        let _guard = self.saving.lock().await;
+        let target = file.clone();
+        let content = body.content.into_bytes();
+        let base = body.base_hash;
+        tokio::task::spawn_blocking(move || save_file(&target, &content, base.as_deref()))
+            .await
+            .map_err(internal)??;
+        let id = (w.id.clone(), key.to_string());
+        self.user_edits
+            .lock()
+            .entry(id.clone())
+            .or_default()
+            .insert(file.rel.clone(), Utc::now());
+        self.invalidate(&id.0, &id.1);
+        drop(_guard);
+        self.file(w, key, &file.rel).await
     }
 
     pub async fn diff(&self, w: &WorkspaceRt, key: &str, q: DiffQuery) -> Result<FileDiff, ApiErr> {
@@ -524,6 +630,92 @@ impl Files {
     }
 }
 
+/// Why the browser may not write this file, or `None`.
+fn read_only_reason(
+    w: &WorkspaceRt,
+    root: &Path,
+    file: &tree::Contained,
+    changed_by: Option<&ChangedBy>,
+) -> Option<String> {
+    if file.rel.split('/').any(|s| s == ".git") {
+        return Some("Files under .git are read-only here. Use git to change them.".into());
+    }
+    // `file.real` is canonical, and `is_inside` compares lexically.
+    let runtime = paths::workspace_runtime(&w.root);
+    let runtime = std::fs::canonicalize(&runtime).unwrap_or(runtime);
+    let memory = paths::project_runtime(root).join("memory");
+    if paths::is_inside(&runtime, &file.real) || paths::is_inside(&memory, &file.real) {
+        return Some(
+            "Ostra's own state is read-only here. Change workspace settings on the Settings screen, because a direct edit skips their validation.".into(),
+        );
+    }
+    changed_by.filter(|c| c.running).map(|_| {
+        "A running execution is writing this file. Edit it after the execution ends, so neither change overwrites the other.".into()
+    })
+}
+
+/// Check the base hash against the disk and write the new text atomically.
+fn save_file(file: &tree::Contained, content: &[u8], base: Option<&str>) -> Result<(), ApiErr> {
+    use std::io::Write;
+    let changed = "The file changed on disk after you opened it. Reload it and apply your change again, or save over it.";
+    let current = match std::fs::read(&file.real) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(bad(format!("Cannot read {}: {e}", file.rel))),
+    };
+    let perms = match (&current, base) {
+        (None, None) => None,
+        (None, Some(_)) => {
+            return Err(ApiErr::conflict_on(
+                "base_hash",
+                "The file was deleted after you opened it. Save it again as a new file to create it.",
+            ));
+        }
+        (Some(_), None) => {
+            return Err(ApiErr::conflict_on(
+                "base_hash",
+                format!(
+                    "{} already exists. Open it and edit that version.",
+                    file.rel
+                ),
+            ));
+        }
+        (Some(bytes), Some(b)) => {
+            if tree::sha256_hex(bytes) != b {
+                return Err(ApiErr::conflict_on("base_hash", changed));
+            }
+            std::fs::metadata(&file.real).ok().map(|m| m.permissions())
+        }
+    };
+    let dir = file
+        .real
+        .parent()
+        .ok_or_else(|| bad("The file has no folder."))?;
+    std::fs::create_dir_all(dir).map_err(|e| bad(format!("Cannot create the folder: {e}")))?;
+    let write = || -> std::io::Result<()> {
+        let mut tmp = tempfile::Builder::new()
+            .prefix(".ostra-save-")
+            .tempfile_in(dir)?;
+        tmp.write_all(content)?;
+        tmp.as_file().sync_all()?;
+        match perms {
+            Some(p) => tmp.as_file().set_permissions(p)?,
+            // A temp file starts at 0600; a new project file gets the usual 0644.
+            #[cfg(unix)]
+            None => {
+                use std::os::unix::fs::PermissionsExt;
+                tmp.as_file()
+                    .set_permissions(std::fs::Permissions::from_mode(0o644))?
+            }
+            #[cfg(not(unix))]
+            None => {}
+        }
+        tmp.persist(&file.real).map_err(|e| e.error)?;
+        Ok(())
+    };
+    write().map_err(|e| internal(format!("Cannot write {}: {e}", file.rel)))
+}
+
 /// Map an absolute path to the workspace project holding it: the deepest project root wins.
 fn locate(workspaces: &[Arc<WorkspaceRt>], real: &Path) -> Option<(ProjectId, String)> {
     let mut best: Option<(usize, ProjectId, String)> = None;
@@ -584,9 +776,23 @@ fn absorb(app: &App, t: Touch, batch: &mut BTreeMap<ProjectId, BTreeSet<String>>
             continue;
         };
         app.files.invalidate(&id.0, &id.1);
+        app.code.touch(&id, &rel);
         app.files.record_live(&id, &rel, &t.execution);
         batch.entry(id).or_default().insert(rel);
     }
+}
+
+/// Tell the browsers and the code index that the user saved a file.
+pub fn announce_save(app: &App, workspace: &WorkspaceId, key: &str, rel: &str) {
+    app.code.touch(&(workspace.clone(), key.to_string()), rel);
+    let _ = app.push.send(Pushed {
+        channels: vec![format!("workspace:{workspace}")],
+        msg: ServerMsg::ProjectFsChanged {
+            workspace: workspace.clone(),
+            key: key.to_string(),
+            paths: vec![rel.to_string()],
+        },
+    });
 }
 
 /// Turn write touches into cache invalidation and `project_fs_changed` messages, coalescing the

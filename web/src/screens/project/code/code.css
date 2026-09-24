@@ -1,0 +1,3 @@
+.os-code .code-sym { cursor: pointer; border-radius: 2px; }
+.os-code .code-sym:hover { text-decoration: underline; text-underline-offset: 2px; }
+.os-code .code-sym--sel { background: var(--surface-selected); outline: 1px solid var(--border-strong); }

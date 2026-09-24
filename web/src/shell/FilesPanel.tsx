@@ -39,13 +39,58 @@ const MAX_MATCHES = 200;
 
 type Folder = { entries: ProjectTreeEntry[] | null; error: string | null };
 
+type Creating = { kind: "file" | "folder"; dir: string };
+
+const parentOf = (path: string) => path.split("/").slice(0, -1).join("/");
+
+/** The inline name field for a new file or folder inside `dir`. Enter creates, Escape or an empty blur cancels. */
+function NewEntry({ creating, depth, onCreate, onCancel }: { creating: Creating; depth: number; onCreate: (name: string) => Promise<void>; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = () => {
+    const n = name.trim().replace(/^\/+|\/+$/g, "");
+    if (!n) return onCancel();
+    setBusy(true);
+    onCreate(n).catch((e: Error) => {
+      setError(e.message);
+      setBusy(false);
+    });
+  };
+  return (
+    <div style={{ paddingLeft: 8 + depth * 14, paddingBlock: 2 }}>
+      <Input
+        size="sm"
+        mono
+        autoFocus
+        icon={creating.kind === "file" ? "file-plus" : "folder-plus"}
+        aria-label={creating.kind === "file" ? "New file name" : "New folder name"}
+        placeholder={creating.kind === "file" ? "name.ext or folder/name.ext" : "folder or folder/sub"}
+        value={name}
+        disabled={busy}
+        error={error ?? undefined}
+        onChange={(e) => {
+          setName(e.target.value);
+          setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+          if (e.key === "Escape") onCancel();
+        }}
+        onBlur={() => !name.trim() && !busy && onCancel()}
+      />
+    </div>
+  );
+}
+
 type FilesPanelProps = {
   ws: string;
   projects: ProjectView[];
   project: string | null;
   setProject: (key: string) => void;
   selected: { key: string; path: string } | null;
-  onOpenFile: (key: string, path: string) => void;
+  /** `edit` opens the file in edit mode in a normal tab, for a file just created. */
+  onOpenFile: (key: string, path: string, opts?: { edit?: boolean }) => void;
   onOpenProject: (key: string) => void;
   onAddProject: () => void;
 };
@@ -60,6 +105,9 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
   const key = project && projects.some((p) => p.key === project) ? project : (projects[0]?.key ?? null);
   const [showHidden, setShowHidden] = useState(false);
   const [filter, setFilter] = useState("");
+  const [creating, setCreating] = useState<Creating | null>(null);
+  /** The folder new entries go into: the last folder toggled, else the open file's folder. */
+  const [lastDir, setLastDir] = useState<string | null>(null);
   const [openDirs, setOpenDirs] = useState<Record<string, Record<string, boolean>>>({});
   const loading = useRef(new Set<string>());
   const open = (key && openDirs[key]) || {};
@@ -124,6 +172,28 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
   useEffect(() => refresh.cancel, [refresh]);
   useProjectFsChanges(ws, key, refresh);
 
+  const startCreate = (kind: Creating["kind"]) => {
+    const dir = lastDir ?? (selected?.key === key ? parentOf(selected.path) : "");
+    setFilter("");
+    if (dir) setOpen((o) => ({ ...o, ...Object.fromEntries([...parents(`${dir}/x`), dir].map((d) => [d, true])) }));
+    setCreating({ kind, dir });
+  };
+
+  const create = async (name: string) => {
+    if (!key || !creating) return;
+    const path = creating.dir ? `${creating.dir}/${name}` : name;
+    if (creating.kind === "file") {
+      await api.saveProjectFile(ws, key, { path, content: "", base_hash: null });
+      onOpenFile(key, path, { edit: true });
+    } else {
+      await api.createProjectFolder(ws, key, path);
+      setOpen((o) => ({ ...o, ...Object.fromEntries([...parents(path), path].map((d) => [d, true])) }));
+      setLastDir(path);
+    }
+    setCreating(null);
+    for (const d of new Set([creating.dir, ...parents(path)])) load(d);
+  };
+
   const index = useFileIndex(ws, filter.trim() ? key : null);
   const { changes } = useProjectChanges(ws, key);
   const q = filter.trim().toLowerCase();
@@ -163,8 +233,9 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
       );
     if (f.error && !f.entries) return <div style={{ paddingLeft: 26 + depth * 14, color: "var(--bad)", fontSize: "var(--text-sm)" }}>{f.error}</div>;
     const entries = [...(f.entries ?? [])].sort((a, b) => (a.is_dir === b.is_dir ? a.name.localeCompare(b.name) : a.is_dir ? -1 : 1));
-    if (entries.length === 0 && depth === 0) return <div style={{ padding: "12px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>This project is empty.</div>;
-    return entries.map((e) => {
+    const field = creating?.dir === dir && <NewEntry key={`new-${creating.kind}`} creating={creating} depth={depth} onCreate={create} onCancel={() => setCreating(null)} />;
+    if (entries.length === 0 && depth === 0) return field || <div style={{ padding: "12px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>This project is empty.</div>;
+    return [field, ...entries.map((e) => {
       const muted = e.ignored ? { color: "var(--text-muted)" } : undefined;
       if (e.is_dir) {
         const isOpen = !!open[e.path];
@@ -176,7 +247,10 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
               icon={isOpen ? "folder-open" : "folder"}
               expanded={isOpen}
               trailing={!isOpen && e.has_changes ? <span className="os-dot os-dot--warn" style={{ width: 5, height: 5 }} /> : null}
-              onToggle={() => setOpen((o) => ({ ...o, [e.path]: !o[e.path] }))}
+              onToggle={() => {
+                setOpen((o) => ({ ...o, [e.path]: !o[e.path] }));
+                setLastDir(isOpen ? parentOf(e.path) : e.path);
+              }}
               title={e.path + (e.ignored ? " · ignored" : "")}
             />
             {isOpen && renderDir(e.path, depth + 1)}
@@ -196,7 +270,7 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
           title={e.path + (mark ? ` · ${mark.word}` : "") + (e.changed_by ? ` by ${humanize(e.changed_by.agent)}` : "")}
         />
       );
-    });
+    })];
   };
 
   return (
@@ -208,7 +282,17 @@ export function FilesPanel({ ws, projects, project, setProject, selected, onOpen
           </div>
           <IconButton size="sm" icon="info" label="Project overview" onClick={() => onOpenProject(key)} />
           <IconButton size="sm" icon={showHidden ? "eye" : "eye-off"} label={showHidden ? "Hide dotfiles" : "Show dotfiles"} active={showHidden} onClick={() => setShowHidden(!showHidden)} />
-          <IconButton size="sm" icon="chevrons-down-up" label="Collapse all" onClick={() => setOpen(() => ({}))} />
+          <IconButton size="sm" icon="file-plus" label="New file" onClick={() => startCreate("file")} />
+          <IconButton size="sm" icon="folder-plus" label="New folder" onClick={() => startCreate("folder")} />
+          <IconButton
+            size="sm"
+            icon="chevrons-down-up"
+            label="Collapse all"
+            onClick={() => {
+              setOpen(() => ({}));
+              setLastDir(null);
+            }}
+          />
         </div>
         <Input size="sm" icon="search" placeholder="Find a file" aria-label="Find a file" value={filter} onChange={(e) => setFilter(e.target.value)} />
         {proj && proj.init_status !== "initialized" && (

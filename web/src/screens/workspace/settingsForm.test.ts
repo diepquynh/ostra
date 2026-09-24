@@ -85,6 +85,16 @@ describe("settings form round trip", () => {
     expect(out.projects[1]).toEqual({ key: "web", path: "/home/me/code/shop-web", stack: null });
   });
 
+  it("keeps each project's code provider, which the form does not show", () => {
+    const s = clone();
+    s.projects[0].code_provider = { command: ["my-nav", "--json"], timeout_secs: 5 };
+    const f = toForm(s);
+    f.projects[0].key = "api";
+    const { settings: out } = fromForm(f, s);
+    expect(out.projects[0].code_provider).toEqual({ command: ["my-nav", "--json"], timeout_secs: 5 });
+    expect("code_provider" in out.projects[1]).toBe(false);
+  });
+
   it("reports what it cannot parse and keeps the saved value for it", () => {
     const s = clone();
     const f = toForm(s);

@@ -195,6 +195,7 @@ async fn implement_session_runs_to_completion_under_yolo() {
         key: "app".into(),
         path: app.clone(),
         stack: None,
+        code_provider: None,
     });
     let exec = Arc::new(Scripted {
         root: app.clone(),
@@ -339,6 +340,7 @@ async fn init_session_start_and_end_notify_project_changes() {
         key: "app".into(),
         path: app.clone(),
         stack: None,
+        code_provider: None,
     });
     let exec = Arc::new(Scripted {
         root: app,

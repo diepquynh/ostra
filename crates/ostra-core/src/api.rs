@@ -1192,6 +1192,29 @@ pub struct ProjectFile {
     pub git: Option<GitMark>,
     pub staged: bool,
     pub changed_by: Option<ChangedBy>,
+    /// SHA-256 of the bytes on disk, hex. Send it back as `base_hash` when saving. Null when the
+    /// file cannot be edited in the browser: binary, cut at the size cap, or not valid UTF-8.
+    pub hash: Option<String>,
+    /// Why a save is refused right now, such as a running execution writing this file.
+    pub read_only: Option<String>,
+}
+
+/// `PUT /api/workspaces/:ws/projects/:key/file`: write one project file.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SaveProjectFile {
+    pub path: String,
+    pub content: String,
+    /// The `hash` the edit started from. Null creates a file that must not exist yet. A file
+    /// that changed since answers 409 with an issue on `base_hash`.
+    pub base_hash: Option<String>,
+}
+
+/// `POST /api/workspaces/:ws/projects/:key/mkdir`: create a folder and its missing parents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CreateProjectFolder {
+    pub path: String,
 }
 
 /// Every non-ignored file of a project, for "Find a file" and search.

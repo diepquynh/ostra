@@ -270,6 +270,8 @@ path = "/home/me/code/shop-backend"
 [[projects]]
 key = "web"
 path = "/home/me/code/shop-web"
+# Optional: a program that answers code navigation for the Files view (12.5).
+code_provider = { command = ["shop-nav", "--stdio"], timeout_secs = 10 }
 
 # Which executor runs each agent. Absent means native.
 [routing.executor.byAgent]
@@ -681,9 +683,11 @@ Each workspace opens as one console, laid out like a code editor:
   opens ⌘K, and toggles for the left dock and the quick-question dock.
 - **Left dock with two tabs.** Sessions is a tree: each session, its execution groups (one agent on one
   project), the runs of each group with their live one-line summary, and the session's artifacts. `tree_patch`
-  messages keep it current without a refetch. Files shows one project read-only: a lazy folder tree with git
-  marks, dotfiles on request, "Find a file", and "Changed by sessions", which names the execution that last
-  changed each file.
+  messages keep it current without a refetch. Files shows one project: a lazy folder tree with git
+  marks, dotfiles on request, "Find a file", New file and New folder, and "Changed by sessions", which names
+  the execution that last changed each file. New file and New folder open a name field in the last folder
+  toggled, else the open file's folder; a name with `/` creates the folders on the way. A new file is empty and
+  opens in edit mode (12.6).
 - **Editor tabs.** Every screen is a resource with an id and a URL: `ws:overview`, `ws:settings`, `ws:cost`,
   `ws:memory`, `session:<id>`, `exec:<id>`, `artifact:<path>`, `project:<key>`, `file:<key>:<path>`. A row opened
   from a list opens a preview tab, shown in italics, which the next preview replaces; an explicit open or a pin
@@ -708,7 +712,7 @@ Each workspace opens as one console, laid out like a code editor:
 | Artifacts | Research documents, the spec, the plan, and phase files render natively from their typed documents, one chapter per page, with an Outlines menu that shows counts (for example requirements, open questions, sources). The spec shows requirements in EARS form with their acceptance criteria, contracts, and External Evidence. The plan shows each phase as its own chapter with its steps. IDs such as `R3`, `E2`, and `step 2.3` are chips that open the chapter holding that element. Fact-check findings sit on the element their `element` field names. The rendered markdown is one toggle away. Content fills the width between the docks, and every table's columns can be resized by dragging a header edge (arrow keys when focused, double-click resets), and a wide table's horizontal scrollbar stays pinned to the bottom of the view while the table is on screen. Reports stay markdown with an outline from their headings beside the text, and the review ledger shows as comments on a Monaco diff. |
 | Gates | Open questions (recommended option first), spec and plan approval (disabled until PASS, with the findings shown), review cap, STUCK rescue, closing gate, skill approval for init, permission asks, and BLOCKER notices showing the reviewer's Guidance text, with no dismiss button. |
 | Project | A header with the init status, the checked-out branch, the path, and the stack. An Overview tab (profile, commands, skills, review rules) or Initialize for a new project, and a Files tab. |
-| File | One project file, read-only, with its git mark and the execution that changed it, or its diff against HEAD. |
+| File | One project file with its git mark and the execution that changed it, or its diff against HEAD. Edit opens the text in Monaco (12.6). The text is colored by the project's code provider (12.5), and a click on a name finds its usages. A code pane beside the text has Outline, Usages (with a symbol search), and Dependencies (imports and the files that import this one). A `#L<n>` hash scrolls to a line and marks it. |
 | Settings | Workspace TOML as forms: projects, executor and model routing tables, instructions, permissions, YOLO, notifications. Validated as you edit and again on save. Each routing row names what Agent default means for that agent (tier, model, and effort from its `agent.toml`), the stack choices are the embedded stack references, and the global permission rules from `~/.config/ostra/config.toml` show read-only. |
 | Memory | Lessons per project, searchable. The user may edit or delete any lesson. |
 | Cost | Per session, stage, agent, and executor over this week (the status bar's week) or all time: tokens, cache reads, cache writes by TTL (5 minutes, 1 hour), cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
@@ -734,6 +738,59 @@ button starts a session with the question as the request.
 Web Push through a service worker with VAPID keys stored in `registry.db`. `http://localhost` is a secure
 context, so no TLS is needed. Push fires when a gate is waiting, a session completes, a phase is blocked, or a
 harness needs login. Every notification deep-links to the screen that needs the user.
+
+### 12.5 Code navigation
+
+The Files view reads display tokens, outlines, usages, and dependencies from a code provider, so a project can
+bring its own analysis without Ostra carrying editor plugins. Every answer names the provider that gave it.
+
+- **Built-in provider.** A table-driven tokenizer covers Rust, TypeScript, JavaScript, Python, Go, Java,
+  Kotlin, Scala, C#, Swift, PHP, C, C++, Ruby, Lua, and shell for navigation, and SQL, TOML, YAML, JSON, CSS,
+  and HTML for color only. Definitions come from keyword rules, members of class bodies, and a few family forms
+  (C function bodies, Go receivers, Python indentation). Imports resolve to project files from the language's
+  own rules and the manifests (`Cargo.toml` package names, `go.mod` module paths, `package.json` and
+  `tsconfig.json` for `@/` paths). Names match by text: there is no type information, so a common name shows
+  every definition.
+- **Index.** One per project, built on the first usages, dependencies, or symbol request. It keeps each file's
+  names, definitions, and imports, not its text, and a usages request re-reads only the files that mention the
+  name. Writes by executions mark files for re-reading, and every file is checked on disk again after 30
+  seconds for edits made outside Ostra. Files over 1 MB and minified files are skipped. The index stops adding
+  files at 256 MB of source and says so in its answers. A usages request reads at most 4,000 files.
+- **Project provider.** `code_provider.command` in a project entry runs once per request in the project folder.
+  Ostra writes one JSON request to its stdin and reads one JSON value from its stdout. The request is
+  `{"op": "file" | "usages" | "deps" | "symbols", "version": 1, "root": <project folder>, ...}` with `path` for
+  `file` and `deps`; `symbol`, `limit`, and optional `path`, `line`, and `col` for `usages`; and `query` and
+  `limit` for `symbols`. The answer has the shape of the matching endpoint below (`CodeFile`, `CodeUsages`,
+  `CodeDeps`, `CodeSymbols` in `ostra-core/src/code.rs`), and a provider sends only the fields it knows. Answer
+  `null` to let the built-in provider answer that request. A non-zero exit, a timeout (`timeout_secs`, 1 to
+  120, default 10), or an answer that fails the checks (project-relative paths, 1-based lines, tokens in groups
+  of four with a valid class index) also falls through to the built-in provider, and the answer shown carries
+  the reason, because a silent fallback would hide a broken provider. `OSTRA_CODE_PROTOCOL` in the program's
+  environment holds the protocol version.
+- **Tokens.** `CodeFile.tokens` is a flat list of four numbers per token: 1-based line, 0-based UTF-16 column,
+  UTF-16 length, and an index into `classes`. UTF-16 matches browser string indexes, so the browser slices each
+  line without converting. A token never spans lines.
+
+### 12.6 Editing files
+
+The File screen edits one text file at a time, with optimistic concurrency so a save never overwrites a
+change the user has not seen:
+
+- `ProjectFile.hash` is the SHA-256 of the bytes on disk. A save sends it back as `base_hash`. The server hashes
+  the file again under a save lock and refuses with 409, an issue on `base_hash`, when they differ. A null
+  `base_hash` creates a file and is refused when the file exists. The write goes to a temporary file in the
+  same folder and is renamed over the target, keeping its permissions.
+- While an edit is open, a `project_fs_changed` push for the file reloads it. A new hash with unsaved changes
+  shows a banner with Reload (take the disk version) and Overwrite (save over it with the new hash). Without
+  unsaved changes the new version replaces the old one.
+- Editing is offered only for a complete, valid UTF-8 text file, because saving the lossy text of a binary,
+  cut, or invalid file would corrupt it (`hash` is null). `read_only` names why a save is refused now: files
+  under `.git`, the project's memory store, and the workspace's `.ostra` folder, because an edit there skips
+  settings validation or engine state ownership; and a file a running execution is writing, answered with 409,
+  so neither change overwrites the other.
+- New folders use `POST .../mkdir` under the same path rules as a save, and answer 409 when the path exists.
+- A save supersedes older attribution: "Changed by sessions" stops naming an execution for a file the user
+  saved after it. The save marks the file for the code index and pushes `project_fs_changed`.
 
 ## 13. API
 
@@ -767,10 +824,23 @@ PATCH/DELETE    /api/git/credentials/:id                  edit (absent fields ke
 GET/PATCH/DELETE /api/workspaces/:ws/projects/:key/memory
 GET             /api/workspaces/:ws/projects/:key/tree    ?path=&depth=&hidden=; entries with git marks and the
                                                           execution that changed them
-GET             /api/workspaces/:ws/projects/:key/file    ?path=; read-only text, binary flag, size cap
+GET/PUT         /api/workspaces/:ws/projects/:key/file    ?path=; text with its hash, binary flag, size cap;
+                                                          PUT {path, content, base_hash} saves (12.6), 409
+                                                          when the disk no longer holds base_hash
+POST            /api/workspaces/:ws/projects/:key/mkdir   {path}; create a folder and its parents, answers the
+                                                          parent listing; 409 when it exists
 GET             /api/workspaces/:ws/projects/:key/files   every non-ignored path, for Find a file and search
 GET             /api/workspaces/:ws/projects/:key/diff    ?path=&base=HEAD; parsed hunks
 GET             /api/workspaces/:ws/projects/:key/changes files sessions changed that still differ from HEAD
+GET             /api/workspaces/:ws/projects/:key/code/file
+                                                          ?path=; display tokens, outline, imports (12.5)
+GET             /api/workspaces/:ws/projects/:key/code/usages
+                                                          ?symbol=&path=&line=&col=&limit=; definitions and
+                                                          references, the named file first
+GET             /api/workspaces/:ws/projects/:key/code/deps
+                                                          ?path=; imports with targets, and importers
+GET             /api/workspaces/:ws/projects/:key/code/symbols
+                                                          ?q=&limit=; definitions by name
 GET/POST        /api/workspaces/:ws/sessions              list, create (request + toggles)
 GET             /api/workspaces/:ws/tree                  the Sessions tree: sessions, groups, runs, artifacts
 GET             /api/workspaces/:ws/search                ?q=&limit=; ranked hits for ⌘K
@@ -835,6 +905,7 @@ ostra/
     ostra-providers               anthropic, openai
     ostra-store                   SQLite (rusqlite with bundled FTS5), migrations, event log
     ostra-notify                  Web Push
+    ostra-code                    tokenizer, project code index, code providers for the Files view
     ostra-server                  axum, WebSocket, auth, embedded web build, CLI entry (serve, hook, mcp-stdio)
   assets/
     agents/<name>/{agent.toml, prompt.md}

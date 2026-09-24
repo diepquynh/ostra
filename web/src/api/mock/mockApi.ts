@@ -5,7 +5,8 @@ import * as f from "./fixtures";
 import * as fx from "./fixtures.execution";
 import { eventsFor, gateSessions } from "./fixtures.session";
 import * as wf from "./fixtures.workspace";
-import { mockBrowse, mockChanges, mockDiff, mockFile, mockFileIndex, mockTree } from "./projectFiles";
+import { mockBrowse, mockChanges, mockDiff, mockFile, mockFileIndex, mockMkdir, mockSaveFile, mockTree } from "./projectFiles";
+import { mockCodeDeps, mockCodeFile, mockCodeSymbols, mockCodeUsages } from "./mockCode";
 import { mockCreateWorkspace, mockValidateCreate, mockValidateImport } from "./fixtures.projects";
 
 const delay = <T>(value: T, ms = 80): Promise<T> =>
@@ -336,8 +337,28 @@ export const mockApi: Api = {
 
   projectTree: (_ws, key, opts = {}) => attempt(() => mockTree(key, opts.path, opts.hidden)),
   projectFile: (_ws, key, path) => attempt(() => mockFile(key, path)),
+  createProjectFolder: (_ws, key, path) => {
+    try {
+      return delay(mockMkdir(key, path));
+    } catch (e) {
+      const err = e as Error & { status?: number; issues?: { path: string; message: string }[] };
+      return new Promise((_, reject) => setTimeout(() => reject(new HttpError(err.status ?? 400, err.message, err.issues ?? [])), 80));
+    }
+  },
+  saveProjectFile: (_ws, key, body) => {
+    try {
+      return delay(mockSaveFile(key, body.path, body.content, body.base_hash));
+    } catch (e) {
+      const err = e as Error & { status?: number; issues?: { path: string; message: string }[] };
+      return new Promise((_, reject) => setTimeout(() => reject(new HttpError(err.status ?? 404, err.message, err.issues ?? [])), 80));
+    }
+  },
   projectFiles: (_ws, key) => delay(mockFileIndex(key)),
   projectDiff: (_ws, key, path) => attempt(() => mockDiff(key, path)),
+  codeFile: (_ws, key, path) => attempt(() => mockCodeFile(key, path)),
+  codeUsages: (_ws, key, symbol, at = {}) => attempt(() => mockCodeUsages(key, symbol, at.path)),
+  codeDeps: (_ws, key, path) => attempt(() => mockCodeDeps(key, path)),
+  codeSymbols: (_ws, key, query, limit = 50) => attempt(() => mockCodeSymbols(key, query, limit)),
   projectChanges: (_ws, key) => delay(mockChanges(key)),
 
   tree: () => delay({ sessions: tree() }),

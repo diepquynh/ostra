@@ -10,6 +10,7 @@ use ostra_core::api::{
     UI_STATE_MAX_BYTES, UiTab, WorkspaceActivity, WorkspaceDetail, WorkspaceSummary, WorkspaceTree,
     WorkspaceUiState,
 };
+use ostra_core::code::{CodeDeps, CodeFile, CodeLocation, CodeSymbols, CodeUsages, SymbolKind};
 use ostra_core::config::{GlobalConfig, PermissionMode, TierTable, ValidationIssue, save_toml};
 use ostra_providers::mock::{response, tool_use_response};
 use ostra_providers::{
@@ -808,6 +809,223 @@ async fn yolo_implement_session_end_to_end() {
         index.paths
     );
     assert!(!index.truncated);
+
+    // Code navigation: tokens and outline, usages across files, dependencies, symbol search.
+    std::fs::create_dir_all(app_dir.join("src")).unwrap();
+    std::fs::write(app_dir.join("Cargo.toml"), "[package]\nname = \"app\"\n").unwrap();
+    std::fs::write(
+        app_dir.join("src/lib.rs"),
+        "mod greet;\npub use greet::hello;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        app_dir.join("src/greet.rs"),
+        "pub fn hello() -> &'static str {\n    \"hi\"\n}\n",
+    )
+    .unwrap();
+    app.files.invalidate(&ws.id, "app");
+    let file: CodeFile = get("code/file", &[("path", "src/greet.rs")])
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            file.provider.as_str(),
+            file.language.as_deref(),
+            file.tokens.len() % 4
+        ),
+        ("native", Some("rust"), 0)
+    );
+    assert_eq!(
+        (
+            file.symbols[0].name.as_str(),
+            file.symbols[0].kind,
+            file.symbols[0].end_line
+        ),
+        ("hello", SymbolKind::Function, Some(3))
+    );
+    let usages: CodeUsages = get(
+        "code/usages",
+        &[("symbol", "hello"), ("path", "src/lib.rs")],
+    )
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let at = |l: &[CodeLocation]| {
+        l.iter()
+            .map(|x| (x.path.clone(), x.line))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        at(&usages.definitions),
+        vec![("src/greet.rs".to_string(), 1)]
+    );
+    assert_eq!(at(&usages.references), vec![("src/lib.rs".to_string(), 2)]);
+    let deps: CodeDeps = get("code/deps", &[("path", "src/greet.rs")])
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let by: Vec<(&str, u32)> = deps
+        .importers
+        .iter()
+        .map(|i| (i.path.as_str(), i.line))
+        .collect();
+    assert_eq!(by, vec![("src/lib.rs", 1), ("src/lib.rs", 2)]);
+    let found: CodeSymbols = get("code/symbols", &[("q", "hel")])
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(found.items[0].name, "hello");
+    assert_eq!(
+        get("code/usages", &[("symbol", "two words")])
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        get("code/file", &[("path", "../outside.rs")])
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+
+    // Saving from the browser: the base hash must match the disk, and the save supersedes attribution.
+    let put = |body: serde_json::Value| client.put(format!("{project}/file")).json(&body).send();
+    let read = |path: &'static str| async move {
+        get("file", &[("path", path)])
+            .await
+            .unwrap()
+            .json::<ProjectFile>()
+            .await
+            .unwrap()
+    };
+    let before = read("greeting.txt").await;
+    let base_hash = before.hash.clone().expect("a small text file is editable");
+    assert_eq!(before.read_only, None);
+    assert!(before.changed_by.is_some());
+    let r =
+        put(json!({"path": "greeting.txt", "content": "hello\nworld\n", "base_hash": base_hash}))
+            .await
+            .unwrap();
+    assert_eq!(r.status(), 200);
+    let saved: ProjectFile = r.json().await.unwrap();
+    assert_eq!(saved.content.as_deref(), Some("hello\nworld\n"));
+    assert_ne!(saved.hash, Some(base_hash.clone()));
+    assert_eq!(
+        saved.changed_by, None,
+        "the user's save supersedes the implementer"
+    );
+    assert_eq!(
+        std::fs::read_to_string(app_dir.join("greeting.txt")).unwrap(),
+        "hello\nworld\n"
+    );
+
+    let stale = put(json!({"path": "greeting.txt", "content": "x", "base_hash": base_hash}))
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    let err: ApiError = stale.json().await.unwrap();
+    assert_eq!(err.issues[0].path, "base_hash");
+
+    std::fs::write(app_dir.join("greeting.txt"), "edited in a shell\n").unwrap();
+    let r = put(json!({"path": "greeting.txt", "content": "x", "base_hash": saved.hash}))
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        409,
+        "an edit outside Ostra is caught by the hash"
+    );
+    assert_eq!(
+        std::fs::read_to_string(app_dir.join("greeting.txt")).unwrap(),
+        "edited in a shell\n"
+    );
+
+    let exists = put(json!({"path": "greeting.txt", "content": "x", "base_hash": null}))
+        .await
+        .unwrap();
+    assert_eq!(exists.status(), 409);
+    let created = put(
+        json!({"path": "src/deep/new.rs", "content": "pub fn fresh() {}\n", "base_hash": null}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(created.status(), 200);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(app_dir.join("src/deep/new.rs"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644);
+    }
+    let fresh: CodeUsages = get("code/usages", &[("symbol", "fresh")])
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        fresh.definitions.len(),
+        1,
+        "the code index sees the saved file"
+    );
+
+    let git_file = read(".git/HEAD").await;
+    assert!(git_file.read_only.is_some());
+    let r = put(json!({"path": ".git/HEAD", "content": "x", "base_hash": git_file.hash}))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    let r = put(json!({"path": "../escape.txt", "content": "x", "base_hash": null}))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    assert!(!root.join("escape.txt").exists());
+
+    let mkdir = |path: &str| {
+        client
+            .post(format!("{project}/mkdir"))
+            .json(&json!({ "path": path }))
+            .send()
+    };
+    let r = mkdir("docs/guides").await.unwrap();
+    assert_eq!(r.status(), 200);
+    let listing: ProjectTree = r.json().await.unwrap();
+    assert_eq!(listing.path, "docs");
+    assert_eq!(
+        listing
+            .entries
+            .iter()
+            .map(|e| (e.name.as_str(), e.is_dir))
+            .collect::<Vec<_>>(),
+        vec![("guides", true)]
+    );
+    assert!(app_dir.join("docs/guides").is_dir());
+    assert_eq!(mkdir("docs/guides").await.unwrap().status(), 409);
+    assert_eq!(mkdir(".git/hooks2").await.unwrap().status(), 403);
+    assert_eq!(mkdir("../outside").await.unwrap().status(), 403);
+    assert!(!root.join("outside").exists());
+    std::fs::create_dir_all(app_dir.join(".ostra/memory")).unwrap();
+    std::fs::write(app_dir.join(".ostra/memory/notes.txt"), "state\n").unwrap();
+    let memory = read(".ostra/memory/notes.txt").await;
+    assert!(memory.read_only.is_some());
+    let r =
+        put(json!({"path": ".ostra/memory/notes.txt", "content": "x", "base_hash": memory.hash}))
+            .await
+            .unwrap();
+    assert_eq!(r.status(), 403);
 
     let fs: FsBrowse = client
         .get(
