@@ -23,7 +23,12 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
     <>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
         <div style={{ flex: "1 1 420px", minWidth: 0 }}>
-          <h1 style={{ margin: "0 0 6px", font: "var(--type-title)", textWrap: "pretty" }}>{s.request}</h1>
+          <h1 style={{ margin: "0 0 6px", font: "var(--type-title)", textWrap: "pretty" }}>{s.title ?? "Untitled"}</h1>
+          {s.request && (
+            <p style={{ margin: "0 0 12px", fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: "var(--leading-normal)" }}>
+              {s.request}
+            </p>
+          )}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
             {category && <Chip tone={s.kind.kind === "init" ? "info" : "neutral"}>{category}</Chip>}
             <StatusChip status={s.status} />
