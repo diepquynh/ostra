@@ -134,6 +134,7 @@ async fn boot(root: &Path) -> Server {
     unsafe {
         std::env::set_var("OSTRA_CONFIG", root.join("config.toml"));
         std::env::set_var("OSTRA_DATA_DIR", root.join("data"));
+        std::env::set_var("OSTRA_MODELS_DEV_URL", "");
     }
     let mut global = GlobalConfig::default();
     global.tiers.insert(

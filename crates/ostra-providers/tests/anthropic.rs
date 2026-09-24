@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 fn provider(base: String) -> Anthropic {
+    ostra_core::pricing::install_test_prices();
     Anthropic::new(ApiKey::new("sk-ant-test-key"), Some(base)).with_retry(RetryPolicy::fast(2))
 }
 

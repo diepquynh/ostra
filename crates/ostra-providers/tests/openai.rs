@@ -11,6 +11,7 @@ use parking_lot::Mutex;
 use serde_json::json;
 
 fn provider(base: String) -> OpenAi {
+    ostra_core::pricing::install_test_prices();
     OpenAi::new(ApiKey::new("sk-openai-test"), Some(base)).with_retry(RetryPolicy::fast(2))
 }
 

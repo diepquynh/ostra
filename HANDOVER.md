@@ -461,12 +461,17 @@ implementations.
 
 - System prompt: the rendered agent prompt. First user message: the spawn block plus the repo brief. Loaded
   skills join the cached prefix.
-- Prompt caching on the system prompt, the tool definitions, and loaded skills.
+- Prompt caching on the system prompt, the tool definitions, and loaded skills. Every breakpoint uses the
+  1-hour TTL, because an execution's turns can sit more than five minutes apart (a long build, a permission ask).
 - Reasoning effort maps from `agent.toml` to each provider's effort or thinking setting.
 - `timeout_seconds` is a hard budget per execution. Cancel is immediate.
 - Long executions clear old tool results before the context fills. The implementer's progress log is what lets
   a re-run resume, as in Ultracode.
-- Tokens, cache reads, and cost are recorded per execution.
+- Tokens, cache reads, and cost are recorded per execution. Prices come from the models.dev catalog
+  (`https://models.dev/api.json`), cached as `models-dev.json` in the data dir and refreshed daily, with a
+  first-party listing preferred over resellers and context tiers applied per request. models.dev lists only the
+  5-minute cache write, so Anthropic 1-hour writes are priced at twice the input rate. `OSTRA_MODELS_DEV_URL`
+  overrides the URL, and an empty value turns fetching off.
 
 ### 10.2 Harness executors
 

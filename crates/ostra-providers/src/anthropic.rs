@@ -198,9 +198,15 @@ fn messages_json(messages: &[Message]) -> Vec<Value> {
         && let Some(last_block) = last_user["content"].as_array_mut().and_then(|c| c.last_mut())
         && matches!(last_block["type"].as_str(), Some("text" | "tool_result"))
     {
-        last_block["cache_control"] = json!({"type": "ephemeral"});
+        last_block["cache_control"] = cache_mark();
     }
     out
+}
+
+/// Every breakpoint uses the 1-hour TTL: an execution's turns can sit more than five minutes apart
+/// (a long build, a permission ask), and mixing TTLs would need the longer entries first.
+fn cache_mark() -> Value {
+    json!({"type": "ephemeral", "ttl": "1h"})
 }
 
 pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
@@ -228,7 +234,7 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
             .map(|(i, s)| {
                 let mut v = json!({"type": "text", "text": s.text});
                 if marks.contains(&i) {
-                    v["cache_control"] = json!({"type": "ephemeral"});
+                    v["cache_control"] = cache_mark();
                 }
                 v
             })
@@ -256,7 +262,7 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
             "eager_input_streaming": true,
         });
         if i + 1 == client_tools {
-            v["cache_control"] = json!({"type": "ephemeral"});
+            v["cache_control"] = cache_mark();
         }
         tools.push(v);
     }
@@ -638,6 +644,9 @@ mod tests {
         assert_eq!(b["tools"][3]["cache_control"]["type"], "ephemeral");
         assert!(b["tools"][2].get("cache_control").is_none());
         assert_eq!(b["messages"][0]["content"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(b["messages"][0]["content"][0]["cache_control"]["ttl"], "1h");
+        assert_eq!(b["system"][1]["cache_control"]["ttl"], "1h");
+        assert_eq!(b["tools"][3]["cache_control"]["ttl"], "1h");
         assert!(betas.is_empty());
     }
 

@@ -216,6 +216,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     let global_path = ensure_global_config()?;
     let global: GlobalConfig = load_toml(&global_path).with_context(|| format!("reading {}", global_path.display()))?;
     std::fs::create_dir_all(paths::data_dir())?;
+    crate::prices::start(&paths::data_dir());
     let registry = RegistryDb::open(&paths::registry_db_path())?;
     // The registry holds provider keys saved from the browser.
     #[cfg(unix)]

@@ -20,4 +20,5 @@ keyring.workspace = true
 parking_lot.workspace = true
 
 [dev-dependencies]
+ostra-core = { workspace = true, features = ["test-prices"] }
 pretty_assertions.workspace = true

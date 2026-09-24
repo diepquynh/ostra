@@ -19,5 +19,9 @@ tokio-util.workspace = true
 regex.workspace = true
 dirs.workspace = true
 
+[features]
+# Exposes `pricing::install_test_prices` to other crates' tests.
+test-prices = []
+
 [dev-dependencies]
 pretty_assertions.workspace = true

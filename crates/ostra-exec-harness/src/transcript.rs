@@ -408,6 +408,7 @@ mod tests {
 
     #[test]
     fn reader_follows_appends_and_waits_for_a_partial_line() {
+        ostra_core::pricing::install_test_prices();
         use std::io::Write;
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("t.jsonl");
@@ -450,6 +451,7 @@ mod tests {
 
     #[test]
     fn claude_usage_counts_once_per_message_and_prices_cache_ttls() {
+        ostra_core::pricing::install_test_prices();
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("t.jsonl");
         let usage = r#""usage":{"input_tokens":1000000,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":3000000,"cache_creation":{"ephemeral_5m_input_tokens":2000000,"ephemeral_1h_input_tokens":1000000}}"#;
@@ -463,6 +465,7 @@ mod tests {
 
     #[test]
     fn codex_prices_each_increase_of_the_running_total() {
+        ostra_core::pricing::install_test_prices();
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().join("r.jsonl");
         let count = |input: u64, cached: u64, output: u64| {
@@ -470,14 +473,14 @@ mod tests {
         };
         let lines = [
             r#"{"type":"turn_context","payload":{"model":"gpt-5.6-terra"}}"#.to_string(),
-            count(1_000_000, 0, 0),
-            count(1_000_000, 0, 0),
-            count(3_000_000, 1_000_000, 1_000_000),
+            count(100_000, 0, 0),
+            count(100_000, 0, 0),
+            count(250_000, 50_000, 50_000),
         ];
         std::fs::write(&p, lines.join("\n")).unwrap();
         let f = codex_facts(&p);
-        assert_eq!((f.usage.input_tokens, f.usage.cache_read_tokens, f.usage.output_tokens), (2_000_000, 1_000_000, 1_000_000));
-        // Terra: $2 input, $0.2 cached, $12 output, per million.
-        assert!((f.usage.cost_usd - (4.0 + 0.2 + 12.0)).abs() < 1e-9, "{}", f.usage.cost_usd);
+        assert_eq!((f.usage.input_tokens, f.usage.cache_read_tokens, f.usage.output_tokens), (200_000, 50_000, 50_000));
+        // Terra below its 272k context tier: $2 input, $0.2 cached, $12 output, per million.
+        assert!((f.usage.cost_usd - (0.4 + 0.01 + 0.6)).abs() < 1e-9, "{}", f.usage.cost_usd);
     }
 }

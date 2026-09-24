@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod env;
 pub mod files;
 pub mod nav;
+pub mod prices;
 pub mod services;
 pub mod setup;
 pub mod skills;
