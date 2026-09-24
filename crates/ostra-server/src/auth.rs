@@ -1,17 +1,23 @@
 //! Browser auth (HANDOVER 15): a one-time token in the URL fragment, exchanged once for an
 //! `HttpOnly`, `SameSite=Strict` cookie. Host and Origin checks block DNS rebinding and foreign
 //! pages. Tokens and cookies are stored hashed in the registry, so a restart keeps sign-ins and
-//! `ostra url` can mint a token for a running server.
+//! `ostra url` can mint a token for a running server. A sign-in lasts [`COOKIE_TTL_SECS`], and
+//! `ostra signout` revokes every one; a running server notices within [`RECHECK`].
 
 use ostra_core::paths;
 use ostra_store::RegistryDb;
 use parking_lot::RwLock;
 use rand::RngExt;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 pub const COOKIE: &str = "ostra_session";
 const TOKEN_TTL_SECS: u64 = 15 * 60;
+pub const COOKIE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+/// How long a checked cookie is trusted before the registry is read again.
+const RECHECK: Duration = Duration::from_secs(30);
+const COOKIE_KEY: &str = "auth:cookie:";
 
 pub struct Auth {
     registry: RegistryDb,
@@ -20,7 +26,8 @@ pub struct Auth {
     hosts: Vec<String>,
     /// Host used in printed sign-in URLs.
     url_host: String,
-    cookies: RwLock<HashSet<String>>,
+    /// Cookie hash to (expiry, when the registry last confirmed it).
+    cookies: RwLock<HashMap<String, (u64, Instant)>>,
 }
 
 /// Where the server listens and which names reach it.
@@ -55,12 +62,17 @@ pub fn is_local_address(ip: std::net::IpAddr) -> bool {
     ip.is_loopback() || if_addrs::get_if_addrs().unwrap_or_default().iter().any(|i| i.ip() == ip)
 }
 
+/// The machine's host name, without a `.local` suffix (macOS often includes one).
 fn hostname() -> Option<String> {
-    std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .or_else(|_| std::fs::read_to_string("/etc/hostname"))
-        .ok()
-        .map(|h| h.trim().to_lowercase())
-        .filter(|h| !h.is_empty())
+    let mut buf = [0u8; 256];
+    // SAFETY: gethostname writes at most `buf.len()` bytes into the buffer we own.
+    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let name = String::from_utf8_lossy(&buf[..end]).trim().to_lowercase();
+    let name = name.strip_suffix(".local").unwrap_or(&name).to_string();
+    (!name.is_empty()).then_some(name)
 }
 
 impl Access {
@@ -196,7 +208,7 @@ impl Auth {
             port: access.port,
             hosts: access.hosts(),
             url_host: access.url_host(),
-            cookies: RwLock::new(HashSet::new()),
+            cookies: RwLock::new(HashMap::new()),
         }
     }
 
@@ -225,21 +237,35 @@ impl Auth {
         }
         let cookie = random_hex();
         let h = hash(&cookie);
-        let _ = self.registry.kv_set(&format!("auth:cookie:{h}"), now().to_string().as_bytes());
-        self.cookies.write().insert(h);
+        let created = now();
+        let _ = self.registry.kv_set(&format!("{COOKIE_KEY}{h}"), created.to_string().as_bytes());
+        self.cookies.write().insert(h, (created + COOKIE_TTL_SECS, Instant::now()));
         Ok(cookie)
     }
 
+    /// A cookie is valid while its sign-in is in the registry and younger than the TTL.
     pub fn check_cookie(&self, value: &str) -> bool {
         let h = hash(value);
-        if self.cookies.read().contains(&h) {
-            return true;
+        if let Some((expires, checked)) = self.cookies.read().get(&h).copied()
+            && checked.elapsed() < RECHECK
+        {
+            return expires > now();
         }
-        let known = self.registry.kv_get(&format!("auth:cookie:{h}")).ok().flatten().is_some();
-        if known {
-            self.cookies.write().insert(h);
+        let key = format!("{COOKIE_KEY}{h}");
+        let expires = self.registry.kv_get(&key).ok().flatten().and_then(|v| sign_in_expiry(&v));
+        match expires {
+            Some(e) if e > now() => {
+                self.cookies.write().insert(h, (e, Instant::now()));
+                true
+            }
+            other => {
+                if other.is_some() {
+                    let _ = self.registry.kv_delete(&key);
+                }
+                self.cookies.write().remove(&h);
+                false
+            }
         }
-        known
     }
 
     /// A `Host` this server is not known by is refused, which blocks DNS rebinding.
@@ -260,9 +286,48 @@ impl Auth {
         }
     }
 
-    pub fn cookie_header(value: &str) -> String {
-        format!("{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000")
+    /// `secure` when the browser reached Ostra over HTTPS, as through a TLS reverse proxy.
+    pub fn cookie_header(value: &str, secure: bool) -> String {
+        let secure = if secure { "; Secure" } else { "" };
+        format!("{COOKIE}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={COOKIE_TTL_SECS}{secure}")
     }
+}
+
+/// The stored value is the sign-in's creation time in seconds.
+fn sign_in_expiry(stored: &[u8]) -> Option<u64> {
+    std::str::from_utf8(stored).ok()?.parse::<u64>().ok().map(|created| created + COOKIE_TTL_SECS)
+}
+
+/// A sign-in as `ostra signins` lists it: an id prefix of its hash, and its times in seconds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignIn {
+    pub id: String,
+    pub created: u64,
+    pub expires: u64,
+}
+
+pub fn list_sign_ins(registry: &RegistryDb) -> anyhow::Result<Vec<SignIn>> {
+    let mut out: Vec<SignIn> = registry
+        .kv_scan(COOKIE_KEY)?
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let expires = sign_in_expiry(&value)?;
+            let id = key.strip_prefix(COOKIE_KEY)?.chars().take(12).collect();
+            Some(SignIn { id, created: expires - COOKIE_TTL_SECS, expires })
+        })
+        .filter(|s| s.expires > now())
+        .collect();
+    out.sort_by_key(|s| s.created);
+    Ok(out)
+}
+
+/// Remove every sign-in. Returns how many there were.
+pub fn revoke_sign_ins(registry: &RegistryDb) -> anyhow::Result<usize> {
+    let keys = registry.kv_scan(COOKIE_KEY)?;
+    for (key, _) in &keys {
+        registry.kv_delete(key)?;
+    }
+    Ok(keys.len())
 }
 
 pub fn cookie_value(header: Option<&str>) -> Option<String> {
@@ -284,7 +349,17 @@ pub fn write_server_file(auth: &Auth) -> anyhow::Result<()> {
 pub fn server_running() -> bool {
     let Ok(text) = std::fs::read_to_string(server_file()) else { return false };
     let pid = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("pid").and_then(|p| p.as_u64()));
-    pid.is_some_and(|p| std::path::Path::new(&format!("/proc/{p}")).exists())
+    pid.and_then(|p| i32::try_from(p).ok()).is_some_and(process_alive)
+}
+
+/// `kill(pid, 0)` probes without signalling, on Linux and macOS alike. EPERM means the process
+/// exists under another user.
+fn process_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 performs only the existence and permission check.
+    unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
 }
 
 pub fn remove_server_file() {
@@ -317,6 +392,45 @@ mod tests {
         assert!(!auth.check_cookie("nope"));
         let fresh = Auth::new(reg, &Access::loopback(7878));
         assert!(fresh.check_cookie(&cookie), "sign-ins survive a restart");
+    }
+
+    #[test]
+    fn sign_ins_expire_and_can_be_revoked() {
+        let reg = RegistryDb::open_in_memory().unwrap();
+        let auth = Auth::new(reg.clone(), &Access::loopback(7878));
+        let cookie = auth.exchange(&mint_token(&reg).unwrap()).unwrap();
+        assert_eq!(list_sign_ins(&reg).unwrap().len(), 1);
+
+        let old = format!("{COOKIE_KEY}{}", hash("old"));
+        reg.kv_set(&old, (now() - COOKIE_TTL_SECS - 1).to_string().as_bytes()).unwrap();
+        assert!(!auth.check_cookie("old"), "a sign-in older than the TTL is refused");
+        assert_eq!(reg.kv_get(&old).unwrap(), None, "and removed");
+
+        assert_eq!(revoke_sign_ins(&reg).unwrap(), 1);
+        assert!(auth.check_cookie(&cookie), "the cache holds for a short while");
+        let fresh = Auth::new(reg.clone(), &Access::loopback(7878));
+        assert!(!fresh.check_cookie(&cookie), "a revoked sign-in is refused once the registry is read");
+        auth.cookies.write().values_mut().for_each(|(_, checked)| *checked -= RECHECK);
+        assert!(!auth.check_cookie(&cookie), "the running server notices after the recheck window");
+    }
+
+    #[test]
+    fn detects_live_processes_and_names_the_host() {
+        assert!(process_alive(std::process::id() as i32));
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id() as i32;
+        child.wait().unwrap();
+        assert!(!process_alive(pid), "a reaped child is gone");
+        assert!(!process_alive(0) && !process_alive(-1));
+        let h = hostname().expect("every test machine has a host name");
+        assert!(!h.is_empty() && !h.ends_with(".local") && h == h.to_lowercase());
+    }
+
+    #[test]
+    fn cookie_is_secure_over_https() {
+        assert!(!Auth::cookie_header("v", false).contains("Secure"));
+        assert!(Auth::cookie_header("v", true).ends_with("; Secure"));
+        assert!(Auth::cookie_header("v", false).contains(&format!("Max-Age={COOKIE_TTL_SECS}")));
     }
 
     #[test]

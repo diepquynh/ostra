@@ -2,51 +2,59 @@
 
 use crate::app::{App, HubMsg};
 use axum::extract::State;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
+use axum::http::{HeaderMap, header};
 use axum::response::Response;
 use ostra_core::api::{ClientMsg, ServerMsg};
 use ostra_core::ids::ExecutionId;
 use ostra_core::paths;
 use ostra_engine::EngineNotice;
-use std::collections::HashSet;
+use ostra_exec_harness::PtyRegistry;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::broadcast;
+use std::time::Duration;
+use tokio::sync::{broadcast, mpsc};
+use tokio::task::AbortHandle;
 
-pub async fn handler(State(app): State<Arc<App>>, upgrade: WebSocketUpgrade) -> Response {
-    upgrade.on_upgrade(move |socket| run(app, socket))
+/// Largest client message. Terminal pastes are the big ones.
+const MAX_MESSAGE: usize = 1024 * 1024;
+/// Largest `term_input`, so one paste cannot fill the PTY's write queue on its own.
+const MAX_TERM_INPUT: usize = 64 * 1024;
+const MAX_CHANNELS: usize = 256;
+/// Binary frames queued for one socket; a slow socket makes its PTY streams lag and resync.
+const TERM_QUEUE: usize = 64;
+/// How often an open socket re-checks its sign-in, so a revoked or expired cookie disconnects.
+const RECHECK: Duration = Duration::from_secs(30);
+
+pub async fn handler(State(app): State<Arc<App>>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    let cookie = crate::auth::cookie_value(headers.get(header::COOKIE).and_then(|h| h.to_str().ok())).unwrap_or_default();
+    upgrade.max_message_size(MAX_MESSAGE).max_frame_size(MAX_MESSAGE).on_upgrade(move |socket| run(app, socket, cookie))
 }
 
 /// Channels a notice goes to, and the frame to send.
-type Routed = (Vec<String>, Option<ServerMsg>, Option<(String, Vec<u8>)>);
+type Routed = (Vec<String>, ServerMsg);
 
 fn route(msg: &HubMsg) -> Routed {
     match &msg.notice {
         EngineNotice::Event { session, stored } => (
             vec![format!("session:{session}")],
-            Some(ServerMsg::SessionEvent { session: session.clone(), seq: stored.seq, at: stored.at, event: stored.event.clone() }),
-            None,
+            ServerMsg::SessionEvent { session: session.clone(), seq: stored.seq, at: stored.at, event: stored.event.clone() },
         ),
         EngineNotice::Delta { execution, item } => (
             vec![format!("execution:{execution}")],
-            Some(ServerMsg::ExecutionDelta { execution: execution.clone(), seq: item.seq, at: item.at, delta: item.delta.clone() }),
-            None,
+            ServerMsg::ExecutionDelta { execution: execution.clone(), seq: item.seq, at: item.at, delta: item.delta.clone() },
         ),
         EngineNotice::ExecutionStatus { execution, status } => (
             vec![format!("execution:{execution}")],
-            Some(ServerMsg::ExecutionStatus { execution: execution.clone(), status: *status }),
-            None,
+            ServerMsg::ExecutionStatus { execution: execution.clone(), status: *status },
         ),
         EngineNotice::SessionUpdated { summary } => (
             vec![format!("session:{}", summary.id), format!("workspace:{}", msg.workspace), "home".into()],
-            Some(ServerMsg::SessionUpdated { summary: summary.clone() }),
-            None,
+            ServerMsg::SessionUpdated { summary: summary.clone() },
         ),
-        EngineNotice::ProjectsChanged => (
-            vec![format!("workspace:{}", msg.workspace)],
-            Some(ServerMsg::WorkspaceUpdated { workspace: msg.workspace.clone() }),
-            None,
-        ),
-        EngineNotice::Terminal { execution, bytes } => (vec![format!("term:{execution}")], None, Some((execution.to_string(), bytes.clone()))),
+        EngineNotice::ProjectsChanged => {
+            (vec![format!("workspace:{}", msg.workspace)], ServerMsg::WorkspaceUpdated { workspace: msg.workspace.clone() })
+        }
     }
 }
 
@@ -68,6 +76,62 @@ pub fn stored_transcript(app: &App, id: &ExecutionId) -> Option<Vec<u8>> {
     ostra_exec_harness::read_transcript(&paths::terminal_transcript(&root, id.as_str()))
 }
 
+/// Feed `term:<id>` to one socket: the live screen and everything after it, a fresh screen after
+/// falling behind, and the stored transcript when no PTY is running. Waits for a run that has not
+/// started its PTY yet.
+async fn stream_terminal(app: Arc<App>, ptys: Arc<PtyRegistry>, id: ExecutionId, out: mpsc::Sender<Vec<u8>>) {
+    let mut inserted = ptys.inserted();
+    let mut first = true;
+    loop {
+        inserted.borrow_and_update();
+        let Some(pty) = ptys.get(&id) else {
+            if std::mem::take(&mut first) {
+                let (app, tid) = (app.clone(), id.clone());
+                let stored = tokio::task::spawn_blocking(move || stored_transcript(&app, &tid)).await.ok().flatten();
+                if let Some(bytes) = stored
+                    && out.send(frame(id.as_str(), &bytes)).await.is_err()
+                {
+                    return;
+                }
+            }
+            if inserted.changed().await.is_err() {
+                return;
+            }
+            continue;
+        };
+        first = false;
+        let (screen, mut rx) = pty.stream();
+        drop(pty);
+        if out.send(frame(id.as_str(), &screen)).await.is_err() {
+            return;
+        }
+        // Ends on Lagged, to resync from a fresh screen, or on Closed, to wait for another PTY.
+        while let Ok(chunk) = rx.recv().await {
+            if out.send(frame(id.as_str(), &chunk)).await.is_err() {
+                return;
+            }
+        }
+    }
+}
+
+/// Stops a socket's terminal streams when the socket ends, however it ends.
+#[derive(Default)]
+struct Streams(HashMap<String, AbortHandle>);
+
+impl Streams {
+    fn stop(&mut self, channel: &str) {
+        if let Some(h) = self.0.remove(channel) {
+            h.abort();
+        }
+    }
+}
+
+impl Drop for Streams {
+    fn drop(&mut self) {
+        self.0.values().for_each(AbortHandle::abort);
+    }
+}
+
 async fn send(socket: &mut WebSocket, msg: &ServerMsg) -> bool {
     match serde_json::to_string(msg) {
         Ok(text) => socket.send(Message::Text(text.into())).await.is_ok(),
@@ -75,19 +139,37 @@ async fn send(socket: &mut WebSocket, msg: &ServerMsg) -> bool {
     }
 }
 
-async fn run(app: Arc<App>, mut socket: WebSocket) {
+async fn error(socket: &mut WebSocket, message: &str) -> bool {
+    send(socket, &ServerMsg::Error { message: message.into() }).await
+}
+
+async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
     let mut rx = app.hub.subscribe();
     let mut pushed = app.push.subscribe();
     let mut channels: HashSet<String> = HashSet::new();
+    let mut streams = Streams::default();
+    let (term_tx, mut term_rx) = mpsc::channel::<Vec<u8>>(TERM_QUEUE);
+    let mut recheck = tokio::time::interval(RECHECK);
+    recheck.tick().await;
     loop {
         tokio::select! {
+            _ = recheck.tick() => {
+                if !app.auth.check_cookie(&cookie) {
+                    let close = CloseFrame { code: 4401, reason: "Signed out".into() };
+                    let _ = socket.send(Message::Close(Some(close))).await;
+                    break;
+                }
+            }
+            Some(bytes) = term_rx.recv() => {
+                if socket.send(Message::Binary(bytes.into())).await.is_err() { break }
+            }
             p = pushed.recv() => {
                 match p {
                     Ok(p) => {
                         if p.channels.iter().any(|c| channels.contains(c)) && !send(&mut socket, &p.msg).await { break }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
-                        if !send(&mut socket, &ServerMsg::Error { message: "lagged".into() }).await { break }
+                        if !error(&mut socket, "lagged").await { break }
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -100,20 +182,21 @@ async fn run(app: Arc<App>, mut socket: WebSocket) {
                     _ => continue,
                 };
                 let Ok(client) = serde_json::from_str::<ClientMsg>(&text) else {
-                    if !send(&mut socket, &ServerMsg::Error { message: "Unreadable message.".into() }).await { break }
+                    if !error(&mut socket, "Unreadable message.").await { break }
                     continue;
                 };
                 match client {
                     ClientMsg::Subscribe { channel } => {
+                        if !channels.contains(&channel) && channels.len() >= MAX_CHANNELS {
+                            if !error(&mut socket, "Too many subscriptions on one connection. Unsubscribe from channels you no longer show.").await { break }
+                            continue;
+                        }
                         channels.insert(channel.clone());
-                        if channel.starts_with("term:") {
-                            let id = ostra_core::ids::ExecutionId::from(channel.trim_start_matches("term:"));
-                            let backlog = app.shared.harness.backlog(&id).or_else(|| stored_transcript(&app, &id));
-                            if let Some(backlog) = backlog
-                                && socket.send(Message::Binary(frame(id.as_str(), &backlog).into())).await.is_err()
-                            {
-                                break;
-                            }
+                        if let Some(id) = channel.strip_prefix("term:") {
+                            // A repeated subscribe restarts the stream, which resends the screen.
+                            streams.stop(&channel);
+                            let task = tokio::spawn(stream_terminal(app.clone(), app.shared.harness.ptys(), ExecutionId::from(id), term_tx.clone()));
+                            streams.0.insert(channel.clone(), task.abort_handle());
                         }
                         if channel == "home" {
                             let statuses = app.shared.env.read().harnesses.clone();
@@ -122,13 +205,28 @@ async fn run(app: Arc<App>, mut socket: WebSocket) {
                         if !send(&mut socket, &ServerMsg::Subscribed { channel }).await { break }
                     }
                     ClientMsg::Unsubscribe { channel } => {
-                        if let Some(id) = channel.strip_prefix("term:") {
-                            app.shared.harness.detach(&ostra_core::ids::ExecutionId::from(id));
-                        }
+                        streams.stop(&channel);
                         channels.remove(&channel);
                     }
-                    ClientMsg::TermInput { execution, data } => app.shared.harness.input(&execution, data.as_bytes()),
-                    ClientMsg::TermResize { execution, cols, rows } => app.shared.harness.resize(&execution, cols, rows),
+                    ClientMsg::TermInput { execution, data } => {
+                        if data.len() > MAX_TERM_INPUT {
+                            if !error(&mut socket, "Terminal input is limited to 64 KiB per message. Paste in smaller parts.").await { break }
+                            continue;
+                        }
+                        if let Some(pty) = app.shared.harness.ptys().get(&execution)
+                            && pty.write(data.as_bytes()).is_err()
+                            && !error(&mut socket, "The harness is not reading terminal input right now, so the input was dropped.").await
+                        {
+                            break;
+                        }
+                    }
+                    ClientMsg::TermResize { execution, cols, rows } => {
+                        if cols == 0 || rows == 0 || cols > ostra_exec_harness::pty::MAX_COLS || rows > ostra_exec_harness::pty::MAX_ROWS {
+                            if !error(&mut socket, "Terminal size is out of range.").await { break }
+                            continue;
+                        }
+                        app.shared.harness.ptys().resize(&execution, cols, rows);
+                    }
                 }
             }
             notice = rx.recv() => {
@@ -136,19 +234,13 @@ async fn run(app: Arc<App>, mut socket: WebSocket) {
                     Ok(m) => m,
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         // The page refetches its REST snapshot on this error.
-                        if !send(&mut socket, &ServerMsg::Error { message: "lagged".into() }).await { break }
+                        if !error(&mut socket, "lagged").await { break }
                         continue;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 };
-                let (targets, json, binary) = route(&msg);
-                if !targets.iter().any(|c| channels.contains(c)) {
-                    continue;
-                }
-                if let Some(json) = json && !send(&mut socket, &json).await {
-                    break;
-                }
-                if let Some((id, bytes)) = binary && socket.send(Message::Binary(frame(&id, &bytes).into())).await.is_err() {
+                let (targets, json) = route(&msg);
+                if targets.iter().any(|c| channels.contains(c)) && !send(&mut socket, &json).await {
                     break;
                 }
             }

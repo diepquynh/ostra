@@ -295,7 +295,7 @@ pub async fn run(opts: ServeOptions) -> anyhow::Result<()> {
             println!("The link works once, from any address this machine has ({}). Run `ostra url` for another.\n", others.join(", "));
         }
         println!(
-            "Ostra is reachable from your network over plain HTTP. Anyone who reaches this port with a sign-in link can run commands as you, and traffic is not encrypted. Prefer an SSH tunnel or a TLS reverse proxy (add its host name with --allow-host). Push notifications need HTTPS or localhost.\n"
+            "Ostra is reachable from your network over plain HTTP. Anyone who reaches this port with a sign-in link can run commands as you. Traffic is not encrypted, so anyone on the network path can read the sign-in cookie and what you type into harness terminals. Prefer an SSH tunnel or a TLS reverse proxy (add its host name with --allow-host). Push notifications need HTTPS or localhost. Run `ostra signout` to end every sign-in.\n"
         );
     }
     if opts.open_browser && open::that(&url).is_err() {

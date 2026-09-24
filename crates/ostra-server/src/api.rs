@@ -247,6 +247,8 @@ fn request_facts(req_headers: &axum::http::HeaderMap, peer: Option<std::net::Soc
 async fn exchange(State(app): AppState, req: Request) -> Response {
     let peer = req.extensions().get::<axum::extract::ConnectInfo<std::net::SocketAddr>>().map(|c| c.0);
     let facts = request_facts(req.headers(), peer);
+    // The guard already accepted this Origin, so https here means a TLS proxy in front of Ostra.
+    let secure = req.headers().get(header::ORIGIN).and_then(|o| o.to_str().ok()).is_some_and(|o| o.to_ascii_lowercase().starts_with("https://"));
     let bytes = axum::body::to_bytes(req.into_body(), 64 * 1024).await.unwrap_or_default();
     let Ok(body) = serde_json::from_slice::<AuthExchange>(&bytes) else {
         tracing::info!("sign-in: unreadable body; {facts}");
@@ -256,7 +258,7 @@ async fn exchange(State(app): AppState, req: Request) -> Response {
         Ok(cookie) => {
             tracing::info!("sign-in: token exchanged for a session cookie; {facts}");
             let mut res = StatusCode::NO_CONTENT.into_response();
-            if let Ok(v) = HeaderValue::from_str(&Auth::cookie_header(&cookie)) {
+            if let Ok(v) = HeaderValue::from_str(&Auth::cookie_header(&cookie, secure)) {
                 res.headers_mut().insert(header::SET_COOKIE, v);
             }
             res

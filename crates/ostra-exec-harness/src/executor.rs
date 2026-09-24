@@ -139,11 +139,11 @@ fn launch_error(message: String) -> String {
 }
 
 impl HarnessExecutor {
-    pub fn new(config: HarnessExecutorConfig, live: Arc<LiveRegistry>) -> Self {
+    pub fn new(config: HarnessExecutorConfig, live: Arc<LiveRegistry>, ptys: Arc<PtyRegistry>) -> Self {
         HarnessExecutor {
             config: RwLock::new(config),
             live,
-            ptys: PtyRegistry::new(),
+            ptys,
         }
     }
 
@@ -217,14 +217,12 @@ impl HarnessExecutor {
         if let Some(sid) = &plan.session_id {
             live.note_session(Some(sid.clone()), None);
         }
-        let sink = host.clone();
         let log = TermLog::create(terminal_transcript(&spec.ctx.session_root, spec.id.as_str())).ok();
         let pty = PtySession::spawn(
             &plan,
             cfg.cols,
             cfg.rows,
             Box::new(move |b| {
-                sink.terminal(b);
                 if let Some(log) = &log {
                     log.append(b);
                 }
@@ -323,7 +321,7 @@ impl HarnessExecutor {
                 }
                 nudges += 1;
                 live.touch();
-                let _ = pty.type_line(&missing_submit_instruction(spec.agent));
+                let _ = pty.type_line(&missing_submit_instruction(spec.agent)).await;
                 host.emit(ExecutionDelta::Status {
                     message: "The session went quiet; Ostra reminded it to submit.".into(),
                 });

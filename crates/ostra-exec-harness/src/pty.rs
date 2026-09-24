@@ -1,7 +1,7 @@
 //! PTY sessions for harness executions. A `vt100` screen mirrors the terminal so a browser that
-//! attaches mid-run is sent the current screen, and while no browser is attached Ostra answers
-//! the terminal queries TUIs send at startup (cursor position, device attributes, colors), which
-//! would otherwise leave them waiting.
+//! attaches mid-run is sent the current screen with its scrollback. Ostra alone answers the
+//! terminal queries TUIs send (cursor position, device attributes, colors): browsers mute their
+//! own replies, so any number of viewers, or none, gives the harness exactly one answer.
 
 use crate::launch::LaunchPlan;
 use ostra_core::ExecutionId;
@@ -10,13 +10,19 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::time::{Duration, Instant};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 pub const DEFAULT_COLS: u16 = 120;
 pub const DEFAULT_ROWS: u16 = 40;
+pub const MAX_COLS: u16 = 1000;
+pub const MAX_ROWS: u16 = 500;
 const SCROLLBACK: usize = 2000;
+/// Pending writes before input is refused; a harness that stops reading must not block callers.
+const WRITE_QUEUE: usize = 256;
+/// Output chunks a viewer may fall behind by before it is resynced from a fresh snapshot.
+const STREAM_BUFFER: usize = 256;
 
 /// Variables that tie a process to the harness session Ostra itself was started from. A child that
 /// inherits them runs as that session's nested child: Claude Code does not persist such a session,
@@ -44,10 +50,11 @@ type OutputSink = Box<dyn Fn(&[u8]) + Send + Sync>;
 
 pub struct PtySession {
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    input: SyncSender<Vec<u8>>,
     pid: Option<u32>,
+    /// Also held while an output chunk is broadcast, so a snapshot and a new receiver line up.
     screen: Mutex<vt100::Parser>,
-    viewers: AtomicUsize,
+    out: broadcast::Sender<Arc<[u8]>>,
     last_output: Mutex<Instant>,
     exit: watch::Receiver<Option<ExitInfo>>,
 }
@@ -101,14 +108,25 @@ impl PtySession {
         drop(pair.slave);
         let pid = child.process_id();
         let reader = pair.master.try_clone_reader().map_err(|e| io(e.into()))?;
-        let writer = pair.master.take_writer().map_err(|e| io(e.into()))?;
+        let mut writer = pair.master.take_writer().map_err(|e| io(e.into()))?;
+        let (input, queued) = sync_channel::<Vec<u8>>(WRITE_QUEUE);
+        std::thread::Builder::new()
+            .name(format!("pty-write-{}", pid.unwrap_or(0)))
+            .spawn(move || {
+                for bytes in queued {
+                    if writer.write_all(&bytes).and_then(|_| writer.flush()).is_err() {
+                        break;
+                    }
+                }
+            })?;
         let (exit_tx, exit_rx) = watch::channel(None);
+        let (cols, rows) = clamp_size(cols, rows);
         let session = Arc::new(PtySession {
             master: Mutex::new(pair.master),
-            writer: Mutex::new(writer),
+            input,
             pid,
             screen: Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)),
-            viewers: AtomicUsize::new(0),
+            out: broadcast::channel(STREAM_BUFFER).0,
             last_output: Mutex::new(Instant::now()),
             exit: exit_rx,
         });
@@ -138,21 +156,19 @@ impl PtySession {
             };
             let chunk = &buf[..n];
             *self.last_output.lock() = Instant::now();
-            self.screen.lock().process(chunk);
-            on_output(chunk);
-            if self.viewers.load(Ordering::SeqCst) == 0 {
+            let replies = {
+                let mut screen = self.screen.lock();
+                screen.process(chunk);
+                let _ = self.out.send(Arc::from(chunk));
                 carry.extend_from_slice(chunk);
-                let (replies, keep) = {
-                    let screen = self.screen.lock();
-                    let (row, col) = screen.screen().cursor_position();
-                    answer_queries(&carry, row + 1, col + 1)
-                };
+                let (row, col) = screen.screen().cursor_position();
+                let (replies, keep) = answer_queries(&carry, row + 1, col + 1);
                 carry.drain(..carry.len() - keep);
-                if !replies.is_empty() {
-                    let _ = self.write(&replies);
-                }
-            } else {
-                carry.clear();
+                replies
+            };
+            on_output(chunk);
+            if !replies.is_empty() {
+                let _ = self.write(&replies);
             }
         }
     }
@@ -161,21 +177,32 @@ impl PtySession {
         self.pid
     }
 
+    /// Queue bytes for the program's input. Refused, not blocked on, when the program has stopped
+    /// reading and the queue is full.
     pub fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
-        let mut w = self.writer.lock();
-        w.write_all(bytes)?;
-        w.flush()
+        self.input.try_send(bytes.to_vec()).map_err(|e| match e {
+            TrySendError::Full(_) => std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "the program is not reading its terminal input",
+            ),
+            TrySendError::Disconnected(_) => std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "the terminal is closed",
+            ),
+        })
     }
 
     /// Type a line of text as if a person entered it, then press Enter.
-    pub fn type_line(&self, text: &str) -> std::io::Result<()> {
+    pub async fn type_line(&self, text: &str) -> std::io::Result<()> {
         // Bracketed paste keeps TUIs from treating embedded newlines as submits.
         self.write(format!("\x1b[200~{text}\x1b[201~").as_bytes())?;
-        std::thread::sleep(Duration::from_millis(150));
+        tokio::time::sleep(Duration::from_millis(150)).await;
         self.write(b"\r")
     }
 
+    /// Resize, clamped to a size the screen model can hold.
     pub fn resize(&self, cols: u16, rows: u16) {
+        let (cols, rows) = clamp_size(cols, rows);
         let _ = self.master.lock().resize(PtySize {
             rows,
             cols,
@@ -185,29 +212,21 @@ impl PtySession {
         self.screen.lock().screen_mut().set_size(rows, cols);
     }
 
-    /// Escape sequences that redraw the current screen, for a browser that attaches now.
+    /// Escape sequences that redraw the terminal, for a browser that attaches now.
     pub fn snapshot(&self) -> Vec<u8> {
-        let screen = self.screen.lock();
-        let mut out = b"\x1b[H\x1b[2J".to_vec();
-        out.extend(screen.screen().contents_formatted());
-        out
+        snapshot(&mut self.screen.lock())
+    }
+
+    /// The current screen and a receiver for every chunk written after it, taken together so the
+    /// viewer neither misses nor repeats output.
+    pub fn stream(&self) -> (Vec<u8>, broadcast::Receiver<Arc<[u8]>>) {
+        let mut screen = self.screen.lock();
+        (snapshot(&mut screen), self.out.subscribe())
     }
 
     /// Visible text, for recognizing login and trust prompts.
     pub fn screen_text(&self) -> String {
         self.screen.lock().screen().contents()
-    }
-
-    pub fn attach(&self) {
-        self.viewers.fetch_add(1, Ordering::SeqCst);
-    }
-
-    pub fn detach(&self) {
-        let _ = self
-            .viewers
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
-                Some(v.saturating_sub(1))
-            });
     }
 
     pub fn idle_for(&self) -> Duration {
@@ -255,6 +274,38 @@ impl PtySession {
             }
         }
     }
+}
+
+fn clamp_size(cols: u16, rows: u16) -> (u16, u16) {
+    (cols.clamp(1, MAX_COLS), rows.clamp(1, MAX_ROWS))
+}
+
+/// Reset, then the scrollback as plain lines, then the screen with its formatting and input
+/// modes. Scrollback rows are plain text because formatted rows position the cursor absolutely.
+fn snapshot(parser: &mut vt100::Parser) -> Vec<u8> {
+    let mut out = b"\x1bc".to_vec();
+    let screen = parser.screen_mut();
+    if screen.alternate_screen() {
+        out.extend_from_slice(b"\x1b[?1049h");
+    } else {
+        let (_, cols) = screen.size();
+        screen.set_scrollback(usize::MAX);
+        let total = screen.scrollback();
+        let mut lines: Vec<String> = Vec::with_capacity(total);
+        for offset in (1..=total).rev() {
+            screen.set_scrollback(offset);
+            lines.push(screen.rows(0, cols).next().unwrap_or_default());
+        }
+        screen.set_scrollback(0);
+        if total > 0 {
+            // The visible rows follow as text too, which scrolls exactly the history off screen;
+            // the formatted redraw below then replaces them.
+            lines.extend(screen.rows(0, cols));
+            out.extend_from_slice(lines.join("\r\n").as_bytes());
+        }
+    }
+    out.extend(screen.state_formatted());
+    out
 }
 
 mod anyhow_like {
@@ -322,8 +373,12 @@ fn parse_query(s: &[u8]) -> Parsed {
     match s[1] {
         b'[' => {
             let mut j = 2;
-            while j < s.len() && !(0x40..=0x7e).contains(&s[j]) {
+            while j < s.len() && (0x20..=0x3f).contains(&s[j]) {
                 j += 1;
+            }
+            if j < s.len() && !(0x40..=0x7e).contains(&s[j]) {
+                // A control or high byte inside the sequence: not a query, and never echoed back.
+                return Parsed::Other(j);
             }
             if j >= s.len() {
                 return if j - 2 > 32 {
@@ -342,7 +397,7 @@ fn parse_query(s: &[u8]) -> Parsed {
                 (b">" | b">0", b'c') => Some(Reply::SecondaryDa),
                 (b"?", b'u') => Some(Reply::KittyKeyboard),
                 (b">" | b">0", b'q') => Some(Reply::XtVersion),
-                (p, b'p') if p.starts_with(b"?") && p.ends_with(b"$") => Some(Reply::Mode(
+                (p, b'p') if is_mode_query(p) => Some(Reply::Mode(
                     String::from_utf8_lossy(&p[1..p.len() - 1]).into_owned(),
                 )),
                 _ => None,
@@ -383,6 +438,14 @@ fn parse_query(s: &[u8]) -> Parsed {
     }
 }
 
+/// `?<digits>$`: the only parameters echoed back, so program output cannot type into its input.
+fn is_mode_query(p: &[u8]) -> bool {
+    let Some(mode) = p.strip_prefix(b"?").and_then(|p| p.strip_suffix(b"$")) else {
+        return false;
+    };
+    (1..=5).contains(&mode.len()) && mode.iter().all(u8::is_ascii_digit)
+}
+
 fn reply_bytes(r: Reply, row: u16, col: u16) -> Vec<u8> {
     match r {
         Reply::CursorPosition => format!("\x1b[{row};{col}R").into_bytes(),
@@ -397,19 +460,29 @@ fn reply_bytes(r: Reply, row: u16, col: u16) -> Vec<u8> {
     }
 }
 
-/// Live PTYs by execution id, so the server can forward browser input, resizes, and attaches.
-#[derive(Debug, Default)]
+/// Live PTYs by execution id, so the server can forward browser input, resizes, and streams.
+#[derive(Debug)]
 pub struct PtyRegistry {
     map: Mutex<HashMap<ExecutionId, Arc<PtySession>>>,
+    inserted: watch::Sender<u64>,
 }
 
 impl PtyRegistry {
     pub fn new() -> Arc<Self> {
-        Arc::new(PtyRegistry::default())
+        Arc::new(PtyRegistry {
+            map: Mutex::new(HashMap::new()),
+            inserted: watch::channel(0).0,
+        })
     }
 
     pub fn insert(&self, id: ExecutionId, pty: Arc<PtySession>) {
         self.map.lock().insert(id, pty);
+        self.inserted.send_modify(|n| *n += 1);
+    }
+
+    /// Changes whenever a PTY is inserted, so a viewer waiting for a run to start can wake.
+    pub fn inserted(&self) -> watch::Receiver<u64> {
+        self.inserted.subscribe()
     }
 
     pub fn get(&self, id: &ExecutionId) -> Option<Arc<PtySession>> {
@@ -455,6 +528,92 @@ mod tests {
         assert_eq!(r, b"\x1b[?2026;0$y\x1b[?0u".to_vec());
     }
 
+    #[test]
+    fn output_cannot_type_through_a_reply() {
+        for evil in [
+            &b"\x1b[?1\r$p"[..],
+            b"\x1b[?1\n2$p",
+            b"\x1b[?1;2$p",
+            b"\x1b[?123456$p",
+            b"\x1b[?$p",
+            b"\x1b[?1\xff$p",
+        ] {
+            let (r, keep) = answer_queries(evil, 1, 1);
+            assert!(r.is_empty(), "{evil:?} got {r:?}");
+            assert_eq!(keep, 0, "{evil:?}");
+        }
+    }
+
+    fn sh(script: &str) -> LaunchPlan {
+        LaunchPlan {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: vec![],
+            cwd: std::env::temp_dir(),
+            files: vec![],
+            links: vec![],
+            session_id: None,
+        }
+    }
+
+    async fn wait_for(pty: &PtySession, text: &str) {
+        for _ in 0..100 {
+            if pty.screen_text().contains(text) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("never saw {text:?} in {:?}", pty.screen_text());
+    }
+
+    #[tokio::test]
+    async fn a_zero_size_resize_is_clamped() {
+        let pty = PtySession::spawn(&sh("printf 'up\\n'; sleep 5"), 0, 0, Box::new(|_| {})).unwrap();
+        pty.resize(0, 0);
+        pty.resize(u16::MAX, u16::MAX);
+        wait_for(&pty, "up").await;
+        pty.terminate(Duration::from_millis(200)).await;
+    }
+
+    #[tokio::test]
+    async fn stream_starts_where_the_snapshot_ends() {
+        let pty = PtySession::spawn(
+            &sh("for i in $(seq 1 60); do echo line$i; done; read x; echo after-$x; sleep 5"),
+            40,
+            10,
+            Box::new(|_| {}),
+        )
+        .unwrap();
+        wait_for(&pty, "line60").await;
+        let (snap, mut rx) = pty.stream();
+        let text = String::from_utf8_lossy(&snap).into_owned();
+        assert!(text.starts_with("\x1bc"));
+        assert!(text.contains("line1\r\n"), "the scrollback is replayed: {text:?}");
+        assert!(!text.contains("after-"));
+        pty.write(b"go\r").unwrap();
+        let mut seen = String::new();
+        while !seen.contains("after-go") {
+            let chunk = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+            seen.push_str(&String::from_utf8_lossy(&chunk));
+        }
+        assert!(!seen.contains("line60"), "nothing from before the snapshot repeats: {seen:?}");
+        pty.terminate(Duration::from_millis(200)).await;
+    }
+
+    #[tokio::test]
+    async fn answers_queries_with_a_viewer_attached() {
+        let pty = PtySession::spawn(
+            &sh("stty raw -echo; printf 'ask\\033[6n'; dd bs=1 count=6 2>/dev/null | od -c; sleep 5"),
+            80,
+            24,
+            Box::new(|_| {}),
+        )
+        .unwrap();
+        let _viewer = pty.stream();
+        wait_for(&pty, "033").await;
+        pty.terminate(Duration::from_millis(200)).await;
+    }
+
     #[tokio::test]
     async fn runs_a_program_in_a_pty() {
         let tmp = tempfile::tempdir().unwrap();
@@ -492,7 +651,7 @@ mod tests {
         assert_eq!(exit.code, Some(3));
         let out = String::from_utf8_lossy(&seen.lock()).into_owned();
         assert!(out.contains("got abc"), "{out}");
-        assert!(pty.snapshot().starts_with(b"\x1b[H\x1b[2J"));
+        assert!(pty.snapshot().starts_with(b"\x1bc"));
     }
 
     #[tokio::test]

@@ -647,3 +647,89 @@ async fn skills_are_listed_edited_adopted_and_deleted() {
     assert_eq!(client.delete(&skill).send().await.unwrap().status(), 404);
     assert_eq!(client.get(&skill).send().await.unwrap().status(), 404);
 }
+
+/// A signed-in WebSocket on `server`, with its own sign-in.
+async fn socket(server: &Server) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let url = server.app.auth.sign_in_url().unwrap();
+    let token = url.split("#token=").nth(1).unwrap();
+    let r = reqwest::Client::new().post(format!("{}/api/auth/exchange", server.base)).json(&json!({"token": token})).send().await.unwrap();
+    let set = r.headers()["set-cookie"].to_str().unwrap().to_string();
+    assert!(!set.contains("Secure"), "plain http gets no Secure flag: {set}");
+    let cookie = set.split(';').next().unwrap().to_string();
+    let mut req = format!("{}/ws", server.base.replace("http://", "ws://")).into_client_request().unwrap();
+    req.headers_mut().insert("cookie", cookie.parse().unwrap());
+    req.headers_mut().insert("origin", server.base.parse().unwrap());
+    tokio_tungstenite::connect_async(req).await.unwrap().0
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn terminal_streams_over_the_socket() {
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let server = boot(dir.path()).await;
+    let mut ws = socket(&server).await;
+    let exec = ostra_core::ids::ExecutionId::new();
+    let send = |v: Value| Message::Text(v.to_string().into());
+    let next = async |ws: &mut tokio_tungstenite::WebSocketStream<_>| -> Message {
+        tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("no message").unwrap().unwrap()
+    };
+
+    // Subscribed before the run has a PTY: the stream starts once it does.
+    ws.send(send(json!({"type": "subscribe", "channel": format!("term:{exec}")}))).await.unwrap();
+    assert!(matches!(next(&mut ws).await, Message::Text(t) if t.contains("subscribed")));
+    let plan = ostra_exec_harness::launch::LaunchPlan {
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "echo hello-ws; read x; echo after-$x; sleep 5".into()],
+        env: vec![],
+        cwd: dir.path().to_path_buf(),
+        files: vec![],
+        links: vec![],
+        session_id: None,
+    };
+    let pty = ostra_exec_harness::PtySession::spawn(&plan, 80, 24, Box::new(|_| {})).unwrap();
+    let ptys = server.app.shared.harness.ptys();
+    ptys.insert(exec.clone(), pty.clone());
+
+    let mut seen = String::new();
+    let mut first = true;
+    let prefix = 1 + exec.as_str().len();
+    while !seen.contains("hello-ws") {
+        let Message::Binary(b) = next(&mut ws).await else { continue };
+        assert_eq!(&b[1..prefix], exec.as_str().as_bytes());
+        if std::mem::take(&mut first) {
+            assert!(b[prefix..].starts_with(b"\x1bc"), "the stream opens with a snapshot");
+        }
+        seen.push_str(&String::from_utf8_lossy(&b[prefix..]));
+    }
+
+    // Limits come back as errors and do not reach the PTY.
+    ws.send(send(json!({"type": "term_resize", "execution": exec, "cols": 0, "rows": 24}))).await.unwrap();
+    assert!(matches!(next(&mut ws).await, Message::Text(t) if t.contains("out of range")));
+    ws.send(send(json!({"type": "term_input", "execution": exec, "data": "x".repeat(70 * 1024)}))).await.unwrap();
+    assert!(matches!(next(&mut ws).await, Message::Text(t) if t.contains("64 KiB")));
+
+    ws.send(send(json!({"type": "term_input", "execution": exec, "data": "go\r"}))).await.unwrap();
+    let mut after = String::new();
+    while !after.contains("after-go") {
+        if let Message::Binary(b) = next(&mut ws).await {
+            after.push_str(&String::from_utf8_lossy(&b[prefix..]));
+        }
+    }
+
+    // A second subscribe on the same socket resends the screen rather than doubling the stream.
+    ws.send(send(json!({"type": "subscribe", "channel": format!("term:{exec}")}))).await.unwrap();
+    let mut snapshot = None;
+    while snapshot.is_none() {
+        if let Message::Binary(b) = next(&mut ws).await {
+            snapshot = Some(b[prefix..].to_vec());
+        }
+    }
+    let snapshot = String::from_utf8_lossy(snapshot.as_deref().unwrap()).into_owned();
+    assert!(snapshot.starts_with("\x1bc") && snapshot.contains("after-go"), "{snapshot:?}");
+
+    ptys.remove(&exec);
+    pty.terminate(Duration::from_millis(200)).await;
+}

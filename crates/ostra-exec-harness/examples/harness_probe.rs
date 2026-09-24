@@ -113,16 +113,13 @@ async fn mcp(
     Json(app.bridge.handle_mcp(&token(&headers), req).await)
 }
 
-struct Host(Arc<Log>, Mutex<std::fs::File>);
+struct Host(Arc<Log>);
 
 #[async_trait::async_trait]
 impl ExecutionHost for Host {
     fn emit(&self, delta: ExecutionDelta) {
         eprintln!("delta: {delta:?}");
         self.0.line(json!({"delta": delta}));
-    }
-    fn terminal(&self, bytes: &[u8]) {
-        let _ = self.1.lock().unwrap().write_all(bytes);
     }
     async fn ask_permission(&self, _: &ToolCall, _: &str, _: &RuleRef) -> PermissionAnswer {
         PermissionAnswer::AllowOnce
@@ -178,7 +175,7 @@ async fn main() {
         url,
     );
     cfg.idle_nudge = std::time::Duration::from_secs(90);
-    let exec = HarnessExecutor::new(cfg, live);
+    let exec = HarnessExecutor::new(cfg, live, PtyRegistry::new());
     let id = ExecutionId::new();
     let agent = AgentName::QuickAnswer;
     let spec = ExecutionSpec {
@@ -230,8 +227,9 @@ async fn main() {
         }),
         harness_session_id: None,
     };
-    let term = std::fs::File::create(dir.join(format!("{harness}{suffix}-terminal.bin"))).unwrap();
-    let host = Arc::new(Host(log.clone(), Mutex::new(term)));
+    let transcript = ostra_core::paths::terminal_transcript(&spec.ctx.session_root, id.as_str());
+    let host = Arc::new(Host(log.clone()));
     let result = exec.run(spec, host, CancellationToken::new()).await;
+    let _ = std::fs::copy(transcript, dir.join(format!("{harness}{suffix}-terminal.bin")));
     println!("{}", serde_json::to_string_pretty(&result).unwrap());
 }

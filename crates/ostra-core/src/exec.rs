@@ -177,9 +177,6 @@ pub enum ExecutionDelta {
 pub trait ExecutionHost: Send + Sync {
     fn emit(&self, delta: ExecutionDelta);
 
-    /// Raw PTY bytes for the Terminal tab.
-    fn terminal(&self, _bytes: &[u8]) {}
-
     /// A permission ask. Waits for the browser answer, or answers at once under YOLO.
     async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer;
 

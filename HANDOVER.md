@@ -721,8 +721,11 @@ WebSocket `/ws`, multiplexed by channel. The browser sends `subscribe` and `unsu
   finished, gate opened and answered, decision made, session completed), and `session_updated`.
 - `execution:<id>`: `execution_delta` (thinking, text, tool calls and results, policy decisions, usage) and
   `execution_status`.
-- `term:<execution>`: binary PTY frames. Subscribing sends the live backlog, or the stored transcript of an
-  ended run.
+- `term:<execution>`: binary PTY frames. Subscribing sends the stored transcript when no PTY is running, and
+  otherwise a snapshot (a reset, the scrollback as plain lines, then the formatted screen and input modes)
+  followed by every chunk after it. A viewer that falls behind is resynced with a fresh snapshot rather than
+  sent a gap. A run that has not started its PTY yet streams once it does. Terminal bytes travel on each PTY's
+  own channel, never through engine notices, so a busy terminal cannot make session events lag.
 - `workspace:<ws>`: `session_updated`; `tree_patch` with a whole Sessions tree node, at most four per second per
   session; `activity` with the running executions, open gates, and spend, at most two per second;
   `project_fs_changed` with the project-relative paths an execution wrote, coalesced over a short window.
@@ -769,11 +772,25 @@ The server runs shell commands for its caller, so these ship in the first build:
 
 - Bind to `127.0.0.1` only.
 - `ostra` prints and opens a URL carrying a one-time token in the fragment. The page exchanges it once for an
-  `HttpOnly`, `SameSite=Strict` session cookie.
+  `HttpOnly`, `SameSite=Strict` session cookie, marked `Secure` when the page was reached over HTTPS. A sign-in
+  lasts 30 days, checked on the server. `ostra signins` lists sign-ins and `ostra signout` revokes all of them;
+  a running server and its open sockets notice within 30 seconds.
 - Reject a `Host` header other than `127.0.0.1:<port>` or `localhost:<port>`, which blocks DNS rebinding.
   Reject a foreign `Origin` on REST and on the WebSocket upgrade. Send no CORS headers.
 - `/internal/policy` and the MCP shim accept only per-execution tokens, which expire when the execution ends.
 - API keys stay on the server. Logs never contain keys, tokens, or file bodies.
+- Terminal streaming: the server alone answers terminal queries, and it echoes back only digit parameters, so
+  harness output cannot type into the harness. The browser mutes xterm.js's own replies and opens only
+  `http`/`https` links, after showing the address. A socket takes at most 1 MiB per message, 64 KiB per
+  `term_input`, and 256 channels. Resizes outside 1 to 1000 columns and 1 to 500 rows are refused. Terminal
+  transcripts are `0600` in a `0700` directory.
+- Accepted risks, recorded so they are not mistaken for gaps:
+  - Typing into a harness terminal is a shell for the signed-in user. Keystrokes reach the harness directly,
+    and commands a harness runs outside its tool calls (such as a `!` shell escape) do not pass Ostra's
+    policy. The sign-in cookie is the boundary.
+  - The PTY gets the server's whole environment, because harness auth depends on it (section 10.2). Provider
+    keys in that environment are visible to the harness and to commands it runs.
+  - The execution token is in the harness's environment. It only acts as that execution.
 
 ## 16. Milestones
 

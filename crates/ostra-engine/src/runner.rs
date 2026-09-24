@@ -42,7 +42,6 @@ pub enum EngineNotice {
     Delta { execution: ExecutionId, item: ActivityItem },
     ExecutionStatus { execution: ExecutionId, status: ExecutionStatus },
     SessionUpdated { summary: SessionSummary },
-    Terminal { execution: ExecutionId, bytes: Vec<u8> },
     /// A project's init status may have changed: an init session started or ended.
     ProjectsChanged,
 }
@@ -1349,10 +1348,6 @@ impl ExecutionHost for EngineHost {
         if let Ok(item) = self.inner.db.append_activity(&self.execution, &delta) {
             let _ = self.inner.tx.send(EngineNotice::Delta { execution: self.execution.clone(), item });
         }
-    }
-
-    fn terminal(&self, bytes: &[u8]) {
-        let _ = self.inner.tx.send(EngineNotice::Terminal { execution: self.execution.clone(), bytes: bytes.to_vec() });
     }
 
     async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer {

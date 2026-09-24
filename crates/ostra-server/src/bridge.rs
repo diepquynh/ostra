@@ -17,7 +17,7 @@ use ostra_core::ids::ExecutionId;
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall, ToolOutcome};
 use ostra_exec_harness::{
-    BridgeServices, HarnessBridge, HarnessExecutor, HarnessExecutorConfig, LiveRegistry, McpRequest, PolicyRequest,
+    BridgeServices, HarnessBridge, HarnessExecutor, HarnessExecutorConfig, LiveRegistry, McpRequest, PolicyRequest, PtyRegistry,
 };
 use ostra_policy::{ExecutionPolicy, Observation, PolicyInputs};
 use ostra_tools::{ToolEnv, ToolEnvConfig};
@@ -49,6 +49,7 @@ pub struct HarnessRuntime {
     exe: PathBuf,
     callback: String,
     live: Arc<LiveRegistry>,
+    ptys: Arc<PtyRegistry>,
     executor: OnceLock<Arc<HarnessExecutor>>,
     registry: Arc<Registry>,
     bridge: HarnessBridge,
@@ -69,7 +70,7 @@ impl HarnessRuntime {
         let live = LiveRegistry::new();
         let registry = Arc::new(Registry::default());
         let bridge = HarnessBridge::new(Arc::new(ServerBridge { registry: registry.clone() }), live.clone());
-        HarnessRuntime { exe, callback, live, executor: OnceLock::new(), registry, bridge }
+        HarnessRuntime { exe, callback, live, ptys: PtyRegistry::new(), executor: OnceLock::new(), registry, bridge }
     }
 
     pub fn set_write_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<Touch>) {
@@ -81,7 +82,7 @@ impl HarnessRuntime {
             .executor
             .get_or_init(|| {
                 let cfg = HarnessExecutorConfig::new(global.clone(), self.exe.clone(), format!("http://{}", self.callback));
-                Arc::new(HarnessExecutor::new(cfg, self.live.clone()))
+                Arc::new(HarnessExecutor::new(cfg, self.live.clone(), self.ptys.clone()))
             })
             .clone();
         exec.set_global(global.clone());
@@ -92,37 +93,13 @@ impl HarnessRuntime {
         Some(Arc::new(Wrapped { inner: self.inner(global), registry: self.registry.clone() }))
     }
 
-    fn pty(&self, id: &ExecutionId) -> Option<Arc<ostra_exec_harness::PtySession>> {
-        self.executor.get().and_then(|e| e.ptys().get(id))
-    }
-
     pub fn has_terminal(&self, id: &ExecutionId) -> bool {
-        self.pty(id).is_some()
+        self.ptys.contains(id)
     }
 
-    /// The current screen, sent first to a browser that attaches mid-run.
-    pub fn backlog(&self, id: &ExecutionId) -> Option<Vec<u8>> {
-        let pty = self.pty(id)?;
-        pty.attach();
-        Some(pty.snapshot())
-    }
-
-    pub fn detach(&self, id: &ExecutionId) {
-        if let Some(p) = self.pty(id) {
-            p.detach();
-        }
-    }
-
-    pub fn input(&self, id: &ExecutionId, data: &[u8]) {
-        if let Some(e) = self.executor.get() {
-            e.ptys().input(id, data);
-        }
-    }
-
-    pub fn resize(&self, id: &ExecutionId, cols: u16, rows: u16) {
-        if let Some(e) = self.executor.get() {
-            e.ptys().resize(id, cols, rows);
-        }
+    /// Live PTYs, for streaming, input, and resizes from the Terminal tab.
+    pub fn ptys(&self) -> Arc<PtyRegistry> {
+        self.ptys.clone()
     }
 }
 

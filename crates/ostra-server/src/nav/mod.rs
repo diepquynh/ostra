@@ -76,7 +76,7 @@ impl Nav {
                     w.activity_dirty = true;
                 }
             }
-            EngineNotice::Terminal { .. } | EngineNotice::ProjectsChanged => {}
+            EngineNotice::ProjectsChanged => {}
         }
     }
 

@@ -190,6 +190,14 @@ impl RegistryDb {
         Ok(self.lock().execute("DELETE FROM kv WHERE key = ?1", params![key])? > 0)
     }
 
+    /// Every entry whose key starts with `prefix`, in key order.
+    pub fn kv_scan(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT key, value FROM kv WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key")?;
+        let rows = stmt.query_map(params![prefix], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     // -- onboarding ---------------------------------------------------------------------------
 
     pub fn onboarded_at(&self) -> Result<Option<DateTime<Utc>>, StoreError> {

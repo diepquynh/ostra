@@ -221,7 +221,6 @@ async fn implement_session_runs_to_completion_under_yolo() {
     assert_eq!(engine.execution(&imp.id).unwrap().run_label, "Phase 1");
     assert!(detail.completion.unwrap().contains("Everything ran"));
     assert!(services.notices.lock().unwrap().iter().any(|n| n.title == "Session complete"));
-    let _ = EngineNotice::Terminal { execution: ostra_core::ids::ExecutionId::new(), bytes: vec![] };
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

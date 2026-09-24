@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal as Xterm, type ITheme } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { socket } from "../../api";
+import { linkHandler, muteQueryReplies } from "./terminalSafety";
 
 /** The terminal palette from the design tokens. The pane is dark in both themes. */
 function theme(): ITheme {
@@ -74,7 +75,9 @@ export default function XtermScreen({ execution, readOnly, onSize }: XtermScreen
       scrollback: 10000,
       theme: theme(),
       allowProposedApi: false,
+      linkHandler,
     });
+    const muted = muteQueryReplies(term.parser);
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(el);
@@ -112,6 +115,7 @@ export default function XtermScreen({ execution, readOnly, onSize }: XtermScreen
       input.dispose();
       unsub();
       offReconnect();
+      muted.dispose();
       term.dispose();
     };
   }, [execution, readOnly]);

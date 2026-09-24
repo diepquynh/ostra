@@ -49,6 +49,10 @@ enum Command {
     Config,
     /// Print a fresh sign-in URL for a running server.
     Url,
+    /// List the browsers signed in to Ostra.
+    Signins,
+    /// Sign out every browser. Open pages disconnect within 30 seconds.
+    Signout,
     /// Stop a session while the server is not running, so the next start does not recover and
     /// re-run its executions. With the server running, stop it from its session board instead.
     Stop {
@@ -77,6 +81,24 @@ fn main() -> anyhow::Result<()> {
         Some(Command::Stop { session }) => {
             let n = ostra_server::app::stop_offline(&session)?;
             println!("Stopped {session}; {n} running executions were cancelled.");
+            Ok(())
+        }
+        Some(Command::Signins) => {
+            let registry = ostra_store::RegistryDb::open(&ostra_core::paths::registry_db_path())?;
+            let list = ostra_server::auth::list_sign_ins(&registry)?;
+            if list.is_empty() {
+                println!("No browser is signed in.");
+            }
+            let date = |s: u64| chrono::DateTime::from_timestamp(s as i64, 0).map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string()).unwrap_or_default();
+            for s in list {
+                println!("{}  signed in {}  expires {}", s.id, date(s.created), date(s.expires));
+            }
+            Ok(())
+        }
+        Some(Command::Signout) => {
+            let registry = ostra_store::RegistryDb::open(&ostra_core::paths::registry_db_path())?;
+            let n = ostra_server::auth::revoke_sign_ins(&registry)?;
+            println!("Signed out {n} browsers. Run `ostra url` to sign in again.");
             Ok(())
         }
         Some(Command::Url) => {

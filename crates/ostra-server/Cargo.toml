@@ -16,6 +16,7 @@ ostra-exec-native.workspace = true
 ostra-exec-harness.workspace = true
 ostra-notify.workspace = true
 tokio.workspace = true
+libc.workspace = true
 tokio-util.workspace = true
 futures.workspace = true
 async-trait.workspace = true
@@ -48,6 +49,8 @@ ignore.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 reqwest.workspace = true
+futures.workspace = true
+tokio-tungstenite = "0.29"
 
 [[bin]]
 name = "ostra"

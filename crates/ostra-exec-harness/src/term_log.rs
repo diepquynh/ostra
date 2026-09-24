@@ -1,10 +1,12 @@
 //! The raw bytes of a harness terminal, kept on disk so the Terminal tab can replay an ended run.
 //! The file grows to at most twice [`TRANSCRIPT_CAP`]; past that it is rewritten with its last
-//! [`TRANSCRIPT_CAP`] bytes, so writes stay appends and memory stays flat.
+//! [`TRANSCRIPT_CAP`] bytes, so writes stay appends and memory stays flat. Harness output can
+//! carry secrets, so the file is readable by its owner only.
 
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// Bytes of terminal output a replay shows.
@@ -36,8 +38,9 @@ impl TermLog {
     fn with_cap(path: PathBuf, cap: usize) -> std::io::Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
         }
-        let file = File::create(&path)?;
+        let file = private(&path)?;
         Ok(TermLog {
             path,
             cap,
@@ -67,10 +70,18 @@ impl TermLog {
         let bytes = std::fs::read(&self.path)?;
         let tail = &bytes[bytes.len().saturating_sub(self.cap)..];
         let tmp = self.path.with_extension("log.tmp");
-        std::fs::write(&tmp, tail)?;
+        private(&tmp)?.write_all(tail)?;
         std::fs::rename(&tmp, &self.path)?;
         OpenOptions::new().append(true).open(&self.path)
     }
+}
+
+/// Create or truncate `path` as a file only its owner can read.
+fn private(path: &Path) -> std::io::Result<File> {
+    let file = OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path)?;
+    // `mode` applies only on creation; an older transcript keeps its bits otherwise.
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    Ok(file)
 }
 
 /// The stored transcript at `path`, at most [`TRANSCRIPT_CAP`] bytes. `None` when there is none.
@@ -101,6 +112,9 @@ mod tests {
         let stored = std::fs::read(&path).unwrap();
         assert!(stored.len() <= 20, "{}", stored.len());
         assert!(stored.ends_with(b"888999"));
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600, "a trimmed transcript stays private");
+        assert_eq!(mode(path.parent().unwrap()), 0o700);
         let log = TermLog::with_cap(path.clone(), 10).unwrap();
         log.append(b"new");
         assert_eq!(std::fs::read(&path).unwrap(), b"new", "a new run replaces the old transcript");
