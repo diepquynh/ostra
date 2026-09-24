@@ -1,4 +1,6 @@
+# syntax=docker/dockerfile:1
 # Usage: docker build -t ostra . (run from the repo root)
+# BuildKit cache mounts keep the cargo registry, target dir, and npm cache across builds.
 
 FROM ubuntu:26.04 AS web
 ARG DEBIAN_FRONTEND=noninteractive
@@ -9,7 +11,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN node --version \
+RUN --mount=type=cache,target=/root/.npm \
+    node --version \
     && npm ci --no-audit --no-fund
 COPY web/ ./
 RUN npm run -s build
@@ -34,7 +37,12 @@ COPY crates/ crates/
 COPY tests/ tests/
 COPY assets/ assets/
 COPY --from=web /src/web/dist web/dist
-RUN cargo build --release -p ostra-server
+# target/ is a cache mount and vanishes after this step, so the binary is copied out of it.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    cargo build --release -p ostra-server \
+    && cp target/release/ostra /usr/local/bin/ostra
 
 FROM ubuntu:26.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
@@ -50,7 +58,7 @@ RUN if getent passwd 1000 >/dev/null; then userdel --remove "$(getent passwd 100
     && mkdir -p /data /config \
     && chown 1000:1000 /data /config
 ENV OSTRA_DATA_DIR=/data OSTRA_CONFIG=/config/config.toml
-COPY --from=rust /src/target/release/ostra /usr/local/bin/ostra
+COPY --from=rust /usr/local/bin/ostra /usr/local/bin/ostra
 # 7878 is Ostra's default serve port (crates/ostra-server), matched by CMD's --port below.
 EXPOSE 7878
 STOPSIGNAL SIGINT
