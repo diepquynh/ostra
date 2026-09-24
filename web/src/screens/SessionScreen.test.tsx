@@ -48,7 +48,8 @@ const gates = () => within(screen.getByRole("region", { name: "Waiting for you" 
 describe("session board", () => {
   it("renders the demo session: header, lanes, open gates, lane stages, phase graph, decisions, artifacts, executions", async () => {
     const { open } = mount(SESSION);
-    await screen.findByRole("heading", { name: /Add order cancellation/ });
+    await screen.findByRole("heading", { name: "Order cancellation" });
+    expect(screen.getByText(/^Add order cancellation: customers can cancel an order/)).toBeTruthy();
     expect((screen.getByRole("switch", { name: "YOLO" }) as HTMLInputElement).checked).toBe(false);
     expect(screen.getByRole("button", { name: "Change the request" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop the session" })).toBeTruthy();
