@@ -52,3 +52,13 @@
 .ex-hook-note { font-size: var(--text-xs); color: var(--text-muted); }
 .ex-hook-rule { display: inline-flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: var(--text-sm); }
 .ex-hook-rule code { white-space: nowrap; }
+
+.ex-term-frame[data-maximized] {
+  position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; gap: 8px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: var(--term-bg, #0d0d0c);
+}
+.ex-term-frame { display: flex; flex-direction: column; gap: 10px; }
+.ex-term-frame[data-maximized] .os-term { flex: 1; min-height: 0; }
+.ex-term-frame .os-term__bar .os-btn { color: var(--term-muted); height: 22px; width: 22px; }
+.ex-term-frame .os-term__bar .os-btn:hover { color: var(--term-fg); background: rgba(255, 255, 255, 0.08); }
