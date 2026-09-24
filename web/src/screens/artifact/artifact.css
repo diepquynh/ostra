@@ -36,8 +36,13 @@
 
 .art-table { margin: 0 0 16px; border: 1px solid var(--border-default); border-radius: var(--radius-md); overflow-x: auto; }
 .art-table table { width: 100%; border-collapse: collapse; font-size: var(--text-base); line-height: 1.5; }
-.art-table th { white-space: nowrap; text-align: left; font: var(--type-label); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-label); color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-default); background: var(--surface-panel, transparent); }
+.art-table th { position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; font: var(--type-label); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-label); color: var(--text-muted); padding: 8px 12px; border-bottom: 1px solid var(--border-default); background: var(--surface-panel, transparent); }
 .art-table td { padding: 8px 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: top; background: var(--surface-raised); }
+.art-col-resize { position: absolute; top: 0; right: 0; width: 7px; height: 100%; cursor: col-resize; touch-action: none; }
+.art-col-resize::after { content: ""; position: absolute; top: 25%; right: 3px; width: 1px; height: 50%; background: var(--border-default); }
+.art-col-resize:hover::after, .art-col-resize:focus-visible::after { top: 0; height: 100%; width: 2px; right: 2px; background: var(--accent); }
+.art-col-resize:focus-visible { outline: none; }
+body.art-col-resizing { cursor: col-resize; user-select: none; }
 .art-table tr:last-child td { border-bottom: 0; }
 .art-table td.art-id { font: var(--weight-semibold) var(--text-sm)/22px var(--font-mono); color: var(--accent-fg); white-space: nowrap; width: 1%; }
 

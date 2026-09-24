@@ -3,6 +3,7 @@ import type { Evidence, FactCheckView, Question, Source } from "../../../api/typ
 import { Markdown } from "../../../components/Markdown";
 import { Chip, cx, Icon, SectionLabel, type Tone } from "../../../design";
 import { findingElement, normId, severityTone, type Mark, type MarkTone } from "./model";
+import { ColumnResizer } from "../ColumnResizer";
 
 export type DocCtx = {
   /** Go to an element id (`R3`, `step 2.1`) or a chapter id. */
@@ -238,9 +239,18 @@ export function SourcesTable({ sources }: { sources: Source[] }) {
       <table>
         <thead>
           <tr>
-            <th>Source</th>
-            <th>Version or date</th>
-            <th>What it established</th>
+            <th>
+              Source
+              <ColumnResizer />
+            </th>
+            <th>
+              Version or date
+              <ColumnResizer />
+            </th>
+            <th>
+              What it established
+              <ColumnResizer />
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -268,7 +278,10 @@ export function Grid({ head, rows, ids }: { head: string[]; rows: ReactNode[][];
         <thead>
           <tr>
             {head.map((h) => (
-              <th key={h}>{h}</th>
+              <th key={h}>
+                {h}
+                <ColumnResizer />
+              </th>
             ))}
           </tr>
         </thead>

@@ -1,5 +1,4 @@
 /* Typed documents: chapter pages, cards, cross-reference chips, and markers. */
-.doc-article { max-width: 1040px; }
 .doc-chapter-title { font: var(--type-heading); margin: 6px 0 16px; }
 .doc-chapter { display: block; }
 .doc-stack { display: flex; flex-direction: column; gap: 14px; }

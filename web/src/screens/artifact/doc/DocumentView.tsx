@@ -112,8 +112,8 @@ export function DocumentView({ path, view, check, header }: DocumentViewProps) {
 
   return (
     <DocContext.Provider value={ctx}>
-      <nav className="art-outline" aria-label="Chapters">
-        <div className="os-tree-section">Chapters</div>
+      <nav className="art-outline" aria-label="Outlines">
+        <div className="os-tree-section">Outlines</div>
         <div role="tree">
           {chapters.map((c) => (
             <TreeItem

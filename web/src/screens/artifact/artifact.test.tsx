@@ -94,6 +94,26 @@ describe("heading slugs match the server", () => {
   });
 });
 
+describe("report tables", () => {
+  it("resizes a column from its header and resets on double-click", async () => {
+    await render(<ArtifactMarkdown text={"| ID | Statement |\n| --- | --- |\n| R1 | THE SYSTEM SHALL x. |\n"} headings={[]} onAnchor={() => {}} />);
+    const handles = host!.querySelectorAll<HTMLElement>('th [role="separator"]');
+    expect(handles).toHaveLength(2);
+    const table = host!.querySelector("table")!;
+    const th = handles[0].closest("th")!;
+    await act(async () => {
+      handles[0].dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    expect(table.style.tableLayout).toBe("fixed");
+    expect(th.style.width).toMatch(/px$/);
+    await act(async () => {
+      handles[0].dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+    expect(table.style.tableLayout).toBe("");
+    expect(th.style.width).toBe("");
+  });
+});
+
 describe("artifact kind and badges", () => {
   it("reads the kind from the ref, else from the file name", () => {
     expect(artifactKind("/s/ostra-spec-x.md")).toBe("spec");
@@ -130,7 +150,7 @@ describe("artifact screen", () => {
   const research = `/home/me/code/shop/.ostra/sessions/${f.SESSION}/backend/ostra-research-20260922-100100-order-lifecycle.md`;
   const report = `/home/me/code/shop/.ostra/sessions/${f.SESSION}/backend/ostra-implementer-phase-1.md`;
   const chapters = () =>
-    Array.from(host!.querySelectorAll<HTMLElement>('[aria-label="Chapters"] [role="treeitem"]')).map((r) => ({
+    Array.from(host!.querySelectorAll<HTMLElement>('[aria-label="Outlines"] [role="treeitem"]')).map((r) => ({
       el: r,
       label: r.querySelector(".os-tree-item__label")?.textContent ?? r.textContent ?? "",
       meta: r.querySelector(".os-tree-item__meta")?.textContent ?? null,
@@ -221,11 +241,11 @@ describe("artifact screen", () => {
     await act(async () => button("Markdown").click());
     expect(host!.querySelector('[aria-label="Outline"]')).not.toBeNull();
     await act(async () => button("Document").click());
-    expect(host!.querySelector('[aria-label="Chapters"]')).not.toBeNull();
+    expect(host!.querySelector('[aria-label="Outlines"]')).not.toBeNull();
     act(() => root?.unmount());
     host?.remove();
     await render(withNav(<ArtifactScreen ws={f.WS} path={report} />, () => {}));
-    expect(host!.querySelector('[aria-label="Chapters"]')).toBeNull();
+    expect(host!.querySelector('[aria-label="Outlines"]')).toBeNull();
     expect(button("Markdown")).toBeUndefined();
   });
 });

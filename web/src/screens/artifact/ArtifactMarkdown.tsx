@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import type { Heading } from "../../api/gen/Heading";
 import { CodeView } from "../../design";
 import { headingText, rehypeHeadingIds } from "./outline";
+import { ColumnResizer } from "./ColumnResizer";
 
 type HastLike = { type: string; tagName?: string; value?: string; properties?: Record<string, unknown>; children?: HastLike[] };
 
@@ -53,6 +54,12 @@ export function ArtifactMarkdown({ text, headings, onAnchor }: ArtifactMarkdownP
         <div className="art-table">
           <table {...rest} />
         </div>
+      ),
+      th: ({ node: _node, children, ...rest }: ComponentProps<"th"> & { node?: unknown }) => (
+        <th {...rest}>
+          {children}
+          <ColumnResizer />
+        </th>
       ),
       td: ({ node, children, ...rest }: ComponentProps<"td"> & { node?: unknown }) => {
         const id = node ? headingText(node as HastLike) : "";
