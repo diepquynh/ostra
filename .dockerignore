@@ -1,0 +1,14 @@
+# Keeps host build outputs and local state out of the Docker build context, because the Dockerfile builds web/dist and the binary itself.
+target/
+target-*/
+web/node_modules/
+web/dist/
+.git/
+.ostra/
+.design-import/
+.claude/
+.design-sync/
+web/.vitest/
+web/.shots/
+*.log
+**/*.log

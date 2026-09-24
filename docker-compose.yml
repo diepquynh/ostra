@@ -1,0 +1,29 @@
+# Before the first `docker compose up -d`:
+# 1. Create ./config next to this file and give it to UID 1000 / GID 1000, for example:
+#      mkdir -p config
+#      sudo chown 1000:1000 config
+#    A directory the Docker daemon creates on its own is owned by root, and Ostra runs as
+#    1000:1000, so it would fail to write /config/config.toml and exit at start.
+# 2. Replace the placeholder projects path below on BOTH sides of the projects mount with one
+#    absolute host directory that holds the projects and workspaces, owned by or writable by
+#    UID 1000.
+# 3. After `docker compose up -d`, open http://localhost:7878.
+
+services:
+  ostra:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "7878:7878"
+    stop_signal: SIGINT
+    volumes:
+      - ostra-data:/data
+      - ./config:/config
+      # Both halves must be the same absolute host path: Ostra stores workspace and project
+      # paths literally, so only projects and workspaces under this directory can be imported
+      # or created persistently. It must be writable by UID 1000.
+      - /srv/ostra/projects:/srv/ostra/projects
+
+volumes:
+  ostra-data: {}
