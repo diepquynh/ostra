@@ -11,7 +11,7 @@ function mount(id: string) {
   const open = vi.fn();
   const noop = () => {};
   const ctx: ConsoleContextValue = {
-    nav: { ws: WS, activeId: `session:${id}`, tabs: [], open, close: noop, pin: noop, href: (x) => x },
+    nav: { ws: WS, activeId: `session:${id}`, tabs: [], open, close: noop, keep: noop, href: (x) => x },
     shell: {
       openDock: noop,
       closeDock: noop,

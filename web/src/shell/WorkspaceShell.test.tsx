@@ -105,6 +105,40 @@ describe("workspace shell", () => {
     expect(router.state.location.pathname).toBe(`/w/${WS}/s/${SESSION}`);
   });
 
+  it("pins, unpins and bulk-closes tabs from the tab context menu", async () => {
+    await mount(`/w/${WS}/cost`);
+    for (const page of ["settings", `s/${SESSION}`]) {
+      await act(async () => {
+        await router.navigate(`/w/${WS}/${page}`);
+      });
+      await settle(2);
+    }
+    expect(tabs()).toEqual(["Cost", "Settings", "Order cancellation"]);
+    const tab = (label: string) =>
+      Array.from(document.querySelectorAll('[aria-label="Open tabs"] [role="tab"]')).find(
+        (t) => t.textContent === label,
+      )!;
+    const menu = async (label: string, action: string) => {
+      await act(async () => {
+        tab(label).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 10 }));
+      });
+      const items = Array.from(document.querySelectorAll('[aria-label="Tab actions"] [role="menuitem"]'));
+      await click(items.find((i) => i.textContent?.startsWith(action))!);
+    };
+
+    await menu("Order cancellation", "Pin");
+    expect(tabs()).toEqual(["Order cancellation", "Cost", "Settings"]);
+    expect(document.querySelector('[aria-label="Unpin Order cancellation"]')).not.toBeNull();
+
+    await menu("Settings", "Close all");
+    expect(tabs()).toEqual(["Order cancellation"]);
+    expect(router.state.location.pathname).toBe(`/w/${WS}/s/${SESSION}`);
+
+    await click(document.querySelector('[aria-label="Unpin Order cancellation"]')!);
+    expect(document.querySelector('[aria-label="Unpin Order cancellation"]')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(`ostra.ui.${WS}`) ?? "{}").tabs[0].pinned).toBe(false);
+  });
+
   it("follows browser history to a tab that was closed", async () => {
     await mount(`/w/${WS}/cost`);
     await act(async () => {

@@ -21,7 +21,7 @@ export interface Nav {
   open: (id: string, opts?: OpenOptions) => void;
   close: (id: string) => void;
   /** Turn the preview tab into a normal tab. */
-  pin: (id: string) => void;
+  keep: (id: string) => void;
   /** The URL of a resource, for real links (middle-click, copy link). */
   href: (id: string) => string;
 }
@@ -57,7 +57,7 @@ export type ConsoleContextValue = { nav: Nav; shell: ShellActions; workspace: Wo
 const noop = () => {};
 
 export const ConsoleContext = createContext<ConsoleContextValue>({
-  nav: { ws: "", activeId: null, tabs: [], open: noop, close: noop, pin: noop, href: (id) => resourcePath("", id) },
+  nav: { ws: "", activeId: null, tabs: [], open: noop, close: noop, keep: noop, href: (id) => resourcePath("", id) },
   shell: {
     openDock: noop,
     closeDock: noop,

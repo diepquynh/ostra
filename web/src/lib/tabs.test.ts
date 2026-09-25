@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { emptyTabs, fromUiTabs, normalizeTabs, type TabsAction, type TabsState, tabsReducer, toUiTabs } from "./tabs";
+import {
+  type CloseScope,
+  emptyTabs,
+  fromUiTabs,
+  normalizeTabs,
+  type TabsAction,
+  type TabsState,
+  tabsReducer,
+  toUiTabs,
+} from "./tabs";
 
 const run = (actions: TabsAction[], from: TabsState = emptyTabs) => actions.reduce(tabsReducer, from);
-const ids = (s: TabsState) => s.tabs.map((t) => (t.preview ? `(${t.id})` : t.id));
+const ids = (s: TabsState) => s.tabs.map((t) => (t.preview ? `(${t.id})` : t.pinned ? `*${t.id}` : t.id));
 
 describe("tab model", () => {
   it("opens normal tabs in order and focuses the last one", () => {
@@ -48,16 +57,16 @@ describe("tab model", () => {
     expect(ids(s)).toEqual(["(session:c)", "session:b"]);
   });
 
-  it("pins a preview tab, so the next preview open adds a new tab", () => {
+  it("keeps a preview tab, so the next preview open adds a new tab", () => {
     const s = run([
       { type: "open", id: "exec:x1", preview: true },
-      { type: "pin", id: "exec:x1" },
+      { type: "keep", id: "exec:x1" },
       { type: "open", id: "exec:x2", preview: true },
     ]);
     expect(ids(s)).toEqual(["exec:x1", "(exec:x2)"]);
   });
 
-  it("pins a preview tab when the same resource is opened normally", () => {
+  it("keeps a preview tab when the same resource is opened normally", () => {
     const s = run([
       { type: "open", id: "exec:x1", preview: true },
       { type: "open", id: "exec:x1" },
@@ -79,7 +88,9 @@ describe("tab model", () => {
     const s = run([{ type: "open", id: "session:s1" }]);
     expect(tabsReducer(s, { type: "open", id: "session:s1" })).toBe(s);
     expect(tabsReducer(s, { type: "activate", id: "session:s1" })).toBe(s);
-    expect(tabsReducer(s, { type: "pin", id: "session:s1" })).toBe(s);
+    expect(tabsReducer(s, { type: "keep", id: "session:s1" })).toBe(s);
+    expect(tabsReducer(s, { type: "setPinned", id: "session:s1", pinned: false })).toBe(s);
+    expect(tabsReducer(s, { type: "closeMany", scope: "others", id: "session:s1" })).toBe(s);
     expect(tabsReducer(s, { type: "close", id: "nope:1" })).toBe(s);
   });
 
@@ -133,26 +144,77 @@ describe("tab model", () => {
       type: "restore",
       state: {
         tabs: [
-          { id: "a:1", preview: true },
-          { id: "a:1", preview: false },
-          { id: "b:2", preview: true },
+          { id: "a:1", preview: true, pinned: false },
+          { id: "a:1", preview: false, pinned: false },
+          { id: "b:2", preview: true, pinned: false },
+          { id: "c:3", preview: true, pinned: true },
         ],
         active: "gone:1",
       },
     });
-    expect(ids(s)).toEqual(["(a:1)", "b:2"]);
-    expect(s.active).toBe("a:1");
+    expect(ids(s)).toEqual(["*c:3", "(a:1)", "b:2"]);
+    expect(s.active).toBe("c:3");
+  });
+
+  describe("pinned tabs", () => {
+    const four = run([
+      { type: "open", id: "a:1" },
+      { type: "open", id: "b:2" },
+      { type: "open", id: "c:3", preview: true },
+      { type: "open", id: "d:4" },
+    ]);
+
+    it("moves a pinned tab to the end of the pinned group and an unpinned one just after it", () => {
+      const s = run(
+        [
+          { type: "setPinned", id: "c:3", pinned: true },
+          { type: "setPinned", id: "d:4", pinned: true },
+        ],
+        four,
+      );
+      expect(ids(s)).toEqual(["*c:3", "*d:4", "a:1", "b:2"]);
+      expect(ids(run([{ type: "setPinned", id: "c:3", pinned: false }], s))).toEqual(["*d:4", "c:3", "a:1", "b:2"]);
+    });
+
+    it("opens a tab beside a pinned one after the pinned group", () => {
+      const s = run(
+        [
+          { type: "setPinned", id: "d:4", pinned: true },
+          { type: "setPinned", id: "b:2", pinned: true },
+          { type: "activate", id: "d:4" },
+          { type: "open", id: "e:5", beside: true },
+        ],
+        four,
+      );
+      expect(ids(s)).toEqual(["*d:4", "*b:2", "e:5", "a:1", "(c:3)"]);
+    });
+
+    it("keeps pinned tabs through every bulk close", () => {
+      const pinned = run([{ type: "setPinned", id: "b:2", pinned: true }], four);
+      expect(ids(pinned)).toEqual(["*b:2", "a:1", "(c:3)", "d:4"]);
+      const close = (scope: CloseScope, id: string) => ids(run([{ type: "closeMany", scope, id }], pinned));
+      expect(close("all", "a:1")).toEqual(["*b:2"]);
+      expect(close("others", "c:3")).toEqual(["*b:2", "(c:3)"]);
+      expect(close("left", "c:3")).toEqual(["*b:2", "(c:3)", "d:4"]);
+      expect(close("right", "a:1")).toEqual(["*b:2", "a:1"]);
+    });
+
+    it("focuses the tab a bulk close was asked on when the active tab goes", () => {
+      const pinned = run([{ type: "setPinned", id: "b:2", pinned: true }], four);
+      expect(run([{ type: "closeMany", scope: "others", id: "a:1" }], pinned).active).toBe("a:1");
+      expect(run([{ type: "closeMany", scope: "all", id: "a:1" }], pinned).active).toBe("b:2");
+      expect(run([{ type: "closeMany", scope: "all", id: "a:1" }], four)).toEqual({ tabs: [], active: null });
+      const keep = run([{ type: "activate", id: "b:2" }], pinned);
+      expect(run([{ type: "closeMany", scope: "right", id: "a:1" }], keep).active).toBe("b:2");
+    });
   });
 
   it("converts to and from the server's UiTab shape", () => {
     const tabs = [
-      { id: "a:1", preview: false },
-      { id: "b:2", preview: true },
-    ];
-    expect(toUiTabs(tabs)).toEqual([
       { id: "a:1", preview: false, pinned: true },
       { id: "b:2", preview: true, pinned: false },
-    ]);
+    ];
+    expect(toUiTabs(tabs)).toEqual(tabs);
     expect(fromUiTabs(toUiTabs(tabs))).toEqual(tabs);
     expect(normalizeTabs({ tabs, active: "b:2" }).active).toBe("b:2");
   });

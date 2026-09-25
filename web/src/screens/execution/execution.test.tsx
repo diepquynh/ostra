@@ -59,7 +59,7 @@ afterEach(() => {
 function withNav(node: ReactNode, open: Nav["open"] = () => {}) {
   const noop = () => {};
   const ctx: ConsoleContextValue = {
-    nav: { ws: f.WS, activeId: null, tabs: [], open, close: noop, pin: noop, href: (id) => id },
+    nav: { ws: f.WS, activeId: null, tabs: [], open, close: noop, keep: noop, href: (id) => id },
     shell: {
       openDock: noop,
       closeDock: noop,

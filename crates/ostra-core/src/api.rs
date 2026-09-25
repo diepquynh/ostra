@@ -546,6 +546,7 @@ pub struct WorkspaceUiState {
 pub struct UiTab {
     /// The UI's resource id, for example `session:<id>` or `file:<project>:<path>`.
     pub id: String,
+    /// The user pinned it: it sits before unpinned tabs, is never the preview tab, and bulk closes keep it.
     pub pinned: bool,
     /// The single preview tab that the next preview open replaces.
     pub preview: bool,

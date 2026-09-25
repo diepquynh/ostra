@@ -219,7 +219,7 @@ describe("workspace screen", () => {
     const detail = await api.workspace(WS);
     const base = { ...detail, projects: detail.projects.map((p) => ({ ...p, init_status: "initialized" as const })) };
     const ctx = (draft: string | null): ConsoleContextValue => ({
-      nav: { ws: WS, activeId: "ws:overview", tabs: [], open, close: () => {}, pin: () => {}, href: (id) => id },
+      nav: { ws: WS, activeId: "ws:overview", tabs: [], open, close: () => {}, keep: () => {}, href: (id) => id },
       shell: {
         openDock: () => {},
         closeDock: () => {},

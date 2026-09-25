@@ -4,7 +4,11 @@ export type UiTab = {
 /**
  * The UI's resource id, for example `session:<id>` or `file:<project>:<path>`.
  */
-id: string, pinned: boolean, 
+id: string, 
+/**
+ * The user pinned it: it sits before unpinned tabs, is never the preview tab, and bulk closes keep it.
+ */
+pinned: boolean, 
 /**
  * The single preview tab that the next preview open replaces.
  */

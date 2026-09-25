@@ -10,14 +10,14 @@ import {
 } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
-import { Button, Kbd, StatusDot, Tabs, type Tone } from "../design";
+import { Button, Kbd, Menu, type MenuItem, StatusDot, Tabs, type Tone } from "../design";
 import { useAsync, useChannel } from "../lib/hooks";
 import { modKeys, shortcutOf } from "../lib/keys";
 import { useWorkspaceTree } from "../lib/live";
 import { ConsoleContext, type ConsoleContextValue, type OpenOptions, type Theme } from "../lib/nav";
 import { paletteTarget } from "../lib/palette";
 import { parseResource, resourceFromPath, resourcePath } from "../lib/resource";
-import { emptyTabs, normalizeTabs, type TabsState, tabsReducer } from "../lib/tabs";
+import { type CloseScope, emptyTabs, normalizeTabs, type TabsState, tabsReducer } from "../lib/tabs";
 import { applyTheme, resolveTheme } from "../lib/theme";
 import { AddProjectDialog, NewWorkspaceDialog, Onboarding, selfScrolling } from "../screens";
 import { resourceMeta } from "./meta";
@@ -175,7 +175,8 @@ function Shell({ ws }: { ws: string }) {
     },
     [ws, navigate, setPref, tabs.active],
   );
-  const pinActive = useCallback(() => tabs.active && dispatch({ type: "pin", id: tabs.active }), [tabs.active]);
+  const pinActive = useCallback(() => tabs.active && dispatch({ type: "keep", id: tabs.active }), [tabs.active]);
+  const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
 
   const ctx: ConsoleContextValue = useMemo(
     () => ({
@@ -185,7 +186,7 @@ function Shell({ ws }: { ws: string }) {
         tabs: tabs.tabs,
         open,
         close: (id) => dispatch({ type: "close", id }),
-        pin: (id) => dispatch({ type: "pin", id }),
+        keep: (id) => dispatch({ type: "keep", id }),
         href: (id) => resourcePath(ws, id),
       },
       shell: {
@@ -264,7 +265,7 @@ function Shell({ ws }: { ws: string }) {
     const tab = (e.target as HTMLElement).closest('[role="tab"]');
     if (!tab?.parentElement) return;
     const i = Array.from(tab.parentElement.children).indexOf(tab);
-    if (tabs.tabs[i]) dispatch({ type: "pin", id: tabs.tabs[i].id });
+    if (tabs.tabs[i]) dispatch({ type: "keep", id: tabs.tabs[i].id });
   };
   const onTabsAuxClick = (e: MouseEvent) => {
     if (e.button !== 1) return;
@@ -272,6 +273,32 @@ function Shell({ ws }: { ws: string }) {
     if (!tab?.parentElement) return;
     const i = Array.from(tab.parentElement.children).indexOf(tab);
     if (tabs.tabs[i]) dispatch({ type: "close", id: tabs.tabs[i].id });
+  };
+
+  const tabMenuItems = (id: string): MenuItem[] => {
+    const at = tabs.tabs.findIndex((t) => t.id === id);
+    const tab = tabs.tabs[at];
+    if (!tab) return [];
+    // A bulk close is offered only when it would close an unpinned tab.
+    const bulk = (label: string, scope: CloseScope, stays: (j: number) => boolean): MenuItem[] =>
+      tabs.tabs.some((t, j) => !t.pinned && !stays(j))
+        ? [{ label, onSelect: () => dispatch({ type: "closeMany", scope, id }) }]
+        : [];
+    return [
+      { label: "Close", onSelect: () => dispatch({ type: "close", id }) },
+      ...bulk("Close others", "others", (j) => j === at),
+      ...bulk("Close to the left", "left", (j) => j >= at),
+      ...bulk("Close to the right", "right", (j) => j <= at),
+      ...bulk("Close all", "all", () => false).map((it) =>
+        tabs.tabs.some((t) => t.pinned) ? { ...it, hint: "Keeps pinned" } : it,
+      ),
+      { type: "divider" },
+      {
+        label: tab.pinned ? "Unpin" : "Pin",
+        icon: tab.pinned ? "pin-off" : "pin",
+        onSelect: () => dispatch({ type: "setPinned", id, pinned: !tab.pinned }),
+      },
+    ];
   };
 
   return (
@@ -336,6 +363,13 @@ function Shell({ ws }: { ws: string }) {
                   value={active ?? ""}
                   onChange={(id) => dispatch({ type: "activate", id })}
                   onClose={(id) => dispatch({ type: "close", id })}
+                  onUnpin={(id) => dispatch({ type: "setPinned", id, pinned: false })}
+                  onContextMenu={(id, e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    const x = e.clientX || r.left;
+                    const y = e.clientY || r.bottom;
+                    setTabMenu({ id, x: Math.min(x, window.innerWidth - 240), y });
+                  }}
                   tabs={tabs.tabs.map((t) => {
                     const m = resourceMeta(t.id, metaCtx);
                     return {
@@ -344,11 +378,20 @@ function Shell({ ws }: { ws: string }) {
                       title: m.title ?? m.label,
                       icon: m.status ? null : m.icon,
                       italic: t.preview,
+                      pinned: t.pinned,
                       dot: m.status ? (
                         <StatusDot tone={TAB_TONE[m.status]} pulse={m.status === "running"} />
                       ) : undefined,
                     };
                   })}
+                />
+                <Menu
+                  open={!!tabMenu}
+                  onClose={() => setTabMenu(null)}
+                  items={tabMenu ? tabMenuItems(tabMenu.id) : []}
+                  width={220}
+                  label="Tab actions"
+                  style={tabMenu ? { position: "fixed", left: tabMenu.x, top: tabMenu.y } : undefined}
                 />
               </div>
             )}

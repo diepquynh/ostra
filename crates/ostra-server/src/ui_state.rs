@@ -40,8 +40,12 @@ pub fn merge(current: &WorkspaceUiState, patch: &[u8]) -> Result<WorkspaceUiStat
         _ => Map::new(),
     };
     merged.extend(patch);
-    let state: WorkspaceUiState = serde_json::from_value(Value::Object(merged))
+    let mut state: WorkspaceUiState = serde_json::from_value(Value::Object(merged))
         .map_err(|e| UiStateError::Invalid(format!("The UI state has a wrong field: {e}")))?;
+    for tab in state.tabs.iter_mut().filter(|t| t.pinned) {
+        tab.preview = false;
+    }
+    state.tabs.sort_by_key(|t| !t.pinned);
     if serde_json::to_vec(&state).map_or(0, |v| v.len()) > UI_STATE_MAX_BYTES {
         return Err(UiStateError::TooLarge);
     }
@@ -99,6 +103,29 @@ mod tests {
         assert_eq!(second.theme.as_deref(), Some("dark"));
         let cleared = merge(&second, br#"{"active": null}"#).unwrap();
         assert_eq!(cleared.active, None);
+    }
+
+    #[test]
+    fn pinned_tabs_come_first_and_are_never_the_preview() {
+        let s = merge(
+            &WorkspaceUiState::default(),
+            br#"{"tabs": [{"id": "a"}, {"id": "b", "pinned": true, "preview": true}, {"id": "c", "preview": true}, {"id": "d", "pinned": true}]}"#,
+        )
+        .unwrap();
+        let tabs: Vec<_> = s
+            .tabs
+            .iter()
+            .map(|t| (t.id.as_str(), t.pinned, t.preview))
+            .collect();
+        assert_eq!(
+            tabs,
+            vec![
+                ("b", true, false),
+                ("d", true, false),
+                ("a", false, false),
+                ("c", false, true)
+            ]
+        );
     }
 
     #[test]

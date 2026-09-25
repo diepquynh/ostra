@@ -532,7 +532,8 @@
   opacity: 0;
 }
 .os-tab:hover .os-tab__close,
-.os-tab--active .os-tab__close {
+.os-tab--active .os-tab__close,
+.os-tab__pin {
   opacity: 1;
 }
 .os-tab__close:hover {

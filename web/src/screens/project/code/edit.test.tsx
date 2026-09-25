@@ -52,7 +52,7 @@ async function settle(rounds = 4) {
 function withShell(node: ReactNode, url = "/") {
   const noop = () => {};
   const ctx: ConsoleContextValue = {
-    nav: { ws: WS, activeId: null, tabs: [], open: noop, close: noop, pin: noop, href: (id) => id },
+    nav: { ws: WS, activeId: null, tabs: [], open: noop, close: noop, keep: noop, href: (id) => id },
     shell: {
       openDock: noop,
       closeDock: noop,
