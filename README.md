@@ -11,6 +11,13 @@ work inside each stage. `HANDOVER.md` is the design brief this implementation fo
 applies the `export` lines of `$OSTRA_ENV_FILE` when it is set, and starts `ostra` with any
 flags you pass, for example `./run.sh --bind 0.0.0.0`. `SKIP_BUILD=1 ./run.sh` starts the existing binary.
 
+To run Ostra as a service that starts at login, run `./install.sh` (flags pass through, for example
+`./install.sh --port 8080`). The service listens on every interface; pass `--bind 127.0.0.1` to keep it
+local, and read the remote access notes below. It builds, installs `ostra` into `~/.local/bin` (or `$OSTRA_PREFIX/bin`),
+and registers a launchd agent on macOS or a systemd user unit on Linux. The service applies the `export`
+lines of the credentials file at every start, so after changing a key run `./install.sh restart`. The
+other commands are `status`, `url`, and `uninstall`, which keeps your config and data.
+
 By hand:
 
 ```bash
