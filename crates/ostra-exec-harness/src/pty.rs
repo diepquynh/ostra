@@ -18,6 +18,10 @@ pub const DEFAULT_COLS: u16 = 120;
 pub const DEFAULT_ROWS: u16 = 40;
 pub const MAX_COLS: u16 = 1000;
 pub const MAX_ROWS: u16 = 500;
+/// vt100 0.16 underflows, and panics the reader thread, on a one-row screen that wraps a line and
+/// on a one-column screen that draws a wide character. No harness TUI draws usefully below this.
+pub const MIN_COLS: u16 = 20;
+pub const MIN_ROWS: u16 = 5;
 const SCROLLBACK: usize = 2000;
 /// Pending writes before input is refused; a harness that stops reading must not block callers.
 const WRITE_QUEUE: usize = 256;
@@ -280,7 +284,10 @@ impl PtySession {
 }
 
 fn clamp_size(cols: u16, rows: u16) -> (u16, u16) {
-    (cols.clamp(1, MAX_COLS), rows.clamp(1, MAX_ROWS))
+    (
+        cols.clamp(MIN_COLS, MAX_COLS),
+        rows.clamp(MIN_ROWS, MAX_ROWS),
+    )
 }
 
 /// Reset, then the scrollback as plain lines, then the screen with its formatting and input
@@ -567,6 +574,20 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         panic!("never saw {text:?} in {:?}", pty.screen_text());
+    }
+
+    #[test]
+    fn the_smallest_screen_survives_wrapping_and_wide_characters() {
+        let (cols, rows) = clamp_size(0, 0);
+        assert_eq!((cols, rows), (MIN_COLS, MIN_ROWS));
+        let mut parser = vt100::Parser::new(rows, cols, 100);
+        let long = "x".repeat(usize::from(cols) * 3);
+        for _ in 0..usize::from(rows) * 2 {
+            parser.process(format!("{long}\r\n日本語の幅広い文字\r\n").as_bytes());
+        }
+        parser.screen_mut().set_size(rows, cols);
+        parser.process(b"up\r\n");
+        assert!(parser.screen().contents().contains("up"));
     }
 
     #[tokio::test]
