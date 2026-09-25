@@ -8,6 +8,8 @@ export type OpenOptions = {
   preview?: boolean;
   /** Element id to scroll to, sent as the URL hash (for example `gate-<id>`). */
   anchor?: string;
+  /** Put a new tab right after the active one instead of at the end. */
+  beside?: boolean;
 };
 
 /** Tab navigation inside the workspace shell. Every screen opens resources through this. */

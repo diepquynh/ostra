@@ -10,59 +10,58 @@
   background: var(--surface-selected);
   outline: 1px solid var(--border-strong);
 }
-.os-code .code-gutter {
-  flex: none;
-  width: 10px;
-  margin-left: -8px;
-  position: relative;
-}
-.os-code .code-gutter[data-mark] {
+/* The file editor. Monaco renders outside React, so these rules are global under `.monaco-editor`. */
+.monaco-editor .code-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
 }
-.os-code .code-gutter--add::before,
-.os-code .code-gutter--mod::before {
+.monaco-editor .code-sym--sel {
+  background: var(--surface-selected);
+  outline: 1px solid var(--border-strong);
+  border-radius: 2px;
+}
+.monaco-editor .code-line--hl {
+  background: var(--accent-soft);
+}
+.monaco-editor .code-mark {
+  cursor: pointer;
+}
+.monaco-editor .code-mark--add,
+.monaco-editor .code-mark--mod {
+  border-left: 3px solid var(--diff-add-fg);
+  margin-left: 4px;
+}
+.monaco-editor .code-mark--mod {
+  border-left-color: var(--info);
+}
+.monaco-editor .code-mark--del::after {
   content: "";
   position: absolute;
-  left: 2px;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-}
-.os-code .code-gutter--add::before {
-  background: var(--diff-add-fg);
-}
-.os-code .code-gutter--mod::before {
-  background: var(--info);
-}
-.os-code .code-gutter--del::before {
-  content: "";
-  position: absolute;
-  left: 1px;
+  left: 3px;
   bottom: -4px;
   border: 4px solid transparent;
   border-left: 6px solid var(--diff-del-fg);
-  z-index: 1;
 }
-.os-code .code-gutter[data-mark]:hover::before,
-.os-code .code-gutter--open::before {
+.monaco-editor .code-mark:hover {
   filter: brightness(1.3);
-  width: 5px;
 }
-.os-code .code-gutter--del[data-mark]:hover::before,
-.os-code .code-gutter--del.code-gutter--open::before {
-  width: 0;
-}
-.os-code .code-compare {
-  margin: 2px 0 6px;
+.code-zone {
   border-block: 1px solid var(--border-default);
   background: var(--surface-panel);
+  font: var(--text-sm) / 1 var(--font-mono);
+  overflow: hidden;
 }
-.os-code .code-compare__head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 8px 2px 14px;
-  font: var(--text-xs) / 1.4 var(--font-sans);
+.code-zone__head {
+  padding: 0 8px;
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
   color: var(--text-muted);
   white-space: nowrap;
+}
+.code-zone__line {
+  padding-left: 8px;
+  white-space: pre;
+  color: var(--diff-del-fg);
+  background: color-mix(in srgb, var(--diff-del-fg) 10%, transparent);
 }

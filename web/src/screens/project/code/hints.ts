@@ -3,8 +3,9 @@
 // `bindModel` names its project file.
 
 import { socket } from "../../../api/socket";
-import type { CodeDoc, CodeNavigation, CodeRange, CompletionKind, NavigateTarget } from "../../../api/types";
+import type { CodeDoc, CodeRange, CompletionKind, NavigateTarget } from "../../../api/types";
 import { monaco } from "../../../components/monaco";
+import { askJump, type JumpReply } from "./jump";
 
 type Model = monaco.editor.ITextModel;
 type Where = { workspace: string; key: string; path: string };
@@ -60,19 +61,15 @@ function ask(model: Model, position: monaco.Position) {
   return { ...where, text: model.getValue(), line: position.lineNumber, col: position.column - 1 };
 }
 
-/**
- * Supertypes or implementations of the name at `position`. `result` is null when neither the code index nor a
- * language server knows the name, and the whole answer is null when the model is unbound or the socket is closed.
- */
+/** Supertypes or implementations of the name at `position`; null when the model is unbound. See `askJump`. */
 export async function navigate(
   model: Model,
   position: monaco.Position,
   target: NavigateTarget,
-): Promise<{ result: CodeNavigation | null; error: string | null } | null> {
-  const base = ask(model, position);
-  if (!base) return null;
-  const reply = await socket().hint("code_navigate", { ...base, target });
-  return reply ? { result: reply.result, error: reply.error } : null;
+): Promise<JumpReply | null> {
+  const where = bound.get(model);
+  if (!where) return null;
+  return askJump(where, model.getValue(), position.lineNumber, position.column - 1, target);
 }
 
 let registered = false;

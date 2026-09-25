@@ -11,8 +11,8 @@ import { FileScreen } from "../../FileScreen";
 
 // Monaco needs a real layout engine; a textarea stands in for it.
 vi.mock("./FileEditor", () => ({
-  default: ({ value, onChange }: { value: string; onChange: (v: string) => void }) => (
-    <textarea data-testid="editor" value={value} onChange={(e) => onChange(e.target.value)} />
+  default: ({ value, onChange, readOnly }: { value: string; onChange: (v: string) => void; readOnly: boolean }) => (
+    <textarea data-testid="editor" value={value} readOnly={readOnly} onChange={(e) => onChange(e.target.value)} />
   ),
 }));
 
@@ -119,8 +119,11 @@ describe("file edit mode", () => {
     const start = mockFile(KEY, path).hash;
     const save = vi.spyOn(api, "saveProjectFile");
     await open(path);
+    expect(editor().readOnly).toBe(true);
+    expect(editor().value).toBe(mockFile(KEY, path).content);
     await click("Edit this file");
     await settle(2);
+    expect(editor().readOnly).toBe(false);
     expect(editor().value).toBe(mockFile(KEY, path).content);
     expect(button("Save")!.disabled).toBe(true);
     await type("fn changed() {}\n");
@@ -195,7 +198,8 @@ describe("file edit mode", () => {
     expect(editor()).toBeTruthy();
     await click("Discard changes?");
     await settle(1);
-    expect(host!.querySelector('[data-testid="editor"]')).toBeNull();
+    expect(editor().readOnly).toBe(true);
+    expect(editor().value).toBe("newer\n");
     expect(mockFile(KEY, path).content).toBe("newer\n");
   });
 

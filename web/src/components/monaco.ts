@@ -93,4 +93,7 @@ export function defineThemes() {
 
 export const themeName = (theme: Theme) => (theme === "dark" ? "ostra-dark" : "ostra-light");
 
+/** Monaco's default `wordSeparators`, for whole-word searches outside the editor's own find. */
+export const EDITOR_WORD_SEPARATORS = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
+
 export const EDITOR_FONT = { fontFamily: '"JetBrains Mono", ui-monospace, Menlo, monospace', fontSize: 12.5 };

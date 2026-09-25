@@ -6,8 +6,11 @@ export type Tab = { id: string; preview: boolean };
 export type TabsState = { tabs: Tab[]; active: string | null };
 
 export type TabsAction =
-  /** Open a resource. `preview` reuses the preview tab; a plain open pins an existing preview tab. */
-  | { type: "open"; id: string; preview?: boolean }
+  /**
+   * Open a resource. `preview` reuses the preview tab; a plain open pins an existing preview tab. `beside` puts a new
+   * tab right after the active one instead of at the end.
+   */
+  | { type: "open"; id: string; preview?: boolean; beside?: boolean }
   /** Turn a preview tab into a normal one. */
   | { type: "pin"; id: string }
   /** Close a tab; when it was active, its right neighbour (else the left one) becomes active. */
@@ -32,9 +35,11 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
         return tabs === state.tabs && state.active === id ? state : { tabs, active: id };
       }
       const slot = preview ? state.tabs.findIndex((t) => t.preview) : -1;
+      if (slot >= 0) return { tabs: state.tabs.map((t, i) => (i === slot ? { id, preview: true } : t)), active: id };
+      const at = action.beside ? state.tabs.findIndex((t) => t.id === state.active) : -1;
       const tabs =
-        slot >= 0
-          ? state.tabs.map((t, i) => (i === slot ? { id, preview: true } : t))
+        at >= 0
+          ? [...state.tabs.slice(0, at + 1), { id, preview }, ...state.tabs.slice(at + 1)]
           : [...state.tabs, { id, preview }];
       return { tabs, active: id };
     }

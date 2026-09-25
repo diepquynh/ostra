@@ -100,7 +100,9 @@ function Shell({ ws }: { ws: string }) {
   }, [ws, tabs, prefs]);
 
   // Vertical wheels scroll the tab strip sideways. Native listener because React's onWheel is passive.
+  const stripEl = useRef<HTMLDivElement | null>(null);
   const tabStrip = useCallback((el: HTMLDivElement | null) => {
+    stripEl.current = el;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       if (e.deltaY === 0 || Math.abs(e.deltaX) > Math.abs(e.deltaY) || el.scrollWidth <= el.clientWidth) return;
@@ -110,6 +112,17 @@ function Shell({ ws }: { ws: string }) {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
+
+  // Keep the active tab on screen, so a tab opened past the edge of the strip does not need scrolling to.
+  useEffect(() => {
+    if (!tabs.active) return;
+    const id = requestAnimationFrame(() =>
+      stripEl.current
+        ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+        ?.scrollIntoView?.({ block: "nearest", inline: "nearest" }),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [tabs]);
 
   // URL and active tab follow each other. `shellNav` marks a URL change the shell made itself.
   const shellNav = useRef<string | null>(null);
@@ -158,7 +171,7 @@ function Shell({ ws }: { ws: string }) {
         shellNav.current = id;
         navigate(resourcePath(ws, id, opts.anchor));
       }
-      dispatch({ type: "open", id, preview: opts.preview });
+      dispatch({ type: "open", id, preview: opts.preview, beside: opts.beside });
     },
     [ws, navigate, setPref, tabs.active],
   );

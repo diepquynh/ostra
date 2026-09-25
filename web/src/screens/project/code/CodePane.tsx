@@ -261,7 +261,7 @@ function useOpenLocation(projectKey: string, path: string, onGoto: (line: number
   return (p: string, line: number, carry = symbol) => {
     if (p === path) return onGoto(line);
     if (carry) carrySymbol(projectKey, p, carry);
-    nav.open(fileId(projectKey, p), { anchor: `L${line}` });
+    nav.open(fileId(projectKey, p), { anchor: `L${line}`, beside: true });
   };
 }
 

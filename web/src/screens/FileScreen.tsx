@@ -10,7 +10,8 @@ import { useProjectFsChanges, useWorkspaceTree } from "../lib/live";
 import { useNav, useShell } from "../lib/nav";
 import { fileId } from "../lib/resource";
 import { CodePane, takeCarried } from "./project/code/CodePane";
-import { SourceView, type SymbolRef } from "./project/code/SourceView";
+import type { EditorStart } from "./project/code/FileEditor";
+import type { SymbolRef } from "./project/code/SourceView";
 import { lineFromHash } from "./project/code/tokens";
 import { useFileEdit } from "./project/code/useFileEdit";
 import { DiffPane } from "./project/DiffPane";
@@ -59,9 +60,10 @@ const linkStyle = {
 /**
  * Resource `file:<key>:<path>`: a project file using the whole center pane, rendered markdown for `.md`,
  * or its Changes view (unified diff against HEAD) when a session touched it. Refreshes when the file
- * changes on disk. Scrolls its own content. The File view colors text with the project's code provider, and the
- * code pane beside it shows the outline, usages of a clicked name, and dependencies. A `#L<n>` hash marks a line.
- * Edit mode saves through the hash the edit started from and shows a conflict when the file changed on disk.
+ * changes on disk. The File view is one Monaco editor, read-only until the pencil starts an edit; while viewing, a
+ * clicked name drives the code pane beside it (outline, usages, dependencies), and changed lines carry gutter marks.
+ * A `#L<n>` hash marks a line. Edit mode saves through the hash the edit started from and shows a conflict when the
+ * file changed on disk.
  */
 export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
   const nav = useNav();
@@ -82,6 +84,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
   const hash = useLocation().hash;
   const hashLine = lineFromHash(hash);
   const edit = useFileEdit(ws, projectKey, path, file);
+  const [editStart, setEditStart] = useState<EditorStart | null>(null);
   // `#edit`, from creating the file in the Files panel, opens it in edit mode once.
   const autoEdit = useRef(hash === "#edit");
   useEffect(() => {
@@ -119,6 +122,22 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
     setMode("file");
     setGoto((g) => ({ line, n: (g?.n ?? 0) + 1 }));
   };
+  const locked = !f
+    ? null
+    : f.hash === null
+      ? f.truncated
+        ? "This file is larger than the size Ostra reads for the browser, so it cannot be edited here."
+        : "This file is not UTF-8 text, so it cannot be edited here."
+      : (f.read_only ?? null);
+  const reveal = useMemo(
+    () => (goto ? { line: goto.line, n: goto.n } : hashLine ? { line: hashLine, n: 0 } : null),
+    [goto, hashLine],
+  );
+  useEffect(() => {
+    if (!edit.editing) setEditStart(null);
+    // Done lands back on the File view, not on Changes, even when the save made the file differ from HEAD.
+    else setMode("file");
+  }, [edit.editing]);
 
   useEffect(() => {
     if (!edit.editing) return;
@@ -155,7 +174,9 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
       >
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           <Breadcrumbs
-            onNavigate={(_, i) => (i === 0 ? nav.open(`project:${projectKey}`) : shell.browseFiles(projectKey))}
+            onNavigate={(_, i) =>
+              i === 0 ? nav.open(`project:${projectKey}`, { beside: true }) : shell.browseFiles(projectKey)
+            }
             items={[{ label: projectKey, icon: "folder-git-2" }, ...segs.map((label) => ({ label }))]}
           />
         </div>
@@ -230,7 +251,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
             <button
               type="button"
               style={linkStyle}
-              onClick={() => nav.open(`exec:${by.execution}`)}
+              onClick={() => nav.open(`exec:${by.execution}`, { beside: true })}
               title="Open the execution"
             >
               {changedByLabel(by)}
@@ -239,7 +260,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
             <button
               type="button"
               style={linkStyle}
-              onClick={() => nav.open(`session:${by.session}`)}
+              onClick={() => nav.open(`session:${by.session}`, { beside: true })}
               title="Open the session"
             >
               {session?.title ?? session?.request ?? by.session}
@@ -268,9 +289,24 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
             <div style={{ padding: 20, display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)" }}>
               <Spinner size={11} /> Reading the file…
             </div>
-          ) : edit.editing ? (
+          ) : f.binary ? (
+            <div style={{ padding: 20, color: "var(--text-muted)" }}>Binary file, {fmtSize(f.size)}. No preview.</div>
+          ) : view === "diff" && d ? (
+            <>
+              {d.truncated && (
+                <div style={{ padding: "8px 12px 0" }}>
+                  <Banner tone="info">The diff is cut at the size cap. The first changes are shown.</Banner>
+                </div>
+              )}
+              <DiffPane hunks={d.hunks} />
+            </>
+          ) : view === "rendered" ? (
+            <div style={{ padding: "20px 28px 40px" }}>
+              <Markdown text={f.content ?? ""} className="os-prose" />
+            </div>
+          ) : (
             <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-              {edit.conflict && (
+              {edit.editing && edit.conflict && (
                 <div style={{ padding: "8px 12px 0" }}>
                   <Banner
                     tone="warn"
@@ -290,17 +326,25 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
                   </Banner>
                 </div>
               )}
-              {f.read_only && (
+              {edit.editing && f.read_only && (
                 <div style={{ padding: "8px 12px 0" }}>
                   <Banner tone="info">{f.read_only}</Banner>
                 </div>
               )}
-              {edit.error && (
+              {edit.editing && edit.error && (
                 <div style={{ padding: "8px 12px 0" }}>
                   <Banner tone="bad">{edit.error}</Banner>
                 </div>
               )}
-              <div style={{ flex: 1, minHeight: 0, paddingTop: edit.conflict || edit.error || f.read_only ? 8 : 0 }}>
+              {f.truncated && (
+                <div style={{ padding: "8px 12px 0" }}>
+                  <Banner tone="info">
+                    Showing the start of the file. At {fmtSize(f.size)} it is larger than the size Ostra reads for the
+                    browser.
+                  </Banner>
+                </div>
+              )}
+              <div style={{ flex: 1, minHeight: 0, paddingTop: 0 }}>
                 <Suspense
                   fallback={
                     <div
@@ -314,54 +358,27 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
                     ws={ws}
                     projectKey={projectKey}
                     path={path}
-                    value={edit.draft}
+                    value={edit.editing ? edit.draft : (f.content ?? "")}
                     onChange={edit.change}
                     theme={shell.theme}
                     onSave={edit.save}
                     dirty={edit.dirty}
-                    onOpen={(p, line) => nav.open(fileId(projectKey, p), { anchor: `L${line}` })}
+                    onOpen={(p, line) => nav.open(fileId(projectKey, p), { anchor: `L${line}`, beside: true })}
+                    readOnly={!edit.editing}
+                    locked={locked}
+                    onEditAt={(start) => {
+                      setEditStart(start);
+                      edit.start();
+                    }}
+                    start={editStart}
+                    selected={edit.editing ? null : (selected?.name ?? null)}
+                    onSymbol={setSelected}
+                    reveal={reveal}
+                    changes={edit.editing ? null : changes}
                   />
                 </Suspense>
               </div>
             </div>
-          ) : f.binary ? (
-            <div style={{ padding: 20, color: "var(--text-muted)" }}>Binary file, {fmtSize(f.size)}. No preview.</div>
-          ) : (
-            <>
-              {f.truncated && view !== "diff" && (
-                <div style={{ padding: "8px 12px 0" }}>
-                  <Banner tone="info">
-                    Showing the start of the file. At {fmtSize(f.size)} it is larger than the size Ostra reads for the
-                    browser.
-                  </Banner>
-                </div>
-              )}
-              {view === "diff" && d ? (
-                <>
-                  {d.truncated && (
-                    <div style={{ padding: "8px 12px 0" }}>
-                      <Banner tone="info">The diff is cut at the size cap. The first changes are shown.</Banner>
-                    </div>
-                  )}
-                  <DiffPane hunks={d.hunks} />
-                </>
-              ) : view === "rendered" ? (
-                <div style={{ padding: "20px 28px 40px" }}>
-                  <Markdown text={f.content ?? ""} className="os-prose" />
-                </div>
-              ) : (
-                <SourceView
-                  code={f.content ?? ""}
-                  file={c}
-                  language={ext}
-                  selected={selected?.name ?? null}
-                  onSymbol={setSelected}
-                  highlightLine={goto?.line ?? hashLine}
-                  scrollNonce={goto?.n}
-                  changes={changes}
-                />
-              )}
-            </>
           )}
         </div>
         {showPane && (

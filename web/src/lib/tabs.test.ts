@@ -14,6 +14,21 @@ describe("tab model", () => {
     expect(s.active).toBe("session:s1");
   });
 
+  it("opens a tab beside the active one when asked, and leaves an open tab where it is", () => {
+    const s = run([
+      { type: "open", id: "file:app:a.rs" },
+      { type: "open", id: "file:app:b.rs" },
+      { type: "open", id: "file:app:c.rs" },
+      { type: "activate", id: "file:app:a.rs" },
+      { type: "open", id: "file:app:d.rs", beside: true },
+      { type: "open", id: "file:app:e.rs", beside: true },
+      { type: "open", id: "file:app:c.rs", beside: true },
+    ]);
+    expect(ids(s)).toEqual(["file:app:a.rs", "file:app:d.rs", "file:app:e.rs", "file:app:b.rs", "file:app:c.rs"]);
+    expect(s.active).toBe("file:app:c.rs");
+    expect(ids(run([{ type: "open", id: "x:1", beside: true }]))).toEqual(["x:1"]);
+  });
+
   it("reuses the single preview tab for the next preview open", () => {
     const s = run([
       { type: "open", id: "ws:overview" },
