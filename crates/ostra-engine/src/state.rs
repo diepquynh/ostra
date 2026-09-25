@@ -477,6 +477,8 @@ pub enum DocsState {
 pub struct ProjectTrack {
     /// `Some(exit code)` once format ran. `Some(None)` means no format command.
     pub format: Option<Option<i32>>,
+    /// The command running now, between `CommandStarted` and `CommandRan`.
+    pub running: Option<(CommandPurpose, String)>,
     pub closing_gate: Option<GateId>,
     pub closing: Option<(bool, bool)>,
     pub docs: DocsState,
@@ -486,6 +488,7 @@ impl Default for ProjectTrack {
     fn default() -> Self {
         ProjectTrack {
             format: None,
+            running: None,
             closing_gate: None,
             closing: None,
             docs: DocsState::NotStarted,
@@ -1005,41 +1008,56 @@ impl SessionState {
                 let payload = g.payload.clone();
                 self.on_gate_answered(id, &payload, answer);
             }
+            SessionEvent::CommandStarted {
+                purpose,
+                project,
+                command,
+            } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .running = Some((*purpose, command.clone()));
+            }
             SessionEvent::CommandRan {
                 purpose,
                 project,
                 exit_code,
                 ..
-            } => match purpose {
-                CommandPurpose::Format => {
-                    self.project_tracks
-                        .entry(project.clone())
-                        .or_default()
-                        .format = Some(*exit_code);
+            } => {
+                if let Some(t) = self.project_tracks.get_mut(project) {
+                    t.running = None;
                 }
-                CommandPurpose::Stage => {
-                    let key = self
-                        .phases
-                        .iter()
-                        .flat_map(|(id, p)| {
-                            [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)]
-                        })
-                        .find(|(k, l)| {
-                            self.phases
-                                .get(&k.0)
-                                .is_some_and(|p| &p.info.project == project)
-                                && l.next == LoopNext::Stage
-                        })
-                        .map(|(k, _)| k);
-                    if let Some(key) = key
-                        && let Some(l) = self.loop_mut(key)
-                    {
-                        l.next = LoopNext::Done;
-                        l.staged = *exit_code == Some(0);
+                match purpose {
+                    CommandPurpose::Format => {
+                        self.project_tracks
+                            .entry(project.clone())
+                            .or_default()
+                            .format = Some(*exit_code);
                     }
+                    CommandPurpose::Stage => {
+                        let key = self
+                            .phases
+                            .iter()
+                            .flat_map(|(id, p)| {
+                                [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)]
+                            })
+                            .find(|(k, l)| {
+                                self.phases
+                                    .get(&k.0)
+                                    .is_some_and(|p| &p.info.project == project)
+                                    && l.next == LoopNext::Stage
+                            })
+                            .map(|(k, _)| k);
+                        if let Some(key) = key
+                            && let Some(l) = self.loop_mut(key)
+                        {
+                            l.next = LoopNext::Done;
+                            l.staged = *exit_code == Some(0);
+                        }
+                    }
+                    CommandPurpose::Autofix => {}
                 }
-                CommandPurpose::Autofix => {}
-            },
+            }
             SessionEvent::AutofixApplied {
                 phase,
                 tests,

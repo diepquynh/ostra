@@ -9,7 +9,7 @@ use ostra_core::api::{
     GateView, PendingGate, PhaseStatus, PhaseView, SessionDetail, SessionStatus, SessionSummary,
     StageCard, StageStatus, TreeGroup, TreeRun, TreeSession,
 };
-use ostra_core::event::{GatePayload, JudgeKind, SessionKind, numbered_run_label};
+use ostra_core::event::{CommandPurpose, GatePayload, JudgeKind, SessionKind, numbered_run_label};
 use ostra_core::exec::ExecutionStatus;
 use ostra_core::executor::ExecStream;
 use ostra_core::ids::{ExecutionId, WorkspaceId};
@@ -91,6 +91,20 @@ pub fn inferred_stage(s: &SessionState) -> (Lane, String) {
             _ => stage_label(r.stage).to_string(),
         };
         return (r.stage.lane(), label);
+    }
+    if let Some((key, purpose)) = s
+        .project_tracks
+        .iter()
+        .find_map(|(k, t)| t.running.as_ref().map(|(p, _)| (k, *p)))
+    {
+        let (stage, label) = match purpose {
+            CommandPurpose::Format => (StageKind::Format, format!("Formatting {key}")),
+            CommandPurpose::Stage | CommandPurpose::Autofix => (
+                StageKind::Staging,
+                format!("Staging reviewed files in {key}"),
+            ),
+        };
+        return (stage.lane(), label);
     }
     if s.category.is_none() {
         return (Lane::Research, "Classifying the request".into());
@@ -510,6 +524,18 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         }
     }
     for (key, t) in &s.project_tracks {
+        if t.format.is_none()
+            && let Some((CommandPurpose::Format, cmd)) = &t.running
+        {
+            let mut c = card(
+                StageKind::Format,
+                format!("Format {key}"),
+                StageStatus::Running,
+            );
+            c.project = Some(key.clone());
+            c.detail = Some(cmd.clone());
+            out.push(c);
+        }
         if let Some(f) = t.format {
             let mut c = card(
                 StageKind::Format,

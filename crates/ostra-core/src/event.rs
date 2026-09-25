@@ -526,6 +526,12 @@ pub enum SessionEvent {
         /// Why the YOLO judge chose this answer.
         reason: Option<String>,
     },
+    /// Appended before a command process starts, so a long format run shows on the board.
+    CommandStarted {
+        purpose: CommandPurpose,
+        project: String,
+        command: String,
+    },
     CommandRan {
         purpose: CommandPurpose,
         project: String,

@@ -37,7 +37,7 @@ resumes: ExecutionId | null, } | { "type": "execution_finished", id: ExecutionId
 /**
  * Why the YOLO judge chose this answer.
  */
-reason: string | null, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "autofix_applied", project: string, phase: number, tests: boolean, applied: Array<string>, 
+reason: string | null, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "autofix_applied", project: string, phase: number, tests: boolean, applied: Array<string>, 
 /**
  * Findings that could not be applied mechanically, with the reason.
  */

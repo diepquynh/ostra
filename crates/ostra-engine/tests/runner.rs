@@ -3,9 +3,9 @@
 
 use async_trait::async_trait;
 use ostra_core::agent::AgentName;
-use ostra_core::api::{CreateSession, SessionStatus};
+use ostra_core::api::{CreateSession, SessionStatus, StageStatus};
 use ostra_core::config::{GlobalConfig, ProjectEntry, ResolvedRoute, WorkspaceSettings};
-use ostra_core::event::{ExecPurpose, JudgeKind, SessionEvent, SessionOptions};
+use ostra_core::event::{CommandPurpose, ExecPurpose, JudgeKind, SessionEvent, SessionOptions};
 use ostra_core::exec::{
     CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
     ExecutionStatus, Executor, Usage,
@@ -13,8 +13,9 @@ use ostra_core::exec::{
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Effort;
+use ostra_core::pipeline::StageKind;
 use ostra_engine::factory::AgentsFactory;
-use ostra_engine::{Engine, EngineNotice, Notice, Services, SpawnFactory};
+use ostra_engine::{Engine, EngineNotice, Notice, Services, SessionState, SpawnFactory, view};
 use ostra_store::WorkspaceDb;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -252,6 +253,42 @@ async fn implement_session_runs_to_completion_under_yolo() {
     assert!(
         decisions.contains(&JudgeKind::YoloAnswer),
         "approvals were answered by the YOLO judge"
+    );
+    // A running format command is visible before it finishes.
+    let started = events
+        .iter()
+        .position(|e| {
+            matches!(
+                &e.event,
+                SessionEvent::CommandStarted { purpose: CommandPurpose::Format, command, .. }
+                    if command == "true"
+            )
+        })
+        .expect("format announced");
+    let ran = events
+        .iter()
+        .position(|e| {
+            matches!(
+                &e.event,
+                SessionEvent::CommandRan {
+                    purpose: CommandPurpose::Format,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(started < ran);
+    let mid = SessionState::fold(summary.id.clone(), &events[..=started]);
+    assert_eq!(view::inferred_stage(&mid).1, "Formatting app");
+    assert!(view::stages(&mid).iter().any(|c| {
+        c.stage == StageKind::Format
+            && c.status == StageStatus::Running
+            && c.detail.as_deref() == Some("true")
+    }));
+    assert!(
+        SessionState::fold(summary.id.clone(), &events[..=ran]).project_tracks["app"]
+            .running
+            .is_none()
     );
     let agents: Vec<AgentName> = exec.runs.lock().unwrap().iter().map(|r| r.0).collect();
     assert_eq!(

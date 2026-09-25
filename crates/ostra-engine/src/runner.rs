@@ -1441,6 +1441,7 @@ impl Inner {
                     "No format command in project.toml, so format was skipped.".to_string(),
                 ),
                 Some(cmd) => {
+                    self.append_command_started(session, purpose, project, &cmd)?;
                     let (code, out) =
                         run_shell(&root, "bash", &["-c".into(), cmd.clone()], 600).await;
                     (cmd, code, out)
@@ -1459,8 +1460,10 @@ impl Inner {
                         "--".into(),
                     ];
                     args.extend(files.iter().cloned());
+                    let text = format!("git {}", args.join(" "));
+                    self.append_command_started(session, purpose, project, &text)?;
                     let (code, out) = run_shell(&root, "git", &args, 60).await;
-                    (format!("git {}", args.join(" ")), code, out)
+                    (text, code, out)
                 }
             }
             CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
@@ -1473,6 +1476,24 @@ impl Inner {
                 command: cmd_text,
                 exit_code: exit,
                 output_tail: tail,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn append_command_started(
+        &self,
+        session: &SessionId,
+        purpose: CommandPurpose,
+        project: &str,
+        command: &str,
+    ) -> Result<(), EngineError> {
+        self.append(
+            session,
+            SessionEvent::CommandStarted {
+                purpose,
+                project: project.into(),
+                command: command.into(),
             },
         )?;
         Ok(())

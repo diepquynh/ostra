@@ -301,6 +301,8 @@ export function describeEvent(e: SessionEvent): string {
       return `Waiting: ${e.title}`;
     case "gate_answered":
       return `Gate answered by ${e.source}`;
+    case "command_started":
+      return `${humanize(e.purpose)} started in ${e.project}: ${truncate(e.command, 80)}`;
     case "command_ran":
       return `${humanize(e.purpose)} in ${e.project}: exit ${e.exit_code ?? "unknown"}`;
     case "autofix_applied":
