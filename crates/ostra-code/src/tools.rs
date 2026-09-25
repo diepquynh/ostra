@@ -57,6 +57,9 @@ fn loc(l: &CodeLocation) -> String {
     if let Some(c) = &l.container {
         write!(s, " in {c}").unwrap();
     }
+    if let Some(v) = &l.via {
+        write!(s, " (impl {v})").unwrap();
+    }
     s
 }
 
@@ -73,7 +76,17 @@ fn rel(root: &Path, p: &str) -> String {
     {
         return r.to_string_lossy().into_owned();
     }
-    p.trim_start_matches("./").to_string()
+    let p = p.trim_start_matches("./");
+    // An agent that works across the workspace names files from the workspace root, starting
+    // with the project's folder.
+    if let Some(dir) = root.file_name().and_then(|d| d.to_str())
+        && let Some(rest) = p.strip_prefix(dir).and_then(|r| r.strip_prefix('/'))
+        && !root.join(p).exists()
+        && root.join(rest).exists()
+    {
+        return rest.to_string();
+    }
+    p.to_string()
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(input: &Value) -> Result<T, String> {
@@ -120,6 +133,15 @@ struct CalleesIn {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ImplementationsIn {
+    symbol: String,
+    path: Option<String>,
+    line: Option<u32>,
+    limit: Option<usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ImpactIn {
     #[serde(default)]
     paths: Vec<String>,
@@ -144,6 +166,7 @@ pub fn run(ix: &mut ProjectIndex, tool: &str, input: &Value) -> Result<String, S
         "CodeFind" => find(ix, parse(input)?),
         "CodeCallers" => callers(ix, &root, parse(input)?),
         "CodeCallees" => callees(ix, &root, parse(input)?),
+        "CodeImplementations" => implementations(ix, &root, parse(input)?),
         "CodeNeighbors" => neighbors(ix, &root, parse(input)?),
         "CodeImpact" => impact(ix, &root, parse(input)?),
         "CodeMap" => map(ix, parse(input)?),
@@ -302,6 +325,64 @@ fn callees(ix: &mut ProjectIndex, root: &Path, a: CalleesIn) -> Result<String, S
     }
     if c.truncated {
         out.push_str("(more; raise limit)\n");
+    }
+    Ok(out)
+}
+
+/// Definitions a CodeImplementations answer lists when the name has several.
+const MAX_IMPL_GROUPS: usize = 8;
+
+fn implementations(
+    ix: &mut ProjectIndex,
+    root: &Path,
+    a: ImplementationsIn,
+) -> Result<String, String> {
+    let path = a.path.map(|p| rel(root, &p));
+    let r = ix.implementations(
+        &a.symbol,
+        path.as_deref(),
+        a.line,
+        MAX_IMPL_GROUPS,
+        limit(a.limit),
+    );
+    if r.definitions == 0 {
+        return Err(match &path {
+            Some(p) => format!(
+                "No type or method `{}` is defined in `{p}`. Use CodeOutline on the file to see its definitions.",
+                a.symbol
+            ),
+            None => format!(
+                "No type or method `{}` is in the index. Use CodeFind to look the name up.",
+                a.symbol
+            ),
+        });
+    }
+    let mut out = String::new();
+    if r.definitions > 1 {
+        writeln!(
+            out,
+            "`{}` has {} definitions; showing the ones with implementation links. Pass `path` for one.",
+            a.symbol, r.definitions
+        )
+        .unwrap();
+    }
+    for x in &r.links {
+        writeln!(out, "{}", loc(&x.definition)).unwrap();
+        let section = |out: &mut String, title: &str, v: &[CodeLocation]| {
+            if v.is_empty() {
+                writeln!(out, "  {title}: none").unwrap();
+                return;
+            }
+            writeln!(out, "  {title} ({}):", v.len()).unwrap();
+            for l in v {
+                writeln!(out, "    {}", loc(l)).unwrap();
+            }
+        };
+        section(&mut out, "implements or extends", &x.implements);
+        section(&mut out, "implemented or extended by", &x.implemented_by);
+    }
+    if r.truncated {
+        out.push_str("(more; pass `path` or raise limit)\n");
     }
     Ok(out)
 }

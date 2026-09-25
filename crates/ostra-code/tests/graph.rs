@@ -430,3 +430,326 @@ fn symbol_impact_follows_the_call_chain_not_the_file() {
         assert!(err.contains("Give `symbol`"), "{err}");
     });
 }
+
+const IMPLS: &[(&str, &str)] = &[
+    ("Cargo.toml", "[package]\nname = \"shapes\"\n"),
+    (
+        "src/lib.rs",
+        "pub mod shape;\npub mod circle;\npub mod square;\n",
+    ),
+    (
+        "src/shape.rs",
+        "pub trait Shape {\n    fn area(&self) -> f64;\n    fn name(&self) -> String;\n}\n",
+    ),
+    (
+        "src/circle.rs",
+        "use crate::shape::Shape;\npub struct Circle { r: f64 }\nimpl Circle {\n    pub fn new(r: f64) -> Self { Circle { r } }\n}\nimpl Shape for Circle {\n    fn area(&self) -> f64 { 3.14 * self.r }\n    fn name(&self) -> String { String::new() }\n}\n",
+    ),
+    (
+        "src/square.rs",
+        "use crate::shape::Shape;\npub struct Square;\nimpl Square {\n    pub fn new() -> Self { Square }\n}\nimpl Shape for Square {\n    fn area(&self) -> f64 { 1.0 }\n    fn name(&self) -> String { String::new() }\n}\n",
+    ),
+    (
+        "java/Pet.java",
+        "package zoo;\npublic interface Pet {\n    void feed();\n}\n",
+    ),
+    (
+        "java/Cat.java",
+        "package zoo;\npublic class Cat implements Pet {\n    public void feed() {}\n    public void feed(int grams) {}\n}\n",
+    ),
+];
+
+#[test]
+fn symbol_view_links_implementations() {
+    use ostra_core::code::{CodeGraph, CodeGraphEdgeKind};
+    let implements = |g: &CodeGraph, from: &str, to: &str| {
+        g.edges.iter().any(|e| {
+            e.kind == CodeGraphEdgeKind::Implements && e.from.contains(from) && e.to.contains(to)
+        })
+    };
+    with_files(IMPLS, |ix| {
+        let t = ix.symbol_view("src/shape.rs", "Shape", None, 1).unwrap();
+        assert!(
+            implements(&t, "circle.rs:2:Circle", "shape.rs:1:Shape"),
+            "{:#?}",
+            t.edges
+        );
+        assert!(implements(&t, "square.rs:2:Square", "shape.rs:1:Shape"));
+        let circle = t
+            .nodes
+            .iter()
+            .find(|n| n.id.contains("circle.rs:2:Circle"))
+            .unwrap();
+        assert_eq!(circle.column, -1);
+        // The `impl Shape for Circle` line is the implementation, not a separate reference.
+        assert!(
+            !t.nodes.iter().any(|n| n.id == "src/circle.rs"),
+            "{:#?}",
+            t.nodes
+        );
+        let focus = t.nodes.iter().find(|n| n.id == t.focus).unwrap();
+        let members: Vec<&str> = focus
+            .symbol
+            .as_ref()
+            .unwrap()
+            .members
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        assert_eq!(members, ["area", "name"]);
+
+        // A type lists its methods from every impl block, with the trait each one implements.
+        let c = ix.symbol_view("src/circle.rs", "Circle", None, 1).unwrap();
+        assert!(implements(&c, "circle.rs:2:Circle", "shape.rs:1:Shape"));
+        let sym = c
+            .nodes
+            .iter()
+            .find(|n| n.id == c.focus)
+            .unwrap()
+            .symbol
+            .clone()
+            .unwrap();
+        let members: Vec<(&str, Option<&str>)> = sym
+            .members
+            .iter()
+            .map(|m| (m.name.as_str(), m.via.as_deref()))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                ("new", None),
+                ("area", Some("Shape")),
+                ("name", Some("Shape"))
+            ]
+        );
+
+        // A trait method links down to each implementation, and an implementation up to it.
+        let area = ix.symbol_view("src/shape.rs", "area", None, 1).unwrap();
+        assert!(
+            implements(&area, "circle.rs:7:area", "shape.rs:2:area"),
+            "{:#?}",
+            area.edges
+        );
+        assert!(implements(&area, "square.rs:7:area", "shape.rs:2:area"));
+        let up = ix.symbol_view("src/circle.rs", "area", None, 1).unwrap();
+        assert!(implements(&up, "circle.rs:7:area", "shape.rs:2:area"));
+        assert!(!up.nodes.iter().any(|n| n.id.contains("square.rs")));
+        let sig = &up
+            .nodes
+            .iter()
+            .find(|n| n.id == up.focus)
+            .unwrap()
+            .symbol
+            .as_ref()
+            .unwrap()
+            .signature;
+        assert!(sig.contains("fn area(&self) -> f64"), "{sig}");
+
+        // Java: the class implements the interface, and both overloads carry their signatures.
+        let pet = ix.symbol_view("java/Pet.java", "Pet", None, 1).unwrap();
+        assert!(
+            implements(&pet, "Cat.java:2:Cat", "Pet.java:2:Pet"),
+            "{:#?}",
+            pet.edges
+        );
+        let feed = ix.symbol_view("java/Pet.java", "feed", None, 1).unwrap();
+        assert!(
+            implements(&feed, "Cat.java:3:feed", "Pet.java:3:feed"),
+            "{:#?}",
+            feed.edges
+        );
+        let cat = ix.symbol_view("java/Cat.java", "Cat", None, 1).unwrap();
+        let sigs: Vec<String> = cat
+            .nodes
+            .iter()
+            .find(|n| n.id == cat.focus)
+            .unwrap()
+            .symbol
+            .as_ref()
+            .unwrap()
+            .members
+            .iter()
+            .map(|m| m.signature.clone())
+            .collect();
+        assert_eq!(sigs, ["public void feed()", "public void feed(int grams)"]);
+    });
+}
+
+#[test]
+fn go_interfaces_are_satisfied_by_method_sets() {
+    use ostra_core::code::CodeGraphEdgeKind;
+    let files: &[(&str, &str)] = &[
+        ("go.mod", "module example.com/app\n\ngo 1.22\n"),
+        (
+            "store/store.go",
+            "package store\n\ntype Store interface {\n\tSave(id string) error\n\tLoad(id string) (string, error)\n}\n\ntype Any interface{}\n",
+        ),
+        (
+            "store/mem.go",
+            "package store\n\ntype Mem struct{}\n\nfunc (m *Mem) Save(id string) error { return nil }\n",
+        ),
+        (
+            "store/mem_load.go",
+            "package store\n\nfunc (m *Mem) Load(\n\tkey string,\n) (_ string, err error) {\n\treturn \"\", nil\n}\n",
+        ),
+        (
+            "store/half.go",
+            "package store\n\ntype Half struct{}\n\nfunc (h Half) Save(id string) error { return nil }\n",
+        ),
+        (
+            "cache/cache.go",
+            "package cache\n\ntype Cache interface {\n\tGet(k string) string\n}\n\ntype Mem struct{}\n\nfunc (m *Mem) Get(k string) string { return k }\n",
+        ),
+        (
+            "store/other.go",
+            "package store\n\ntype Other struct{}\n\nfunc (o *Other) Save(n int) error { return nil }\nfunc (o *Other) Load(key string) (string, error) { return \"\", nil }\n",
+        ),
+    ];
+    with_files(files, |ix| {
+        let imp = |g: &ostra_core::code::CodeGraph, from: &str, to: &str| {
+            g.edges.iter().any(|e| {
+                e.kind == CodeGraphEdgeKind::Implements
+                    && e.from.contains(from)
+                    && e.to.contains(to)
+            })
+        };
+        let s = ix.symbol_view("store/store.go", "Store", None, 1).unwrap();
+        assert!(
+            imp(&s, "mem.go:3:Mem", "store.go:3:Store"),
+            "{:#?}",
+            s.edges
+        );
+        assert!(
+            !s.nodes.iter().any(|n| n.id.contains("Half")),
+            "Half lacks Load"
+        );
+        // Other has both names, but Save takes an int.
+        assert!(
+            !s.nodes.iter().any(|n| n.id.contains("Other")),
+            "{:#?}",
+            s.nodes
+        );
+        let m = ix.symbol_view("store/mem.go", "Mem", None, 1).unwrap();
+        assert!(imp(&m, "mem.go:3:Mem", "store.go:3:Store"));
+        assert!(
+            !m.edges.iter().any(|e| e.to.contains(":Any")),
+            "the empty interface is left out"
+        );
+        let members: Vec<String> = m
+            .nodes
+            .iter()
+            .find(|n| n.id == m.focus)
+            .unwrap()
+            .symbol
+            .as_ref()
+            .unwrap()
+            .members
+            .iter()
+            .map(|x| format!("{}:{}", x.path, x.name))
+            .collect();
+        assert_eq!(members, ["store/mem.go:Save", "store/mem_load.go:Load"]);
+        let load = ix.symbol_view("store/store.go", "Load", None, 1).unwrap();
+        assert!(
+            imp(&load, "mem_load.go:3:Load", "store.go:5:Load"),
+            "{:#?}",
+            load.edges
+        );
+        // The implementation sits left of the interface method, never among its callees.
+        let impl_node = load
+            .nodes
+            .iter()
+            .find(|n| n.id.contains("mem_load.go"))
+            .unwrap();
+        assert_eq!(impl_node.column, -1, "{:#?}", load.nodes);
+        let get = ix.symbol_view("cache/cache.go", "Get", Some(4), 1).unwrap();
+        let mem_get = get
+            .nodes
+            .iter()
+            .find(|n| n.id == "symbol:cache/cache.go:9:Get")
+            .expect("Mem.Get implements Cache.Get");
+        assert_eq!(mem_get.column, -1, "{:#?}", get.nodes);
+        assert!(
+            !get.edges
+                .iter()
+                .any(|e| e.from == get.focus && e.to == mem_get.id),
+            "{:#?}",
+            get.edges
+        );
+        let sig = &load
+            .nodes
+            .iter()
+            .find(|n| n.id.contains("mem_load.go"))
+            .unwrap()
+            .symbol
+            .as_ref()
+            .unwrap()
+            .signature;
+        assert_eq!(sig, "func (m *Mem) Load(key string) (_ string, err error)");
+    });
+}
+
+#[test]
+fn implementations_tool_answers_in_text() {
+    use ostra_code::tools::run;
+    use serde_json::json;
+    with_files(IMPLS, |ix| {
+        let out = run(ix, "CodeImplementations", &json!({"symbol": "Shape"})).unwrap();
+        assert!(out.starts_with("src/shape.rs:1 interface Shape\n"), "{out}");
+        assert!(out.contains("  implemented or extended by (2):\n    src/circle.rs:2 class Circle\n    src/square.rs:2 class Square\n"), "{out}");
+        assert!(out.contains("  implements or extends: none"), "{out}");
+        // A method name with several definitions: the trait method, with its implementations, comes first.
+        let out = run(ix, "CodeImplementations", &json!({"symbol": "area"})).unwrap();
+        assert!(out.starts_with("`area` has 3 definitions"), "{out}");
+        let first = out.lines().nth(1).unwrap();
+        assert_eq!(first, "src/shape.rs:2 method area in Shape");
+        assert!(
+            out.contains("    src/circle.rs:7 method area in Circle (impl Shape)"),
+            "{out}"
+        );
+        let out = run(
+            ix,
+            "CodeImplementations",
+            &json!({"symbol": "area", "path": "src/square.rs"}),
+        )
+        .unwrap();
+        assert!(
+            out.contains("  implements or extends (1):\n    src/shape.rs:2 method area in Shape"),
+            "{out}"
+        );
+        let out = run(
+            ix,
+            "CodeImplementations",
+            &json!({"symbol": "feed", "path": "java/Cat.java", "line": 4}),
+        )
+        .unwrap();
+        assert!(
+            out.starts_with("java/Cat.java:4 method feed in Cat"),
+            "{out}"
+        );
+        // A workspace-relative path that starts with the project's folder names the same file.
+        let dir = ix.root().file_name().unwrap().to_str().unwrap().to_string();
+        let out = run(
+            ix,
+            "CodeImplementations",
+            &json!({"symbol": "Shape", "path": format!("{dir}/src/shape.rs")}),
+        )
+        .unwrap();
+        assert!(out.starts_with("src/shape.rs:1 interface Shape"), "{out}");
+        let out = run(
+            ix,
+            "CodeOutline",
+            &json!({"path": format!("{dir}/src/circle.rs")}),
+        )
+        .unwrap();
+        assert!(out.contains("Circle"), "{out}");
+        let err = run(ix, "CodeImplementations", &json!({"symbol": "nope"})).unwrap_err();
+        assert!(err.contains("Use CodeFind"), "{err}");
+        let err = run(
+            ix,
+            "CodeImplementations",
+            &json!({"symbol": "Shape", "path": "src/circle.rs"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("Use CodeOutline"), "{err}");
+    });
+}

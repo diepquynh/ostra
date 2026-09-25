@@ -105,6 +105,10 @@ pub struct CodeSymbol {
     /// The enclosing type, module, or impl, for methods and fields.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
+    /// The trait or interface the enclosing impl block implements, such as `Display` for a
+    /// `fmt` in `impl Display for Point`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 /// One dependency a file names: an import, use, include, or require.
@@ -175,6 +179,9 @@ pub struct CodeLocation {
     pub kind: Option<SymbolKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
+    /// Set on definitions inside an impl of a trait or interface: that trait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
 }
 
 /// `GET .../code/usages?symbol=&path=`: where a symbol is defined and used.
@@ -259,8 +266,50 @@ pub struct CodeGraphSymbol {
     pub kind: SymbolKind,
     /// 1-based line of the definition.
     pub line: u32,
+    /// Last line of its body, when the language gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
+    /// The trait or interface its impl block implements.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    /// The trimmed definition line, which tells overloads and same-named methods apart.
+    #[serde(default)]
+    pub signature: String,
+    /// For a type: its methods and functions, wherever its impl blocks are.
+    #[serde(default)]
+    pub members: Vec<CodeGraphMember>,
+    /// For a type: more members than `members` lists.
+    #[serde(default)]
+    pub more_members: u32,
+}
+
+/// A method or function a type defines, in a symbol view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeGraphMember {
+    pub path: String,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub line: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
+    #[serde(default)]
+    pub signature: String,
+}
+
+/// What a link in a symbol view means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum CodeGraphEdgeKind {
+    /// `from` references `to`: a call, a type in a signature, an import.
+    #[default]
+    Uses,
+    /// `from` implements or extends `to`: a class and its interface, or a method and the
+    /// interface method it implements.
+    Implements,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -303,6 +352,8 @@ pub struct CodeGraphEdge {
     /// An import statement names `to`.
     #[serde(default)]
     pub import: bool,
+    #[serde(default)]
+    pub kind: CodeGraphEdgeKind,
 }
 
 /// `GET .../code/graph?package=&path=&symbol=&line=&depth=`: one view of the project's dependency graph.

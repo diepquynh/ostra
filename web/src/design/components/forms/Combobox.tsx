@@ -36,6 +36,8 @@ export interface ComboboxProps {
   width?: number | string;
   /** Width of the list, when wider than the field. */
   listWidth?: number | string;
+  /** Which edge of the field a wider list lines up with. Default left. */
+  align?: "left" | "right";
   style?: CSSProperties;
 }
 
@@ -43,7 +45,7 @@ export interface ComboboxProps {
  * Text field with a list of suggestions below it. Arrow keys move the highlight, Enter picks the
  * highlighted item, Escape closes the list. The caller filters `items` for the query.
  */
-export function Combobox({ value, onChange, items, onSelect, onSubmit, placeholder, label, icon = "search", mono, size = "md", loading, empty = "No matches", width, listWidth, style }: ComboboxProps) {
+export function Combobox({ value, onChange, items, onSelect, onSubmit, placeholder, label, icon = "search", mono, size = "md", loading, empty = "No matches", width, listWidth, align = "left", style }: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [i, setI] = useState(0);
   const listId = useId();
@@ -105,7 +107,7 @@ export function Combobox({ value, onChange, items, onSelect, onSubmit, placehold
         {loading && <Spinner size={11} />}
       </div>
       {show && (
-        <div ref={listRef} id={listId} role="listbox" className="os-menu os-combobox__list" style={{ width: listWidth ?? "100%" }} onMouseDown={(e) => e.preventDefault()}>
+        <div ref={listRef} id={listId} role="listbox" className="os-menu os-combobox__list" style={{ width: listWidth ?? "100%", [align]: 0, [align === "left" ? "right" : "left"]: "auto" }} onMouseDown={(e) => e.preventDefault()}>
           {items.length === 0 && <div className="os-combobox__empty">{empty}</div>}
           {items.map((it, n) => (
             <Fragment key={it.id}>

@@ -234,7 +234,7 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
     id: p, kind: "file", label: p.split("/").pop() ?? p, package: pkgOf(p), column, files: 1,
     test: /test/.test(p), dependents: used(p).length, dependencies: uses.get(p)?.size ?? 0,
   });
-  const fileEdge = (from: string, to: string): CodeGraphEdge => ({ from, to, weight: 1, names: [], import: true });
+  const fileEdge = (from: string, to: string): CodeGraphEdge => ({ from, to, weight: 1, names: [], import: true, kind: "uses" });
   /** Longest chain of uses below each node, negated, so users sit left of what they use. */
   const columns = (ids: string[], out: (id: string) => string[]) => {
     const level = new Map<string, number>();
@@ -305,7 +305,7 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
       files: files.filter((f) => pkgOf(f.path) === p).length, test: false,
       dependents: pairs.filter(([, b]) => b === p).length, dependencies: pairs.filter(([a]) => a === p).length,
     })),
-    edges: pairs.map(([a, b, n]) => ({ from: pkgId(a), to: pkgId(b), weight: n, names: [], import: true })),
+    edges: pairs.map(([a, b, n]) => ({ from: pkgId(a), to: pkgId(b), weight: n, names: [], import: true, kind: "uses" })),
   };
 }
 
@@ -317,14 +317,23 @@ function mockSymbolGraph(key: string, path: string, symbol: string, line?: numbe
   if (!focus) throw Object.assign(new Error(`${symbol} is not defined in ${path}.`), { status: 404 });
   const idOf = (s: CodeSymbol) => `symbol:${path}:${s.line}:${s.name}`;
   const next = own.find((s) => s.line > focus.line)?.line ?? Infinity;
-  const body = fileText(key, path).split("\n").slice(focus.line, next - 1).join("\n");
+  const lines = fileText(key, path).split("\n");
+  const body = lines.slice(focus.line, next - 1).join("\n");
   const word = (name: string) => new RegExp(`\\b${name}\\b`);
   const callees = own.filter((s) => s !== focus && s.kind !== "module" && word(s.name).test(body));
   const callers = texts.filter((t) => t.path !== path && word(symbol).test(t.code)).map((t) => t.path);
   const symNode = (s: CodeSymbol, column: number, ins: number, outs: number): CodeGraphNode => ({
     id: idOf(s), kind: "symbol", label: s.container ? `${s.container}.${s.name}` : s.name, package: path.includes("/") ? path.split("/")[0] : "",
     column, files: 1, test: false, dependents: ins, dependencies: outs,
-    symbol: { path, name: s.name, kind: s.kind, line: s.line, container: s.container ?? null },
+    symbol: {
+      path, name: s.name, kind: s.kind, line: s.line, end_line: s.end_line ?? null, container: s.container ?? null, via: s.via ?? null,
+      signature: lines[s.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? s.name,
+      members: ["class", "enum", "interface", "type"].includes(s.kind)
+        ? own.filter((m) => m.container === s.name && (m.kind === "method" || m.kind === "function"))
+            .map((m) => ({ path, name: m.name, kind: m.kind, line: m.line, via: m.via ?? null, signature: lines[m.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? m.name }))
+        : [],
+      more_members: 0,
+    },
   });
   return {
     view: "symbol", focus: idOf(focus), indexed_files: texts.length, truncated: false,
@@ -334,8 +343,8 @@ function mockSymbolGraph(key: string, path: string, symbol: string, line?: numbe
       ...callers.map((p): CodeGraphNode => ({ id: p, kind: "file", label: p.split("/").pop() ?? p, package: p.includes("/") ? p.split("/")[0] : "", column: -1, files: 1, test: false, dependents: 0, dependencies: 1 })),
     ],
     edges: [
-      ...callees.map((s) => ({ from: idOf(focus), to: idOf(s), weight: 1, names: [], import: false })),
-      ...callers.map((p) => ({ from: p, to: idOf(focus), weight: 1, names: [], import: false })),
+      ...callees.map((s): CodeGraphEdge => ({ from: idOf(focus), to: idOf(s), weight: 1, names: [], import: false, kind: "uses" })),
+      ...callers.map((p): CodeGraphEdge => ({ from: p, to: idOf(focus), weight: 1, names: [], import: false, kind: "uses" })),
     ],
   };
 }

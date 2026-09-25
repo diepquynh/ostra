@@ -16,8 +16,19 @@ pub struct Symbol {
     pub len: u32,
     pub end_line: Option<u32>,
     pub container: Option<String>,
+    /// The trait or interface the enclosing impl block implements: `Display` for a `fmt` in
+    /// `impl Display for Point`.
+    pub via: Option<String>,
     /// Byte offset of the name.
     pub byte: u32,
+}
+
+/// `sub` names `sup` as a supertype: `class A extends B`, `impl B for A`, `trait A: B`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Super {
+    pub sub: String,
+    pub sup: String,
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +64,7 @@ pub struct Analysis {
     pub classes: Vec<Option<TokenClass>>,
     pub symbols: Vec<Symbol>,
     pub imports: Vec<RawImport>,
+    pub supers: Vec<Super>,
 }
 
 struct Scope {
@@ -60,6 +72,7 @@ struct Scope {
     depth: i32,
     sym: Option<usize>,
     name: Option<String>,
+    via: Option<String>,
     class_like: bool,
     kind: Option<SymbolKind>,
 }
@@ -67,6 +80,7 @@ struct Scope {
 struct Pending {
     sym: Option<usize>,
     name: Option<String>,
+    via: Option<String>,
     class_like: bool,
     kind: Option<SymbolKind>,
     depth: i32,
@@ -272,7 +286,20 @@ impl<'a> A<'a> {
         }
     }
 
+    /// The trait of the innermost named scope, the one `container` names.
+    fn via(&self) -> Option<String> {
+        if self.lang.family == Family::Python {
+            return None;
+        }
+        self.scopes
+            .iter()
+            .rev()
+            .find(|s| s.name.is_some())
+            .and_then(|s| s.via.clone())
+    }
+
     fn add(&mut self, k: usize, kind: SymbolKind, container: Option<String>) -> usize {
+        let via = container.as_ref().and_then(|_| self.via());
         let t = self.t(k).expect("a name token");
         self.consumed[k] = true;
         self.def_kind[self.sig[k]] = Some(kind);
@@ -284,6 +311,7 @@ impl<'a> A<'a> {
             len: t.len,
             end_line: None,
             container,
+            via,
             byte: t.start,
         });
         self.out.symbols.len() - 1
@@ -297,6 +325,16 @@ impl<'a> A<'a> {
             kind,
             SymbolKind::Class | SymbolKind::Enum | SymbolKind::Interface
         );
+        if class_like {
+            let line = self.line(k);
+            for sup in self.supertypes(k) {
+                self.out.supers.push(Super {
+                    sub: name.clone(),
+                    sup,
+                    line,
+                });
+            }
+        }
         match self.lang.family {
             Family::Python => self.py.push(PyScope {
                 indent: self.line_indent,
@@ -309,6 +347,7 @@ impl<'a> A<'a> {
                 self.pending = Some(Pending {
                     sym: Some(idx),
                     name: (class_like || kind == SymbolKind::Module).then_some(name),
+                    via: None,
                     class_like,
                     kind: Some(kind),
                     depth: self.depth,
@@ -356,6 +395,7 @@ impl<'a> A<'a> {
                             depth: self.depth,
                             sym: None,
                             name: None,
+                            via: None,
                             class_like: false,
                             kind: None,
                         },
@@ -363,6 +403,7 @@ impl<'a> A<'a> {
                             depth: self.depth,
                             sym: p.sym,
                             name: p.name,
+                            via: p.via,
                             class_like: p.class_like,
                             kind: p.kind,
                         },
@@ -372,6 +413,7 @@ impl<'a> A<'a> {
                                 depth: self.depth,
                                 sym: None,
                                 name: None,
+                                via: None,
                                 class_like: false,
                                 kind: None,
                             }
@@ -600,9 +642,14 @@ impl<'a> A<'a> {
         self.define(j, sym_kind(def, member), container);
     }
 
-    /// Rust `impl` and Swift `extension`: the implemented type becomes the container.
+    /// Rust `impl` and Swift `extension`: the implemented type becomes the container, and the
+    /// trait of `impl Trait for Type` (or each protocol after a Swift `:`) a supertype.
     fn impl_block(&mut self, k: usize) {
+        let rust = self.lang.family == Family::Rust;
         let mut cand = None;
+        let mut trait_ = None;
+        let mut conforms: Vec<String> = vec![];
+        let mut colon = false;
         let mut angle = 0;
         let mut stop = false;
         for j in k + 1..self.sig.len().min(k + 300) {
@@ -614,23 +661,153 @@ impl<'a> A<'a> {
                 if self.is_p(j, b'{') || self.is_p(j, b';') {
                     break;
                 }
+                if !rust && self.is_p(j, b':') {
+                    colon = true;
+                    continue;
+                }
                 match (self.kind(j), self.txt(j)) {
-                    (Some(Kind::Keyword), "for") => cand = None,
+                    (Some(Kind::Keyword), "for") => trait_ = cand.take(),
                     (Some(Kind::Keyword), "where") => stop = true,
                     // `impl $name` in a macro template names no type.
-                    _ if self.is_name(j) && !stop && !self.is_p(j - 1, b'$') => cand = Some(j),
+                    _ if self.is_name(j) && !stop && !self.is_p(j - 1, b'$') => {
+                        if !colon {
+                            cand = Some(j);
+                        } else if self.is_p(j - 1, b'.') {
+                            if let Some(last) = conforms.last_mut() {
+                                *last = self.txt(j).to_string();
+                            }
+                        } else {
+                            conforms.push(self.txt(j).to_string());
+                        }
+                    }
                     _ => {}
                 }
             }
         }
+        let name = cand.map(|j| self.txt(j).to_string());
+        let via = trait_.map(|j| self.txt(j).to_string());
+        if let Some(sub) = &name {
+            let line = self.line(k);
+            for sup in via.iter().cloned().chain(conforms) {
+                self.out.supers.push(Super {
+                    sub: sub.clone(),
+                    sup,
+                    line,
+                });
+            }
+        }
         self.pending = Some(Pending {
             sym: None,
-            name: cand.map(|j| self.txt(j).to_string()),
+            name,
+            via,
             class_like: true,
             kind: Some(SymbolKind::Class),
             depth: self.depth,
             paren: self.paren,
         });
+    }
+
+    /// The supertypes a type declaration at name token `k` names: after `extends`, `implements`,
+    /// `with`, or `:`, or in Python's parentheses and after Ruby's `<`. Each is its last path
+    /// segment, without type arguments.
+    fn supertypes(&self, k: usize) -> Vec<String> {
+        let fam = self.lang.family;
+        let end = self.sig.len().min(k + 300);
+        let mut out = vec![];
+        if fam == Family::Python {
+            let Some(close) = self
+                .is_p(k + 1, b'(')
+                .then(|| self.matching(k + 1))
+                .flatten()
+            else {
+                return out;
+            };
+            let mut cur: Option<&str> = None;
+            let mut j = k + 2;
+            while j < close {
+                if self.is_p(j, b'(') || self.is_p(j, b'[') {
+                    j = self.matching(j).map_or(close, |m| m + 1);
+                    continue;
+                }
+                if self.is_p(j, b',') {
+                    out.extend(cur.take().map(str::to_string));
+                } else if self.is_name(j) && self.is_p(j + 1, b'=') {
+                    cur = None;
+                    j = (j..close).find(|&i| self.is_p(i, b',')).unwrap_or(close);
+                    continue;
+                } else if self.is_name(j) {
+                    cur = Some(self.txt(j));
+                }
+                j += 1;
+            }
+            out.extend(cur.map(str::to_string));
+            return out;
+        }
+        if fam == Family::Ruby {
+            if self.is_p(k + 1, b'<') {
+                let mut j = k + 2;
+                let mut last = None;
+                while j < end && self.is_name(j) {
+                    last = Some(self.txt(j).to_string());
+                    if self.is_p(j + 1, b':') && self.is_p(j + 2, b':') {
+                        j += 3;
+                    } else {
+                        break;
+                    }
+                }
+                out.extend(last);
+            }
+            return out;
+        }
+        let first = self.line(k);
+        let mut on = false;
+        let mut cur: Option<&str> = None;
+        let mut j = k + 1;
+        while j < end {
+            if self.line(j) > first + 5
+                || self.is_p(j, b'{')
+                || self.is_p(j, b';')
+                || self.is_p(j, b'=')
+            {
+                break;
+            }
+            if self.is_p(j, b'<') || self.is_p(j, b'(') || self.is_p(j, b'[') {
+                match self.matching(j) {
+                    Some(m) => {
+                        j = m + 1;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            if self.is_p(j, b':') && self.is_p(j + 1, b':') {
+                j += 2;
+                continue;
+            }
+            let t = self.txt(j);
+            match t {
+                "where" => break,
+                "extends" | "implements" | "with" => {
+                    out.extend(cur.take().map(str::to_string));
+                    on = true;
+                }
+                "public" | "private" | "protected" | "virtual" | "internal" | "open" => {}
+                _ if self.is_p(j, b':') => {
+                    out.extend(cur.take().map(str::to_string));
+                    on = true;
+                }
+                _ if self.is_p(j, b',') || self.is_p(j, b'+') || self.is_p(j, b'&') => {
+                    out.extend(cur.take().map(str::to_string));
+                }
+                _ if on && self.is_name(j) => cur = Some(t),
+                _ if on && self.kind(j) == Some(Kind::Keyword) => break,
+                _ => {}
+            }
+            j += 1;
+        }
+        out.extend(cur.map(str::to_string));
+        out.retain(|s| s != "Self");
+        out
     }
 
     fn go_func(&mut self, k: usize) {
@@ -835,6 +1012,8 @@ impl<'a> A<'a> {
             return;
         }
         let prev_ok = prev.is_some_and(|p| match self.kind(p) {
+            // `void` is a return type everywhere but in JavaScript, where it is an operator.
+            Some(Kind::Keyword) if self.txt(p) == "void" => fam != Family::Js,
             Some(Kind::Keyword) => !NOT_BEFORE_MEMBER.contains(&self.txt(p)),
             Some(Kind::Ident | Kind::Type | Kind::Attr) => true,
             Some(Kind::Punct(c)) => b"{};)>]*&".contains(&c) || (c == b',' && fam == Family::Rust),

@@ -10,8 +10,8 @@ use crate::lex;
 use crate::outline::ImportStyle;
 use crate::resolve::parent;
 use ostra_core::code::{
-    CodeGraph, CodeGraphEdge, CodeGraphNode, CodeGraphNodeKind, CodeGraphSymbol, CodeGraphView,
-    CodeLocation, SymbolKind,
+    CodeGraph, CodeGraphEdge, CodeGraphEdgeKind, CodeGraphMember, CodeGraphNode, CodeGraphNodeKind,
+    CodeGraphSymbol, CodeGraphView, CodeLocation, SymbolKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -284,6 +284,27 @@ pub struct Callees {
     pub end_line: Option<u32>,
     /// Definitions the body names, in order of first mention.
     pub uses: Vec<CodeLocation>,
+    pub truncated: bool,
+}
+
+/// One definition's implementation links.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImplLinks {
+    pub definition: CodeLocation,
+    /// What it implements or extends; for a method, the supertype methods it implements.
+    pub implements: Vec<CodeLocation>,
+    /// What implements or extends it; for a method, the methods that implement it.
+    pub implemented_by: Vec<CodeLocation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Implementations {
+    pub symbol: String,
+    /// How many definitions the name has in the scope asked about.
+    pub definitions: usize,
+    /// Definitions with at least one link, most linked first. When nothing links, the first
+    /// definition with empty lists.
+    pub links: Vec<ImplLinks>,
     pub truncated: bool,
 }
 
@@ -1405,7 +1426,9 @@ impl ProjectIndex {
         let mut uses: Vec<(u32, u32)> = vec![];
         let mut truncated = false;
         for (i, t) in toks.iter().enumerate() {
-            if !in_body(t) {
+            // The definition's own name is not a use; on a bodiless interface method it would
+            // resolve to the methods that implement it.
+            if !in_body(t) || (t.line == def.line && t.col == def.col) {
                 continue;
             }
             let Some(m) = self.mention_of(&src, &toks, i, e.lang) else {
@@ -1523,6 +1546,7 @@ impl ProjectIndex {
             weight: e.names.len().max(1) as u32,
             names: self.names_of(&e.names),
             import: e.real_import(),
+            kind: CodeGraphEdgeKind::Uses,
         }
     }
 
@@ -1574,6 +1598,7 @@ impl ProjectIndex {
                     weight: d.links as u32,
                     names: vec![],
                     import: true,
+                    kind: CodeGraphEdgeKind::Uses,
                 })
             })
             .collect();
@@ -1669,6 +1694,7 @@ impl ProjectIndex {
                 weight: n,
                 names: vec![],
                 import: true,
+                kind: CodeGraphEdgeKind::Uses,
             });
         }
         Some(CodeGraph {
@@ -1770,11 +1796,23 @@ impl ProjectIndex {
 
 /// Callees a symbol view reads per definition.
 const MAX_VIEW_CALLEES: usize = 200;
+/// Members a type node lists.
+const MAX_MEMBERS: usize = 40;
+/// Links a symbol view draws; implementations are kept first, then the heaviest references.
+pub const MAX_VIEW_EDGES: usize = 300;
 /// Stands for the top level of a file in a symbol view key.
 const TOP: u32 = u32::MAX;
 
 /// A definition in a symbol view: (file, index into its defs), or (file, [`TOP`]).
 type DefKey = (u32, u32);
+
+/// One link out of (or into) a definition in a symbol view.
+struct CallStep {
+    to: DefKey,
+    /// Lines of the reference, 1 for an implementation.
+    weight: u32,
+    kind: CodeGraphEdgeKind,
+}
 
 /// Definitions a symbol view follows out of a body: what can be called or named as a type.
 /// Fields, variables, and constants would crowd out the calls.
@@ -1791,6 +1829,135 @@ fn view_kind(k: SymbolKind) -> bool {
     )
 }
 
+fn type_kind(k: SymbolKind) -> bool {
+    matches!(
+        k,
+        SymbolKind::Class | SymbolKind::Enum | SymbolKind::Interface | SymbolKind::Type
+    )
+}
+
+fn callable(k: SymbolKind) -> bool {
+    matches!(
+        k,
+        SymbolKind::Function | SymbolKind::Method | SymbolKind::Macro
+    )
+}
+
+/// A Go method's parameter and result types, with names and spaces dropped.
+#[derive(Debug, PartialEq, Eq)]
+struct GoSig {
+    params: Vec<String>,
+    results: Vec<String>,
+}
+
+/// Top-level comma-separated parts of `s`.
+fn split_top(s: &str) -> Vec<&str> {
+    let mut out = vec![];
+    let (mut depth, mut start) = (0i32, 0);
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(s[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = s[start..].trim();
+    if !last.is_empty() {
+        out.push(last);
+    }
+    out
+}
+
+/// The types of a Go parameter or result list. Either every entry is named or none is, and
+/// `a, b string` gives both names the type after the last.
+fn go_types(list: &str) -> Vec<String> {
+    // Without spaces or package qualifiers, since an import alias may rename the package.
+    let squash = |s: &str| {
+        let mut out = String::new();
+        for c in s.chars().filter(|c| !c.is_whitespace()) {
+            if c == '.' {
+                while out.ends_with(|p: char| p.is_alphanumeric() || p == '_') {
+                    out.pop();
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    };
+    let parts: Vec<(Option<&str>, &str)> = split_top(list)
+        .into_iter()
+        .map(|p| match p.split_once(char::is_whitespace) {
+            Some((first, tail))
+                if first.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    && !matches!(first, "chan" | "func" | "map" | "struct" | "interface") =>
+            {
+                (Some(first), tail)
+            }
+            _ => (None, p),
+        })
+        .collect();
+    if !parts.iter().any(|(n, _)| n.is_some()) {
+        return parts.into_iter().map(|(_, t)| squash(t)).collect();
+    }
+    let mut out = vec![String::new(); parts.len()];
+    let mut ty = String::new();
+    for (i, (name, t)) in parts.iter().enumerate().rev() {
+        if name.is_some() {
+            ty = squash(t);
+        }
+        out[i] = ty.clone();
+    }
+    out
+}
+
+/// The signature after `name` on a Go definition: `Save(tx *gorm.DB, id string) (_ *X, err
+/// error)` gives params `["*gorm.DB", "string"]` and results `["*X", "error"]`. `None` when
+/// the signature is cut off.
+fn go_sig(line: &str, name: &str) -> Option<GoSig> {
+    let at = line.find(&format!("{name}("))? + name.len();
+    let rest = &line[at..];
+    let close = |s: &str| {
+        let mut depth = 0;
+        s.char_indices().find_map(|(i, c)| {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            }
+            None
+        })
+    };
+    let end = close(rest)?;
+    let tail = rest[end + 1..].trim();
+    let results = match tail.strip_prefix('(') {
+        Some(_) => go_types(&tail[1..close(tail)?]),
+        None if tail.is_empty() => vec![],
+        None => go_types(tail),
+    };
+    Some(GoSig {
+        params: go_types(&rest[1..end]),
+        results,
+    })
+}
+
+fn bare(name: u32) -> Mention {
+    Mention {
+        name,
+        qual: Qual::None,
+        member: false,
+    }
+}
+
 impl ProjectIndex {
     fn def_at(&self, f: u32, line: u32, name: &str) -> Option<u32> {
         let &n = self.names.get(name)?;
@@ -1801,40 +1968,270 @@ impl ProjectIndex {
             .map(|i| i as u32)
     }
 
+    fn def_of(&self, (f, d): DefKey) -> &Def {
+        &self.entries[f as usize].defs[d as usize]
+    }
+
+    /// The type definitions `name` can mean in file `a`.
+    fn types_named(&self, g: &Graph, a: u32, name: u32) -> Vec<DefKey> {
+        self.resolve(g, a, bare(name))
+            .into_iter()
+            .filter(|&k| type_kind(self.def_of(k).kind))
+            .collect()
+    }
+
+    fn is_go(&self, f: u32) -> bool {
+        self.entries[f as usize].lang.family == Family::Go
+    }
+
+    fn dir_of(&self, f: u32) -> &str {
+        parent(&self.entries[f as usize].path)
+    }
+
+    /// The methods Go interface `t` declares: name and signature.
+    fn go_method_set(&self, t: DefKey) -> Vec<(u32, Option<GoSig>)> {
+        let name = &*self.name_list[self.def_of(t).name as usize];
+        self.entries[t.0 as usize]
+            .defs
+            .iter()
+            .filter(|x| x.kind == SymbolKind::Method && x.container.as_deref() == Some(name))
+            .map(|x| (x.name, go_sig(&x.preview, &self.name_list[x.name as usize])))
+            .collect()
+    }
+
+    /// Go type `s` has every method in `set` with a matching signature, declared in its package.
+    fn go_satisfies(&self, s: DefKey, set: &[(u32, Option<GoSig>)]) -> bool {
+        let owner = &*self.name_list[self.def_of(s).name as usize];
+        let dir = self.dir_of(s.0);
+        set.iter().all(|(m, want)| {
+            self.defs_by_name.get(m).is_some_and(|v| {
+                v.iter().any(|&(f, d)| {
+                    let x = self.def_of((f, d));
+                    callable(x.kind)
+                        && x.container.as_deref() == Some(owner)
+                        && self.dir_of(f) == dir
+                        // A signature the definition line cuts off matches by name alone.
+                        && match (want, go_sig(&x.preview, &self.name_list[*m as usize])) {
+                            (Some(a), Some(b)) => *a == b,
+                            _ => true,
+                        }
+                })
+            })
+        })
+    }
+
+    /// Go interfaces are satisfied implicitly, so a Go type implements every project
+    /// interface whose method set its package defines. Empty interfaces are left out.
+    fn go_interfaces_of(&self, s: DefKey) -> Vec<DefKey> {
+        let mut out = vec![];
+        for (fi, e) in self.entries.iter().enumerate() {
+            if !e.alive || e.lang.family != Family::Go {
+                continue;
+            }
+            for (di, x) in e.defs.iter().enumerate() {
+                let i = (fi as u32, di as u32);
+                if x.kind == SymbolKind::Interface && i != s {
+                    let set = self.go_method_set(i);
+                    if !set.is_empty() && self.go_satisfies(s, &set) {
+                        out.push(i);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn go_implementors_of(&self, t: DefKey) -> Vec<(DefKey, u32)> {
+        let set = self.go_method_set(t);
+        let Some(&(rare, _)) = set
+            .iter()
+            .min_by_key(|(m, _)| self.defs_by_name.get(m).map_or(0, Vec::len))
+        else {
+            return vec![];
+        };
+        let mut out: Vec<(DefKey, u32)> = vec![];
+        for &(f, d) in self.defs_by_name.get(&rare).into_iter().flatten() {
+            let x = self.def_of((f, d));
+            let Some(owner) = x.container.as_deref().and_then(|c| self.names.get(c)) else {
+                continue;
+            };
+            if !callable(x.kind) || (f, d) == t {
+                continue;
+            }
+            let dir = self.dir_of(f);
+            for &(sf, sd) in self.defs_by_name.get(owner).into_iter().flatten() {
+                let s = (sf, sd);
+                if s != t
+                    && self.is_go(sf)
+                    && self.dir_of(sf) == dir
+                    && matches!(self.def_of(s).kind, SymbolKind::Class | SymbolKind::Type)
+                    && !out.iter().any(|&(x, _)| x == s)
+                    && self.go_satisfies(s, &set)
+                {
+                    out.push((s, sf));
+                }
+            }
+        }
+        out
+    }
+
+    /// What type `t` extends or implements, from every declaration that names it as the subtype
+    /// (a Rust `impl Trait for T` may sit in any file).
+    fn supertypes_of(&self, g: &Graph, t: DefKey) -> Vec<DefKey> {
+        if self.is_go(t.0) {
+            return self.go_interfaces_of(t);
+        }
+        let name = self.def_of(t).name;
+        let mut out = vec![];
+        for (rf, e) in self.entries.iter().enumerate() {
+            let rf = rf as u32;
+            for r in e.supers.iter().filter(|r| r.sub == name) {
+                if !self.types_named(g, rf, name).contains(&t) {
+                    continue;
+                }
+                for s in self.types_named(g, rf, r.sup) {
+                    if s != t && !out.contains(&s) {
+                        out.push(s);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The types that extend or implement `t`, each with the file whose declaration says so.
+    fn subtypes_of(&self, g: &Graph, t: DefKey) -> Vec<(DefKey, u32)> {
+        if self.is_go(t.0) {
+            return if self.def_of(t).kind == SymbolKind::Interface {
+                self.go_implementors_of(t)
+            } else {
+                vec![]
+            };
+        }
+        let name = self.def_of(t).name;
+        let mut out: Vec<(DefKey, u32)> = vec![];
+        for (rf, e) in self.entries.iter().enumerate() {
+            let rf = rf as u32;
+            for r in e.supers.iter().filter(|r| r.sup == name) {
+                if !self.types_named(g, rf, name).contains(&t) {
+                    continue;
+                }
+                for s in self.types_named(g, rf, r.sub) {
+                    if s != t && !out.iter().any(|&(x, f)| x == s && f == rf) {
+                        out.push((s, rf));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// The methods named `name` that type `owner` defines, in its own file or in `also`.
+    fn methods_of(&self, owner: DefKey, name: u32, also: u32, via: Option<u32>) -> Vec<DefKey> {
+        let owner_name = &*self.name_list[self.def_of(owner).name as usize];
+        let via_name = via.map(|v| &*self.name_list[v as usize]);
+        self.defs_by_name
+            .get(&name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&(f, d)| {
+                let x = self.def_of((f, d));
+                // Go methods may sit in any file of the type's package.
+                (f == owner.0
+                    || f == also
+                    || (self.is_go(f) && self.dir_of(f) == self.dir_of(owner.0)))
+                    && callable(x.kind)
+                    && x.container.as_deref() == Some(owner_name)
+                    && via_name.is_none_or(|v| x.via.as_deref().is_none_or(|xv| xv == v))
+            })
+            .collect()
+    }
+
+    /// Implementation links of `m`: for a type, what it extends and what extends it; for a
+    /// method, the supertype method it implements and the methods that implement it.
+    fn impl_steps(&self, g: &Graph, m: DefKey, dir: Direction) -> Vec<DefKey> {
+        let md = self.def_of(m);
+        if type_kind(md.kind) {
+            return match dir {
+                Direction::Dependencies => self.supertypes_of(g, m),
+                Direction::Dependents => {
+                    self.subtypes_of(g, m).into_iter().map(|(s, _)| s).collect()
+                }
+            };
+        }
+        if !callable(md.kind) {
+            return vec![];
+        }
+        let Some(&c) = md.container.as_deref().and_then(|c| self.names.get(c)) else {
+            return vec![];
+        };
+        let via = md.via.as_deref().and_then(|v| self.names.get(v)).copied();
+        let owners = self.types_named(g, m.0, c);
+        let mut out = vec![];
+        match dir {
+            Direction::Dependencies => {
+                let sups: Vec<DefKey> = match via {
+                    Some(v) => self.types_named(g, m.0, v),
+                    None => owners
+                        .iter()
+                        .flat_map(|&o| self.supertypes_of(g, o))
+                        .collect(),
+                };
+                for s in sups {
+                    out.extend(self.methods_of(s, md.name, s.0, None));
+                }
+            }
+            Direction::Dependents => {
+                for &o in &owners {
+                    for (sub, rf) in self.subtypes_of(g, o) {
+                        out.extend(self.methods_of(sub, md.name, rf, Some(self.def_of(o).name)));
+                    }
+                }
+            }
+        }
+        out.retain(|&k| k != m);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// One step of a symbol view from `(file, def)`: the definitions it names, or the definitions
-    /// (or file top levels) that name it, each with the number of lines that do.
-    fn call_steps(&mut self, (f, d): DefKey, dir: Direction) -> (Vec<(DefKey, u32)>, bool) {
+    /// (or file top levels) that name it, plus its implementation links.
+    fn call_steps(&mut self, (f, d): DefKey, dir: Direction) -> (Vec<CallStep>, bool) {
         if d == TOP {
             return (vec![], false);
         }
         let e = &self.entries[f as usize];
         let def = &e.defs[d as usize];
-        let (path, name, line) = (
-            e.path.clone(),
-            self.name_list[def.name as usize].to_string(),
-            def.line,
-        );
+        let (path, name_id, line) = (e.path.clone(), def.name, def.line);
+        let name = self.name_list[name_id as usize].to_string();
         let mut out = vec![];
+        let mut truncated = false;
         match dir {
             Direction::Dependencies => {
-                let Some(c) = self.callees(&path, &name, Some(line), MAX_VIEW_CALLEES) else {
-                    return (out, false);
-                };
-                for l in c.uses {
-                    if !l.kind.is_some_and(view_kind) {
-                        continue;
-                    }
-                    let Some(&tf) = self.by_path.get(&l.path) else {
-                        continue;
-                    };
-                    if let Some(td) = self.def_at(tf, l.line, &l.name) {
-                        out.push(((tf, td), 1));
+                if let Some(c) = self.callees(&path, &name, Some(line), MAX_VIEW_CALLEES) {
+                    truncated = c.truncated;
+                    for l in c.uses {
+                        if !l.kind.is_some_and(view_kind) {
+                            continue;
+                        }
+                        let Some(&tf) = self.by_path.get(&l.path) else {
+                            continue;
+                        };
+                        if let Some(td) = self.def_at(tf, l.line, &l.name) {
+                            out.push(CallStep {
+                                to: (tf, td),
+                                weight: 1,
+                                kind: CodeGraphEdgeKind::Uses,
+                            });
+                        }
                     }
                 }
-                (out, c.truncated)
             }
             Direction::Dependents => {
                 let c = self.callers(&name, Some(&path), MAX_CALLER_REFS);
+                truncated = c.truncated;
                 for x in c.callers {
                     if x.import {
                         continue;
@@ -1842,6 +2239,20 @@ impl ProjectIndex {
                     let Some(&cf) = self.by_path.get(&x.path) else {
                         continue;
                     };
+                    // The `implements` clause shows as an implementation link, and an import
+                    // only brings the name in.
+                    let ce = &self.entries[cf as usize];
+                    let decl: HashSet<u32> = ce
+                        .supers
+                        .iter()
+                        .filter(|r| r.sup == name_id)
+                        .map(|r| r.line)
+                        .chain(ce.imports.iter().map(|i| i.line))
+                        .collect();
+                    let lines = x.lines.iter().filter(|l| !decl.contains(l)).count();
+                    if lines == 0 {
+                        continue;
+                    }
                     let key = match (&x.name, x.line) {
                         (Some(n), Some(l)) => match self.def_at(cf, l, n) {
                             Some(cd) => (cf, cd),
@@ -1849,16 +2260,173 @@ impl ProjectIndex {
                         },
                         _ => (cf, TOP),
                     };
-                    out.push((key, x.lines.len().max(1) as u32));
+                    out.push(CallStep {
+                        to: key,
+                        weight: lines as u32,
+                        kind: CodeGraphEdgeKind::Uses,
+                    });
                 }
-                (out, c.truncated)
             }
+        }
+        self.ensure_graph();
+        let g = self.graph_ref();
+        for to in self.impl_steps(g, (f, d), dir) {
+            out.push(CallStep {
+                to,
+                weight: 1,
+                kind: CodeGraphEdgeKind::Implements,
+            });
+        }
+        (out, truncated)
+    }
+
+    /// The methods and functions type `t` defines: in its own file, and in impl blocks of other
+    /// files whose name for it means `t`.
+    fn members_of(
+        &self,
+        g: &Graph,
+        t: DefKey,
+        by_container: &HashMap<u32, Vec<DefKey>>,
+    ) -> Vec<DefKey> {
+        let mut out: Vec<DefKey> = by_container
+            .get(&self.def_of(t).name)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&k| callable(self.def_of(k).kind))
+            .filter(|&(f, _)| f == t.0 || self.types_named(g, f, self.def_of(t).name).contains(&t))
+            .collect();
+        out.sort_by_key(|&(f, d)| (f != t.0, f, self.def_of((f, d)).line));
+        out
+    }
+
+    fn view_symbol(
+        &self,
+        g: &Graph,
+        k: DefKey,
+        by_container: Option<&HashMap<u32, Vec<DefKey>>>,
+    ) -> CodeGraphSymbol {
+        let e = &self.entries[k.0 as usize];
+        let def = self.def_of(k);
+        let mut members = vec![];
+        let mut more_members = 0;
+        if let Some(bc) = by_container.filter(|_| type_kind(def.kind)) {
+            let all = self.members_of(g, k, bc);
+            more_members = all.len().saturating_sub(MAX_MEMBERS) as u32;
+            members = all
+                .into_iter()
+                .take(MAX_MEMBERS)
+                .map(|m| {
+                    let x = self.def_of(m);
+                    CodeGraphMember {
+                        path: self.entries[m.0 as usize].path.clone(),
+                        name: self.name_list[x.name as usize].to_string(),
+                        kind: x.kind,
+                        line: x.line,
+                        via: x.via.as_deref().map(str::to_string),
+                        signature: x.preview.to_string(),
+                    }
+                })
+                .collect();
+        }
+        CodeGraphSymbol {
+            path: e.path.clone(),
+            name: self.name_list[def.name as usize].to_string(),
+            kind: def.kind,
+            line: def.line,
+            end_line: def.end_line,
+            container: def.container.as_deref().map(str::to_string),
+            via: def.via.as_deref().map(str::to_string),
+            signature: def.preview.to_string(),
+            members,
+            more_members,
         }
     }
 
-    /// `symbol` in `path` (the definition nearest `line`), what references it to the left and
-    /// what it calls or names to the right, one column per hop. A reference from the top level
-    /// of a file shows as that file. `None` when the index does not hold the definition.
+    /// What the types or methods named `symbol` implement, and what implements them. `path` and
+    /// `line` pick one definition; without them every type or method of that name is asked, and
+    /// the ones with links come first, up to `groups`.
+    pub fn implementations(
+        &mut self,
+        symbol: &str,
+        path: Option<&str>,
+        line: Option<u32>,
+        groups: usize,
+        limit: usize,
+    ) -> Implementations {
+        self.ensure_graph();
+        let mut out = Implementations {
+            symbol: symbol.to_string(),
+            definitions: 0,
+            links: vec![],
+            truncated: false,
+        };
+        let Some(&n) = self.names.get(symbol) else {
+            return out;
+        };
+        let mut defs: Vec<DefKey> = self
+            .defs_by_name
+            .get(&n)
+            .into_iter()
+            .flatten()
+            .copied()
+            .filter(|&k| {
+                let x = self.def_of(k);
+                (type_kind(x.kind) || callable(x.kind))
+                    && path.is_none_or(|p| self.entries[k.0 as usize].path == p)
+            })
+            .collect();
+        if let Some(l) = line
+            && let Some(&best) = defs
+                .iter()
+                .min_by_key(|&&k| self.def_of(k).line.abs_diff(l))
+        {
+            defs = vec![best];
+        }
+        out.definitions = defs.len();
+        let g = self.graph_ref();
+        let mut all: Vec<ImplLinks> = defs
+            .iter()
+            .map(|&k| {
+                let locs = |v: Vec<DefKey>| -> Vec<CodeLocation> {
+                    v.into_iter()
+                        .map(|x| self.location(x.0, self.def_of(x)))
+                        .collect()
+                };
+                ImplLinks {
+                    definition: self.location(k.0, self.def_of(k)),
+                    implements: locs(self.impl_steps(g, k, Direction::Dependencies)),
+                    implemented_by: locs(self.impl_steps(g, k, Direction::Dependents)),
+                }
+            })
+            .collect();
+        let linked = |x: &ImplLinks| x.implements.len() + x.implemented_by.len();
+        all.sort_by_key(|x| std::cmp::Reverse(linked(x)));
+        if all.iter().any(|x| linked(x) > 0) {
+            all.retain(|x| linked(x) > 0);
+        } else {
+            all.truncate(1);
+        }
+        if all.len() > groups {
+            out.truncated = true;
+            all.truncate(groups);
+        }
+        for x in &mut all {
+            for v in [&mut x.implements, &mut x.implemented_by] {
+                if v.len() > limit {
+                    out.truncated = true;
+                    v.truncate(limit);
+                }
+            }
+        }
+        out.links = all;
+        out
+    }
+
+    /// `symbol` in `path` (the definition nearest `line`), what references or implements it to
+    /// the left and what it calls, names, or implements to the right, one column per hop. A
+    /// reference from the top level of a file shows as that file. `None` when the index does
+    /// not hold the definition.
     pub fn symbol_view(
         &mut self,
         path: &str,
@@ -1878,7 +2446,7 @@ impl ProjectIndex {
         let focus = (f, d as u32);
         let mut column: HashMap<DefKey, i32> = HashMap::from([(focus, 0)]);
         let mut order = vec![focus];
-        let mut links: BTreeMap<(DefKey, DefKey), u32> = BTreeMap::new();
+        let mut links: BTreeMap<(DefKey, DefKey), (u32, CodeGraphEdgeKind)> = BTreeMap::new();
         let mut truncated = false;
         // Callees stop at half the nodes so the callers keep room.
         for (dir, sign, cap) in [
@@ -1891,7 +2459,11 @@ impl ProjectIndex {
                 for &a in &frontier {
                     let (steps, cut) = self.call_steps(a, dir);
                     truncated |= cut;
-                    for (b, w) in steps {
+                    // Implementations first, so a full view still shows them.
+                    let mut steps = steps;
+                    steps.sort_by_key(|s| s.kind != CodeGraphEdgeKind::Implements);
+                    for s in steps {
+                        let b = s.to;
                         if a == b {
                             continue;
                         }
@@ -1905,15 +2477,46 @@ impl ProjectIndex {
                             next.push(b);
                         }
                         let k = if sign > 0 { (a, b) } else { (b, a) };
-                        let slot = links.entry(k).or_default();
-                        *slot = (*slot).max(w);
+                        let slot = links.entry(k).or_insert((0, s.kind));
+                        slot.0 = slot.0.max(s.weight);
+                        if s.kind == CodeGraphEdgeKind::Implements {
+                            slot.1 = s.kind;
+                        }
                     }
                 }
                 frontier = next;
             }
         }
+        if links.len() > MAX_VIEW_EDGES {
+            truncated = true;
+            let mut all: Vec<_> = std::mem::take(&mut links).into_iter().collect();
+            all.sort_by_key(|&(_, (w, kind))| {
+                (kind != CodeGraphEdgeKind::Implements, std::cmp::Reverse(w))
+            });
+            all.truncate(MAX_VIEW_EDGES);
+            links = all.into_iter().collect();
+        }
         self.ensure_graph();
         let g = self.graph_ref();
+        let mut by_container: HashMap<u32, Vec<DefKey>> = HashMap::new();
+        if order
+            .iter()
+            .any(|&(f, d)| d != TOP && type_kind(self.def_of((f, d)).kind))
+        {
+            for (fi, e) in self.entries.iter().enumerate() {
+                if !e.alive {
+                    continue;
+                }
+                for (di, x) in e.defs.iter().enumerate() {
+                    if let Some(&c) = x.container.as_deref().and_then(|c| self.names.get(c)) {
+                        by_container
+                            .entry(c)
+                            .or_default()
+                            .push((fi as u32, di as u32));
+                    }
+                }
+            }
+        }
         let id = |(f, d): DefKey| {
             let e = &self.entries[f as usize];
             if d == TOP {
@@ -1938,16 +2541,7 @@ impl ProjectIndex {
                 let (f, d) = k;
                 let e = &self.entries[f as usize];
                 let file = e.path.rsplit('/').next().unwrap_or(&e.path).to_string();
-                let symbol = (d != TOP).then(|| {
-                    let def = &e.defs[d as usize];
-                    CodeGraphSymbol {
-                        path: e.path.clone(),
-                        name: self.name_list[def.name as usize].to_string(),
-                        kind: def.kind,
-                        line: def.line,
-                        container: def.container.as_deref().map(str::to_string),
-                    }
-                });
+                let symbol = (d != TOP).then(|| self.view_symbol(g, k, Some(&by_container)));
                 let label = match &symbol {
                     None => file,
                     Some(s) => match (&s.container, e.lang.family) {
@@ -1976,12 +2570,13 @@ impl ProjectIndex {
             .collect();
         let edges = links
             .iter()
-            .map(|(&(a, b), &w)| CodeGraphEdge {
+            .map(|(&(a, b), &(w, kind))| CodeGraphEdge {
                 from: id(a),
                 to: id(b),
                 weight: w,
                 names: vec![],
                 import: false,
+                kind,
             })
             .collect();
         Some(CodeGraph {

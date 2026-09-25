@@ -178,11 +178,12 @@ pub enum Capability {
 }
 
 /// The code navigation tools: the operation (`code_{op}` over MCP) and the native tool name.
-pub const CODE_TOOLS: [(&str, &str); 7] = [
+pub const CODE_TOOLS: [(&str, &str); 8] = [
     ("outline", "CodeOutline"),
     ("find", "CodeFind"),
     ("callers", "CodeCallers"),
     ("callees", "CodeCallees"),
+    ("implementations", "CodeImplementations"),
     ("neighbors", "CodeNeighbors"),
     ("impact", "CodeImpact"),
     ("map", "CodeMap"),

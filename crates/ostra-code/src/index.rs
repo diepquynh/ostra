@@ -7,7 +7,7 @@ use crate::graph::{self, Graph, Mention, Qual, RawMention, RawQual};
 use crate::lang::{self, Lang};
 use crate::outline::RawImport;
 use crate::resolve::{Resolver, Target, parent};
-use crate::{MAX_FILE_BYTES, lex, outline, preview};
+use crate::{MAX_FILE_BYTES, lex, outline, preview, signature};
 use ostra_core::api::FileIndex;
 use ostra_core::code::{
     CodeDeps, CodeImport, CodeImporter, CodeLocation, CodeSymbols, CodeUsages, NATIVE_PROVIDER,
@@ -43,7 +43,17 @@ pub(crate) struct Def {
     pub(crate) len: u32,
     pub(crate) end_line: Option<u32>,
     pub(crate) container: Option<Box<str>>,
+    pub(crate) via: Option<Box<str>>,
+    /// The definition's signature on one line (see [`crate::signature`]).
     pub(crate) preview: Box<str>,
+}
+
+/// `sub` names `sup` as a supertype on `line`, both interned.
+#[derive(Clone, Copy)]
+pub(crate) struct SuperRel {
+    pub(crate) sub: u32,
+    pub(crate) sup: u32,
+    pub(crate) line: u32,
 }
 
 pub(crate) struct Entry {
@@ -57,6 +67,7 @@ pub(crate) struct Entry {
     pub(crate) mentions: Vec<Mention>,
     pub(crate) defs: Vec<Def>,
     pub(crate) imports: Vec<RawImport>,
+    pub(crate) supers: Vec<SuperRel>,
     pub(crate) targets: Vec<Option<Target>>,
     pub(crate) alive: bool,
 }
@@ -67,6 +78,7 @@ struct Facts {
     mentions: Vec<RawMention>,
     defs: Vec<(outline::Symbol, String)>,
     imports: Vec<RawImport>,
+    supers: Vec<outline::Super>,
 }
 
 fn is_minified(src: &str) -> bool {
@@ -93,7 +105,7 @@ fn analyze(src: &str, lang: &Lang) -> Facts {
         .symbols
         .into_iter()
         .map(|s| {
-            let p = preview(src, s.byte as usize);
+            let p = signature(src, s.byte as usize);
             (s, p)
         })
         .collect();
@@ -102,6 +114,7 @@ fn analyze(src: &str, lang: &Lang) -> Facts {
         mentions: graph::mentions(src, &toks, lang),
         defs,
         imports: an.imports,
+        supers: an.supers,
     }
 }
 
@@ -226,6 +239,7 @@ impl ProjectIndex {
         let names = std::mem::take(&mut e.names);
         let defs = std::mem::take(&mut e.defs);
         e.mentions = vec![];
+        e.supers = vec![];
         self.by_path.remove(&e.path);
         for n in names {
             if let Some(list) = self.postings.get_mut(&n)
@@ -280,9 +294,19 @@ impl ProjectIndex {
                 len: s.len,
                 end_line: s.end_line,
                 container: s.container.map(Into::into),
+                via: s.via.map(Into::into),
                 preview: preview.into(),
             });
         }
+        let supers = facts
+            .supers
+            .iter()
+            .map(|r| SuperRel {
+                sub: self.intern(&r.sub),
+                sup: self.intern(&r.sup),
+                line: r.line,
+            })
+            .collect();
         self.bytes += stamp.size;
         self.by_path.insert(path.clone(), id);
         self.entries.push(Entry {
@@ -294,6 +318,7 @@ impl ProjectIndex {
             mentions,
             defs,
             imports: facts.imports,
+            supers,
             targets: vec![],
             alive: true,
         });
@@ -418,6 +443,7 @@ impl ProjectIndex {
             preview: def.preview.to_string(),
             kind: Some(def.kind),
             container: def.container.as_deref().map(str::to_string),
+            via: def.via.as_deref().map(str::to_string),
         }
     }
 
@@ -510,6 +536,7 @@ impl ProjectIndex {
                     preview: preview(&src, t.start as usize),
                     kind: None,
                     container: None,
+                    via: None,
                 })
                 .collect::<Vec<_>>()
         });

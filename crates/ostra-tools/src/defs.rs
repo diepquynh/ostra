@@ -150,6 +150,13 @@ Usage:
 - Use it to follow a function downward without reading every file it touches.
 - `line` picks among several definitions of the same name in the file.";
 
+const CODE_IMPLEMENTATIONS: &str = "Lists implementations: what a class, interface, trait, or struct implements or extends, and what implements or extends it. For a method, the interface or supertype method it implements, and the methods that implement it.
+
+Usage:
+- Call it before you change an interface, trait, or abstract method, because every implementation has to change with it. Use it instead of Grep for `implements` or `impl ... for`, because it also finds Rust impl blocks in other files and Go types that satisfy an interface without naming it.
+- Pass `path` (and `line`) to pick one definition when the name has several; without it, the definitions that have implementation links are listed, most linked first.
+- Links come from declarations (`extends`, `implements`, `:`, Python base classes, Rust `impl Trait for Type`) and, for Go, from matching method sets. Methods that code generation adds are not seen.";
+
 const CODE_NEIGHBORS: &str = "Shows how one file connects to the rest of the project: the files it uses and the files that use it, with the import lines and the names that link each pair, plus files related through a shared neighbor.
 
 Usage:
@@ -206,6 +213,16 @@ fn code_defs() -> Vec<ToolDefinition> {
                 "line": {"type": "integer", "minimum": 1, "description": "The definition's line, when the file defines the name more than once"},
                 "limit": limit
             }, "required": ["path", "symbol"], "additionalProperties": false}),
+        ),
+        def(
+            "CodeImplementations",
+            CODE_IMPLEMENTATIONS,
+            json!({"type": "object", "properties": {
+                "symbol": {"type": "string", "description": "The bare name of the type or method, such as `Shape` or `area`"},
+                "path": path("The file that defines it"),
+                "line": {"type": "integer", "minimum": 1, "description": "The definition's line, when the file defines the name more than once"},
+                "limit": limit
+            }, "required": ["symbol"], "additionalProperties": false}),
         ),
         def(
             "CodeNeighbors",

@@ -33,6 +33,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "CodeFind",
     "CodeCallers",
     "CodeCallees",
+    "CodeImplementations",
     "CodeNeighbors",
     "CodeImpact",
     "CodeMap",

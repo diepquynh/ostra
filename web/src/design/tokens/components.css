@@ -289,7 +289,7 @@
 .os-menu__divider { height: 1px; margin: 4px 2px; background: var(--border-subtle); }
 .os-menu__item--active { background: var(--surface-selected); }
 .os-combobox { position: relative; }
-.os-combobox__list { left: 0; }
+.os-combobox__list { left: 0; max-width: calc(100vw - 32px); }
 .os-combobox__empty { padding: 8px; color: var(--text-muted); font-size: var(--text-sm); }
 .os-menu__heading { padding: 8px 8px 4px; font: var(--type-label); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--text-muted); }
 

@@ -94,6 +94,7 @@ pub fn document_symbols(v: &Value) -> Vec<CodeSymbol> {
                             .filter(|c| !c.is_empty())
                             .map(str::to_string)
                     }),
+                    via: None,
                 });
             }
             if let Some(kids) = s.get("children").and_then(Value::as_array) {

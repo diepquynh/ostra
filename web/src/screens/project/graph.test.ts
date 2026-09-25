@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CodeGraph, CodeGraphNode } from "../../api/types";
 import { mockCodeGraph, mockCodeSymbols } from "../../api/mock/mockCode";
-import { kindStyle, layout, matchFiles } from "./DependencyGraph";
+import { centerOn, clipLabel, fitCamera, inlineMembers, kindStyle, layout, matchFiles, MAX_ZOOM, MIN_ZOOM, nodeHeight, zoomAround } from "./DependencyGraph";
 
 const node = (id: string, column: number): CodeGraphNode => ({
   id,
@@ -19,7 +19,7 @@ const graph = (nodes: CodeGraphNode[], edges: [string, string][]): CodeGraph => 
   view: "file",
   focus: "c",
   nodes,
-  edges: edges.map(([from, to]) => ({ from, to, weight: 1, names: [], import: true })),
+  edges: edges.map(([from, to]) => ({ from, to, weight: 1, names: [], import: true, kind: "uses" as const })),
   indexed_files: nodes.length,
   truncated: false,
 });
@@ -108,10 +108,70 @@ describe("graph search", () => {
   });
 
   it("colors functions and types apart", () => {
-    const fn = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "f", kind: "function", line: 1 } });
-    const ty = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "T", kind: "class", line: 1 } });
+    const fn = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "f", kind: "function", line: 1, signature: "fn f()", members: [], more_members: 0 } });
+    const ty = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "T", kind: "class", line: 1, signature: "struct T", members: [], more_members: 0 } });
     expect(fn.icon).toBe("square-function");
     expect(ty.icon).toBe("shapes");
     expect(kindStyle({ kind: "package" }).icon).toBe("box");
+  });
+});
+
+describe("graph camera", () => {
+  it("zooms around the pointer, keeping the point under it still", () => {
+    const c = { k: 1, x: 40, y: 10 };
+    const z = zoomAround(c, 2, 200, 100);
+    // Graph point under (200, 100) before: ((200-40)/1, (100-10)/1) = (160, 90).
+    expect(160 * z.k + z.x).toBeCloseTo(200);
+    expect(90 * z.k + z.y).toBeCloseTo(100);
+    expect(zoomAround(c, 100, 0, 0).k).toBe(MAX_ZOOM);
+    expect(zoomAround(c, 0.001, 0, 0).k).toBe(MIN_ZOOM);
+  });
+
+  it("centers a point and fits a graph without enlarging it", () => {
+    const c = centerOn(50, 20, 1, 800, 400);
+    expect(50 * c.k + c.x).toBe(400);
+    expect(20 * c.k + c.y).toBe(200);
+    expect(fitCamera(400, 200, 800, 600).k).toBe(1);
+    const small = fitCamera(4000, 200, 800, 600);
+    expect(small.k).toBeLessThan(1);
+    expect(2000 * small.k + small.x).toBeCloseTo(400);
+  });
+});
+
+describe("type members in the graph", () => {
+  const member = (name: string, line: number) => ({ path: "a.rs", name, kind: "method" as const, line, via: null, signature: `fn ${name}()` });
+  const typeNode = (id: string, n: number, column = 0): CodeGraphNode => ({
+    ...node(id, column),
+    kind: "symbol",
+    symbol: { path: "a.rs", name: id, kind: "class", line: 1, signature: `struct ${id}`, members: Array.from({ length: n }, (_, i) => member(`m${i}`, i + 2)), more_members: 0 },
+  });
+
+  it("lists members inside the focused type only, capped with a count", () => {
+    const t = typeNode("T", 15);
+    expect(inlineMembers(t, "T").rows).toHaveLength(12);
+    expect(inlineMembers(t, "T").more).toBe(3);
+    expect(inlineMembers(t, "other").rows).toHaveLength(0);
+    expect(nodeHeight(t, "T")).toBeGreaterThan(nodeHeight(t, "other"));
+  });
+
+  it("stacks a tall focused node without overlapping its column", () => {
+    const g: CodeGraph = { ...graph([typeNode("T", 6), node("a", 1), node("b", 1)], [["T", "a"], ["T", "b"]]), focus: "T", view: "symbol" };
+    const p = layout(g).nodes;
+    const [a, b] = ["a", "b"].map((id) => p.find((n) => n.id === id)!).sort((x, y) => x.y - y.y);
+    expect(b.y).toBeGreaterThanOrEqual(a.y + a.h);
+    const t = p.find((n) => n.id === "T")!;
+    expect(t.h).toBe(nodeHeight(g.nodes[0], "T"));
+    expect(layout(g).height).toBeGreaterThanOrEqual(t.y + t.h);
+  });
+});
+
+describe("node labels", () => {
+  it("keeps the member name and cuts the owner from the front", () => {
+    expect(clipLabel("UserDeletionEventTransformer.transform", 22)).toBe("…Transformer.transform");
+    expect(clipLabel("Planner::explore_components", 22).endsWith("explore_components")).toBe(true);
+    expect(clipLabel("Planner::explore_components", 22).length).toBeLessThanOrEqual(22);
+    expect(clipLabel("short", 22)).toBe("short");
+    expect(clipLabel("a_very_long_function_name_here", 22)).toBe("a_very_long_function_…");
+    expect(clipLabel("X.an_extremely_long_method_name_indeed", 22)).toBe("an_extremely_long_met…");
   });
 });

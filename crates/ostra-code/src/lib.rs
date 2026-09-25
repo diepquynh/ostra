@@ -75,6 +75,7 @@ pub fn render(path: &str, src: &str, resolver: Option<&resolve::Resolver>) -> Co
             col: s.col,
             end_line: s.end_line,
             container: s.container,
+            via: s.via,
         })
         .collect();
     out.imports = an
@@ -94,6 +95,45 @@ pub fn render(path: &str, src: &str, resolver: Option<&resolve::Resolver>) -> Co
 }
 
 /// The trimmed source line holding byte `at`, cut to a readable length.
+/// The definition whose name starts at byte `at`, from its line start through its parameter
+/// list and before its body, on one line: `func (r *Repo) Save(tx *gorm.DB, id string) error`
+/// for a Go method whose parameters wrap.
+pub fn signature(src: &str, at: usize) -> String {
+    const MAX: usize = 300;
+    let at = at.min(src.len());
+    let start = src[..at].rfind('\n').map_or(0, |i| i + 1);
+    let mut depth = 0i32;
+    let mut out = String::new();
+    let mut gap = false;
+    for (i, c) in src[start..].char_indices() {
+        let pos = start + i;
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = (depth - 1).max(0),
+            '{' | ';' if depth == 0 && pos > at => break,
+            '\n' if depth == 0 => break,
+            _ => {}
+        }
+        if c.is_whitespace() {
+            gap = true;
+            continue;
+        }
+        if gap && !out.is_empty() && !out.ends_with(['(', '[']) && !matches!(c, ')' | ']' | ',') {
+            out.push(' ');
+        }
+        gap = false;
+        if matches!(c, ')' | ']') && out.ends_with(',') {
+            out.pop();
+        }
+        out.push(c);
+        if out.len() >= MAX {
+            out.push('…');
+            break;
+        }
+    }
+    out.trim_end_matches([':', ' ']).to_string()
+}
+
 pub fn preview(src: &str, at: usize) -> String {
     const MAX: usize = 240;
     let at = at.min(src.len());

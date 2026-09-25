@@ -267,6 +267,13 @@ fn tools_answer_in_text() {
         .unwrap();
         assert!(out.contains("hop 1:\n"), "{out}");
         assert!(out.contains("tests/conformance/main.rs"), "{out}");
+        let out = t(
+            "CodeImplementations",
+            json!({"symbol": "Executor", "path": "crates/ostra-core/src/exec.rs"}),
+        )
+        .unwrap();
+        assert!(out.contains("implemented or extended by ("), "{out}");
+        assert!(out.contains("NativeExecutor"), "{out}");
         let out = t("CodeMap", json!({"prefix": "crates/ostra-engine"})).unwrap();
         assert!(out.contains("crates/ostra-engine  "), "{out}");
         let err = t("CodeFind", json!({"q": "x"})).unwrap_err();
@@ -378,4 +385,3 @@ fn graph_views_for_the_ui() {
         assert!(ix.package_view("nope").is_none());
     });
 }
-

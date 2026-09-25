@@ -568,6 +568,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
             preview: preview_line,
             kind: None,
             container: None,
+            via: None,
         })
     }
 

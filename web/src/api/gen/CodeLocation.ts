@@ -28,4 +28,8 @@ preview: string,
 /**
  * Set on definitions.
  */
-kind?: SymbolKind | null, container?: string | null, };
+kind?: SymbolKind | null, container?: string | null, 
+/**
+ * Set on definitions inside an impl of a trait or interface: that trait.
+ */
+via?: string | null, };

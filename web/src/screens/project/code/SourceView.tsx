@@ -19,6 +19,10 @@ export interface SourceViewProps {
   onSymbol?: (s: SymbolRef) => void;
   /** Line to tint and scroll into view. */
   highlightLine?: number | null;
+  /** Tint through this line too, for a whole definition. */
+  highlightEnd?: number | null;
+  /** Where `highlightLine` lands when scrolled to. Default: the middle. */
+  scrollBlock?: "center" | "start";
   /** Change it to scroll to `highlightLine` again. */
   scrollNonce?: number;
   /** Changed lines against HEAD. Their gutter marks open the old text under the change. */
@@ -104,7 +108,7 @@ function Compare({ block, language, onClose }: { block: ChangeBlock; language: s
  * `onSymbol`. Uses CodeView's markup and, when the provider sent no tokens, its coloring. Changed lines carry a
  * gutter mark; clicking one shows the HEAD text under the change.
  */
-export function SourceView({ code, file, language = "", selected = null, onSymbol, highlightLine = null, scrollNonce = 0, changes = null }: SourceViewProps) {
+export function SourceView({ code, file, language = "", selected = null, onSymbol, highlightLine = null, highlightEnd = null, scrollBlock = "center", scrollNonce = 0, changes = null }: SourceViewProps) {
   const box = useRef<HTMLDivElement>(null);
   const lines = useMemo(() => splitLines(code), [code]);
   const spans = useMemo(() => (file && file.tokens.length > 0 ? decodeTokens(file, lines.length) : null), [file, lines.length]);
@@ -116,9 +120,15 @@ export function SourceView({ code, file, language = "", selected = null, onSymbo
 
   useEffect(() => {
     if (!highlightLine) return;
-    const id = requestAnimationFrame(() => box.current?.querySelector(`[data-line="${highlightLine}"]`)?.scrollIntoView?.({ block: "center" }));
+    const id = requestAnimationFrame(() => {
+      const row = box.current?.querySelector<HTMLElement>(`[data-line="${highlightLine}"]`);
+      const pane = box.current?.parentElement;
+      // Scroll only the pane that holds the view, so the page itself stays put.
+      if (row && pane && scrollBlock === "start") pane.scrollTop += row.getBoundingClientRect().top - pane.getBoundingClientRect().top - 8;
+      else row?.scrollIntoView?.({ block: scrollBlock });
+    });
     return () => cancelAnimationFrame(id);
-  }, [highlightLine, scrollNonce, spans]);
+  }, [highlightLine, scrollBlock, scrollNonce, spans]);
 
   const [openAt, setOpenAt] = useState<number | null>(null);
   const byLine = useMemo(() => {
@@ -152,7 +162,7 @@ export function SourceView({ code, file, language = "", selected = null, onSymbo
         const b = byLine.get(n) ?? null;
         return (
           <Fragment key={i}>
-            <Line n={n} text={text} spans={spans ? spans[i] : null} language={language} hl={highlightLine === n} selected={hasSel?.[i] ? selected : null} mark={b?.kind ?? null} open={!!b && b === openBlock} />
+            <Line n={n} text={text} spans={spans ? spans[i] : null} language={language} hl={highlightLine !== null && (n === highlightLine || (highlightEnd !== null && n > highlightLine && n <= highlightEnd))} selected={hasSel?.[i] ? selected : null} mark={b?.kind ?? null} open={!!b && b === openBlock} />
             {openBlock?.anchor === n && <Compare block={openBlock} language={language} onClose={() => setOpenAt(null)} />}
           </Fragment>
         );

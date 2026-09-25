@@ -557,3 +557,139 @@ fn definition_classes_color_names() {
             .is_empty()
     );
 }
+
+/// `sub -> sup` per supertype relation, in source order.
+fn supers(path: &str, src: &str) -> Vec<String> {
+    let lang = lang::for_path(path).unwrap();
+    let toks = lex(src, lang);
+    analyze(src, lang, &toks)
+        .supers
+        .into_iter()
+        .map(|s| format!("{} -> {}", s.sub, s.sup))
+        .collect()
+}
+
+#[test]
+fn supertypes_per_language() {
+    assert_eq!(
+        supers(
+            "a.java",
+            "public class Cat<T extends Pet> extends Animal implements Pet, java.io.Serializable {\n}\ninterface Pet extends Named, Comparable<Pet> {}\nrecord P(int x) implements Named {}\n"
+        ),
+        [
+            "Cat -> Animal",
+            "Cat -> Pet",
+            "Cat -> Serializable",
+            "Pet -> Named",
+            "Pet -> Comparable",
+            "P -> Named"
+        ]
+    );
+    assert_eq!(
+        supers(
+            "a.ts",
+            "export class Store<T> extends Base<T> implements Api, Closeable {\n}\ninterface Api extends Named {}\n"
+        ),
+        [
+            "Store -> Base",
+            "Store -> Api",
+            "Store -> Closeable",
+            "Api -> Named"
+        ]
+    );
+    assert_eq!(
+        supers(
+            "a.kt",
+            "data class Cat(val name: String) : Animal(name), Pet\nclass Dog : Pet {\n}\n"
+        ),
+        ["Cat -> Animal", "Cat -> Pet", "Dog -> Pet"]
+    );
+    assert_eq!(
+        supers(
+            "a.cs",
+            "public class Repo<T> : BaseRepo<T>, IRepo where T : class {\n}\n"
+        ),
+        ["Repo -> BaseRepo", "Repo -> IRepo"]
+    );
+    assert_eq!(
+        supers(
+            "a.cpp",
+            "class Circle : public Shape, private Drawable {\n};\n"
+        ),
+        ["Circle -> Shape", "Circle -> Drawable"]
+    );
+    assert_eq!(
+        supers(
+            "a.py",
+            "class Cat(Animal, abc.ABC, metaclass=Meta):\n    pass\nclass Plain:\n    pass\n"
+        ),
+        ["Cat -> Animal", "Cat -> ABC"]
+    );
+    assert_eq!(
+        supers("a.rb", "class Cat < Animals::Animal\nend\n"),
+        ["Cat -> Animal"]
+    );
+    assert_eq!(
+        supers(
+            "a.rs",
+            "pub trait Shape: Debug + fmt::Display {}\npub struct Circle { r: f64 }\nimpl<T: Clone> fmt::Display for Circle {\n    fn fmt(&self) {}\n}\nimpl Circle { fn area(&self) {} }\nimpl<T> From<T> for Circle {}\n"
+        ),
+        [
+            "Shape -> Debug",
+            "Shape -> Display",
+            "Circle -> Display",
+            "Circle -> From"
+        ]
+    );
+    assert_eq!(
+        supers(
+            "a.swift",
+            "class Cat: Animal, Pet {\n}\nextension Cat: Codable {\n}\n"
+        ),
+        ["Cat -> Animal", "Cat -> Pet", "Cat -> Codable"]
+    );
+}
+
+#[test]
+fn rust_impl_methods_name_their_trait() {
+    let src = "struct P;\nimpl fmt::Display for P {\n    fn fmt(&self) {}\n}\nimpl P {\n    fn fmt(&self) {}\n}\n";
+    let lang = lang::for_path("a.rs").unwrap();
+    let toks = lex(src, lang);
+    let got: Vec<(String, Option<String>, Option<String>)> = analyze(src, lang, &toks)
+        .symbols
+        .into_iter()
+        .map(|s| (s.name, s.container, s.via))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            ("P".into(), None, None),
+            ("fmt".into(), Some("P".into()), Some("Display".into())),
+            ("fmt".into(), Some("P".into()), None),
+        ]
+    );
+}
+
+#[test]
+fn void_methods_in_java_and_csharp() {
+    assert_eq!(
+        outline(
+            "a/Cat.java",
+            "public class Cat implements Pet {\n    public void feed() {}\n    public void feed(int grams) {}\n}\ninterface Pet {\n    void feed();\n}\n"
+        ),
+        [
+            "Cat class",
+            "feed method Cat",
+            "feed method Cat",
+            "Pet interface",
+            "feed method Pet"
+        ]
+    );
+    assert_eq!(
+        outline(
+            "a.cs",
+            "public class Repo {\n    public void Save() {}\n}\n"
+        ),
+        ["Repo class", "Save method Repo"]
+    );
+}

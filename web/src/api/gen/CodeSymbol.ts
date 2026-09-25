@@ -20,4 +20,9 @@ end_line?: number | null,
 /**
  * The enclosing type, module, or impl, for methods and fields.
  */
-container?: string | null, };
+container?: string | null, 
+/**
+ * The trait or interface the enclosing impl block implements, such as `Display` for a
+ * `fmt` in `impl Display for Point`.
+ */
+via?: string | null, };

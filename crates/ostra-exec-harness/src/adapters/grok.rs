@@ -216,6 +216,16 @@ mod tests {
             (call.tool.as_str(), call.str_field("symbol")),
             ("CodeCallers", Some("placeOrder"))
         );
+        let PreParse::Call { call, .. } = Grok.parse_pre(&payload(
+            "use_tool",
+            json!({"tool_name": "ostra__code_implementations", "arguments": "{\"symbol\":\"Shape\"}"}),
+        )) else {
+            panic!()
+        };
+        assert_eq!(
+            (call.tool.as_str(), call.str_field("symbol")),
+            ("CodeImplementations", Some("Shape"))
+        );
 
         let PreParse::Call { call, .. } = Grok.parse_pre(&payload(
             "ostra__report",

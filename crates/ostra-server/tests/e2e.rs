@@ -1013,6 +1013,16 @@ async fn yolo_implement_session_end_to_end() {
         .await
         .unwrap();
     assert!(callers.contains("src/greet.rs:1 fn hello"), "{callers}");
+    let impls = app
+        .code_tools
+        .call(&app_dir, "CodeImplementations", &json!({"symbol": "hello"}))
+        .await
+        .unwrap();
+    assert!(impls.starts_with("src/greet.rs:1 fn hello"), "{impls}");
+    assert!(
+        impls.contains("implemented or extended by: none"),
+        "{impls}"
+    );
     assert!(callers.contains("src/lib.rs"), "{callers}");
     let outline = app
         .code_tools

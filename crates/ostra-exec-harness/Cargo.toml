@@ -27,6 +27,8 @@ notify.workspace = true
 
 [dev-dependencies]
 ostra-core = { workspace = true, features = ["test-prices"] }
+ostra-code.workspace = true
+ostra-tools.workspace = true
 async-trait.workspace = true
 tempfile.workspace = true
 pretty_assertions.workspace = true

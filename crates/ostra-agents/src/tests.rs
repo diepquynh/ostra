@@ -138,6 +138,7 @@ fn code_tools_are_named_per_executor() {
         "CodeOutline",
         "CodeCallers",
         "CodeCallees",
+        "CodeImplementations",
         "CodeNeighbors",
         "CodeImpact",
     ] {
@@ -156,6 +157,15 @@ fn code_tools_are_named_per_executor() {
     )
     .unwrap();
     assert!(codex.contains("`code_impact`"));
+    assert!(claude.contains("`mcp__ostra__code_implementations`"));
+    assert!(codex.contains("`code_implementations`"));
+    for h in [HarnessKind::Grok, HarnessKind::Agy] {
+        let p = render_prompt(AgentName::Explore, ExecutorKind::Harness(h)).unwrap();
+        assert!(
+            p.contains("`code_implementations`"),
+            "{h:?} lacks code_implementations"
+        );
+    }
 }
 
 #[test]

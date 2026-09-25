@@ -2,6 +2,9 @@
 //! Serves `/internal/policy` and `/internal/mcp` with an allow-all policy that logs every payload,
 //! runs one QuickAnswer execution in the harness, and prints the result. The same binary serves
 //! as the `hook` and `mcp-stdio` subcommands the harness calls back.
+//!
+//! With `PROBE_CODE` set, the repo gets a small Rust project, the bridge serves the real code
+//! navigation tools over an index of it, and the agent is asked to call `code_implementations`.
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -26,7 +29,34 @@ impl Log {
     }
 }
 
-struct Services(Arc<Log>);
+struct Services(Arc<Log>, Option<Code>);
+
+/// The code navigation tools over the probe repo, served the way the server's bridge serves them.
+struct Code {
+    root: PathBuf,
+    list: Arc<ostra_core::api::FileIndex>,
+    indexes: ostra_code::Indexes<()>,
+}
+
+const CODE_FILES: &[(&str, &str)] = &[
+    ("Cargo.toml", "[package]\nname = \"shapes\"\n"),
+    (
+        "src/lib.rs",
+        "pub mod shape;\npub mod circle;\npub mod square;\n",
+    ),
+    (
+        "src/shape.rs",
+        "pub trait Shape {\n    fn area(&self) -> f64;\n}\n",
+    ),
+    (
+        "src/circle.rs",
+        "use crate::shape::Shape;\npub struct Circle { pub r: f64 }\nimpl Shape for Circle {\n    fn area(&self) -> f64 { 3.14 * self.r * self.r }\n}\n",
+    ),
+    (
+        "src/square.rs",
+        "use crate::shape::Shape;\npub struct Square { pub side: f64 }\nimpl Shape for Square {\n    fn area(&self) -> f64 { self.side * self.side }\n}\n",
+    ),
+];
 
 #[async_trait::async_trait]
 impl BridgeServices for Services {
@@ -68,10 +98,33 @@ impl BridgeServices for Services {
     }
     async fn mcp_call(&self, _: &ExecutionId, tool: &str, args: Value) -> Result<String, String> {
         self.0.line(json!({"mcp_call": tool, "args": args}));
-        Ok("ok".into())
+        let Some(code) = &self.1 else {
+            return Ok("ok".into());
+        };
+        let native = ostra_core::agent::CODE_TOOLS
+            .iter()
+            .find(|(op, _)| format!("code_{op}") == tool)
+            .map(|(_, n)| *n)
+            .ok_or_else(|| format!("unknown tool {tool}"))?;
+        let out = code.indexes.with(&(), &code.root, &code.list, |ix| {
+            ostra_code::tools::run(ix, native, &args)
+        });
+        self.0.line(json!({"mcp_result": out}));
+        out
     }
     fn mcp_tools(&self, _: &ExecutionId) -> Vec<(String, String, Value)> {
-        vec![]
+        if self.1.is_none() {
+            return vec![];
+        }
+        ostra_tools::definitions(&[Capability::Code])
+            .into_iter()
+            .filter_map(|d| {
+                ostra_core::agent::CODE_TOOLS
+                    .iter()
+                    .find(|(_, n)| *n == d.name)
+                    .map(|(op, _)| (format!("code_{op}"), d.description, d.input_schema))
+            })
+            .collect()
     }
     fn stop_event(&self, _: &ExecutionId, payload: Value) {
         self.0.line(json!({"stop": payload}));
@@ -155,8 +208,24 @@ async fn main() {
     let log = Arc::new(Log(Mutex::new(
         std::fs::File::create(dir.join(format!("{harness}{suffix}-events.jsonl"))).unwrap(),
     )));
+    let code = std::env::var("PROBE_CODE").is_ok().then(|| {
+        for (p, text) in CODE_FILES {
+            let path = repo.join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        Code {
+            root: repo.canonicalize().unwrap(),
+            list: Arc::new(ostra_core::api::FileIndex {
+                paths: CODE_FILES.iter().map(|(p, _)| p.to_string()).collect(),
+                truncated: false,
+            }),
+            indexes: ostra_code::Indexes::default(),
+        }
+    });
+    let code_probe = code.is_some();
     let live = LiveRegistry::new();
-    let bridge = HarnessBridge::new(Arc::new(Services(log.clone())), live.clone());
+    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), code)), live.clone());
     let app = App {
         bridge,
         log: log.clone(),
@@ -190,16 +259,27 @@ async fn main() {
         system_prompt:
             "You are an Ostra probe agent. Follow the user's steps exactly and do nothing else."
                 .into(),
-        first_message: format!(
-            "Do exactly these steps and nothing more:\n{}1. Run the shell command `echo ostra-probe > probe.txt`.\n2. Call the `{}` tool with answer \"probe ok\" and sources [\"probe.txt\"].\nThen end your turn.",
-            if std::env::var("PROBE_DENY").is_ok() {
-                "0. Run the shell command `echo forbidden`. Ostra may refuse it; if so, continue.\n"
-            } else {
-                ""
-            },
-            agent.submit_tool_name()
-        ),
-        capabilities: vec![Capability::Read, Capability::Shell],
+        first_message: if code_probe {
+            format!(
+                "Do exactly these steps and nothing more:\n1. Call the `code_implementations` tool with symbol \"Shape\".\n2. Call the `{}` tool with answer set to the names of the types the tool listed under \"implemented or extended by\", comma-separated, and sources [\"src/shape.rs\"].\nThen end your turn.",
+                agent.submit_tool_name()
+            )
+        } else {
+            format!(
+                "Do exactly these steps and nothing more:\n{}1. Run the shell command `echo ostra-probe > probe.txt`.\n2. Call the `{}` tool with answer \"probe ok\" and sources [\"probe.txt\"].\nThen end your turn.",
+                if std::env::var("PROBE_DENY").is_ok() {
+                    "0. Run the shell command `echo forbidden`. Ostra may refuse it; if so, continue.\n"
+                } else {
+                    ""
+                },
+                agent.submit_tool_name()
+            )
+        },
+        capabilities: if code_probe {
+            vec![Capability::Read, Capability::Code]
+        } else {
+            vec![Capability::Read, Capability::Shell]
+        },
         submit_schema: ostra_core::submit::submit_schema(agent),
         timeout_secs: timeout,
         ctx: ExecContext {

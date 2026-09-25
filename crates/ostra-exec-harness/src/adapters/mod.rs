@@ -330,6 +330,10 @@ mod tests {
             Some("CodeCallers")
         );
         assert_eq!(
+            ostra_mcp_tool("mcp__ostra__code_implementations").as_deref(),
+            Some("CodeImplementations")
+        );
+        assert_eq!(
             ostra_mcp_tool("ostra__code_unknown").as_deref(),
             Some("code_unknown")
         );

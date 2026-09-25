@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 /// Template token names and the mapping key each resolves through.
-const TOKENS: [(&str, &str); 21] = [
+const TOKENS: [(&str, &str); 22] = [
     ("tool_read", "read"),
     ("tool_write", "write"),
     ("tool_edit", "edit"),
@@ -25,6 +25,7 @@ const TOKENS: [(&str, &str); 21] = [
     ("tool_code_find", "code:find"),
     ("tool_code_callers", "code:callers"),
     ("tool_code_callees", "code:callees"),
+    ("tool_code_implementations", "code:implementations"),
     ("tool_code_neighbors", "code:neighbors"),
     ("tool_code_impact", "code:impact"),
     ("tool_code_map", "code:map"),
