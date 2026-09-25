@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CodeGraph, CodeGraphNode } from "../../api/types";
 import { mockCodeGraph, mockCodeSymbols } from "../../api/mock/mockCode";
-import { centerOn, clipLabel, fitCamera, inlineMembers, kindStyle, layout, matchFiles, MAX_ZOOM, MIN_ZOOM, nodeHeight, zoomAround } from "./DependencyGraph";
+import { asSymbol, centerOn, fileDefsHint, clipLabel, fitCamera, inlineMembers, kindStyle, layout, matchFiles, MAX_ZOOM, MIN_ZOOM, nodeHeight, zoomAround } from "./DependencyGraph";
 
 const node = (id: string, column: number): CodeGraphNode => ({
   id,
@@ -13,6 +13,8 @@ const node = (id: string, column: number): CodeGraphNode => ({
   test: false,
   dependents: 0,
   dependencies: 0,
+  file_defs: [],
+  more_file_defs: 0,
 });
 
 const graph = (nodes: CodeGraphNode[], edges: [string, string][]): CodeGraph => ({
@@ -139,7 +141,7 @@ describe("graph camera", () => {
 });
 
 describe("type members in the graph", () => {
-  const member = (name: string, line: number) => ({ path: "a.rs", name, kind: "method" as const, line, via: null, signature: `fn ${name}()` });
+  const member = (name: string, line: number) => ({ path: "a.rs", name, kind: "method" as const, line, end_line: line + 2, via: null, signature: `fn ${name}()` });
   const typeNode = (id: string, n: number, column = 0): CodeGraphNode => ({
     ...node(id, column),
     kind: "symbol",
@@ -173,5 +175,24 @@ describe("node labels", () => {
     expect(clipLabel("short", 22)).toBe("short");
     expect(clipLabel("a_very_long_function_name_here", 22)).toBe("a_very_long_function_…");
     expect(clipLabel("X.an_extremely_long_method_name_indeed", 22)).toBe("an_extremely_long_met…");
+  });
+});
+
+describe("previewing a member", () => {
+  it("turns a member into the symbol the preview shows, keeping its range", () => {
+    const s = asSymbol({ path: "a/Zoo.java", name: "open", kind: "method", line: 3, end_line: 5, via: null, signature: "void open()" }, "Zoo");
+    expect(s).toMatchObject({ path: "a/Zoo.java", name: "open", line: 3, end_line: 5, container: "Zoo", members: [] });
+  });
+});
+
+describe("the file badge", () => {
+  const d = (name: string, kind: "class" | "function" = "class") => ({ path: "Zoo.java", name, kind, line: 1, end_line: null, via: null, signature: name });
+  it("counts what a file defines, and for a method what else its file defines besides its own type", () => {
+    expect(fileDefsHint({ kind: "file", file_defs: [d("Zoo"), d("load", "function")], more_file_defs: 3 })).toBe("5 inside");
+    expect(fileDefsHint({ kind: "file", file_defs: [], more_file_defs: 0 })).toBe("");
+    const method = { path: "Zoo.java", name: "open", kind: "method" as const, line: 3, container: "Zoo", signature: "void open()", members: [], more_members: 0 };
+    expect(fileDefsHint({ kind: "symbol", symbol: method, file_defs: [d("Zoo"), d("Keeper"), d("load", "function")], more_file_defs: 0 })).toBe("+2 in file");
+    expect(fileDefsHint({ kind: "symbol", symbol: method, file_defs: [d("Zoo")], more_file_defs: 0 })).toBe("");
+    expect(fileDefsHint({ kind: "package", file_defs: [d("Zoo")], more_file_defs: 0 })).toBe("");
   });
 });

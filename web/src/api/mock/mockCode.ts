@@ -1,7 +1,7 @@
 // A naive code provider for the mock server: a regex tokenizer, definitions after a definition keyword,
 // usages by whole-word match, and imports from `use` and `import ... from` lines.
 
-import type { CodeDeps, CodeFile, CodeGraph, CodeGraphEdge, CodeGraphNode, CodeImport, CodeLocation, CodeSymbol, CodeSymbols, CodeUsages, SymbolKind, TokenClass } from "../types";
+import type { CodeDeps, CodeFile, CodeGraph, CodeGraphEdge, CodeGraphMember, CodeGraphNode, CodeImport, CodeLocation, CodeSymbol, CodeSymbols, CodeUsages, SymbolKind, TokenClass } from "../types";
 import { mockTexts } from "./projectFiles";
 
 const KW = new Set(
@@ -219,6 +219,18 @@ export function mockCodeSymbols(key: string, query: string, limit: number): Code
 }
 
 /** The dependency graph over the mock files' imports; a file's top folder is its package. */
+const TYPE_KINDS: SymbolKind[] = ["class", "enum", "interface", "type"];
+
+/** The top-level types and functions a mock file defines, as a graph node lists them. */
+function mockFileDefs(key: string, path: string, except?: number): CodeGraphMember[] {
+  const t = mockTexts(key).find((x) => x.path === path);
+  if (!t || !langOf(path)) return [];
+  const lines = t.code.split("\n");
+  return analyze(key, path, t.code).symbols
+    .filter((s) => !s.container && (TYPE_KINDS.includes(s.kind) || s.kind === "function" || s.kind === "method") && s.line !== except)
+    .map((s) => ({ path, name: s.name, kind: s.kind, line: s.line, end_line: s.end_line ?? null, via: s.via ?? null, signature: lines[s.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? s.name }));
+}
+
 export function mockCodeGraph(key: string, at: { package?: string; path?: string; symbol?: string; line?: number; depth?: number }): CodeGraph {
   if (at.path && at.symbol) return mockSymbolGraph(key, at.path, at.symbol, at.line);
   const files = mockTexts(key).filter((t) => langOf(t.path));
@@ -232,7 +244,7 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
   const pkgId = (p: string) => `package:${p}`;
   const fileNode = (p: string, column: number): CodeGraphNode => ({
     id: p, kind: "file", label: p.split("/").pop() ?? p, package: pkgOf(p), column, files: 1,
-    test: /test/.test(p), dependents: used(p).length, dependencies: uses.get(p)?.size ?? 0,
+    test: /test/.test(p), dependents: used(p).length, dependencies: uses.get(p)?.size ?? 0, file_defs: mockFileDefs(key, p), more_file_defs: 0,
   });
   const fileEdge = (from: string, to: string): CodeGraphEdge => ({ from, to, weight: 1, names: [], import: true, kind: "uses" });
   /** Longest chain of uses below each node, negated, so users sit left of what they use. */
@@ -282,7 +294,7 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
         ...members.map((p) => fileNode(p, col(p))),
         ...others.map((id): CodeGraphNode => {
           const name = id.slice("package:".length);
-          return { id, kind: "package", label: name || "(project top)", package: name, column: col(id), files: files.filter((f) => pkgOf(f.path) === name).length, test: false, dependents: 0, dependencies: 0 };
+          return { id, kind: "package", label: name || "(project top)", package: name, column: col(id), files: files.filter((f) => pkgOf(f.path) === name).length, test: false, dependents: 0, dependencies: 0, file_defs: [], more_file_defs: 0 };
         }),
       ],
       edges: [
@@ -303,7 +315,7 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
     nodes: pkgs.map((p) => ({
       id: pkgId(p), kind: "package", label: p || "(project top)", package: p, column: col(p),
       files: files.filter((f) => pkgOf(f.path) === p).length, test: false,
-      dependents: pairs.filter(([, b]) => b === p).length, dependencies: pairs.filter(([a]) => a === p).length,
+      dependents: pairs.filter(([, b]) => b === p).length, dependencies: pairs.filter(([a]) => a === p).length, file_defs: [], more_file_defs: 0,
     })),
     edges: pairs.map(([a, b, n]) => ({ from: pkgId(a), to: pkgId(b), weight: n, names: [], import: true, kind: "uses" })),
   };
@@ -324,13 +336,13 @@ function mockSymbolGraph(key: string, path: string, symbol: string, line?: numbe
   const callers = texts.filter((t) => t.path !== path && word(symbol).test(t.code)).map((t) => t.path);
   const symNode = (s: CodeSymbol, column: number, ins: number, outs: number): CodeGraphNode => ({
     id: idOf(s), kind: "symbol", label: s.container ? `${s.container}.${s.name}` : s.name, package: path.includes("/") ? path.split("/")[0] : "",
-    column, files: 1, test: false, dependents: ins, dependencies: outs,
+    column, files: 1, test: false, dependents: ins, dependencies: outs, file_defs: mockFileDefs(key, path, s.line), more_file_defs: 0,
     symbol: {
       path, name: s.name, kind: s.kind, line: s.line, end_line: s.end_line ?? null, container: s.container ?? null, via: s.via ?? null,
       signature: lines[s.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? s.name,
       members: ["class", "enum", "interface", "type"].includes(s.kind)
         ? own.filter((m) => m.container === s.name && (m.kind === "method" || m.kind === "function"))
-            .map((m) => ({ path, name: m.name, kind: m.kind, line: m.line, via: m.via ?? null, signature: lines[m.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? m.name }))
+            .map((m) => ({ path, name: m.name, kind: m.kind, line: m.line, end_line: m.end_line ?? null, via: m.via ?? null, signature: lines[m.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? m.name }))
         : [],
       more_members: 0,
     },
@@ -340,7 +352,7 @@ function mockSymbolGraph(key: string, path: string, symbol: string, line?: numbe
     nodes: [
       symNode(focus, 0, callers.length, callees.length),
       ...callees.map((s) => symNode(s, 1, 1, 0)),
-      ...callers.map((p): CodeGraphNode => ({ id: p, kind: "file", label: p.split("/").pop() ?? p, package: p.includes("/") ? p.split("/")[0] : "", column: -1, files: 1, test: false, dependents: 0, dependencies: 1 })),
+      ...callers.map((p): CodeGraphNode => ({ id: p, kind: "file", label: p.split("/").pop() ?? p, package: p.includes("/") ? p.split("/")[0] : "", column: -1, files: 1, test: false, dependents: 0, dependencies: 1, file_defs: mockFileDefs(key, p), more_file_defs: 0 })),
     ],
     edges: [
       ...callees.map((s): CodeGraphEdge => ({ from: idOf(focus), to: idOf(s), weight: 1, names: [], import: false, kind: "uses" })),

@@ -149,6 +149,18 @@ export function clipLabel(label: string, n: number): string {
   return room < 3 ? clip(tail.replace(/^[.:]+/, ""), n) : `…${label.slice(at - room, at)}${tail}`;
 }
 
+/**
+ * The badge that says what else a node's file defines: "4 inside" on a file, "+3 in file" on a
+ * definition, not counting a method's own type. Empty when there is nothing else. Pure, for tests.
+ */
+export function fileDefsHint(n: Pick<CodeGraphNode, "kind" | "symbol" | "file_defs" | "more_file_defs">): string {
+  if (n.kind === "package") return "";
+  const all = n.file_defs.length + n.more_file_defs;
+  if (n.kind === "file") return all ? `${all} inside` : "";
+  const others = all - n.file_defs.filter((t) => t.name === n.symbol?.container).length;
+  return others ? `+${others} in file` : "";
+}
+
 /** The second line of a node: where it lives, and the trait its impl block implements. */
 function subline(n: CodeGraphNode): string {
   if (n.kind === "package") return `${n.files} file${n.files === 1 ? "" : "s"}`;
@@ -329,24 +341,37 @@ function FileSymbols({ ws, projectKey, path, onPick }: { ws: string; projectKey:
   );
 }
 
-/** A type's methods, each a way to center on it. */
-function MemberList({ symbol, onPick }: { symbol: CodeGraphSymbol; onPick: (m: CodeGraphMember) => void }) {
-  if (!symbol.members.length) return null;
+const memberKey = (m: { path: string; line: number }) => `${m.path}:${m.line}`;
+
+/** A method or type as the preview shows it. */
+export function asSymbol(m: CodeGraphMember, container: string | null): CodeGraphSymbol {
+  return { path: m.path, name: m.name, kind: m.kind, line: m.line, end_line: m.end_line ?? null, container, via: m.via ?? null, signature: m.signature, members: [], more_members: 0 };
+}
+
+/**
+ * Definitions to look through: a click shows one in the code preview, and the button at the start of
+ * its row centers the graph on it.
+ */
+function DefList({ title, items, more = 0, active, onPeek, onCenter }: { title: string; items: CodeGraphMember[]; more?: number; active: string | null; onPeek: (m: CodeGraphMember) => void; onCenter: (m: CodeGraphMember) => void }) {
+  if (!items.length) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       <span className="dg-label">
-        Methods and functions ({symbol.members.length + symbol.more_members})
+        {title} ({items.length + more})
       </span>
       <div className="dg-members">
-        {symbol.members.map((m) => (
-          <button key={`${m.path}:${m.line}`} type="button" className="dg-member" onClick={() => onPick(m)} title={`${m.path}:${m.line}`}>
-            <Icon name={symbolStyle(m.kind).icon} size={12} style={{ color: symbolStyle(m.kind).color, flex: "none" }} />
-            <span className="dg-member__sig">{m.signature || m.name}</span>
-            {m.via && <Chip>{m.via}</Chip>}
-            {m.path !== symbol.path && <span className="dg-member__where">{m.path.split("/").pop()}</span>}
-          </button>
+        {items.map((m) => (
+          <div key={memberKey(m)} className={`dg-member ${active === memberKey(m) ? "dg-member--active" : ""}`}>
+            <IconButton icon="locate-fixed" label={`Center the graph on ${m.name}`} size="sm" onClick={() => onCenter(m)} />
+            <button type="button" className="dg-member__peek" onClick={() => onPeek(m)} title={`Show ${m.path}:${m.line} in the preview`}>
+              <Icon name={symbolStyle(m.kind).icon} size={12} style={{ color: symbolStyle(m.kind).color, flex: "none" }} />
+              <span className="dg-member__sig">{m.signature || m.name}</span>
+              {m.via && <Chip>{m.via}</Chip>}
+              <span className="dg-member__where">{m.path.split("/").pop()}:{m.line}</span>
+            </button>
+          </div>
         ))}
-        {symbol.more_members > 0 && <span style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>and {symbol.more_members} more</span>}
+        {more > 0 && <span style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", paddingLeft: 6 }}>and {more} more</span>}
       </div>
     </div>
   );
@@ -472,8 +497,11 @@ function usePanZoom(canvas: RefObject<HTMLDivElement | null>) {
 export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: string }) {
   const nav = useNav();
   const [view, setView] = useState<GraphView>({ kind: "packages" });
+  const [history, setHistory] = useState<GraphView[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [hover, setHover] = useState<string | null>(null);
+  // A method or type picked from a list, shown in the preview without moving the graph.
+  const [peek, setPeek] = useState<CodeGraphSymbol | null>(null);
   const [rebuilt, setRebuilt] = useState<{ ok: CodeReindex } | { error: string } | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [generation, setGeneration] = useState(0);
@@ -505,11 +533,35 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placed]);
 
-  const go = (v: GraphView) => {
+  const show = (v: GraphView) => {
     setView(v);
     setSelected(null);
     setHover(null);
+    setPeek(null);
   };
+  const go = (v: GraphView) => {
+    if (JSON.stringify(v) === JSON.stringify(view)) return;
+    setHistory((h) => [...h.slice(-49), view]);
+    show(v);
+  };
+  const back = () => {
+    const prev = history[history.length - 1];
+    if (!prev) return;
+    setHistory((h) => h.slice(0, -1));
+    show(prev);
+  };
+  // Alt+Left goes back, as in a browser, unless the user is typing.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.altKey && e.key === "ArrowLeft" && !(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) {
+        e.preventDefault();
+        back();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   const depth = view.kind === "file" || view.kind === "symbol" ? view.depth : 1;
   const primary = (n: CodeGraphNode) => {
     if (n.kind === "package") go({ kind: "package", pkg: n.package });
@@ -517,6 +569,7 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
     else go({ kind: "file", path: n.id, depth });
   };
   const toMember = (m: CodeGraphMember) => go({ kind: "symbol", path: m.path, symbol: m.name, line: m.line, depth });
+  const peekMember = (m: CodeGraphMember, container: string | null) => setPeek(asSymbol(m, container));
   const openAt = (path: string, line?: number) => nav.open(fileId(projectKey, path), line ? { anchor: `L${line}` } : undefined);
   const rebuild = () => {
     setRebuilding(true);
@@ -553,7 +606,12 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
   const sel = selected ? byId.get(selected) : undefined;
   const selEdges = sel && graph.data ? graph.data.edges.filter((e) => e.from === sel.id || e.to === sel.id) : [];
   const isSymbolView = graph.data?.view === "symbol";
-  const previewed = sel?.symbol ?? (sel ? undefined : focusNode?.symbol);
+  const previewed = peek ?? sel?.symbol ?? (sel ? undefined : focusNode?.symbol);
+  const peekKey = peek ? memberKey(peek) : null;
+  const pick = (id: string | null) => {
+    setSelected(id);
+    setPeek(null);
+  };
   const zoomBy = (f: number) => {
     const { w, h } = pz.size();
     pz.move(zoomAround(pz.cam, f, w / 2, h / 2));
@@ -572,6 +630,7 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "0 24px 24px", minHeight: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <IconButton icon="arrow-left" label={history.length ? "Back to the previous view (Alt+Left)" : "No previous view"} size="sm" disabled={!history.length} onClick={back} />
         <nav aria-label="Graph view" style={{ display: "flex", alignItems: "center", gap: 4, font: "var(--type-ui)", minWidth: 0, flexWrap: "wrap" }}>
           {crumbs.map((c, i) => (
             <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
@@ -691,7 +750,7 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                           opacity={dim ? 0.35 : 1}
                           onMouseEnter={() => setHover(n.id)}
                           onMouseLeave={() => setHover(null)}
-                          onClick={() => setSelected(n.id === selected ? null : n.id)}
+                          onClick={() => pick(n.id === selected ? null : n.id)}
                           onDoubleClick={() => primary(n)}
                         >
                           {isFocus && <rect x={-4} y={-4} width={NODE_W + 8} height={n.h + 8} rx={10} fill="none" stroke="var(--accent)" strokeOpacity={0.35} strokeWidth={4} />}
@@ -711,7 +770,7 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                             {clipLabel(n.label, 22)}
                           </text>
                           <text x={36} y={33} className="dg-node__sub">
-                            {clip(subline(n), 30)}
+                            {clip(subline(n), fileDefsHint(n) ? 22 : 30)}
                           </text>
                           {(n.dependents > 0 || n.dependencies > 0) && n.kind !== "symbol" && (
                             <text x={NODE_W - 8} y={19} textAnchor="end" className="dg-node__count">
@@ -721,6 +780,12 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                           {n.kind === "symbol" && !isFocus && (n.symbol?.members.length ?? 0) > 0 && (
                             <text x={NODE_W - 8} y={19} textAnchor="end" className="dg-node__count">
                               {(n.symbol?.members.length ?? 0) + (n.symbol?.more_members ?? 0)} ƒ
+                            </text>
+                          )}
+                          {fileDefsHint(n) && (
+                            <text x={NODE_W - 8} y={33} textAnchor="end" className="dg-node__types">
+                              {fileDefsHint(n)}
+                              <title>{`${n.kind === "file" ? "In this file" : "Also in this file"}: ${n.file_defs.map((t) => t.name).join(", ")}${n.more_file_defs ? `, and ${n.more_file_defs} more` : ""}. Select the node to go to one.`}</title>
                             </text>
                           )}
                           {inline.rows.length > 0 && <line x1={8} x2={NODE_W - 8} y1={NODE_H + 2} y2={NODE_H + 2} stroke="var(--border-subtle)" />}
@@ -734,10 +799,14 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                                 transform={`translate(0,${NODE_H + 6 + i * MEMBER_H})`}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  peekMember(m, n.symbol?.name ?? null);
+                                }}
+                                onDoubleClick={(e) => {
+                                  e.stopPropagation();
                                   toMember(m);
                                 }}
                               >
-                                <rect x={4} y={0} width={NODE_W - 8} height={MEMBER_H} rx={4} className="dg-row__bg" />
+                                <rect x={4} y={0} width={NODE_W - 8} height={MEMBER_H} rx={4} className={peekKey === memberKey(m) ? "dg-row__bg dg-row__bg--active" : "dg-row__bg"} />
                                 <MGlyph x={12} y={3} width={13} height={13} color={ms.color} strokeWidth={1.75} />
                                 <text x={32} y={14} className="dg-row__label">
                                   {clip(m.name, m.via ? 16 : 22)}
@@ -747,7 +816,7 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                                     {clip(m.via, 10)}
                                   </text>
                                 )}
-                                <title>{`${m.signature}\n${m.path}:${m.line}${m.via ? `\nimplements ${m.via}` : ""}\nClick to center on it.`}</title>
+                                <title>{`${m.signature}\n${m.path}:${m.line}${m.via ? `\nimplements ${m.via}` : ""}\nClick to preview it, double-click to center on it.`}</title>
                               </g>
                             );
                           })}
@@ -827,7 +896,7 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                       const verb = e.kind === "implements" ? (out ? "implements " : "implemented by ") : isSymbolView ? (out ? "calls or uses " : "referenced by ") : out ? "uses " : "used by ";
                       return (
                         <li key={i}>
-                          <button type="button" className="dg-link" onClick={() => setSelected(other)}>
+                          <button type="button" className="dg-link" onClick={() => pick(other)}>
                             {verb}
                             {byId.get(other)?.label ?? other}
                           </button>
@@ -838,18 +907,24 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                     })}
                   </ul>
                 )}
-                {sel.symbol && <MemberList symbol={sel.symbol} onPick={toMember} />}
+                {sel.symbol && (
+                  <DefList title="Methods and functions" items={sel.symbol.members} more={sel.symbol.more_members} active={peekKey} onPeek={(m) => peekMember(m, sel.symbol!.name)} onCenter={toMember} />
+                )}
+                <DefList title={sel.kind === "file" ? "In this file" : "Also in this file"} items={sel.file_defs} more={sel.more_file_defs} active={peekKey} onPeek={(m) => peekMember(m, null)} onCenter={toMember} />
                 {sel.kind === "file" && <FileSymbols ws={ws} projectKey={projectKey} path={sel.id} onPick={go} />}
               </div>
             )}
-            {!sel && focusNode?.symbol && focusNode.symbol.members.length > 0 && (
+            {!sel && focusNode && ((focusNode.symbol?.members.length ?? 0) > 0 || focusNode.file_defs.length > 0) && (
               <div className="dg-details">
-                <MemberList symbol={focusNode.symbol} onPick={toMember} />
+                {focusNode.symbol && (
+                  <DefList title="Methods and functions" items={focusNode.symbol.members} more={focusNode.symbol.more_members} active={peekKey} onPeek={(m) => peekMember(m, focusNode.symbol!.name)} onCenter={toMember} />
+                )}
+                <DefList title={focusNode.kind === "file" ? "In this file" : "Also in this file"} items={focusNode.file_defs} more={focusNode.more_file_defs} active={peekKey} onPeek={(m) => peekMember(m, null)} onCenter={toMember} />
               </div>
             )}
             {previewed && (
               <DefinitionPreview
-                key={`${previewed.path}:${previewed.line}`}
+                key={previewed.path}
                 ws={ws}
                 projectKey={projectKey}
                 symbol={previewed}

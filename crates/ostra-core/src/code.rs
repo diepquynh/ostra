@@ -294,6 +294,8 @@ pub struct CodeGraphMember {
     pub kind: SymbolKind,
     pub line: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
     #[serde(default)]
     pub signature: String,
@@ -336,6 +338,14 @@ pub struct CodeGraphNode {
     /// Set on symbol nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub symbol: Option<CodeGraphSymbol>,
+    /// For a file or a symbol: the top-level definitions (types and functions) in its file, the
+    /// symbol itself left out, such as the package-private classes next to a Java file's public
+    /// class or the other functions of a Go or Python module.
+    #[serde(default)]
+    pub file_defs: Vec<CodeGraphMember>,
+    /// More top-level definitions than `file_defs` lists.
+    #[serde(default)]
+    pub more_file_defs: u32,
 }
 
 /// `from` uses `to`.

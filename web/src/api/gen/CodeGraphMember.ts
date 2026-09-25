@@ -4,4 +4,4 @@ import type { SymbolKind } from "./SymbolKind";
 /**
  * A method or function a type defines, in a symbol view.
  */
-export type CodeGraphMember = { path: string, name: string, kind: SymbolKind, line: number, via?: string | null, signature: string, };
+export type CodeGraphMember = { path: string, name: string, kind: SymbolKind, line: number, end_line?: number | null, via?: string | null, signature: string, };

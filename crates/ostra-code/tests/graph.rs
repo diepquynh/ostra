@@ -454,6 +454,10 @@ const IMPLS: &[(&str, &str)] = &[
         "package zoo;\npublic interface Pet {\n    void feed();\n}\n",
     ),
     (
+        "java/Zoo.java",
+        "package zoo;\npublic class Zoo {\n    void open() {}\n}\nclass Keeper {\n    void feed() {}\n}\ninterface Feeder {}\n",
+    ),
+    (
         "java/Cat.java",
         "package zoo;\npublic class Cat implements Pet {\n    public void feed() {}\n    public void feed(int grams) {}\n}\n",
     ),
@@ -751,5 +755,72 @@ fn implementations_tool_answers_in_text() {
         )
         .unwrap_err();
         assert!(err.contains("Use CodeOutline"), "{err}");
+    });
+}
+
+#[test]
+fn nodes_list_the_other_definitions_of_their_file() {
+    let names = |g: &ostra_core::code::CodeGraph| -> Vec<String> {
+        let n = g.nodes.iter().find(|n| n.id == g.focus).unwrap();
+        n.file_defs.iter().map(|t| t.name.clone()).collect()
+    };
+    with_files(IMPLS, |ix| {
+        let z = ix.symbol_view("java/Zoo.java", "Zoo", None, 1).unwrap();
+        let focus = z.nodes.iter().find(|n| n.id == z.focus).unwrap();
+        let lines: Vec<(&str, u32)> = focus
+            .file_defs
+            .iter()
+            .map(|t| (t.name.as_str(), t.line))
+            .collect();
+        assert_eq!(lines, [("Keeper", 5), ("Feeder", 8)]);
+        assert!(
+            !z.nodes.iter().any(|n| n.id.contains(":open")),
+            "Zoo's own method is a member, not a callee: {:#?}",
+            z.nodes
+        );
+        let open = &focus.symbol.as_ref().unwrap().members[0];
+        assert_eq!((open.name.as_str(), open.end_line), ("open", Some(3)));
+        // A method's node names every top-level definition of its file, its own type included.
+        assert_eq!(
+            names(&ix.symbol_view("java/Zoo.java", "feed", None, 1).unwrap()),
+            ["Zoo", "Keeper", "Feeder"]
+        );
+        let f = ix.file_view("java/Zoo.java", 1).unwrap();
+        let n = f.nodes.iter().find(|n| n.id == "java/Zoo.java").unwrap();
+        assert_eq!(n.file_defs.len(), 3);
+    });
+    // Every language: a module of functions lists its functions next to its types.
+    let files: &[(&str, &str)] = &[
+        (
+            "tools/util.py",
+            "import os\n\nclass Cache:\n    def get(self):\n        return 1\n\ndef load():\n    return Cache()\n\ndef save():\n    pass\n",
+        ),
+        ("go.mod", "module example.com/app\n\ngo 1.22\n"),
+        (
+            "store/store.go",
+            "package store\n\ntype Store struct{}\n\nfunc (s *Store) Save() {}\n\nfunc Open() *Store { return &Store{} }\n\nfunc Close() {}\n",
+        ),
+        (
+            "web/src/fmt.ts",
+            "export function price(n: number) { return `${n}`; }\nexport const date = (d: Date) => d.toISOString();\nexport interface Money { amount: number }\n",
+        ),
+    ];
+    with_files(files, |ix| {
+        assert_eq!(
+            names(&ix.symbol_view("tools/util.py", "load", None, 1).unwrap()),
+            ["Cache", "save"]
+        );
+        assert_eq!(
+            names(&ix.symbol_view("store/store.go", "Open", None, 1).unwrap()),
+            ["Store", "Close"]
+        );
+        assert_eq!(
+            names(&ix.symbol_view("web/src/fmt.ts", "price", None, 1).unwrap()),
+            ["date", "Money"]
+        );
+        let f = ix.file_view("tools/util.py", 1).unwrap();
+        let n = f.nodes.iter().find(|n| n.id == "tools/util.py").unwrap();
+        assert_eq!(n.file_defs.len(), 3);
+        assert_eq!(n.more_file_defs, 0);
     });
 }

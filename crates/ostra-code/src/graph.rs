@@ -1536,6 +1536,8 @@ impl ProjectIndex {
             dependents: self.steps(g, f, Direction::Dependents).len() as u32,
             dependencies: self.steps(g, f, Direction::Dependencies).len() as u32,
             symbol: None,
+            file_defs: self.file_defs(f, None),
+            more_file_defs: self.more_file_defs(f, None),
         }
     }
 
@@ -1586,6 +1588,8 @@ impl ProjectIndex {
                 dependents: u.used_by.len() as u32,
                 dependencies: u.depends_on.len() as u32,
                 symbol: None,
+                file_defs: vec![],
+                more_file_defs: 0,
             })
             .collect();
         let edges = m
@@ -1685,6 +1689,8 @@ impl ProjectIndex {
                 dependents,
                 dependencies,
                 symbol: None,
+                file_defs: vec![],
+                more_file_defs: 0,
             });
         }
         for (&(f, tu), &n) in &out_links {
@@ -1798,6 +1804,8 @@ impl ProjectIndex {
 const MAX_VIEW_CALLEES: usize = 200;
 /// Members a type node lists.
 const MAX_MEMBERS: usize = 40;
+/// Top-level definitions a node lists from its file.
+const MAX_FILE_DEFS: usize = 30;
 /// Links a symbol view draws; implementations are kept first, then the heaviest references.
 pub const MAX_VIEW_EDGES: usize = 300;
 /// Stands for the top level of a file in a symbol view key.
@@ -2210,10 +2218,16 @@ impl ProjectIndex {
         let mut truncated = false;
         match dir {
             Direction::Dependencies => {
+                let is_type = type_kind(def.kind);
                 if let Some(c) = self.callees(&path, &name, Some(line), MAX_VIEW_CALLEES) {
                     truncated = c.truncated;
                     for l in c.uses {
-                        if !l.kind.is_some_and(view_kind) {
+                        // A type's own methods are listed inside its node, not as its callees.
+                        if !l.kind.is_some_and(view_kind)
+                            || (is_type
+                                && l.path == path
+                                && l.container.as_deref() == Some(name.as_str()))
+                        {
                             continue;
                         }
                         let Some(&tf) = self.by_path.get(&l.path) else {
@@ -2300,6 +2314,46 @@ impl ProjectIndex {
         out
     }
 
+    fn member(&self, k: DefKey) -> CodeGraphMember {
+        let x = self.def_of(k);
+        CodeGraphMember {
+            path: self.entries[k.0 as usize].path.clone(),
+            name: self.name_list[x.name as usize].to_string(),
+            kind: x.kind,
+            line: x.line,
+            end_line: x.end_line,
+            via: x.via.as_deref().map(str::to_string),
+            signature: x.preview.to_string(),
+        }
+    }
+
+    /// The top-level types and functions file `f` defines, except def `except`, in source order.
+    fn top_level(&self, f: u32, except: Option<u32>) -> impl Iterator<Item = u32> + '_ {
+        self.entries[f as usize]
+            .defs
+            .iter()
+            .enumerate()
+            .filter(move |&(i, x)| {
+                Some(i as u32) != except
+                    && x.container.is_none()
+                    && (type_kind(x.kind) || callable(x.kind))
+            })
+            .map(|(i, _)| i as u32)
+    }
+
+    fn file_defs(&self, f: u32, except: Option<u32>) -> Vec<CodeGraphMember> {
+        self.top_level(f, except)
+            .take(MAX_FILE_DEFS)
+            .map(|d| self.member((f, d)))
+            .collect()
+    }
+
+    fn more_file_defs(&self, f: u32, except: Option<u32>) -> u32 {
+        self.top_level(f, except)
+            .count()
+            .saturating_sub(MAX_FILE_DEFS) as u32
+    }
+
     fn view_symbol(
         &self,
         g: &Graph,
@@ -2316,17 +2370,7 @@ impl ProjectIndex {
             members = all
                 .into_iter()
                 .take(MAX_MEMBERS)
-                .map(|m| {
-                    let x = self.def_of(m);
-                    CodeGraphMember {
-                        path: self.entries[m.0 as usize].path.clone(),
-                        name: self.name_list[x.name as usize].to_string(),
-                        kind: x.kind,
-                        line: x.line,
-                        via: x.via.as_deref().map(str::to_string),
-                        signature: x.preview.to_string(),
-                    }
-                })
+                .map(|m| self.member(m))
                 .collect();
         }
         CodeGraphSymbol {
@@ -2565,6 +2609,8 @@ impl ProjectIndex {
                     dependents: ins.get(&k).copied().unwrap_or(0),
                     dependencies: outs.get(&k).copied().unwrap_or(0),
                     symbol,
+                    file_defs: self.file_defs(f, (d != TOP).then_some(d)),
+                    more_file_defs: self.more_file_defs(f, (d != TOP).then_some(d)),
                 }
             })
             .collect();
