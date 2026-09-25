@@ -1,6 +1,7 @@
 //! `/ws`: one socket per tab, multiplexed by channel (HANDOVER 13).
 
 use crate::app::{App, HubMsg};
+use crate::code::HintAsk;
 use axum::extract::State;
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, header};
@@ -165,6 +166,28 @@ impl Streams {
     }
 }
 
+impl Streams {
+    /// Run `task` under `key`, stopping the one it replaces.
+    fn replace(&mut self, key: &str, task: AbortHandle) {
+        self.stop(key);
+        self.0.insert(key.to_string(), task);
+    }
+}
+
+/// Keys of a socket's in-flight hint requests in `Streams`. A newer request of a kind stops the
+/// older one, which then never answers.
+const HINT_COMPLETE: &str = "hint:complete";
+const HINT_SIGNATURE: &str = "hint:signature";
+/// Hint answers queued for one socket.
+const HINT_QUEUE: usize = 8;
+
+fn split<T>(r: Result<T, crate::api::ApiErr>) -> (Option<T>, Option<String>) {
+    match r {
+        Ok(v) => (Some(v), None),
+        Err(e) => (None, Some(e.message().to_string())),
+    }
+}
+
 impl Drop for Streams {
     fn drop(&mut self) {
         self.0.values().for_each(AbortHandle::abort);
@@ -194,6 +217,7 @@ async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
     let mut channels: HashSet<String> = HashSet::new();
     let mut streams = Streams::default();
     let (term_tx, mut term_rx) = mpsc::channel::<Vec<u8>>(TERM_QUEUE);
+    let (hint_tx, mut hint_rx) = mpsc::channel::<ServerMsg>(HINT_QUEUE);
     let mut recheck = tokio::time::interval(RECHECK);
     recheck.tick().await;
     loop {
@@ -207,6 +231,9 @@ async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
             }
             Some(bytes) = term_rx.recv() => {
                 if socket.send(Message::Binary(bytes.into())).await.is_err() { break }
+            }
+            Some(msg) = hint_rx.recv() => {
+                if !send(&mut socket, &msg).await { break }
             }
             p = pushed.recv() => {
                 match p {
@@ -264,6 +291,32 @@ async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
                         {
                             break;
                         }
+                    }
+                    ClientMsg::CodeComplete { id, workspace, key, path, text, line, col, trigger, retrigger } => {
+                        let ask = HintAsk { path, text, line, col, trigger, retrigger };
+                        let (app, tx) = (app.clone(), hint_tx.clone());
+                        let task = tokio::spawn(async move {
+                            let r = match crate::api::ws(&app, workspace.as_str()) {
+                                Ok(w) => app.code.complete(&app, &w, &key, ask).await,
+                                Err(e) => Err(e),
+                            };
+                            let (result, error) = split(r);
+                            let _ = tx.send(ServerMsg::CodeCompletion { id, result, error }).await;
+                        });
+                        streams.replace(HINT_COMPLETE, task.abort_handle());
+                    }
+                    ClientMsg::CodeSignature { id, workspace, key, path, text, line, col, trigger, retrigger } => {
+                        let ask = HintAsk { path, text, line, col, trigger, retrigger };
+                        let (app, tx) = (app.clone(), hint_tx.clone());
+                        let task = tokio::spawn(async move {
+                            let r = match crate::api::ws(&app, workspace.as_str()) {
+                                Ok(w) => app.code.signature(&app, &w, &key, ask).await,
+                                Err(e) => Err(e),
+                            };
+                            let (result, error) = split(r);
+                            let _ = tx.send(ServerMsg::CodeSignatureHelp { id, result: result.flatten(), error }).await;
+                        });
+                        streams.replace(HINT_SIGNATURE, task.abort_handle());
                     }
                     ClientMsg::TermResize { execution, cols, rows } => {
                         if cols == 0 || rows == 0 || cols > ostra_exec_harness::pty::MAX_COLS || rows > ostra_exec_harness::pty::MAX_ROWS {

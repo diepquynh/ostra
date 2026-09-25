@@ -8,6 +8,18 @@ const mockSocket: SocketFactory | null =
 export type WireMsg = ServerMsg;
 
 type MsgHandler = (msg: WireMsg) => void;
+
+type HintAsk = Extract<ClientMsg, { type: "code_complete" | "code_signature" }>;
+/** A hint request without its type and id. */
+export type HintRequest<T extends HintAsk["type"]> = Omit<Extract<HintAsk, { type: T }>, "type" | "id">;
+type HintReplies = {
+  code_complete: Extract<ServerMsg, { type: "code_completion" }>;
+  code_signature: Extract<ServerMsg, { type: "code_signature_help" }>;
+};
+type HintReply = HintReplies[keyof HintReplies];
+
+/** A hint the server has not answered by then resolves to null. */
+const HINT_TIMEOUT_MS = 30_000;
 type PtyHandler = (data: Uint8Array) => void;
 
 /** The subset of the browser WebSocket the manager uses, so tests can pass a fake. */
@@ -75,6 +87,9 @@ export class SocketManager {
   private everOpened = false;
   private stopped = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private hintSeq = 0;
+  private hints = new Map<number, (reply: HintReply | null) => void>();
+  private latestHint = new Map<HintAsk["type"], number>();
   state: SocketState = "closed";
 
   constructor(
@@ -154,6 +169,33 @@ export class SocketManager {
     }
   }
 
+  /**
+   * Ask for completions or signature help. Resolves to null when the socket is closed, when the server does not
+   * answer in time, or when a newer request of the same type replaces this one, because the server stops it.
+   */
+  hint<T extends HintAsk["type"]>(type: T, req: HintRequest<T>): Promise<HintReplies[T] | null> {
+    if (!this.socket || this.socket.readyState !== OPEN) return Promise.resolve(null);
+    const id = ++this.hintSeq;
+    const older = this.latestHint.get(type);
+    if (older !== undefined) this.settleHint(older, null);
+    this.latestHint.set(type, id);
+    return new Promise((resolve) => {
+      const timer = this.schedule(() => this.settleHint(id, null), HINT_TIMEOUT_MS);
+      this.hints.set(id, (reply) => {
+        clearTimeout(timer);
+        resolve(reply as HintReplies[T] | null);
+      });
+      this.send({ ...req, type, id } as HintAsk);
+    });
+  }
+
+  private settleHint(id: number, reply: HintReply | null) {
+    const done = this.hints.get(id);
+    if (!done) return;
+    this.hints.delete(id);
+    done(reply);
+  }
+
   channels(): string[] {
     return [...this.handlers.keys()];
   }
@@ -186,6 +228,7 @@ export class SocketManager {
       if (this.socket !== sock) return;
       this.socket = null;
       this.setState("closed");
+      for (const id of [...this.hints.keys()]) this.settleHint(id, null);
       if (this.stopped) return;
       const delay = Math.min(10000, 500 * 2 ** this.attempts);
       this.attempts += 1;
@@ -199,6 +242,10 @@ export class SocketManager {
       try {
         msg = JSON.parse(data) as WireMsg;
       } catch {
+        return;
+      }
+      if (msg.type === "code_completion" || msg.type === "code_signature_help") {
+        this.settleHint(msg.id, msg);
         return;
       }
       this.anyListeners.forEach((fn) => fn(msg));

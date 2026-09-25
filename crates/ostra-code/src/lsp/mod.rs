@@ -7,11 +7,14 @@
 pub mod convert;
 pub mod rpc;
 
+use crate::hint::At;
 use crate::provider::{Answer, CodeProvider};
 use crate::{MAX_FILE_BYTES, lang, preview};
 use async_trait::async_trait;
 use convert::{Legend, Range};
-use ostra_core::code::{CodeLocation, CodeSymbols, CodeUsages, ProviderRequest};
+use ostra_core::code::{
+    CodeCompletion, CodeLocation, CodeSignatureHelp, CodeSymbols, CodeUsages, ProviderRequest,
+};
 use ostra_core::config::LanguageServerConfig;
 use parking_lot::Mutex;
 use rpc::{Client, Transport};
@@ -189,6 +192,27 @@ async fn start(
                 "synchronization": {"dynamicRegistration": false},
                 "definition": {"linkSupport": true},
                 "references": {},
+                "completion": {
+                    "completionItem": {
+                        "snippetSupport": true,
+                        "commitCharactersSupport": true,
+                        "documentationFormat": ["markdown", "plaintext"],
+                        "deprecatedSupport": true,
+                        "preselectSupport": true,
+                        "tagSupport": {"valueSet": [1]},
+                        "insertReplaceSupport": true,
+                    },
+                    "completionItemKind": {"valueSet": (1..=25).collect::<Vec<u32>>()},
+                    "contextSupport": true,
+                },
+                "signatureHelp": {
+                    "signatureInformation": {
+                        "documentationFormat": ["markdown", "plaintext"],
+                        "parameterInformation": {"labelOffsetSupport": true},
+                        "activeParameterSupport": true,
+                    },
+                    "contextSupport": true,
+                },
                 "documentSymbol": {
                     "hierarchicalDocumentSymbolSupport": true,
                     "symbolKind": {"valueSet": kinds},
@@ -485,6 +509,12 @@ fn read_text(p: &Path) -> Option<String> {
         return None;
     }
     String::from_utf8(std::fs::read(p).ok()?).ok()
+}
+
+/// Whether the string array `list` holds `c`.
+fn listed(list: &Value, c: &str) -> bool {
+    list.as_array()
+        .is_some_and(|a| a.iter().any(|x| x.as_str() == Some(c)))
 }
 
 fn line_of(text: &str, line1: u32) -> Option<(usize, &str)> {
@@ -811,6 +841,108 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
             truncated,
             warning: self.busy_note(&s),
         })))
+    }
+
+    /// Completions at `at` from the server, or None when it does not answer for this file. Waits
+    /// at most `wait` for a server that is starting.
+    pub async fn complete(
+        &self,
+        at: &At<'_>,
+        wait: Duration,
+    ) -> Result<Option<CodeCompletion>, String> {
+        let Some(lang) = self.language_of(at.path) else {
+            return Ok(None);
+        };
+        let s = self
+            .pool
+            .get(&self.key, &self.root, &self.config, wait)
+            .await?;
+        if !s.has("completionProvider") {
+            return Ok(None);
+        }
+        let empty = || CodeCompletion {
+            provider: s.name.clone(),
+            items: vec![],
+            incomplete: false,
+            warning: None,
+        };
+        // LSP CompletionTriggerKind: 1 invoked, 2 trigger character, 3 incomplete list retrigger.
+        let context = match at.trigger {
+            Some(c) if listed(&s.caps["completionProvider"]["triggerCharacters"], c) => {
+                json!({"triggerKind": 2, "triggerCharacter": c})
+            }
+            // The browser opens the list on characters of every language; this server has no
+            // completions after this one.
+            Some(_) => return Ok(Some(empty())),
+            None if at.retrigger => json!({"triggerKind": 3}),
+            None => json!({"triggerKind": 1}),
+        };
+        s.sync(at.path, lang, at.text).await;
+        let v = s
+            .client
+            .request(
+                "textDocument/completion",
+                json!({"textDocument": {"uri": s.uri(at.path)},
+                       "position": {"line": at.line - 1, "character": at.col},
+                       "context": context}),
+                self.timeout(),
+            )
+            .await?;
+        let mut c = convert::completion(&v);
+        c.provider = s.name.clone();
+        c.warning = self.busy_note(&s);
+        Ok(Some(c))
+    }
+
+    /// Signature help at `at` from the server. None when the server does not answer for this
+    /// file or the cursor is not inside a call.
+    pub async fn signature(
+        &self,
+        at: &At<'_>,
+        wait: Duration,
+    ) -> Result<Option<CodeSignatureHelp>, String> {
+        let Some(lang) = self.language_of(at.path) else {
+            return Ok(None);
+        };
+        let s = self
+            .pool
+            .get(&self.key, &self.root, &self.config, wait)
+            .await?;
+        let caps = &s.caps["signatureHelpProvider"];
+        if !s.has("signatureHelpProvider") {
+            return Ok(None);
+        }
+        // LSP SignatureHelpTriggerKind: 1 invoked, 2 trigger character, 3 content change.
+        let kind = match at.trigger {
+            Some(c)
+                if listed(&caps["triggerCharacters"], c)
+                    || (at.retrigger && listed(&caps["retriggerCharacters"], c)) =>
+            {
+                2
+            }
+            _ if at.retrigger => 3,
+            Some(_) => return Ok(None),
+            None => 1,
+        };
+        let mut context = json!({"triggerKind": kind, "isRetrigger": at.retrigger});
+        if kind == 2 {
+            context["triggerCharacter"] = json!(at.trigger);
+        }
+        s.sync(at.path, lang, at.text).await;
+        let v = s
+            .client
+            .request(
+                "textDocument/signatureHelp",
+                json!({"textDocument": {"uri": s.uri(at.path)},
+                       "position": {"line": at.line - 1, "character": at.col},
+                       "context": context}),
+                self.timeout(),
+            )
+            .await?;
+        Ok(convert::signature_help(&v).map(|mut h| {
+            h.provider = s.name.clone();
+            h
+        }))
     }
 
     async fn symbols(&self, query: &str, limit: usize) -> Result<Option<Answer>, String> {

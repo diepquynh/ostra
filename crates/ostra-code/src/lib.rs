@@ -4,6 +4,7 @@
 //! (`ostra_core::code`).
 
 pub mod graph;
+pub mod hint;
 pub mod index;
 pub mod lang;
 pub mod lex;

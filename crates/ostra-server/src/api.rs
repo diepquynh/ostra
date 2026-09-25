@@ -390,7 +390,7 @@ pub fn router(app: Arc<App>) -> axum::Router {
 // Lookups
 // ---------------------------------------------------------------------------------------------
 
-fn ws(app: &App, id: &str) -> Result<Arc<WorkspaceRt>, ApiErr> {
+pub(crate) fn ws(app: &App, id: &str) -> Result<Arc<WorkspaceRt>, ApiErr> {
     app.workspace(&WorkspaceId::from(id))
         .ok_or_else(|| ApiErr::not_found(format!("No workspace {id}.")))
 }

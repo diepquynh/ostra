@@ -9,10 +9,11 @@ use crate::code_watch::{self, Batch, OnBatch, ProjectWatch};
 use crate::files::{self, Files, ProjectId};
 use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
+use ostra_code::hint::{self, At};
 use ostra_code::provider::{self, Answer, CodeProvider, CommandProvider, NativeProvider};
-use ostra_code::{Indexes, LspPool, LspProvider};
+use ostra_code::{Indexes, LspPool, LspProvider, MAX_FILE_BYTES};
 use ostra_core::api::{FileIndex, ServerMsg};
-use ostra_core::code::{PROTOCOL_VERSION, ProviderRequest};
+use ostra_core::code::{CodeCompletion, CodeSignatureHelp, PROTOCOL_VERSION, ProviderRequest};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -185,6 +186,159 @@ impl Code {
         provider::ask(&chain, &req)
             .await
             .map_err(|e| ApiErr::new(StatusCode::BAD_REQUEST, e))
+    }
+}
+
+/// A cursor in the unsaved text of a project file, from the editor.
+pub struct HintAsk {
+    pub path: String,
+    pub text: String,
+    pub line: u32,
+    pub col: u32,
+    pub trigger: Option<String>,
+    pub retrigger: bool,
+}
+
+impl HintAsk {
+    fn at(&self) -> At<'_> {
+        At {
+            path: &self.path,
+            text: &self.text,
+            line: self.line,
+            col: self.col,
+            trigger: self.trigger.as_deref(),
+            retrigger: self.retrigger,
+        }
+    }
+}
+
+/// How long a hint waits for a language server that is starting. The server keeps starting, and
+/// the code index answers completions meanwhile.
+const HINT_WAIT: Duration = Duration::from_secs(3);
+
+/// A project's language servers for one hint request, and what the index fallback needs.
+struct HintRig {
+    id: ProjectId,
+    root: PathBuf,
+    list: Arc<FileIndex>,
+    servers: Vec<LspProvider<ProjectId>>,
+}
+
+impl Code {
+    async fn hint_rig(
+        &self,
+        app: &Arc<App>,
+        w: &WorkspaceRt,
+        key: &str,
+        ask: &mut HintAsk,
+    ) -> Result<HintRig, ApiErr> {
+        let bad = |m: &str| ApiErr::new(StatusCode::BAD_REQUEST, m);
+        let root = files::project_root(w, key)?;
+        let c = files::contain(&root, &ask.path)?;
+        if c.rel.is_empty() || c.real.is_dir() {
+            return Err(bad("Name a file with path."));
+        }
+        ask.path = c.rel;
+        if ask.text.len() as u64 > MAX_FILE_BYTES {
+            return Err(bad(
+                "The file is larger than 1 MB, the size Ostra sends to a language server.",
+            ));
+        }
+        if ask.line == 0 || ask.line as usize > ask.text.split('\n').count() {
+            return Err(bad("The cursor line is outside the text."));
+        }
+        if ask.trigger.as_ref().is_some_and(|t| t.chars().count() != 1) {
+            return Err(bad("Send one typed character as trigger."));
+        }
+        let list = app.files.index(w, key).await?;
+        let id: ProjectId = (w.id.clone(), key.to_string());
+        self.ensure_watch(app, &id, &root, &list);
+        let base: Arc<dyn CodeProvider> = Arc::new(NativeProvider {
+            indexes: self.indexes.clone(),
+            key: id.clone(),
+            root: root.clone(),
+            list: list.clone(),
+        });
+        let project = w.settings().projects.into_iter().find(|p| p.key == key);
+        let servers = project
+            .map(|p| p.language_servers)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|config| LspProvider {
+                pool: self.servers.clone(),
+                key: id.clone(),
+                root: root.clone(),
+                config,
+                base: base.clone(),
+            })
+            .collect();
+        Ok(HintRig {
+            id,
+            root,
+            list,
+            servers,
+        })
+    }
+
+    /// Completions from the first language server that answers for the file, else from the
+    /// names the code index defines.
+    pub async fn complete(
+        &self,
+        app: &Arc<App>,
+        w: &WorkspaceRt,
+        key: &str,
+        mut ask: HintAsk,
+    ) -> Result<CodeCompletion, ApiErr> {
+        let rig = self.hint_rig(app, w, key, &mut ask).await?;
+        let mut problems = vec![];
+        for s in &rig.servers {
+            match s.complete(&ask.at(), HINT_WAIT).await {
+                Ok(Some(c)) => return Ok(c),
+                Ok(None) => {}
+                Err(e) => problems.push(format!(
+                    "`{}` did not complete, so the code index did: {e}",
+                    s.name()
+                )),
+            }
+        }
+        let indexes = self.indexes.clone();
+        let HintRig { id, root, list, .. } = rig;
+        let mut c = tokio::task::spawn_blocking(move || {
+            indexes.with(&id, &root, &list, |ix| hint::from_index(ix, &ask.at()))
+        })
+        .await
+        .map_err(|e| {
+            ApiErr::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("The code index failed: {e}"),
+            )
+        })?;
+        c.warning = (!problems.is_empty()).then(|| problems.join(" "));
+        Ok(c)
+    }
+
+    /// Signature help from the first language server that answers for the file. The code index
+    /// has none to give.
+    pub async fn signature(
+        &self,
+        app: &Arc<App>,
+        w: &WorkspaceRt,
+        key: &str,
+        mut ask: HintAsk,
+    ) -> Result<Option<CodeSignatureHelp>, ApiErr> {
+        let rig = self.hint_rig(app, w, key, &mut ask).await?;
+        let mut problems = vec![];
+        for s in &rig.servers {
+            match s.signature(&ask.at(), HINT_WAIT).await {
+                Ok(Some(h)) => return Ok(Some(h)),
+                Ok(None) => {}
+                Err(e) => problems.push(format!("`{}`: {e}", s.name())),
+            }
+        }
+        match problems.is_empty() {
+            true => Ok(None),
+            false => Err(ApiErr::new(StatusCode::BAD_GATEWAY, problems.join(" "))),
+        }
     }
 }
 

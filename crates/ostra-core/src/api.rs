@@ -1399,6 +1399,40 @@ pub enum ClientMsg {
         cols: u16,
         rows: u16,
     },
+    /// Completions at `line`/`col` of the unsaved `text` of project file `path`. Answered with
+    /// `code_completion` carrying the same `id`. A newer request from the same socket cancels
+    /// this one. Lines are 1-based; columns are 0-based UTF-16 code units.
+    CodeComplete {
+        id: u32,
+        workspace: WorkspaceId,
+        key: String,
+        path: String,
+        text: String,
+        line: u32,
+        col: u32,
+        /// The typed character that opened the list, when one did.
+        #[serde(default)]
+        trigger: Option<String>,
+        /// The previous list was incomplete and the word under the cursor grew.
+        #[serde(default)]
+        retrigger: bool,
+    },
+    /// Signature help at `line`/`col`, answered with `code_signature_help`. Same rules as
+    /// `code_complete`.
+    CodeSignature {
+        id: u32,
+        workspace: WorkspaceId,
+        key: String,
+        path: String,
+        text: String,
+        line: u32,
+        col: u32,
+        #[serde(default)]
+        trigger: Option<String>,
+        /// Signature help is already showing.
+        #[serde(default)]
+        retrigger: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1457,6 +1491,19 @@ pub enum ServerMsg {
     TreePatch {
         workspace: WorkspaceId,
         session: TreeSession,
+    },
+    /// The answer to `code_complete`. `result` is null when nothing answered; `error` says why
+    /// the request could not be asked.
+    CodeCompletion {
+        id: u32,
+        result: Option<crate::code::CodeCompletion>,
+        error: Option<String>,
+    },
+    /// The answer to `code_signature`. `result` is null outside a call.
+    CodeSignatureHelp {
+        id: u32,
+        result: Option<crate::code::CodeSignatureHelp>,
+        error: Option<String>,
     },
     /// The workspace's running executions, open gates, or spend changed, on `workspace:<id>`. At
     /// most two per second.

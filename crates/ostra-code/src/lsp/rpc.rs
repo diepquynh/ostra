@@ -67,6 +67,21 @@ pub struct Client {
     closed: AtomicBool,
 }
 
+/// Cancels a request whose caller stopped waiting, by timeout or because its future was dropped.
+struct CancelOnDrop<'a> {
+    client: &'a Client,
+    id: i64,
+}
+
+impl Drop for CancelOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.client.shared.pending.lock().remove(&self.id).is_some() {
+            self.client
+                .notify("$/cancelRequest", json!({"id": self.id}));
+        }
+    }
+}
+
 impl Client {
     /// Start the reader and writer tasks over `t`. `name` labels errors and logs.
     pub fn start(name: &str, t: Transport, folders: Value) -> Arc<Client> {
@@ -167,18 +182,15 @@ impl Client {
             return Err(why);
         }
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        let _cancel = CancelOnDrop { client: self, id };
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(reply)) => reply,
             Ok(Err(_)) => Err("The language server connection closed.".into()),
-            Err(_) => {
-                self.shared.pending.lock().remove(&id);
-                self.notify("$/cancelRequest", json!({"id": id}));
-                Err(format!(
-                    "`{}` did not answer `{method}` within {} seconds.",
-                    self.name,
-                    timeout.as_secs()
-                ))
-            }
+            Err(_) => Err(format!(
+                "`{}` did not answer `{method}` within {} seconds.",
+                self.name,
+                timeout.as_secs()
+            )),
         }
     }
 

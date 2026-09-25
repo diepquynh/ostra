@@ -48,6 +48,37 @@ function setup() {
 const sent = (s: FakeSocket) => s.sent.map((m) => JSON.parse(m));
 
 describe("SocketManager", () => {
+  it("routes hint replies by id and settles replaced or unanswered requests with null", async () => {
+    const { mgr, sockets, timers } = setup();
+    sockets[0].open();
+    const req = {
+      workspace: "w",
+      key: "app",
+      path: "a.rs",
+      text: "x",
+      line: 1,
+      col: 1,
+      trigger: null,
+      retrigger: false,
+    };
+    const first = mgr.hint("code_complete", req);
+    const second = mgr.hint("code_complete", req);
+    const sig = mgr.hint("code_signature", req);
+    expect(sent(sockets[0]).map((m) => [m.type, m.id])).toEqual([
+      ["code_complete", 1],
+      ["code_complete", 2],
+      ["code_signature", 3],
+    ]);
+    expect(await first).toBeNull();
+    const reply = { type: "code_completion", id: 2, result: null, error: "No workspace w." };
+    sockets[0].receive(JSON.stringify(reply));
+    expect(await second).toEqual(reply);
+    timers.at(-1)?.();
+    expect(await sig).toBeNull();
+    sockets[0].close();
+    expect(await mgr.hint("code_complete", req)).toBeNull();
+  });
+
   it("subscribes once per channel and unsubscribes when the last handler leaves", () => {
     const { mgr, sockets } = setup();
     sockets[0].open();

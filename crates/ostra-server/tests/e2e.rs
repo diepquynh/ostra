@@ -884,6 +884,60 @@ async fn yolo_implement_session_end_to_end() {
         .await
         .unwrap();
     assert_eq!(found.items[0].name, "hello");
+
+    // Editing hints over the socket: without a language server, completions come from the index.
+    {
+        use futures::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let server = Server {
+            app: app.clone(),
+            base: base.clone(),
+            client: client.clone(),
+        };
+        let mut sock = socket(&server).await;
+        let mut ask = async |v: Value| -> Value {
+            sock.send(Message::Text(v.to_string().into()))
+                .await
+                .unwrap();
+            loop {
+                let m = tokio::time::timeout(Duration::from_secs(10), sock.next())
+                    .await
+                    .expect("no answer")
+                    .unwrap()
+                    .unwrap();
+                if let Message::Text(t) = m {
+                    return serde_json::from_str(&t).unwrap();
+                }
+            }
+        };
+        let text = "mod greet;\npub use greet::hel";
+        let hint = |kind: &str, id: u32, path: &str| {
+            json!({"type": kind, "id": id, "workspace": ws.id, "key": "app", "path": path,
+                   "text": text, "line": 2, "col": 18})
+        };
+        let c = ask(hint("code_complete", 1, "src/lib.rs")).await;
+        assert_eq!(
+            (c["type"].as_str(), c["id"].as_u64()),
+            (Some("code_completion"), Some(1))
+        );
+        let item = &c["result"]["items"][0];
+        assert_eq!(
+            (item["label"].as_str(), item["kind"].as_str()),
+            (Some("hello"), Some("function"))
+        );
+        assert_eq!(
+            item["range"],
+            json!({"line": 2, "col": 15, "end_line": 2, "end_col": 18})
+        );
+        assert_eq!(c["result"]["provider"], "native");
+        let h = ask(hint("code_signature", 2, "src/lib.rs")).await;
+        assert_eq!(
+            (h["type"].as_str(), &h["result"], &h["error"]),
+            (Some("code_signature_help"), &Value::Null, &Value::Null)
+        );
+        let bad = ask(hint("code_complete", 3, "../outside.rs")).await;
+        assert!(bad["result"].is_null() && bad["error"].is_string(), "{bad}");
+    }
     assert_eq!(
         get("code/usages", &[("symbol", "two words")])
             .await

@@ -310,6 +310,8 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
                   }
                 >
                   <FileEditor
+                    ws={ws}
+                    projectKey={projectKey}
                     path={path}
                     value={edit.draft}
                     onChange={edit.change}

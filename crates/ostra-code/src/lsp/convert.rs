@@ -1,7 +1,10 @@
 //! Pure conversions between LSP shapes and `ostra_core::code` shapes. LSP lines are 0-based and
 //! Ostra's are 1-based; both count columns in UTF-16 code units.
 
-use ostra_core::code::{CodeFile, CodeSymbol, SymbolKind, TokenClass};
+use ostra_core::code::{
+    CodeCompletion, CodeCompletionItem, CodeDoc, CodeFile, CodeParameter, CodeRange, CodeSignature,
+    CodeSignatureHelp, CodeSymbol, CodeTextEdit, CompletionKind, SymbolKind, TokenClass,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -287,6 +290,196 @@ pub fn language_id(lang: &str, path: &str) -> String {
     .to_string()
 }
 
+/// Items kept from one completion answer; the list is marked incomplete past this.
+pub const MAX_COMPLETIONS: usize = 1000;
+
+fn code_range(v: &Value) -> Option<CodeRange> {
+    let r = range(v)?;
+    Some(CodeRange {
+        line: r.start_line + 1,
+        col: r.start_col,
+        end_line: r.end_line + 1,
+        end_col: r.end_col,
+    })
+}
+
+fn text_edit(v: &Value) -> Option<CodeTextEdit> {
+    Some(CodeTextEdit {
+        range: code_range(&v["range"])?,
+        text: v["newText"].as_str()?.to_string(),
+    })
+}
+
+/// `string | MarkupContent`, dropping empty text.
+pub fn doc(v: &Value) -> Option<CodeDoc> {
+    let (text, markdown) = match v {
+        Value::String(s) => (s.as_str(), false),
+        Value::Object(_) => (v["value"].as_str()?, v["kind"] == "markdown"),
+        _ => return None,
+    };
+    (!text.trim().is_empty()).then(|| CodeDoc {
+        text: text.to_string(),
+        markdown,
+    })
+}
+
+pub fn completion_kind(n: u64) -> Option<CompletionKind> {
+    use CompletionKind::*;
+    const KINDS: [CompletionKind; 25] = [
+        Text,
+        Method,
+        Function,
+        Constructor,
+        Field,
+        Variable,
+        Class,
+        Interface,
+        Module,
+        Property,
+        Unit,
+        Value,
+        Enum,
+        Keyword,
+        Snippet,
+        Color,
+        File,
+        Reference,
+        Folder,
+        EnumMember,
+        Constant,
+        Struct,
+        Event,
+        Operator,
+        TypeParameter,
+    ];
+    KINDS.get((n as usize).checked_sub(1)?).copied()
+}
+
+fn completion_item(v: &Value) -> Option<CodeCompletionItem> {
+    let label = v["label"].as_str()?.to_string();
+    let edit = &v["textEdit"];
+    // An `InsertReplaceEdit` has `insert` and `replace` ranges; inserting keeps the text after.
+    let range = code_range(&edit["range"]).or_else(|| code_range(&edit["insert"]));
+    let insert = edit["newText"]
+        .as_str()
+        .or_else(|| v["insertText"].as_str())
+        .unwrap_or(&label)
+        .to_string();
+    let text = |k: &str| v[k].as_str().filter(|s| !s.is_empty()).map(str::to_string);
+    let tags = v["tags"].as_array().map(Vec::as_slice).unwrap_or_default();
+    Some(CodeCompletionItem {
+        kind: v["kind"].as_u64().and_then(completion_kind),
+        detail: text("detail"),
+        doc: doc(&v["documentation"]),
+        insert,
+        snippet: v["insertTextFormat"] == 2,
+        range,
+        filter: text("filterText"),
+        sort: text("sortText"),
+        preselect: v["preselect"] == true,
+        // CompletionItemTag 1 is Deprecated.
+        deprecated: v["deprecated"] == true || tags.iter().any(|t| t == 1),
+        edits: v["additionalTextEdits"]
+            .as_array()
+            .map(|a| a.iter().filter_map(text_edit).collect())
+            .unwrap_or_default(),
+        commit_chars: v["commitCharacters"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        label,
+    })
+}
+
+/// `CompletionItem[] | CompletionList | null`.
+pub fn completion(v: &Value) -> CodeCompletion {
+    let (items, mut incomplete) = match v {
+        Value::Array(a) => (a.as_slice(), false),
+        Value::Object(_) => (
+            v["items"].as_array().map(Vec::as_slice).unwrap_or_default(),
+            v["isIncomplete"] == true,
+        ),
+        _ => (&[][..], false),
+    };
+    if items.len() > MAX_COMPLETIONS {
+        incomplete = true;
+    }
+    CodeCompletion {
+        provider: String::new(),
+        items: items
+            .iter()
+            .take(MAX_COMPLETIONS)
+            .filter_map(completion_item)
+            .collect(),
+        incomplete,
+        warning: None,
+    }
+}
+
+fn signature(v: &Value) -> Option<CodeSignature> {
+    let label = v["label"].as_str()?.to_string();
+    let mut from = 0usize;
+    let parameters = v["parameters"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|p| {
+            let (start, end) = match &p["label"] {
+                Value::String(name) => match label[from..].find(name.as_str()) {
+                    Some(i) => {
+                        let at = from + i;
+                        from = at + name.len();
+                        (utf16_len(&label[..at]), utf16_len(&label[..from]))
+                    }
+                    None => (0, 0),
+                },
+                Value::Array(a) => (
+                    a.first().and_then(Value::as_u64).unwrap_or(0) as u32,
+                    a.get(1).and_then(Value::as_u64).unwrap_or(0) as u32,
+                ),
+                _ => (0, 0),
+            };
+            CodeParameter {
+                start,
+                end,
+                doc: doc(&p["documentation"]),
+            }
+        })
+        .collect();
+    Some(CodeSignature {
+        doc: doc(&v["documentation"]),
+        parameters,
+        active_parameter: v["activeParameter"].as_u64().map(|n| n as u32),
+        label,
+    })
+}
+
+/// `SignatureHelp | null`, and None when it has no signatures.
+pub fn signature_help(v: &Value) -> Option<CodeSignatureHelp> {
+    let signatures: Vec<CodeSignature> = v["signatures"]
+        .as_array()?
+        .iter()
+        .filter_map(signature)
+        .collect();
+    if signatures.is_empty() {
+        return None;
+    }
+    let active =
+        (v["activeSignature"].as_u64().unwrap_or(0) as u32).min(signatures.len() as u32 - 1);
+    Some(CodeSignatureHelp {
+        provider: String::new(),
+        signatures,
+        active_signature: active,
+        active_parameter: v["activeParameter"].as_u64().unwrap_or(0) as u32,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +562,70 @@ mod tests {
         assert_eq!(find_name("é x", "x", 0), Some(2));
         assert_eq!(find_name("xy", "x", 0), None);
         assert_eq!(byte_at("éx", 1), 2);
+    }
+
+    #[test]
+    fn completion_reads_lists_edits_and_snippets() {
+        let v = json!({"isIncomplete": true, "items": [
+            {"label": "push", "kind": 2, "detail": "fn(&mut self, T)",
+             "documentation": {"kind": "markdown", "value": "Appends."},
+             "insertTextFormat": 2,
+             "textEdit": {"range": {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 6}},
+                          "newText": "push(${1:value})"},
+             "additionalTextEdits": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}},
+                                      "newText": "use std::vec::Vec;\n"}],
+             "tags": [1]},
+            {"label": "len", "insertText": "len"},
+            {"label": "pop", "textEdit": {"newText": "pop",
+                "insert": {"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 3}},
+                "replace": {"start": {"line": 1, "character": 2}, "end": {"line": 1, "character": 5}}}},
+            {"kind": 3}
+        ]});
+        let c = completion(&v);
+        assert!(c.incomplete);
+        assert_eq!(c.items.len(), 3);
+        let push = &c.items[0];
+        assert_eq!(push.kind, Some(CompletionKind::Method));
+        assert!(push.snippet && push.deprecated);
+        assert_eq!(push.insert, "push(${1:value})");
+        assert_eq!(
+            push.range,
+            Some(CodeRange {
+                line: 4,
+                col: 4,
+                end_line: 4,
+                end_col: 6
+            })
+        );
+        assert_eq!(push.doc.as_ref().map(|d| d.markdown), Some(true));
+        assert_eq!(push.edits[0].range.line, 1);
+        assert_eq!(c.items[1].insert, "len");
+        assert_eq!(c.items[1].range, None);
+        assert_eq!(c.items[2].range.map(|r| r.end_col), Some(3));
+        assert_eq!(completion(&json!([{"label": "x"}])).items[0].insert, "x");
+        assert!(completion(&Value::Null).items.is_empty());
+    }
+
+    #[test]
+    fn signature_help_finds_parameter_spans() {
+        let v = json!({"activeSignature": 5, "activeParameter": 1, "signatures": [{
+            "label": "fn copy(a: &str, b: &str) -> é",
+            "documentation": "Copies.",
+            "parameters": [{"label": "a: &str"}, {"label": "b: &str"}, {"label": [3, 7]}, {"label": "zzz"}]
+        }]});
+        let h = signature_help(&v).unwrap();
+        assert_eq!(h.active_signature, 0);
+        assert_eq!(h.active_parameter, 1);
+        let p = &h.signatures[0].parameters;
+        assert_eq!((p[0].start, p[0].end), (8, 15));
+        assert_eq!((p[1].start, p[1].end), (17, 24));
+        assert_eq!((p[2].start, p[2].end), (3, 7));
+        assert_eq!((p[3].start, p[3].end), (0, 0));
+        assert_eq!(
+            h.signatures[0].doc.as_ref().map(|d| d.markdown),
+            Some(false)
+        );
+        assert!(signature_help(&json!({"signatures": []})).is_none());
+        assert!(signature_help(&Value::Null).is_none());
     }
 }

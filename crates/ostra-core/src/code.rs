@@ -407,6 +407,140 @@ pub struct CodeSymbols {
     pub warning: Option<String>,
 }
 
+/// What a completion item inserts, for its icon. The LSP `CompletionItemKind` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum CompletionKind {
+    Text,
+    Method,
+    Function,
+    Constructor,
+    Field,
+    Variable,
+    Class,
+    Interface,
+    Module,
+    Property,
+    Unit,
+    Value,
+    Enum,
+    Keyword,
+    Snippet,
+    Color,
+    File,
+    Reference,
+    Folder,
+    EnumMember,
+    Constant,
+    Struct,
+    Event,
+    Operator,
+    TypeParameter,
+}
+
+/// A span of the edited text. Lines are 1-based; columns are 0-based UTF-16 code units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeRange {
+    pub line: u32,
+    pub col: u32,
+    pub end_line: u32,
+    pub end_col: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeTextEdit {
+    pub range: CodeRange,
+    pub text: String,
+}
+
+/// Documentation text, as Markdown or as plain text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeDoc {
+    pub text: String,
+    pub markdown: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeCompletionItem {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<CompletionKind>,
+    /// A type or signature shown beside the label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<CodeDoc>,
+    /// The text to insert, in LSP snippet syntax when `snippet` is set.
+    pub insert: String,
+    #[serde(default)]
+    pub snippet: bool,
+    /// The span `insert` replaces. Without one, the word at the cursor is replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<CodeRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub preselect: bool,
+    #[serde(default)]
+    pub deprecated: bool,
+    /// Edits elsewhere in the file applied with the item, such as an added import.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<CodeTextEdit>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commit_chars: Vec<String>,
+}
+
+/// Completions at the cursor of an edited file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeCompletion {
+    pub provider: String,
+    pub items: Vec<CodeCompletionItem>,
+    /// The list depends on what is typed next, so ask again as the word grows.
+    pub incomplete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeParameter {
+    /// The parameter's span in the signature label, in UTF-16 code units.
+    pub start: u32,
+    pub end: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<CodeDoc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeSignature {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc: Option<CodeDoc>,
+    pub parameters: Vec<CodeParameter>,
+    /// Overrides `CodeSignatureHelp::active_parameter` for this signature.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_parameter: Option<u32>,
+}
+
+/// The signatures of the call around the cursor, and the parameter being typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeSignatureHelp {
+    pub provider: String,
+    pub signatures: Vec<CodeSignature>,
+    pub active_signature: u32,
+    pub active_parameter: u32,
+}
+
 /// One request to an external provider, written as JSON to its stdin. The provider answers with
 /// the response shape of `op` on stdout, or `null` to let the built-in provider answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

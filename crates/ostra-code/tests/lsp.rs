@@ -1,12 +1,13 @@
 //! The LSP provider against an in-process fake server over a pipe, and one live test against
 //! rust-analyzer.
 
+use ostra_code::hint::At;
 use ostra_code::lsp::rpc::Transport;
 use ostra_code::lsp::{Connector, LspPool, LspProvider};
 use ostra_code::provider::{Answer, CodeProvider, NativeProvider, ask};
 use ostra_code::{CLASSES, Indexes};
 use ostra_core::api::FileIndex;
-use ostra_core::code::{PROTOCOL_VERSION, ProviderRequest, SymbolKind, TokenClass};
+use ostra_core::code::{CompletionKind, PROTOCOL_VERSION, ProviderRequest, SymbolKind, TokenClass};
 use ostra_core::config::LanguageServerConfig;
 use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
@@ -14,6 +15,7 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 const A: &str = "fn helper() {}\nfn main() { helper(); }\n";
@@ -72,7 +74,16 @@ async fn fake_server(root: PathBuf, io: tokio::io::DuplexStream, log: Log) {
                 "definitionProvider": true,
                 "referencesProvider": true,
                 "workspaceSymbolProvider": true,
+                "completionProvider": {"triggerCharacters": ["."]},
+                "signatureHelpProvider": {"triggerCharacters": ["("], "retriggerCharacters": [","]},
             }}),
+            "textDocument/completion" => json!({"isIncomplete": false, "items": [
+                {"label": "helper", "kind": 3, "detail": "fn()",
+                 "textEdit": {"range": range(1, 12, 3), "newText": "helper()"}},
+            ]}),
+            "textDocument/signatureHelp" => json!({"signatures": [
+                {"label": "helper(a: u32)", "parameters": [{"label": "a: u32"}]},
+            ], "activeParameter": 0}),
             // `helper` on line 1 as a function; `(` as punctuation, which has no class.
             "textDocument/semanticTokens/full" => json!({"data": [0, 3, 6, 0, 0, 0, 6, 1, 1, 0]}),
             "textDocument/documentSymbol" => json!([
@@ -162,6 +173,31 @@ impl Rig {
         ]
     }
 
+    fn lsp(&self) -> LspProvider<String> {
+        let chain = self.chain();
+        LspProvider {
+            pool: self.pool.clone(),
+            key: "p".to_string(),
+            root: self.dir.path().to_path_buf(),
+            config: LanguageServerConfig {
+                command: vec!["/usr/bin/fake-ls".into()],
+                languages: vec!["rust".into()],
+                timeout_secs: 5,
+                initialization_options: None,
+            },
+            base: chain[1].clone(),
+        }
+    }
+
+    fn params(&self, method: &str) -> Vec<Value> {
+        self.log
+            .lock()
+            .iter()
+            .filter(|(m, _)| m == method)
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+
     fn methods(&self) -> Vec<String> {
         self.log.lock().iter().map(|(m, _)| m.clone()).collect()
     }
@@ -189,6 +225,111 @@ fn usages(r: &Rig, at: Option<(u32, u32)>) -> ProviderRequest {
         col: at.map(|a| a.1),
         limit: 100,
     }
+}
+
+const EDITED: &str = "fn helper() {}\nfn main() { hel }\n";
+
+fn at<'a>(text: &'a str, path: &'a str, trigger: Option<&'a str>, retrigger: bool) -> At<'a> {
+    At {
+        path,
+        text,
+        line: 2,
+        col: 15,
+        trigger,
+        retrigger,
+    }
+}
+
+#[tokio::test]
+async fn completion_sends_the_unsaved_text_and_reads_the_list() {
+    let r = rig();
+    let wait = Duration::from_secs(5);
+    let c = r
+        .lsp()
+        .complete(&at(EDITED, "a.rs", None, false), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(c.provider, "fake-ls");
+    assert_eq!(c.items.len(), 1);
+    assert_eq!(c.items[0].insert, "helper()");
+    assert_eq!(c.items[0].kind, Some(CompletionKind::Function));
+    assert_eq!(c.items[0].range.map(|x| (x.line, x.col)), Some((2, 12)));
+    assert_eq!(
+        r.params("textDocument/didOpen")[0]["textDocument"]["text"],
+        EDITED
+    );
+    let asked = &r.params("textDocument/completion")[0];
+    assert_eq!(asked["position"], json!({"line": 1, "character": 15}));
+    assert_eq!(asked["context"], json!({"triggerKind": 1}));
+
+    // A character the server does not list gets an empty answer without a request.
+    let none = r
+        .lsp()
+        .complete(&at(EDITED, "a.rs", Some(":"), false), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(none.items.is_empty());
+    r.lsp()
+        .complete(&at(EDITED, "a.rs", Some("."), false), wait)
+        .await
+        .unwrap();
+    let asked = r.params("textDocument/completion");
+    assert_eq!(asked.len(), 2);
+    assert_eq!(
+        asked[1]["context"],
+        json!({"triggerKind": 2, "triggerCharacter": "."})
+    );
+    // The same text is not sent twice.
+    assert!(r.params("textDocument/didChange").is_empty());
+
+    // Other languages are left to the next provider.
+    let py = r
+        .lsp()
+        .complete(&at("x", "c.py", None, false), wait)
+        .await
+        .unwrap();
+    assert!(py.is_none());
+}
+
+#[tokio::test]
+async fn signature_help_maps_trigger_and_retrigger_characters() {
+    let r = rig();
+    let wait = Duration::from_secs(5);
+    let lsp = r.lsp();
+    let h = lsp
+        .signature(&at(EDITED, "a.rs", Some("("), false), wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(h.signatures[0].label, "helper(a: u32)");
+    assert_eq!(
+        (
+            h.signatures[0].parameters[0].start,
+            h.signatures[0].parameters[0].end
+        ),
+        (7, 13)
+    );
+    // `,` only retriggers, and a content change while showing asks with kind 3.
+    assert!(
+        lsp.signature(&at(EDITED, "a.rs", Some(","), false), wait)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    lsp.signature(&at(EDITED, "a.rs", Some(","), true), wait)
+        .await
+        .unwrap();
+    lsp.signature(&at(EDITED, "a.rs", None, true), wait)
+        .await
+        .unwrap();
+    let kinds: Vec<Value> = r
+        .params("textDocument/signatureHelp")
+        .iter()
+        .map(|p| p["context"]["triggerKind"].clone())
+        .collect();
+    assert_eq!(kinds, vec![json!(2), json!(2), json!(3)]);
 }
 
 #[tokio::test]
