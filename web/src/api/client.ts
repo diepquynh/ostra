@@ -123,6 +123,7 @@ export const httpApi = {
   workspace: (ws: string) => request<WorkspaceDetail>("GET", `/api/workspaces/${enc(ws)}`),
   saveSettings: (ws: string, settings: WorkspaceSettings) =>
     request<WorkspaceDetail>("PATCH", `/api/workspaces/${enc(ws)}`, settings),
+  deleteWorkspace: (ws: string) => request<void>("DELETE", `/api/workspaces/${enc(ws)}`),
   validateSettings: (ws: string, settings: WorkspaceSettings) =>
     request<ValidationIssue[]>("POST", `/api/workspaces/${enc(ws)}/validate`, settings),
   importProject: (ws: string, body: ImportProject) =>

@@ -4,7 +4,8 @@ use crate::app::Shared;
 use crate::services::ServerServices;
 use ostra_core::agent::{AgentName, JUDGE_ROUTE};
 use ostra_core::api::{
-    AgentInfo, ImportProject, InitStatus, ProjectView, ProviderStatus, WorkspaceDetail,
+    AgentInfo, ImportProject, InitStatus, ProjectView, ProviderStatus, SessionStatus,
+    WorkspaceDetail,
 };
 use ostra_core::config::{
     Environment, GlobalConfig, ProjectEntry, ProjectProfile, RouteQuery, ValidationIssue,
@@ -391,6 +392,33 @@ impl WorkspaceRt {
         save_toml(&paths::workspace_toml(&self.root), &settings).map_err(|e| e.to_string())?;
         self.sync_projects();
         Ok(())
+    }
+
+    /// Why the workspace cannot be deleted now: a live session, a running execution, or a clone.
+    pub fn busy(&self) -> Result<Option<String>, ostra_store::StoreError> {
+        if let Some(s) = self
+            .db
+            .list_sessions()?
+            .into_iter()
+            .find(|s| matches!(s.status, SessionStatus::Running | SessionStatus::Waiting))
+        {
+            return Ok(Some(format!(
+                "Stop session {} or wait for it to finish, then try again, because deleting the workspace would lose its state.",
+                s.id
+            )));
+        }
+        if let Some(e) = self.db.running_executions()?.into_iter().next() {
+            return Ok(Some(format!(
+                "Cancel execution {} or wait for it to finish, then try again, because it is still running.",
+                e.id
+            )));
+        }
+        if let Some((key, _)) = self.cloning.lock().first() {
+            return Ok(Some(format!(
+                "Wait for the git operation on `{key}` to finish, then try again."
+            )));
+        }
+        Ok(None)
     }
 
     pub fn project_path(&self, key: &str) -> Option<PathBuf> {

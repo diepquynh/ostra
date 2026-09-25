@@ -156,12 +156,18 @@ impl RegistryDb {
         row.map(to_record).transpose()
     }
 
-    /// Unregister a workspace. Deletes nothing on disk.
+    /// Unregister a workspace and drop the push subscriptions scoped to it. Deletes nothing on
+    /// disk.
     pub fn remove_workspace(&self, id: &WorkspaceId) -> Result<bool, StoreError> {
-        Ok(self
-            .lock()
-            .execute("DELETE FROM workspaces WHERE id = ?1", params![id.as_str()])?
-            > 0)
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM push_subscriptions WHERE workspace_id = ?1",
+            params![id.as_str()],
+        )?;
+        let removed = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id.as_str()])?;
+        tx.commit()?;
+        Ok(removed > 0)
     }
 
     // -- push subscriptions -------------------------------------------------------------------

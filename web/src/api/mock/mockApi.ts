@@ -168,6 +168,7 @@ export const mockApi: Api = {
     return delay(mockCreateWorkspace(body, { ...f.workspaceDetail, settings }), 1500);
   },
   workspace: () => delay({ ...f.workspaceDetail, settings }),
+  deleteWorkspace: () => delay(undefined),
   saveSettings: (_ws, next) => {
     const issues = wf.validate(next);
     if (issues.length) return new Promise((_, reject) => setTimeout(() => reject(new HttpError(422, "The settings have problems.", issues)), 80));

@@ -52,6 +52,10 @@ fn workspace_channel(id: &WorkspaceId) -> Vec<String> {
 }
 
 impl Nav {
+    pub fn forget(&self, workspace: &WorkspaceId) {
+        self.workspaces.lock().remove(workspace);
+    }
+
     /// Record what one engine notice changed.
     pub fn observe(&self, workspace: &WorkspaceId, notice: &EngineNotice) {
         let mut all = self.workspaces.lock();

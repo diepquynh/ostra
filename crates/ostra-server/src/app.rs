@@ -137,6 +137,19 @@ pub struct App {
     pub nav: Arc<crate::nav::Nav>,
 }
 
+#[derive(Debug)]
+pub enum DeleteError {
+    NotFound(String),
+    Busy(String),
+    Store(ostra_store::StoreError),
+}
+
+impl From<ostra_store::StoreError> for DeleteError {
+    fn from(e: ostra_store::StoreError) -> Self {
+        DeleteError::Store(e)
+    }
+}
+
 /// `ostra stop`: end a session while no server holds it.
 pub fn stop_offline(session: &str) -> anyhow::Result<usize> {
     if crate::auth::server_running() {
@@ -209,6 +222,49 @@ impl App {
 
     pub fn all_workspaces(&self) -> Vec<Arc<WorkspaceRt>> {
         self.workspaces.read().values().cloned().collect()
+    }
+
+    /// Unregister a workspace and delete `workspace.toml` and `workspace.db`. Project folders,
+    /// session artifact folders, and per-project `.ostra/` files stay on disk.
+    pub fn delete_workspace(&self, id: &WorkspaceId) -> Result<(), DeleteError> {
+        let record = self
+            .shared
+            .registry
+            .get_workspace(id)?
+            .ok_or_else(|| DeleteError::NotFound(format!("No workspace {id}.")))?;
+        {
+            // Held across the check, so no request reaches the engine between the check and removal.
+            let mut open = self.workspaces.write();
+            if let Some(rt) = open.get(id) {
+                if let Some(reason) = rt.busy()? {
+                    return Err(DeleteError::Busy(reason));
+                }
+                open.remove(id);
+            }
+        }
+        self.shared.registry.remove_workspace(id)?;
+        self.nav.forget(id);
+        let _ = self.push.send(Pushed {
+            channels: vec![format!("workspace:{id}"), "home".into()],
+            msg: ServerMsg::WorkspaceUpdated {
+                workspace: id.clone(),
+            },
+        });
+        let db = paths::workspace_db(&record.root);
+        let mut files = vec![paths::workspace_toml(&record.root), db.clone()];
+        files.extend(["-wal", "-shm"].map(|s| {
+            let mut p = db.clone().into_os_string();
+            p.push(s);
+            PathBuf::from(p)
+        }));
+        for f in files {
+            match std::fs::remove_file(&f) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!("deleting {}: {e}", f.display()),
+            }
+        }
+        Ok(())
     }
 
     /// Open a registered workspace, recover its sessions, and forward its engine's notices.

@@ -2255,3 +2255,69 @@ async fn harness_login_runs_in_a_setup_terminal() {
         .unwrap();
     assert_eq!(r.status(), 404);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_a_workspace_keeps_projects_and_session_folders() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { app, base, client } = boot(dir.path()).await;
+    let repo = dir.path().join("app");
+    std::fs::create_dir_all(repo.join(".ostra")).unwrap();
+    std::fs::write(repo.join("main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(repo.join(".ostra/INVENTORY.md"), "# app\n").unwrap();
+    let root = dir.path().join("ws");
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "del", "root": root, "projects": [{"path": repo, "key": "app"}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let wsp = format!("{base}/api/workspaces/{}", ws.id);
+    let session_dir = ostra_core::paths::session_root(&ws.root, "s_old");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(session_dir.join("spec.md"), "# spec\n").unwrap();
+    assert!(ostra_core::paths::workspace_db(&ws.root).is_file());
+
+    let rt = app.workspace(&ws.id).unwrap();
+    rt.cloning.lock().push(("app".into(), repo.clone()));
+    let r = client.delete(&wsp).send().await.unwrap();
+    assert_eq!(r.status(), 409);
+    assert!(app.workspace(&ws.id).is_some());
+    rt.cloning.lock().clear();
+    drop(rt);
+
+    let r = client.delete(&wsp).send().await.unwrap();
+    assert_eq!(r.status(), 204);
+    assert!(app.workspace(&ws.id).is_none());
+    let list: Vec<WorkspaceSummary> = client
+        .get(format!("{base}/api/workspaces"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(list.is_empty());
+    assert_eq!(client.get(&wsp).send().await.unwrap().status(), 404);
+    assert_eq!(client.delete(&wsp).send().await.unwrap().status(), 404);
+
+    assert!(!ostra_core::paths::workspace_toml(&ws.root).exists());
+    assert!(!ostra_core::paths::workspace_db(&ws.root).exists());
+    assert!(session_dir.join("spec.md").is_file());
+    assert!(repo.join("main.rs").is_file());
+    assert!(repo.join(".ostra/INVENTORY.md").is_file());
+
+    let again: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "del", "root": root, "projects": [{"path": repo, "key": "app"}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_ne!(again.id, ws.id);
+}

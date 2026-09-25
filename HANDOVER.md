@@ -815,8 +815,11 @@ POST            /api/harnesses/:harness/setup             {action: install | log
 GET/POST        /api/workspaces                           list; create in one call (name, root, projects,
                                                           permissions, yolo, routing_preset, notifications)
 POST            /api/workspaces/validate                  the same body; every issue, writes nothing
-GET/PATCH       /api/workspaces/:ws                       detail (projects, harnesses, agents, stacks, global
-                                                          permissions, validation); settings (validated)
+GET/PATCH/DELETE /api/workspaces/:ws                      detail (projects, harnesses, agents, stacks, global
+                                                          permissions, validation); settings (validated);
+                                                          delete unregisters and removes workspace.toml and
+                                                          workspace.db, keeps projects and session folders;
+                                                          409 while a session, execution, or clone runs
 POST            /api/workspaces/:ws/validate              settings issues without saving
 GET/PATCH       /api/workspaces/:ws/ui                    console layout; PATCH merges top-level fields, 64 KB cap
 POST/DELETE     /api/workspaces/:ws/projects[/:key]       import (like /add-dir); 422 issues on key, path, stack;

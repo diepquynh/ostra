@@ -198,7 +198,9 @@ pub fn router(app: Arc<App>) -> axum::Router {
         )
         .route(
             "/api/workspaces/{ws}",
-            get(get_workspace).patch(patch_workspace),
+            get(get_workspace)
+                .patch(patch_workspace)
+                .delete(delete_workspace),
         )
         .route("/api/workspaces/{ws}/validate", post(validate_workspace))
         .route("/api/workspaces/{ws}/projects", post(import_project))
@@ -618,6 +620,20 @@ async fn patch_workspace(
             .rename_workspace(&w.id, &settings.name)?;
     }
     Ok(Json(w.detail()))
+}
+
+async fn delete_workspace(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiErr> {
+    use crate::app::DeleteError;
+    app.delete_workspace(&WorkspaceId::from(id.as_str()))
+        .map_err(|e| match e {
+            DeleteError::NotFound(m) => ApiErr::not_found(m),
+            DeleteError::Busy(m) => ApiErr::new(StatusCode::CONFLICT, m),
+            DeleteError::Store(e) => e.into(),
+        })?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn validate_workspace(

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router";
 import { api, HttpError } from "../api";
 import type { ValidationIssue, WorkspaceDetail } from "../api/types";
 import { Banner, Button, Panel, Tabs } from "../design";
@@ -239,7 +240,12 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
         onChange={(id) => setTab(id as SettingsTab)}
         tabs={SETTINGS_TABS.map((t) => ({ ...t, count: map.byTab[t.id] || undefined }))}
       />
-      {tab === "general" && <GeneralSection {...props} />}
+      {tab === "general" && (
+        <>
+          <GeneralSection {...props} />
+          <DeleteWorkspace ws={ws} root={detail.root} />
+        </>
+      )}
       {tab === "projects" && <ProjectsSection {...props} onAdd={addProject} stacks={detail.stacks} />}
       {tab === "git" && <GitCredentials />}
       {tab === "routing" && (
@@ -254,6 +260,49 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
       {tab === "instructions" && <InstructionsSection {...props} />}
       {tab === "notifications" && <NotificationsSection {...props} />}
     </Page>
+  );
+}
+
+function DeleteWorkspace({ ws, root }: { ws: string; root: string }) {
+  const navigate = useNavigate();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteWorkspace(ws);
+      navigate("/");
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+  return (
+    <Panel title="Delete workspace" tone="bad" subtitle="removes this workspace from Ostra">
+      <p style={{ margin: 0, color: "var(--text-secondary)", lineHeight: 1.55 }}>
+        Deleting removes the workspace from the list and deletes <code>.ostra/workspace.toml</code> and <code>.ostra/workspace.db</code> in <code>{root}</code>, so its settings and session history are gone.
+        Project folders, session folders under <code>.ostra/sessions</code>, and each project's <code>.ostra</code> files stay on disk.
+      </p>
+      {error && <Banner tone="bad">{error}</Banner>}
+      <div className="wp-row" style={{ marginTop: 12 }}>
+        {confirming ? (
+          <>
+            <Button variant="danger" size="sm" icon="trash-2" disabled={busy} onClick={() => void remove()}>
+              {busy ? "Deleting…" : "Delete this workspace"}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+          </>
+        ) : (
+          <Button variant="danger" size="sm" icon="trash-2" onClick={() => setConfirming(true)}>
+            Delete workspace…
+          </Button>
+        )}
+      </div>
+    </Panel>
   );
 }
 

@@ -531,7 +531,19 @@ fn registry_workspaces_push_kv() {
     assert_eq!(reg.kv_get("vapid").unwrap(), Some(vec![1, 2, 3]));
     assert!(reg.kv_delete("vapid").unwrap());
     assert_eq!(reg.kv_get("vapid").unwrap(), None);
+
+    let unscoped = PushSubscription {
+        endpoint: "https://push.example/2".into(),
+        ..sub.clone()
+    };
+    reg.add_push_subscription(&sub, Some(&id)).unwrap();
+    reg.add_push_subscription(&unscoped, None).unwrap();
     assert!(reg.remove_workspace(&id).unwrap());
+    assert!(!reg.remove_workspace(&id).unwrap());
+    assert!(reg.list_workspaces().unwrap().is_empty());
+    let left = reg.list_push_subscriptions().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].subscription.endpoint, unscoped.endpoint);
 }
 
 #[test]
