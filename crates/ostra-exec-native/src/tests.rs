@@ -429,6 +429,8 @@ async fn resumes_from_transcript() {
     s.resume = Some(ostra_core::exec::ResumeInfo {
         from: from.clone(),
         native_session_id: None,
+        note: None,
+        inspect: false,
     });
     let host = FakeHost::default();
     host.transcripts.lock().insert(
@@ -450,6 +452,18 @@ async fn resumes_from_transcript() {
         matches!(&last.content[0], Block::ToolResult { tool_use_id, is_error: true, .. } if tool_use_id == "t1")
     );
     assert!(matches!(&last.content[1], Block::Text { text } if text.contains("interrupted")));
+}
+
+#[test]
+fn resume_note_replaces_the_interruption_notice() {
+    let transcript = vec![(
+        "assistant".to_string(),
+        json!([{"type": "text", "text": "Working."}]),
+    )];
+    let m = rebuild_transcript(&transcript, Some("Continue the workflow."));
+    assert!(
+        matches!(&m.last().unwrap().content[..], [Block::Text { text }] if text == "Continue the workflow.")
+    );
 }
 
 #[tokio::test]

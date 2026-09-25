@@ -25,6 +25,11 @@ export type TabsAction =
   | { type: "close"; id: string }
   /** Close unpinned tabs; when the active tab goes, `id` (else the first remaining tab) becomes active. */
   | { type: "closeMany"; scope: CloseScope; id: string }
+  /**
+   * Move a tab so it sits at index `to` of the strip. It stays within its group, pinned or not, and a moved preview tab
+   * becomes a normal one.
+   */
+  | { type: "move"; id: string; to: number }
   /** Focus a resource, adding it as a normal tab when it is not open (a deep link or history step). */
   | { type: "activate"; id: string }
   | { type: "restore"; state: TabsState };
@@ -92,6 +97,18 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const open = (id: string | null) => id !== null && tabs.some((t) => t.id === id);
       const active = open(state.active) ? state.active : open(action.id) ? action.id : (tabs[0]?.id ?? null);
       return { tabs, active };
+    }
+    case "move": {
+      const from = state.tabs.findIndex((t) => t.id === action.id);
+      if (from < 0) return state;
+      const tab = state.tabs[from];
+      const rest = state.tabs.filter((_, i) => i !== from);
+      const pins = pinnedCount(rest);
+      const [lo, hi] = tab.pinned ? [0, pins] : [pins, rest.length];
+      const to = Math.max(lo, Math.min(hi, action.to));
+      if (to === from && !tab.preview) return state;
+      const moved: Tab = { ...tab, preview: false };
+      return { ...state, tabs: [...rest.slice(0, to), moved, ...rest.slice(to)] };
     }
     case "activate": {
       if (state.active === action.id && state.tabs.some((t) => t.id === action.id)) return state;

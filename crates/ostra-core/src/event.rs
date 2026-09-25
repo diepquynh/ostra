@@ -30,6 +30,51 @@ pub struct SessionOptions {
     pub yolo: bool,
 }
 
+/// A file or folder the user attached as context: a path relative to one of the workspace's
+/// projects. A folder's path ends in `/`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ContextFile {
+    pub project: String,
+    /// Project-relative and `/`-separated.
+    pub path: String,
+}
+
+impl ContextFile {
+    pub fn is_folder(&self) -> bool {
+        self.path.ends_with('/')
+    }
+
+    /// The `@project/path` tag that names the file or folder in request text.
+    pub fn tag(&self) -> String {
+        format!("@{}/{}", self.project, self.path)
+    }
+}
+
+/// A file the user uploaded as context, kept in the session's `uploads/` folder (Rule C3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct UploadedFile {
+    /// The file name as uploaded, made safe for the file system.
+    pub name: String,
+    #[ts(type = "string")]
+    pub path: PathBuf,
+    #[ts(type = "number")]
+    pub size: u64,
+}
+
+/// When context added mid-session reaches the agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ContextDelivery {
+    /// Running executions finish on the old request; the next step sees the new context.
+    #[default]
+    Queue,
+    /// Running executions are interrupted and re-run with the new context.
+    Now,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ProjectRef {
@@ -151,6 +196,10 @@ pub enum ExecPurpose {
         mode: InitializerMode,
         item: Option<String>,
     },
+    /// The user reopened an ended harness execution's session to read it. Outside the pipeline.
+    Inspect {
+        of: ExecutionId,
+    },
 }
 
 impl ExecPurpose {
@@ -192,6 +241,7 @@ impl ExecPurpose {
             ExecPurpose::PromptGen { handoff_for: None } => "Prompt".into(),
             ExecPurpose::Verify { phase } => format!("Phase {phase} · verification"),
             ExecPurpose::QuickAnswer => "Answer".into(),
+            ExecPurpose::Inspect { .. } => "Read-only session".into(),
             ExecPurpose::Init { mode, item: i } => match mode {
                 InitializerMode::Detect => "Detect the stack".into(),
                 InitializerMode::Adopt => "Adopt a bootstrap".into(),
@@ -467,11 +517,27 @@ pub enum SessionEvent {
         workspace_root: PathBuf,
         #[ts(type = "string")]
         session_root: PathBuf,
+        /// Files the user attached to the request (Rule C1).
+        #[serde(default)]
+        files: Vec<ContextFile>,
+        /// Files the user uploaded with the request (Rule C3).
+        #[serde(default)]
+        uploads: Vec<UploadedFile>,
     },
-    /// The user extended or changed the request (Rules D2, D10).
+    /// The user extended or changed the request, or added context (Rules D2, D10, C2).
     RequestAmended {
         text: String,
+        #[serde(default)]
+        files: Vec<ContextFile>,
+        #[serde(default)]
+        uploads: Vec<UploadedFile>,
+        #[serde(default)]
+        delivery: ContextDelivery,
     },
+    /// The user paused the session (Rule P1).
+    SessionPaused,
+    /// The user continued a paused session (Rule P2).
+    SessionResumed,
     YoloSet {
         enabled: bool,
     },

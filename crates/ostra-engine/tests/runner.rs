@@ -219,6 +219,8 @@ async fn implement_session_runs_to_completion_under_yolo() {
                 ..Default::default()
             },
             projects: vec![],
+            files: vec![],
+            uploads: vec![],
         })
         .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);

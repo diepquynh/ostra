@@ -83,7 +83,7 @@ export function resourceMeta(id: string, ctx: MetaContext): ResourceMeta {
         if (a)
           return {
             label: a.label,
-            icon: "file-text",
+            icon: a.kind === "upload" ? "paperclip" : "file-text",
             title: r.path,
             crumbs: [ws, { label: sessionLabel(s), to: `session:${s.id}` }, { label: name }],
           };

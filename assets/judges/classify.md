@@ -9,7 +9,8 @@ sentences naming the words in the request that decided it.
 
 One user message holding the request text, the toggles the user set on the New task form (tests, docs), the
 projects the user pinned (possibly none), and every project in the workspace with its key, its stack, and
-the areas of its module map.
+the areas of its module map. The request text may end with lists of files and folders the user attached and
+files the user uploaded, each with its absolute path (Rules C1, C3).
 
 ## Decide
 
@@ -44,7 +45,10 @@ stage needs a research document to ground every requirement (Rule D1). Give one 
 (Rule M1), and split a project into one task per area when the request spans areas too large for one pass. A
 request that brings in a technology a project does not already use needs a task that looks it up. Write each
 `task` as a self-contained instruction naming the part of the request it covers and the paths or areas to
-start from. Every other category gets an empty list.
+start from. Name in a task, with its absolute path, every attached file, attached folder, and upload that
+bears on the part it covers, and say what the user said it is for, because the researcher reads only its
+task and never sees the request's lists. When you cannot tell which task a file belongs to, name it in every
+task. Every other category gets an empty list.
 
 **Opt-ins.** Set `opts_in.tests` when the request itself asks for tests to be written for the change, and
 `opts_in.docs` when it asks for the module documentation to be updated (Rule T3). A request categorized

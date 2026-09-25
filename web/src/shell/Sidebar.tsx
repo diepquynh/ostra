@@ -16,6 +16,7 @@ const SESSION_DOT: Record<SessionStatus, [Tone, boolean?]> = {
   completed: ["ok"],
   failed: ["bad"],
   stalled: ["bad"],
+  paused: ["neutral"],
 };
 
 export function SessionDot({ status }: { status: SessionStatus }) {
@@ -218,7 +219,7 @@ function SessionsPanel({ sessions, loading, error, projects, activeId, open, onA
                     key={a.path}
                     depth={2}
                     label={a.label}
-                    icon="file-text"
+                    icon={a.kind === "upload" ? "paperclip" : "file-text"}
                     selected={activeId === `artifact:${a.path}`}
                     onClick={() => open(`artifact:${a.path}`, { preview: true })}
                     title={a.path}

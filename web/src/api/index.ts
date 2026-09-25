@@ -10,3 +10,6 @@ export const api: Api = isMock ? (await import("./mock/mockApi")).mockApi : http
 
 export { HttpError, onUnauthorized } from "./client";
 export { socket } from "./socket";
+
+/** Where the browser downloads a session file (an upload or any other artifact). */
+export const downloadUrl = (path: string) => `/api/artifacts/download?path=${encodeURIComponent(path)}`;

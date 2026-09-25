@@ -14,6 +14,27 @@ const run = (actions: TabsAction[], from: TabsState = emptyTabs) => actions.redu
 const ids = (s: TabsState) => s.tabs.map((t) => (t.preview ? `(${t.id})` : t.pinned ? `*${t.id}` : t.id));
 
 describe("tab model", () => {
+  it("moves a tab within its group, keeps the active tab, and makes a moved preview tab normal", () => {
+    const base = run([
+      { type: "open", id: "a:1" },
+      { type: "open", id: "b:2" },
+      { type: "open", id: "c:3" },
+      { type: "open", id: "d:4", preview: true },
+      { type: "setPinned", id: "a:1", pinned: true },
+      { type: "activate", id: "b:2" },
+    ]);
+    expect(ids(base)).toEqual(["*a:1", "b:2", "c:3", "(d:4)"]);
+    const moved = tabsReducer(base, { type: "move", id: "b:2", to: 3 });
+    expect(ids(moved)).toEqual(["*a:1", "c:3", "(d:4)", "b:2"]);
+    expect(moved.active).toBe("b:2");
+    expect(ids(tabsReducer(base, { type: "move", id: "d:4", to: 1 }))).toEqual(["*a:1", "d:4", "b:2", "c:3"]);
+    // An unpinned tab cannot enter the pinned group, and a pinned one cannot leave it.
+    expect(ids(tabsReducer(base, { type: "move", id: "c:3", to: 0 }))).toEqual(["*a:1", "c:3", "b:2", "(d:4)"]);
+    expect(ids(tabsReducer(base, { type: "move", id: "a:1", to: 3 }))).toEqual(ids(base));
+    expect(tabsReducer(base, { type: "move", id: "b:2", to: 1 })).toBe(base);
+    expect(tabsReducer(base, { type: "move", id: "zz:9", to: 0 })).toBe(base);
+  });
+
   it("opens normal tabs in order and focuses the last one", () => {
     const s = run([
       { type: "open", id: "ws:overview" },

@@ -789,5 +789,12 @@ export function artifactFor(path: string): Artifact {
           : name.includes("implementer")
             ? REPORT
             : SPEC;
-  return { path, content, headings: mockHeadings(content), document: documentFor(path) };
+  return {
+    path,
+    content,
+    headings: mockHeadings(content),
+    document: documentFor(path),
+    binary: false,
+    size: content.length,
+  };
 }

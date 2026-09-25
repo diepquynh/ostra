@@ -305,8 +305,15 @@ export function describeEvent(e: SessionEvent): string {
   switch (e.type) {
     case "session_created":
       return `Session created: ${truncate(e.request, 80)}`;
-    case "request_amended":
-      return `Request amended: ${truncate(e.text, 80)}`;
+    case "request_amended": {
+      const files = e.files.length ? ` (${e.files.length} file${e.files.length === 1 ? "" : "s"})` : "";
+      const how = e.delivery === "now" ? "Context sent now" : "Context queued";
+      return `${how}: ${truncate(e.text, 80)}${files}`;
+    }
+    case "session_paused":
+      return "Session paused";
+    case "session_resumed":
+      return "Session continued";
     case "yolo_set":
       return e.enabled ? "YOLO turned on" : "YOLO turned off";
     case "decision_made":

@@ -5,9 +5,9 @@ use crate::runner::EngineError;
 use crate::state::{DocsState, EpaState, ExecRecord, LoopNext, SessionState, WorkLoop};
 use ostra_core::agent::AgentName;
 use ostra_core::api::{
-    ArtifactRef, ChangedBy, DecisionView, ExecutionGroupView, ExecutionView, FactCheckView,
-    GateView, PendingGate, PhaseStatus, PhaseView, SessionDetail, SessionStatus, SessionSummary,
-    StageCard, StageStatus, TreeGroup, TreeRun, TreeSession,
+    ArtifactRef, ChangedBy, ContextAddition, DecisionView, ExecutionGroupView, ExecutionView,
+    FactCheckView, GateView, PendingGate, PhaseStatus, PhaseView, SessionDetail, SessionStatus,
+    SessionSummary, StageCard, StageStatus, TreeGroup, TreeRun, TreeSession,
 };
 use ostra_core::event::{CommandPurpose, GatePayload, JudgeKind, SessionKind, numbered_run_label};
 use ostra_core::exec::ExecutionStatus;
@@ -34,6 +34,8 @@ pub fn summary(s: &SessionState, workspace: &WorkspaceId, judge_cost: f64) -> Se
         SessionStatus::Completed
     } else if s.failed.is_some() {
         SessionStatus::Failed
+    } else if s.paused {
+        SessionStatus::Paused
     } else if open > 0 && running == 0 {
         SessionStatus::Waiting
     } else {
@@ -676,6 +678,19 @@ pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
             });
         }
     };
+    // Rule C3: uploads are artifacts of the session, so they can be opened and downloaded.
+    for u in s
+        .uploads
+        .iter()
+        .chain(s.amendments.iter().flat_map(|a| a.uploads.iter()))
+    {
+        add(
+            u.path.clone(),
+            "upload",
+            format!("Upload: {}", u.name),
+            None,
+        );
+    }
     for t in &s.explore {
         if let Some(r) = &t.result {
             add(
@@ -1029,6 +1044,19 @@ pub fn detail(
         session_root: s.session_root.clone(),
         execution_groups,
         fact_checks: fact_checks(s),
+        files: s.files.clone(),
+        uploads: s.uploads.clone(),
+        additions: s
+            .amendments
+            .iter()
+            .map(|a| ContextAddition {
+                text: a.text.clone(),
+                files: a.files.clone(),
+                uploads: a.uploads.clone(),
+                delivery: a.delivery,
+                at: a.at,
+            })
+            .collect(),
     })
 }
 
@@ -1090,6 +1118,8 @@ mod tests {
             }],
             workspace_root: PathBuf::from("/ws"),
             session_root: PathBuf::from("/ws/.ostra/sessions/s1"),
+            files: vec![],
+            uploads: vec![],
         }
     }
 

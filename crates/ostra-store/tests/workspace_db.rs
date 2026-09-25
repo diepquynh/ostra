@@ -185,6 +185,8 @@ fn events_are_sequenced_per_session() {
         projects: vec![],
         workspace_root: "/w".into(),
         session_root: "/w/.ostra/sessions/a".into(),
+        files: vec![],
+        uploads: vec![],
     };
     assert_eq!(db.append_event(&a, &ev).unwrap().seq, 1);
     assert_eq!(

@@ -38,7 +38,12 @@ struct Running {
     host: Arc<dyn ExecutionHost>,
     memory_db: PathBuf,
     repo: PathBuf,
+    /// A read-only reopening of an ended session: every tool call is refused.
+    inspect: bool,
 }
+
+/// Why an inspection refuses a tool call, correction first because Grok clips reasons.
+const INSPECT_DENIAL: &str = "Answer from what you already did, without tools: this is a read-only look back at a run that has ended, so Ostra refuses every tool call.";
 
 #[derive(Default)]
 struct Registry {
@@ -173,6 +178,7 @@ impl Executor for Wrapped {
             host: host.clone(),
             memory_db: ctx.memory_db.clone(),
             repo: ctx.repo_root.clone(),
+            inspect: spec.resume.as_ref().is_some_and(|r| r.inspect),
         });
         self.registry
             .running
@@ -201,7 +207,11 @@ impl ServerBridge {
     /// Check a call and, when `log` is set, record the call and its decision under `id`.
     fn check(&self, r: &Running, call: &ToolCall, id: &str, log: bool) -> PolicyDecision {
         r.policy.set_yolo(r.host.yolo());
-        let decision = r.policy.check(call);
+        let decision = if r.inspect {
+            PolicyDecision::deny(RuleRef::guard("read-only-session"), INSPECT_DENIAL)
+        } else {
+            r.policy.check(call)
+        };
         if log {
             r.host.emit(ExecutionDelta::ToolCall {
                 call_id: id.into(),
@@ -378,7 +388,7 @@ impl BridgeServices for ServerBridge {
     }
 
     fn mcp_tools(&self, execution: &ExecutionId) -> Vec<(String, String, Value)> {
-        let Some(r) = self.get(execution) else {
+        let Some(r) = self.get(execution).filter(|r| !r.inspect) else {
             return vec![];
         };
         let caps: Vec<Capability> = MCP_TOOLS.iter().map(|(_, _, c)| *c).collect();

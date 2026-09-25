@@ -242,11 +242,18 @@ describe("workspace screen", () => {
       </MemoryRouter>
     );
     const { rerender } = render(view("Why does checkout retry twice?"));
-    const request = screen.getByLabelText("Request") as HTMLTextAreaElement;
-    await waitFor(() => expect(request.value).toBe("Why does checkout retry twice?"));
+    const request = screen.getByLabelText("Request");
+    await waitFor(() => expect(request.textContent).toBe("Why does checkout retry twice?"));
     expect(setTaskDraft).toHaveBeenCalledWith(null);
     rerender(view(null));
-    expect(request.value).toBe("Why does checkout retry twice?");
+    expect(request.textContent).toBe("Why does checkout retry twice?");
+
+    // A picked file stays in the field as a chip and is sent with the request.
+    const upload = vi.spyOn(api, "uploadFile").mockResolvedValue({ id: "a".repeat(32), name: "flow.png", size: 3 });
+    const picker = screen.getByLabelText("Upload files") as HTMLInputElement;
+    fireEvent.change(picker, { target: { files: [new File(["abc"], "flow.png")] } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Remove flow.png" })).toBeTruthy());
+    expect(upload).toHaveBeenCalledTimes(1);
 
     // Two initialized projects show the pin buttons; pinning one sends it with the request.
     const create = vi.spyOn(api, "createSession");
@@ -257,9 +264,13 @@ describe("workspace screen", () => {
       request: "Why does checkout retry twice?",
       options: { tests: false, docs: false, yolo: false },
       projects: ["web"],
+      files: [],
+      uploads: ["a".repeat(32)],
     });
     await waitFor(() => expect(open).toHaveBeenCalledWith("session:s_new"));
-    expect(request.value).toBe("");
+    expect(request.textContent).toBe("");
+    expect(screen.queryByRole("button", { name: "Remove flow.png" })).toBeNull();
+    upload.mockRestore();
   });
 
   it("filters the sessions table and opens a row in a preview tab", async () => {

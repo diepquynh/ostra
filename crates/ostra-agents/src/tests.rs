@@ -722,3 +722,30 @@ fn project_docs_skip_links_and_copies() {
         .collect();
     assert_eq!(names, ["CLAUDE.md", "Agents.MD"]);
 }
+
+#[test]
+fn harness_prompts_ask_for_only_done_after_submitting() {
+    for h in [
+        HarnessKind::Claude,
+        HarnessKind::Codex,
+        HarnessKind::Grok,
+        HarnessKind::Agy,
+    ] {
+        let p = render_prompt(AgentName::Implementer, ExecutorKind::Harness(h)).unwrap();
+        let line = p
+            .lines()
+            .find(|l| l.contains("reply with only `Done!`"))
+            .unwrap_or_else(|| panic!("{h:?} lacks the Done! instruction"));
+        assert!(line.contains("submit_implementer"), "{h:?}: {line}");
+        println!("{h:?}: {line}");
+    }
+    let native = render_prompt(AgentName::Implementer, ExecutorKind::Native).unwrap();
+    assert!(!native.contains("`Done!`"));
+}
+
+#[test]
+fn classify_judge_names_attached_files_in_research_tasks() {
+    let p = crate::judge_prompt("classify").unwrap();
+    assert!(p.contains("every attached file, attached folder, and upload"));
+    assert!(p.contains("Rules C1, C3"));
+}

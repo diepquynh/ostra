@@ -212,3 +212,64 @@ fn rand_suffix() -> u128 {
         .unwrap()
         .as_nanos()
 }
+
+/// The plan fixture with phase 1 in a temp repo that has the `backend-service` skill installed.
+fn plan_in_repo(repo: &Path) -> Value {
+    std::fs::create_dir_all(repo.join(".agents/skills/backend-service")).unwrap();
+    std::fs::write(repo.join(".agents/skills/backend-service/SKILL.md"), "# s").unwrap();
+    let mut v = value(PLAN);
+    v["phases"][0]["repo_root"] = json!(repo.display().to_string());
+    v
+}
+
+#[test]
+fn plan_steps_name_skills_installed_in_their_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let v = plan_in_repo(tmp.path());
+    assert!(
+        errors(DocKind::Plan, &v).is_empty(),
+        "{:?}",
+        errors(DocKind::Plan, &v)
+    );
+
+    let mut none = v.clone();
+    none["phases"][0]["skills"] = json!([]);
+    for s in none["phases"][0]["steps"].as_array_mut().unwrap() {
+        s["skills"] = json!([]);
+    }
+    let e = errors(DocKind::Plan, &none);
+    assert!(
+        e.iter()
+            .any(|l| l.contains("no step in phase 1 names one") && l.contains("backend-service")),
+        "{e:?}"
+    );
+
+    let mut wrong = v.clone();
+    wrong["phases"][0]["steps"][1]["skills"] = json!(["made-up"]);
+    let e = errors(DocKind::Plan, &wrong);
+    assert!(
+        e.iter().any(|l| l.contains("`made-up` is not one")),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn a_phase_lists_every_skill_its_steps_name() {
+    let mut v = value(PLAN);
+    v["phases"][0]["skills"] = json!([]);
+    let Document::Plan(plan) = DocKind::Plan.parse(&v).unwrap() else {
+        unreachable!()
+    };
+    assert_eq!(plan.phases[0].skills, vec!["backend-service".to_string()]);
+    let md = render(
+        &Document::Phase(PhaseDoc {
+            plan: plan.title.clone(),
+            date: plan.date.clone(),
+            spec: plan.spec.clone(),
+            deliverable_title: None,
+            phase: plan.phases[0].clone(),
+        }),
+        Path::new("/s/ostra-plan-1-phase-1.md"),
+    );
+    assert!(md.contains("`backend-service`"), "{md}");
+}

@@ -1,7 +1,9 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import type { ProjectView, SessionSummary } from "../../api/types";
-import { Banner, Button, Checkbox, Input, Panel } from "../../design";
+import type { ContextFile, ProjectView, SessionSummary } from "../../api/types";
+import { Banner, Button, Checkbox, Panel } from "../../design";
+import { FileTagInput } from "../../features/context/FileTagInput";
+import { useUploads } from "../../features/context/uploads";
 import { isMac, modHint } from "../../lib/keys";
 import { useShell } from "../../lib/nav";
 
@@ -12,7 +14,7 @@ export type NewTaskProps = {
   onCreated: (s: SessionSummary) => void;
 };
 
-/** Request text, the tests, docs and YOLO toggles, and optional pinned projects. */
+/** Request text with `@` file tags, the tests, docs and YOLO toggles, and optional pinned projects. */
 export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) {
   const { taskDraft, setTaskDraft } = useShell();
   const [request, setRequest] = useState("");
@@ -20,9 +22,11 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
   const [docs, setDocs] = useState(false);
   const [yolo, setYolo] = useState(yoloDefault);
   const [pins, setPins] = useState<string[]>([]);
+  const [files, setFiles] = useState<ContextFile[]>([]);
+  const uploads = useUploads(ws);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const field = useRef<HTMLInputElement & HTMLTextAreaElement>(null);
+  const field = useRef<HTMLDivElement>(null);
 
   // "Turn into task" from the quick dock: take the text once, then clear it so a later visit starts empty.
   useEffect(() => {
@@ -35,7 +39,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
   useEffect(() => setYolo(yoloDefault), [yoloDefault]);
 
   const initialized = projects.filter((p) => p.init_status === "initialized");
-  const canStart = !busy && request.trim() !== "" && initialized.length > 0;
+  const canStart = !busy && !uploads.busy && request.trim() !== "" && initialized.length > 0;
 
   const submit = async () => {
     if (!canStart) return;
@@ -46,8 +50,11 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
         request: request.trim(),
         options: { tests, docs, yolo },
         projects: pins,
+        files,
+        uploads: uploads.ids,
       });
       setRequest("");
+      uploads.clear();
       setPins([]);
       onCreated(s);
     } catch (e) {
@@ -57,7 +64,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
     }
   };
 
-  const onKeyDown = (e: KeyboardEvent) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === "Enter" && (isMac ? e.metaKey : e.ctrlKey)) {
       e.preventDefault();
       void submit();
@@ -73,15 +80,20 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
           Describe the work. Ostra classifies it, researches the code, writes a spec for your approval, plans phases,
           builds and reviews each one, and asks before any optional stage.
         </div>
-        <Input
+        <FileTagInput
           ref={field}
-          multiline
+          ws={ws}
+          projects={initialized.map((p) => p.key)}
           rows={3}
-          aria-label="Request"
+          label="Request"
           value={request}
-          onChange={(e) => setRequest(e.target.value)}
+          onChange={setRequest}
+          onFiles={setFiles}
+          uploads={uploads.items}
+          onUploadFiles={uploads.add}
+          onRemoveUpload={uploads.remove}
           onKeyDown={onKeyDown}
-          placeholder="Add order cancellation: customers can cancel until the order ships."
+          placeholder="Add order cancellation: customers can cancel until the order ships. Type @ to tag a file."
         />
         <div className="wp-row" style={{ gap: 14 }}>
           <Checkbox

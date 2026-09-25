@@ -2,14 +2,15 @@ import type { SessionDetail } from "../../api/types";
 import type { Tone } from "../../design";
 import { basename } from "../../lib/format";
 
-export type ArtifactKind = "research" | "spec" | "plan" | "phase" | "report" | "ledger" | "completion";
+export type ArtifactKind = "research" | "spec" | "plan" | "phase" | "report" | "ledger" | "completion" | "upload";
 
-const KINDS: ArtifactKind[] = ["research", "spec", "plan", "phase", "report", "ledger", "completion"];
+const KINDS: ArtifactKind[] = ["research", "spec", "plan", "phase", "report", "ledger", "completion", "upload"];
 
 /** The artifact kind: the session's `ArtifactRef.kind` when known, else read from the file name. */
 export function artifactKind(path: string, refKind?: string | null): ArtifactKind {
   if (refKind && (KINDS as string[]).includes(refKind)) return refKind as ArtifactKind;
   const name = basename(path);
+  if (/\/uploads\/[^/]+$/.test(path)) return "upload";
   if (/^ostra-review-ledger/.test(name)) return "ledger";
   if (/^ostra-spec-/.test(name)) return "spec";
   if (/^ostra-plan-.*phase-\d+/.test(name) || /^phase-\d+\.md$/.test(name)) return "phase";
@@ -27,6 +28,7 @@ export const KIND_LABEL: Record<ArtifactKind, string> = {
   report: "Report",
   ledger: "Review ledger",
   completion: "Completion report",
+  upload: "Upload",
 };
 
 /** Specs, plans and phase files state requirements in EARS, so they carry the reading note. */

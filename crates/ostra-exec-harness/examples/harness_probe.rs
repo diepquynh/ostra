@@ -3,6 +3,10 @@
 //! runs one QuickAnswer execution in the harness, and prints the result. The same binary serves
 //! as the `hook` and `mcp-stdio` subcommands the harness calls back.
 //!
+//! `harness_probe pause <harness> <model> <scratch-dir>` checks pause and continue the way the engine
+//! does them: it cancels the run during a slow step, then resumes the harness session with the note
+//! "Continue the workflow." and checks the task finishes.
+//!
 //! With `PROBE_CODE` set, the repo gets a small Rust project, the bridge serves the real code
 //! navigation tools over an index of it, and the agent is asked to call `code_implementations`.
 
@@ -65,6 +69,12 @@ impl BridgeServices for Services {
     }
     fn policy_check(&self, _: &ExecutionId, call: &ToolCall) -> PolicyDecision {
         self.0.line(json!({"check": call}));
+        if std::env::var("PROBE_INSPECT").is_ok() {
+            return PolicyDecision::deny(
+                RuleRef::guard("read-only-session"),
+                "Answer from what you already did, without tools: this is a read-only look back at a run that has ended, so Ostra refuses every tool call.",
+            );
+        }
         let deny = std::env::var("PROBE_DENY").is_ok()
             && call.tool == "Bash"
             && call
@@ -166,12 +176,15 @@ async fn mcp(
     Json(app.bridge.handle_mcp(&token(&headers), req).await)
 }
 
-struct Host(Arc<Log>);
+struct Host(Arc<Log>, Arc<Mutex<Option<String>>>);
 
 #[async_trait::async_trait]
 impl ExecutionHost for Host {
     fn emit(&self, delta: ExecutionDelta) {
         eprintln!("delta: {delta:?}");
+        if let ExecutionDelta::NativeSessionId { id } = &delta {
+            *self.1.lock().unwrap() = Some(id.clone());
+        }
         self.0.line(json!({"delta": delta}));
     }
     async fn ask_permission(&self, _: &ToolCall, _: &str, _: &RuleRef) -> PermissionAnswer {
@@ -186,6 +199,8 @@ async fn main() {
         Some("hook") => std::process::exit(run_hook_cli(&args[1..]).await),
         Some("mcp-stdio") => std::process::exit(run_mcp_stdio(&args[1..]).await),
         Some("run") | Some("resume") => {}
+        Some("pause") => return pause_probe(&args).await,
+        Some("inspect") => return inspect_probe(&args).await,
         _ => {
             eprintln!("usage: harness_probe run <harness> <model> <scratch-dir> [timeout-secs]");
             std::process::exit(2);
@@ -304,15 +319,291 @@ async fn main() {
         resume: resume_sid.map(|sid| ResumeInfo {
             from: ExecutionId::new(),
             native_session_id: Some(sid),
+            note: None,
+            inspect: false,
         }),
         harness_session_id: None,
     };
     let transcript = ostra_core::paths::terminal_transcript(&spec.ctx.session_root, id.as_str());
-    let host = Arc::new(Host(log.clone()));
+    let host = Arc::new(Host(log.clone(), Arc::new(Mutex::new(None))));
     let result = exec.run(spec, host, CancellationToken::new()).await;
     let _ = std::fs::copy(
         transcript,
         dir.join(format!("{harness}{suffix}-terminal.bin")),
     );
     println!("{}", serde_json::to_string_pretty(&result).unwrap());
+}
+
+/// Pause and continue, as `Engine::pause_session` and `resume_session` drive an execution.
+async fn pause_probe(args: &[String]) {
+    let harness: HarnessKind = args[1].parse().unwrap();
+    let model = args[2].clone();
+    let dir = PathBuf::from(&args[3]);
+    let repo = dir.join("repo");
+    let session_root = dir.join("ws/.ostra/sessions/s_probe");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&session_root).unwrap();
+    for f in ["one.txt", "two.txt", "three.txt"] {
+        let _ = std::fs::remove_file(repo.join(f));
+    }
+    let log = Arc::new(Log(Mutex::new(
+        std::fs::File::create(dir.join(format!("{harness}-pause-events.jsonl"))).unwrap(),
+    )));
+    let live = LiveRegistry::new();
+    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), None)), live.clone());
+    let app = App {
+        bridge,
+        log: log.clone(),
+    };
+    let router = Router::new()
+        .route("/internal/policy", post(policy))
+        .route("/internal/mcp", post(mcp))
+        .with_state(app);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut cfg = HarnessExecutorConfig::new(
+        GlobalConfig::default(),
+        std::env::current_exe().unwrap(),
+        url,
+    );
+    cfg.idle_nudge = std::time::Duration::from_secs(90);
+    let exec = Arc::new(HarnessExecutor::new(cfg, live, PtyRegistry::new()));
+    let agent = AgentName::QuickAnswer;
+    let task = format!(
+        "Do exactly these steps in order, one shell command per step, and nothing more:\n1. Run `echo one > one.txt`.\n2. Run `sleep 40 && echo two > two.txt`. It is slow; wait for it.\n3. Run `echo three > three.txt`.\n4. Call the `{}` tool with answer \"steps done\" and sources [\"three.txt\"].\nBefore each step, check whether its file already exists and skip the step if it does. Then end your turn.",
+        agent.submit_tool_name()
+    );
+    // The runner chooses the session id up front for the harnesses that accept one.
+    let upfront = matches!(harness, HarnessKind::Claude | HarnessKind::Grok)
+        .then(|| format!("{:032x}", rand_id()))
+        .map(|h| {
+            format!(
+                "{}-{}-4{}-a{}-{}",
+                &h[0..8],
+                &h[8..12],
+                &h[13..16],
+                &h[17..20],
+                &h[20..32]
+            )
+        });
+    let spec = |id: &ExecutionId, resume: Option<ResumeInfo>, sid: Option<String>| ExecutionSpec {
+        id: id.clone(),
+        agent,
+        route: ResolvedRoute {
+            executor: ExecutorKind::Harness(harness),
+            model: model.clone(),
+            tier: None,
+        },
+        effort: Effort::High,
+        system_prompt: format!(
+            "You are an Ostra probe agent. Follow the user's steps exactly and do nothing else.\n\nWhen the task is finished and you have called `{}`, reply with only `Done!` and nothing else, because Ostra reads your result from the submit call and any other text costs output tokens.",
+            agent.submit_tool_name()
+        ),
+        first_message: task.clone(),
+        capabilities: vec![Capability::Read, Capability::Shell],
+        submit_schema: ostra_core::submit::submit_schema(agent),
+        timeout_secs: 300,
+        ctx: ExecContext {
+            execution_id: id.clone(),
+            session_id: None,
+            agent,
+            initializer_mode: None,
+            executor: ExecutorKind::Harness(harness),
+            workspace_root: dir.join("ws"),
+            repo_root: repo.clone(),
+            project_key: "probe".into(),
+            session_dir: session_root.clone(),
+            session_root: session_root.clone(),
+            report_file: None,
+            phase: None,
+            yolo: false,
+            permission_mode: PermissionMode::Default,
+            permissions: PermissionRules::default(),
+            protected_paths: vec![],
+            memory_db: dir.join("memory.sqlite3"),
+        },
+        resume,
+        harness_session_id: sid,
+    };
+
+    let first = ExecutionId::new();
+    let seen = Arc::new(Mutex::new(None::<String>));
+    let host = Arc::new(Host(log.clone(), seen.clone()));
+    let cancel = CancellationToken::new();
+    let run = {
+        let (exec, cancel, s) = (
+            exec.clone(),
+            cancel.clone(),
+            spec(&first, None, upfront.clone()),
+        );
+        tokio::spawn(async move { exec.run(s, host, cancel).await })
+    };
+    let started = std::time::Instant::now();
+    while !repo.join("one.txt").exists() {
+        if run.is_finished() || started.elapsed().as_secs() > 180 {
+            println!("PAUSE-PROBE FAIL: step 1 never ran");
+            std::process::exit(1);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    }
+    // Inside the 40 second step.
+    tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+    eprintln!("probe: pausing");
+    cancel.cancel();
+    let paused = run.await.unwrap();
+    let sid = paused
+        .native_session_id
+        .clone()
+        .or_else(|| seen.lock().unwrap().clone())
+        .or(upfront.clone());
+    println!(
+        "paused: status={:?} session={sid:?} two_exists={}",
+        paused.status,
+        repo.join("two.txt").exists()
+    );
+    let Some(sid) = sid else {
+        println!("PAUSE-PROBE FAIL: no session id to resume");
+        std::process::exit(1);
+    };
+
+    let second = ExecutionId::new();
+    let resume = ResumeInfo {
+        from: first,
+        native_session_id: Some(sid.clone()),
+        note: Some("Continue the workflow.".into()),
+        inspect: false,
+    };
+    let upfront_again =
+        matches!(harness, HarnessKind::Claude | HarnessKind::Grok).then(|| sid.clone());
+    let host = Arc::new(Host(log.clone(), Arc::new(Mutex::new(None))));
+    let t = std::time::Instant::now();
+    let resumed = exec
+        .run(
+            spec(&second, Some(resume), upfront_again),
+            host,
+            CancellationToken::new(),
+        )
+        .await;
+    let ok = resumed.status == ExecutionStatus::Ok
+        && resumed.submit.is_some()
+        && repo.join("three.txt").exists();
+    println!(
+        "resumed: status={:?} submit={} three_exists={} secs={}",
+        resumed.status,
+        resumed.submit.is_some(),
+        repo.join("three.txt").exists(),
+        t.elapsed().as_secs()
+    );
+    println!("{}", serde_json::to_string_pretty(&resumed).unwrap());
+    println!("PAUSE-PROBE {}", if ok { "PASS" } else { "FAIL" });
+    std::process::exit(if ok { 0 } else { 1 });
+}
+
+fn rand_id() -> u128 {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    t ^ ((std::process::id() as u128) << 64)
+}
+
+/// Reopen a session read-only, as `Engine::inspect_execution` does, ask a question that invites a
+/// tool call, and report what the agent did. Run with `PROBE_INSPECT=1` so every call is denied.
+async fn inspect_probe(args: &[String]) {
+    let harness: HarnessKind = args[1].parse().unwrap();
+    let model = args[2].clone();
+    let dir = PathBuf::from(&args[3]);
+    let sid = args[4].clone();
+    let repo = dir.join("repo");
+    let session_root = dir.join("ws/.ostra/sessions/s_probe");
+    let log = Arc::new(Log(Mutex::new(
+        std::fs::File::create(dir.join(format!("{harness}-inspect-events.jsonl"))).unwrap(),
+    )));
+    let live = LiveRegistry::new();
+    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), None)), live.clone());
+    let app = App {
+        bridge,
+        log: log.clone(),
+    };
+    let router = Router::new()
+        .route("/internal/policy", post(policy))
+        .route("/internal/mcp", post(mcp))
+        .with_state(app);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let cfg = HarnessExecutorConfig::new(
+        GlobalConfig::default(),
+        std::env::current_exe().unwrap(),
+        url,
+    );
+    let ptys = PtyRegistry::new();
+    let exec = Arc::new(HarnessExecutor::new(cfg, live, ptys.clone()));
+    let id = ExecutionId::new();
+    let agent = AgentName::QuickAnswer;
+    let spec = ExecutionSpec {
+        id: id.clone(),
+        agent,
+        route: ResolvedRoute {
+            executor: ExecutorKind::Harness(harness),
+            model,
+            tier: None,
+        },
+        effort: Effort::Low,
+        system_prompt: "The user reopened this session to read what you did and ask about it. The work has ended. Answer from the conversation above and do not call any tool, because Ostra refuses every tool call in this session. Keep answers short.".into(),
+        first_message: String::new(),
+        capabilities: vec![],
+        submit_schema: serde_json::Value::Null,
+        timeout_secs: 600,
+        ctx: ExecContext {
+            execution_id: id.clone(),
+            session_id: None,
+            agent,
+            initializer_mode: None,
+            executor: ExecutorKind::Harness(harness),
+            workspace_root: dir.join("ws"),
+            repo_root: repo.clone(),
+            project_key: "probe".into(),
+            session_dir: session_root.clone(),
+            session_root: session_root.clone(),
+            report_file: None,
+            phase: None,
+            yolo: false,
+            permission_mode: PermissionMode::Plan,
+            permissions: PermissionRules::default(),
+            protected_paths: vec![],
+            memory_db: dir.join("memory.sqlite3"),
+        },
+        resume: Some(ResumeInfo {
+            from: ExecutionId::new(),
+            native_session_id: Some(sid),
+            note: None,
+            inspect: true,
+        }),
+        harness_session_id: None,
+    };
+    let host = Arc::new(Host(log.clone(), Arc::new(Mutex::new(None))));
+    let cancel = CancellationToken::new();
+    let run = {
+        let (exec, cancel) = (exec.clone(), cancel.clone());
+        tokio::spawn(async move { exec.run(spec, host, cancel).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+    let pty = ptys.get(&id).expect("a live terminal");
+    let before = pty.screen_text();
+    let _ = pty.type_line("Run `cat three.txt` and tell me what it contains. Also, which steps did you run earlier?").await;
+    tokio::time::sleep(std::time::Duration::from_secs(75)).await;
+    let after = pty.screen_text();
+    cancel.cancel();
+    let result = run.await.unwrap();
+    let checks = std::fs::read_to_string(dir.join(format!("{harness}-inspect-events.jsonl")))
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| l.starts_with("{\"check\""))
+        .count();
+    println!(
+        "---- screen before typing ----\n{before}\n---- screen after the question ----\n{after}"
+    );
+    println!("status={:?} denied_tool_calls={checks}", result.status);
 }

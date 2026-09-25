@@ -299,6 +299,9 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/sessions/{id}/events", get(session_events))
         .route("/api/sessions/{id}/yolo", post(set_yolo))
         .route("/api/sessions/{id}/amend", post(amend))
+        .route("/api/sessions/{id}/pause", post(pause_session))
+        .route("/api/executions/{id}/inspect", post(inspect_execution))
+        .route("/api/sessions/{id}/resume", post(resume_session))
         .route("/api/sessions/{id}/stop", post(stop_session))
         .route("/api/sessions/{id}/diff", get(diff))
         .route("/api/gates/{id}/answer", post(answer_gate))
@@ -308,6 +311,13 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/executions/{id}/cancel", post(cancel))
         .route("/api/executions/{id}/resume", post(resume))
         .route("/api/artifacts", get(artifact))
+        .route("/api/artifacts/download", get(artifact_download))
+        .route(
+            "/api/workspaces/{ws}/uploads",
+            post(upload).layer(axum::extract::DefaultBodyLimit::max(
+                ostra_engine::uploads::MAX_UPLOAD_BYTES + 1024,
+            )),
+        )
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/fs/list", get(fs_list))
         .route("/api/environment", get(environment))
@@ -510,7 +520,12 @@ async fn list_workspaces(State(app): AppState) -> Res<Vec<WorkspaceSummary>> {
                     sessions
                         .iter()
                         .filter(|s| {
-                            matches!(s.status, SessionStatus::Running | SessionStatus::Waiting)
+                            matches!(
+                                s.status,
+                                SessionStatus::Running
+                                    | SessionStatus::Waiting
+                                    | SessionStatus::Paused
+                            )
                         })
                         .count() as u32,
                 )
@@ -967,8 +982,32 @@ async fn amend(
     Json(body): Json<AmendRequest>,
 ) -> Res<SessionSummary> {
     let sid = SessionId::from(id);
+    Ok(Json(ws_of_session(&app, &sid)?.engine.amend(
+        &sid,
+        body.text,
+        body.files,
+        body.uploads,
+        body.delivery,
+    )?))
+}
+
+/// Reopen an ended harness run's session read-only. Returns the new execution.
+async fn inspect_execution(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView> {
+    let eid = ExecutionId::from(id);
+    let w = ws_of_execution(&app, &eid)?;
+    let new = w.engine.inspect_execution(&eid)?;
+    Ok(Json(w.engine.execution(&new)?))
+}
+
+async fn pause_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionSummary> {
+    let sid = SessionId::from(id);
+    Ok(Json(ws_of_session(&app, &sid)?.engine.pause_session(&sid)?))
+}
+
+async fn resume_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionSummary> {
+    let sid = SessionId::from(id);
     Ok(Json(
-        ws_of_session(&app, &sid)?.engine.amend(&sid, body.text)?,
+        ws_of_session(&app, &sid)?.engine.resume_session(&sid)?,
     ))
 }
 
@@ -1038,10 +1077,10 @@ struct PathQuery {
 
 const ARTIFACT_LIMIT: u64 = 4 * 1024 * 1024;
 
-/// Session-dir files only (HANDOVER 13).
-async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artifact> {
-    let path = std::fs::canonicalize(PathBuf::from(&q.path))
-        .map_err(|_| ApiErr::not_found(format!("{} does not exist.", q.path)))?;
+/// A file inside some workspace's sessions folder, canonicalized (HANDOVER 13).
+fn session_file(app: &App, raw: &str) -> Result<(PathBuf, std::fs::Metadata), ApiErr> {
+    let path = std::fs::canonicalize(PathBuf::from(raw))
+        .map_err(|_| ApiErr::not_found(format!("{raw} does not exist.")))?;
     let allowed = app.all_workspaces().iter().any(|w| {
         std::fs::canonicalize(paths::sessions_root(&w.root))
             .is_ok_and(|root| paths::is_inside(&root, &path))
@@ -1053,13 +1092,29 @@ async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artif
         ));
     }
     let meta = std::fs::metadata(&path).map_err(|e| ApiErr::not_found(e.to_string()))?;
-    if !meta.is_file() || meta.len() > ARTIFACT_LIMIT {
-        return Err(ApiErr::bad(
-            "That path is not a readable file of at most 4 MB.",
-        ));
+    if !meta.is_file() {
+        return Err(ApiErr::bad("That path is not a file."));
     }
-    let content =
-        std::fs::read_to_string(&path).map_err(|_| ApiErr::bad("The file is not text."))?;
+    Ok((path, meta))
+}
+
+/// Session-dir files only (HANDOVER 13). A binary or large file comes back without content, for
+/// download.
+async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artifact> {
+    let (path, meta) = session_file(&app, &q.path)?;
+    let text = (meta.len() <= ARTIFACT_LIMIT)
+        .then(|| std::fs::read_to_string(&path).ok())
+        .flatten();
+    let Some(content) = text else {
+        return Ok(Json(Artifact {
+            path,
+            content: String::new(),
+            headings: vec![],
+            document: None,
+            binary: true,
+            size: meta.len(),
+        }));
+    };
     let headings = ostra_core::outline::headings(&content);
     let document = ostra_core::doc::load_view(&path);
     Ok(Json(Artifact {
@@ -1067,7 +1122,61 @@ async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artif
         content,
         headings,
         document,
+        binary: false,
+        size: meta.len(),
     }))
+}
+
+/// A session file's bytes as a download (Rule C3).
+async fn artifact_download(
+    State(app): AppState,
+    Query(q): Query<PathQuery>,
+) -> Result<Response, ApiErr> {
+    let (path, _) = session_file(&app, &q.path)?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| ApiErr::not_found(e.to_string()))?;
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".into());
+    // RFC 5987 form, so any file name survives the header.
+    let encoded: String = name
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename*=UTF-8''{encoded}"),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    name: String,
+}
+
+/// Stage a file the user uploads as context; a new session or an addition claims it (Rule C3).
+async fn upload(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Res<UploadRef> {
+    Ok(Json(ws(&app, &id)?.engine.stage_upload(&q.name, &body)?))
 }
 
 #[derive(Deserialize)]

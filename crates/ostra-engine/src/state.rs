@@ -8,8 +8,9 @@ use crate::judge::{
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
 use ostra_core::event::{
-    AnswerSource, CommandPurpose, ExecPurpose, FactTarget, GateAnswer, GatePayload, JudgeKind,
-    ProjectRef, SessionEvent, SessionKind, SessionOptions, StoredEvent, WorkKind,
+    AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, FactTarget,
+    GateAnswer, GatePayload, JudgeKind, ProjectRef, SessionEvent, SessionKind, SessionOptions,
+    StoredEvent, UploadedFile, WorkKind,
 };
 use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
@@ -576,13 +577,74 @@ pub struct InitItem {
     pub result: Option<Value>,
 }
 
+/// Context the user added after the start (Rules D2, C2).
+#[derive(Debug, Clone)]
+pub struct Amendment {
+    pub text: String,
+    pub files: Vec<ContextFile>,
+    pub uploads: Vec<UploadedFile>,
+    pub delivery: ContextDelivery,
+    pub at: DateTime<Utc>,
+}
+
+/// Why the engine interrupted a running execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Interrupt {
+    /// The session was paused; the execution resumes where it stopped (Rule P2).
+    Pause,
+    /// Context was sent now; the execution re-runs from its spawn block (Rule C2).
+    Context,
+}
+
+impl Interrupt {
+    pub fn message(self) -> &'static str {
+        match self {
+            Interrupt::Pause => "Paused by the user.",
+            Interrupt::Context => "Interrupted to deliver the context the user added.",
+        }
+    }
+}
+
+/// Rule C3: each upload reaches the agents as the absolute path of its copy in the session.
+fn upload_list(heading: &str, uploads: &[UploadedFile]) -> String {
+    if uploads.is_empty() {
+        return String::new();
+    }
+    let mut s = format!(
+        "\n\n{heading}. Read each one before you start, because the user chose them as context:"
+    );
+    for u in uploads {
+        s.push_str(&format!("\n- `{}`", u.path.display()));
+    }
+    s
+}
+
+/// The resume-map key of an execution purpose: one work loop, review loop, or stage.
+pub fn purpose_key(p: &ExecPurpose) -> String {
+    match p {
+        ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
+            format!("work:{phase}:false")
+        }
+        ExecPurpose::WriteTest { phase, .. } => format!("work:{phase}:true"),
+        ExecPurpose::Review { phase, tests, .. } => format!("review:{phase}:{tests}"),
+        ExecPurpose::Spec { .. } => "spec".into(),
+        ExecPurpose::Plan { .. } => "plan".into(),
+        ExecPurpose::FactCheck { target, .. } => format!("fact-check:{}", target.as_str()),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionState {
     pub id: SessionId,
     pub created: bool,
     pub kind: SessionKind,
     pub request: String,
-    pub amendments: Vec<String>,
+    /// Files attached to the request at the start (Rule C1).
+    pub files: Vec<ContextFile>,
+    /// Files uploaded with the request at the start (Rule C3).
+    pub uploads: Vec<UploadedFile>,
+    pub amendments: Vec<Amendment>,
     pub options: SessionOptions,
     pub yolo: bool,
     pub projects: Vec<ProjectRef>,
@@ -620,6 +682,12 @@ pub struct SessionState {
     pub completed: Option<(PathBuf, String)>,
     pub failed: Option<String>,
     pub notes: Vec<String>,
+    /// Rule P1: a paused session starts nothing.
+    pub paused: bool,
+    /// Executions the engine is interrupting, and why.
+    pub interrupting: BTreeMap<ExecutionId, Interrupt>,
+    /// Paused executions to resume, by [`purpose_key`] (Rule P2).
+    pub resume_from: BTreeMap<String, ExecutionId>,
     pub last_seq: i64,
     /// The session's short label: from the Classify decision, or fixed for an init session.
     pub title: Option<String>,
@@ -674,7 +742,7 @@ pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
         } => StageKind::Handoff,
         ExecPurpose::PromptGen { handoff_for: None } => StageKind::PromptGen,
         ExecPurpose::Verify { .. } => StageKind::Verify,
-        ExecPurpose::QuickAnswer => StageKind::QuickAnswer,
+        ExecPurpose::QuickAnswer | ExecPurpose::Inspect { .. } => StageKind::QuickAnswer,
         ExecPurpose::Init { mode, .. } => match mode {
             ostra_core::InitializerMode::Detect | ostra_core::InitializerMode::Adopt => {
                 StageKind::Detect
@@ -695,6 +763,8 @@ impl SessionState {
             created: false,
             kind: SessionKind::Pipeline,
             request: String::new(),
+            files: vec![],
+            uploads: vec![],
             amendments: vec![],
             options: SessionOptions::default(),
             yolo: false,
@@ -728,6 +798,9 @@ impl SessionState {
             completed: None,
             failed: None,
             notes: vec![],
+            paused: false,
+            interrupting: BTreeMap::new(),
+            resume_from: BTreeMap::new(),
             last_seq: 0,
             title: None,
         }
@@ -745,14 +818,50 @@ impl SessionState {
         self.completed.is_some() || self.failed.is_some()
     }
 
-    /// The request as it now stands, with every amendment (Rule D2).
+    /// The request as it now stands, with every amendment (Rule D2), attached file (Rule C1), and
+    /// upload (Rule C3).
     pub fn full_request(&self) -> String {
         let mut s = self.request.clone();
+        s.push_str(&self.file_list(
+            "Files and folders the user attached to the request",
+            &self.files,
+        ));
+        s.push_str(&upload_list(
+            "Files the user uploaded with the request",
+            &self.uploads,
+        ));
         for a in &self.amendments {
             s.push_str("\n\nAdded later by the user: ");
-            s.push_str(a);
+            s.push_str(&self.added_part(&a.text, &a.files, &a.uploads));
         }
         s
+    }
+
+    /// Rule C1: each attached file reaches the agents as an absolute path beside its tag.
+    fn file_list(&self, heading: &str, files: &[ContextFile]) -> String {
+        if files.is_empty() {
+            return String::new();
+        }
+        let mut s = format!(
+            "\n\n{heading}. Read each file and look through each folder before you start, because the user chose them as context:"
+        );
+        for f in files {
+            let abs = self
+                .project_path(&f.project)
+                .map(|p| p.join(&f.path).display().to_string())
+                .unwrap_or_else(|| f.path.clone());
+            let kind = if f.is_folder() { "folder, " } else { "" };
+            s.push_str(&format!("\n- `{abs}` ({kind}{})", f.tag()));
+        }
+        s
+    }
+
+    fn added_part(&self, text: &str, files: &[ContextFile], uploads: &[UploadedFile]) -> String {
+        format!(
+            "{text}{}{}",
+            self.file_list("Files and folders attached with this addition", files),
+            upload_list("Files uploaded with this addition", uploads)
+        )
     }
 
     pub fn project_path(&self, key: &str) -> Option<PathBuf> {
@@ -862,8 +971,12 @@ impl SessionState {
                 projects,
                 workspace_root,
                 session_root,
+                files,
+                uploads,
             } => {
                 self.created = true;
+                self.files = files.clone();
+                self.uploads = uploads.clone();
                 self.created_at = at;
                 self.kind = kind.clone();
                 self.request = request.clone();
@@ -881,7 +994,31 @@ impl SessionState {
                     });
                 }
             }
-            SessionEvent::RequestAmended { text } => self.on_amended(text),
+            SessionEvent::RequestAmended {
+                text,
+                files,
+                uploads,
+                delivery,
+            } => {
+                if *delivery == ContextDelivery::Now {
+                    self.interrupt_running(Interrupt::Context);
+                }
+                // Rule P2: a resumed conversation would not see the new context, so re-run instead.
+                self.resume_from.clear();
+                self.amendments.push(Amendment {
+                    text: text.clone(),
+                    files: files.clone(),
+                    uploads: uploads.clone(),
+                    delivery: *delivery,
+                    at,
+                });
+                self.on_amended(&self.added_part(text, files, uploads));
+            }
+            SessionEvent::SessionPaused => {
+                self.paused = true;
+                self.interrupt_running(Interrupt::Pause);
+            }
+            SessionEvent::SessionResumed => self.paused = false,
             SessionEvent::YoloSet { enabled } => self.yolo = *enabled,
             SessionEvent::DecisionMade {
                 id,
@@ -956,6 +1093,11 @@ impl SessionState {
                         spawn_block: spawn_block.clone(),
                     },
                 );
+                self.resume_from.remove(&purpose_key(purpose));
+                if self.paused {
+                    // Started in the window before the pause reached the runner.
+                    self.interrupting.insert(id.clone(), Interrupt::Pause);
+                }
                 self.on_started(id, purpose, loop_key);
             }
             SessionEvent::ExecutionFinished { id, result } => {
@@ -965,6 +1107,12 @@ impl SessionState {
                 rec.result = Some(result.clone());
                 rec.ended_at = Some(at);
                 let rec = rec.clone();
+                if self.interrupting.remove(id) == Some(Interrupt::Pause)
+                    && result.status == ExecutionStatus::Interrupted
+                {
+                    self.resume_from
+                        .insert(purpose_key(&rec.purpose), id.clone());
+                }
                 self.on_finished(&rec, result);
             }
             SessionEvent::GateOpened {
@@ -1150,8 +1298,14 @@ impl SessionState {
         }
     }
 
+    fn interrupt_running(&mut self, why: Interrupt) {
+        let running: Vec<ExecutionId> = self.running_executions().map(|r| r.id.clone()).collect();
+        for id in running {
+            self.interrupting.entry(id).or_insert(why);
+        }
+    }
+
     fn on_amended(&mut self, text: &str) {
-        self.amendments.push(text.to_string());
         if self.classify.is_none() {
             return;
         }

@@ -652,6 +652,17 @@ export const decisions: DecisionView[] = [
 
 export const sessionDetail: SessionDetail = {
   summary: sessionSummary,
+  files: [{ project: "backend", path: "src/orders/service.ts" }],
+  uploads: [{ name: "cancellation-flow.png", path: `${SROOT}/uploads/cancellation-flow.png`, size: 48213 }],
+  additions: [
+    {
+      text: "Refunds follow the same rule, see @backend/src/payments/refund.ts",
+      files: [{ project: "backend", path: "src/payments/refund.ts" }],
+      uploads: [],
+      delivery: "queue",
+      at: "2026-05-14T09:40:00Z",
+    },
+  ],
   session_root: SROOT,
   execution_groups: groupsFor(sessionExecutions(SESSION)),
   fact_checks: [

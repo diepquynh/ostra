@@ -328,6 +328,7 @@ impl WorkspaceRt {
                     s.status,
                     ostra_core::api::SessionStatus::Running
                         | ostra_core::api::SessionStatus::Waiting
+                        | ostra_core::api::SessionStatus::Paused
                 )
             })
             .filter_map(|s| match s.kind {
@@ -397,12 +398,12 @@ impl WorkspaceRt {
 
     /// Why the workspace cannot be deleted now: a live session, a running execution, or a clone.
     pub fn busy(&self) -> Result<Option<String>, ostra_store::StoreError> {
-        if let Some(s) = self
-            .db
-            .list_sessions()?
-            .into_iter()
-            .find(|s| matches!(s.status, SessionStatus::Running | SessionStatus::Waiting))
-        {
+        if let Some(s) = self.db.list_sessions()?.into_iter().find(|s| {
+            matches!(
+                s.status,
+                SessionStatus::Running | SessionStatus::Waiting | SessionStatus::Paused
+            )
+        }) {
             return Ok(Some(format!(
                 "Stop session {} or wait for it to finish, then try again, because deleting the workspace would lose its state.",
                 s.id

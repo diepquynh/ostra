@@ -172,6 +172,9 @@ function build(spec: SessionSpec): SessionDetail {
     session_root: sroot(spec.id),
     execution_groups: f.groupsFor(executions),
     fact_checks: [],
+    files: [],
+    uploads: [],
+    additions: [],
   };
 }
 
@@ -1509,6 +1512,8 @@ export function eventsFor(d: SessionDetail): StoredEvent[] {
       projects: s.projects.map((key) => ({ key, path: `/home/me/code/shop-${key}` })),
       workspace_root: ROOT,
       session_root: d.session_root,
+      files: d.files,
+      uploads: d.uploads,
     },
   });
   for (const x of d.decisions)

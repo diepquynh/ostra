@@ -393,6 +393,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | D9 | A failed phase removes every phase that depends on it from the queue. Independent phases continue. |
 | D10, answer routing | A requirement-level answer at any point after the spec exists re-runs generate-spec, then re-approval, then a plan revision. Both revise in place: generate-spec gets only the answers, changes, and research documents its spec does not reflect yet, and the plan agent edits only the phases the spec's diff reaches. |
 | Hard 4 | The engine reads each report before the next step. For native and submit-tool outputs this is structured data. The research document, the spec, and the plan are typed documents (10.3), and a submit call naming one is refused while it has a check error or disagrees with the submit's counts and phases. |
+| P6, P7 | Each plan step names its skills from its repo's INVENTORY Skill Application Mapping, and Ostra fills a phase's Required Skills with the union of its steps' skills. The Document tool refuses a plan whose step names a skill not installed in its repo, or whose phase has code steps and names no skill in a repo that has skills, because the implementer loads only the skills the phase file lists. |
 | Hard 13 | Implementer, write-test, and code-reviewer executions always carry `Phase file:` when a plan exists, or `No plan:` with a reason. |
 | Quick change | QUICK_CHANGE is a small edit the request fully describes. It runs one implementer pass per project in scope with `No plan:`, always on the native executor whatever the routing says, because a harness adds seconds of startup to a change that takes one edit. No research, spec, plan, review, format, or closing stage runs. Changed files are staged, then the completion report. |
 | Staging | After a phase's review passes, the engine runs `git -C <project> add` on the implementer report's changed files. Reviews use `Review scope: unstaged`. |
@@ -400,6 +401,11 @@ to `UC/commands/orchestrate/prompt.md`.
 | Hard 21, security | A BLOCKER finding sends only the BLOCKER findings to the fix agent with a removal instruction, loops until clear, has no cap, and blocks module documentation. No gate answer can waive it. |
 | HANDOFF | The engine runs prompt-generation with the handoff request, then resumes the original agent with its resume instructions. |
 | STUCK | The Rescue judge picks one: run a targeted explore, re-run the agent with the missing fact quoted, or raise a gate. Never a plain retry. |
+| C1 | A request or an addition may attach up to 50 files or folders, tagged in the text as `@project/path`, a folder with a trailing `/`. Each is an existing file or folder inside one of the session's projects, checked when the API receives it; a path with `..`, an absolute path, or a trailing `/` on a file is refused. Every agent that gets the request gets each one as an absolute path beside its tag, with the instruction to read each file and look through each folder. |
+| C3 | The user may upload up to 20 files of at most 25 MB each with a request or an addition. A file is staged in the workspace (`POST /api/workspaces/:ws/uploads`), because a new task uploads before its session exists, and the request names the staged ids. Creating the session or adding the context moves each file into the session's `uploads/` folder, never overwriting one there, and records its name, path, and size in the event. Every agent that gets the request gets each upload's path, and the Classify judge names each attached file, folder, and upload in the research tasks it bears on, because a researcher reads only its task. Uploads are session artifacts: they open in the artifact view and download from `GET /api/artifacts/download`. |
+| C2 | Context added mid-session is queued or sent now. Queued context lets running executions finish on the old request, and the next step sees it. Context sent now first interrupts every running execution; each re-runs from its spawn block with the updated request, not from where it stopped. Either way it is an amendment, so Rules D2 and D10 apply. |
+| P1 | A paused session starts nothing: no spawn, judge, command, gate, or YOLO answer. Pausing interrupts every running execution and denies its waiting permission asks. Gates can still be answered and context added; both take effect on continue. |
+| P2 | Continuing a paused session resumes each execution the pause interrupted, where it stopped: a native execution from its stored transcript, a harness execution through its resume command with the stored session id and the prompt "Continue the workflow." A harness is sent Esc before it is stopped, so its session is saved whole. Context added while paused cancels the resume: those executions re-run from their spawn blocks, because a resumed conversation would not see it. |
 
 ### 8.3 Judge calls
 
@@ -522,12 +528,15 @@ into it.
 | --- | --- |
 | Prompt | The agent prompt rendered with that harness's tool names and skill-loading strategy from `UC/definitions/tool-mapping.json`, passed as the harness's system prompt addition. The spawn block plus brief is the first user message. |
 | Leaf only | The harness's own subagent tool is disabled for the run. Every Ostra agent is a leaf. |
+| Final reply | The tool vocabulary tells the agent to reply with only `Done!` after its submit call, because Ostra reads the submit payload and any other text costs output tokens. Checked live: Claude Code, Codex, and Antigravity comply; Grok Build 4.5 may still summarize after a resume. |
 | Guards and permissions | Ostra writes a per-execution hook config pointing every PreToolUse and PostToolUse event at `ostra hook --execution <id>`, a subcommand of the same binary. It forwards the payload to `/internal/policy` with an execution token and prints the harness's response shape. One Rust policy engine then serves all harnesses. A permission ask waits for the browser answer. |
 | Ostra tools | `ostra mcp-stdio --execution <id>` serves `report`, `memory`, `memory_recall`, and the `submit_*` tools over stdio. Stdio, because it is the one MCP registration shape Ultracode verified on all four harnesses (`UC/docs/hub.md`, "Why a stdio shim"). |
 | Completion | Detected from the harness's stop event through the hook bridge, and confirmed from its transcript. Needs verifying per harness (section 18). |
 | Session id | Claude Code and Grok accept a chosen `--session-id`, so Ostra picks it up front. Codex and Antigravity cannot choose one (`UC/README.md`), so Ostra captures it from the first output event or the transcript. |
 | Cost | Read from the harness's own session file. While the execution runs, a file watcher (`notify`) on the file's directory reads each appended line once and reports usage live; the whole file is read again for the final result. Hooks are not used for this, because they exist to enforce policy. Claude Code (`~/.claude/projects/*/<id>.jsonl`) repeats a message's usage on each of its lines, so usage counts once per message id, priced per message model with 5-minute and 1-hour cache writes apart. Codex (`rollout-*.jsonl`) reports running totals whose input includes cached input, priced per increase with the current turn's model. Grok Build (`sessions/<cwd>/<id>/updates.jsonl`) states each turn's cost in `costUsdTicks`, 10^10 per dollar. Antigravity's transcript records no usage, so its executions show no cost. |
 | Resume | The Resume button opens a PTY with the harness's resume command and that session id. |
+| Read-only session | Open the session, on an ended harness run, reopens its harness session in a new PTY so the user can scroll the work and ask about it (`POST /api/executions/:id/inspect`). It is a new execution outside the pipeline, purpose `inspect`, with no first prompt, so nothing is spent until the user types. The bridge refuses every tool call in it (guard `read-only-session`) and serves no Ostra MCP tool; Claude Code also gets no ToolSearch. The Stop hook never asks it to submit, and there are no idle nudges. It ends when the user leaves the CLI or cancels it, or after 4 hours. It is refused while the run is still running, and for a paused run the session will resume, because the resumed agent would see the questions. |
+| Startup prompts | In the first two minutes Ostra answers a folder-trust prompt with trust, and a new-model offer (Codex 0.157 "Meet GPT-6 Luna") with "Use existing model", so the run keeps its routed model. Codex also runs with `check_for_update_on_startup = false`, because a self-update exits the CLI. |
 | Auth | The PTY gets the user's environment. A harness started without its auth environment comes up logged out (Ultracode's tmux experience). An unauthenticated harness is shown in settings, and its login flow runs in the terminal view. |
 | Unavailable harness | Settings validation refuses a route to a harness that is not installed. At runtime, an auth or launch failure raises a gate: log in, or re-route this execution to native. Under YOLO the engine re-routes to native and records it. |
 
@@ -667,6 +676,9 @@ Memory stays in each project's `.ostra/memory/knowledge.sqlite3`, using `UC/mcp/
   each with the same spawn block. The implementer resumes from its progress log.
 - **Native execution:** continue from `messages`.
 - **Harness execution:** open the harness's resume command with the stored native session id in a new PTY.
+- **Pause:** the user can pause a session, for example when a provider quota runs out, and continue it later
+  (Rules P1 and P2). A paused session survives a restart paused, and its interrupted executions resume on
+  continue instead of re-running.
 - **Session list:** each session shows its stage (the hub's `inferStage` idea, taken from events), its
   executions, and a Resume or Open action.
 
@@ -713,9 +725,9 @@ Each workspace opens as one console, laid out like a code editor:
 | Screen | Content |
 | --- | --- |
 | Home | Workspace list, or the setup guide on first run (section 6.1). |
-| Workspace | Sessions with stage chips. A New task form (request text, plus tests, docs, and YOLO toggles), not a chat box. |
-| Session board | Lanes in SDLC order: Research, Requirements, Verification, Design, Build, Review, Test, Docs, Done. Each lane carries a short "why this step exists" note from `UC/docs/philosophy.md`. The Build lane shows the phase DAG with complexity and test policy per phase. The current gate is highlighted. |
-| Execution | An Activity tab (streamed thinking summary, tool calls with inputs, diffs, outputs, and every policy decision with its rule) and, for harness executions, a Terminal tab (xterm.js on the PTY, with input and resize; an ended run replays its stored transcript read-only). A paused permission ask shows Allow once and Deny above the stream; any other open gate that names the run links to it. Tool paths show relative to the project. |
+| Workspace | Sessions with stage chips. A New task form (request text with `@` file tags, plus tests, docs, and YOLO toggles), not a chat box. Typing `@` lists the files and folders of the initialized projects, under the caret; a picked one shows as a chip inside the text. Dragging a file or folder from the Files tab onto the field tags it too. Once anything is attached, a hint asks for a few words on what each file is for, because the agents use that note to decide how to read it. |
+| Session board | A header with the request and the context added since, each tagged file drawn as a chip that opens it, and the YOLO, Pause or Continue, and Stop controls. Lanes in SDLC order: Research, Requirements, Verification, Design, Build, Review, Test, Docs, Done. Each lane carries a short "why this step exists" note from `UC/docs/philosophy.md`. Under the lanes, an Overview tab (open gates, the Add context box, the lane's stages, the phase DAG with complexity and test policy per phase, answered gates, the event log) and a Decisions tab (each judge decision with its override). Add context takes text with `@` file and folder tags, or rows dragged from the Files tab, and offers Queue for the next step, or Send now behind a warning that running work restarts (Rule C2). Artifacts and executions are listed in the Sessions tree, not on the board. |
+| Execution | Open the session on an ended harness run, and a read-only banner on the session it opens (10.2). An Activity tab (streamed thinking summary, tool calls with inputs, diffs, outputs, and every policy decision with its rule) and, for harness executions, a Terminal tab (xterm.js on the PTY, with input and resize; an ended run replays its stored transcript read-only). A paused permission ask shows Allow once and Deny above the stream; any other open gate that names the run links to it. Tool paths show relative to the project. |
 | Artifacts | Research documents, the spec, the plan, and phase files render natively from their typed documents, one chapter per page, with an Outlines menu that shows counts (for example requirements, open questions, sources). The spec shows requirements in EARS form with their acceptance criteria, contracts, and External Evidence. The plan shows each phase as its own chapter with its steps. IDs such as `R3`, `E2`, and `step 2.3` are chips that open the chapter holding that element. Fact-check findings sit on the element their `element` field names. The rendered markdown is one toggle away. Content fills the width between the docks, and every table's columns can be resized by dragging a header edge (arrow keys when focused, double-click resets), and a wide table's horizontal scrollbar stays pinned to the bottom of the view while the table is on screen. Reports stay markdown with an outline from their headings beside the text, and the review ledger shows as comments on a Monaco diff. |
 | Gates | Open questions (recommended option first), spec and plan approval (disabled until PASS, with the findings shown), review cap, STUCK rescue, closing gate, skill approval for init, permission asks, and BLOCKER notices showing the reviewer's Guidance text, with no dismiss button. |
 | Project | A header with the init status, the checked-out branch, the path, and the stack. An Overview tab (profile, commands, skills, review rules) or Initialize for a new project, and a Files tab. |
@@ -900,7 +912,8 @@ GET             /api/workspaces/:ws/projects/:key/code/deps
                                                           ?path=; imports with targets, and importers
 GET             /api/workspaces/:ws/projects/:key/code/symbols
                                                           ?q=&limit=; definitions by name
-GET/POST        /api/workspaces/:ws/sessions              list, create (request + toggles)
+GET/POST        /api/workspaces/:ws/sessions              list, create (request, toggles, pinned projects,
+                                                          attached files)
 GET             /api/workspaces/:ws/tree                  the Sessions tree: sessions, groups, runs, artifacts
 GET             /api/workspaces/:ws/search                ?q=&limit=; ranked hits for ⌘K
 GET             /api/workspaces/:ws/activity              running executions, open gates, spend today and this
@@ -911,13 +924,18 @@ POST            /api/workspaces/:ws/ask                   side-panel question (s
 GET             /api/sessions/:id                         state, stages, executions, gates, execution groups
 GET             /api/sessions/:id/events                  ?after=; the event log
 GET             /api/sessions/:id/diff                    ?project=&phase=; review loop files, HEAD against now
-POST            /api/sessions/:id/yolo | /amend | /stop
+POST            /api/sessions/:id/yolo | /stop | /pause | /resume
+POST            /api/sessions/:id/amend                   {text, files, delivery: queue | now}; add context
 POST            /api/gates/:id/answer                     user answer
 POST            /api/decisions/:id/override               override a judge decision
 GET             /api/executions/:id                       view, with its pending gate and project folder
 GET             /api/executions/:id/activity              ?after=; persisted activity items
-POST            /api/executions/:id/cancel | /resume
-GET             /api/artifacts?path=                      session-dir files only, with the heading outline
+POST            /api/executions/:id/cancel | /resume | /inspect
+GET             /api/artifacts?path=                      session-dir files only, with the heading outline; a
+                                                          binary or large file comes back with no content
+GET             /api/artifacts/download?path=             a session-dir file as an attachment
+POST            /api/workspaces/:ws/uploads?name=         stage an uploaded file (raw body), for a new task or
+                                                          an addition to claim
 GET             /api/fs                                   ?path=&prefix=&limit=; type-to-browse folders, git and
                                                           Ostra marks for the folder and its entries
 POST            /api/fs/mkdir                             {path}; create a folder with its parents (`mkdir -p`)

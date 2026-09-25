@@ -63,7 +63,7 @@ describe("every screen renders on mock data inside the shell", () => {
     [`/w/${WS}/cost`, [...shell, "By session", "Cache reads per tool call"]],
     [
       `/w/${WS}/s/${SESSION}`,
-      [...shell, "Waiting for you", "Allow once", "Closing gate", "Research", "Phase graph", "Ostra chose"],
+      [...shell, "Waiting for you", "Allow once", "Closing gate", "Research", "Phase graph", "Add context"],
     ],
     [`/w/${WS}/s/s_research`, ["Completion report", "Decided for you", "Refund event publishing"]],
     [

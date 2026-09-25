@@ -11,8 +11,8 @@ use crate::config::{
     ValidationIssue, WorkspaceSettings,
 };
 use crate::event::{
-    AnswerSource, ExecPurpose, GateAnswer, GatePayload, JudgeKind, SessionEvent, SessionKind,
-    SessionOptions,
+    AnswerSource, ContextDelivery, ContextFile, ExecPurpose, GateAnswer, GatePayload, JudgeKind,
+    SessionEvent, SessionKind, SessionOptions, UploadedFile,
 };
 use crate::exec::{ExecutionDelta, ExecutionStatus, Usage};
 use crate::executor::{ExecStream, ExecutorKind, HarnessKind};
@@ -565,6 +565,23 @@ pub struct CreateSession {
     /// Projects the user pinned. Empty lets the Classify judge choose.
     #[serde(default)]
     pub projects: Vec<String>,
+    /// Files attached as context, each inside a workspace project.
+    #[serde(default)]
+    pub files: Vec<ContextFile>,
+    /// Staged uploads (`UploadRef::id`) to keep in the session.
+    #[serde(default)]
+    pub uploads: Vec<String>,
+}
+
+/// A file uploaded to the workspace's staging area, waiting for a session or an addition to
+/// claim it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct UploadRef {
+    pub id: String,
+    pub name: String,
+    #[ts(type = "number")]
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -578,6 +595,8 @@ pub enum SessionStatus {
     Failed,
     /// Nothing is running and no gate is open, but the session is not done.
     Stalled,
+    /// The user paused it. Nothing starts until they continue it.
+    Paused,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -768,6 +787,22 @@ pub struct SessionDetail {
     pub execution_groups: Vec<ExecutionGroupView>,
     /// Every fact-check pass over the spec and the plan, oldest first.
     pub fact_checks: Vec<FactCheckView>,
+    /// Files attached to the request when the session started.
+    pub files: Vec<ContextFile>,
+    /// Files uploaded with the request.
+    pub uploads: Vec<UploadedFile>,
+    /// Context the user added after the start, oldest first.
+    pub additions: Vec<ContextAddition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ContextAddition {
+    pub text: String,
+    pub files: Vec<ContextFile>,
+    pub uploads: Vec<UploadedFile>,
+    pub delivery: ContextDelivery,
+    pub at: DateTime<Utc>,
 }
 
 /// One fact-check pass, for showing its findings on the document it checked.
@@ -810,6 +845,13 @@ pub struct SetYolo {
 #[ts(export)]
 pub struct AmendRequest {
     pub text: String,
+    #[serde(default)]
+    pub files: Vec<ContextFile>,
+    /// Staged uploads (`UploadRef::id`) to keep in the session.
+    #[serde(default)]
+    pub uploads: Vec<String>,
+    #[serde(default)]
+    pub delivery: ContextDelivery,
 }
 
 /// One persisted Activity item of an execution.
@@ -831,6 +873,11 @@ pub struct Artifact {
     pub headings: Vec<Heading>,
     /// The typed document the markdown was rendered from, for research, spec, plan, and phase files.
     pub document: Option<crate::doc::DocumentView>,
+    /// Not UTF-8 text, or larger than the preview limit: `content` is empty and only a download is
+    /// offered.
+    pub binary: bool,
+    #[ts(type = "number")]
+    pub size: u64,
 }
 
 /// One markdown heading of an artifact.

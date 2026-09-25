@@ -9,7 +9,7 @@ export interface StatusChipProps {
 }
 
 const TONES: Record<StatusKind, Record<string, Tone>> = {
-  session: { running: "accent", waiting: "warn", completed: "ok", failed: "bad", stalled: "bad" },
+  session: { running: "accent", waiting: "warn", completed: "ok", failed: "bad", stalled: "bad", paused: "neutral" },
   execution: {
     running: "accent",
     ok: "ok",

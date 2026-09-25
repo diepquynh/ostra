@@ -1,11 +1,9 @@
 import { useState } from "react";
 import { api } from "../../api";
-import type { DecisionView, SessionDetail } from "../../api/types";
-import { Button, Decision, Dialog, ExecutionGroup, Input, Panel, TreeItem } from "../../design";
+import type { DecisionView } from "../../api/types";
+import { Button, Decision, Dialog, Input, Panel } from "../../design";
 import { decisionChoice } from "../../lib/events";
 import { humanize } from "../../lib/format";
-import { useNav } from "../../lib/nav";
-import { executionGroups } from "./board";
 
 const empty = { padding: "10px 12px", fontSize: "var(--text-sm)", color: "var(--text-muted)" } as const;
 const hhmm = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -110,64 +108,5 @@ function OverrideDialog({
         <Input label="Why" value={reason} onChange={(e) => setReason(e.target.value)} error={error} />
       </div>
     </Dialog>
-  );
-}
-
-/** Spec, plan, reports, and ledgers the session wrote. Rows open in the preview tab. */
-export function ArtifactsPanel({ detail }: { detail: SessionDetail }) {
-  const nav = useNav();
-  return (
-    <Panel title="Artifacts" subtitle={detail.artifacts.length || undefined} icon="files" bodyFlush>
-      {detail.artifacts.length === 0 ? (
-        <div style={empty}>No artifacts yet. The research documents appear here first.</div>
-      ) : (
-        <div style={{ padding: 4 }} role="tree" aria-label="Artifacts">
-          {detail.artifacts.map((a) => (
-            <TreeItem
-              key={a.path}
-              label={a.label}
-              icon={
-                a.kind === "ledger"
-                  ? "file-diff"
-                  : a.kind === "plan" || a.kind === "phase"
-                    ? "list-checks"
-                    : "file-text"
-              }
-              meta={a.project ?? a.kind}
-              title={a.path}
-              onClick={() => nav.open(`artifact:${a.path}`, { preview: true })}
-            />
-          ))}
-        </div>
-      )}
-    </Panel>
-  );
-}
-
-/** Executions grouped by agent and project, oldest group first. Rows open in the preview tab. */
-export function ExecutionsPanel({ detail }: { detail: SessionDetail }) {
-  const nav = useNav();
-  const groups = executionGroups(detail);
-  return (
-    <Panel
-      title="Executions"
-      subtitle={`${detail.executions.length} run${detail.executions.length === 1 ? "" : "s"}`}
-      icon="square-terminal"
-      bodyFlush
-    >
-      {groups.length === 0 ? (
-        <div style={empty}>No executions yet.</div>
-      ) : (
-        groups.map((g) => (
-          <ExecutionGroup
-            key={g.key}
-            agent={g.agent}
-            project={g.project}
-            runs={g.runs}
-            onOpen={(r) => nav.open(`exec:${r.id}`, { preview: true })}
-          />
-        ))
-      )}
-    </Panel>
   );
 }

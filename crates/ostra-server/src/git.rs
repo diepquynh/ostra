@@ -817,9 +817,11 @@ pub(crate) fn workspace_updated(app: &App, w: &WorkspaceRt) {
 /// for.
 pub fn session_in(w: &WorkspaceRt, key: &str) -> Result<Option<SessionId>, StoreError> {
     Ok(w.db.list_sessions()?.into_iter().find_map(|s| {
-        (matches!(s.status, SessionStatus::Running | SessionStatus::Waiting)
-            && (s.projects.iter().any(|p| p == key)
-                || matches!(&s.kind, SessionKind::Init { project } if project == key)))
+        (matches!(
+            s.status,
+            SessionStatus::Running | SessionStatus::Waiting | SessionStatus::Paused
+        ) && (s.projects.iter().any(|p| p == key)
+            || matches!(&s.kind, SessionKind::Init { project } if project == key)))
         .then_some(s.id)
     }))
 }

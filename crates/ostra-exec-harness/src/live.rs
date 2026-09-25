@@ -6,6 +6,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::sync::Notify;
 
@@ -20,6 +21,8 @@ pub struct LiveExecution {
     token: String,
     state: Mutex<LiveState>,
     changed: Notify,
+    /// A read-only reopened session: no submit is expected, so a Stop is never turned back.
+    inspect: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -50,6 +53,10 @@ pub enum StopVerdict {
 impl LiveExecution {
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    pub fn set_inspect(&self) {
+        self.inspect.store(true, Ordering::SeqCst);
     }
 
     pub fn snapshot(&self) -> LiveState {
@@ -114,7 +121,9 @@ impl LiveExecution {
         {
             s.last_message = last_message;
         }
-        let verdict = if s.submit.is_some() {
+        let verdict = if self.inspect.load(Ordering::SeqCst) {
+            StopVerdict::Allow
+        } else if s.submit.is_some() {
             s.stopped_after_submit = true;
             StopVerdict::Allow
         } else if s.stops_without_submit < MAX_STOP_NUDGES {
@@ -183,6 +192,7 @@ impl LiveRegistry {
                 tool_calls: 0,
             }),
             changed: Notify::new(),
+            inspect: AtomicBool::new(false),
         });
         self.map.lock().insert(id, live.clone());
         live
@@ -241,5 +251,18 @@ mod tests {
 
         reg.remove(&id);
         assert!(reg.authorize(&id, &token).is_none());
+    }
+
+    #[test]
+    fn a_read_only_session_is_never_asked_to_submit() {
+        let reg = LiveRegistry::new();
+        let live = reg.register(
+            ExecutionId::new(),
+            AgentName::Implementer,
+            HarnessKind::Grok,
+        );
+        live.set_inspect();
+        assert_eq!(live.on_stop(None), StopVerdict::Allow);
+        assert!(!live.snapshot().gave_up);
     }
 }

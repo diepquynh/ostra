@@ -47,6 +47,8 @@ impl H {
                 .collect(),
             workspace_root: PathBuf::from("/ws"),
             session_root: root(),
+            files: vec![],
+            uploads: vec![],
         });
         h
     }
@@ -600,6 +602,9 @@ fn approval_without_pass_is_ignored_by_the_fold() {
     // A new spec version lands before the answer: its PASS no longer covers it.
     h.ev(SessionEvent::RequestAmended {
         text: "also refunds".into(),
+        files: vec![],
+        uploads: vec![],
+        delivery: ContextDelivery::Queue,
     });
     h.answer(
         &g,
@@ -907,6 +912,9 @@ fn d10_spec_revision_gets_only_new_input() {
     h.run("spawn generate-spec", spec_submit(0, 0));
     h.ev(SessionEvent::RequestAmended {
         text: "also handle refunds".into(),
+        files: vec![],
+        uploads: vec![],
+        delivery: ContextDelivery::Queue,
     });
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let amended = h.spawn_step("spawn generate-spec");
@@ -924,12 +932,197 @@ fn amendment_explores_the_new_part_first() {
     h.run("spawn generate-spec", spec_submit(0, 0));
     h.ev(SessionEvent::RequestAmended {
         text: "also handle refunds".into(),
+        files: vec![],
+        uploads: vec![],
+        delivery: ContextDelivery::Queue,
     });
     assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let spec = h.spawn_step("spawn generate-spec");
     assert!(spec.inputs.task.unwrap().contains("also handle refunds"));
     assert_eq!(spec.inputs.research_docs.len(), 2);
+}
+
+// ------------------------------------------------------------------------------------------
+// Context files, context delivery, and pause (Rules C1, C2, P1, P2)
+// ------------------------------------------------------------------------------------------
+
+fn file(project: &str, path: &str) -> ContextFile {
+    ContextFile {
+        project: project.into(),
+        path: path.into(),
+    }
+}
+
+fn amend(h: &mut H, text: &str, files: Vec<ContextFile>, delivery: ContextDelivery) {
+    h.ev(SessionEvent::RequestAmended {
+        text: text.into(),
+        files,
+        uploads: vec![],
+        delivery,
+    });
+}
+
+#[test]
+fn attached_files_reach_the_agents_as_absolute_paths() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    if let SessionEvent::SessionCreated { files, .. } = &mut h.events[0].event {
+        *files = vec![file("p", "docs/orders.md")];
+    }
+    h.classify("IMPLEMENT", &["p"]);
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    let task = h.spawn_step("spawn generate-spec").inputs.task.unwrap();
+    assert!(
+        task.contains("`/code/p/docs/orders.md` (@p/docs/orders.md)"),
+        "{task}"
+    );
+}
+
+#[test]
+fn uploads_reach_the_agents_as_their_copies_in_the_session() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    let upload = UploadedFile {
+        name: "notes.pdf".into(),
+        path: root().join("uploads/notes.pdf"),
+        size: 3,
+    };
+    if let SessionEvent::SessionCreated { uploads, .. } = &mut h.events[0].event {
+        *uploads = vec![upload.clone()];
+    }
+    h.classify("IMPLEMENT", &["p"]);
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    let task = h.spawn_step("spawn generate-spec").inputs.task.unwrap();
+    assert!(
+        task.contains("Files the user uploaded with the request"),
+        "{task}"
+    );
+    assert!(
+        task.contains(&format!("`{}`", upload.path.display())),
+        "{task}"
+    );
+}
+
+#[test]
+fn files_added_later_reach_the_next_step() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    amend(
+        &mut h,
+        "see @p/src/refund.rs",
+        vec![file("p", "src/refund.rs")],
+        ContextDelivery::Queue,
+    );
+    h.run("spawn explore explore#1", explore_submit(1, &[]));
+    let task = h.spawn_step("spawn generate-spec").inputs.task.unwrap();
+    assert!(
+        task.contains("Added later by the user: see @p/src/refund.rs"),
+        "{task}"
+    );
+    assert!(task.contains("`/code/p/src/refund.rs`"), "{task}");
+}
+
+#[test]
+fn queued_context_lets_running_work_finish() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    amend(&mut h, "also refunds", vec![], ContextDelivery::Queue);
+    assert!(h.state().interrupting.is_empty());
+    assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
+    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
+    h.run("spawn explore explore#1", explore_submit(1, &[]));
+    let revision = h.spawn_step("spawn generate-spec");
+    assert_eq!(
+        revision.inputs.changes,
+        vec!["The user extended the request: also refunds".to_string()]
+    );
+}
+
+#[test]
+fn context_sent_now_reruns_the_interrupted_step_fresh() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    amend(&mut h, "also refunds", vec![], ContextDelivery::Now);
+    assert_eq!(
+        h.state().interrupting.get(&spec),
+        Some(&ostra_engine::state::Interrupt::Context)
+    );
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    assert!(h.state().interrupting.is_empty());
+    // Rule D2 still holds: the new part is researched before the spec runs again.
+    assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
+    h.run("spawn explore explore#1", explore_submit(1, &[]));
+    let rerun = h.spawn_step("spawn generate-spec");
+    assert_eq!(rerun.resumes, None);
+    assert!(rerun.inputs.task.unwrap().contains("also refunds"));
+}
+
+#[test]
+fn paused_session_starts_nothing() {
+    let mut h = H::explored(
+        &["p"],
+        SessionOptions {
+            yolo: true,
+            ..Default::default()
+        },
+    );
+    let (spec, _) = h.start("spawn generate-spec");
+    h.ev(SessionEvent::SessionPaused);
+    assert_eq!(
+        h.state().interrupting.get(&spec),
+        Some(&ostra_engine::state::Interrupt::Pause)
+    );
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    assert!(h.summaries().is_empty(), "{:?}", h.summaries());
+}
+
+#[test]
+fn resumed_session_continues_the_paused_run() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    h.ev(SessionEvent::SessionPaused);
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    h.ev(SessionEvent::SessionResumed);
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#2"]);
+    assert_eq!(h.spawn_step("spawn generate-spec").resumes, Some(spec));
+    h.start("spawn generate-spec");
+    assert!(h.state().resume_from.is_empty());
+}
+
+#[test]
+fn context_added_while_paused_reruns_instead_of_resuming() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    h.ev(SessionEvent::SessionPaused);
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    amend(&mut h, "also refunds", vec![], ContextDelivery::Queue);
+    h.ev(SessionEvent::SessionResumed);
+    h.run("spawn explore explore#1", explore_submit(1, &[]));
+    assert_eq!(h.spawn_step("spawn generate-spec").resumes, None);
+}
+
+#[test]
+fn a_run_started_during_the_pause_is_interrupted_too() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let req = h.spawn_step("spawn generate-spec");
+    h.ev(SessionEvent::SessionPaused);
+    let id = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        id: id.clone(),
+        agent: req.agent,
+        purpose: req.purpose.clone(),
+        stage: req.stage,
+        project: req.project.clone(),
+        executor: ExecutorKind::Native,
+        model: "mock:m".into(),
+        params: json!({}),
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: None,
+    });
+    assert_eq!(
+        h.state().interrupting.get(&id),
+        Some(&ostra_engine::state::Interrupt::Pause)
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1513,6 +1706,8 @@ fn init_session() -> H {
         }],
         workspace_root: PathBuf::from("/ws"),
         session_root: root(),
+        files: vec![],
+        uploads: vec![],
     });
     h
 }

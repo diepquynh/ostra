@@ -1,4 +1,12 @@
-import type { CSSProperties, KeyboardEvent, MouseEvent, ReactElement, ReactNode, SyntheticEvent } from "react";
+import type {
+  CSSProperties,
+  DragEvent,
+  KeyboardEvent,
+  MouseEvent,
+  ReactElement,
+  ReactNode,
+  SyntheticEvent,
+} from "react";
 import { arrowIndex } from "../../focus";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
@@ -21,6 +29,8 @@ export interface TreeItemProps {
   onToggle?: (e: SyntheticEvent) => void;
   title?: string;
   style?: CSSProperties;
+  /** Makes the row draggable; set the drag data here. */
+  onDragStart?: (e: DragEvent<HTMLDivElement>) => void;
 }
 
 /** Arrow Up/Down move focus to the neighbouring row within the enclosing tree, or the enclosing sections' parent. */
@@ -47,6 +57,7 @@ export function TreeItem({
   onToggle,
   title,
   style,
+  onDragStart,
 }: TreeItemProps) {
   const hasChev = expanded !== undefined;
   const activate = (e: SyntheticEvent) => {
@@ -79,6 +90,8 @@ export function TreeItem({
       style={{ paddingLeft: 6 + depth * 14, ...style }}
       onClick={(e: MouseEvent) => activate(e)}
       onKeyDown={onKeyDown}
+      draggable={onDragStart ? true : undefined}
+      onDragStart={onDragStart}
       title={title ?? (typeof label === "string" ? label : undefined)}
     >
       <span

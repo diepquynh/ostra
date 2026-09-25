@@ -106,13 +106,34 @@ fn first_prompt(inp: &LaunchInput<'_>, files: &mut Vec<(PathBuf, String)>) -> St
     )
 }
 
-/// Sent when a harness session is resumed after an interruption.
-pub fn resume_prompt(agent: ostra_core::AgentName) -> String {
+/// Sent when a harness session is resumed: the resume note, or the interruption notice.
+pub fn resume_prompt(spec: &ExecutionSpec) -> String {
+    if let Some(note) = spec.resume.as_ref().and_then(|r| r.note.clone()) {
+        return note;
+    }
+    let agent = spec.agent;
     format!(
         "Ostra resumed this session after an interruption. Continue the task from where it stopped: check \
          what is already done before redoing it, finish the rest, then call `{}` with your result.",
         agent.submit_tool_name()
     )
+}
+
+/// Claude Code tools of a read-only session. Every call is refused by the bridge.
+const INSPECT_TOOLS: &str = "Read,Bash,Grep,Glob";
+
+/// A read-only reopening of an ended session: the user types, and the CLI gets no prompt.
+fn inspecting(spec: &ExecutionSpec) -> bool {
+    spec.resume.as_ref().is_some_and(|r| r.inspect)
+}
+
+/// The prompt argument: the first message, the resume note, or none when inspecting.
+fn prompt_arg(inp: &LaunchInput<'_>, files: &mut Vec<(PathBuf, String)>) -> Option<String> {
+    match inp.resume_session {
+        None => Some(first_prompt(inp, files)),
+        Some(_) if inspecting(inp.spec) => None,
+        Some(_) => Some(resume_prompt(inp.spec)),
+    }
 }
 
 fn effort_word(e: Effort, max_supported: Effort) -> &'static str {
@@ -208,13 +229,22 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
             Some(sid)
         }
     };
-    let tools = claude_tools(&spec.capabilities);
+    // An inspection gets no ToolSearch and no MCP server. It keeps plain tools for Ostra to refuse,
+    // because with none a model asked to run something replies with nothing.
+    let tools = if inspecting(spec) {
+        INSPECT_TOOLS.into()
+    } else {
+        claude_tools(&spec.capabilities)
+    };
     args.extend([
         "--settings".into(),
         settings_path.to_string_lossy().into(),
         "--strict-mcp-config".into(),
-        "--mcp-config".into(),
-        mcp_path.to_string_lossy().into(),
+    ]);
+    if !inspecting(spec) {
+        args.extend(["--mcp-config".into(), mcp_path.to_string_lossy().into()]);
+    }
+    args.extend([
         "--append-system-prompt-file".into(),
         prompt_path.to_string_lossy().into(),
         "--add-dir".into(),
@@ -230,10 +260,7 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
         "--effort".into(),
         effort_word(spec.effort, Effort::Max).into(),
     ]);
-    args.push(match inp.resume_session {
-        None => first_prompt(inp, &mut files),
-        Some(_) => resume_prompt(spec.agent),
-    });
+    args.extend(prompt_arg(inp, &mut files));
     LaunchPlan {
         program: inp.command.clone(),
         args,
@@ -311,6 +338,8 @@ fn plan_codex(inp: &LaunchInput<'_>) -> LaunchPlan {
         ),
         toml_str("trusted"),
     );
+    // Codex updates itself on startup and then exits, which ends the run before it starts.
+    config("check_for_update_on_startup", "false".into());
     config("developer_instructions", toml_str(&spec.system_prompt));
     config(
         "model_reasoning_effort",
@@ -326,10 +355,7 @@ fn plan_codex(inp: &LaunchInput<'_>) -> LaunchPlan {
         "-m".into(),
         spec.route.model.clone(),
     ]);
-    args.push(match inp.resume_session {
-        None => first_prompt(inp, &mut files),
-        Some(_) => resume_prompt(spec.agent),
-    });
+    args.extend(prompt_arg(inp, &mut files));
     LaunchPlan {
         program: inp.command.clone(),
         args,
@@ -448,10 +474,7 @@ fn plan_grok(inp: &LaunchInput<'_>) -> LaunchPlan {
         "--reasoning-effort".into(),
         effort_word(spec.effort, Effort::High).into(),
     ]);
-    args.push(match inp.resume_session {
-        None => first_prompt(inp, &mut files),
-        Some(_) => resume_prompt(spec.agent),
-    });
+    args.extend(prompt_arg(inp, &mut files));
     let mut env = base_env(inp);
     env.push(("GROK_HOME".into(), farm.to_string_lossy().into()));
     env.push(("GROK_SUBAGENTS".into(), "0".into()));
@@ -514,11 +537,9 @@ fn plan_agy(inp: &LaunchInput<'_>) -> LaunchPlan {
         "--effort".into(),
         effort_word(spec.effort, Effort::High).into(),
     ]);
-    let prompt = match inp.resume_session {
-        None => first_prompt(inp, &mut files),
-        Some(_) => resume_prompt(spec.agent),
-    };
-    args.extend(["-i".into(), prompt]);
+    if let Some(prompt) = prompt_arg(inp, &mut files) {
+        args.extend(["-i".into(), prompt]);
+    }
     LaunchPlan {
         program: inp.command.clone(),
         args,
@@ -658,6 +679,60 @@ pub(crate) mod tests {
         assert!(p.env.iter().any(|(k, v)| k == ENV_TOKEN && v == "tok"));
         // The prompt must follow a non-variadic flag so commander does not swallow it.
         assert_eq!(p.args[p.args.len() - 3], "--effort");
+    }
+
+    #[test]
+    fn resumed_session_starts_with_the_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut s = spec(HarnessKind::Claude, "haiku", tmp.path());
+        s.resume = Some(ostra_core::exec::ResumeInfo {
+            from: ExecutionId::from("x_old"),
+            native_session_id: Some("sid-1".into()),
+            note: Some("Continue the workflow.".into()),
+            inspect: false,
+        });
+        let mut inp = input(&s, HarnessKind::Claude, tmp.path());
+        inp.resume_session = Some("sid-1".into());
+        let p = plan(&inp);
+        assert_eq!(p.args.last().unwrap(), "Continue the workflow.");
+        let i = p.args.iter().position(|a| a == "--resume").unwrap();
+        assert_eq!(p.args[i + 1], "sid-1");
+    }
+
+    #[test]
+    fn inspection_reopens_the_session_with_no_prompt_and_no_tools() {
+        let tmp = tempfile::tempdir().unwrap();
+        for h in [
+            HarnessKind::Claude,
+            HarnessKind::Codex,
+            HarnessKind::Grok,
+            HarnessKind::Agy,
+        ] {
+            let mut s = spec(h, "m", tmp.path());
+            s.resume = Some(ostra_core::exec::ResumeInfo {
+                from: ExecutionId::from("x_old"),
+                native_session_id: Some("sid-1".into()),
+                note: None,
+                inspect: true,
+            });
+            let mut inp = input(&s, h, tmp.path());
+            inp.resume_session = Some("sid-1".into());
+            let p = plan(&inp);
+            assert!(p.args.iter().any(|a| a == "sid-1"), "{h:?} does not resume");
+            assert!(
+                !p.args
+                    .iter()
+                    .any(|a| a.contains("Repo root") || a.contains("resumed")),
+                "{h:?} sends a prompt: {:?}",
+                p.args
+            );
+            assert!(!p.args.contains(&"-i".to_string()), "{h:?}");
+            if h == HarnessKind::Claude {
+                let i = p.args.iter().position(|a| a == "--tools").unwrap();
+                assert!(!p.args[i + 1].contains("ToolSearch"));
+                assert!(!p.args.contains(&"--mcp-config".to_string()));
+            }
+        }
     }
 
     #[test]

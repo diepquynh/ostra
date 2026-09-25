@@ -12,7 +12,8 @@ use crate::pty::{DEFAULT_COLS, DEFAULT_ROWS, PtyRegistry, PtySession};
 use crate::term_log::TermLog;
 use ostra_core::config::GlobalConfig;
 use ostra_core::exec::{
-    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec, Executor,
+    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
+    ExecutionStatus, Executor,
 };
 use ostra_core::paths::{harness_execution_dir, terminal_transcript};
 use ostra_core::{ExecutorKind, HarnessKind};
@@ -74,6 +75,26 @@ pub const TRUST_MARKERS: &[&str] = &[
     "i trust this folder",
 ];
 
+/// A new-model offer at startup (Codex 0.157 "Meet GPT-6 Luna"). Ostra keeps the routed model,
+/// because accepting the offer switches the run and the user's default model.
+pub const MODEL_OFFER_MARKERS: &[&str] = &["use existing model"];
+
+/// Which key keeps the current model on a new-model offer: Enter when "Use existing model" is
+/// highlighted, else Down to move to it.
+fn keep_model_key(screen: &str) -> Option<TrustKey> {
+    let selected = screen.lines().map(str::trim_start).find(|t| {
+        t.starts_with('❯') || t.starts_with('›') || t.starts_with('▸') || t.starts_with("> ")
+    });
+    let l = selected?.to_lowercase();
+    if l.contains("use existing") {
+        Some(TrustKey::Confirm)
+    } else if l.contains("try new") {
+        Some(TrustKey::Down)
+    } else {
+        None
+    }
+}
+
 /// A session id the harness printed, such as Antigravity's `agy --conversation=<id>` resume line.
 fn screen_session_id(screen: &str) -> Option<String> {
     let at = screen.find("--conversation=")? + "--conversation=".len();
@@ -107,8 +128,11 @@ fn trust_key(screen: &str) -> Option<TrustKey> {
             && option_like(t)
     })?;
     let l = selected.to_lowercase();
-    let positive =
-        l.contains("yes") && !l.contains("no,") && !l.contains("quit") && !l.contains("exit");
+    // Codex 0.157 words the yes option "Trust and continue".
+    let positive = (l.contains("yes") || l.contains("trust and continue"))
+        && !l.contains("no,")
+        && !l.contains("quit")
+        && !l.contains("exit");
     Some(if positive {
         TrustKey::Confirm
     } else {
@@ -278,6 +302,7 @@ impl HarnessExecutor {
         let (mut trust_steps, mut nudges) = (0u32, 0u32);
         let mut submit_seen_at: Option<Instant> = None;
         let mut reported_session: Option<String> = None;
+        let inspect = spec.resume.as_ref().is_some_and(|r| r.inspect);
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return End::Cancelled,
@@ -293,7 +318,7 @@ impl HarnessExecutor {
                     id: reported_session.clone().unwrap_or_default(),
                 });
             }
-            if s.submit.is_some() {
+            if !inspect && s.submit.is_some() {
                 let at = *submit_seen_at.get_or_insert_with(Instant::now);
                 let agy_quiet =
                     harness == HarnessKind::Agy && pty.idle_for() >= AGY_QUIET_AFTER_SUBMIT;
@@ -302,7 +327,7 @@ impl HarnessExecutor {
                 }
                 continue;
             }
-            if s.gave_up {
+            if !inspect && s.gave_up {
                 return End::GaveUp;
             }
             if Instant::now() >= deadline {
@@ -326,6 +351,21 @@ impl HarnessExecutor {
                     }
                     tokio::time::sleep(Duration::from_millis(400)).await;
                 }
+                if MODEL_OFFER_MARKERS.iter().any(|m| text.contains(m)) {
+                    match keep_model_key(&pty.screen_text()) {
+                        None => {}
+                        Some(TrustKey::Confirm) => {
+                            let _ = pty.write(b"\r");
+                            host.emit(ExecutionDelta::Status {
+                                message: "Declined the harness's new-model offer, so the run keeps its routed model.".into(),
+                            });
+                        }
+                        Some(TrustKey::Down) => {
+                            let _ = pty.write(b"\x1b[B");
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                }
                 if needs_login(&text) {
                     return End::Auth;
                 }
@@ -338,7 +378,8 @@ impl HarnessExecutor {
                     live.note_session(Some(id), None);
                 }
             }
-            if s.last_activity.elapsed().min(pty.idle_for()) >= idle_nudge {
+            // The user drives an inspection; it ends when they leave the CLI or stop it.
+            if !inspect && s.last_activity.elapsed().min(pty.idle_for()) >= idle_nudge {
                 if nudges >= MAX_IDLE_NUDGES {
                     return End::Idle;
                 }
@@ -365,6 +406,9 @@ impl Executor for HarnessExecutor {
             return ExecutionResult::error("the harness executor was given a native route");
         };
         let live = self.live.register(spec.id.clone(), spec.agent, harness);
+        if spec.resume.as_ref().is_some_and(|r| r.inspect) {
+            live.set_inspect();
+        }
         let result = match self.launch(&spec, harness, &live, &host).await {
             Ok(pty) => {
                 self.ptys.insert(spec.id.clone(), pty.clone());
@@ -383,17 +427,30 @@ impl Executor for HarnessExecutor {
                 // Stopped before the final result, so a late live reading cannot overwrite it.
                 stop_following.cancel();
                 let _ = follower.await;
+                if matches!(end, End::Cancelled) {
+                    // Esc ends the CLI's turn so its session is saved whole and can be resumed.
+                    let _ = pty.write(b"\x1b");
+                    tokio::time::sleep(Duration::from_millis(400)).await;
+                }
                 let screen = pty.screen_text();
                 pty.terminate(Duration::from_secs(3)).await;
                 self.ptys.remove(&spec.id);
-                outcome::result(
-                    end,
-                    harness,
-                    &spec.agent.submit_tool_name(),
-                    &live.snapshot(),
-                    &screen,
-                    &home,
-                )
+                let inspect = spec.resume.as_ref().is_some_and(|r| r.inspect);
+                if inspect && matches!(end, End::Exited(..) | End::Timeout(_)) {
+                    let mut r = ExecutionResult::with_status(ExecutionStatus::Ok);
+                    r.native_session_id = live.snapshot().session_id;
+                    r.final_text = "The read-only session ended.".into();
+                    r
+                } else {
+                    outcome::result(
+                        end,
+                        harness,
+                        &spec.agent.submit_tool_name(),
+                        &live.snapshot(),
+                        &screen,
+                        &home,
+                    )
+                }
             }
             Err(message) => ExecutionResult::error(message),
         };
@@ -405,6 +462,24 @@ impl Executor for HarnessExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_0_157_trust_prompt_is_accepted() {
+        let prompt = "  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Quit\n";
+        assert!(matches!(trust_key(prompt), Some(TrustKey::Confirm)));
+        let on_quit = "  1. Trust and continue\n› 2. Quit\n";
+        assert!(matches!(trust_key(on_quit), Some(TrustKey::Down)));
+    }
+
+    #[test]
+    fn a_new_model_offer_keeps_the_routed_model() {
+        let offer =
+            "  Meet GPT-6 Luna\n\n› 1. Try new model\n  2. Use existing model\n  enter/esc confirm";
+        assert!(matches!(keep_model_key(offer), Some(TrustKey::Down)));
+        let moved = "  1. Try new model\n› 2. Use existing model\n";
+        assert!(matches!(keep_model_key(moved), Some(TrustKey::Confirm)));
+        assert!(keep_model_key("› Ask Codex to do anything").is_none());
+    }
 
     #[test]
     fn session_id_from_screen() {

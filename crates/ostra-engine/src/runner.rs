@@ -6,17 +6,18 @@ use crate::judge::{self, output_schema};
 use crate::judge_input::{self, ProjectFacts, YoloPlan};
 use crate::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use crate::services::{Notice, Services, SpawnEnv};
-use crate::state::{AUTO_FIXABLE_PARAM, SessionState};
+use crate::state::{AUTO_FIXABLE_PARAM, Interrupt, SessionState, purpose_key};
+use crate::uploads;
 use crate::view;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::api::{
     ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary,
-    TreeSession,
+    TreeSession, UploadRef,
 };
 use ostra_core::config::{PermissionRules, ProjectProfile, RouteQuery, load_toml, resolve_route};
 use ostra_core::event::{
-    AnswerSource, CommandPurpose, ExecPurpose, GateAnswer, GatePayload, JudgeKind, ProjectRef,
-    SessionEvent, SessionKind, SessionOptions, StoredEvent,
+    AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, GateAnswer,
+    GatePayload, JudgeKind, ProjectRef, SessionEvent, SessionKind, SessionOptions, StoredEvent,
 };
 use ostra_core::exec::{
     CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
@@ -215,6 +216,8 @@ impl Engine {
             req.request,
             req.options,
             &req.projects,
+            &req.files,
+            &req.uploads,
         )
     }
 
@@ -240,6 +243,8 @@ impl Engine {
                 ..Default::default()
             },
             &[project.to_string()],
+            &[],
+            &[],
         )
     }
 
@@ -249,6 +254,8 @@ impl Engine {
         request: String,
         mut options: SessionOptions,
         pinned: &[String],
+        files: &[ContextFile],
+        uploads: &[String],
     ) -> Result<SessionSummary, EngineError> {
         let settings = self.inner.services.workspace();
         if settings.yolo.default {
@@ -283,9 +290,12 @@ impl Engine {
                 projects.sort_by_key(|p| !pinned.contains(&p.key));
             }
         }
+        let files = validate_files(files, &projects)?;
+        uploads::check(&self.inner.workspace_root, uploads)?;
         let id = SessionId::new();
         let session_root = paths::session_root(&self.inner.workspace_root, id.as_str());
         std::fs::create_dir_all(&session_root).map_err(|e| EngineError::Invalid(e.to_string()))?;
+        let uploads = uploads::claim(&self.inner.workspace_root, &session_root, uploads)?;
         let gitignore = paths::sessions_root(&self.inner.workspace_root).join(".gitignore");
         if !gitignore.exists() {
             let _ = std::fs::write(gitignore, "*\n");
@@ -317,6 +327,8 @@ impl Engine {
                 projects,
                 workspace_root: self.inner.workspace_root.clone(),
                 session_root,
+                files,
+                uploads,
             },
         )?;
         self.inner.ensure_driver(&id, live);
@@ -502,17 +514,122 @@ impl Engine {
             .ok_or_else(|| EngineError::NotFound(session.to_string()))
     }
 
-    pub fn amend(&self, session: &SessionId, text: String) -> Result<SessionSummary, EngineError> {
-        if text.trim().is_empty() {
-            return Err(EngineError::Invalid("Say what to add or change.".into()));
+    /// Add context to a running session. `Now` interrupts every running execution first, and
+    /// each re-runs with the new context (Rule C2).
+    pub fn amend(
+        &self,
+        session: &SessionId,
+        text: String,
+        files: Vec<ContextFile>,
+        uploads: Vec<String>,
+        delivery: ContextDelivery,
+    ) -> Result<SessionSummary, EngineError> {
+        let text = text.trim().to_string();
+        if text.is_empty() && files.is_empty() && uploads.is_empty() {
+            return Err(EngineError::Invalid(
+                "Say what to add or change, tag a file with @, or upload one.".into(),
+            ));
         }
-        if self.state(session)?.is_terminal() {
+        let st = self.state(session)?;
+        if st.is_terminal() {
             return Err(EngineError::Invalid(
                 "This session has ended. Start a new task instead.".into(),
             ));
         }
-        self.inner
-            .append(session, SessionEvent::RequestAmended { text })?;
+        let files = validate_files(&files, &st.projects)?;
+        let uploads = uploads::claim(&self.inner.workspace_root, &st.session_root, &uploads)?;
+        self.inner.append(
+            session,
+            SessionEvent::RequestAmended {
+                text,
+                files,
+                uploads,
+                delivery,
+            },
+        )?;
+        if delivery == ContextDelivery::Now {
+            self.interrupt(session, Interrupt::Context)?;
+        }
+        self.summary_of(session)
+    }
+
+    /// Stage an uploaded file until a new session or an addition claims it (Rule C3).
+    pub fn stage_upload(&self, name: &str, bytes: &[u8]) -> Result<UploadRef, EngineError> {
+        uploads::stage(&self.inner.workspace_root, name, bytes)
+    }
+
+    /// Rule P1: pause a session. Running executions are interrupted and nothing new starts
+    /// until [`Engine::resume_session`].
+    pub fn pause_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError> {
+        let st = self.state(session)?;
+        if st.is_terminal() {
+            return Err(EngineError::Invalid(
+                "This session has already ended.".into(),
+            ));
+        }
+        if st.paused {
+            return Err(EngineError::Invalid(
+                "This session is already paused.".into(),
+            ));
+        }
+        self.inner.append(session, SessionEvent::SessionPaused)?;
+        self.interrupt(session, Interrupt::Pause)?;
+        self.summary_of(session)
+    }
+
+    /// Rule P2: continue a paused session. Each paused execution resumes where it stopped.
+    pub fn resume_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError> {
+        let st = self.state(session)?;
+        if !st.paused || st.is_terminal() {
+            return Err(EngineError::Invalid("This session is not paused.".into()));
+        }
+        self.inner.append(session, SessionEvent::SessionResumed)?;
+        self.summary_of(session)
+    }
+
+    /// Cancel the executions the fold marked as interrupting, and deny their waiting permission
+    /// asks, because the run that asked is ending.
+    fn interrupt(&self, session: &SessionId, why: Interrupt) -> Result<(), EngineError> {
+        let st = self.state(session)?;
+        let ids: Vec<&ExecutionId> = st
+            .interrupting
+            .iter()
+            .filter(|(_, w)| **w == why)
+            .map(|(id, _)| id)
+            .collect();
+        for id in &ids {
+            if let Some((_, token)) = lock(&self.inner.execs).get(*id) {
+                token.cancel();
+            }
+        }
+        let asks: Vec<GateId> = st
+            .open_gates()
+            .filter(|g| matches!(&g.payload, GatePayload::Permission { execution, .. } if ids.contains(&execution)))
+            .map(|g| g.id.clone())
+            .collect();
+        for g in asks {
+            if let Some(tx) = lock(&self.inner.permission_waiters).remove(&g) {
+                let _ = tx.send(PermissionAnswer::Deny);
+            }
+            self.inner.append(
+                session,
+                SessionEvent::GateAnswered {
+                    id: g,
+                    source: AnswerSource::Engine,
+                    answer: GateAnswer::Permission {
+                        answer: PermissionAnswer::Deny,
+                    },
+                    reason: Some(format!(
+                        "The execution that asked ended: {}",
+                        why.message().to_lowercase()
+                    )),
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    fn summary_of(&self, session: &SessionId) -> Result<SessionSummary, EngineError> {
         self.inner
             .db
             .get_session(session)?
@@ -586,6 +703,8 @@ impl Engine {
                 ResumeInfo {
                     from: id.clone(),
                     native_session_id: view.native_session_id.clone(),
+                    note: None,
+                    inspect: false,
                 },
             );
         }
@@ -597,6 +716,134 @@ impl Engine {
             },
         )?;
         Ok(())
+    }
+
+    /// Reopen an ended harness execution's session so the user can read its trace and ask about
+    /// it (HANDOVER 10.2). Runs outside the pipeline, and every tool call in it is refused.
+    pub fn inspect_execution(&self, id: &ExecutionId) -> Result<ExecutionId, EngineError> {
+        let view = self
+            .inner
+            .db
+            .get_execution(id)?
+            .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?;
+        let ExecutorKind::Harness(_) = view.executor else {
+            return Err(EngineError::Invalid(
+                "Only a harness execution has a session to reopen. Read a native run in its Activity tab.".into(),
+            ));
+        };
+        if matches!(view.purpose, Some(ExecPurpose::Inspect { .. })) {
+            return Err(EngineError::Invalid(
+                "Reopen the original run instead of a read-only session.".into(),
+            ));
+        }
+        if view.status == ExecutionStatus::Running {
+            return Err(EngineError::Invalid(
+                "This execution is still running. Watch it in its Terminal tab instead.".into(),
+            ));
+        }
+        let sid = view.native_session_id.clone().ok_or_else(|| {
+            EngineError::Invalid(
+                "This run recorded no harness session, so there is nothing to reopen.".into(),
+            )
+        })?;
+        let session = view
+            .session
+            .clone()
+            .ok_or_else(|| EngineError::Invalid("This run belongs to no session.".into()))?;
+        let st = self.state(&session)?;
+        if st.resume_from.values().any(|x| x == id) {
+            return Err(EngineError::Invalid(
+                "Continue or stop the session first, because the paused agent resumes this conversation and would see what you ask.".into(),
+            ));
+        }
+        let executor = self.inner.services.executor(view.executor).ok_or_else(|| {
+            EngineError::Invalid(format!("The {} executor is not available.", view.executor))
+        })?;
+        let repo_root = st
+            .project_path(&view.project)
+            .unwrap_or_else(|| self.inner.workspace_root.clone());
+        let new = ExecutionId::new();
+        let global = self.inner.services.global();
+        let settings = self.inner.services.workspace();
+        let ctx = ExecContext {
+            execution_id: new.clone(),
+            session_id: None,
+            agent: view.agent,
+            initializer_mode: None,
+            executor: view.executor,
+            workspace_root: self.inner.workspace_root.clone(),
+            repo_root: repo_root.clone(),
+            project_key: view.project.clone(),
+            session_dir: st.project_session_dir(&view.project),
+            session_root: st.session_root.clone(),
+            report_file: None,
+            phase: None,
+            yolo: false,
+            permission_mode: ostra_core::config::PermissionMode::Plan,
+            permissions: PermissionRules::merged(&[
+                &global.permissions,
+                &settings.permissions.rules(),
+            ]),
+            protected_paths: self.inner.services.protected_paths(),
+            memory_db: paths::project_memory_db(&repo_root),
+        };
+        self.inner.db.insert_execution(&NewExecution {
+            id: new.clone(),
+            session: None,
+            agent: view.agent,
+            purpose: Some(ExecPurpose::Inspect { of: id.clone() }),
+            stage: None,
+            project: view.project.clone(),
+            executor: view.executor,
+            model: view.model.clone(),
+            params: serde_json::json!({ "inspects": id }),
+            spawn_block: String::new(),
+            report_path: None,
+            native_session_id: Some(sid.clone()),
+        })?;
+        let token = CancellationToken::new();
+        lock(&self.inner.execs).insert(new.clone(), (None, token.clone()));
+        let inner = self.inner.clone();
+        let host = Arc::new(EngineHost {
+            inner: inner.clone(),
+            session: None,
+            execution: new.clone(),
+            repo_root: Some(repo_root),
+        });
+        let spec = ExecutionSpec {
+            id: new.clone(),
+            agent: view.agent,
+            route: ostra_core::config::ResolvedRoute {
+                executor: view.executor,
+                model: view.model.clone(),
+                tier: None,
+            },
+            effort: ostra_core::model::Effort::Low,
+            system_prompt: INSPECT_PROMPT.into(),
+            first_message: String::new(),
+            capabilities: vec![],
+            submit_schema: Value::Null,
+            timeout_secs: INSPECT_TIMEOUT_SECS,
+            ctx,
+            resume: Some(ResumeInfo {
+                from: id.clone(),
+                native_session_id: Some(sid),
+                note: None,
+                inspect: true,
+            }),
+            harness_session_id: None,
+        };
+        let exec_id = new.clone();
+        tokio::spawn(async move {
+            let result = executor.run(spec, host, token).await;
+            let _ = inner.db.finish_execution(&exec_id, &result);
+            lock(&inner.execs).remove(&exec_id);
+            let _ = inner.tx.send(EngineNotice::ExecutionStatus {
+                execution: exec_id,
+                status: result.status,
+            });
+        });
+        Ok(new)
     }
 
     /// A side-panel question (HANDOVER 12.3). Runs outside the pipeline and changes no state.
@@ -656,6 +903,77 @@ impl Engine {
 }
 
 pub const STOPPED_BY_USER: &str = "Stopped by the user.";
+/// The system prompt of a read-only reopened session.
+const INSPECT_PROMPT: &str = "The user reopened this session to read what you did and ask about it. The work has ended. Answer from the conversation above and do not call any tool, because Ostra refuses every tool call in this session. Keep answers short.";
+/// A read-only session ends on its own after this long.
+const INSPECT_TIMEOUT_SECS: u64 = 4 * 60 * 60;
+/// What a paused execution hears when the session continues (Rule P2).
+pub const PAUSE_RESUME_NOTE: &str = "Continue the workflow.";
+/// Files one request or addition may attach (Rule C1).
+pub const MAX_CONTEXT_FILES: usize = 50;
+
+/// Rule C1: every attached path is an existing file or folder inside one of the session's projects.
+/// Returns them with normalized paths, a folder ending in `/`, deduplicated.
+fn validate_files(
+    files: &[ContextFile],
+    projects: &[ProjectRef],
+) -> Result<Vec<ContextFile>, EngineError> {
+    if files.len() > MAX_CONTEXT_FILES {
+        return Err(EngineError::Invalid(format!(
+            "Attach at most {MAX_CONTEXT_FILES} files, because each one is read by every agent."
+        )));
+    }
+    let mut out: Vec<ContextFile> = vec![];
+    for f in files {
+        let Some(project) = projects.iter().find(|p| p.key == f.project) else {
+            return Err(EngineError::Invalid(format!(
+                "Tag files from this session's projects only. `{}` is not one of them.",
+                f.project
+            )));
+        };
+        let rel = f.path.trim().replace('\\', "/");
+        let rel = rel
+            .trim_start_matches("./")
+            .trim_end_matches('/')
+            .to_string();
+        let outside = || {
+            EngineError::Invalid(format!(
+                "Tag a file or folder inside `{}`. `{}` is not one.",
+                f.project, f.path
+            ))
+        };
+        let path = Path::new(&rel);
+        if rel.is_empty()
+            || path.is_absolute()
+            || path
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(outside());
+        }
+        let root = project.path.canonicalize().map_err(|_| outside())?;
+        let full = root.join(path).canonicalize().map_err(|_| outside())?;
+        let wants_folder = f.path.trim_end().ends_with('/');
+        if !full.starts_with(&root)
+            || !(full.is_file() || full.is_dir())
+            || (wants_folder && !full.is_dir())
+        {
+            return Err(outside());
+        }
+        let file = ContextFile {
+            project: f.project.clone(),
+            path: if full.is_dir() {
+                format!("{rel}/")
+            } else {
+                rel
+            },
+        };
+        if !out.contains(&file) {
+            out.push(file);
+        }
+    }
+    Ok(out)
+}
 
 /// Stop a session while no server holds it, so a later start does not recover and re-run its
 /// executions. Running executions become cancelled and keep what they spent. Returns how many
@@ -704,17 +1022,6 @@ pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usi
         },
     )?;
     Ok(running.len())
-}
-
-fn purpose_key(p: &ExecPurpose) -> String {
-    match p {
-        ExecPurpose::Implement { phase, .. } | ExecPurpose::Verify { phase } => {
-            format!("work:{phase}:false")
-        }
-        ExecPurpose::WriteTest { phase, .. } => format!("work:{phase}:true"),
-        ExecPurpose::Review { phase, tests, .. } => format!("review:{phase}:{tests}"),
-        other => serde_json::to_string(other).unwrap_or_default(),
-    }
 }
 
 fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError> {
@@ -1560,7 +1867,7 @@ impl Inner {
     ) -> Result<(), EngineError> {
         let _slot = self.acquire_slot().await;
         let st = self.snapshot(session)?;
-        if st.is_terminal() {
+        if st.is_terminal() || st.paused {
             return Ok(());
         }
         let global = self.services.global();
@@ -1664,7 +1971,24 @@ impl Inner {
             );
         }
         let id = ExecutionId::new();
-        let resume = lock(&self.resume_hints).remove(&purpose_key(&req.purpose));
+        let hint = lock(&self.resume_hints).remove(&purpose_key(&req.purpose));
+        // Rule P2: a run the pause interrupted continues from where it stopped.
+        let resume = match req
+            .resumes
+            .as_ref()
+            .and_then(|from| st.executions.get(from))
+        {
+            Some(rec) => Some(ResumeInfo {
+                from: rec.id.clone(),
+                native_session_id: rec
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.native_session_id.clone()),
+                note: Some(PAUSE_RESUME_NOTE.into()),
+                inspect: false,
+            }),
+            None => hint,
+        };
         let ctx = ExecContext {
             execution_id: id.clone(),
             session_id: Some(session.clone()),
@@ -1726,6 +2050,10 @@ impl Inner {
         });
         let token = CancellationToken::new();
         lock(&self.execs).insert(id.clone(), (Some(session.clone()), token.clone()));
+        // A pause or an interrupt that landed while this run was being set up.
+        if self.snapshot(session)?.interrupting.contains_key(&id) {
+            token.cancel();
+        }
         let host = Arc::new(EngineHost {
             inner: self.clone(),
             session: Some(session.clone()),
@@ -1757,8 +2085,14 @@ impl Inner {
             resume,
             harness_session_id,
         };
-        let result = executor.run(spec, host, token).await;
+        let mut result = executor.run(spec, host, token).await;
         lock(&self.execs).remove(&id);
+        if result.status == ExecutionStatus::Cancelled
+            && let Some(why) = self.snapshot(session)?.interrupting.get(&id).copied()
+        {
+            result.status = ExecutionStatus::Interrupted;
+            result.error = Some(why.message().into());
+        }
         let _ = self.db.finish_execution(&id, &result);
         let _ = self.tx.send(EngineNotice::ExecutionStatus {
             execution: id.clone(),

@@ -404,8 +404,66 @@ fn find_cycle<K: Ord + Copy + std::fmt::Display>(edges: &BTreeMap<K, Vec<K>>) ->
         .find_map(|k| visit(*k, edges, &mut vec![], &mut done))
 }
 
+/// The skills installed in a project: each skills dir entry holding a `SKILL.md`.
+fn installed_skills(root: &Path) -> BTreeSet<String> {
+    crate::paths::project_skill_dirs(root)
+        .into_iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().join("SKILL.md").is_file())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect()
+}
+
+/// Rules P6 and P7: in a repo with skills installed, each phase with code steps names the skills
+/// they need, and every named skill exists there. The implementer loads only what the phase file
+/// lists, so a plan without skills builds without the project's patterns.
+fn plan_skills(d: &PlanDoc, out: &mut Issues, installed: &dyn Fn(&str) -> BTreeSet<String>) {
+    let mut by_root: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for p in &d.phases {
+        let have = by_root
+            .entry(p.repo_root.as_str())
+            .or_insert_with(|| installed(&p.repo_root));
+        if have.is_empty() {
+            continue;
+        }
+        let at = Some(format!("phase {}", p.id));
+        let code_steps = p
+            .steps
+            .iter()
+            .filter(|s| !matches!(s.change, super::FileChange::Delete))
+            .count();
+        if code_steps > 0 && p.steps.iter().all(|s| s.skills.is_empty()) {
+            out.error(
+                at.clone(),
+                format!(
+                    "Name each step's skills from {}'s INVENTORY Skill Application Mapping (P6): no step in phase {} names one, so the implementer would build without the project's patterns. Installed: {}.",
+                    p.repo,
+                    p.id,
+                    have.iter().cloned().collect::<Vec<_>>().join(", ")
+                ),
+            );
+        }
+        for s in &p.steps {
+            for k in &s.skills {
+                if !have.contains(k) {
+                    out.error(
+                        Some(format!("step {}", s.id)),
+                        format!(
+                            "Use a skill installed in {}: `{k}` is not one. Take the exact name from its INVENTORY Skill Application Mapping (P6).",
+                            p.repo
+                        ),
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn plan(d: &PlanDoc, out: &mut Issues) {
     out.questions(&d.clarifying_questions);
+    plan_skills(d, out, &|root| installed_skills(Path::new(root)));
     out.unique(
         "phase",
         d.phases

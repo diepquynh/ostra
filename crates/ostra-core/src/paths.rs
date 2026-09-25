@@ -56,6 +56,16 @@ pub fn sessions_root(workspace: &Path) -> PathBuf {
     workspace_runtime(workspace).join("sessions")
 }
 
+/// Uploads waiting for a session or an addition to claim them.
+pub fn upload_staging(workspace: &Path) -> PathBuf {
+    workspace_runtime(workspace).join("uploads")
+}
+
+/// Where a session keeps the files the user uploaded (Rule C3).
+pub fn session_uploads(session_root: &Path) -> PathBuf {
+    session_root.join("uploads")
+}
+
 /// The session's root dir. Cross-project artifacts (spec, plan) live here.
 pub fn session_root(workspace: &Path, session_id: &str) -> PathBuf {
     sessions_root(workspace).join(session_id)

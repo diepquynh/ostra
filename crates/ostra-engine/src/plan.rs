@@ -208,6 +208,7 @@ fn purpose_summary(p: &ExecPurpose) -> String {
             format!("write-test phase {phase} {work:?}").to_lowercase()
         }
         ExecPurpose::ModuleDocs { project } => format!("docs {project}"),
+        ExecPurpose::Inspect { of } => format!("inspect {of}"),
         ExecPurpose::PromptGen { handoff_for } => {
             if handoff_for.is_some() {
                 "handoff".into()
@@ -264,7 +265,13 @@ pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step> {
 }
 
 impl<'a> Planner<'a> {
-    fn push(&mut self, step: Step) {
+    fn push(&mut self, mut step: Step) {
+        // Rule P2: a spawn that replaces a paused run resumes it.
+        if let Step::Spawn(req) = &mut step
+            && req.resumes.is_none()
+        {
+            req.resumes = self.s.resume_from.get(&purpose_key(&req.purpose)).cloned();
+        }
         // Budget guard: once the session has spent its budget, no new execution starts until
         // the user raises it. Running executions finish.
         if matches!(step, Step::Spawn(_))
@@ -333,7 +340,8 @@ impl<'a> Planner<'a> {
 
     fn run(&mut self) {
         let s = self.s;
-        if !s.created || s.is_terminal() {
+        // Rule P1: a paused session starts nothing, not even a YOLO answer.
+        if !s.created || s.is_terminal() || s.paused {
             return;
         }
         // Under YOLO every open gate is answered by the engine, with no wait (HANDOVER 10.5).

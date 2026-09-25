@@ -6,7 +6,6 @@ import {
   answeredGates,
   defaultLane,
   eventLine,
-  executionGroups,
   laneStates,
   mergeEvents,
   openGatesInOrder,
@@ -127,21 +126,6 @@ describe("board rows", () => {
       stageMeta(stage("review", "done", { detail: "passed", project: "backend", label: "Review phase 1" }), execs),
     ).toBe("passed · backend");
     expect(stageMeta(stage("research", "done", { project: "web", label: "Explore web" }), execs)).toBeUndefined();
-  });
-
-  it("groups executions by agent and project, oldest run first, with short executor names", () => {
-    const groups = executionGroups(sessionDetail);
-    expect(groups.map((g) => g.key)).toEqual(sessionDetail.execution_groups.map((g) => g.group));
-    const impl = groups.find((g) => g.key === "implementer:backend")!;
-    expect(impl.agent).toBe("Implementer");
-    expect(impl.runs).toEqual([
-      { id: "x_imp1", label: "Phase 1", status: "ok", executor: "codex", cost: "$0.30" },
-      { id: "x_imp2", label: "Phase 2", status: "ok", executor: "native", cost: "$0.30" },
-    ]);
-    expect(groups.find((g) => g.key === "implementer:web")!.runs[0]).toMatchObject({
-      executor: "claude",
-      status: "running",
-    });
   });
 
   it("lays phases out in dependency columns for the phase graph", () => {

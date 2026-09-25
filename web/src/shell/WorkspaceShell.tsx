@@ -12,7 +12,7 @@ import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
 import { Button, Kbd, Menu, type MenuItem, StatusDot, Tabs, type Tone } from "../design";
 import { useAsync, useChannel } from "../lib/hooks";
-import { modKeys, shortcutOf } from "../lib/keys";
+import { isMac, modKeys, shortcutOf } from "../lib/keys";
 import { useWorkspaceTree } from "../lib/live";
 import { ConsoleContext, type ConsoleContextValue, type OpenOptions, type Theme } from "../lib/nav";
 import { paletteTarget } from "../lib/palette";
@@ -284,6 +284,31 @@ function Shell({ ws }: { ws: string }) {
       tabs.tabs.some((t, j) => !t.pinned && !stays(j))
         ? [{ label, onSelect: () => dispatch({ type: "closeMany", scope, id }) }]
         : [];
+    // Moves stay within the tab's group, pinned or not.
+    const pins = tabs.tabs.filter((t) => t.pinned).length;
+    const moves = (i: number, pinned: boolean): MenuItem[] => {
+      const [lo, hi] = pinned ? [0, pins - 1] : [pins, tabs.tabs.length - 1];
+      return [
+        ...(i > lo
+          ? [
+              {
+                label: "Move left",
+                hint: isMac ? "⇧⌘←" : "Ctrl+Shift+←",
+                onSelect: () => dispatch({ type: "move", id, to: i - 1 }),
+              },
+            ]
+          : []),
+        ...(i < hi
+          ? [
+              {
+                label: "Move right",
+                hint: isMac ? "⇧⌘→" : "Ctrl+Shift+→",
+                onSelect: () => dispatch({ type: "move", id, to: i + 1 }),
+              },
+            ]
+          : []),
+      ];
+    };
     return [
       { label: "Close", onSelect: () => dispatch({ type: "close", id }) },
       ...bulk("Close others", "others", (j) => j === at),
@@ -293,6 +318,7 @@ function Shell({ ws }: { ws: string }) {
         tabs.tabs.some((t) => t.pinned) ? { ...it, hint: "Keeps pinned" } : it,
       ),
       { type: "divider" },
+      ...moves(at, tab.pinned),
       {
         label: tab.pinned ? "Unpin" : "Pin",
         icon: tab.pinned ? "pin-off" : "pin",
@@ -364,6 +390,7 @@ function Shell({ ws }: { ws: string }) {
                   onChange={(id) => dispatch({ type: "activate", id })}
                   onClose={(id) => dispatch({ type: "close", id })}
                   onUnpin={(id) => dispatch({ type: "setPinned", id, pinned: false })}
+                  onMove={(id, to) => dispatch({ type: "move", id, to })}
                   onContextMenu={(id, e) => {
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     const x = e.clientX || r.left;

@@ -10,4 +10,9 @@ headings: Array<Heading>,
 /**
  * The typed document the markdown was rendered from, for research, spec, plan, and phase files.
  */
-document: DocumentView | null, };
+document: DocumentView | null, 
+/**
+ * Not UTF-8 text, or larger than the preview limit: `content` is empty and only a download is
+ * offered.
+ */
+binary: boolean, size: number, };

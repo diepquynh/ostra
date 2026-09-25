@@ -113,7 +113,7 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
   const nav = useNav();
   const { exec, status, activity: act, activityError, session } = useExecution(id);
   const [tab, setTab] = useState<"stream" | "tools">("stream");
-  const [busy, setBusy] = useState<"cancel" | "resume" | null>(null);
+  const [busy, setBusy] = useState<"cancel" | "resume" | "inspect" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const e = exec.data;
   const st = status ?? e?.status ?? "running";
@@ -163,6 +163,22 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
       const next = kind === "cancel" ? await api.cancelExecution(e.id) : await api.resumeExecution(e.id);
       exec.set(next);
       setTab("stream");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const inspects = e.purpose?.kind === "inspect" ? e.purpose.of : null;
+  const canInspect =
+    !running && !inspects && e.stream === "terminal" && !!e.native_session_id && !!e.session && !e.has_terminal;
+  const inspect = async () => {
+    setBusy("inspect");
+    setError(null);
+    try {
+      const view = await api.inspectExecution(e.id);
+      nav.open(`exec:${view.id}`);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -238,6 +254,7 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
             </Button>
           ) : (
             e.can_resume &&
+            !inspects &&
             !e.has_terminal && (
               <Button
                 size="sm"
@@ -250,6 +267,17 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
               </Button>
             )
           )}
+          {canInspect && (
+            <Button
+              size="sm"
+              icon="eye"
+              disabled={busy !== null}
+              onClick={() => void inspect()}
+              title="Reopen the harness session to read its work and ask about it. Every tool call is refused."
+            >
+              {busy === "inspect" ? "Opening…" : "Open the session"}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -260,6 +288,20 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
         onOpenReport={(p) => nav.open(`artifact:${p}`)}
       />
 
+      {inspects && (
+        <Banner
+          tone="info"
+          title="Read-only session"
+          actions={
+            <Button size="sm" onClick={() => nav.open(`exec:${inspects}`)}>
+              Open the original run
+            </Button>
+          }
+        >
+          This reopens a run that has ended so you can scroll its work and ask the agent about it in the terminal. Ostra
+          refuses every tool call here, because the work is done. Leave the CLI or cancel to close it.
+        </Banner>
+      )}
       {error && <Banner tone="bad">{error}</Banner>}
       {e.error && (
         <Banner tone="bad" title="The execution ended with an error">

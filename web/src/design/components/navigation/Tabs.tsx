@@ -1,4 +1,12 @@
-import { type CSSProperties, type KeyboardEvent, type MouseEvent, type ReactNode, useRef } from "react";
+import {
+  type CSSProperties,
+  type DragEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  useRef,
+  useState,
+} from "react";
 import { arrowIndex } from "../../focus";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
@@ -29,6 +37,11 @@ export interface TabsProps {
   onUnpin?: (id: string) => void;
   /** Right-click or the context-menu key on a tab. */
   onContextMenu?: (id: string, e: MouseEvent) => void;
+  /**
+   * Bar variant only: reorder. Tabs become draggable, and Ctrl+Shift+Left or Right moves the focused tab. `to` is the
+   * index the tab should end up at.
+   */
+  onMove?: (id: string, to: number) => void;
   variant?: "bar" | "underline" | "segmented";
   /** Accessible name for the tab list. */
   label?: string;
@@ -47,17 +60,44 @@ export function Tabs({
   onClose,
   onUnpin,
   onContextMenu,
+  onMove,
   variant = "underline",
   label,
   className = "",
   style,
 }: TabsProps) {
   const listRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const [drop, setDrop] = useState<{ index: number; after: boolean } | null>(null);
+  const movable = variant === "bar" && !!onMove;
   const selectedIndex = tabs.findIndex((t) => t.id === value);
+
+  const focusTab = (id: string) =>
+    requestAnimationFrame(() =>
+      Array.from(listRef.current?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [])
+        .find((el) => el.dataset.id === id)
+        ?.focus(),
+    );
+
+  const dropAt = (e: DragEvent, i: number) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return { index: i, after: e.clientX > r.left + r.width / 2 };
+  };
+
+  const endDrag = () => {
+    setDragging(null);
+    setDrop(null);
+  };
   const focusIndex = selectedIndex >= 0 ? selectedIndex : 0;
 
   const onKeyDown = (e: KeyboardEvent, i: number) => {
     const t = tabs[i];
+    if (movable && (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      onMove?.(t.id, i + (e.key === "ArrowLeft" ? -1 : 1));
+      focusTab(t.id);
+      return;
+    }
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
       onChange?.(t.id);
@@ -89,9 +129,50 @@ export function Tabs({
           <div
             key={t.id}
             role="tab"
+            data-id={t.id}
             aria-selected={active}
             tabIndex={i === focusIndex ? 0 : -1}
-            className={`os-tab ${active ? "os-tab--active" : ""}`}
+            className={[
+              "os-tab",
+              active && "os-tab--active",
+              dragging === t.id && "os-tab--dragging",
+              drop?.index === i && dragging !== t.id && (drop.after ? "os-tab--drop-after" : "os-tab--drop-before"),
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            draggable={movable || undefined}
+            onDragStart={
+              movable
+                ? (e) => {
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", t.id);
+                    setDragging(t.id);
+                  }
+                : undefined
+            }
+            onDragOver={
+              movable && dragging
+                ? (e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    const next = dropAt(e, i);
+                    if (next.index !== drop?.index || next.after !== drop?.after) setDrop(next);
+                  }
+                : undefined
+            }
+            onDrop={
+              movable && dragging
+                ? (e) => {
+                    e.preventDefault();
+                    const from = tabs.findIndex((x) => x.id === dragging);
+                    const { after } = dropAt(e, i);
+                    const slot = after ? i + 1 : i;
+                    if (from >= 0) onMove?.(dragging, slot > from ? slot - 1 : slot);
+                    endDrag();
+                  }
+                : undefined
+            }
+            onDragEnd={movable ? endDrag : undefined}
             onClick={() => onChange?.(t.id)}
             onKeyDown={(e) => onKeyDown(e, i)}
             onContextMenu={

@@ -160,6 +160,12 @@ impl Mapping {
             "Do not start subagents or delegate to another agent: every Ostra agent is a leaf, and Ostra \
              schedules all other work itself.\n",
         );
+        if let Some(submit) = self.tool("submit", executor, agent) {
+            out.push_str(&format!(
+                "\nWhen the task is finished and you have called `{submit}`, reply with only `Done!` and nothing \
+                 else, because Ostra reads your result from the submit call and any other text costs output tokens.\n"
+            ));
+        }
         out
     }
 }

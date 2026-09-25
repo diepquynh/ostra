@@ -2,8 +2,9 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { api } from "../../api";
 import * as f from "../../api/mock/fixtures";
-import { activityFor } from "../../api/mock/fixtures.execution";
+import { activityFor, executionView } from "../../api/mock/fixtures.execution";
 import type { ActivityItem, ExecutionView } from "../../api/types";
 import { foldActivity } from "../../lib/events";
 import { ConsoleContext, type ConsoleContextValue, type Nav } from "../../lib/nav";
@@ -116,6 +117,24 @@ describe("stream selection", () => {
     expect(text()).toContain("Tool calls seen by the hook bridge");
     expect(text()).toContain("no-tests-from-implementer");
     expect(text()).toContain("Asking you");
+  });
+});
+
+describe("read-only session", () => {
+  it("reopens an ended harness run and opens the new execution", async () => {
+    const open = vi.fn();
+    const ended: ExecutionView = { ...executionView("x_n1"), status: "stuck", has_terminal: false };
+    const get = vi.spyOn(api, "execution").mockResolvedValue(ended);
+    const inspect = vi.spyOn(api, "inspectExecution").mockResolvedValue({ ...ended, id: "x_look" });
+    await render(withNav(<ExecutionScreen ws={f.WS} id="x_n1" />, open));
+    const button = Array.from(host!.querySelectorAll("button")).find((b) => b.textContent === "Open the session")!;
+    expect(button).toBeTruthy();
+    await act(async () => button.click());
+    await settle();
+    expect(inspect).toHaveBeenCalledWith("x_n1");
+    expect(open).toHaveBeenCalledWith("exec:x_look");
+    get.mockRestore();
+    inspect.mockRestore();
   });
 });
 

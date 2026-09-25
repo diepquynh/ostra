@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
-import { api } from "../api";
+import { api, downloadUrl } from "../api";
 import { Markdown } from "../components/Markdown";
 import { EARS_NOTE } from "../content/stages";
-import { Banner, Button, Chip, IconButton, Spinner, TreeItem } from "../design";
+import { Banner, Button, Chip, Icon, IconButton, Spinner, TreeItem } from "../design";
 import { basename } from "../lib/format";
 import { useAsync, useStoredFlag } from "../lib/hooks";
 import { useWorkspaceTree } from "../lib/live";
@@ -138,6 +138,15 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
         onClick={() => shell.openDock(`In ${basename(path)}, `)}
       />
       <IconButton size="sm" icon="copy" label="Copy path" onClick={() => void navigator.clipboard?.writeText(path)} />
+      <a
+        className="art-download"
+        href={downloadUrl(path)}
+        download={basename(path)}
+        aria-label="Download"
+        title="Download"
+      >
+        <Icon name="download" size={14} />
+      </a>
       <IconButton size="sm" icon="refresh-ccw" label="Reload" onClick={art.reload} />
     </div>
   );
@@ -213,6 +222,19 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
             <div className="art-note">
               <Spinner size={11} /> Reading the artifact…
             </div>
+          ) : art.data.binary ? (
+            <Banner
+              tone="info"
+              title="No preview for this file"
+              actions={
+                <a className="os-btn os-btn--sm" href={downloadUrl(path)} download={basename(path)}>
+                  <Icon name="download" size={12} /> Download
+                </a>
+              }
+            >
+              It is not text, or it is larger than 4 MB. Download it to open it on your computer. The agents read it
+              from {path}.
+            </Banner>
           ) : (
             <>
               {kind === "ledger" && (

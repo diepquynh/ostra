@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { api } from "../api";
 import type { GitMark, ProjectTreeEntry, ProjectView } from "../api/types";
 import { Button, Icon, IconButton, type IconName, Input, Select, Spinner, TreeItem } from "../design";
+import { setContextDrag } from "../features/context/tags";
 import { humanize } from "../lib/format";
 import { useFileIndex, useProjectChanges, useProjectFsChanges } from "../lib/live";
 import { throttle } from "../lib/store";
@@ -339,6 +340,7 @@ export function FilesPanel({
                   setLastDir(isOpen ? parentOf(e.path) : e.path);
                 }}
                 title={e.path + (e.ignored ? " · ignored" : "")}
+                onDragStart={(ev) => setContextDrag(ev.dataTransfer, { project: key, path: `${e.path}/` })}
               />
               {isOpen && renderDir(e.path, depth + 1)}
             </Fragment>
@@ -353,6 +355,7 @@ export function FilesPanel({
             icon={fileIcon(e.name)}
             selected={isSelected(e.path)}
             onClick={() => onOpenFile(key, e.path)}
+            onDragStart={(ev) => setContextDrag(ev.dataTransfer, { project: key, path: e.path })}
             meta={mark ? <span style={{ color: mark.color, fontWeight: 600 }}>{mark.letter}</span> : null}
             title={
               e.path + (mark ? ` · ${mark.word}` : "") + (e.changed_by ? ` by ${humanize(e.changed_by.agent)}` : "")
@@ -449,6 +452,7 @@ export function FilesPanel({
                 icon={fileIcon(p)}
                 selected={isSelected(p)}
                 onClick={() => onOpenFile(key, p)}
+                onDragStart={(ev) => setContextDrag(ev.dataTransfer, { project: key, path: p })}
                 title={p}
               />
             ))
@@ -486,6 +490,7 @@ export function FilesPanel({
                 title={`${c.path} · ${humanize(c.changed_by.agent)}${c.changed_by.phase !== null ? `, phase ${c.changed_by.phase}` : ""} · +${c.added} −${c.removed}`}
                 selected={isSelected(c.path)}
                 onClick={() => onOpenFile(key, c.path)}
+                onDragStart={(ev) => setContextDrag(ev.dataTransfer, { project: key, path: c.path })}
               />
             );
           })}

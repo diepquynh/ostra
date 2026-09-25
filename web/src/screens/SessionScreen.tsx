@@ -3,7 +3,7 @@ import { useLocation } from "react-router";
 import { api } from "../api";
 import type { GateView, Lane, SessionDetail, StoredEvent } from "../api/types";
 import { Markdown } from "../components/Markdown";
-import { Banner, Button, LaneStepper, Panel, PhaseDag, SectionLabel, Spinner } from "../design";
+import { Banner, Button, LaneStepper, Panel, PhaseDag, SectionLabel, Spinner, Tabs } from "../design";
 import { BlockerNotice } from "../features/gates/BlockerNotice";
 import { GateCard } from "../features/gates/GateCard";
 import { activeSecurityBlocks, splitDecidedForYou } from "../lib/events";
@@ -18,9 +18,10 @@ import {
   openGatesInOrder,
   phaseNodes,
 } from "./session/board";
+import { ContextComposer } from "./session/ContextComposer";
 import { SessionHeader } from "./session/Header";
 import { LanePanel } from "./session/LanePanel";
-import { ArtifactsPanel, DecisionsPanel, ExecutionsPanel } from "./session/SidePanels";
+import { DecisionsPanel } from "./session/SidePanels";
 
 export type SessionScreenProps = {
   ws: string;
@@ -30,9 +31,10 @@ export type SessionScreenProps = {
 
 const PHASE_LANES: Lane[] = ["design", "build", "review", "test"];
 const column = { display: "flex", flexDirection: "column", gap: 16, minWidth: 0 } as const;
+type BoardTab = "overview" | "decisions";
 
 /** Resource `session:<id>`: the session board. A `#gate-<id>` URL hash scrolls to that gate. */
-export function SessionScreen({ id }: SessionScreenProps) {
+export function SessionScreen({ ws, id }: SessionScreenProps) {
   const detail = useAsync(() => api.session(id), [id]);
   const events = useAsync(() => api.events(id), [id]);
   const [live, setLive] = useState<StoredEvent[]>([]);
@@ -69,6 +71,7 @@ export function SessionScreen({ id }: SessionScreenProps) {
     );
   return (
     <SessionBoard
+      ws={ws}
       detail={detail.data}
       events={mergeEvents(events.data ?? [], live)}
       onDetail={detail.set}
@@ -85,11 +88,13 @@ function Board({ children }: { children: ReactNode }) {
 }
 
 function SessionBoard({
+  ws,
   detail: d,
   events,
   onDetail,
   reload,
 }: {
+  ws: string;
   detail: SessionDetail;
   events: StoredEvent[];
   onDetail: (d: SessionDetail) => void;
@@ -100,7 +105,14 @@ function SessionBoard({
   const [lane, setLane] = useState<Lane>(() => defaultLane(d));
   const [showLog, setShowLog] = useState(false);
   const [showAnswered, setShowAnswered] = useState(false);
+  const [tab, setTab] = useState<BoardTab>("overview");
   const s = d.summary;
+  const ended = s.status === "completed" || s.status === "failed";
+  const running = d.executions.filter((x) => x.status === "running").length;
+  const sessionProjects = useMemo(() => {
+    const created = events.find((e) => e.event.type === "session_created")?.event;
+    return created?.type === "session_created" ? created.projects.map((p) => p.key) : s.projects;
+  }, [events, s.projects]);
   const lanes = useMemo(() => laneStates(d), [d]);
   const open = openGatesInOrder(d);
   const answered = answeredGates(d);
@@ -112,6 +124,7 @@ function SessionBoard({
     if (!location.hash.startsWith("#gate-")) return;
     const gate = d.gates.find((g) => `#gate-${g.id}` === location.hash);
     if (gate?.answer) setShowAnswered(true);
+    setTab("overview");
     requestAnimationFrame(() =>
       document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" }),
     );
@@ -121,6 +134,7 @@ function SessionBoard({
 
   const goToGate = (gateId: string) => {
     if (d.gates.find((g) => g.id === gateId)?.answer) setShowAnswered(true);
+    setTab("overview");
     requestAnimationFrame(() =>
       document.getElementById(`gate-${gateId}`)?.scrollIntoView({ behavior: "smooth", block: "start" }),
     );
@@ -133,7 +147,21 @@ function SessionBoard({
 
   return (
     <Board>
-      <SessionHeader summary={s} onSummary={(summary) => onDetail({ ...d, summary })} onChanged={reload} />
+      <SessionHeader
+        summary={s}
+        files={d.files}
+        uploads={d.uploads}
+        additions={d.additions}
+        onSummary={(summary) => onDetail({ ...d, summary })}
+        onChanged={reload}
+      />
+
+      {s.status === "paused" && (
+        <Banner tone="info" title="The session is paused">
+          No agent runs and nothing new starts. Continue it from the header, and each paused agent picks up where it
+          stopped. You can still answer gates and add context while it is paused.
+        </Banner>
+      )}
 
       {s.yolo && s.status !== "completed" && s.status !== "failed" && (
         <Banner tone="warn" title="YOLO is on">
@@ -148,8 +176,20 @@ function SessionBoard({
 
       <LaneStepper lanes={lanes} selected={lane} onSelect={(l) => setLane(l)} />
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
-        <div style={{ ...column, flex: "999 1 520px" }}>
+      <Tabs
+        label="Session views"
+        value={tab}
+        onChange={(t) => setTab(t as BoardTab)}
+        tabs={[
+          { id: "overview", label: "Overview", icon: "layout-dashboard", count: open.length || undefined },
+          { id: "decisions", label: "Decisions", icon: "scale", count: d.decisions.length || undefined },
+        ]}
+      />
+
+      {tab === "decisions" ? (
+        <DecisionsPanel decisions={d.decisions} onChanged={reload} />
+      ) : (
+        <div style={column}>
           {open.length > 0 && (
             <section aria-label="Waiting for you" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <SectionLabel>Waiting for you</SectionLabel>
@@ -173,6 +213,19 @@ function SessionBoard({
             >
               <Markdown className="os-prose" text={completion.decided} />
             </Panel>
+          )}
+
+          {!ended && s.kind.kind === "pipeline" && (
+            <ContextComposer
+              ws={ws}
+              summary={s}
+              projects={sessionProjects}
+              running={running}
+              onSent={(summary) => {
+                onDetail({ ...d, summary });
+                reload();
+              }}
+            />
           )}
 
           <LanePanel detail={d} lane={lane} onGate={goToGate} />
@@ -239,13 +292,7 @@ function SessionBoard({
             )}
           </div>
         </div>
-
-        <div style={{ ...column, flex: "1 1 320px" }}>
-          <DecisionsPanel decisions={d.decisions} onChanged={reload} />
-          <ArtifactsPanel detail={d} />
-          <ExecutionsPanel detail={d} />
-        </div>
-      </div>
+      )}
     </Board>
   );
 }

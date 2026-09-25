@@ -1,22 +1,49 @@
 import { useState } from "react";
 import { api } from "../../api";
-import type { SessionSummary } from "../../api/types";
+import type { ContextAddition, ContextFile, SessionSummary, UploadedFile } from "../../api/types";
 import { LANES } from "../../content/stages";
-import { Button, Chip, Dialog, IconButton, Input, StatusChip, Switch } from "../../design";
+import { Button, Chip, Dialog, IconButton, StatusChip, Switch } from "../../design";
+import { TaggedText, UntaggedFiles } from "../../features/context/TaggedText";
+import { UploadChip } from "../../features/context/uploads";
 import { formatCost, humanize } from "../../lib/format";
 import { startedLabel } from "./board";
 
-type Props = { summary: SessionSummary; onSummary: (s: SessionSummary) => void; onChanged: () => void };
+type Props = {
+  summary: SessionSummary;
+  /** Files attached to the request at the start. */
+  files: ContextFile[];
+  /** Files uploaded with the request at the start. */
+  uploads: UploadedFile[];
+  additions: ContextAddition[];
+  onSummary: (s: SessionSummary) => void;
+  onChanged: () => void;
+};
 
 const ended = (s: SessionSummary) => s.status === "completed" || s.status === "failed";
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 
-/** Title, request, status chips, and the session controls: YOLO, change the request, stop. */
-export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
-  const [dialog, setDialog] = useState<"amend" | "stop" | null>(null);
-  const [yoloError, setYoloError] = useState<string | null>(null);
+/** Title, request with its tagged files, added context, status chips, and the controls: YOLO, pause, stop. */
+export function SessionHeader({ summary: s, files, uploads, additions, onSummary, onChanged }: Props) {
+  const [dialog, setDialog] = useState<"stop" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const toggleYolo = () => {
-    setYoloError(null);
-    api.setYolo(s.id, !s.yolo).then(onSummary, (e: Error) => setYoloError(e.message));
+    setError(null);
+    api.setYolo(s.id, !s.yolo).then(onSummary, (e: Error) => setError(e.message));
+  };
+  const paused = s.status === "paused";
+  const togglePause = () => {
+    setError(null);
+    setBusy(true);
+    (paused ? api.resumeSession(s.id) : api.pauseSession(s.id))
+      .then(
+        (next) => {
+          onSummary(next);
+          onChanged();
+        },
+        (e: Error) => setError(e.message),
+      )
+      .finally(() => setBusy(false));
   };
   const category = s.kind.kind === "init" ? `Init ${s.kind.project}` : s.category ? humanize(s.category) : null;
   return (
@@ -33,8 +60,26 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
                 lineHeight: "var(--leading-normal)",
               }}
             >
-              {s.request}
+              <TaggedText text={s.request} files={files} /> <UntaggedFiles text={s.request} files={files} />
+              {uploads.map((u) => (
+                <UploadChip key={u.path} upload={u} />
+              ))}
             </p>
+          )}
+          {additions.length > 0 && (
+            <ul className="ctx-additions" aria-label="Context you added">
+              {additions.map((a) => (
+                <li key={a.at}>
+                  <span className="ctx-additions__meta">
+                    {a.delivery === "now" ? "Sent now" : "Queued"} · {hhmm(a.at)}
+                  </span>
+                  <TaggedText text={a.text} files={a.files} /> <UntaggedFiles text={a.text} files={a.files} />
+                  {a.uploads.map((u) => (
+                    <UploadChip key={u.path} upload={u} />
+                  ))}
+                </li>
+              ))}
+            </ul>
           )}
           <div
             style={{
@@ -69,9 +114,20 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
             onChange={toggleYolo}
             title="Ostra answers every gate and permission ask itself, from the next gate or tool call on"
           />
-          {!ended(s) && s.kind.kind === "pipeline" && (
-            <Button size="sm" icon="pencil-line" onClick={() => setDialog("amend")}>
-              Change the request
+          {!ended(s) && (
+            <Button
+              size="sm"
+              icon={paused ? "play" : "pause"}
+              variant={paused ? "primary" : "default"}
+              disabled={busy}
+              onClick={togglePause}
+              title={
+                paused
+                  ? "Start the pipeline again. Each paused agent continues from where it stopped."
+                  : "Stop every running agent and start nothing new until you continue. Each agent resumes where it stopped."
+              }
+            >
+              {paused ? "Continue" : "Pause"}
             </Button>
           )}
           {!ended(s) && (
@@ -85,17 +141,7 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
           )}
         </div>
       </div>
-      {yoloError && <div className="os-field__error">{yoloError}</div>}
-      {dialog === "amend" && (
-        <AmendDialog
-          id={s.id}
-          onClose={() => setDialog(null)}
-          onDone={(next) => {
-            onSummary(next);
-            onChanged();
-          }}
-        />
-      )}
+      {error && <div className="os-field__error">{error}</div>}
       {dialog === "stop" && (
         <StopDialog
           id={s.id}
@@ -107,70 +153,6 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
         />
       )}
     </>
-  );
-}
-
-function AmendDialog({
-  id,
-  onClose,
-  onDone,
-}: {
-  id: string;
-  onClose: () => void;
-  onDone: (s: SessionSummary) => void;
-}) {
-  const [text, setText] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const send = () => {
-    if (!text.trim()) return setError("Write the change first.");
-    setBusy(true);
-    api
-      .amend(id, text.trim())
-      .then((s) => {
-        onDone(s);
-        onClose();
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setBusy(false));
-  };
-  return (
-    <Dialog
-      title="Change the request"
-      subtitle="Ostra routes the change through the pipeline"
-      onClose={onClose}
-      footer={
-        <>
-          <span style={{ flex: 1 }} />
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={busy || !text.trim()} onClick={send}>
-            Send the change
-          </Button>
-        </>
-      }
-    >
-      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <p
-          style={{
-            margin: 0,
-            fontSize: "var(--text-sm)",
-            color: "var(--text-secondary)",
-            lineHeight: "var(--leading-normal)",
-          }}
-        >
-          A requirement change goes through research for the new part, then the spec is rewritten and approved again. If
-          a plan exists, a new plan is written from the updated spec.
-        </p>
-        <Input
-          multiline
-          rows={4}
-          label="What changes"
-          value={text}
-          error={error}
-          onChange={(e) => setText(e.target.value)}
-        />
-      </div>
-    </Dialog>
   );
 }
 

@@ -122,6 +122,13 @@ pub struct ResumeInfo {
     pub from: ExecutionId,
     /// Harness session id, for harness resume commands.
     pub native_session_id: Option<String>,
+    /// The message the resumed run starts with, in place of the interruption notice.
+    #[serde(default)]
+    pub note: Option<String>,
+    /// Reopen the session for the user to read and ask about: no first prompt, no tools, no
+    /// submit, and it ends when the user leaves or stops it.
+    #[serde(default)]
+    pub inspect: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

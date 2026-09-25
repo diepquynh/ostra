@@ -1,11 +1,11 @@
-// Pure helpers for the session board: lane states, gate order, the phase graph, execution groups, and the
+// Pure helpers for the session board: lane states, gate order, the phase graph, and the
 // event log. The screen renders what these return.
 
 import type { ExecutionView, GateView, Lane, PhaseView, SessionDetail, StageCard, StoredEvent } from "../../api/types";
 import { LANES } from "../../content/stages";
-import type { ExecutionRun, LaneState, PhaseNodeProps } from "../../design";
+import type { LaneState, PhaseNodeProps } from "../../design";
 import { currentGate, describeEvent, LANE_ORDER, phaseLayers, stagesByLane } from "../../lib/events";
-import { formatCost, humanize } from "../../lib/format";
+import { humanize } from "../../lib/format";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -101,33 +101,6 @@ export function phaseNodes(phases: PhaseView[]): PhaseNodeProps[][] {
       dependsOn: p.info.depends_on ?? undefined,
     })),
   );
-}
-
-export type ExecutionGroupRows = { key: string; agent: string; project: string; runs: ExecutionRun[] };
-
-/** `SessionDetail.execution_groups` as rows for the design ExecutionGroup, runs oldest first. */
-export function executionGroups(d: SessionDetail): ExecutionGroupRows[] {
-  const byId = new Map(d.executions.map((x) => [x.id, x]));
-  return d.execution_groups.map((g) => ({
-    key: g.group,
-    agent: humanize(g.agent),
-    project: g.project,
-    runs: g.executions.flatMap((id) => {
-      const x = byId.get(id);
-      // The design picks the stream glyph from `native`; harness names stay short so a group row fits the side column.
-      return x
-        ? [
-            {
-              id: x.id,
-              label: x.run_label,
-              status: x.status,
-              executor: x.stream === "activity" ? "native" : x.executor.replace(/^harness:/, ""),
-              cost: formatCost(x.usage.cost_usd),
-            },
-          ]
-        : [];
-    }),
-  }));
 }
 
 /** The REST snapshot plus live events, deduplicated by sequence number and in order. */

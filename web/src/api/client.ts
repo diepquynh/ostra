@@ -24,6 +24,7 @@ import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
 import type { ArtifactWithHeadings, SearchResults, WorkspaceActivity, WorkspaceTree } from "./nav";
 import type {
   ActivityItem,
+  AmendRequest,
   AnswerGate,
   AskQuestion,
   AskStarted,
@@ -55,6 +56,7 @@ import type {
   SkillDoc,
   SkillSave,
   StoredEvent,
+  UploadRef,
   ValidationIssue,
   WorkspaceDetail,
   WorkspaceSettings,
@@ -171,8 +173,30 @@ export const httpApi = {
     request<StoredEvent[]>("GET", `/api/sessions/${enc(id)}/events${q({ after })}`),
   setYolo: (id: string, enabled: boolean) =>
     request<SessionSummary>("POST", `/api/sessions/${enc(id)}/yolo`, { enabled }),
-  amend: (id: string, text: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/amend`, { text }),
+  amend: (id: string, body: AmendRequest) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/amend`, body),
   stopSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/stop`),
+  pauseSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/pause`),
+  /** Stage a file from the user's computer; a new task or an addition claims it by id. */
+  uploadFile: async (ws: string, file: File): Promise<UploadRef> => {
+    const res = await fetch(`/api/workspaces/${enc(ws)}/uploads${q({ name: file.name })}`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    });
+    if (!res.ok) {
+      let message = `${res.status} ${res.statusText}`;
+      try {
+        const data = await res.json();
+        if (data && typeof data.error === "string") message = data.error;
+      } catch {
+        // Keep the status line.
+      }
+      throw new Error(message);
+    }
+    return (await res.json()) as UploadRef;
+  },
+  resumeSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/resume`),
 
   answerGate: (id: string, body: AnswerGate) => request<GateView>("POST", `/api/gates/${enc(id)}/answer`, body),
   overrideDecision: (id: string, body: OverrideDecision) =>
@@ -183,6 +207,8 @@ export const httpApi = {
     request<ActivityItem[]>("GET", `/api/executions/${enc(id)}/activity${q({ after })}`),
   cancelExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/cancel`),
   resumeExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/resume`),
+  /** Reopen an ended harness run's session read-only; returns the new execution. */
+  inspectExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/inspect`),
 
   artifact: (path: string) => request<ArtifactWithHeadings>("GET", `/api/artifacts${q({ path })}`),
   diff: (session: string, project: string, phase: string) =>

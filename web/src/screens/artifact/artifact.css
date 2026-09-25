@@ -273,3 +273,15 @@ body.art-col-resizing {
   flex-direction: column;
   gap: 2px;
 }
+.art-download {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+.art-download:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}

@@ -2584,3 +2584,127 @@ async fn deleting_a_workspace_keeps_projects_and_session_folders() {
         .unwrap();
     assert_ne!(again.id, ws.id);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn uploads_are_kept_in_the_session_and_downloadable() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, .. } = boot(root).await;
+    let app_dir = root.join("app");
+    std::fs::create_dir_all(app_dir.join(".ostra")).unwrap();
+    std::fs::write(app_dir.join(".ostra/INVENTORY.md"), "# app Inventory\n").unwrap();
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "up", "root": root.join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let _: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces/{}/projects", ws.id))
+        .json(&json!({"path": app_dir, "key": "app", "stack": null}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+
+    let bytes: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0, 0xff, 0xfe, 1, 2, 3];
+    let up: ostra_core::api::UploadRef = client
+        .post(
+            reqwest::Url::parse_with_params(
+                &format!("{base}/api/workspaces/{}/uploads", ws.id),
+                &[("name", "../My diagram.png")],
+            )
+            .unwrap(),
+        )
+        .header("content-type", "application/octet-stream")
+        .body(bytes.clone())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(up.name, "My diagram.png");
+    assert_eq!(up.size, bytes.len() as u64);
+
+    let s: SessionSummary = client
+        .post(format!("{base}/api/workspaces/{}/sessions", ws.id))
+        .json(&json!({"request": "Explain the diagram", "uploads": [up.id]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let d: SessionDetail = client
+        .get(format!("{base}/api/sessions/{}", s.id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(d.uploads.len(), 1);
+    let art = d
+        .artifacts
+        .iter()
+        .find(|a| a.kind == "upload")
+        .expect("the upload is an artifact");
+    let path = art.path.display().to_string();
+
+    let a: ostra_core::api::Artifact = client
+        .get(
+            reqwest::Url::parse_with_params(&format!("{base}/api/artifacts"), &[("path", &path)])
+                .unwrap(),
+        )
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(a.binary);
+    assert_eq!(a.size, bytes.len() as u64);
+
+    let r = client
+        .get(
+            reqwest::Url::parse_with_params(
+                &format!("{base}/api/artifacts/download"),
+                &[("path", &path)],
+            )
+            .unwrap(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        r.headers()["content-disposition"],
+        "attachment; filename*=UTF-8''My%20diagram.png"
+    );
+    assert_eq!(r.bytes().await.unwrap().to_vec(), bytes);
+
+    std::fs::write(root.join("secret.txt"), "x").unwrap();
+    let outside = client
+        .get(
+            reqwest::Url::parse_with_params(
+                &format!("{base}/api/artifacts/download"),
+                &[("path", root.join("secret.txt").display().to_string())],
+            )
+            .unwrap(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(outside.status(), 403);
+    let _ = client
+        .post(format!("{base}/api/sessions/{}/stop", s.id))
+        .send()
+        .await;
+}

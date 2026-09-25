@@ -109,6 +109,8 @@ async fn recovery_keeps_usage_and_reruns() {
             request: "Explain greet".into(),
             options: SessionOptions::default(),
             projects: vec![],
+            files: vec![],
+            uploads: vec![],
         })
         .unwrap();
     let running = || first.state(&s.id).unwrap().running_executions().count();
@@ -200,6 +202,8 @@ async fn offline_stop_prevents_rerun_on_recovery() {
             request: "Explain greet".into(),
             options: SessionOptions::default(),
             projects: vec![],
+            files: vec![],
+            uploads: vec![],
         })
         .unwrap();
     for _ in 0..100 {

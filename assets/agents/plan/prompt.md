@@ -280,10 +280,13 @@ missing something necessary, raise it as a Step 4 clarifying question. Never add
 - **P6: Per-step skills.** For each code step, name the skill(s) to load, derived from **that phase's repo's**
   INVENTORY **Skill Application Mapping** (file type to skills). Use exact skill names from that table. Do not
   invent names or route by skill descriptions. The always-on convention skill is auto-loaded. Do not list it.
-- **P7: Phase-level Required Skills.** After designing a phase's steps, collect the deduplicated union of their
-  per-step skills (excluding the auto-loaded convention skill) into the phase's `skills` list, rendered as its `## Required Skills`
-  section, also derived from that repo's INVENTORY mapping. The implementer agent loads these once at phase
-  start, not per step.
+  Ostra refuses the plan when a step names a skill that is not installed in its repo, or when a phase with
+  code steps names no skill at all in a repo that has skills, because the implementer agent builds only with
+  the skills the phase file lists.
+- **P7: Phase-level Required Skills.** Ostra collects the deduplicated union of a phase's per-step skills into
+  its `skills` list, rendered as its `## Required Skills` section. The implementer agent loads these once at
+  phase start, not per step. Name each skill on the steps that need it; a phase-level `skills` entry is only
+  for a skill the whole phase needs that no single step names.
 - **P8: Tag repo and dependencies.** Every phase records its **Repo** (the repo key of the repo it changes,
   taken from its deliverable's row in the Delivery Order table) and its **Depends on** set (the phase IDs it
   needs completed first, in any repo). A phase with no prerequisites has `Depends on: none`. Within one
@@ -433,7 +436,7 @@ Phase fields:
 | `areas` | Areas this phase touches, from this repo's Module/Area Map. |
 | `description` | One sentence for the Phase Index. |
 | `context` | 2 to 4 sentences: what this phase accomplishes. Phase 1: "This is the first phase. No prior phases." Phase 2 and later: the exact artifacts (class or file names with full paths) from prior phases that this phase depends on. If a prerequisite artifact lives in another repo, name that repo key and give the artifact's exact contract (path, type or endpoint name, and fields or signature). If this phase consumes a contract an earlier deliverable provides, repeat that contract's full shape verbatim from the spec's Contracts Provided table. The implementer agent never reads the spec file. |
-| `skills` | The phase's Required Skills (P7). |
+| `skills` | Optional. Ostra adds every step's skills to it (P7); list here only a skill the whole phase needs that no step names. |
 | `requirements` | One `{id, statement}` per requirement any step in this phase delivers, the EARS statement quoted verbatim from the spec, so the implementer sees the obligation without opening the spec. |
 | `constraints` | Every `E{n}` any step in this phase must obey, copied verbatim from the spec's External Evidence table: `id`, `fact`, `rule`, `source`, `version`. These came from vendor documentation the explore agent fetched. Empty when no step depends on a technology outside the repo. |
 | `steps` | The Step 5 steps. |

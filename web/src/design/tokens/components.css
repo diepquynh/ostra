@@ -522,6 +522,15 @@
   height: 1px;
   background: var(--surface-editor);
 }
+.os-tabs--bar .os-tab--dragging {
+  opacity: 0.5;
+}
+.os-tabs--bar .os-tab--drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.os-tabs--bar .os-tab--drop-after {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
 .os-tab__close {
   display: grid;
   place-items: center;

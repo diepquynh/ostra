@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { api } from "../api";
 import { SESSION, WS } from "../api/mock/fixtures";
 import { ConsoleContext, type ConsoleContextValue } from "../lib/nav";
 import { SessionScreen } from "./SessionScreen";
@@ -46,17 +47,25 @@ function mount(id: string) {
 const gates = () => within(screen.getByRole("region", { name: "Waiting for you" }));
 
 describe("session board", () => {
-  it("renders the demo session: header, lanes, open gates, lane stages, phase graph, decisions, artifacts, executions", async () => {
+  it("renders the demo session: header, lanes, open gates, lane stages, phase graph, and a decisions tab", async () => {
     const { open } = mount(SESSION);
     await screen.findByRole("heading", { name: "Order cancellation" });
     expect(screen.getByText(/^Add order cancellation: customers can cancel an order/)).toBeTruthy();
     expect((screen.getByRole("switch", { name: "YOLO" }) as HTMLInputElement).checked).toBe(false);
-    expect(screen.getByRole("button", { name: "Change the request" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop the session" })).toBeTruthy();
+    // Tagged files render as chips, not as their paths.
+    expect(screen.getByRole("button", { name: "service.ts" })).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Context you added" }).textContent).toContain(
+      "Refunds follow the same rule",
+    );
 
-    const lanes = screen.getAllByRole("tab").map((t) => t.textContent);
-    expect(lanes).toHaveLength(9);
-    expect(screen.getByRole("tab", { selected: true }).textContent).toContain("Review");
+    const laneTabs = within(screen.getByRole("tablist", { name: "Pipeline lanes" }));
+    expect(laneTabs.getAllByRole("tab")).toHaveLength(9);
+    expect(laneTabs.getByRole("tab", { selected: true }).textContent).toContain("Review");
+    const views = within(screen.getByRole("tablist", { name: "Session views" }));
+    expect(views.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Overview2", "Decisions2"]);
+    expect(screen.queryByText("Artifacts")).toBeNull();
 
     const cards = gates().getAllByRole("region");
     expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["Allow a shell command?", "Closing gate for web"]);
@@ -68,11 +77,8 @@ describe("session board", () => {
     expect(screen.getByText(/You cannot review code you wrote an hour ago/)).toBeTruthy();
     expect(screen.getByText("Review phase 2")).toBeTruthy();
     expect(screen.getByText("Cancellation service and endpoint")).toBeTruthy();
-    expect(screen.getAllByText(/Ostra chose/, { selector: ".os-decision__text" })).toHaveLength(2);
+    expect(screen.queryByText(/Ostra chose/, { selector: ".os-decision__text" })).toBeNull();
     expect(screen.getByText("Show answered gates (3)")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("Spec: order cancellation"));
-    expect(open).toHaveBeenCalledWith(expect.stringMatching(/^artifact:.*order-cancel\.md$/), { preview: true });
 
     fireEvent.click(screen.getByText("Review phase 2"));
     expect(screen.getByText(/Protects against:/).parentElement?.textContent).toContain(
@@ -81,9 +87,50 @@ describe("session board", () => {
     fireEvent.click(screen.getByRole("button", { name: /Code reviewer · Phase 2 · pass 2/ }));
     expect(open).toHaveBeenLastCalledWith("exec:x_rev2");
 
-    fireEvent.click(screen.getByRole("tab", { name: /Research/ }));
+    fireEvent.click(laneTabs.getByRole("tab", { name: /Research/ }));
     expect(screen.getByText("Explore backend")).toBeTruthy();
     expect(screen.queryByText("Cancellation service and endpoint")).toBeNull();
+
+    fireEvent.click(views.getByRole("tab", { name: /Decisions/ }));
+    expect(screen.getAllByText(/Ostra chose/, { selector: ".os-decision__text" })).toHaveLength(2);
+    expect(screen.queryByRole("region", { name: "Waiting for you" })).toBeNull();
+  });
+
+  it("queues added context with its tagged files", async () => {
+    mount(SESSION);
+    const amend = vi.spyOn(api, "amend");
+    const field = await screen.findByLabelText("Context");
+    field.textContent = "Also see @backend/src/a.ts, please";
+    fireEvent.input(field);
+    fireEvent.click(screen.getByRole("button", { name: /Queue for the next step/ }));
+    await waitFor(() => expect(amend).toHaveBeenCalledTimes(1));
+    expect(amend.mock.calls[0][1]).toEqual({
+      text: "Also see @backend/src/a.ts, please",
+      files: [{ project: "backend", path: "src/a.ts" }],
+      uploads: [],
+      delivery: "queue",
+    });
+  });
+
+  it("asks before sending context now, because running work is interrupted", async () => {
+    mount(SESSION);
+    const amend = vi.spyOn(api, "amend");
+    const field = await screen.findByLabelText("Context");
+    field.textContent = "Stop using the legacy table";
+    fireEvent.input(field);
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+    const dialog = await screen.findByRole("dialog", { name: "Interrupt running work?" });
+    expect(amend).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Interrupt and send" }));
+    await waitFor(() => expect(amend).toHaveBeenCalledTimes(1));
+    expect(amend.mock.calls[0][1]).toMatchObject({ delivery: "now" });
+  });
+
+  it("pauses the session from the header", async () => {
+    mount(SESSION);
+    const pause = vi.spyOn(api, "pauseSession");
+    fireEvent.click(await screen.findByRole("button", { name: "Pause" }));
+    await waitFor(() => expect(pause).toHaveBeenCalledWith(SESSION));
   });
 
   it.each([

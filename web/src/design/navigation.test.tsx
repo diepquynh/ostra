@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, createEvent, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CommandPalette, filterPaletteItems, Menu, type PaletteItem, Tabs, TreeItem } from "./index";
@@ -96,6 +96,75 @@ function ControlledTabs({ onClose }: { onClose?: (id: string) => void }) {
     />
   );
 }
+
+function MovableTabs({ onMove }: { onMove: (id: string, to: number) => void }) {
+  return (
+    <Tabs
+      variant="bar"
+      value="a"
+      onMove={onMove}
+      tabs={[
+        { id: "a", label: "Alpha" },
+        { id: "b", label: "Beta" },
+        { id: "c", label: "Gamma" },
+      ]}
+    />
+  );
+}
+
+/** Drag `from` onto the left or right half of `onto`. jsdom lays nothing out, so the tab box is stubbed. */
+function drag(from: HTMLElement, onto: HTMLElement, half: "left" | "right") {
+  onto.getBoundingClientRect = () => ({
+    left: 0,
+    width: 100,
+    top: 0,
+    height: 30,
+    right: 100,
+    bottom: 30,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  const dataTransfer = { setData: () => {}, effectAllowed: "", dropEffect: "" };
+  const clientX = half === "left" ? 10 : 90;
+  fireEvent.dragStart(from, { dataTransfer });
+  // jsdom has no DragEvent, so the pointer position is set on the event by hand.
+  for (const type of ["dragOver", "drop"] as const) {
+    const ev = createEvent[type](onto, { dataTransfer });
+    Object.defineProperty(ev, "clientX", { value: clientX });
+    fireEvent(onto, ev);
+  }
+}
+
+describe("Tabs reorder", () => {
+  it("drops a dragged tab before or after the tab under the pointer", () => {
+    const onMove = vi.fn();
+    render(<MovableTabs onMove={onMove} />);
+    const [a, , c] = screen.getAllByRole("tab");
+    expect(a.getAttribute("draggable")).toBe("true");
+    drag(a, c, "right");
+    expect(onMove).toHaveBeenLastCalledWith("a", 2);
+    drag(a, c, "left");
+    expect(onMove).toHaveBeenLastCalledWith("a", 1);
+    drag(c, a, "left");
+    expect(onMove).toHaveBeenLastCalledWith("c", 0);
+  });
+
+  it("moves the focused tab with Ctrl+Shift+Arrow", () => {
+    const onMove = vi.fn();
+    render(<MovableTabs onMove={onMove} />);
+    const [, b] = screen.getAllByRole("tab");
+    fireEvent.keyDown(b, { key: "ArrowRight", ctrlKey: true, shiftKey: true });
+    expect(onMove).toHaveBeenLastCalledWith("b", 2);
+    fireEvent.keyDown(b, { key: "ArrowLeft", ctrlKey: true, shiftKey: true });
+    expect(onMove).toHaveBeenLastCalledWith("b", 0);
+  });
+
+  it("is off without onMove", () => {
+    render(<ControlledTabs />);
+    expect(screen.getAllByRole("tab")[0].getAttribute("draggable")).toBeNull();
+  });
+});
 
 describe("Tabs", () => {
   const selected = () =>

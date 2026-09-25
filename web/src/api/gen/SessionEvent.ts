@@ -2,6 +2,8 @@
 import type { AgentName } from "./AgentName";
 import type { AnswerSource } from "./AnswerSource";
 import type { CommandPurpose } from "./CommandPurpose";
+import type { ContextDelivery } from "./ContextDelivery";
+import type { ContextFile } from "./ContextFile";
 import type { DecisionId } from "./DecisionId";
 import type { ExecPurpose } from "./ExecPurpose";
 import type { ExecutionId } from "./ExecutionId";
@@ -16,8 +18,17 @@ import type { ReviewFinding } from "./ReviewFinding";
 import type { SessionKind } from "./SessionKind";
 import type { SessionOptions } from "./SessionOptions";
 import type { StageKind } from "./StageKind";
+import type { UploadedFile } from "./UploadedFile";
 
-export type SessionEvent = { "type": "session_created", kind: SessionKind, request: string, options: SessionOptions, projects: Array<ProjectRef>, workspace_root: string, session_root: string, } | { "type": "request_amended", text: string, } | { "type": "yolo_set", enabled: boolean, } | { "type": "decision_made", id: DecisionId, judge: JudgeKind, 
+export type SessionEvent = { "type": "session_created", kind: SessionKind, request: string, options: SessionOptions, projects: Array<ProjectRef>, workspace_root: string, session_root: string, 
+/**
+ * Files the user attached to the request (Rule C1).
+ */
+files: Array<ContextFile>, 
+/**
+ * Files the user uploaded with the request (Rule C3).
+ */
+uploads: Array<UploadedFile>, } | { "type": "request_amended", text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, } | { "type": "session_paused" } | { "type": "session_resumed" } | { "type": "yolo_set", enabled: boolean, } | { "type": "decision_made", id: DecisionId, judge: JudgeKind, 
 /**
  * What the decision is about: a gate id, an execution id, a phase.
  */

@@ -364,7 +364,26 @@ export const mockApi: Api = {
     yolo = enabled;
     return delay({ ...f.sessionSummary, yolo });
   },
-  amend: (id) => delay(summaryFor(id)),
+  amend: (id, body) => {
+    updateBoard(id, (d) => ({
+      ...d,
+      additions: [
+        ...d.additions,
+        { text: body.text, files: body.files, uploads: [], delivery: body.delivery, at: new Date().toISOString() },
+      ],
+    }));
+    return delay(summaryFor(id));
+  },
+  uploadFile: (_ws, file) =>
+    delay({ id: Math.random().toString(16).slice(2).padEnd(32, "0"), name: file.name, size: file.size }),
+  pauseSession: (id) => {
+    updateBoard(id, (d) => ({ ...d, summary: { ...d.summary, status: "paused" } }));
+    return delay(summaryFor(id));
+  },
+  resumeSession: (id) => {
+    updateBoard(id, (d) => ({ ...d, summary: { ...d.summary, status: "running" } }));
+    return delay(summaryFor(id));
+  },
   stopSession: (id) => {
     updateBoard(id, (d) => ({
       ...d,
@@ -394,6 +413,7 @@ export const mockApi: Api = {
   activity: (id, after) => delay(fx.activityFor(id).filter((a) => a.seq > (after ?? 0))),
   cancelExecution: (id) => delay({ ...execView(id), status: "cancelled" }),
   resumeExecution: (id) => delay(fx.resume(id)),
+  inspectExecution: (id) => delay(fx.resume(id)),
   artifact: (path) => delay(fx.artifactFor(path)),
   diff: () => delay(fx.ledgerDiff),
   lessons: (_ws, key, query) => {

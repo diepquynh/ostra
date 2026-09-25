@@ -226,8 +226,9 @@ fn role_str(role: Role) -> &'static str {
     }
 }
 
-/// Rebuild a message list from a stored transcript and add the resume turn.
-pub fn rebuild_transcript(transcript: &[(String, Value)]) -> Vec<Message> {
+/// Rebuild a message list from a stored transcript and add the resume turn: `note`, or the
+/// interruption notice.
+pub fn rebuild_transcript(transcript: &[(String, Value)], note: Option<&str>) -> Vec<Message> {
     let mut messages: Vec<Message> = transcript
         .iter()
         .filter_map(|(role, content)| {
@@ -240,7 +241,9 @@ pub fn rebuild_transcript(transcript: &[(String, Value)]) -> Vec<Message> {
             (!content.is_empty()).then_some(Message { role, content })
         })
         .collect();
-    let note = Block::text("The previous run was interrupted. Continue from where it stopped.");
+    let note = Block::text(
+        note.unwrap_or("The previous run was interrupted. Continue from where it stopped."),
+    );
     match messages.last() {
         Some(m) if m.role == Role::Assistant => {
             let open: Vec<Block> = m
@@ -364,7 +367,7 @@ impl Run {
         let mut messages = match &spec.resume {
             Some(resume) => {
                 let transcript = self.host.transcript(&resume.from);
-                let mut m = rebuild_transcript(&transcript);
+                let mut m = rebuild_transcript(&transcript, resume.note.as_deref());
                 if transcript.is_empty() {
                     m.insert(0, Message::user_text(spec.first_message.clone()));
                 }

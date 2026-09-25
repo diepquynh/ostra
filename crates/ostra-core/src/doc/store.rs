@@ -75,7 +75,20 @@ impl DocKind {
         Ok(match self {
             DocKind::Research => Document::Research(typed(value)?),
             DocKind::Spec => Document::Spec(typed(value)?),
-            DocKind::Plan => Document::Plan(typed(value)?),
+            DocKind::Plan => {
+                let mut plan: super::PlanDoc = typed(value)?;
+                // Rule P7: a phase's Required Skills are the union of its steps' skills.
+                for p in &mut plan.phases {
+                    for s in &p.steps {
+                        for k in &s.skills {
+                            if !p.skills.contains(k) {
+                                p.skills.push(k.clone());
+                            }
+                        }
+                    }
+                }
+                Document::Plan(plan)
+            }
         })
     }
 }
