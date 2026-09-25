@@ -188,6 +188,101 @@ impl Code {
     }
 }
 
+/// Which view of the dependency graph to answer, before the project root is known.
+pub enum GraphAsk {
+    Packages,
+    Package(String),
+    File { path: String, depth: u32 },
+}
+
+pub const MAX_GRAPH_DEPTH: u32 = 3;
+
+impl Code {
+    /// One view of the project's dependency graph, from the built-in index.
+    pub async fn graph(
+        &self,
+        app: &Arc<App>,
+        w: &WorkspaceRt,
+        key: &str,
+        ask: GraphAsk,
+    ) -> Result<ostra_core::code::CodeGraph, ApiErr> {
+        let root = files::project_root(w, key)?;
+        let ask = match ask {
+            GraphAsk::File { path, depth } => {
+                let c = files::contain(&root, &path)?;
+                if c.rel.is_empty() || c.real.is_dir() {
+                    return Err(ApiErr::new(
+                        StatusCode::BAD_REQUEST,
+                        "Name a file with path.",
+                    ));
+                }
+                GraphAsk::File {
+                    path: c.rel,
+                    depth: depth.clamp(1, MAX_GRAPH_DEPTH),
+                }
+            }
+            other => other,
+        };
+        let list = app.files.index(w, key).await?;
+        let id: ProjectId = (w.id.clone(), key.to_string());
+        self.ensure_watch(app, &id, &root, &list);
+        let indexes = self.indexes.clone();
+        let answer = tokio::task::spawn_blocking(move || {
+            indexes.with(&id, &root, &list, |ix| match ask {
+                GraphAsk::Packages => Some(ix.packages_view()),
+                GraphAsk::Package(unit) => ix.package_view(&unit),
+                GraphAsk::File { path, depth } => ix.file_view(&path, depth),
+            })
+        })
+        .await
+        .map_err(|e| {
+            ApiErr::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("The code index failed: {e}"),
+            )
+        })?;
+        answer.ok_or_else(|| {
+            ApiErr::new(
+                StatusCode::NOT_FOUND,
+                "That package or file is not in the code index. The index leaves out ignored files, files over 1 MB, and languages it does not parse.",
+            )
+        })
+    }
+
+    /// Drop the project's index and file list and build them again from disk.
+    pub async fn reindex(
+        &self,
+        app: &Arc<App>,
+        w: &WorkspaceRt,
+        key: &str,
+    ) -> Result<ostra_core::code::CodeReindex, ApiErr> {
+        let root = files::project_root(w, key)?;
+        let id: ProjectId = (w.id.clone(), key.to_string());
+        app.files.invalidate(&id.0, &id.1);
+        let list = app.files.index(w, key).await?;
+        self.ensure_watch(app, &id, &root, &list);
+        let indexes = self.indexes.clone();
+        tokio::task::spawn_blocking(move || {
+            let started = std::time::Instant::now();
+            indexes.forget(&id);
+            let (files, truncated) =
+                indexes.with(&id, &root, &list, |ix| (ix.files(), ix.truncated));
+            ostra_core::code::CodeReindex {
+                indexed_files: files as u32,
+                millis: started.elapsed().as_millis().min(u32::MAX as u128) as u32,
+                truncated,
+            }
+        })
+        .await
+        .map_err(|e| {
+            ApiErr::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("The code index failed: {e}"),
+            )
+        })
+    }
+}
+
 /// Paths a browser is told about per change; more reload the whole listing.
 const MAX_PUSHED_PATHS: usize = 200;
 

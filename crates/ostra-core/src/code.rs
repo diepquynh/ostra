@@ -225,6 +225,90 @@ pub struct CodeDeps {
     pub warning: Option<String>,
 }
 
+/// Which slice of the dependency graph a [`CodeGraph`] shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum CodeGraphView {
+    /// Every package and the links between them.
+    Packages,
+    /// One package's files, plus the packages they use.
+    Package,
+    /// One file and the files within a few hops of it.
+    File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum CodeGraphNodeKind {
+    Package,
+    File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeGraphNode {
+    /// A project-relative file path, or `package:<folder>` for a package.
+    pub id: String,
+    pub kind: CodeGraphNodeKind,
+    pub label: String,
+    /// The package folder the node belongs to, `""` for the project top.
+    pub package: String,
+    /// Left to right: a node uses the nodes in higher columns. The focus of a file view is column 0.
+    pub column: i32,
+    /// Files in a package; 1 for a file.
+    pub files: u32,
+    pub test: bool,
+    /// Files (or packages) that use this one, across the whole project.
+    pub dependents: u32,
+    /// Files (or packages) this one uses, across the whole project.
+    pub dependencies: u32,
+}
+
+/// `from` uses `to`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeGraphEdge {
+    pub from: String,
+    pub to: String,
+    /// Names `from` uses from `to`, or file-to-file links between two packages.
+    pub weight: u32,
+    /// The first few names, for a file edge.
+    #[serde(default)]
+    pub names: Vec<String>,
+    /// An import statement names `to`.
+    #[serde(default)]
+    pub import: bool,
+}
+
+/// `GET .../code/graph?package=&path=&depth=`: one view of the project's dependency graph.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeGraph {
+    pub view: CodeGraphView,
+    /// The package or file the view is about; empty for the package view.
+    #[serde(default)]
+    pub focus: String,
+    pub nodes: Vec<CodeGraphNode>,
+    pub edges: Vec<CodeGraphEdge>,
+    /// Files the index holds.
+    pub indexed_files: u32,
+    /// Nodes were left out to keep the view readable.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// `POST .../code/reindex`: the project's code index, rebuilt from disk.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeReindex {
+    pub indexed_files: u32,
+    pub millis: u32,
+    /// The index's size cap left files out.
+    pub truncated: bool,
+}
+
 /// `GET .../code/symbols?q=&limit=`: definitions whose name matches, best match first.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]

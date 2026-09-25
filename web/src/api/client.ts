@@ -37,6 +37,9 @@ import type {
   WorkspaceSummary,
 } from "./types";
 import type { CodeDeps } from "./gen/CodeDeps";
+import type { CodeGraph } from "./gen/CodeGraph";
+import type { CodeReindex } from "./gen/CodeReindex";
+import type { Commands } from "./gen/Commands";
 import type { CodeFile } from "./gen/CodeFile";
 import type { CodeSymbols } from "./gen/CodeSymbols";
 import type { CodeUsages } from "./gen/CodeUsages";
@@ -187,6 +190,9 @@ export const httpApi = {
     request<SkillDoc>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/harness-skill${q({ path })}`),
   saveSkill: (ws: string, key: string, name: string, body: SkillSave) =>
     request<SkillDoc>("PUT", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}`, body),
+  /** Replace the project's `[commands]` in `.ostra/project.toml`; blank commands are removed. */
+  saveProjectCommands: (ws: string, key: string, commands: Commands) =>
+    request<Commands>("PUT", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/commands`, commands),
   deleteSkill: (ws: string, key: string, name: string) =>
     request<void>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}`),
   adoptSkill: (ws: string, key: string, name: string, body: SkillAdopt) =>
@@ -229,6 +235,10 @@ export const httpApi = {
   codeDeps: (ws: string, key: string, path: string) => request<CodeDeps>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/deps${q({ path })}`),
   codeSymbols: (ws: string, key: string, query: string, limit = 50) =>
     request<CodeSymbols>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/symbols${q({ q: query, limit })}`),
+  /** No argument: the package view. `package`: one package's files. `path`: one file's neighborhood. */
+  codeGraph: (ws: string, key: string, at: { package?: string; path?: string; depth?: number } = {}) =>
+    request<CodeGraph>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/graph${q(at)}`),
+  codeReindex: (ws: string, key: string) => request<CodeReindex>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/reindex`),
 
   tree: (ws: string) => request<WorkspaceTree>("GET", `/api/workspaces/${enc(ws)}/tree`),
   search: (ws: string, query: string, limit = 30) => request<SearchResults>("GET", `/api/workspaces/${enc(ws)}/search${q({ q: query, limit })}`),

@@ -1036,6 +1036,90 @@ async fn yolo_implement_session_end_to_end() {
         .await
         .unwrap_err();
     assert!(bad.contains("not in the code index"), "{bad}");
+    // The dependency graph views the project screen draws, and a rebuild from disk.
+    let graph = |q: &[(&str, &str)]| get("code/graph", q);
+    let pk: ostra_core::code::CodeGraph = graph(&[]).await.unwrap().json().await.unwrap();
+    assert_eq!(pk.view, ostra_core::code::CodeGraphView::Packages);
+    assert!(pk.nodes.iter().any(|n| n.id == "package:"), "{pk:?}");
+    let one: ostra_core::code::CodeGraph = graph(&[("package", ".")])
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(one.nodes.iter().any(|n| n.id == "src/greet.rs"), "{one:?}");
+    let around: ostra_core::code::CodeGraph = graph(&[("path", "src/greet.rs")])
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let lib = around
+        .nodes
+        .iter()
+        .find(|n| n.id == "src/lib.rs")
+        .expect("lib.rs uses greet.rs");
+    assert_eq!(lib.column, -1);
+    assert!(
+        around
+            .edges
+            .iter()
+            .any(|e| e.from == "src/lib.rs" && e.to == "src/greet.rs")
+    );
+    assert_eq!(graph(&[("path", "nope.rs")]).await.unwrap().status(), 404);
+    assert_eq!(graph(&[("path", "../x.rs")]).await.unwrap().status(), 403);
+    assert_eq!(
+        graph(&[("path", "src/greet.rs"), ("package", ".")])
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    let r = client
+        .post(format!("{project}/code/reindex"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let re: ostra_core::code::CodeReindex = r.json().await.unwrap();
+    assert!(re.indexed_files >= 3 && !re.truncated, "{re:?}");
+
+    // Commands edited from the project screen land in `.ostra/project.toml`.
+    let put_commands = |body: Value| client.put(format!("{project}/commands")).json(&body).send();
+    let r = put_commands(
+        json!({"build": "  cargo build  ", "test": "cargo test", "format": "true", "lint": ""}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(r.status(), 200);
+    let saved: ostra_core::config::Commands = r.json().await.unwrap();
+    assert_eq!(
+        (
+            saved.build.as_deref(),
+            saved.test.as_deref(),
+            saved.lint.as_deref()
+        ),
+        (Some("cargo build"), Some("cargo test"), None)
+    );
+    let profile: ostra_core::config::ProjectProfile =
+        ostra_core::config::load_toml(&app_dir.join(".ostra/project.toml")).unwrap();
+    assert_eq!(profile.commands, saved);
+    let bad = put_commands(json!({"build": "make\nmake install"}))
+        .await
+        .unwrap();
+    assert_eq!(bad.status(), 422);
+    let err: ApiError = bad.json().await.unwrap();
+    assert_eq!(issue_paths(&err.issues), vec!["commands.build"]);
+    assert_eq!(
+        ostra_core::config::load_toml::<ostra_core::config::ProjectProfile>(
+            &app_dir.join(".ostra/project.toml")
+        )
+        .unwrap()
+        .commands,
+        saved,
+        "a refused save changes nothing"
+    );
+
     let outside = app
         .code_tools
         .call(Path::new("/"), "CodeMap", &json!({}))

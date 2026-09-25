@@ -1,7 +1,7 @@
 // A naive code provider for the mock server: a regex tokenizer, definitions after a definition keyword,
 // usages by whole-word match, and imports from `use` and `import ... from` lines.
 
-import type { CodeDeps, CodeFile, CodeImport, CodeLocation, CodeSymbol, CodeSymbols, CodeUsages, SymbolKind, TokenClass } from "../types";
+import type { CodeDeps, CodeFile, CodeGraph, CodeGraphEdge, CodeGraphNode, CodeImport, CodeLocation, CodeSymbol, CodeSymbols, CodeUsages, SymbolKind, TokenClass } from "../types";
 import { mockTexts } from "./projectFiles";
 
 const KW = new Set(
@@ -215,5 +215,95 @@ export function mockCodeSymbols(key: string, query: string, limit: number): Code
     provider: "mock",
     items: items.slice(0, limit),
     truncated: items.length > limit,
+  };
+}
+
+/** The dependency graph over the mock files' imports; a file's top folder is its package. */
+export function mockCodeGraph(key: string, at: { package?: string; path?: string; depth?: number }): CodeGraph {
+  const files = mockTexts(key).filter((t) => langOf(t.path));
+  const pkgOf = (p: string) => (p.includes("/") ? p.split("/")[0] : "");
+  const uses = new Map<string, Set<string>>();
+  for (const f of files) {
+    const targets = imports(key, f.path, f.code).flatMap((i) => (i.target && i.target !== f.path ? [i.target] : []));
+    uses.set(f.path, new Set(targets));
+  }
+  const used = (p: string) => [...uses].filter(([, t]) => t.has(p)).map(([f]) => f);
+  const pkgId = (p: string) => `package:${p}`;
+  const fileNode = (p: string, column: number): CodeGraphNode => ({
+    id: p, kind: "file", label: p.split("/").pop() ?? p, package: pkgOf(p), column, files: 1,
+    test: /test/.test(p), dependents: used(p).length, dependencies: uses.get(p)?.size ?? 0,
+  });
+  const fileEdge = (from: string, to: string): CodeGraphEdge => ({ from, to, weight: 1, names: [], import: true });
+  /** Longest chain of uses below each node, negated, so users sit left of what they use. */
+  const columns = (ids: string[], out: (id: string) => string[]) => {
+    const level = new Map<string, number>();
+    const visit = (id: string, seen: Set<string>): number => {
+      if (level.has(id)) return level.get(id)!;
+      if (seen.has(id)) return 0;
+      seen.add(id);
+      const l = Math.max(-1, ...out(id).map((o) => visit(o, seen))) + 1;
+      level.set(id, l);
+      return l;
+    };
+    ids.forEach((id) => visit(id, new Set()));
+    return (id: string) => -(level.get(id) ?? 0);
+  };
+  const base = { indexed_files: files.length, truncated: false };
+  if (at.path) {
+    if (!uses.has(at.path)) throw Object.assign(new Error(`${at.path} is not in the code index.`), { status: 404 });
+    const col = new Map<string, number>([[at.path, 0]]);
+    const walk = (next: (p: string) => string[], sign: number) => {
+      let frontier = [at.path!];
+      for (let d = 1; d <= (at.depth ?? 1); d++) {
+        frontier = frontier.flatMap(next).filter((p) => !col.has(p) && col.set(p, sign * d));
+      }
+    };
+    walk((p) => [...(uses.get(p) ?? [])], 1);
+    walk(used, -1);
+    const ids = [...col.keys()];
+    return {
+      ...base, view: "file", focus: at.path,
+      nodes: ids.map((p) => fileNode(p, col.get(p)!)),
+      edges: ids.flatMap((p) => [...(uses.get(p) ?? [])].filter((t) => col.has(t)).map((t) => fileEdge(p, t))),
+    };
+  }
+  if (at.package !== undefined) {
+    const pkg = at.package === "." ? "" : at.package;
+    const members = files.map((f) => f.path).filter((p) => pkgOf(p) === pkg);
+    if (!members.length) throw Object.assign(new Error(`No package ${at.package} in the code index.`), { status: 404 });
+    const outside = (p: string) => [...(uses.get(p) ?? [])].filter((t) => pkgOf(t) !== pkg).map((t) => pkgId(pkgOf(t)));
+    const inside = (p: string) => [...(uses.get(p) ?? [])].filter((t) => pkgOf(t) === pkg);
+    const col = columns(members, (id) => (id.startsWith("package:") ? [] : [...inside(id), ...outside(id)]));
+    const others = [...new Set(members.flatMap(outside))];
+    return {
+      ...base, view: "package", focus: pkg,
+      nodes: [
+        ...members.map((p) => fileNode(p, col(p))),
+        ...others.map((id): CodeGraphNode => {
+          const name = id.slice("package:".length);
+          return { id, kind: "package", label: name || "(project top)", package: name, column: col(id), files: files.filter((f) => pkgOf(f.path) === name).length, test: false, dependents: 0, dependencies: 0 };
+        }),
+      ],
+      edges: [
+        ...members.flatMap((p) => inside(p).map((t) => fileEdge(p, t))),
+        ...members.flatMap((p) => [...new Set(outside(p))].map((t) => fileEdge(p, t))),
+      ],
+    };
+  }
+  const pkgs = [...new Set(files.map((f) => pkgOf(f.path)))];
+  const links = new Map<string, number>();
+  for (const [f, targets] of uses)
+    for (const t of targets)
+      if (pkgOf(t) !== pkgOf(f)) links.set(`${pkgOf(f)}\u0000${pkgOf(t)}`, (links.get(`${pkgOf(f)}\u0000${pkgOf(t)}`) ?? 0) + 1);
+  const pairs = [...links].map(([k, n]) => [...k.split("\u0000"), n] as [string, string, number]);
+  const col = columns(pkgs, (p) => pairs.filter(([a]) => a === p).map(([, b]) => b));
+  return {
+    ...base, view: "packages", focus: "",
+    nodes: pkgs.map((p) => ({
+      id: pkgId(p), kind: "package", label: p || "(project top)", package: p, column: col(p),
+      files: files.filter((f) => pkgOf(f.path) === p).length, test: false,
+      dependents: pairs.filter(([, b]) => b === p).length, dependencies: pairs.filter(([a]) => a === p).length,
+    })),
+    edges: pairs.map(([a, b, n]) => ({ from: pkgId(a), to: pkgId(b), weight: n, names: [], import: true })),
   };
 }

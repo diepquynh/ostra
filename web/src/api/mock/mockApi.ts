@@ -7,7 +7,7 @@ import { eventsFor, gateSessions } from "./fixtures.session";
 import * as wf from "./fixtures.workspace";
 import { mockGit } from "./mockGit";
 import { mockBrowse, mockChanges, mockDiff, mockFile, mockFileIndex, mockMkdir, mockSaveFile, mockTree } from "./projectFiles";
-import { mockCodeDeps, mockCodeFile, mockCodeSymbols, mockCodeUsages } from "./mockCode";
+import { mockCodeDeps, mockCodeFile, mockCodeGraph, mockCodeSymbols, mockCodeUsages } from "./mockCode";
 import { mockCreateWorkspace, mockValidateCreate, mockValidateImport } from "./fixtures.projects";
 
 const delay = <T>(value: T, ms = 80): Promise<T> =>
@@ -294,6 +294,18 @@ export const mockApi: Api = {
     skillDocs = { ...skillDocs, [key]: { ...skillDocs[key], [name]: doc } };
     return delay(doc);
   },
+  saveProjectCommands: (_ws, key, commands) => {
+    const p = f.workspaceDetail.projects.find((x) => x.key === key);
+    if (!p?.profile) return Promise.reject(new HttpError(409, `Initialize ${key} first: its commands live in .ostra/project.toml.`));
+    const bad = Object.entries(commands).filter(([, v]) => v && /[\r\n]/.test(v));
+    if (bad.length)
+      return Promise.reject(
+        new HttpError(422, "Fix the commands and save again.", bad.map(([k]) => ({ path: `commands.${k}`, message: "Write the command on one line; chain steps with `&&`." }))),
+      );
+    const clean = Object.fromEntries(Object.entries(commands).map(([k, v]) => [k, v?.trim() ? v.trim() : null])) as typeof commands;
+    p.profile.commands = clean;
+    return delay(clean);
+  },
   deleteSkill: (_ws, key, name) => {
     const rest = { ...skillDocs[key] };
     delete rest[name];
@@ -369,6 +381,8 @@ export const mockApi: Api = {
   codeUsages: (_ws, key, symbol, at = {}) => attempt(() => mockCodeUsages(key, symbol, at.path)),
   codeDeps: (_ws, key, path) => attempt(() => mockCodeDeps(key, path)),
   codeSymbols: (_ws, key, query, limit = 50) => attempt(() => mockCodeSymbols(key, query, limit)),
+  codeGraph: (_ws, key, at = {}) => attempt(() => mockCodeGraph(key, at)),
+  codeReindex: (_ws, key) => delay({ indexed_files: mockCodeGraph(key, {}).indexed_files, millis: 12, truncated: false }),
   projectChanges: (_ws, key) => delay(mockChanges(key)),
 
   tree: () => delay({ sessions: tree() }),

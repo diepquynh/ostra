@@ -1,9 +1,10 @@
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../../api";
 import type { ProjectView } from "../../api/types";
 import type { Commands } from "../../api/gen/Commands";
 import { Banner, Button, Chip, Dialog, Panel, Stepper, Table } from "../../design";
+import { CommandsPanel } from "./CommandsPanel";
 import { useAsync } from "../../lib/hooks";
 import { useWorkspaceTree } from "../../lib/live";
 import { useNav, useWorkspace } from "../../lib/nav";
@@ -11,15 +12,7 @@ import { resourcePath } from "../../lib/resource";
 
 const INIT_STEPS = [{ label: "Detect" }, { label: "Scout" }, { label: "Propose skills" }, { label: "Your approval" }, { label: "Generate" }, { label: "Inventory" }];
 
-const COMMANDS: [keyof Commands, string][] = [
-  ["build", "Build"],
-  ["test", "Test"],
-  ["test_one", "One test"],
-  ["typecheck", "Typecheck"],
-  ["lint", "Lint"],
-  ["format", "Format"],
-  ["run", "Run"],
-];
+const EMPTY_COMMANDS: Commands = { build: null, test: null, test_one: null, format: null, lint: null, typecheck: null, run: null };
 
 /** Overview tab: commands, skills, module map and maintenance, or the Initialize flow for a project that has none. */
 export function ProjectOverview({ ws, project }: { ws: string; project: ProjectView }) {
@@ -73,7 +66,6 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
   );
 
   const profile = p.profile;
-  const commands = profile ? COMMANDS.filter(([k]) => profile.commands[k]) : [];
 
   return (
     <div style={{ padding: "18px 24px 40px", display: "flex", flexDirection: "column", gap: 16 }}>
@@ -125,22 +117,7 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-            <Panel title="Commands" icon="square-terminal">
-              {commands.length ? (
-                <div style={{ display: "grid", gridTemplateColumns: "80px 1fr", gap: "8px 10px", alignItems: "center", fontSize: "var(--text-sm)" }}>
-                  {commands.map(([k, label]) => (
-                    <Fragment key={k}>
-                      <span style={{ color: "var(--text-muted)" }}>{label}</span>
-                      <code style={{ wordBreak: "break-all" }}>{profile!.commands[k]}</code>
-                    </Fragment>
-                  ))}
-                </div>
-              ) : (
-                <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-                  No commands in <code>.ostra/project.toml</code>. Re-initialize, or add them under <code>[commands]</code>.
-                </div>
-              )}
-            </Panel>
+            <CommandsPanel ws={ws} projectKey={p.key} commands={profile?.commands ?? EMPTY_COMMANDS} onSaved={reload} />
             <Panel
               title="Skills"
               subtitle={profile?.skills.length ?? 0}

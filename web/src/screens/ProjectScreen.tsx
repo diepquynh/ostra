@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { api } from "../api";
 import type { GitPullResult, ProjectView } from "../api/types";
-import { Banner, Button, Chip, Icon, Spinner, StatusChip } from "../design";
+import { Banner, Button, Chip, Icon, Spinner, StatusChip, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
+import { DependencyGraph } from "./project/DependencyGraph";
 import { ProjectOverview } from "./project/ProjectOverview";
 
 export type ProjectScreenProps = {
@@ -28,6 +29,7 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
   const p = detail?.projects.find((x) => x.key === projectKey);
   const [pulling, setPulling] = useState(false);
   const [pulled, setPulled] = useState<{ ok: GitPullResult } | { error: string } | null>(null);
+  const [section, setSection] = useState<"overview" | "dependencies">("overview");
 
   const pull = () => {
     setPulling(true);
@@ -102,8 +104,19 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
           )}
         </div>
       )}
+      <div style={{ padding: "12px 24px 0", flex: "none" }}>
+        <Tabs
+          label="Project sections"
+          tabs={[
+            { id: "overview", label: "Overview", icon: "layout-dashboard" },
+            { id: "dependencies", label: "Dependencies", icon: "git-fork" },
+          ]}
+          value={section}
+          onChange={(id) => setSection(id as "overview" | "dependencies")}
+        />
+      </div>
       <div style={{ flex: 1, overflow: "auto", minHeight: 0, paddingTop: 12 }}>
-        <ProjectOverview ws={ws} project={p} />
+        {section === "overview" ? <ProjectOverview ws={ws} project={p} /> : <DependencyGraph key={p.key} ws={ws} projectKey={p.key} />}
       </div>
     </div>
   );

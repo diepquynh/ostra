@@ -273,3 +273,64 @@ fn tools_answer_in_text() {
         assert!(err.starts_with("Invalid input"), "{err}");
     });
 }
+
+#[test]
+fn graph_views_for_the_ui() {
+    use ostra_core::code::CodeGraph;
+    let closed = |g: &CodeGraph| {
+        for e in &g.edges {
+            assert!(g.nodes.iter().any(|n| n.id == e.from), "{} missing", e.from);
+            assert!(g.nodes.iter().any(|n| n.id == e.to), "{} missing", e.to);
+        }
+    };
+    let col = |g: &CodeGraph, id: &str| {
+        g.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("{id} not in the view"))
+            .column
+    };
+    with_ostra(|ix| {
+        let p = ix.packages_view();
+        closed(&p);
+        assert!(col(&p, "package:crates/ostra-server") < col(&p, "package:crates/ostra-engine"));
+        assert!(col(&p, "package:crates/ostra-engine") < col(&p, "package:crates/ostra-core"));
+        assert!(
+            p.edges
+                .iter()
+                .any(|e| e.from == "package:crates/ostra-engine"
+                    && e.to == "package:crates/ostra-core"
+                    && e.weight > 10)
+        );
+
+        let v = ix.package_view("crates/ostra-engine").unwrap();
+        closed(&v);
+        assert!(
+            v.nodes
+                .iter()
+                .any(|n| n.id == "crates/ostra-engine/src/plan.rs")
+        );
+        assert!(v.nodes.iter().any(|n| n.id == "package:crates/ostra-core"));
+        assert!(
+            !v.nodes
+                .iter()
+                .any(|n| n.id.starts_with("crates/ostra-core/"))
+        );
+
+        let f = ix.file_view("crates/ostra-engine/src/plan.rs", 1).unwrap();
+        closed(&f);
+        assert_eq!(col(&f, "crates/ostra-engine/src/plan.rs"), 0);
+        assert_eq!(col(&f, "crates/ostra-engine/src/runner.rs"), -1);
+        assert_eq!(col(&f, "crates/ostra-engine/src/state.rs"), 1);
+        assert!(
+            f.edges
+                .iter()
+                .any(|e| e.from == "crates/ostra-engine/src/runner.rs"
+                    && e.to == "crates/ostra-engine/src/plan.rs"
+                    && e.names.iter().any(|n| n == "PlanCtx"))
+        );
+
+        assert!(ix.file_view("nope.rs", 1).is_none());
+        assert!(ix.package_view("nope").is_none());
+    });
+}

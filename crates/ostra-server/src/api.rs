@@ -64,6 +64,16 @@ impl ApiErr {
             },
         }
     }
+    /// A 422 with a message of its own and one issue per field.
+    pub fn invalid_with(message: impl Into<String>, issues: Vec<ValidationIssue>) -> Self {
+        ApiErr {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            body: ApiError {
+                error: message.into(),
+                issues,
+            },
+        }
+    }
     fn invalid(issues: Vec<ValidationIssue>) -> Self {
         ApiErr {
             status: StatusCode::UNPROCESSABLE_ENTITY,
@@ -268,6 +278,10 @@ pub fn router(app: Arc<App>) -> axum::Router {
             post(skill_adopt),
         )
         .route(
+            "/api/workspaces/{ws}/projects/{key}/commands",
+            axum::routing::put(project_commands),
+        )
+        .route(
             "/api/workspaces/{ws}/projects/{key}/harness-skill",
             get(harness_skill_get),
         )
@@ -346,6 +360,14 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route(
             "/api/workspaces/{ws}/projects/{key}/code/symbols",
             get(code_symbols),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/code/graph",
+            get(code_graph),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/code/reindex",
+            post(code_reindex),
         )
         .route(
             "/api/workspaces/{ws}/projects/{key}/changes",
@@ -1179,6 +1201,18 @@ async fn skill_get(
     Ok(Json(crate::skills::get(&w, &key, &name)?))
 }
 
+async fn project_commands(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Json(body): Json<ostra_core::config::Commands>,
+) -> Res<ostra_core::config::Commands> {
+    let w = ws(&app, &id)?;
+    let saved = crate::commands::save(&w, &key, body)?;
+    // ProjectView carries the profile, so browsers holding the workspace refetch it.
+    crate::git::workspace_updated(&app, &w);
+    Ok(Json(saved))
+}
+
 async fn skill_save(
     State(app): AppState,
     Path((id, key, name)): Path<(String, String, String)>,
@@ -1456,6 +1490,49 @@ async fn code_deps(
         Answer::Deps(d) => Ok(Json(d)),
         _ => Err(wrong_answer()),
     }
+}
+
+#[derive(Deserialize)]
+struct CodeGraphQuery {
+    package: Option<String>,
+    path: Option<String>,
+    depth: Option<u32>,
+}
+
+async fn code_graph(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<CodeGraphQuery>,
+) -> Res<ostra_core::code::CodeGraph> {
+    let ask = match (q.path.filter(|p| !p.is_empty()), q.package) {
+        (Some(_), Some(_)) => {
+            return Err(ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "Give either package or path, not both.",
+            ));
+        }
+        (Some(path), None) => crate::code::GraphAsk::File {
+            path,
+            depth: q.depth.unwrap_or(1),
+        },
+        // `.` names the package at the project top, whose folder is the empty string.
+        (None, Some(package)) => crate::code::GraphAsk::Package(if package == "." {
+            String::new()
+        } else {
+            package
+        }),
+        (None, None) => crate::code::GraphAsk::Packages,
+    };
+    let w = ws(&app, &id)?;
+    Ok(Json(app.code.graph(&app, &w, &key, ask).await?))
+}
+
+async fn code_reindex(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+) -> Res<ostra_core::code::CodeReindex> {
+    let w = ws(&app, &id)?;
+    Ok(Json(app.code.reindex(&app, &w, &key).await?))
 }
 
 async fn code_symbols(

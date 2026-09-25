@@ -9,7 +9,10 @@ use crate::lang::{Family, Lang};
 use crate::lex;
 use crate::outline::ImportStyle;
 use crate::resolve::parent;
-use ostra_core::code::{CodeLocation, SymbolKind};
+use ostra_core::code::{
+    CodeGraph, CodeGraphEdge, CodeGraphNode, CodeGraphNodeKind, CodeGraphView, CodeLocation,
+    SymbolKind,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
@@ -1447,6 +1450,316 @@ impl ProjectIndex {
             line: def.line,
             end_line: def.end_line,
             uses,
+            truncated,
+        })
+    }
+}
+
+/// Files a package view shows.
+pub const MAX_VIEW_FILES: usize = 150;
+/// Files a file view shows.
+pub const MAX_VIEW_NEIGHBORS: usize = 80;
+
+/// A column per node so that each node sits left of what it uses; nodes that use each other in a
+/// loop share a column. Sinks are column 0 and users take negative columns.
+fn columns(adj: &[Vec<u32>]) -> Vec<i32> {
+    let comps = sccs(adj);
+    let mut comp_of = vec![0usize; adj.len()];
+    for (ci, c) in comps.iter().enumerate() {
+        for &v in c {
+            comp_of[v as usize] = ci;
+        }
+    }
+    // Tarjan emits a component after every component it reaches, so those levels are known.
+    let mut level = vec![0i32; comps.len()];
+    for (ci, c) in comps.iter().enumerate() {
+        let mut l = 0;
+        for &v in c {
+            for &w in &adj[v as usize] {
+                let cw = comp_of[w as usize];
+                if cw != ci {
+                    l = l.max(level[cw] + 1);
+                }
+            }
+        }
+        level[ci] = l;
+    }
+    (0..adj.len()).map(|v| -level[comp_of[v]]).collect()
+}
+
+fn package_id(unit: &str) -> String {
+    format!("package:{unit}")
+}
+
+fn package_label(unit: &str) -> String {
+    if unit.is_empty() {
+        "(project top)".into()
+    } else {
+        unit.to_string()
+    }
+}
+
+impl ProjectIndex {
+    fn file_node(&self, g: &Graph, f: u32, column: i32) -> CodeGraphNode {
+        let path = &self.entries[f as usize].path;
+        CodeGraphNode {
+            id: path.clone(),
+            kind: CodeGraphNodeKind::File,
+            label: path.rsplit('/').next().unwrap_or(path).to_string(),
+            package: g.units[g.unit[f as usize] as usize].clone(),
+            column,
+            files: 1,
+            test: g.test[f as usize],
+            dependents: self.steps(g, f, Direction::Dependents).len() as u32,
+            dependencies: self.steps(g, f, Direction::Dependencies).len() as u32,
+        }
+    }
+
+    fn file_edge(&self, from: u32, e: &Edge) -> CodeGraphEdge {
+        CodeGraphEdge {
+            from: self.entries[from as usize].path.clone(),
+            to: self.entries[e.other as usize].path.clone(),
+            weight: e.names.len().max(1) as u32,
+            names: self.names_of(&e.names),
+            import: e.real_import(),
+        }
+    }
+
+    /// Every package and the links between them.
+    pub fn packages_view(&mut self) -> CodeGraph {
+        let m = self.units();
+        let files = self.files() as u32;
+        let index: HashMap<&str, u32> = m
+            .units
+            .iter()
+            .enumerate()
+            .map(|(i, u)| (u.path.as_str(), i as u32))
+            .collect();
+        let adj: Vec<Vec<u32>> = m
+            .units
+            .iter()
+            .map(|u| {
+                u.depends_on
+                    .iter()
+                    .filter_map(|d| index.get(d.path.as_str()).copied())
+                    .collect()
+            })
+            .collect();
+        let cols = columns(&adj);
+        let nodes = m
+            .units
+            .iter()
+            .zip(&cols)
+            .map(|(u, &column)| CodeGraphNode {
+                id: package_id(&u.path),
+                kind: CodeGraphNodeKind::Package,
+                label: package_label(&u.path),
+                package: u.path.clone(),
+                column,
+                files: u.files as u32,
+                test: false,
+                dependents: u.used_by.len() as u32,
+                dependencies: u.depends_on.len() as u32,
+            })
+            .collect();
+        let edges = m
+            .units
+            .iter()
+            .flat_map(|u| {
+                u.depends_on.iter().map(|d| CodeGraphEdge {
+                    from: package_id(&u.path),
+                    to: package_id(&d.path),
+                    weight: d.links as u32,
+                    names: vec![],
+                    import: true,
+                })
+            })
+            .collect();
+        CodeGraph {
+            view: CodeGraphView::Packages,
+            focus: String::new(),
+            nodes,
+            edges,
+            indexed_files: files,
+            truncated: false,
+        }
+    }
+
+    /// One package's files with the links between them, and the other packages they use.
+    /// `None` when no indexed file belongs to `unit`.
+    pub fn package_view(&mut self, unit: &str) -> Option<CodeGraph> {
+        self.ensure_graph();
+        let g = self.graph_ref();
+        let u = g.units.iter().position(|x| x == unit)? as u32;
+        let mut members: Vec<u32> = (0..self.entries.len() as u32)
+            .filter(|&f| self.entries[f as usize].alive && g.unit[f as usize] == u)
+            .collect();
+        if members.is_empty() {
+            return None;
+        }
+        let truncated = members.len() > MAX_VIEW_FILES;
+        if truncated {
+            // Keep the files the rest of the package leans on most.
+            members.sort_by_cached_key(|&f| {
+                std::cmp::Reverse(self.steps(g, f, Direction::Dependents).len())
+            });
+            members.truncate(MAX_VIEW_FILES);
+        }
+        members.sort_by(|a, b| {
+            self.entries[*a as usize]
+                .path
+                .cmp(&self.entries[*b as usize].path)
+        });
+        let slot: HashMap<u32, u32> = members
+            .iter()
+            .enumerate()
+            .map(|(i, &f)| (f, i as u32))
+            .collect();
+        let mut outside: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut adj: Vec<Vec<u32>> = vec![vec![]; members.len()];
+        let mut edges = vec![];
+        let mut out_links: BTreeMap<(u32, u32), u32> = BTreeMap::new();
+        for (i, &f) in members.iter().enumerate() {
+            for (to, e) in self.steps(g, f, Direction::Dependencies) {
+                if let Some(&j) = slot.get(&to) {
+                    adj[i].push(j);
+                    edges.push(self.file_edge(f, e));
+                } else if g.unit[to as usize] != u {
+                    let tu = g.unit[to as usize];
+                    let next = members.len() as u32 + outside.len() as u32;
+                    outside.entry(tu).or_insert(next);
+                    *out_links.entry((f, tu)).or_default() += 1;
+                }
+            }
+        }
+        adj.resize(members.len() + outside.len(), vec![]);
+        for &(f, tu) in out_links.keys() {
+            adj[slot[&f] as usize].push(outside[&tu]);
+        }
+        let cols = columns(&adj);
+        let mut nodes: Vec<CodeGraphNode> = members
+            .iter()
+            .enumerate()
+            .map(|(i, &f)| self.file_node(g, f, cols[i]))
+            .collect();
+        let m = self.units_of(g);
+        for (&tu, &i) in &outside {
+            let name = &g.units[tu as usize];
+            let (files, dependents, dependencies) =
+                m.get(name.as_str()).copied().unwrap_or_default();
+            nodes.push(CodeGraphNode {
+                id: package_id(name),
+                kind: CodeGraphNodeKind::Package,
+                label: package_label(name),
+                package: name.clone(),
+                column: cols[i as usize],
+                files,
+                test: false,
+                dependents,
+                dependencies,
+            });
+        }
+        for (&(f, tu), &n) in &out_links {
+            edges.push(CodeGraphEdge {
+                from: self.entries[f as usize].path.clone(),
+                to: package_id(&g.units[tu as usize]),
+                weight: n,
+                names: vec![],
+                import: true,
+            });
+        }
+        Some(CodeGraph {
+            view: CodeGraphView::Package,
+            focus: unit.to_string(),
+            nodes,
+            edges,
+            indexed_files: self.files() as u32,
+            truncated,
+        })
+    }
+
+    /// Files, dependents, and dependencies per package, for package nodes in a package view.
+    fn units_of(&self, g: &Graph) -> HashMap<String, (u32, u32, u32)> {
+        let mut files: HashMap<u32, u32> = HashMap::new();
+        let mut uses: HashMap<u32, HashSet<u32>> = HashMap::new();
+        let mut used: HashMap<u32, HashSet<u32>> = HashMap::new();
+        for (id, e) in self.entries.iter().enumerate() {
+            if !e.alive {
+                continue;
+            }
+            let u = g.unit[id];
+            *files.entry(u).or_default() += 1;
+            for (to, _) in self.steps(g, id as u32, Direction::Dependencies) {
+                let tu = g.unit[to as usize];
+                if tu != u {
+                    uses.entry(u).or_default().insert(tu);
+                    used.entry(tu).or_default().insert(u);
+                }
+            }
+        }
+        files
+            .into_iter()
+            .map(|(u, n)| {
+                (
+                    g.units[u as usize].clone(),
+                    (
+                        n,
+                        used.get(&u).map_or(0, |s| s.len() as u32),
+                        uses.get(&u).map_or(0, |s| s.len() as u32),
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    /// `path` and the files within `depth` hops: what uses it to the left, what it uses to the
+    /// right, one column per hop. `None` when the index does not hold `path`.
+    pub fn file_view(&mut self, path: &str, depth: u32) -> Option<CodeGraph> {
+        self.ensure_graph();
+        let g = self.graph_ref();
+        let &focus = self.by_path.get(path)?;
+        let mut column: HashMap<u32, i32> = HashMap::from([(focus, 0)]);
+        let mut order = vec![focus];
+        let mut truncated = false;
+        for (dir, sign) in [(Direction::Dependencies, 1), (Direction::Dependents, -1)] {
+            let mut frontier = vec![focus];
+            for d in 1..=depth as i32 {
+                let mut next = vec![];
+                for &n in &frontier {
+                    for (m, _) in self.steps(g, n, dir) {
+                        if column.contains_key(&m) {
+                            continue;
+                        }
+                        if order.len() >= MAX_VIEW_NEIGHBORS {
+                            truncated = true;
+                            break;
+                        }
+                        column.insert(m, sign * d);
+                        order.push(m);
+                        next.push(m);
+                    }
+                }
+                frontier = next;
+            }
+        }
+        let nodes = order
+            .iter()
+            .map(|&f| self.file_node(g, f, column[&f]))
+            .collect();
+        let mut edges = vec![];
+        for &f in &order {
+            for (to, e) in self.steps(g, f, Direction::Dependencies) {
+                if column.contains_key(&to) {
+                    edges.push(self.file_edge(f, e));
+                }
+            }
+        }
+        Some(CodeGraph {
+            view: CodeGraphView::File,
+            focus: path.to_string(),
+            nodes,
+            edges,
+            indexed_files: self.files() as u32,
             truncated,
         })
     }
