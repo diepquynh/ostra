@@ -171,6 +171,7 @@ pub fn import_entry(
             path,
             stack,
             code_provider: None,
+            language_servers: vec![],
         }),
         _ => Err(issues),
     }
@@ -480,6 +481,7 @@ mod tests {
             path: base.join("api"),
             stack: None,
             code_provider: None,
+            language_servers: vec![],
         });
 
         let ok = import_entry(&settings, &root, &request(&app, " app ", Some(" "))).unwrap();

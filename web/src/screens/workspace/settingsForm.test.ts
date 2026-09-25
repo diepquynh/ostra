@@ -95,6 +95,15 @@ describe("settings form round trip", () => {
     expect("code_provider" in out.projects[1]).toBe(false);
   });
 
+  it("keeps each project's language servers, which the form does not show", () => {
+    const s = clone();
+    const servers = [{ command: ["rust-analyzer"], languages: ["rust"], timeout_secs: 10 }];
+    s.projects[0].language_servers = servers;
+    const { settings: out } = fromForm(toForm(s), s);
+    expect(out.projects[0].language_servers).toEqual(servers);
+    expect("language_servers" in out.projects[1]).toBe(false);
+  });
+
   it("reports what it cannot parse and keeps the saved value for it", () => {
     const s = clone();
     const f = toForm(s);

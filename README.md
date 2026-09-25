@@ -83,9 +83,11 @@ scratch setup.
 | `crates/ostra-providers` | Anthropic and OpenAI streaming clients, a scripted mock |
 | `crates/ostra-store` | SQLite: workspace database, registry, project memory |
 | `crates/ostra-notify` | Web Push without OpenSSL |
-| `crates/ostra-server` | The `ostra` binary: axum, auth, REST, WebSocket, embedded web build |
+| `crates/ostra-code` | Code navigation for the Files view: tokenizer, per-project code index, LSP client, code providers |
+| `crates/ostra-server` | The `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI |
 | `assets/` | Agent prompts and definitions, judge prompts, stack references, the meta-author skill |
 | `web/` | React, Vite, TypeScript |
+| `.design-sync/` | Notes and config for syncing UI changes to the Claude Design project |
 | `tests/conformance/` | Engine fixtures, one per rule ID of HANDOVER section 8.2 |
 
 ## Tests

@@ -323,6 +323,29 @@ pub struct ProjectEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub code_provider: Option<CodeProviderConfig>,
+    /// Language Server Protocol servers that answer code navigation for their languages, after
+    /// `code_provider` and before the built-in index.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<LanguageServerConfig>>", optional)]
+    pub language_servers: Vec<LanguageServerConfig>,
+}
+
+/// `[[projects.language_servers]]`: a server Ostra starts in the project folder and keeps running
+/// while the Files view uses it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LanguageServerConfig {
+    /// Program and arguments, such as `["rust-analyzer"]`.
+    pub command: Vec<String>,
+    /// Language ids this server answers for, such as `rust` (`code::NAV_LANGUAGES`).
+    pub languages: Vec<String>,
+    /// Seconds one request may take before Ostra answers with the built-in provider.
+    #[serde(default = "default_provider_timeout")]
+    pub timeout_secs: u32,
+    /// Sent as `initializationOptions` in the `initialize` request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "unknown")]
+    pub initialization_options: Option<serde_json::Value>,
 }
 
 /// `[projects.code_provider]`: the program Ostra runs once per request, with one JSON request on
@@ -863,6 +886,51 @@ pub fn validate_workspace(
                 ));
             }
         }
+        let mut claimed: Vec<&str> = vec![];
+        for (j, ls) in p.language_servers.iter().enumerate() {
+            let at = format!("projects[{i}].language_servers[{j}]");
+            if ls.command.first().is_none_or(|c| c.trim().is_empty()) {
+                issues.push(issue(
+                    format!("{at}.command"),
+                    "Name the server program as the first item of command.".into(),
+                ));
+            }
+            if ls.languages.is_empty() {
+                issues.push(issue(
+                    format!("{at}.languages"),
+                    format!(
+                        "List the languages this server answers for, from: {}.",
+                        crate::code::NAV_LANGUAGES.join(", ")
+                    ),
+                ));
+            }
+            for l in &ls.languages {
+                if !crate::code::NAV_LANGUAGES.contains(&l.as_str()) {
+                    issues.push(issue(
+                        format!("{at}.languages"),
+                        format!(
+                            "Use a language id from: {}. `{l}` is not one.",
+                            crate::code::NAV_LANGUAGES.join(", ")
+                        ),
+                    ));
+                } else if claimed.contains(&l.as_str()) {
+                    issues.push(issue(
+                        format!("{at}.languages"),
+                        format!(
+                            "Give `{l}` to one server only, because each file asks one server."
+                        ),
+                    ));
+                } else {
+                    claimed.push(l);
+                }
+            }
+            if ls.timeout_secs == 0 || ls.timeout_secs > MAX_PROVIDER_TIMEOUT {
+                issues.push(issue(
+                    format!("{at}.timeout_secs"),
+                    format!("Use a timeout from 1 to {MAX_PROVIDER_TIMEOUT} seconds."),
+                ));
+            }
+        }
     }
 
     for key in ws.routing.executor.by_agent.keys() {
@@ -1290,6 +1358,7 @@ deny = ["Bash(git push *)"]
                 path: PathBuf::from(format!("/code/{key}")),
                 stack: stack.map(str::to_string),
                 code_provider: None,
+                language_servers: vec![],
             });
         }
         let env = Environment {
@@ -1361,6 +1430,41 @@ deny = ["Bash(git push *)"]
             vec![
                 "projects[1].code_provider.command",
                 "projects[1].code_provider.timeout_secs"
+            ]
+        );
+    }
+
+    #[test]
+    fn language_servers_parse_and_validate() {
+        let ws: WorkspaceSettings = toml::from_str(
+            "name = \"x\"\n[[projects]]\nkey = \"a\"\npath = \"/a\"\n\
+             [[projects.language_servers]]\ncommand = [\"rust-analyzer\"]\nlanguages = [\"rust\"]\n\
+             initialization_options = { checkOnSave = false }\n\
+             [[projects.language_servers]]\ncommand = []\nlanguages = [\"rust\", \"cobol\"]\n\
+             timeout_secs = 500\n",
+        )
+        .unwrap();
+        let a = &ws.projects[0].language_servers[0];
+        assert_eq!(a.timeout_secs, 10);
+        assert_eq!(
+            a.initialization_options,
+            Some(serde_json::json!({"checkOnSave": false}))
+        );
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
+        let paths: Vec<String> = validate_workspace(&GlobalConfig::default(), &ws, &env, tier)
+            .into_iter()
+            .map(|i| i.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "projects[0].language_servers[1].command",
+                "projects[0].language_servers[1].languages",
+                "projects[0].language_servers[1].languages",
+                "projects[0].language_servers[1].timeout_secs"
             ]
         );
     }

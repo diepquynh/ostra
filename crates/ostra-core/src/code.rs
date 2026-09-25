@@ -9,6 +9,26 @@ use ts_rs::TS;
 /// The version of the external provider protocol, sent in every request.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Language ids the built-in provider navigates, which a language server entry may name.
+pub const NAV_LANGUAGES: &[&str] = &[
+    "rust",
+    "typescript",
+    "javascript",
+    "python",
+    "go",
+    "java",
+    "kotlin",
+    "scala",
+    "csharp",
+    "swift",
+    "php",
+    "c",
+    "cpp",
+    "ruby",
+    "lua",
+    "shell",
+];
+
 /// Name the built-in provider reports in `provider`.
 pub const NATIVE_PROVIDER: &str = "native";
 

@@ -1,10 +1,12 @@
 //! Code navigation for the Files view: a table-driven tokenizer for about twenty languages, an
-//! incremental per-project index of names, definitions, and imports, and the provider layer that
-//! lets a project swap in its own program for any request (`ostra_core::code`).
+//! incremental per-project index of names, definitions, and imports, language servers over LSP,
+//! and the provider layer that lets a project swap in its own program for any request
+//! (`ostra_core::code`).
 
 pub mod index;
 pub mod lang;
 pub mod lex;
+pub mod lsp;
 pub mod outline;
 pub mod provider;
 pub mod resolve;
@@ -12,6 +14,7 @@ pub mod resolve;
 use ostra_core::code::{CodeFile, CodeImport, CodeSymbol, TokenClass};
 
 pub use index::{Indexes, ProjectIndex};
+pub use lsp::{LspPool, LspProvider};
 pub use provider::{Answer, CodeProvider, CommandProvider, NativeProvider};
 
 /// Files larger than this are not tokenized or indexed.

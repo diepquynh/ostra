@@ -137,6 +137,7 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
             path,
             stack: p.stack.clone().filter(|s| !s.trim().is_empty()),
             code_provider: None,
+            language_servers: vec![],
         });
     }
 
@@ -460,6 +461,7 @@ mod tests {
             path: dir.path().join("gone"),
             stack: None,
             code_provider: None,
+            language_servers: vec![],
         });
         old.instructions.all = Some("Keep it short.".into());
         save_toml(&paths::workspace_toml(&root), &old).unwrap();

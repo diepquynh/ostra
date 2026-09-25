@@ -194,10 +194,16 @@ export function fromForm(form: SettingsForm, base: WorkspaceSettings): { setting
   };
 
   s.name = form.name;
-  // The form has no field for a code provider, so each row keeps the one its project had (by key, or by path after a rename).
+  // The form has no fields for code providers or language servers, so each row keeps what its project had (by key, or by path after a rename).
   s.projects = form.projects.map((p) => {
     const was = base.projects.find((b) => b.key === p.key) ?? base.projects.find((b) => b.path === p.path);
-    return { key: p.key, path: p.path, stack: p.stack || null, ...(was?.code_provider ? { code_provider: was.code_provider } : {}) };
+    return {
+      key: p.key,
+      path: p.path,
+      stack: p.stack || null,
+      ...(was?.code_provider ? { code_provider: was.code_provider } : {}),
+      ...(was?.language_servers?.length ? { language_servers: was.language_servers } : {}),
+    };
   });
 
   s.routing.executor.byAgent = {};

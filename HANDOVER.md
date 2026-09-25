@@ -774,6 +774,23 @@ bring its own analysis without Ostra carrying editor plugins. Every answer names
   of four with a valid class index) also falls through to the built-in provider, and the answer shown carries
   the reason, because a silent fallback would hide a broken provider. `OSTRA_CODE_PROTOCOL` in the program's
   environment holds the protocol version.
+- **Language servers.** `[[projects.language_servers]]` entries name a Language Server Protocol server
+  (`command`), the language ids it answers for (`languages`, from `NAV_LANGUAGES` in
+  `ostra-core/src/code.rs`, each claimed by one entry), `timeout_secs` (1 to 120, default 10), and
+  optional `initialization_options`. They sit after `code_provider` and before the built-in index. Ostra
+  starts a server in the project folder on the first request for one of its languages, keeps one per
+  project and command, stops it after 10 minutes without requests, and runs at most 8 across all projects,
+  stopping the least recently used, because each one holds a whole project in memory. A server that fails
+  to start or exits is not started again for 30 seconds. A file answer starts from the built-in one and
+  replaces the tokens the server's semantic tokens cover and the outline with its document symbols;
+  imports stay built-in. Usages at a position ask `definition` and `references` there; without one they
+  start from `workspace/symbol` matches of the exact name. Symbol search asks `workspace/symbol`.
+  Dependencies always come from the built-in index. An empty answer, a failure, or a timeout falls through
+  to the built-in provider with the reason shown, and an answer given while the server reports progress
+  says it may be incomplete. Writes by executions and saves reach running servers as
+  `workspace/didChangeWatchedFiles`. Some servers need options to answer fully: gopls colors only with
+  `semanticTokens = true`, and rust-analyzer searches functions only with
+  `workspace.symbol.search.kind = "all_symbols"`.
 - **Tokens.** `CodeFile.tokens` is a flat list of four numbers per token: 1-based line, 0-based UTF-16 column,
   UTF-16 length, and an index into `classes`. UTF-16 matches browser string indexes, so the browser slices each
   line without converting. A token never spans lines.
@@ -915,7 +932,7 @@ ostra/
     ostra-providers               anthropic, openai
     ostra-store                   SQLite (rusqlite with bundled FTS5), migrations, event log
     ostra-notify                  Web Push
-    ostra-code                    tokenizer, project code index, code providers for the Files view
+    ostra-code                    tokenizer, project code index, LSP client, code providers for the Files view
     ostra-server                  axum, WebSocket, auth, embedded web build, CLI entry (serve, hook, mcp-stdio)
   assets/
     agents/<name>/{agent.toml, prompt.md}

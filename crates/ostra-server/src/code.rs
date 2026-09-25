@@ -1,13 +1,14 @@
 //! Code navigation for the Files view: display tokens, outline, usages, dependencies, and symbol
 //! search. The work lives in `ostra-code`. This module picks each project's providers (its own
-//! `code_provider` program, then the built-in index) and feeds write touches to the index.
+//! `code_provider` program, then its language servers, then the built-in index) and feeds write
+//! touches to the index and the running servers.
 
 use crate::api::ApiErr;
 use crate::files::{self, Files, ProjectId};
 use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
-use ostra_code::Indexes;
 use ostra_code::provider::{self, Answer, CodeProvider, CommandProvider, NativeProvider};
+use ostra_code::{Indexes, LspPool, LspProvider};
 use ostra_core::code::{PROTOCOL_VERSION, ProviderRequest};
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,12 +43,14 @@ pub enum Ask {
 #[derive(Default)]
 pub struct Code {
     indexes: Arc<Indexes<ProjectId>>,
+    servers: LspPool<ProjectId>,
 }
 
 impl Code {
     /// A file changed on disk; the next query re-reads it.
     pub fn touch(&self, id: &ProjectId, rel: &str) {
         self.indexes.touch(id, rel);
+        self.servers.touch(id, rel);
     }
 
     pub async fn ask(
@@ -120,27 +123,33 @@ impl Code {
             },
         };
         let list = files.index(w, key).await?;
+        let project = w.settings().projects.into_iter().find(|p| p.key == key);
+        let id: ProjectId = (w.id.clone(), key.to_string());
+        let native: Arc<dyn CodeProvider> = Arc::new(NativeProvider {
+            indexes: self.indexes.clone(),
+            key: id.clone(),
+            root: root.clone(),
+            list,
+        });
         let mut chain: Vec<Arc<dyn CodeProvider>> = vec![];
-        // Read per request, so a saved `code_provider` applies to the next one.
-        if let Some(cp) = w
-            .settings()
-            .projects
-            .into_iter()
-            .find(|p| p.key == key)
-            .and_then(|p| p.code_provider)
-        {
+        // Read per request, so saved provider settings apply to the next one.
+        if let Some(cp) = project.as_ref().and_then(|p| p.code_provider.clone()) {
             chain.push(Arc::new(CommandProvider {
                 command: cp.command,
                 root: root.clone(),
                 timeout: Duration::from_secs(cp.timeout_secs.into()),
             }));
         }
-        chain.push(Arc::new(NativeProvider {
-            indexes: self.indexes.clone(),
-            key: (w.id.clone(), key.to_string()),
-            root,
-            list,
-        }));
+        for config in project.map(|p| p.language_servers).unwrap_or_default() {
+            chain.push(Arc::new(LspProvider {
+                pool: self.servers.clone(),
+                key: id.clone(),
+                root: root.clone(),
+                config,
+                base: native.clone(),
+            }));
+        }
+        chain.push(native);
         provider::ask(&chain, &req)
             .await
             .map_err(|e| ApiErr::new(StatusCode::BAD_REQUEST, e))
