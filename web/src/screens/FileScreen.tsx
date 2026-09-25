@@ -271,7 +271,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
         </div>
       )}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <div className="os-rise" key={view} style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
+        <div key={view} style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
           {file.error ? (
             <div style={{ padding: 16 }}>
               <Banner

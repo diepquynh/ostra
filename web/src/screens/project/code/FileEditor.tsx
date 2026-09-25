@@ -99,6 +99,11 @@ const START_ACTION: Record<NonNullable<EditorStart["action"]>, string> = {
   lineDown: "editor.action.moveLinesDownAction",
 };
 
+// Scroll, cursor, and folds per file, because switching tabs unmounts the editor. Oldest first.
+const viewStates = new Map<string, monaco.editor.ICodeEditorViewState>();
+const MAX_VIEW_STATES = 200;
+const viewKey = (ws: string, key: string, model: monaco.editor.ITextModel) => `${ws}\0${key}\0${model.uri}`;
+
 const PICK_WIDTH = 380;
 const MAX_TINTS = 2000;
 const MARK_WORD = { add: "Added", mod: "Changed", del: "Removed below" } as const;
@@ -266,9 +271,32 @@ export default function FileEditor(props: FileEditorProps) {
       const word = e.getModel()?.getWordAtPosition(at);
       if (word) p.onSymbol({ name: word.word, line: at.lineNumber, col: word.startColumn - 1 });
     });
+    // Saved as it changes, so the state survives an unmount. A model is saved only once its own state was restored,
+    // because switching models scrolls the new one to the top first.
+    const keep = () => {
+      const model = e.getModel();
+      const state = e.saveViewState();
+      if (!model || !state || restored.current !== model) return;
+      const k = viewKey(latest.current.ws, latest.current.projectKey, model);
+      viewStates.delete(k);
+      viewStates.set(k, state);
+      if (viewStates.size > MAX_VIEW_STATES) viewStates.delete(viewStates.keys().next().value as string);
+    };
+    e.onDidScrollChange(keep);
+    e.onDidChangeCursorPosition(keep);
     if (!latest.current.readOnly) e.focus();
     setEditor(e);
   };
+  // Before the `reveal` effect, so a jump to a line wins over the restored view.
+  const restored = useRef<monaco.editor.ITextModel | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new path means the wrapper switched to another model.
+  useEffect(() => {
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    const state = viewStates.get(viewKey(ws, projectKey, model));
+    if (state) editor.restoreViewState(state);
+    restored.current = model;
+  }, [editor, ws, projectKey, path]);
   // The options effect of the wrapper runs before this one, so the editor is writable when the action runs, and its
   // `onChange` subscription exists, so the edit reaches the draft.
   const start = props.start;

@@ -505,7 +505,7 @@
   border-bottom: 0;
   font-family: var(--font-sans);
 }
-.os-tabs--bar .os-tab:hover {
+.os-tabs--bar .os-tab:not(.os-tab--active):hover {
   color: var(--text-secondary);
   background: var(--surface-hover);
 }
