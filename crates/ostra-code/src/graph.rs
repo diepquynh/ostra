@@ -343,7 +343,7 @@ fn name_like(k: lex::Kind) -> bool {
 }
 
 /// How token `i`, a name, is mentioned, from the tokens just before it.
-fn mention_at(src: &str, toks: &[lex::Tok], i: usize, lang: &Lang) -> RawMention {
+pub(crate) fn mention_at(src: &str, toks: &[lex::Tok], i: usize, lang: &Lang) -> RawMention {
     let prev = |from: usize| {
         (0..from)
             .rev()
@@ -446,7 +446,7 @@ fn module_name(p: &str) -> &str {
     }
 }
 
-fn member_kind(k: SymbolKind) -> bool {
+pub(crate) fn member_kind(k: SymbolKind) -> bool {
     matches!(
         k,
         SymbolKind::Method
@@ -522,7 +522,7 @@ fn sccs(adj: &[Vec<u32>]) -> Vec<Vec<u32>> {
 }
 
 impl ProjectIndex {
-    fn graph_ref(&self) -> &Graph {
+    pub(crate) fn graph_ref(&self) -> &Graph {
         self.graph.as_ref().expect("ensure_graph ran")
     }
 
@@ -729,7 +729,7 @@ impl ProjectIndex {
     }
 
     /// File `a` mentions `name` somewhere.
-    fn mentions_name(&self, a: u32, name: &str) -> bool {
+    pub(crate) fn mentions_name(&self, a: u32, name: &str) -> bool {
         self.entries[a as usize]
             .names
             .binary_search_by(|&n| (*self.name_list[n as usize]).cmp(name))
@@ -737,7 +737,7 @@ impl ProjectIndex {
     }
 
     /// The definitions mention `m` in file `a` most likely means, as (file, def) pairs.
-    fn resolve(&self, g: &Graph, a: u32, m: Mention) -> Vec<(u32, u32)> {
+    pub(crate) fn resolve(&self, g: &Graph, a: u32, m: Mention) -> Vec<(u32, u32)> {
         let Some(all) = self.defs_by_name.get(&m.name) else {
             return vec![];
         };
@@ -1289,7 +1289,13 @@ impl ProjectIndex {
     }
 
     /// The mention at token `i`, with its names interned; `None` for a name the index lacks.
-    fn mention_of(&self, src: &str, toks: &[lex::Tok], i: usize, lang: &Lang) -> Option<Mention> {
+    pub(crate) fn mention_of(
+        &self,
+        src: &str,
+        toks: &[lex::Tok],
+        i: usize,
+        lang: &Lang,
+    ) -> Option<Mention> {
         let raw = mention_at(src, toks, i, lang);
         let &name = self.names.get(raw.name.as_str())?;
         let qual = match raw.qual {
@@ -1812,7 +1818,7 @@ pub const MAX_VIEW_EDGES: usize = 300;
 const TOP: u32 = u32::MAX;
 
 /// A definition in a symbol view: (file, index into its defs), or (file, [`TOP`]).
-type DefKey = (u32, u32);
+pub(crate) type DefKey = (u32, u32);
 
 /// One link out of (or into) a definition in a symbol view.
 struct CallStep {
@@ -1837,14 +1843,14 @@ fn view_kind(k: SymbolKind) -> bool {
     )
 }
 
-fn type_kind(k: SymbolKind) -> bool {
+pub(crate) fn type_kind(k: SymbolKind) -> bool {
     matches!(
         k,
         SymbolKind::Class | SymbolKind::Enum | SymbolKind::Interface | SymbolKind::Type
     )
 }
 
-fn callable(k: SymbolKind) -> bool {
+pub(crate) fn callable(k: SymbolKind) -> bool {
     matches!(
         k,
         SymbolKind::Function | SymbolKind::Method | SymbolKind::Macro
@@ -1976,23 +1982,23 @@ impl ProjectIndex {
             .map(|i| i as u32)
     }
 
-    fn def_of(&self, (f, d): DefKey) -> &Def {
+    pub(crate) fn def_of(&self, (f, d): DefKey) -> &Def {
         &self.entries[f as usize].defs[d as usize]
     }
 
     /// The type definitions `name` can mean in file `a`.
-    fn types_named(&self, g: &Graph, a: u32, name: u32) -> Vec<DefKey> {
+    pub(crate) fn types_named(&self, g: &Graph, a: u32, name: u32) -> Vec<DefKey> {
         self.resolve(g, a, bare(name))
             .into_iter()
             .filter(|&k| type_kind(self.def_of(k).kind))
             .collect()
     }
 
-    fn is_go(&self, f: u32) -> bool {
+    pub(crate) fn is_go(&self, f: u32) -> bool {
         self.entries[f as usize].lang.family == Family::Go
     }
 
-    fn dir_of(&self, f: u32) -> &str {
+    pub(crate) fn dir_of(&self, f: u32) -> &str {
         parent(&self.entries[f as usize].path)
     }
 
@@ -2085,7 +2091,7 @@ impl ProjectIndex {
 
     /// What type `t` extends or implements, from every declaration that names it as the subtype
     /// (a Rust `impl Trait for T` may sit in any file).
-    fn supertypes_of(&self, g: &Graph, t: DefKey) -> Vec<DefKey> {
+    pub(crate) fn supertypes_of(&self, g: &Graph, t: DefKey) -> Vec<DefKey> {
         if self.is_go(t.0) {
             return self.go_interfaces_of(t);
         }
@@ -2158,7 +2164,7 @@ impl ProjectIndex {
 
     /// Implementation links of `m`: for a type, what it extends and what extends it; for a
     /// method, the supertype method it implements and the methods that implement it.
-    fn impl_steps(&self, g: &Graph, m: DefKey, dir: Direction) -> Vec<DefKey> {
+    pub(crate) fn impl_steps(&self, g: &Graph, m: DefKey, dir: Direction) -> Vec<DefKey> {
         let md = self.def_of(m);
         if type_kind(md.kind) {
             return match dir {

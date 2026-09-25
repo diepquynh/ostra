@@ -756,8 +756,22 @@ bring its own analysis without Ostra carrying editor plugins. Every answer names
   and HTML for color only. Definitions come from keyword rules, members of class bodies, and a few family forms
   (C function bodies, Go receivers, Python indentation). Imports resolve to project files from the language's
   own rules and the manifests (`Cargo.toml` package names, `go.mod` module paths, `package.json` and
-  `tsconfig.json` for `@/` paths). Names match by text: there is no type information, so a common name shows
-  every definition.
+  `tsconfig.json` for `@/` paths). There is no type checker, so symbol search and usages without a position
+  match names by text, and a common name shows every definition.
+- **Usages at a position.** A usages request with `path` and `line` finds the one definition the name there
+  means and lists only the mentions that can mean it, because a member name such as `getName` is shared by
+  unrelated classes. A position on a definition means that definition. A member after `.`, `->`, or `::`
+  resolves through its receiver's type: the type the file declares the receiver with (`Repo repo`,
+  `repo: Repo`, `repo *Repo`, `repo = new Repo()`), or the return type in the signature of the call before
+  it (`Order.builder().build()`, `var b = Order.builder()`), and then that type's supertypes.
+  `self.x`, `this.x`, and a bare member name in a Java-family or C++ class body mean the enclosing class,
+  unless a local declared earlier in the method hides it. A receiver declared with a type the project does
+  not define, such as `String`, means none of the project's members. A method's usages also include calls to
+  the interface or trait methods it implements, and those methods are listed as definitions too. A
+  mention whose receiver type is unknown counts when the file names the definition's class (and the outer
+  class, for a nested one), or when nothing else in the language has that name. When the name at the
+  position resolves to nothing the index can tell, the answer falls back to matching by name. Generated
+  members (Lombok getters) are not known.
 - **Index.** One per project, built on the first usages, dependencies, or symbol request. It keeps each file's
   names, definitions, and imports, not its text, and a usages request re-reads only the files that mention the
   name. Writes by executions mark files for re-reading, and every file is checked on disk again after 30

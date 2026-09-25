@@ -464,21 +464,29 @@ impl ProjectIndex {
         v
     }
 
-    /// Where `symbol` is defined and used. Files are read in this order: `from`, its folder,
-    /// then the rest by path.
+    /// Where `symbol` is defined and used, matching the name alone. Files are read in this
+    /// order: `from`, its folder, then the rest by path.
     pub fn usages(&self, symbol: &str, from: Option<&str>, limit: usize) -> CodeUsages {
         let symbol = symbol.trim_end_matches('!');
-        let mut out = CodeUsages {
-            symbol: symbol.to_string(),
-            provider: NATIVE_PROVIDER.to_string(),
-            definitions: vec![],
-            references: vec![],
-            truncated: false,
-            warning: None,
-        };
         let Some(&name) = self.names.get(symbol) else {
-            return out;
+            return empty_usages(symbol);
         };
+        let defs = self.defs_by_name.get(&name).cloned().unwrap_or_default();
+        self.usages_of(symbol, name, defs, from, limit, |_, _, _, _| true)
+    }
+
+    /// `defs` as the definitions, and as references the mentions of `name` outside every
+    /// definition of it for which `keep(file, text, tokens, token)` holds.
+    pub(crate) fn usages_of(
+        &self,
+        symbol: &str,
+        name: u32,
+        mut defs: Vec<(u32, u32)>,
+        from: Option<&str>,
+        limit: usize,
+        keep: impl Fn(u32, &str, &[lex::Tok], usize) -> bool + Sync,
+    ) -> CodeUsages {
+        let mut out = empty_usages(symbol);
         let def_at: HashSet<(u32, u32, u32)> = self
             .defs_by_name
             .get(&name)
@@ -489,7 +497,6 @@ impl ProjectIndex {
                 (f, def.line, def.col)
             })
             .collect();
-        let mut defs: Vec<(u32, u32)> = self.defs_by_name.get(&name).cloned().unwrap_or_default();
         let from_dir = from.map(parent);
         let rank = |f: u32| {
             let p = &self.entries[f as usize].path;
@@ -518,25 +525,30 @@ impl ProjectIndex {
             let Some(src) = read_text(&self.root.join(&e.path)) else {
                 return vec![];
             };
-            lex::lex(&src, e.lang)
-                .into_iter()
-                .filter(|t| {
+            let toks = lex::lex(&src, e.lang);
+            (0..toks.len())
+                .filter(|&i| {
+                    let t = &toks[i];
                     matches!(
                         t.kind,
                         lex::Kind::Ident | lex::Kind::Type | lex::Kind::Macro
                     ) && t.text(&src).trim_end_matches('!') == symbol
                         && !def_at.contains(&(f, t.line, t.col))
+                        && keep(f, &src, &toks, i)
                 })
-                .map(|t| CodeLocation {
-                    name: symbol.to_string(),
-                    path: e.path.clone(),
-                    line: t.line,
-                    col: t.col,
-                    len: t.len,
-                    preview: preview(&src, t.start as usize),
-                    kind: None,
-                    container: None,
-                    via: None,
+                .map(|i| {
+                    let t = &toks[i];
+                    CodeLocation {
+                        name: symbol.to_string(),
+                        path: e.path.clone(),
+                        line: t.line,
+                        col: t.col,
+                        len: t.len,
+                        preview: preview(&src, t.start as usize),
+                        kind: None,
+                        container: None,
+                        via: None,
+                    }
                 })
                 .collect::<Vec<_>>()
         });
@@ -647,6 +659,17 @@ impl ProjectIndex {
             }
         }
         out
+    }
+}
+
+pub(crate) fn empty_usages(symbol: &str) -> CodeUsages {
+    CodeUsages {
+        symbol: symbol.to_string(),
+        provider: NATIVE_PROVIDER.to_string(),
+        definitions: vec![],
+        references: vec![],
+        truncated: false,
+        warning: None,
     }
 }
 

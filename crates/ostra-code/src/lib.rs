@@ -13,6 +13,7 @@ pub mod outline;
 pub mod provider;
 pub mod resolve;
 pub mod tools;
+pub mod usage;
 
 use ostra_core::code::{CodeFile, CodeImport, CodeSymbol, TokenClass};
 

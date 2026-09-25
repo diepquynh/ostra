@@ -120,9 +120,12 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> CodeProvider for NativeProvid
                     Answer::File(render(&path, &src, Some(&resolver)))
                 }
                 ProviderRequest::Usages {
-                    symbol, path, limit, ..
+                    symbol, path, line, col, limit, ..
                 } => Answer::Usages(indexes.with(&key, &root, &list, |ix| {
-                    let mut u = ix.usages(&symbol, path.as_deref(), limit as usize);
+                    let mut u = match (path.as_deref(), line) {
+                        (Some(p), Some(l)) => ix.usages_at(&symbol, p, l, col, limit as usize),
+                        _ => ix.usages(&symbol, path.as_deref(), limit as usize),
+                    };
                     if ix.truncated {
                         u.warning = Some(TRUNCATED.into());
                     }
