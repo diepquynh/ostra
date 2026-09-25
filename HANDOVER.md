@@ -735,7 +735,7 @@ Beginners are the audience, so the UI teaches as it runs:
 
 ### 12.3 Quick-questions side panel
 
-Available on every workspace screen as the quick-question dock (⌘/). Answers come from the `quick-answer` agent, read-only: `Read`, `Grep`,
+Available on every workspace screen as the quick-question dock (⌘/). Answers come from the `quick-answer` agent on the native executor, read-only (a QUICK ANSWER session runs it natively too): `Read`, `Grep`,
 `Glob`, `WebSearch`, `WebFetch`, `MemoryRecall`. Its context is the workspace's projects plus, when opened from
 a session, that session's artifacts. It never writes and never changes pipeline state. A "Turn into task"
 button starts a session with the question as the request.

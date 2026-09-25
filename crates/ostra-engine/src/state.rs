@@ -1554,9 +1554,12 @@ impl SessionState {
     }
 
     /// The executor an agent must run on regardless of routing: native after a harness failure,
-    /// and native for a quick change, which skips the harness startup cost.
+    /// native for a quick change, which skips the harness startup cost, and native for a quick
+    /// answer, which runs the side panel's agent (HANDOVER 12.3).
     pub fn forced_executor(&self, agent: AgentName) -> Option<ostra_core::ExecutorKind> {
-        (self.native_fallback.contains(&agent) || self.category == Some(Category::QuickChange))
+        (self.native_fallback.contains(&agent)
+            || self.category == Some(Category::QuickChange)
+            || agent == AgentName::QuickAnswer)
             .then_some(ostra_core::ExecutorKind::Native)
     }
 

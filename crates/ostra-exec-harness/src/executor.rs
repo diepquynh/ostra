@@ -29,7 +29,8 @@ const AFTER_SUBMIT_GRACE: Duration = Duration::from_secs(20);
 /// Antigravity has no Stop hook: a submit followed by this much terminal quiet ends the turn.
 const AGY_QUIET_AFTER_SUBMIT: Duration = Duration::from_secs(4);
 
-/// Screen text that means the harness needs its user to log in.
+/// Screen text that means the harness needs its user to log in: an error, or a sign-in screen
+/// that would otherwise wait out the whole budget.
 pub const AUTH_MARKERS: &[&str] = &[
     "please log in",
     "please login",
@@ -39,7 +40,21 @@ pub const AUTH_MARKERS: &[&str] = &[
     "login required",
     "authentication required",
     "oauth token has expired",
+    // Grok Build's browser sign-in, shown when its saved token has expired.
+    "finish signing in",
+    "make sure your browser shows this code",
+    // Claude Code's and Codex's first-run sign-in choices.
+    "select login method",
+    "sign in with chatgpt",
+    // Gemini-family CLIs waiting on a browser sign-in.
+    "waiting for auth",
+    "login with google",
 ];
+
+/// The screen shows a sign-in prompt or a login error.
+fn needs_login(screen_lower: &str) -> bool {
+    AUTH_MARKERS.iter().any(|m| screen_lower.contains(m))
+}
 
 /// Screen text that means the harness could not start the session at all.
 pub const FATAL_MARKERS: &[&str] = &[
@@ -311,7 +326,7 @@ impl HarnessExecutor {
                     }
                     tokio::time::sleep(Duration::from_millis(400)).await;
                 }
-                if AUTH_MARKERS.iter().any(|m| text.contains(m)) {
+                if needs_login(&text) {
                     return End::Auth;
                 }
                 if let Some(m) = FATAL_MARKERS.iter().find(|m| text.contains(**m)) {
@@ -398,6 +413,18 @@ mod tests {
             Some("2c1a2063-f047-4000-b905-83620a93da8e")
         );
         assert_eq!(screen_session_id("nothing"), None);
+    }
+
+    #[test]
+    fn sign_in_screens_are_recognized() {
+        // Grok Build 1.0.41 with an expired token, as its terminal showed it.
+        let grok = "Connecting...\nApprove in your browser to finish signing in.\nGA7K-2QXM\nMake sure your browser shows this code.If it doesn't open, click here to copy.\nq  quit";
+        assert!(needs_login(&grok.to_lowercase()));
+        assert!(needs_login(
+            "select login method:\n❯ 1. claude account with subscription"
+        ));
+        assert!(!needs_login("  › ask codex to do anything"));
+        assert!(!needs_login("reading src/auth/login.ts"));
     }
 
     #[test]

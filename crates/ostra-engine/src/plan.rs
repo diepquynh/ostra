@@ -1414,10 +1414,19 @@ impl<'a> Planner<'a> {
             return;
         }
         if let Some(err) = &q.failed {
+            // Either failure gate counts: a harness that cannot run opens HarnessFailure.
+            let failure_gate = |g: &crate::state::GateRecord, exec: &ExecutionId| {
+                matches!(&g.payload,
+                    GatePayload::ExecutionFailed { execution, .. }
+                    | GatePayload::HarnessFailure { execution, .. } if execution == exec)
+            };
             if let Some(exec) = &q.exec
-                && !s.gates.values().any(|g| matches!(&g.payload, GatePayload::ExecutionFailed { execution, .. } if execution == exec) && g.answer.is_none())
+                && !s
+                    .gates
+                    .values()
+                    .any(|g| failure_gate(g, exec) && g.answer.is_none())
             {
-                if s.gates.values().any(|g| matches!(&g.payload, GatePayload::ExecutionFailed { execution, .. } if execution == exec)) {
+                if s.gates.values().any(|g| failure_gate(g, exec)) {
                     self.push(Step::Fail { error: err.clone() });
                 } else {
                     self.exec_failed_gate(exec, AgentName::QuickAnswer, &s.primary(), err);

@@ -995,7 +995,7 @@ pub fn validate_workspace(
     {
         issues.push(issue(
             "routing.executor.byAgent.quick-answer".into(),
-            "The side panel answers on the native executor only.".into(),
+            "Quick answers run on the native executor only; remove this route.".into(),
         ));
     }
 

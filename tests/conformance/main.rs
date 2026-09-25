@@ -1275,6 +1275,53 @@ fn quick_answer_category() {
     assert_eq!(h.summaries(), vec!["complete"]);
 }
 
+// A quick answer whose harness cannot run opens one harness-failure gate, waits on it, and
+// reruns once it is answered (under YOLO, on the native executor).
+#[test]
+fn quick_answer_harness_failure_opens_one_gate() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "QUICK_ANSWER", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": false}, "reason": "r"}));
+    let (id, _) = h.start("spawn quick-answer");
+    h.ev(SessionEvent::ExecutionFinished {
+        id,
+        result: ExecutionResult {
+            status: ExecutionStatus::Error,
+            submit: None,
+            final_text: String::new(),
+            usage: Usage::default(),
+            native_session_id: None,
+            error: Some("harness-auth: Grok Build is not logged in.".into()),
+        },
+    });
+    assert_eq!(h.summaries(), vec!["gate harness_failure"]);
+    let gate = h.open_gate("harness_failure");
+    assert_eq!(h.summaries(), Vec::<String>::new());
+    h.answer(
+        &gate,
+        GateAnswer::Choice {
+            option: "native".into(),
+            text: None,
+        },
+    );
+    let after = h.summaries();
+    assert_eq!(after.len(), 1, "{after:?}");
+    assert!(after[0].starts_with("spawn quick-answer"), "{after:?}");
+}
+
+// Quick answers run natively however the workspace routes executors (HANDOVER 12.3).
+#[test]
+fn quick_answer_is_forced_native() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "QUICK_ANSWER", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": false}, "reason": "r"}));
+    assert_eq!(h.summaries().len(), 1);
+    assert!(h.summaries()[0].starts_with("spawn quick-answer"));
+    assert_eq!(
+        h.state().forced_executor(AgentName::QuickAnswer),
+        Some(ExecutorKind::Native)
+    );
+    assert_eq!(h.state().forced_executor(AgentName::Explore), None);
+}
+
 // Quick change: one implementer pass on the native executor, staged, then completion.
 #[test]
 fn quick_change_runs_one_native_pass_without_review() {

@@ -1808,7 +1808,10 @@ impl Inner {
         let route = resolve_route(
             &global,
             &settings,
-            RouteQuery::new("quick-answer", meta.default_tier),
+            RouteQuery {
+                executor_override: Some(ExecutorKind::Native),
+                ..RouteQuery::new("quick-answer", meta.default_tier)
+            },
         )
         .map_err(|e| EngineError::Invalid(e.0))?;
         let system = factory
