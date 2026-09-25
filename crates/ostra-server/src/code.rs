@@ -4,13 +4,20 @@
 //! touches to the index and the running servers.
 
 use crate::api::ApiErr;
+use crate::app::{App, Pushed};
+use crate::code_watch::{self, Batch, OnBatch, ProjectWatch};
 use crate::files::{self, Files, ProjectId};
 use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
 use ostra_code::provider::{self, Answer, CodeProvider, CommandProvider, NativeProvider};
 use ostra_code::{Indexes, LspPool, LspProvider};
+use ostra_core::api::{FileIndex, ServerMsg};
 use ostra_core::code::{PROTOCOL_VERSION, ProviderRequest};
-use std::sync::Arc;
+use parking_lot::Mutex;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 pub const DEFAULT_USAGES: u32 = 500;
@@ -44,9 +51,34 @@ pub enum Ask {
 pub struct Code {
     indexes: Arc<Indexes<ProjectId>>,
     servers: LspPool<ProjectId>,
+    watches: Mutex<HashMap<ProjectId, ProjectWatch>>,
 }
 
 impl Code {
+    /// Watch the project's folders from now on, so outside edits reach the index. Replaces a
+    /// watch on an old root.
+    pub fn ensure_watch(&self, app: &Arc<App>, id: &ProjectId, root: &Path, list: &FileIndex) {
+        let mut watches = self.watches.lock();
+        if watches.get(id).is_some_and(|w| w.root == root) {
+            return;
+        }
+        let weak = Arc::downgrade(app);
+        let key = id.clone();
+        let on_batch: OnBatch = Arc::new(move |b: Batch| {
+            let Some(app) = weak.upgrade() else { return };
+            on_outside_change(&app, &key, b);
+        });
+        match code_watch::start(root.to_path_buf(), &list.paths, on_batch) {
+            Some(w) => {
+                watches.insert(id.clone(), w);
+            }
+            None => tracing::warn!(
+                "cannot watch {}; outside edits reach the code index within 30 s",
+                root.display()
+            ),
+        }
+    }
+
     /// A file changed on disk; the next query re-reads it.
     pub fn touch(&self, id: &ProjectId, rel: &str) {
         self.indexes.touch(id, rel);
@@ -153,5 +185,97 @@ impl Code {
         provider::ask(&chain, &req)
             .await
             .map_err(|e| ApiErr::new(StatusCode::BAD_REQUEST, e))
+    }
+}
+
+/// Paths a browser is told about per change; more reload the whole listing.
+const MAX_PUSHED_PATHS: usize = 200;
+
+fn on_outside_change(app: &App, id: &ProjectId, b: Batch) {
+    if b.structural {
+        app.files.invalidate(&id.0, &id.1);
+    }
+    for rel in &b.changed {
+        app.code.touch(id, rel);
+    }
+    let paths = if b.changed.len() > MAX_PUSHED_PATHS {
+        vec![]
+    } else {
+        b.changed.into_iter().collect()
+    };
+    let _ = app.push.send(Pushed {
+        channels: vec![format!("workspace:{}", id.0)],
+        msg: ServerMsg::ProjectFsChanged {
+            workspace: id.0.clone(),
+            key: id.1.clone(),
+            paths,
+        },
+    });
+}
+
+/// The code navigation tools' view of the server. Executors are built before the app, so the app
+/// is bound afterwards.
+#[derive(Default)]
+pub struct CodeTools {
+    app: OnceLock<Weak<App>>,
+}
+
+impl CodeTools {
+    pub fn bind(&self, app: &Arc<App>) {
+        let _ = self.app.set(Arc::downgrade(app));
+    }
+}
+
+/// The workspace project whose folder holds `dir`, the innermost when projects nest.
+fn project_holding(app: &App, dir: &Path) -> Option<(Arc<WorkspaceRt>, String, PathBuf)> {
+    let workspaces: Vec<Arc<WorkspaceRt>> = app.workspaces.read().values().cloned().collect();
+    let mut best: Option<(Arc<WorkspaceRt>, String, PathBuf)> = None;
+    for w in workspaces {
+        for p in w.settings().projects {
+            let Ok(root) = std::fs::canonicalize(&p.path) else {
+                continue;
+            };
+            let longer = best
+                .as_ref()
+                .is_none_or(|b| b.2.as_os_str().len() < root.as_os_str().len());
+            if ostra_core::paths::is_inside(&root, dir) && longer {
+                best = Some((w.clone(), p.key.clone(), root));
+            }
+        }
+    }
+    best
+}
+
+#[async_trait::async_trait]
+impl ostra_tools::CodeNav for CodeTools {
+    async fn call(&self, repo_root: &Path, tool: &str, input: &Value) -> Result<String, String> {
+        let app = self
+            .app
+            .get()
+            .and_then(Weak::upgrade)
+            .ok_or("The Ostra server is shutting down.")?;
+        let dir = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+        let (w, key, root) = project_holding(&app, &dir).ok_or_else(|| {
+            format!(
+                "{} is not inside a project of an open workspace, so it has no code index.",
+                dir.display()
+            )
+        })?;
+        let list = app
+            .files
+            .index(&w, &key)
+            .await
+            .map_err(|e| e.message().to_string())?;
+        let id: ProjectId = (w.id.clone(), key);
+        app.code.ensure_watch(&app, &id, &root, &list);
+        let indexes = app.code.indexes.clone();
+        let (tool, input) = (tool.to_string(), input.clone());
+        tokio::task::spawn_blocking(move || {
+            indexes.with(&id, &root, &list, |ix| {
+                ostra_code::tools::run(ix, &tool, &input)
+            })
+        })
+        .await
+        .map_err(|e| format!("The code index failed: {e}"))?
     }
 }

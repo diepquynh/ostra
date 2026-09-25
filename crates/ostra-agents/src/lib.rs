@@ -260,7 +260,11 @@ pub fn render_prompt(agent: AgentName, executor: ExecutorKind) -> Result<String,
     let path = format!("agents/{}/prompt.md", agent.as_str());
     let source = asset_text(&path)?;
     let ctx = mapping::get().context(agent, executor, &assets_dir());
-    let body = render_str(&path, &source, &ctx)?;
+    let mut body = render_str(&path, &source, &ctx)?;
+    if agent_def(agent).capabilities.contains(&Capability::Code) {
+        let guide = render_str("code-tools.md", &asset_text("code-tools.md")?, &ctx)?;
+        body = format!("{guide}{body}");
+    }
     match executor {
         ExecutorKind::Native => Ok(body),
         ExecutorKind::Harness(h) => {

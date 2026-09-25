@@ -3,6 +3,7 @@
 //! and the provider layer that lets a project swap in its own program for any request
 //! (`ostra_core::code`).
 
+pub mod graph;
 pub mod index;
 pub mod lang;
 pub mod lex;
@@ -10,6 +11,7 @@ pub mod lsp;
 pub mod outline;
 pub mod provider;
 pub mod resolve;
+pub mod tools;
 
 use ostra_core::code::{CodeFile, CodeImport, CodeSymbol, TokenClass};
 

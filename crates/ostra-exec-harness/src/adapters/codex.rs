@@ -150,6 +150,17 @@ mod tests {
         };
         assert_eq!(call.tool, "MemoryRecall");
 
+        let PreParse::Call { call, .. } = Codex.parse_pre(&payload(
+            "mcp__ostra__code_impact",
+            json!({"symbol": "releaseStock"}),
+        )) else {
+            panic!()
+        };
+        assert_eq!(
+            (call.tool.as_str(), call.str_field("symbol")),
+            ("CodeImpact", Some("releaseStock"))
+        );
+
         assert!(matches!(
             Codex.parse_pre(&payload("spawn_agent", json!({}))),
             PreParse::Refuse(_)

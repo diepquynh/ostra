@@ -17,7 +17,7 @@ use ostra_providers::{
     ServerTools, StopReason, StreamEvent, SystemBlock, ToolChoice, ToolDef,
 };
 use ostra_store::MemoryStore;
-use ostra_tools::{SkillResolver, ToolEnv, ToolEnvConfig};
+use ostra_tools::{CodeNav, SkillResolver, ToolEnv, ToolEnvConfig};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::sync::Arc;
@@ -40,13 +40,19 @@ const CLEANUP_GRACE: Duration = Duration::from_secs(3);
 pub struct NativeExecutor {
     providers: Arc<Providers>,
     skill_resolver: SkillResolver,
+    code: Option<Arc<dyn CodeNav>>,
 }
 
 impl NativeExecutor {
-    pub fn new(providers: Arc<Providers>, skill_resolver: SkillResolver) -> Self {
+    pub fn new(
+        providers: Arc<Providers>,
+        skill_resolver: SkillResolver,
+        code: Option<Arc<dyn CodeNav>>,
+    ) -> Self {
         NativeExecutor {
             providers,
             skill_resolver,
+            code,
         }
     }
 }
@@ -66,6 +72,7 @@ impl Executor for NativeExecutor {
         let run = Run {
             providers: self.providers.clone(),
             skill_resolver: self.skill_resolver.clone(),
+            code: self.code.clone(),
             host: host.clone(),
             usage: usage.clone(),
             cancel: inner.clone(),
@@ -99,6 +106,7 @@ impl Executor for NativeExecutor {
 struct Run {
     providers: Arc<Providers>,
     skill_resolver: SkillResolver,
+    code: Option<Arc<dyn CodeNav>>,
     host: Arc<dyn ExecutionHost>,
     usage: Arc<Mutex<Usage>>,
     cancel: CancellationToken,
@@ -164,7 +172,7 @@ fn is_concurrent(name: &str) -> bool {
     matches!(
         name,
         "Read" | "Grep" | "Glob" | "WebFetch" | "MemoryRecall" | "Skill"
-    )
+    ) || ostra_core::agent::is_code_tool(name)
 }
 
 /// Buffers streamed deltas so the Activity log gets readable chunks, not one row per token.
@@ -310,6 +318,7 @@ impl Run {
             memory_db: ctx.memory_db.clone(),
             memory_source: format!("{} {}", spec.agent, spec.id),
             skill_resolver: self.skill_resolver.clone(),
+            code: self.code.clone(),
         });
 
         let offered = provider.server_tools(&model);
@@ -511,10 +520,17 @@ impl Run {
         env: &ToolEnv,
         submit_name: &str,
     ) -> TurnEnd {
+        let submit_schema = ostra_core::submit::submit_schema(self.spec.agent);
         let calls: Vec<(String, String, Value)> = resp
             .tool_uses()
             .into_iter()
-            .map(|(id, name, input)| (id.to_string(), name.to_string(), input.clone()))
+            .map(|(id, name, input)| {
+                let mut input = input.clone();
+                if name == submit_name {
+                    ostra_core::args::coerce_json_strings(&mut input, &submit_schema);
+                }
+                (id.to_string(), name.to_string(), input)
+            })
             .collect();
         let mut results: Vec<Option<Block>> = vec![None; calls.len()];
         let mut i = 0;

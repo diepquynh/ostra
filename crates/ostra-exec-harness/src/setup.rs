@@ -178,7 +178,8 @@ pub fn agy_tools(caps: &[Capability]) -> Vec<&'static str> {
             Capability::Report
             | Capability::Document
             | Capability::Memory
-            | Capability::MemoryRecall => {}
+            | Capability::MemoryRecall
+            | Capability::Code => {}
         }
     }
     out

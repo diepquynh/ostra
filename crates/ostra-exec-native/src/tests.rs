@@ -138,7 +138,7 @@ fn executor(p: ScriptedProvider) -> (NativeExecutor, Arc<ScriptedProvider>) {
     let providers = Providers::empty();
     providers.register("mock", p.clone());
     let resolver: SkillResolver = Arc::new(|_: &str| None);
-    (NativeExecutor::new(Arc::new(providers), resolver), p)
+    (NativeExecutor::new(Arc::new(providers), resolver, None), p)
 }
 
 fn impl_caps() -> Vec<Capability> {
@@ -536,7 +536,7 @@ async fn missing_provider_is_a_clear_error() {
         vec![Capability::Read],
     );
     s.route.model = "anthropic:claude-sonnet-5".into();
-    let exec = NativeExecutor::new(Arc::new(Providers::empty()), Arc::new(|_: &str| None));
+    let exec = NativeExecutor::new(Arc::new(Providers::empty()), Arc::new(|_: &str| None), None);
     let r = exec
         .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
         .await;

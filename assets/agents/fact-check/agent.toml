@@ -1,7 +1,7 @@
 description = "Checks a spec or plan for claims that would break the implementer, and for external facts that no longer trace to a cited page, and submits one {verdict, target, findings} result. Mandatory after generate-spec and after plan, before either is shown for approval: Ostra refuses approval without a recorded PASS. Prior findings scope a re-pass to the previous findings plus changed text, and Source check decides whether it re-opens cited pages. Read-only on project source."
 default_tier = "advanced"
 timeout_seconds = 1800
-capabilities = ["read", "write", "shell", "search_text", "glob", "web_search", "web_fetch"]
+capabilities = ["read", "write", "shell", "search_text", "glob", "web_search", "web_fetch", "code"]
 
 [effort]
 native = "high"

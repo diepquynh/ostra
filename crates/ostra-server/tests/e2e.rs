@@ -982,6 +982,67 @@ async fn yolo_implement_session_end_to_end() {
         "the code index sees the saved file"
     );
 
+    // An edit outside Ostra reaches the index through the folder watch, well before the 30 s
+    // disk check.
+    std::fs::write(
+        app_dir.join("src/deep/outside.rs"),
+        "pub fn from_the_shell() {}\n",
+    )
+    .unwrap();
+    let mut seen = false;
+    for _ in 0..50 {
+        let u: CodeUsages = get("code/usages", &[("symbol", "from_the_shell")])
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if !u.definitions.is_empty() {
+            seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(seen, "the watch reports a file written outside Ostra");
+
+    // The agents' code tools answer from the same index.
+    use ostra_tools::CodeNav;
+    let callers = app
+        .code_tools
+        .call(&app_dir, "CodeCallers", &json!({"symbol": "hello"}))
+        .await
+        .unwrap();
+    assert!(callers.contains("src/greet.rs:1 fn hello"), "{callers}");
+    assert!(callers.contains("src/lib.rs"), "{callers}");
+    let outline = app
+        .code_tools
+        .call(
+            &app_dir,
+            "CodeOutline",
+            &json!({"path": app_dir.join("src/lib.rs")}),
+        )
+        .await
+        .unwrap();
+    assert!(outline.contains("greet -> src/greet.rs"), "{outline}");
+    let map = app
+        .code_tools
+        .call(&app_dir, "CodeMap", &json!({}))
+        .await
+        .unwrap();
+    assert!(map.contains("files indexed"), "{map}");
+    let bad = app
+        .code_tools
+        .call(&app_dir, "CodeNeighbors", &json!({"path": "nope.rs"}))
+        .await
+        .unwrap_err();
+    assert!(bad.contains("not in the code index"), "{bad}");
+    let outside = app
+        .code_tools
+        .call(Path::new("/"), "CodeMap", &json!({}))
+        .await
+        .unwrap_err();
+    assert!(outside.contains("not inside a project"), "{outside}");
+
     let git_file = read(".git/HEAD").await;
     assert!(git_file.read_only.is_some());
     let r = put(json!({"path": ".git/HEAD", "content": "x", "base_hash": git_file.hash}))

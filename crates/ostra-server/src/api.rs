@@ -31,6 +31,10 @@ pub struct ApiErr {
 }
 
 impl ApiErr {
+    pub fn message(&self) -> &str {
+        &self.body.error
+    }
+
     pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
         ApiErr {
             status,
@@ -1392,9 +1396,19 @@ struct CodeSymbolsQuery {
     limit: Option<u32>,
 }
 
-async fn ask_code(app: &App, id: &str, key: &str, ask: crate::code::Ask) -> Result<Answer, ApiErr> {
+async fn ask_code(
+    app: &Arc<App>,
+    id: &str,
+    key: &str,
+    ask: crate::code::Ask,
+) -> Result<Answer, ApiErr> {
     let w = ws(app, id)?;
-    app.code.ask(&app.files, &w, key, ask).await
+    let answer = app.code.ask(&app.files, &w, key, ask).await?;
+    if let (Ok(root), Ok(list)) = (files::project_root(&w, key), app.files.index(&w, key).await) {
+        app.code
+            .ensure_watch(app, &(w.id.clone(), key.to_string()), &root, &list);
+    }
+    Ok(answer)
 }
 
 fn wrong_answer() -> ApiErr {

@@ -970,6 +970,7 @@ fn default_mode() {
         &ToolCall::new("Read", json!({"file_path": "/etc/hosts"})),
     );
     allowed(&p, &ToolCall::new("MemoryRecall", json!({"query": "x"})));
+    allowed(&p, &ToolCall::new("CodeCallers", json!({"symbol": "x"})));
     allowed(
         &p,
         &ToolCall::new("submit_implementer", json!({"status": "ok"})),

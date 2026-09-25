@@ -206,6 +206,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_document_sent_as_json_text_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = env_for(dir.path(), AgentName::Explore);
+        let md = env.config().session_dir.join("ostra-research-1-t.md");
+        let text = serde_json::to_string_pretty(&research()).unwrap();
+        let out = run(&env, "Document", json!({"path": md, "document": text})).await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(md.exists());
+    }
+
+    #[tokio::test]
     async fn refuses_bad_paths_schema_errors_and_other_agents() {
         let dir = tempfile::tempdir().unwrap();
         let env = env_for(dir.path(), AgentName::Explore);

@@ -236,6 +236,13 @@ mod tests {
         );
         let PreParse::Call { call, .. } = Agy.parse_pre(&payload(
             "call_mcp_tool",
+            json!({"ServerName": "ostra", "ToolName": "code_find", "Arguments": {"query": "reorder"}}),
+        )) else {
+            panic!()
+        };
+        assert_eq!(call, ToolCall::new("CodeFind", json!({"query": "reorder"})));
+        let PreParse::Call { call, .. } = Agy.parse_pre(&payload(
+            "call_mcp_tool",
             json!({"ServerName": "github", "ToolName": "x", "Arguments": {}}),
         )) else {
             panic!()

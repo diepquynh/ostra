@@ -129,6 +129,36 @@ fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabula
 }
 
 #[test]
+fn code_tools_are_named_per_executor() {
+    let native = render_prompt(AgentName::Explore, ExecutorKind::Native).unwrap();
+    assert!(native.starts_with("## Code navigation"));
+    for t in [
+        "CodeMap",
+        "CodeFind",
+        "CodeOutline",
+        "CodeCallers",
+        "CodeCallees",
+        "CodeNeighbors",
+        "CodeImpact",
+    ] {
+        assert!(native.contains(&format!("`{t}`")), "native lacks {t}");
+    }
+    let claude = render_prompt(
+        AgentName::Explore,
+        ExecutorKind::Harness(HarnessKind::Claude),
+    )
+    .unwrap();
+    assert!(claude.contains("`mcp__ostra__code_callers`"));
+    assert!(claude.contains("| code | mcp__ostra__code_outline, mcp__ostra__code_find,"));
+    let codex = render_prompt(
+        AgentName::Explore,
+        ExecutorKind::Harness(HarnessKind::Codex),
+    )
+    .unwrap();
+    assert!(codex.contains("`code_impact`"));
+}
+
+#[test]
 fn no_ultracode_leftovers_in_any_asset() {
     // The initializer detects and migrates `.ultracode/` bootstraps, so it names them on purpose.
     let allowed = [

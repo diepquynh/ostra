@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 /// Template token names and the mapping key each resolves through.
-const TOKENS: [(&str, &str); 14] = [
+const TOKENS: [(&str, &str); 21] = [
     ("tool_read", "read"),
     ("tool_write", "write"),
     ("tool_edit", "edit"),
@@ -21,6 +21,13 @@ const TOKENS: [(&str, &str); 14] = [
     ("tool_document", "document"),
     ("tool_memory", "memory"),
     ("tool_memory_recall", "memory_recall"),
+    ("tool_code_outline", "code:outline"),
+    ("tool_code_find", "code:find"),
+    ("tool_code_callers", "code:callers"),
+    ("tool_code_callees", "code:callees"),
+    ("tool_code_neighbors", "code:neighbors"),
+    ("tool_code_impact", "code:impact"),
+    ("tool_code_map", "code:map"),
     ("tool_submit", "submit"),
 ];
 
@@ -54,21 +61,30 @@ fn capability_key(c: Capability) -> &'static str {
         Capability::Document => "document",
         Capability::Memory => "memory",
         Capability::MemoryRecall => "memory_recall",
+        Capability::Code => "code",
     }
 }
 
 impl Mapping {
+    /// The tool name for a mapping key. `code:callers` fills the `code` entry's `{op}` (and
+    /// `{Op}`) with one of the code tools.
     pub(crate) fn tool(
         &self,
         capability: &str,
         executor: ExecutorKind,
         agent: AgentName,
     ) -> Option<String> {
-        let value = self
-            .capabilities
-            .get(capability)?
-            .get(executor.tier_table())?;
-        Some(value.replace("{agent}", &agent.snake()))
+        let (key, op) = capability
+            .split_once(':')
+            .map_or((capability, None), |(k, o)| (k, Some(o)));
+        let value = self.capabilities.get(key)?.get(executor.tier_table())?;
+        let mut v = value.replace("{agent}", &agent.snake());
+        if let Some(op) = op {
+            let mut cap = op.to_string();
+            cap[..1].make_ascii_uppercase();
+            v = v.replace("{op}", op).replace("{Op}", &cap);
+        }
+        Some(v)
     }
 
     /// Template context: every `tool_*` token plus `assets_dir`, rendered bare as Ultracode's
@@ -111,7 +127,16 @@ impl Mapping {
         let mut keys: Vec<&str> = caps.iter().map(|c| capability_key(*c)).collect();
         keys.push("submit");
         for key in &keys {
-            if let Some(tool) = self.tool(key, executor, agent) {
+            let tool = if *key == "code" {
+                let all: Vec<String> = ostra_core::agent::CODE_TOOLS
+                    .iter()
+                    .filter_map(|(op, _)| self.tool(&format!("code:{op}"), executor, agent))
+                    .collect();
+                (!all.is_empty()).then(|| all.join(", "))
+            } else {
+                self.tool(key, executor, agent)
+            };
+            if let Some(tool) = tool {
                 out.push_str(&format!("| {} | {} |\n", key.replace('_', " "), tool));
             }
         }

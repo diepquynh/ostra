@@ -21,6 +21,31 @@ pub struct Resolver {
     rust_crates: HashMap<String, String>,
     /// Go module path to its folder.
     go_modules: Vec<(String, String)>,
+    /// Folders holding a package manifest.
+    units: HashSet<String>,
+}
+
+const MANIFESTS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "go.mod",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "composer.json",
+    "Gemfile",
+    "Package.swift",
+    "mix.exs",
+];
+
+fn is_manifest(name: &str) -> bool {
+    MANIFESTS.contains(&name)
+        || name.ends_with(".csproj")
+        || name.ends_with(".gemspec")
+        || name.ends_with(".rockspec")
 }
 
 /// The folder of a project-relative path, `""` at the top.
@@ -103,6 +128,9 @@ impl Resolver {
                     .or_default()
                     .push(d.to_string());
             }
+            if is_manifest(file_name(p)) {
+                r.units.insert(parent(p).to_string());
+            }
             match file_name(p) {
                 "Cargo.toml" => {
                     if let Some(name) = read(p).as_deref().and_then(cargo_name) {
@@ -125,6 +153,17 @@ impl Resolver {
         }
         r.dirs.insert(String::new());
         r
+    }
+
+    /// The package folder that owns `dir`: the nearest one with a manifest, `""` when none does.
+    pub fn unit_of_dir<'a>(&self, dir: &'a str) -> &'a str {
+        let mut d = dir;
+        loop {
+            if d.is_empty() || self.units.contains(d) {
+                return d;
+            }
+            d = parent(d);
+        }
     }
 
     fn has(&self, p: &str) -> bool {

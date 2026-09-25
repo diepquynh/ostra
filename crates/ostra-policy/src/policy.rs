@@ -456,7 +456,8 @@ impl ExecutionPolicy {
                 let known = matches!(
                     tool,
                     "WebSearch" | "Skill" | "Report" | "Document" | "Memory" | "MemoryRecall"
-                ) || tool.starts_with("submit_")
+                ) || ostra_core::agent::is_code_tool(tool)
+                    || tool.starts_with("submit_")
                     || harness_internal;
                 match self.rule_decision(&subject, &session_allow) {
                     Some(d) => d,

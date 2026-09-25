@@ -173,6 +173,23 @@ pub enum Capability {
     Document,
     Memory,
     MemoryRecall,
+    /// The code navigation tools over the project's index and dependency graph ([`CODE_TOOLS`]).
+    Code,
+}
+
+/// The code navigation tools: the operation (`code_{op}` over MCP) and the native tool name.
+pub const CODE_TOOLS: [(&str, &str); 7] = [
+    ("outline", "CodeOutline"),
+    ("find", "CodeFind"),
+    ("callers", "CodeCallers"),
+    ("callees", "CodeCallees"),
+    ("neighbors", "CodeNeighbors"),
+    ("impact", "CodeImpact"),
+    ("map", "CodeMap"),
+];
+
+pub fn is_code_tool(native: &str) -> bool {
+    CODE_TOOLS.iter().any(|(_, n)| *n == native)
 }
 
 impl Capability {
@@ -192,6 +209,7 @@ impl Capability {
             Capability::Document => "Document",
             Capability::Memory => "Memory",
             Capability::MemoryRecall => "MemoryRecall",
+            Capability::Code => CODE_TOOLS[0].1,
         }
     }
 

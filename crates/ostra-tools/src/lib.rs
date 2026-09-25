@@ -3,6 +3,7 @@
 //! permissions or guards.
 
 mod bash;
+mod code;
 mod defs;
 mod doc;
 mod fs;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
+pub use code::CodeNav;
 pub use defs::{
     ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search,
 };
@@ -40,6 +42,8 @@ pub struct ToolEnvConfig {
     /// Recorded as a lesson's `source` when the model gives none, for example `implementer x_123`.
     pub memory_source: String,
     pub skill_resolver: SkillResolver,
+    /// Serves the code navigation tools; `None` where no index is wired in.
+    pub code: Option<Arc<dyn CodeNav>>,
 }
 
 /// Per-execution tool state: the persistent shell working directory, the files read so far, and
@@ -141,7 +145,11 @@ pub async fn execute(
     cancel: CancellationToken,
 ) -> ToolOutput {
     let started = Instant::now();
-    let input = &call.input;
+    let mut input = call.input.clone();
+    if let Some(schema) = defs::input_schema(&call.tool, env.config().agent) {
+        ostra_core::args::coerce_json_strings(&mut input, &schema);
+    }
+    let input = &input;
     let fut = async {
         match call.tool.as_str() {
             "Read" => fs::read(env, input).await,
@@ -156,6 +164,7 @@ pub async fn execute(
             "Document" => doc::document(env, input).await,
             "Memory" => misc::memory(env, input).await,
             "MemoryRecall" => misc::memory_recall(env, input).await,
+            t if ostra_core::agent::is_code_tool(t) => code::run(env, t, input).await,
             "WebSearch" => ToolOutput::err(
                 "WebSearch runs on the model provider's side and has no local implementation.",
             ),
@@ -219,6 +228,7 @@ pub(crate) mod testutil {
             }),
             repo_root: repo,
             session_dir: session,
+            code: None,
         })
     }
 

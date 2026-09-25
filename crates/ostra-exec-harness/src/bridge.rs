@@ -217,8 +217,9 @@ impl HarnessBridge {
 
     async fn call_tool(&self, live: &LiveExecution, params: &Value) -> Value {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
-        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        let mut args = params.get("arguments").cloned().unwrap_or(json!({}));
         if name == live.agent.submit_tool_name() {
+            ostra_core::args::coerce_json_strings(&mut args, &submit_schema(live.agent));
             if let Err(message) = validate_submit(live.agent, &args) {
                 return tool_error(&format!(
                     "Fix the arguments and call `{name}` again: {message}. Nothing was recorded."

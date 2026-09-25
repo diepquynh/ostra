@@ -1,7 +1,7 @@
 description = "Researches one task and writes ONE research document: what the code does, plus what any technology the project does not already use documents about itself, every page cited by URL and date. The only agent that searches the web for the pipeline. Runs per project, per area, and again whenever the user changes the request. Reports findings only, never requirements or deliverables. Read-only on project source."
 default_tier = "advanced"
 timeout_seconds = 1800
-capabilities = ["read", "shell", "search_text", "glob", "web_search", "web_fetch", "memory_recall", "memory", "document"]
+capabilities = ["read", "shell", "search_text", "glob", "web_search", "web_fetch", "memory_recall", "memory", "document", "code"]
 
 [effort]
 native = "high"

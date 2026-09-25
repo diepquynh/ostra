@@ -153,6 +153,26 @@ let count = 0;
 }
 
 #[test]
+fn typescript_object_return_types_do_not_end_the_body() {
+    let src = "export function handle(b: Order): { ok: boolean } {\n  cancel(b);\n  return { ok: true };\n}\nexport async function load(): Promise<{ n: number }> {\n  return { n: 1 };\n}\nexport function after() {}\n";
+    let f = ostra_code::render("web/src/routes.ts", src, None);
+    let spans: Vec<(&str, u32, Option<u32>)> = f
+        .symbols
+        .iter()
+        .filter(|s| s.container.is_none())
+        .map(|s| (s.name.as_str(), s.line, s.end_line))
+        .collect();
+    assert_eq!(
+        spans,
+        vec![
+            ("handle", 1, Some(4)),
+            ("load", 5, Some(7)),
+            ("after", 8, Some(8))
+        ]
+    );
+}
+
+#[test]
 fn python_indentation_scopes() {
     let src = r#"
 import os, json as j

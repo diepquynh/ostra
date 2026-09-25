@@ -207,6 +207,17 @@ mod tests {
         assert_eq!(call.str_field("research_path"), Some("/s/r.md"));
 
         let PreParse::Call { call, .. } = Grok.parse_pre(&payload(
+            "use_tool",
+            json!({"tool_name": "ostra__code_callers", "arguments": "{\"symbol\":\"placeOrder\"}"}),
+        )) else {
+            panic!()
+        };
+        assert_eq!(
+            (call.tool.as_str(), call.str_field("symbol")),
+            ("CodeCallers", Some("placeOrder"))
+        );
+
+        let PreParse::Call { call, .. } = Grok.parse_pre(&payload(
             "ostra__report",
             json!({"tool_name": "ostra__report", "tool_input": {"content": "# Report"}}),
         )) else {

@@ -29,6 +29,13 @@ const KNOWN_TOOLS: &[&str] = &[
     "Document",
     "Memory",
     "MemoryRecall",
+    "CodeOutline",
+    "CodeFind",
+    "CodeCallers",
+    "CodeCallees",
+    "CodeNeighbors",
+    "CodeImpact",
+    "CodeMap",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 description = "Turns one approved spec into a master plan plus one self-contained file per phase, each step naming an exact path, a prose action, the skills to load, and a verification command. Phases carry their project, complexity, test policy, and dependencies so Ostra can schedule them. Runs once after spec approval for medium and high stakes. Reads the spec and nothing else. Read-only on project source."
 default_tier = "advanced"
 timeout_seconds = 1800
-capabilities = ["read", "shell", "search_text", "glob", "document"]
+capabilities = ["read", "shell", "search_text", "glob", "document", "code"]
 
 [effort]
 native = "high"

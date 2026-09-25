@@ -43,6 +43,8 @@ pub struct RawImport {
     pub style: ImportStyle,
     /// More specific specs to try first (`from a import b` tries `a.b`).
     pub alts: Vec<String>,
+    /// `export * from`: every name of the target passes through.
+    pub star: bool,
 }
 
 #[derive(Debug, Default)]
@@ -338,7 +340,25 @@ impl<'a> A<'a> {
             match t.kind {
                 Kind::Punct(b'{') if !py => {
                     self.depth += 1;
-                    let scope = match self.pending.take() {
+                    // `f(): { ok: boolean } {` and `Promise<{ a: T }>`: a brace after a type
+                    // position opens an object type, not the body.
+                    let type_brace = self.lang.family == Family::Js
+                        && self.prev(k).is_some_and(|j| {
+                            matches!(self.kind(j), Some(Kind::Punct(b':' | b'<' | b'|' | b'&')))
+                        });
+                    let pending = if type_brace {
+                        None
+                    } else {
+                        self.pending.take()
+                    };
+                    let scope = match pending {
+                        None if type_brace => Scope {
+                            depth: self.depth,
+                            sym: None,
+                            name: None,
+                            class_like: false,
+                            kind: None,
+                        },
                         Some(p) if p.depth == self.depth - 1 && p.paren == self.paren => Scope {
                             depth: self.depth,
                             sym: p.sym,
@@ -420,7 +440,60 @@ impl<'a> A<'a> {
         for p in self.py.drain(..) {
             self.out.symbols[p.sym].end_line = Some(last);
         }
+        if self.lang.family == Family::Js {
+            self.js_expression_ends();
+        }
         self.out.symbols.sort_by_key(|s| (s.line, s.col));
+    }
+
+    /// `const List = () => (<ul>...</ul>);` and `memo(...)` have no brace body of their own: a
+    /// top-level definition without an end runs until its brackets close and the expression ends.
+    fn js_expression_ends(&mut self) {
+        for i in 0..self.out.symbols.len() {
+            let s = &self.out.symbols[i];
+            if s.end_line.is_some() || s.container.is_some() {
+                continue;
+            }
+            let Some(start) =
+                (0..self.sig.len()).find(|&k| self.t(k).is_some_and(|t| t.start == s.byte))
+            else {
+                continue;
+            };
+            let mut depth = 0i32;
+            let mut opened = false;
+            let mut end = None;
+            for k in start + 1..self.sig.len() {
+                if depth == 0 && self.new_line(k) && !opened && !self.is_p(k - 1, b'=') {
+                    break;
+                }
+                match self.kind(k) {
+                    Some(Kind::Punct(b'(' | b'[' | b'{')) => {
+                        depth += 1;
+                        opened = true;
+                    }
+                    Some(Kind::Punct(b')' | b']' | b'}')) => {
+                        depth -= 1;
+                        if depth < 0 {
+                            break;
+                        }
+                        if depth == 0 {
+                            end = Some(self.line(k));
+                            let goes_on = self.is_p(k + 1, b'(')
+                                || self.is_p(k + 1, b'.')
+                                || (self.is_p(k + 1, b'=') && self.is_p(k + 2, b'>'));
+                            if !goes_on {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Kind::Punct(b';')) if depth == 0 => break,
+                    _ => {}
+                }
+            }
+            if let Some(e) = end {
+                self.out.symbols[i].end_line = Some(e);
+            }
+        }
     }
 
     fn keyword(&mut self, k: usize) {
@@ -819,6 +892,7 @@ impl<'a> A<'a> {
             line,
             style,
             alts,
+            star: false,
         });
     }
 
@@ -883,7 +957,8 @@ impl<'a> A<'a> {
                         if kw
                             && (self.is_p(k + 1, b'{')
                                 || self.is_p(k + 1, b'*')
-                                || (self.txt(k + 1) == "type" && self.is_p(k + 2, b'{'))) =>
+                                || (self.txt(k + 1) == "type"
+                                    && (self.is_p(k + 2, b'{') || self.is_p(k + 2, b'*')))) =>
                     {
                         self.js_from(k)
                     }
@@ -892,6 +967,11 @@ impl<'a> A<'a> {
                 };
                 if let Some(s) = spec {
                     self.push_import(k, s, ImportStyle::Module, vec![]);
+                    let star =
+                        text == "export" && (self.is_p(k + 1, b'*') || self.is_p(k + 2, b'*'));
+                    if star && let Some(i) = self.out.imports.last_mut() {
+                        i.star = true;
+                    }
                 }
             }
             Family::Python if kw && self.new_line(k) => match text {

@@ -123,6 +123,120 @@ Usage:
 - area narrows recall to a module and its sub-scopes. Lessons from other areas that match the query fill the remaining slots.
 - limit defaults to 8.";
 
+const PATH_NOTE: &str =
+    "Paths are relative to the project root; an absolute path inside the project works too.";
+
+const CODE_OUTLINE: &str = "Lists a source file's imports (with the project file each resolves to) and its definitions with line ranges, without reading the file.
+
+Usage:
+- Call it before Read on a file you have not seen, then Read only the line ranges you need, because an outline costs a fraction of the file.
+- Methods and fields are indented under their type.";
+
+const CODE_FIND: &str = "Finds definitions by name across the project: functions, types, methods, constants, fields.
+
+Usage:
+- Use it instead of Grep to locate where something is defined, because it returns definitions only, ranked exact match first, then prefix, then substring, then initials (`pn` finds `parse_name`).
+- Each hit shows path:line, kind, the enclosing type, and the definition's first line.";
+
+const CODE_CALLERS: &str = "Lists every place that uses a symbol, grouped by the enclosing function or type, with line numbers.
+
+Usage:
+- Use it instead of Grep for \"who calls this\" and \"what breaks if I change this\", because it groups by caller and drops mentions that mean another definition of the same name.
+- Pass `path`, the file that defines the symbol, when the name is defined in more than one place. With one definition it is picked for you.";
+
+const CODE_CALLEES: &str = "Lists the project definitions that one function or type body uses: what it calls, the types it names, the fields it touches.
+
+Usage:
+- Use it to follow a function downward without reading every file it touches.
+- `line` picks among several definitions of the same name in the file.";
+
+const CODE_NEIGHBORS: &str = "Shows how one file connects to the rest of the project: the files it uses and the files that use it, with the import lines and the names that link each pair, plus files related through a shared neighbor.
+
+Usage:
+- Call it on the file you are about to change, to see what it depends on and what depends on it before you Read anything else.";
+
+const CODE_IMPACT: &str = "Shows what a change can break.
+
+Usage:
+- For one function, type, or constant, pass `symbol` (and `path`, its file, when the name is defined in more than one place). It lists the definitions that use it, then the ones that use those, hop by hop, and the files to change or recheck. Use this for \"what breaks if I change or remove X\", because it follows the names: a file that only uses something else from the same file is left out.
+- For whole files, pass `paths`. `dependents` (the default) lists the files that use them, directly and transitively, which is where to look for tests to run; `dependencies` lists what they use.
+- Keep depth small (the default is 3), because each hop widens the list.";
+
+const CODE_MAP: &str = "Summarizes the project's structure: its packages with their dependencies on each other, the most depended-on files, and import cycles.
+
+Usage:
+- Call it once at the start of work in an unfamiliar project, because it tells you where things live before you search.
+- `prefix` limits the answer to one folder, such as `crates/engine`.";
+
+fn code_defs() -> Vec<ToolDefinition> {
+    let limit = json!({"type": "integer", "minimum": 1, "maximum": 300, "description": "Maximum entries to return. Defaults to 40"});
+    let path = |d: &str| json!({"type": "string", "description": format!("{d}. {PATH_NOTE}")});
+    vec![
+        def(
+            "CodeOutline",
+            CODE_OUTLINE,
+            json!({"type": "object", "properties": {
+                "path": path("The source file"),
+                "limit": limit
+            }, "required": ["path"], "additionalProperties": false}),
+        ),
+        def(
+            "CodeFind",
+            CODE_FIND,
+            json!({"type": "object", "properties": {
+                "query": {"type": "string", "description": "A name or part of one, case-insensitive"},
+                "limit": limit
+            }, "required": ["query"], "additionalProperties": false}),
+        ),
+        def(
+            "CodeCallers",
+            CODE_CALLERS,
+            json!({"type": "object", "properties": {
+                "symbol": {"type": "string", "description": "The bare name, such as `next_steps` or `Button`, without its type or module"},
+                "path": path("The file that defines the symbol"),
+                "limit": limit
+            }, "required": ["symbol"], "additionalProperties": false}),
+        ),
+        def(
+            "CodeCallees",
+            CODE_CALLEES,
+            json!({"type": "object", "properties": {
+                "path": path("The file that defines the symbol"),
+                "symbol": {"type": "string", "description": "The bare name of the function or type"},
+                "line": {"type": "integer", "minimum": 1, "description": "The definition's line, when the file defines the name more than once"},
+                "limit": limit
+            }, "required": ["path", "symbol"], "additionalProperties": false}),
+        ),
+        def(
+            "CodeNeighbors",
+            CODE_NEIGHBORS,
+            json!({"type": "object", "properties": {
+                "path": path("The source file"),
+                "limit": limit
+            }, "required": ["path"], "additionalProperties": false}),
+        ),
+        def(
+            "CodeImpact",
+            CODE_IMPACT,
+            json!({"type": "object", "properties": {
+                "symbol": {"type": "string", "description": "The bare name of one function, type, or constant to start from"},
+                "path": path("With `symbol`: the file that defines it"),
+                "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": format!("Instead of `symbol`: the files to start from. {PATH_NOTE}")},
+                "direction": {"type": "string", "enum": ["dependents", "dependencies"], "description": "Defaults to dependents"},
+                "depth": {"type": "integer", "minimum": 1, "maximum": 10, "description": "Hops to walk. Defaults to 3"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 300, "description": "Maximum entries to return. Defaults to 100"}
+            }, "additionalProperties": false}),
+        ),
+        def(
+            "CodeMap",
+            CODE_MAP,
+            json!({"type": "object", "properties": {
+                "prefix": {"type": "string", "description": "A project folder to limit the answer to"}
+            }, "additionalProperties": false}),
+        ),
+    ]
+}
+
 fn read_def() -> ToolDefinition {
     def(
         "Read",
@@ -295,23 +409,52 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
     capabilities
         .iter()
         .filter(|c| seen.insert(**c))
-        .filter_map(|c| match c {
-            Capability::Read => Some(read_def()),
-            Capability::Write => Some(write_def()),
-            Capability::Edit => Some(edit_def()),
-            Capability::Shell => Some(bash_def()),
-            Capability::SearchText => Some(grep_def()),
-            Capability::Glob => Some(glob_def()),
-            Capability::Skill => Some(skill_def()),
-            Capability::WebFetch => Some(web_fetch_def()),
-            Capability::Report => Some(report_def()),
+        .flat_map(|c| match c {
+            Capability::Read => vec![read_def()],
+            Capability::Write => vec![write_def()],
+            Capability::Edit => vec![edit_def()],
+            Capability::Shell => vec![bash_def()],
+            Capability::SearchText => vec![grep_def()],
+            Capability::Glob => vec![glob_def()],
+            Capability::Skill => vec![skill_def()],
+            Capability::WebFetch => vec![web_fetch_def()],
+            Capability::Report => vec![report_def()],
             // Agent-specific: see [`document_tool_definition`].
-            Capability::Document => None,
-            Capability::Memory => Some(memory_def()),
-            Capability::MemoryRecall => Some(memory_recall_def()),
-            Capability::WebSearch => None,
+            Capability::Document => vec![],
+            Capability::Memory => vec![memory_def()],
+            Capability::MemoryRecall => vec![memory_recall_def()],
+            Capability::Code => code_defs(),
+            Capability::WebSearch => vec![],
         })
         .collect()
+}
+
+const EVERY: [Capability; 14] = [
+    Capability::Read,
+    Capability::Write,
+    Capability::Edit,
+    Capability::Shell,
+    Capability::SearchText,
+    Capability::Glob,
+    Capability::Skill,
+    Capability::WebSearch,
+    Capability::WebFetch,
+    Capability::Report,
+    Capability::Document,
+    Capability::Memory,
+    Capability::MemoryRecall,
+    Capability::Code,
+];
+
+/// The input schema of a local tool as `agent` sees it.
+pub(crate) fn input_schema(tool: &str, agent: AgentName) -> Option<Value> {
+    if tool == "Document" {
+        return document_tool_definition(agent).map(|d| d.input_schema);
+    }
+    definitions(&EVERY)
+        .into_iter()
+        .find(|d| d.name == tool)
+        .map(|d| d.input_schema)
 }
 
 /// True when the agent may search the web, so the loop enables the provider's search tool.

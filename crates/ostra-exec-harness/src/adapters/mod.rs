@@ -113,14 +113,17 @@ pub fn ostra_mcp_tool(name: &str) -> Option<String> {
 }
 
 /// `report` to `Report`, `document` to `Document`, `memory` to `Memory`, `memory_recall` to
-/// `MemoryRecall`; `submit_*` keeps its name.
+/// `MemoryRecall`, `code_callers` to `CodeCallers`; `submit_*` keeps its name.
 pub fn canonical_ostra_tool(bare: &str) -> String {
     match bare {
         "report" => "Report".into(),
         "document" => "Document".into(),
         "memory" => "Memory".into(),
         "memory_recall" => "MemoryRecall".into(),
-        other => other.to_string(),
+        other => bare
+            .strip_prefix("code_")
+            .and_then(|op| ostra_core::agent::CODE_TOOLS.iter().find(|(o, _)| *o == op))
+            .map_or_else(|| other.to_string(), |(_, native)| native.to_string()),
     }
 }
 
@@ -321,6 +324,14 @@ mod tests {
         assert_eq!(
             ostra_mcp_tool("ostra__memory_recall").as_deref(),
             Some("MemoryRecall")
+        );
+        assert_eq!(
+            ostra_mcp_tool("mcp__ostra__code_callers").as_deref(),
+            Some("CodeCallers")
+        );
+        assert_eq!(
+            ostra_mcp_tool("ostra__code_unknown").as_deref(),
+            Some("code_unknown")
         );
         assert_eq!(
             ostra_mcp_tool("mcp_ostra_submit_plan").as_deref(),

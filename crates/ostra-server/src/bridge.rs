@@ -29,7 +29,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 
 /// What one live harness execution needs server-side.
 struct Running {
@@ -46,6 +46,7 @@ struct Registry {
     calls: AtomicU64,
     /// Where successful harness writes are reported for live file updates.
     write_sink: OnceLock<tokio::sync::mpsc::UnboundedSender<Touch>>,
+    code: OnceLock<Arc<dyn ostra_tools::CodeNav>>,
 }
 
 pub struct HarnessRuntime {
@@ -95,6 +96,10 @@ impl HarnessRuntime {
 
     pub fn set_write_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<Touch>) {
         let _ = self.registry.write_sink.set(sink);
+    }
+
+    pub fn set_code_nav(&self, nav: Arc<dyn ostra_tools::CodeNav>) {
+        let _ = self.registry.code.set(nav);
     }
 
     fn inner(&self, global: &GlobalConfig) -> Arc<HarnessExecutor> {
@@ -163,6 +168,7 @@ impl Executor for Wrapped {
                 memory_db: ctx.memory_db.clone(),
                 memory_source: format!("{} {}", spec.agent, spec.id),
                 skill_resolver: crate::app::skill_resolver(),
+                code: self.registry.code.get().cloned(),
             }),
             host: host.clone(),
             memory_db: ctx.memory_db.clone(),
@@ -215,12 +221,25 @@ fn served_by_mcp(tool: &str) -> bool {
     MCP_TOOLS.iter().any(|(_, native, _)| *native == tool)
 }
 
-const MCP_TOOLS: [(&str, &str, Capability); 4] = [
-    ("report", "Report", Capability::Report),
-    ("document", "Document", Capability::Document),
-    ("memory", "Memory", Capability::Memory),
-    ("memory_recall", "MemoryRecall", Capability::MemoryRecall),
-];
+/// Ostra's MCP tools other than `submit_*`: the MCP name, the native tool, its capability.
+static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>> = LazyLock::new(|| {
+    let mut v: Vec<(String, &'static str, Capability)> = vec![
+        ("report".into(), "Report", Capability::Report),
+        ("document".into(), "Document", Capability::Document),
+        ("memory".into(), "Memory", Capability::Memory),
+        (
+            "memory_recall".into(),
+            "MemoryRecall",
+            Capability::MemoryRecall,
+        ),
+    ];
+    v.extend(
+        ostra_core::agent::CODE_TOOLS
+            .iter()
+            .map(|(op, native)| (format!("code_{op}"), *native, Capability::Code)),
+    );
+    v
+});
 
 #[async_trait::async_trait]
 impl BridgeServices for ServerBridge {

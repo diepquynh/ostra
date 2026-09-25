@@ -3,6 +3,7 @@
 //! re-reads only the files that mention the name. `sync` re-analyzes the files whose size or
 //! modification time changed, in parallel.
 
+use crate::graph::{self, Graph, Mention, Qual, RawMention, RawQual};
 use crate::lang::{self, Lang};
 use crate::outline::RawImport;
 use crate::resolve::{Resolver, Target, parent};
@@ -34,31 +35,36 @@ struct Stamp {
     mtime: Option<SystemTime>,
 }
 
-struct Def {
-    name: u32,
-    kind: SymbolKind,
-    line: u32,
-    col: u32,
-    len: u32,
-    container: Option<Box<str>>,
-    preview: Box<str>,
+pub(crate) struct Def {
+    pub(crate) name: u32,
+    pub(crate) kind: SymbolKind,
+    pub(crate) line: u32,
+    pub(crate) col: u32,
+    pub(crate) len: u32,
+    pub(crate) end_line: Option<u32>,
+    pub(crate) container: Option<Box<str>>,
+    pub(crate) preview: Box<str>,
 }
 
-struct Entry {
-    path: String,
-    lang: &'static Lang,
+pub(crate) struct Entry {
+    pub(crate) path: String,
+    pub(crate) lang: &'static Lang,
     stamp: Stamp,
     bytes: u64,
-    names: Vec<u32>,
-    defs: Vec<Def>,
-    imports: Vec<RawImport>,
-    targets: Vec<Option<Target>>,
-    alive: bool,
+    /// Every name the file mentions, sorted and distinct.
+    pub(crate) names: Vec<u32>,
+    /// How each name is mentioned: bare, qualified, or as a member, sorted and distinct.
+    pub(crate) mentions: Vec<Mention>,
+    pub(crate) defs: Vec<Def>,
+    pub(crate) imports: Vec<RawImport>,
+    pub(crate) targets: Vec<Option<Target>>,
+    pub(crate) alive: bool,
 }
 
 /// What one file's analysis produced, before names are interned.
 struct Facts {
     names: Vec<String>,
+    mentions: Vec<RawMention>,
     defs: Vec<(outline::Symbol, String)>,
     imports: Vec<RawImport>,
 }
@@ -93,12 +99,13 @@ fn analyze(src: &str, lang: &Lang) -> Facts {
         .collect();
     Facts {
         names,
+        mentions: graph::mentions(src, &toks, lang),
         defs,
         imports: an.imports,
     }
 }
 
-fn read_text(path: &Path) -> Option<String> {
+pub(crate) fn read_text(path: &Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     if bytes.iter().take(8_000).any(|&b| b == 0) {
         return None;
@@ -115,7 +122,7 @@ fn stamp(path: &Path) -> Option<Stamp> {
 }
 
 /// Run `f` over `items` on a few threads, keeping the input order.
-fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub(crate) fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let workers = std::thread::available_parallelism()
         .map_or(4, |n| n.get())
         .min(8)
@@ -144,19 +151,21 @@ fn parallel<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R>
 
 pub struct ProjectIndex {
     root: PathBuf,
-    entries: Vec<Entry>,
-    by_path: HashMap<String, u32>,
-    names: HashMap<Box<str>, u32>,
-    name_list: Vec<Box<str>>,
+    pub(crate) entries: Vec<Entry>,
+    pub(crate) by_path: HashMap<String, u32>,
+    pub(crate) names: HashMap<Box<str>, u32>,
+    pub(crate) name_list: Vec<Box<str>>,
     /// Name to the files that mention it, sorted.
     postings: HashMap<u32, Vec<u32>>,
     /// Name to the (file, definition) pairs that define it.
-    defs_by_name: HashMap<u32, Vec<(u32, u32)>>,
-    resolver: Arc<Resolver>,
+    pub(crate) defs_by_name: HashMap<u32, Vec<(u32, u32)>>,
+    pub(crate) resolver: Arc<Resolver>,
     importers: HashMap<u32, Vec<(u32, u32)>>,
     /// Folder to the imports that name it (Go packages).
     folder_importers: HashMap<String, Vec<(u32, u32)>>,
     linked: bool,
+    /// Built on the first graph query after a link, dropped by the next link.
+    pub(crate) graph: Option<Graph>,
     bytes: u64,
     /// The byte cap left files out.
     pub truncated: bool,
@@ -176,6 +185,7 @@ impl ProjectIndex {
             importers: HashMap::new(),
             folder_importers: HashMap::new(),
             linked: false,
+            graph: None,
             bytes: 0,
             truncated: false,
         }
@@ -215,6 +225,7 @@ impl ProjectIndex {
         self.bytes -= e.bytes;
         let names = std::mem::take(&mut e.names);
         let defs = std::mem::take(&mut e.defs);
+        e.mentions = vec![];
         self.by_path.remove(&e.path);
         for n in names {
             if let Some(list) = self.postings.get_mut(&n)
@@ -234,6 +245,21 @@ impl ProjectIndex {
     fn insert(&mut self, path: String, lang: &'static Lang, stamp: Stamp, facts: Facts) {
         let id = self.entries.len() as u32;
         let names: Vec<u32> = facts.names.iter().map(|n| self.intern(n)).collect();
+        let mut mentions: Vec<Mention> = facts
+            .mentions
+            .iter()
+            .map(|m| Mention {
+                name: self.intern(&m.name),
+                qual: match &m.qual {
+                    RawQual::None => Qual::None,
+                    RawQual::SelfLike => Qual::SelfLike,
+                    RawQual::Name(q) => Qual::Name(self.intern(q)),
+                },
+                member: m.member,
+            })
+            .collect();
+        mentions.sort_unstable();
+        mentions.dedup();
         for &n in &names {
             let list = self.postings.entry(n).or_default();
             // Ids only grow, so pushing keeps each list sorted.
@@ -252,6 +278,7 @@ impl ProjectIndex {
                 line: s.line,
                 col: s.col,
                 len: s.len,
+                end_line: s.end_line,
                 container: s.container.map(Into::into),
                 preview: preview.into(),
             });
@@ -264,6 +291,7 @@ impl ProjectIndex {
             stamp,
             bytes: stamp.size,
             names,
+            mentions,
             defs,
             imports: facts.imports,
             targets: vec![],
@@ -345,10 +373,11 @@ impl ProjectIndex {
         }
     }
 
-    fn link(&mut self) {
+    pub(crate) fn link(&mut self) {
         if self.linked {
             return;
         }
+        self.graph = None;
         self.importers.clear();
         self.folder_importers.clear();
         let resolver = self.resolver.clone();
@@ -379,7 +408,7 @@ impl ProjectIndex {
         self.linked = true;
     }
 
-    fn location(&self, file: u32, def: &Def) -> CodeLocation {
+    pub(crate) fn location(&self, file: u32, def: &Def) -> CodeLocation {
         CodeLocation {
             name: self.name_list[def.name as usize].to_string(),
             path: self.entries[file as usize].path.clone(),
@@ -390,6 +419,23 @@ impl ProjectIndex {
             kind: Some(def.kind),
             container: def.container.as_deref().map(str::to_string),
         }
+    }
+
+    /// The files that define `symbol`, sorted.
+    pub fn definition_files(&self, symbol: &str) -> Vec<String> {
+        let Some(n) = self.names.get(symbol.trim_end_matches('!')) else {
+            return vec![];
+        };
+        let mut v: Vec<String> = self
+            .defs_by_name
+            .get(n)
+            .into_iter()
+            .flatten()
+            .map(|&(f, _)| self.entries[f as usize].path.clone())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
     }
 
     /// Where `symbol` is defined and used. Files are read in this order: `from`, its folder,

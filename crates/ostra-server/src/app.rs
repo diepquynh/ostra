@@ -132,6 +132,8 @@ pub struct App {
     pub files: Arc<Files>,
     /// Display tokens, outline, usages, and dependencies for the Files view.
     pub code: crate::code::Code,
+    /// The agents' code navigation tools, over the same indexes.
+    pub code_tools: Arc<crate::code::CodeTools>,
     pub push: broadcast::Sender<Pushed>,
     /// The Sessions tree, search, and workspace activity.
     pub nav: Arc<crate::nav::Nav>,
@@ -333,7 +335,13 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         &global,
         &crate::credentials::load_all(&registry)?,
     ));
-    let native = Arc::new(NativeExecutor::new(providers.clone(), skill_resolver()));
+    let code_tools = Arc::new(crate::code::CodeTools::default());
+    let code_nav: Arc<dyn ostra_tools::CodeNav> = code_tools.clone();
+    let native = Arc::new(NativeExecutor::new(
+        providers.clone(),
+        skill_resolver(),
+        Some(code_nav.clone()),
+    ));
     let notifier = Arc::new(Notifier::new(
         vapid_keys(&registry)?,
         "mailto:ostra@localhost".into(),
@@ -349,6 +357,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     let harness = crate::bridge::HarnessRuntime::new(opts.exe.clone(), callback);
     let (touches, touch_rx) = tokio::sync::mpsc::unbounded_channel();
     harness.set_write_sink(touches.clone());
+    harness.set_code_nav(code_nav);
     let shared = Arc::new(Shared {
         global_path,
         global_cache: RwLock::new(global),
@@ -371,9 +380,11 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         dev: opts.dev,
         files: Arc::new(Files::new(touches)),
         code: Default::default(),
+        code_tools: code_tools.clone(),
         push,
         nav: Default::default(),
     });
+    code_tools.bind(&app);
     tokio::spawn(crate::files::run_touches(Arc::downgrade(&app), touch_rx));
     tokio::spawn(crate::nav::run(Arc::downgrade(&app)));
     for record in app.shared.registry.list_workspaces()? {

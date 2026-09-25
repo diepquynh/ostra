@@ -7,6 +7,7 @@ pub mod assets;
 pub mod auth;
 pub mod bridge;
 pub mod code;
+pub mod code_watch;
 pub mod credentials;
 pub mod env;
 pub mod files;
