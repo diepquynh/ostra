@@ -799,6 +799,20 @@ bring its own analysis without Ostra carrying editor plugins. Every answer names
   replaces the tokens the server's semantic tokens cover and the outline with its document symbols;
   imports stay built-in. Usages at a position ask `definition` and `references` there; without one they
   start from `workspace/symbol` matches of the exact name. Symbol search asks `workspace/symbol`.
+- **Dependency files.** A definition, jump, or symbol a language server places outside the project is kept,
+  with the server's URI in `CodeLocation.uri` and a display path in `path`: a library source under a package
+  cache (`file://`, such as `~/go/pkg/mod`, `~/.cargo/registry`, or a Python environment outside the project)
+  or a class inside a jar (`jdt://`). A server whose languages include `java` gets
+  `extendedClientCapabilities.classFileContentsSupport` in its `initializationOptions` unless the entry sets
+  it, because jdtls answers definitions in jars only for clients that read them; Ostra reads their text with
+  `java/classFileContents` (sources when the jar has them attached, else decompiled). The file opens as a
+  read-only `dep:<key>:<uri>` tab, and Ctrl/Cmd+click there asks the same server, so navigation continues
+  through the library and back into the project. References stay in the project, because a library's own
+  uses would crowd out the project's. Ostra reads only URIs a server of that project answered with since
+  the Ostra server started (the last 20,000), so the browser cannot name an arbitrary file; after a restart
+  a dependency tab says to open the file again from the code. Base class and implementation jumps, the
+  code pane, and the code index work in project files only. A project's own `code_provider` program cannot
+  name dependency files: Ostra clears `uri` in its answers.
   Dependencies always come from the built-in index. An empty answer, a failure, or a timeout falls through
   to the built-in provider with the reason shown, and an answer given while the server reports progress
   says it may be incomplete. Writes by executions and saves reach running servers as
@@ -877,7 +891,11 @@ GET             /api/workspaces/:ws/projects/:key/code/file
                                                           ?path=; display tokens, outline, imports (12.5)
 GET             /api/workspaces/:ws/projects/:key/code/usages
                                                           ?symbol=&path=&line=&col=&limit=; definitions and
-                                                          references, the named file first
+                                                          references, the named file first; uri= instead of
+                                                          path asks inside a dependency file
+GET             /api/workspaces/:ws/projects/:key/code/external
+                                                          ?uri=; a dependency file a language server pointed
+                                                          at, read-only; 404 for any other URI
 GET             /api/workspaces/:ws/projects/:key/code/deps
                                                           ?path=; imports with targets, and importers
 GET             /api/workspaces/:ws/projects/:key/code/symbols

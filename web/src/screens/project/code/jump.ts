@@ -74,8 +74,10 @@ export const linkModifier = (e: Pick<MouseEvent, "ctrlKey" | "metaKey">) => (IS_
  * Ctrl/Cmd+click on the name at `line`/`col` of `path`: on a use it goes to the definition (a list when the name has
  * several); on a definition it lists the usages, or goes to the only one. A name nothing defines leads nowhere.
  */
-export function clickLanding(u: CodeUsages, path: string, line: number, col: number): Landing {
-  const onDef = u.definitions.some((d) => d.path === path && d.line === line && col >= d.col && col <= d.col + d.len);
+export function clickLanding(u: CodeUsages, path: string, line: number, col: number, uri?: string | null): Landing {
+  // A click in a dependency file (`uri`) is on a definition only when the definition is in that same file.
+  const here = (d: CodeLocation) => (uri ? d.uri === uri : !d.uri && d.path === path);
+  const onDef = u.definitions.some((d) => here(d) && d.line === line && col >= d.col && col <= d.col + d.len);
   if (onDef) {
     const [first, ...rest] = u.references;
     if (!first) return { note: `Nothing in the project uses ${u.symbol}.` };

@@ -5,6 +5,7 @@
 //! the colors the server leaves out still come from the tokenizer.
 
 pub mod convert;
+pub mod external;
 pub mod rpc;
 
 use crate::hint::{self, At};
@@ -13,14 +14,14 @@ use crate::{MAX_FILE_BYTES, lang, preview};
 use async_trait::async_trait;
 use convert::{Legend, Range};
 use ostra_core::code::{
-    CodeCompletion, CodeLocation, CodeNavigation, CodeSignatureHelp, CodeSymbols, CodeUsages,
-    NavigateTarget, ProviderRequest,
+    CodeCompletion, CodeExternalFile, CodeLocation, CodeNavigation, CodeSignatureHelp, CodeSymbols,
+    CodeUsages, NavigateTarget, ProviderRequest,
 };
 use ostra_core::config::LanguageServerConfig;
 use parking_lot::Mutex;
 use rpc::{Client, Transport};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -41,6 +42,8 @@ const RETRY: Duration = Duration::from_secs(30);
 const INIT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_DEFINITIONS: usize = 50;
 const SWEEP: Duration = Duration::from_secs(60);
+/// Outside URIs the pool remembers, across projects. Remembering one more forgets the oldest.
+const MAX_EXTERNALS: usize = 20_000;
 
 /// Opens a connection to a server: `command` run in `root`.
 pub type Connector = Arc<dyn Fn(&[String], &Path) -> std::io::Result<Transport> + Send + Sync>;
@@ -108,14 +111,18 @@ impl Server {
 
     /// Open `rel` with `text`, or send the new text when it changed since the last request.
     async fn sync(&self, rel: &str, lang: &str, text: &str) {
+        self.sync_doc(&self.uri(rel), &convert::language_id(lang, rel), text)
+            .await;
+    }
+
+    async fn sync_doc(&self, uri: &str, language_id: &str, text: &str) {
         let mut h = DefaultHasher::new();
         text.hash(&mut h);
         let hash = h.finish();
         let mut guard = self.docs.lock().await;
         let (docs, clock) = &mut *guard;
         *clock += 1;
-        let uri = self.uri(rel);
-        if let Some(d) = docs.get_mut(rel) {
+        if let Some(d) = docs.get_mut(uri) {
             d.used = *clock;
             if d.hash != hash {
                 d.hash = hash;
@@ -137,16 +144,16 @@ impl Server {
             docs.remove(&old);
             self.client.notify(
                 "textDocument/didClose",
-                json!({"textDocument": {"uri": self.uri(&old)}}),
+                json!({"textDocument": {"uri": old}}),
             );
         }
         self.client.notify(
             "textDocument/didOpen",
-            json!({"textDocument": {"uri": uri, "languageId": convert::language_id(lang, rel),
+            json!({"textDocument": {"uri": uri, "languageId": language_id,
                    "version": 1, "text": text}}),
         );
         docs.insert(
-            rel.to_string(),
+            uri.to_string(),
             Doc {
                 version: 1,
                 hash,
@@ -307,10 +314,18 @@ impl Entry {
 /// A project and a server command.
 type ServerId<K> = (K, Vec<String>);
 
+/// Outside URIs servers answered with, and the command of the server that did, so only those
+/// are read back.
+struct Externals<K> {
+    by: HashMap<(K, String), Vec<String>>,
+    order: VecDeque<(K, String)>,
+}
+
 struct PoolInner<K> {
     entries: Mutex<HashMap<ServerId<K>, Arc<Entry>>>,
     connect: Connector,
     sweeping: Mutex<bool>,
+    externals: Mutex<Externals<K>>,
 }
 
 /// Running language servers, keyed by project and command.
@@ -339,6 +354,10 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspPool<K> {
                 entries: Mutex::new(HashMap::new()),
                 connect,
                 sweeping: Mutex::new(false),
+                externals: Mutex::new(Externals {
+                    by: HashMap::new(),
+                    order: VecDeque::new(),
+                }),
             }),
         }
     }
@@ -388,7 +407,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspPool<K> {
             self.inner.connect.clone(),
             cfg.command.clone(),
             root.to_path_buf(),
-            cfg.initialization_options.clone(),
+            external::with_extensions(&cfg.languages, cfg.initialization_options.clone()),
         );
         // Spawned so that a caller that stops waiting leaves the server starting for the next one.
         let task = tokio::spawn(async move {
@@ -404,6 +423,32 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspPool<K> {
                 "`{name}` is still starting. Ask again in a moment."
             )),
         }
+    }
+
+    /// Remember that the server `command` of `key` answered with outside URI `uri`.
+    fn remember(&self, key: &K, uri: &str, command: &[String]) {
+        let mut x = self.inner.externals.lock();
+        let id = (key.clone(), uri.to_string());
+        if x.by.insert(id.clone(), command.to_vec()).is_some() {
+            return;
+        }
+        x.order.push_back(id);
+        while x.order.len() > MAX_EXTERNALS {
+            if let Some(old) = x.order.pop_front() {
+                x.by.remove(&old);
+            }
+        }
+    }
+
+    /// The command of the server that answered with outside URI `uri` for `key`, or None when no
+    /// server of this process did.
+    pub fn external_server(&self, key: &K, uri: &str) -> Option<Vec<String>> {
+        self.inner
+            .externals
+            .lock()
+            .by
+            .get(&(key.clone(), uri.to_string()))
+            .cloned()
     }
 
     /// A project file changed on disk. Running servers of that project hear about it.
@@ -504,6 +549,14 @@ impl Texts {
             .or_insert_with(|| read_text(&root.join(rel)).map(Arc::from))
             .clone()
     }
+
+    /// An outside file by absolute path, which cannot collide with a project-relative one.
+    fn abs(&mut self, p: &Path) -> Option<Arc<str>> {
+        self.0
+            .entry(p.to_string_lossy().into_owned())
+            .or_insert_with(|| read_text(p).map(Arc::from))
+            .clone()
+    }
 }
 
 fn read_text(p: &Path) -> Option<String> {
@@ -571,8 +624,18 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
         r: Range,
         symbol: &str,
     ) -> Option<CodeLocation> {
-        let path = s.rel(uri)?;
-        let text = texts.get(&self.root, &path);
+        let (path, text, outside) = match s.rel(uri) {
+            Some(rel) => {
+                let text = texts.get(&self.root, &rel);
+                (rel, text, None)
+            }
+            None => {
+                let d = external::describe(uri)?;
+                self.pool.remember(&self.key, uri, &self.config.command);
+                let text = external::file_path(uri).and_then(|p| texts.abs(&p));
+                (d.path, text, Some(uri.to_string()))
+            }
+        };
         let line = text.as_deref().and_then(|t| line_of(t, r.start_line + 1));
         let (name, preview_line) = match line {
             Some((at, l)) => {
@@ -596,6 +659,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
             len: convert::utf16_len(&name),
             name,
             path,
+            uri: outside,
             line: r.start_line + 1,
             col: r.start_col,
             preview: preview_line,
@@ -808,6 +872,22 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
                 }
             }
         };
+        self.finish_usages(&s, texts, from, defs, symbol, (path, limit))
+            .await
+    }
+
+    /// References from `from`, merged with `defs` into one answer. References outside the
+    /// project are left out, because a library's own uses would crowd out the project's.
+    async fn finish_usages(
+        &self,
+        s: &Server,
+        mut texts: Texts,
+        from: Option<Value>,
+        mut defs: Vec<CodeLocation>,
+        symbol: &str,
+        (path, limit): (Option<&str>, usize),
+    ) -> Result<Option<Answer>, String> {
+        let t = self.timeout();
         let mut refs: Vec<CodeLocation> = vec![];
         if let Some(mut position) = from
             && s.has("referencesProvider")
@@ -818,7 +898,9 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
                 .request("textDocument/references", position, t)
                 .await?;
             for (uri, r) in convert::locations(&v) {
-                refs.extend(self.location(&s, &mut texts, &uri, r, symbol));
+                if s.rel(&uri).is_some() {
+                    refs.extend(self.location(s, &mut texts, &uri, r, symbol));
+                }
             }
         }
         if defs.is_empty() && refs.is_empty() {
@@ -842,8 +924,101 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
             definitions: defs,
             references: refs,
             truncated,
-            warning: self.busy_note(&s),
+            warning: self.busy_note(s),
         })))
+    }
+
+    /// A file outside the project that this server answered with. The caller checks that it did.
+    pub async fn external_file(&self, uri: &str) -> Result<CodeExternalFile, String> {
+        let d = external::describe(uri).ok_or("Ostra cannot read this kind of location.")?;
+        let content = match external::file_path(uri) {
+            Some(p) => read_text(&p)
+                .ok_or_else(|| format!("Cannot read {} as UTF-8 text under 1 MB.", d.path))?,
+            None => {
+                let s = self.server().await?;
+                let v = s
+                    .client
+                    .request(
+                        "java/classFileContents",
+                        json!({"uri": uri}),
+                        self.timeout(),
+                    )
+                    .await?;
+                match v.as_str() {
+                    Some(t) if !t.is_empty() => t.to_string(),
+                    _ => {
+                        return Err(format!(
+                            "`{}` has no source or decompiled text for {}.",
+                            s.name, d.name
+                        ));
+                    }
+                }
+            }
+        };
+        if content.len() as u64 > MAX_FILE_BYTES {
+            return Err(format!(
+                "{} is larger than 1 MB, the size Ostra reads.",
+                d.name
+            ));
+        }
+        Ok(CodeExternalFile {
+            uri: uri.to_string(),
+            name: d.name,
+            path: d.path,
+            language: d.language.map(str::to_string),
+            content,
+            provider: program_name(&self.config.command),
+        })
+    }
+
+    /// Definitions and project references of `symbol` at `line` (1-based) and `col` of outside
+    /// file `uri`, which this server answered with.
+    pub async fn external_usages(
+        &self,
+        uri: &str,
+        symbol: &str,
+        line: u32,
+        col: Option<u32>,
+        limit: usize,
+    ) -> Result<CodeUsages, String> {
+        let file = self.external_file(uri).await?;
+        let s = self.server().await?;
+        let lang = file.language.as_deref().unwrap_or("plaintext");
+        s.sync_doc(uri, &convert::language_id(lang, &file.name), &file.content)
+            .await;
+        let c = line_of(&file.content, line)
+            .and_then(|(_, l)| convert::find_name(l, symbol, col.unwrap_or(0)))
+            .ok_or_else(|| format!("{symbol} is not on line {line} of {}.", file.name))?;
+        let position =
+            json!({"textDocument": {"uri": uri}, "position": {"line": line - 1, "character": c}});
+        let mut texts = Texts::default();
+        let mut defs = vec![];
+        if s.has("definitionProvider") {
+            let v = s
+                .client
+                .request("textDocument/definition", position.clone(), self.timeout())
+                .await?;
+            for (u, r) in convert::locations(&v) {
+                defs.extend(self.location(&s, &mut texts, &u, r, symbol));
+            }
+        }
+        let answer = self
+            .finish_usages(&s, texts, Some(position), defs, symbol, (None, limit))
+            .await?;
+        Ok(match answer {
+            Some(Answer::Usages(mut u)) => {
+                u.provider = s.name.clone();
+                u
+            }
+            _ => CodeUsages {
+                symbol: symbol.to_string(),
+                provider: s.name.clone(),
+                definitions: vec![],
+                references: vec![],
+                truncated: false,
+                warning: self.busy_note(&s),
+            },
+        })
     }
 
     /// Completions at `at` from the server, or None when it does not answer for this file. Waits

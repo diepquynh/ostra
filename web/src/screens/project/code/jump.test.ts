@@ -35,6 +35,15 @@ describe("clickLanding", () => {
     expect(clickLanding(usages(two, []), "Cat.java", 3, 28)).toMatchObject({ pick: { title: "Definitions of Pet" } });
     expect(clickLanding(usages([], [loc("Cat.java", 3)]), "Cat.java", 3, 4)).toBeNull();
   });
+
+  it("counts a definition as clicked only in the same dependency file", () => {
+    const uri = "jdt://contents/lib.jar/com.acme/Thing.class";
+    const inJar = { ...loc("lib.jar › com/acme/Thing.class", 3, 7), uri };
+    const use = loc("Main.java", 9, 4);
+    expect(clickLanding(usages([inJar], [use]), inJar.path, 3, 7, uri)).toEqual({ go: use });
+    // The same line and path in the project is a use of the jar's definition, which it goes to.
+    expect(clickLanding(usages([inJar], [use]), inJar.path, 3, 7)).toEqual({ go: inJar });
+  });
 });
 
 describe("jumpLanding", () => {

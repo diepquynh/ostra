@@ -526,7 +526,8 @@ function DefinitionPreview({
     api.codeUsages(ws, projectKey, s.name, { path: symbol.path, line: s.line, col: s.col, limit: 1 }).then(
       (u) => {
         const d = u.definitions[0];
-        if (d) onPick({ kind: "symbol", path: d.path, symbol: d.name || s.name, line: d.line, depth: 1 });
+        if (d && !d.uri) onPick({ kind: "symbol", path: d.path, symbol: d.name || s.name, line: d.line, depth: 1 });
+        else if (d) setMiss(`${s.name} is defined in a dependency (${d.path}), which the graph does not show.`);
         else setMiss(`${s.name} is not defined in this project.`);
       },
       (e: Error) => setMiss(e.message),

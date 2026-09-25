@@ -2,13 +2,23 @@
 import type { SymbolKind } from "./SymbolKind";
 
 /**
- * A place in a project file.
+ * A place in a project file, or in a dependency outside the project.
  */
 export type CodeLocation = { 
 /**
  * The symbol's name as written at this place. A provider may leave it out of usages.
  */
-name: string, path: string, 
+name: string, 
+/**
+ * Project-relative, or for a place outside the project (`uri` set) a path to show, such as
+ * `~/go/pkg/mod/golang.org/x/text@v0.14.0/unicode/norm/normalize.go`.
+ */
+path: string, 
+/**
+ * The language server's URI of a place outside the project: a library source file or a
+ * class inside a jar. `GET .../code/external?uri=` reads it.
+ */
+uri?: string | null, 
 /**
  * 1-based.
  */

@@ -14,8 +14,8 @@ use ostra_code::provider::{self, Answer, CodeProvider, CommandProvider, NativePr
 use ostra_code::{Indexes, LspPool, LspProvider, MAX_FILE_BYTES};
 use ostra_core::api::{FileIndex, ServerMsg};
 use ostra_core::code::{
-    CodeCompletion, CodeNavigation, CodeSignatureHelp, NavigateTarget, PROTOCOL_VERSION,
-    ProviderRequest,
+    CodeCompletion, CodeExternalFile, CodeNavigation, CodeSignatureHelp, CodeUsages,
+    NavigateTarget, PROTOCOL_VERSION, ProviderRequest,
 };
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -393,6 +393,94 @@ impl Code {
             true => Ok(None),
             false => Err(ApiErr::new(StatusCode::BAD_GATEWAY, problems.join(" "))),
         }
+    }
+}
+
+/// Outside URIs a request may name.
+const MAX_URI_LEN: usize = 4096;
+
+impl Code {
+    /// The language server of project `key` that answered with outside URI `uri`. Only such URIs
+    /// are read, so the browser cannot name an arbitrary file.
+    fn external_server(
+        &self,
+        w: &WorkspaceRt,
+        key: &str,
+        uri: &str,
+    ) -> Result<LspProvider<ProjectId>, ApiErr> {
+        if uri.is_empty() || uri.len() > MAX_URI_LEN {
+            return Err(ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "Name the dependency file with uri.",
+            ));
+        }
+        let root = files::project_root(w, key)?;
+        let id: ProjectId = (w.id.clone(), key.to_string());
+        let command = self.servers.external_server(&id, uri).ok_or_else(|| {
+            ApiErr::new(
+                StatusCode::NOT_FOUND,
+                "Ostra does not know this dependency file, because no language server of this project has pointed at it since the Ostra server started. Open it again from the code that uses it.",
+            )
+        })?;
+        let project = w.settings().projects.into_iter().find(|p| p.key == key);
+        let config = project
+            .into_iter()
+            .flat_map(|p| p.language_servers)
+            .find(|c| c.command == command)
+            .ok_or_else(|| {
+                ApiErr::new(
+                    StatusCode::NOT_FOUND,
+                    "The language server that found this dependency file is no longer in the project's settings.",
+                )
+            })?;
+        let base: Arc<dyn CodeProvider> = Arc::new(provider::Unanswered);
+        Ok(LspProvider {
+            pool: self.servers.clone(),
+            key: id,
+            root,
+            config,
+            base,
+        })
+    }
+
+    /// A read-only file outside the project that a language server pointed at.
+    pub async fn external_file(
+        &self,
+        w: &WorkspaceRt,
+        key: &str,
+        uri: &str,
+    ) -> Result<CodeExternalFile, ApiErr> {
+        let s = self.external_server(w, key, uri)?;
+        s.external_file(uri)
+            .await
+            .map_err(|e| ApiErr::new(StatusCode::BAD_GATEWAY, e))
+    }
+
+    /// Where the name at `line` and `col` of an outside file is defined, and where the project
+    /// uses it, from the language server that pointed at the file.
+    pub async fn external_usages(
+        &self,
+        w: &WorkspaceRt,
+        key: &str,
+        uri: &str,
+        symbol: &str,
+        (line, col): (u32, Option<u32>),
+        limit: Option<u32>,
+    ) -> Result<CodeUsages, ApiErr> {
+        if symbol.is_empty()
+            || symbol.len() > MAX_SYMBOL_LEN
+            || symbol.chars().any(|c| c.is_whitespace() || c.is_control())
+        {
+            return Err(ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "Name one symbol with symbol, such as `parse_config`.",
+            ));
+        }
+        let s = self.external_server(w, key, uri)?;
+        let limit = limit.unwrap_or(DEFAULT_USAGES).clamp(1, MAX_USAGES) as usize;
+        s.external_usages(uri, symbol, line, col, limit)
+            .await
+            .map_err(|e| ApiErr::new(StatusCode::BAD_GATEWAY, e))
     }
 }
 

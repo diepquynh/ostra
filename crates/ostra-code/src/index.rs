@@ -437,6 +437,7 @@ impl ProjectIndex {
         CodeLocation {
             name: self.name_list[def.name as usize].to_string(),
             path: self.entries[file as usize].path.clone(),
+            uri: None,
             line: def.line,
             col: def.col,
             len: def.len,
@@ -541,6 +542,7 @@ impl ProjectIndex {
                     CodeLocation {
                         name: symbol.to_string(),
                         path: e.path.clone(),
+                        uri: None,
                         line: t.line,
                         col: t.col,
                         len: t.len,

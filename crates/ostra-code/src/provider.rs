@@ -82,6 +82,20 @@ pub async fn ask(
     })
 }
 
+/// Answers nothing, for a language server asked only about files outside the project.
+pub struct Unanswered;
+
+#[async_trait]
+impl CodeProvider for Unanswered {
+    fn name(&self) -> String {
+        String::new()
+    }
+
+    async fn answer(&self, _: &ProviderRequest) -> Result<Option<Answer>, String> {
+        Ok(None)
+    }
+}
+
 /// The built-in tokenizer and index.
 pub struct NativeProvider<K> {
     pub indexes: Arc<Indexes<K>>,
@@ -304,6 +318,8 @@ pub fn parse_answer(req: &ProviderRequest, out: &[u8]) -> Result<Option<Answer>,
                 if l.name.is_empty() {
                     l.name = symbol.clone();
                 }
+                // Ostra reads back only outside files a language server named.
+                l.uri = None;
             }
             check_locations(&u.definitions)?;
             check_locations(&u.references)?;
@@ -325,7 +341,8 @@ pub fn parse_answer(req: &ProviderRequest, out: &[u8]) -> Result<Option<Answer>,
             Answer::Deps(d)
         }
         ProviderRequest::Symbols { .. } => {
-            let s: CodeSymbols = serde_json::from_str(text).map_err(bad)?;
+            let mut s: CodeSymbols = serde_json::from_str(text).map_err(bad)?;
+            s.items.iter_mut().for_each(|l| l.uri = None);
             check_locations(&s.items)?;
             Answer::Symbols(s)
         }

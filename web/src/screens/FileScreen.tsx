@@ -8,7 +8,7 @@ import { humanize } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges, useWorkspaceTree } from "../lib/live";
 import { useNav, useShell } from "../lib/nav";
-import { fileId } from "../lib/resource";
+import { locationId } from "../lib/resource";
 import { CodePane, takeCarried } from "./project/code/CodePane";
 import type { EditorStart } from "./project/code/FileEditor";
 import type { SymbolRef } from "./project/code/SourceView";
@@ -363,7 +363,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
                     theme={shell.theme}
                     onSave={edit.save}
                     dirty={edit.dirty}
-                    onOpen={(p, line) => nav.open(fileId(projectKey, p), { anchor: `L${line}`, beside: true })}
+                    onOpen={(to) => nav.open(locationId(projectKey, to), { anchor: `L${to.line}`, beside: true })}
                     readOnly={!edit.editing}
                     locked={locked}
                     onEditAt={(start) => {

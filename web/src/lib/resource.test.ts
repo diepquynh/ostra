@@ -22,6 +22,10 @@ describe("resource ids and routes", () => {
     ["project:backend", "/w/shop/p/backend"],
     ["file:backend:crates/orders/src/service.rs", "/w/shop/f/backend/crates/orders/src/service.rs"],
     ["file:web:src/a b/c#d.ts", "/w/shop/f/web/src/a%20b/c%23d.ts"],
+    [
+      "dep:backend:jdt://contents/lib.jar/com.acme/Thing.class?=p",
+      "/w/shop/d/backend?uri=jdt%3A%2F%2Fcontents%2Flib.jar%2Fcom.acme%2FThing.class%3F%3Dp",
+    ],
   ];
 
   for (const [id, url] of cases) {
@@ -51,6 +55,7 @@ describe("resource ids and routes", () => {
     expect(resourceFromPath("/w/shop/artifact", "")).toBeNull();
     expect(resourceFromPath("/w/shop/overview", "")).toBeNull();
     expect(resourceFromPath("/w/shop/f/backend", "")).toBeNull();
+    expect(resourceFromPath("/w/shop/d/backend", "")).toBeNull();
     expect(resourceFromPath("/w/shop/projects", "")).toBeNull();
   });
 

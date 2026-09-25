@@ -26,6 +26,7 @@ export type * from "./gen/CodeCompletion";
 export type * from "./gen/CodeCompletionItem";
 export type * from "./gen/CodeDeps";
 export type * from "./gen/CodeDoc";
+export type * from "./gen/CodeExternalFile";
 export type * from "./gen/CodeFile";
 export type * from "./gen/CodeGraph";
 export type * from "./gen/CodeGraphEdge";

@@ -29,8 +29,10 @@ export type FileEditorProps = {
   onSave: () => void;
   /** The draft differs from the saved file, so opening another file would drop it. */
   dirty: boolean;
-  /** Open another project file at a 1-based line. */
-  onOpen: (path: string, line: number) => void;
+  /** Open another file at a 1-based line: a project file, or a dependency file when `uri` is set. */
+  onOpen: (to: { path: string; uri?: string | null; line: number }) => void;
+  /** Showing a dependency file a language server pointed at: its URI and file name. Always read-only. */
+  external?: { uri: string; name: string } | null;
   /** Viewing, not editing: the text cannot change, and a click on a name selects it for the code pane. */
   readOnly: boolean;
   /** Why the file cannot be edited at all, or null when the pencil may start an edit. */
@@ -154,12 +156,13 @@ export default function FileEditor(props: FileEditorProps) {
 
   const go = (e: Code, l: CodeLocation) => {
     const p = latest.current;
-    if (l.path !== p.path) {
+    const here = p.external ? l.uri === p.external.uri : !l.uri && l.path === p.path;
+    if (!here) {
       if (p.dirty) {
         message(e, `Save or discard your changes before opening ${l.path}, because leaving the editor drops them.`);
         return;
       }
-      p.onOpen(l.path, l.line);
+      p.onOpen({ path: l.path, uri: l.uri, line: l.line });
       return;
     }
     const at = { lineNumber: l.line, column: l.col + 1 };
@@ -186,6 +189,7 @@ export default function FileEditor(props: FileEditorProps) {
     const model = e.getModel();
     const at = e.getPosition();
     if (!model || !at) return;
+    if (latest.current.external) return message(e, "Base class and implementation jumps work in project files.");
     const reply = await navigate(model, at, target);
     if (reply?.error) return message(e, reply.error);
     // A null result means neither the code index nor a language server knows the name.
@@ -198,9 +202,10 @@ export default function FileEditor(props: FileEditorProps) {
     if (!word) return;
     const p = latest.current;
     const col = word.startColumn - 1;
+    const doc = p.external ? { uri: p.external.uri } : { path: p.path };
     try {
-      const u = await api.codeUsages(p.ws, p.projectKey, word.word, { path: p.path, line: at.lineNumber, col });
-      land(e, at, clickLanding(u, p.path, at.lineNumber, col));
+      const u = await api.codeUsages(p.ws, p.projectKey, word.word, { ...doc, line: at.lineNumber, col });
+      land(e, at, clickLanding(u, p.path, at.lineNumber, col, p.external?.uri));
     } catch (err) {
       message(e, err instanceof Error ? err.message : String(err));
     }
@@ -379,17 +384,19 @@ export default function FileEditor(props: FileEditorProps) {
     };
   }, [editor, changes]);
   // Runs after the editor switched to the model of `path`, because child effects run first.
+  const external = props.external;
   useEffect(() => {
     const model = editor?.getModel();
-    if (model) bindModel(model, { workspace: ws, key: projectKey, path });
-  }, [editor, ws, projectKey, path]);
+    // Completions and signatures ask about project files, and a dependency file is never edited.
+    if (model && !external) bindModel(model, { workspace: ws, key: projectKey, path });
+  }, [editor, ws, projectKey, path, external]);
   return (
     <div ref={box} style={{ position: "relative", height: "100%" }}>
       <Editor
         height="100%"
-        path={path}
+        path={external ? `dep:${external.uri}` : path}
         value={value}
-        language={languageOf(path)}
+        language={languageOf(external ? external.name.replace(/\.class$/, ".java") : path)}
         theme={themeName(theme)}
         beforeMount={() => {
           defineThemes();

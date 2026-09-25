@@ -157,14 +157,20 @@ pub struct CodeFile {
     pub warning: Option<String>,
 }
 
-/// A place in a project file.
+/// A place in a project file, or in a dependency outside the project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CodeLocation {
     /// The symbol's name as written at this place. A provider may leave it out of usages.
     #[serde(default)]
     pub name: String,
+    /// Project-relative, or for a place outside the project (`uri` set) a path to show, such as
+    /// `~/go/pkg/mod/golang.org/x/text@v0.14.0/unicode/norm/normalize.go`.
     pub path: String,
+    /// The language server's URI of a place outside the project: a library source file or a
+    /// class inside a jar. `GET .../code/external?uri=` reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
     /// 1-based.
     pub line: u32,
     /// 0-based, UTF-16.
@@ -182,6 +188,24 @@ pub struct CodeLocation {
     /// Set on definitions inside an impl of a trait or interface: that trait.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub via: Option<String>,
+}
+
+/// `GET .../code/external?uri=`: a read-only file outside the project that a language server
+/// pointed at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeExternalFile {
+    pub uri: String,
+    /// The file name, such as `ObjectMapper.class` or `normalize.go`.
+    pub name: String,
+    /// Where it lives, for display: a path under the home folder or `<jar> › <class path>`.
+    pub path: String,
+    /// A language id of `NAV_LANGUAGES`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    pub content: String,
+    /// The language server that pointed at it.
+    pub provider: String,
 }
 
 /// `GET .../code/usages?symbol=&path=`: where a symbol is defined and used.

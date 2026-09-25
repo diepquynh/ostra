@@ -970,6 +970,23 @@ async fn yolo_implement_session_end_to_end() {
             .status(),
         403
     );
+    // Only files a language server pointed at are read outside the project.
+    for q in [
+        vec![("uri", "file:///etc/passwd")],
+        vec![("uri", "jdt://contents/a.jar/b/C.class")],
+    ] {
+        assert_eq!(get("code/external", &q).await.unwrap().status(), 404);
+    }
+    assert_eq!(
+        get(
+            "code/usages",
+            &[("symbol", "x"), ("uri", "file:///etc/passwd"), ("line", "1")]
+        )
+        .await
+        .unwrap()
+        .status(),
+        404
+    );
 
     // Saving from the browser: the base hash must match the disk, and the save supersedes attribution.
     let put = |body: serde_json::Value| client.put(format!("{project}/file")).json(&body).send();

@@ -1,6 +1,7 @@
 import { parseResource } from "../lib/resource";
 import { ArtifactScreen } from "./ArtifactScreen";
 import { CostScreen } from "./CostScreen";
+import { DependencyFileScreen } from "./DependencyFileScreen";
 import { ExecutionScreen } from "./ExecutionScreen";
 import { FileScreen } from "./FileScreen";
 import { MemoryScreen } from "./MemoryScreen";
@@ -16,6 +17,7 @@ export { Onboarding } from "./setup/Onboarding";
 export {
   ArtifactScreen,
   CostScreen,
+  DependencyFileScreen,
   ExecutionScreen,
   FileScreen,
   MemoryScreen,
@@ -27,7 +29,7 @@ export {
 };
 
 /** Resources whose screen scrolls its own content, so the shell's center pane must not scroll. */
-export const selfScrolling = (id: string) => /^(artifact|file|project):/.test(id);
+export const selfScrolling = (id: string) => /^(artifact|file|dep|project):/.test(id);
 
 /** The screen for a resource id. Keyed by the id so each tab starts with fresh state. */
 export function ScreenFor({ ws, id }: { ws: string; id: string }) {
@@ -50,5 +52,7 @@ export function ScreenFor({ ws, id }: { ws: string; id: string }) {
       return <ProjectScreen key={id} ws={ws} projectKey={r.key} />;
     case "file":
       return <FileScreen key={id} ws={ws} projectKey={r.key} path={r.path} />;
+    case "dep":
+      return <DependencyFileScreen key={id} ws={ws} projectKey={r.key} uri={r.uri} />;
   }
 }

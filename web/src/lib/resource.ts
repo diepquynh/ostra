@@ -8,6 +8,7 @@
 //   artifact:<absolute path>                         /w/:ws/artifact?path=<path>
 //   project:<key>                                    /w/:ws/p/:key
 //   file:<key>:<project-relative path>               /w/:ws/f/:key/<path>
+//   dep:<key>:<language server URI>                  /w/:ws/d/:key?uri=<uri>   (a dependency file, read-only)
 
 export type WorkspacePage = "overview" | "cost" | "settings" | "memory" | "skills";
 
@@ -17,7 +18,8 @@ export type Resource =
   | { type: "exec"; id: string }
   | { type: "artifact"; path: string }
   | { type: "project"; key: string }
-  | { type: "file"; key: string; path: string };
+  | { type: "file"; key: string; path: string }
+  | { type: "dep"; key: string; uri: string };
 
 const PAGES: WorkspacePage[] = ["overview", "cost", "settings", "memory", "skills"];
 
@@ -39,11 +41,14 @@ export function parseResource(id: string): Resource | null {
       return { type: "artifact", path: ref };
     case "project":
       return { type: "project", key: ref };
-    case "file": {
-      // Project keys never contain a colon; the path may.
+    case "file":
+    case "dep": {
+      // Project keys never contain a colon; the path or URI may.
       const sep = ref.indexOf(":");
       if (sep <= 0 || sep === ref.length - 1) return null;
-      return { type: "file", key: ref.slice(0, sep), path: ref.slice(sep + 1) };
+      const key = ref.slice(0, sep);
+      const rest = ref.slice(sep + 1);
+      return type === "file" ? { type: "file", key, path: rest } : { type: "dep", key, uri: rest };
     }
     default:
       return null;
@@ -64,10 +69,27 @@ export function resourceId(r: Resource): string {
       return `project:${r.key}`;
     case "file":
       return `file:${r.key}:${r.path}`;
+    case "dep":
+      return `dep:${r.key}:${r.uri}`;
   }
 }
 
 export const fileId = (key: string, path: string) => `file:${key}:${path}`;
+export const depId = (key: string, uri: string) => `dep:${key}:${uri}`;
+
+/** The file name at the end of a dependency URI, such as `ObjectMapper.class` or `print.go`. */
+export function depName(uri: string): string {
+  const last = uri.split(/[?#]/)[0].split("/").filter(Boolean).pop() ?? uri;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+/** The tab for a code location: a project file, or a dependency file when the location has a URI. */
+export const locationId = (key: string, l: { path: string; uri?: string | null }) =>
+  l.uri ? depId(key, l.uri) : fileId(key, l.path);
 
 const enc = encodeURIComponent;
 const encPath = (p: string) => p.split("/").map(enc).join("/");
@@ -91,6 +113,8 @@ export function resourcePath(ws: string, id: string, anchor?: string | null): st
       return `${base}/p/${enc(r.key)}${hash}`;
     case "file":
       return `${base}/f/${enc(r.key)}/${encPath(r.path)}${hash}`;
+    case "dep":
+      return `${base}/d/${enc(r.key)}?uri=${enc(r.uri)}${hash}`;
   }
 }
 
@@ -115,6 +139,10 @@ export function resourceFromPath(pathname: string, search = ""): { ws: string; i
   if (head === "x" && tail.length === 1) return { ws, id: `exec:${dec(tail[0])}` };
   if (head === "p" && tail.length === 1) return { ws, id: `project:${dec(tail[0])}` };
   if (head === "f" && tail.length >= 2) return { ws, id: fileId(dec(tail[0]), tail.slice(1).map(dec).join("/")) };
+  if (head === "d" && tail.length === 1) {
+    const uri = new URLSearchParams(search).get("uri");
+    return uri ? { ws, id: depId(dec(tail[0]), uri) } : null;
+  }
   if (head === "artifact" && tail.length === 0) {
     const path = new URLSearchParams(search).get("path");
     return path ? { ws, id: `artifact:${path}` } : null;

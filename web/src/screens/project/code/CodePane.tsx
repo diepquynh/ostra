@@ -4,7 +4,7 @@ import type { CodeFile, CodeLocation, CodeSymbol, SymbolKind } from "../../../ap
 import { Banner, Button, Icon, type IconName, Input, Spinner, type TabItem, Tabs } from "../../../design";
 import { useAsync } from "../../../lib/hooks";
 import { useNav, useShell } from "../../../lib/nav";
-import { fileId } from "../../../lib/resource";
+import { depId, fileId } from "../../../lib/resource";
 import type { SymbolRef } from "./SourceView";
 
 type PaneTab = "outline" | "usages" | "deps";
@@ -258,7 +258,8 @@ function byFile(locs: CodeLocation[]): [string, CodeLocation[]][] {
 
 function useOpenLocation(projectKey: string, path: string, onGoto: (line: number) => void, symbol?: SymbolRef | null) {
   const nav = useNav();
-  return (p: string, line: number, carry = symbol) => {
+  return (p: string, line: number, carry = symbol, uri?: string | null) => {
+    if (uri) return nav.open(depId(projectKey, uri), { anchor: `L${line}`, beside: true });
     if (p === path) return onGoto(line);
     if (carry) carrySymbol(projectKey, p, carry);
     nav.open(fileId(projectKey, p), { anchor: `L${line}`, beside: true });
@@ -272,7 +273,7 @@ function LocationList({
 }: {
   title: string;
   locs: CodeLocation[];
-  open: (path: string, line: number) => void;
+  open: (path: string, line: number, carry?: SymbolRef | null, uri?: string | null) => void;
 }) {
   if (locs.length === 0) return null;
   return (
@@ -290,7 +291,7 @@ function LocationList({
               key={i}
               type="button"
               style={rowStyle}
-              onClick={() => open(l.path, l.line)}
+              onClick={() => open(l.path, l.line, undefined, l.uri)}
               title={`${l.path}:${l.line}`}
             >
               <span
@@ -387,8 +388,8 @@ function Usages({
                     col: l.col,
                   };
                   setQuery("");
-                  if (l.path === path) onSelect(sym);
-                  open(l.path, l.line, sym);
+                  if (l.path === path && !l.uri) onSelect(sym);
+                  open(l.path, l.line, sym, l.uri);
                 }}
               >
                 {l.kind && (
@@ -592,7 +593,7 @@ function Deps({
               key={i}
               type="button"
               style={rowStyle}
-              onClick={() => open(l.path, l.line)}
+              onClick={() => open(l.path, l.line, undefined, l.uri)}
               title={`${l.path}:${l.line}`}
             >
               <span

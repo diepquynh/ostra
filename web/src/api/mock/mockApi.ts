@@ -564,6 +564,10 @@ export const mockApi: Api = {
   codeFile: (_ws, key, path) => attempt(() => mockCodeFile(key, path)),
   codeUsages: (_ws, key, symbol, at = {}) => attempt(() => mockCodeUsages(key, symbol, at.path)),
   codeDeps: (_ws, key, path) => attempt(() => mockCodeDeps(key, path)),
+  codeExternal: () =>
+    attempt(() => {
+      throw new Error("The mock project has no language server, so it has no dependency files.");
+    }),
   codeSymbols: (_ws, key, query, limit = 50) => attempt(() => mockCodeSymbols(key, query, limit)),
   codeGraph: (_ws, key, at = {}) => attempt(() => mockCodeGraph(key, at)),
   codeReindex: (_ws, key) =>

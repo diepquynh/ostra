@@ -2,7 +2,7 @@ import type { TreeSession } from "../api/nav";
 import type { SessionStatus } from "../api/types";
 import type { Crumb, IconName } from "../design";
 import { basename, humanize, truncate } from "../lib/format";
-import { parseResource } from "../lib/resource";
+import { depName, parseResource } from "../lib/resource";
 
 /** A crumb whose `to` is a resource id. */
 export type ResourceCrumb = Crumb & { to?: string };
@@ -47,6 +47,15 @@ export function resourceMeta(id: string, ctx: MetaContext): ResourceMeta {
         title: `${r.key}/${r.path}`,
         crumbs: [ws, { label: r.key, to: `project:${r.key}` }, ...r.path.split("/").map((label) => ({ label }))],
       };
+    case "dep": {
+      const label = depName(r.uri);
+      return {
+        label,
+        icon: "package",
+        title: r.uri,
+        crumbs: [ws, { label: r.key, to: `project:${r.key}` }, { label: "Dependencies" }, { label }],
+      };
+    }
     case "session": {
       const s = ctx.sessions.find((x) => x.id === r.id);
       const label = s ? sessionLabel(s) : "Session";

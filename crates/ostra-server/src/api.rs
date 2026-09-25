@@ -12,7 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use ostra_code::Answer;
 use ostra_core::api::*;
-use ostra_core::code::{CodeDeps, CodeFile, CodeSymbols, CodeUsages};
+use ostra_core::code::{CodeDeps, CodeExternalFile, CodeFile, CodeSymbols, CodeUsages};
 use ostra_core::config::{ValidationIssue, WorkspaceSettings};
 use ostra_core::event::StoredEvent;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
@@ -356,6 +356,10 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route(
             "/api/workspaces/{ws}/projects/{key}/code/deps",
             get(code_deps),
+        )
+        .route(
+            "/api/workspaces/{ws}/projects/{key}/code/external",
+            get(code_external),
         )
         .route(
             "/api/workspaces/{ws}/projects/{key}/code/symbols",
@@ -1419,6 +1423,8 @@ struct CodePathQuery {
 struct CodeUsagesQuery {
     symbol: String,
     path: Option<String>,
+    /// An outside file a language server pointed at, instead of `path`.
+    uri: Option<String>,
     line: Option<u32>,
     col: Option<u32>,
     limit: Option<u32>,
@@ -1468,6 +1474,20 @@ async fn code_usages(
     Path((id, key)): Path<(String, String)>,
     Query(q): Query<CodeUsagesQuery>,
 ) -> Res<CodeUsages> {
+    if let Some(uri) = q.uri.filter(|u| !u.is_empty()) {
+        let line = q.line.filter(|&l| l > 0).ok_or_else(|| {
+            ApiErr::new(
+                StatusCode::BAD_REQUEST,
+                "Name the 1-based line of the symbol in the dependency file.",
+            )
+        })?;
+        let w = ws(&app, &id)?;
+        let u = app
+            .code
+            .external_usages(&w, &key, &uri, q.symbol.trim(), (line, q.col), q.limit)
+            .await?;
+        return Ok(Json(u));
+    }
     let ask = crate::code::Ask::Usages {
         symbol: q.symbol,
         path: q.path,
@@ -1479,6 +1499,20 @@ async fn code_usages(
         Answer::Usages(u) => Ok(Json(u)),
         _ => Err(wrong_answer()),
     }
+}
+
+#[derive(Deserialize)]
+struct CodeExternalQuery {
+    uri: String,
+}
+
+async fn code_external(
+    State(app): AppState,
+    Path((id, key)): Path<(String, String)>,
+    Query(q): Query<CodeExternalQuery>,
+) -> Res<CodeExternalFile> {
+    let w = ws(&app, &id)?;
+    Ok(Json(app.code.external_file(&w, &key, &q.uri).await?))
 }
 
 async fn code_deps(

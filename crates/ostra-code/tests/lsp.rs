@@ -101,7 +101,16 @@ async fn fake_server(root: PathBuf, io: tokio::io::DuplexStream, log: Log) {
                 {"name": "helper", "kind": 12, "range": range(0, 0, 14), "selectionRange": range(0, 3, 6)},
                 {"name": "main", "kind": 12, "range": range(1, 0, 23), "selectionRange": range(1, 3, 4)},
             ]),
+            // From b.rs, `helper` is defined in a library source outside the project and in a class
+            // inside a jar; from anywhere else, in a.rs.
+            "textDocument/definition" if msg["params"]["textDocument"]["uri"] == uri("b.rs") => {
+                json!([
+                    {"uri": url::Url::from_file_path(dep_dir(&root).join("lib.rs")).unwrap().to_string(), "range": range(0, 7, 6)},
+                    {"uri": JAR_CLASS, "range": range(2, 7, 6)},
+                ])
+            }
             "textDocument/definition" => json!([{"uri": uri("a.rs"), "range": range(0, 3, 6)}]),
+            "java/classFileContents" if msg["params"]["uri"] == JAR_CLASS => json!(CLASS_TEXT),
             "textDocument/references" => json!([
                 {"uri": uri("b.rs"), "range": range(1, 9, 6)},
                 {"uri": uri("a.rs"), "range": range(1, 12, 6)},
@@ -121,6 +130,14 @@ async fn fake_server(root: PathBuf, io: tokio::io::DuplexStream, log: Log) {
             return;
         }
     }
+}
+
+const JAR_CLASS: &str = "jdt://contents/lib.jar/com.acme/Thing.class?=p";
+const CLASS_TEXT: &str = "package com.acme;\npublic class Thing {\n  void helper() {}\n}\n";
+
+/// A folder beside the project, standing in for a package cache.
+fn dep_dir(root: &Path) -> PathBuf {
+    root.with_extension("dep")
 }
 
 struct Rig {
@@ -757,4 +774,153 @@ async fn navigation_asks_implementations_and_the_type_hierarchy() {
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn definitions_outside_the_project_are_kept_and_read_back() {
+    let r = rig();
+    let dep = dep_dir(r.dir.path());
+    std::fs::create_dir_all(&dep).unwrap();
+    std::fs::write(dep.join("lib.rs"), "pub fn helper() {}\n").unwrap();
+    let req = ProviderRequest::Usages {
+        version: PROTOCOL_VERSION,
+        root: root(&r),
+        symbol: "helper".into(),
+        path: Some("b.rs".into()),
+        line: Some(2),
+        col: Some(9),
+        limit: 100,
+    };
+    let Answer::Usages(u) = ask(&r.chain(), &req).await.unwrap() else {
+        panic!()
+    };
+    let lib_uri = url::Url::from_file_path(dep.join("lib.rs"))
+        .unwrap()
+        .to_string();
+    let defs: Vec<_> = u
+        .definitions
+        .iter()
+        .map(|l| {
+            (
+                l.uri.as_deref(),
+                l.path.as_str(),
+                l.line,
+                l.preview.as_str(),
+            )
+        })
+        .collect();
+    let lib_path = dep.join("lib.rs").to_string_lossy().into_owned();
+    assert_eq!(
+        defs,
+        vec![
+            (
+                Some(lib_uri.as_str()),
+                lib_path.as_str(),
+                1,
+                "pub fn helper() {}"
+            ),
+            (Some(JAR_CLASS), "lib.jar › com/acme/Thing.class", 3, ""),
+        ]
+    );
+    let lsp = r.lsp();
+    assert_eq!(
+        r.pool.external_server(&"p".to_string(), JAR_CLASS),
+        Some(vec!["/usr/bin/fake-ls".to_string()])
+    );
+    assert_eq!(
+        r.pool
+            .external_server(&"p".to_string(), "file:///etc/passwd"),
+        None
+    );
+
+    let class = lsp.external_file(JAR_CLASS).await.unwrap();
+    assert_eq!(
+        (class.name.as_str(), class.language.as_deref()),
+        ("Thing.class", Some("java"))
+    );
+    assert_eq!(class.content, CLASS_TEXT);
+    let lib = lsp.external_file(&lib_uri).await.unwrap();
+    assert_eq!(
+        (lib.content.as_str(), lib.language.as_deref()),
+        ("pub fn helper() {}\n", Some("rust"))
+    );
+
+    // A name in the class resolves through the server, which gets the class text opened first.
+    let inner = lsp
+        .external_usages(JAR_CLASS, "helper", 3, Some(9), 100)
+        .await
+        .unwrap();
+    let at: Vec<_> = inner
+        .definitions
+        .iter()
+        .map(|l| (l.uri.as_deref(), l.path.as_str(), l.line))
+        .collect();
+    assert_eq!(at, vec![(None, "a.rs", 1)]);
+    let opened = r.params("textDocument/didOpen");
+    let doc = opened
+        .iter()
+        .find(|p| p["textDocument"]["uri"] == JAR_CLASS)
+        .unwrap();
+    assert_eq!(doc["textDocument"]["languageId"], "java");
+    assert_eq!(doc["textDocument"]["text"], CLASS_TEXT);
+    let def = r.params("textDocument/definition").pop().unwrap();
+    assert_eq!(def["position"], json!({"line": 2, "character": 7}));
+    let _ = std::fs::remove_dir_all(dep);
+}
+
+#[tokio::test]
+#[ignore = "needs gopls on PATH"]
+async fn live_gopls_into_the_standard_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("go.mod"), "module example.com/demo\n\ngo 1.21\n").unwrap();
+    let main = "package main\n\nimport \"strings\"\n\nfunc main() { _ = strings.ToUpper(\"x\") }\n";
+    std::fs::write(root.join("main.go"), main).unwrap();
+    let lsp = LspProvider {
+        pool: LspPool::default(),
+        key: 0u8,
+        root: root.to_path_buf(),
+        config: LanguageServerConfig {
+            command: vec!["gopls".into()],
+            languages: vec!["go".into()],
+            timeout_secs: 60,
+            initialization_options: None,
+        },
+        base: Arc::new(ostra_code::provider::Unanswered),
+    };
+    let req = ProviderRequest::Usages {
+        version: PROTOCOL_VERSION,
+        root: root.to_string_lossy().into_owned(),
+        symbol: "ToUpper".into(),
+        path: Some("main.go".into()),
+        line: Some(5),
+        col: Some(27),
+        limit: 50,
+    };
+    let mut found = None;
+    for _ in 0..60 {
+        if let Ok(Some(Answer::Usages(u))) = lsp.answer(&req).await
+            && !u.definitions.is_empty()
+        {
+            found = Some(u);
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let u = found.expect("gopls found the definition");
+    let def = &u.definitions[0];
+    let uri = def.uri.clone().expect("the definition is outside the project");
+    assert!(def.path.ends_with("strings/strings.go"), "{def:?}");
+    let file = lsp.external_file(&uri).await.unwrap();
+    assert_eq!(file.language.as_deref(), Some("go"));
+    let line = file.content.lines().nth(def.line as usize - 1).unwrap();
+    assert!(line.contains("func ToUpper"), "{line}");
+    // From the library's own definition, the project's call is a reference.
+    let back = lsp
+        .external_usages(&uri, "ToUpper", def.line, Some(def.col), 50)
+        .await
+        .unwrap();
+    let refs: Vec<_> = back.references.iter().map(|r| (r.path.as_str(), r.line)).collect();
+    assert_eq!(refs, vec![("main.go", 5)], "{back:?}");
+    lsp.pool.forget(&0u8);
 }

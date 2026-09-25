@@ -1,4 +1,5 @@
 import type { CodeDeps } from "./gen/CodeDeps";
+import type { CodeExternalFile } from "./gen/CodeExternalFile";
 import type { CodeFile } from "./gen/CodeFile";
 import type { CodeGraph } from "./gen/CodeGraph";
 import type { CodeReindex } from "./gen/CodeReindex";
@@ -254,8 +255,12 @@ export const httpApi = {
     ws: string,
     key: string,
     symbol: string,
-    at: { path?: string; line?: number; col?: number; limit?: number } = {},
+    /** `uri` asks at a position in a dependency file instead of the project file `path`. */
+    at: { path?: string; uri?: string; line?: number; col?: number; limit?: number } = {},
   ) => request<CodeUsages>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/usages${q({ symbol, ...at })}`),
+  /** A read-only dependency file a language server pointed at. */
+  codeExternal: (ws: string, key: string, uri: string) =>
+    request<CodeExternalFile>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/external${q({ uri })}`),
   codeDeps: (ws: string, key: string, path: string) =>
     request<CodeDeps>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/deps${q({ path })}`),
   codeSymbols: (ws: string, key: string, query: string, limit = 50) =>
