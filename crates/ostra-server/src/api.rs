@@ -1496,6 +1496,8 @@ async fn code_deps(
 struct CodeGraphQuery {
     package: Option<String>,
     path: Option<String>,
+    symbol: Option<String>,
+    line: Option<u32>,
     depth: Option<u32>,
 }
 
@@ -1511,9 +1513,17 @@ async fn code_graph(
                 "Give either package or path, not both.",
             ));
         }
-        (Some(path), None) => crate::code::GraphAsk::File {
-            path,
-            depth: q.depth.unwrap_or(1),
+        (Some(path), None) => match q.symbol.filter(|s| !s.is_empty()) {
+            Some(symbol) => crate::code::GraphAsk::Symbol {
+                path,
+                symbol,
+                line: q.line,
+                depth: q.depth.unwrap_or(1),
+            },
+            None => crate::code::GraphAsk::File {
+                path,
+                depth: q.depth.unwrap_or(1),
+            },
         },
         // `.` names the package at the project top, whose folder is the empty string.
         (None, Some(package)) => crate::code::GraphAsk::Package(if package == "." {

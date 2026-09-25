@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CodeGraph, CodeGraphNode } from "../../api/types";
-import { mockCodeGraph } from "../../api/mock/mockCode";
-import { layout } from "./DependencyGraph";
+import { mockCodeGraph, mockCodeSymbols } from "../../api/mock/mockCode";
+import { kindStyle, layout, matchFiles } from "./DependencyGraph";
 
 const node = (id: string, column: number): CodeGraphNode => ({
   id,
@@ -42,6 +42,18 @@ describe("dependency graph layout", () => {
     expect(y("b2") < y("b1")).toBe(y("a1") < y("a2"));
   });
 
+  it("wraps a tall column into lanes", () => {
+    const many = Array.from({ length: 25 }, (_, i) => node(`d${i}`, 1));
+    const g = graph([node("c", 0), ...many], many.map((n) => ["c", n.id] as [string, string]));
+    const p = layout(g);
+    const xs = new Set(p.nodes.filter((n) => n.column === 1).map((n) => n.x));
+    expect(xs.size).toBe(3);
+    const c = p.nodes.find((n) => n.id === "c")!;
+    expect(Math.min(...xs)).toBeGreaterThan(c.x);
+    expect(p.width).toBeGreaterThan(Math.max(...xs));
+    expect(p.columns.map((k) => k.column)).toEqual([0, 1]);
+  });
+
   it("centers a short column against the tallest one", () => {
     const g = graph([node("a", 0), node("b", 0), node("c", 0), node("d", 1)], [["a", "d"]]);
     const p = layout(g).nodes;
@@ -74,5 +86,32 @@ describe("mock dependency graph", () => {
     const around = mockCodeGraph("backend", { path: file.id, depth: 2 });
     expect(around.nodes.find((n) => n.id === file.id)!.column).toBe(0);
     closed(around);
+  });
+
+  it("answers a symbol view centered on the definition", () => {
+    const def = mockCodeSymbols("backend", "pay", 5).items.find((s) => s.name === "pay")!;
+    const g = mockCodeGraph("backend", { path: def.path, symbol: def.name, line: def.line });
+    expect(g.view).toBe("symbol");
+    const focus = g.nodes.find((n) => n.id === g.focus)!;
+    expect(focus.column).toBe(0);
+    expect(focus.symbol?.name).toBe("pay");
+    closed(g);
+  });
+});
+
+describe("graph search", () => {
+  it("matches files by every word, basename first", () => {
+    const paths = ["src/api/plan.rs", "src/plan/mod.rs", "docs/planning.md", "src/runner.rs"];
+    expect(matchFiles(paths, "plan", 10)).toEqual(["src/api/plan.rs", "docs/planning.md", "src/plan/mod.rs"]);
+    expect(matchFiles(paths, "src plan", 10)).toEqual(["src/api/plan.rs", "src/plan/mod.rs"]);
+    expect(matchFiles(paths, "  ", 10)).toEqual([]);
+  });
+
+  it("colors functions and types apart", () => {
+    const fn = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "f", kind: "function", line: 1 } });
+    const ty = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "T", kind: "class", line: 1 } });
+    expect(fn.icon).toBe("square-function");
+    expect(ty.icon).toBe("shapes");
+    expect(kindStyle({ kind: "package" }).icon).toBe("box");
   });
 });

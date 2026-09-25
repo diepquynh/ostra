@@ -235,8 +235,8 @@ export const httpApi = {
   codeDeps: (ws: string, key: string, path: string) => request<CodeDeps>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/deps${q({ path })}`),
   codeSymbols: (ws: string, key: string, query: string, limit = 50) =>
     request<CodeSymbols>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/symbols${q({ q: query, limit })}`),
-  /** No argument: the package view. `package`: one package's files. `path`: one file's neighborhood. */
-  codeGraph: (ws: string, key: string, at: { package?: string; path?: string; depth?: number } = {}) =>
+  /** No argument: the package view. `package`: one package's files. `path`: one file's neighborhood. `path` and `symbol`: one definition's calls. */
+  codeGraph: (ws: string, key: string, at: { package?: string; path?: string; symbol?: string; line?: number; depth?: number } = {}) =>
     request<CodeGraph>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/graph${q(at)}`),
   codeReindex: (ws: string, key: string) => request<CodeReindex>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/reindex`),
 

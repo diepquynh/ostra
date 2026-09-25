@@ -13,6 +13,7 @@ export { Kbd, type KbdProps } from "./components/core/Kbd";
 
 export { Input, type InputProps } from "./components/forms/Input";
 export { Select, type SelectProps, type SelectOption } from "./components/forms/Select";
+export { Combobox, type ComboboxProps, type ComboItem } from "./components/forms/Combobox";
 export { Checkbox, type CheckboxProps } from "./components/forms/Checkbox";
 export { Switch, type SwitchProps } from "./components/forms/Switch";
 export { FolderPicker, splitPath, type FolderPickerProps, type FsEntry, type FolderListing, type FolderLister } from "./components/forms/FolderPicker";

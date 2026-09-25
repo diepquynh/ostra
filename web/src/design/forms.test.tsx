@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Checkbox, FolderPicker, Input, splitPath, Switch, type FolderLister, type FsEntry } from "./index";
+import { Checkbox, Combobox, FolderPicker, Input, splitPath, Switch, type FolderLister, type FsEntry } from "./index";
 
 afterEach(cleanup);
 
@@ -230,5 +230,44 @@ describe("FolderPicker, with a list function", () => {
     cleanup();
     render(<FolderPicker value="/home/me/code/shop" list={list} mkdir={async () => undefined} debounceMs={0} />);
     expect((await screen.findByTitle(CREATE)).textContent).toBe("Create /home/me/code/shop");
+  });
+});
+
+describe("Combobox", () => {
+  const items = [
+    { id: "a", label: "alpha", group: "Symbols" },
+    { id: "b", label: "beta", group: "Files" },
+  ];
+  function Harness({ onSelect }: { onSelect: (id: string) => void }) {
+    const [q, setQ] = useState("");
+    return <Combobox label="Find" value={q} onChange={setQ} items={q ? items : []} onSelect={(it) => onSelect(it.id)} />;
+  }
+
+  it("opens on typing, moves with arrows, picks with Enter", () => {
+    const onSelect = vi.fn();
+    render(<Harness onSelect={onSelect} />);
+    const box = screen.getByRole("combobox", { name: "Find" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    fireEvent.change(box, { target: { value: "a" } });
+    expect(screen.getByRole("listbox")).toBeTruthy();
+    expect(screen.getByText("Symbols")).toBeTruthy();
+    expect(screen.getAllByRole("option")[0].getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(box.getAttribute("aria-activedescendant")).toBe(screen.getAllByRole("option")[1].id);
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(onSelect).toHaveBeenLastCalledWith("b");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("closes on Escape and picks on click", () => {
+    const onSelect = vi.fn();
+    render(<Harness onSelect={onSelect} />);
+    const box = screen.getByRole("combobox", { name: "Find" });
+    fireEvent.change(box, { target: { value: "x" } });
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    fireEvent.click(screen.getByText("alpha"));
+    expect(onSelect).toHaveBeenLastCalledWith("a");
   });
 });

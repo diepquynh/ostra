@@ -3,4 +3,4 @@
 /**
  * Which slice of the dependency graph a [`CodeGraph`] shows.
  */
-export type CodeGraphView = "packages" | "package" | "file";
+export type CodeGraphView = "packages" | "package" | "file" | "symbol";

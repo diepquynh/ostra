@@ -4,7 +4,7 @@ import type { CodeGraphNode } from "./CodeGraphNode";
 import type { CodeGraphView } from "./CodeGraphView";
 
 /**
- * `GET .../code/graph?package=&path=&depth=`: one view of the project's dependency graph.
+ * `GET .../code/graph?package=&path=&symbol=&line=&depth=`: one view of the project's dependency graph.
  */
 export type CodeGraph = { view: CodeGraphView, 
 /**

@@ -236,6 +236,8 @@ pub enum CodeGraphView {
     Package,
     /// One file and the files within a few hops of it.
     File,
+    /// One definition, what references it to the left, and what it calls or names to the right.
+    Symbol,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -244,12 +246,28 @@ pub enum CodeGraphView {
 pub enum CodeGraphNodeKind {
     Package,
     File,
+    /// A function, method, type, or other definition.
+    Symbol,
+}
+
+/// The definition a symbol node stands for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeGraphSymbol {
+    pub path: String,
+    pub name: String,
+    pub kind: SymbolKind,
+    /// 1-based line of the definition.
+    pub line: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CodeGraphNode {
-    /// A project-relative file path, or `package:<folder>` for a package.
+    /// A project-relative file path, `package:<folder>` for a package, or
+    /// `symbol:<path>:<line>:<name>` for a definition.
     pub id: String,
     pub kind: CodeGraphNodeKind,
     pub label: String,
@@ -260,10 +278,15 @@ pub struct CodeGraphNode {
     /// Files in a package; 1 for a file.
     pub files: u32,
     pub test: bool,
-    /// Files (or packages) that use this one, across the whole project.
+    /// Files (or packages) that use this one, across the whole project. For a symbol view, the
+    /// links into the node that the view shows.
     pub dependents: u32,
-    /// Files (or packages) this one uses, across the whole project.
+    /// Files (or packages) this one uses, across the whole project. For a symbol view, the links
+    /// out of the node that the view shows.
     pub dependencies: u32,
+    /// Set on symbol nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<CodeGraphSymbol>,
 }
 
 /// `from` uses `to`.
@@ -282,7 +305,7 @@ pub struct CodeGraphEdge {
     pub import: bool,
 }
 
-/// `GET .../code/graph?package=&path=&depth=`: one view of the project's dependency graph.
+/// `GET .../code/graph?package=&path=&symbol=&line=&depth=`: one view of the project's dependency graph.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CodeGraph {

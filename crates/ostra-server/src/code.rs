@@ -192,7 +192,16 @@ impl Code {
 pub enum GraphAsk {
     Packages,
     Package(String),
-    File { path: String, depth: u32 },
+    File {
+        path: String,
+        depth: u32,
+    },
+    Symbol {
+        path: String,
+        symbol: String,
+        line: Option<u32>,
+        depth: u32,
+    },
 }
 
 pub const MAX_GRAPH_DEPTH: u32 = 3;
@@ -221,6 +230,26 @@ impl Code {
                     depth: depth.clamp(1, MAX_GRAPH_DEPTH),
                 }
             }
+            GraphAsk::Symbol {
+                path,
+                symbol,
+                line,
+                depth,
+            } => {
+                let c = files::contain(&root, &path)?;
+                if c.rel.is_empty() || c.real.is_dir() {
+                    return Err(ApiErr::new(
+                        StatusCode::BAD_REQUEST,
+                        "Name the file that defines the symbol with path.",
+                    ));
+                }
+                GraphAsk::Symbol {
+                    path: c.rel,
+                    symbol,
+                    line,
+                    depth: depth.clamp(1, MAX_GRAPH_DEPTH),
+                }
+            }
             other => other,
         };
         let list = app.files.index(w, key).await?;
@@ -232,6 +261,12 @@ impl Code {
                 GraphAsk::Packages => Some(ix.packages_view()),
                 GraphAsk::Package(unit) => ix.package_view(&unit),
                 GraphAsk::File { path, depth } => ix.file_view(&path, depth),
+                GraphAsk::Symbol {
+                    path,
+                    symbol,
+                    line,
+                    depth,
+                } => ix.symbol_view(&path, &symbol, line, depth),
             })
         })
         .await
@@ -244,7 +279,7 @@ impl Code {
         answer.ok_or_else(|| {
             ApiErr::new(
                 StatusCode::NOT_FOUND,
-                "That package or file is not in the code index. The index leaves out ignored files, files over 1 MB, and languages it does not parse.",
+                "That package, file, or symbol is not in the code index. The index leaves out ignored files, files over 1 MB, and languages it does not parse.",
             )
         })
     }

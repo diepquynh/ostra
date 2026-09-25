@@ -330,7 +330,52 @@ fn graph_views_for_the_ui() {
                     && e.names.iter().any(|n| n == "PlanCtx"))
         );
 
+        let s = ix
+            .symbol_view("crates/ostra-engine/src/plan.rs", "next_steps", None, 1)
+            .unwrap();
+        closed(&s);
+        assert_eq!(s.view, ostra_core::code::CodeGraphView::Symbol);
+        let focus = s.nodes.iter().find(|n| n.id == s.focus).unwrap();
+        assert_eq!(focus.column, 0);
+        assert_eq!(focus.symbol.as_ref().unwrap().name, "next_steps");
+        let caller = s
+            .nodes
+            .iter()
+            .find(|n| {
+                n.symbol
+                    .as_ref()
+                    .is_some_and(|x| x.path == "crates/ostra-engine/src/runner.rs")
+            })
+            .expect("a runner function calls next_steps");
+        assert_eq!(caller.column, -1);
+        assert!(
+            s.edges
+                .iter()
+                .any(|e| e.from == caller.id && e.to == s.focus)
+        );
+
+        let fold = ix
+            .symbol_view("crates/ostra-engine/src/state.rs", "fold", None, 1)
+            .unwrap();
+        closed(&fold);
+        let apply = fold
+            .nodes
+            .iter()
+            .find(|n| n.symbol.as_ref().is_some_and(|x| x.name == "apply"))
+            .expect("fold calls apply");
+        assert_eq!(apply.column, 1);
+        assert!(
+            fold.edges
+                .iter()
+                .any(|e| e.from == fold.focus && e.to == apply.id)
+        );
+
+        assert!(
+            ix.symbol_view("crates/ostra-engine/src/plan.rs", "nope", None, 1)
+                .is_none()
+        );
         assert!(ix.file_view("nope.rs", 1).is_none());
         assert!(ix.package_view("nope").is_none());
     });
 }
+

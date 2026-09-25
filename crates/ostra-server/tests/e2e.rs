@@ -1066,6 +1066,25 @@ async fn yolo_implement_session_end_to_end() {
             .iter()
             .any(|e| e.from == "src/lib.rs" && e.to == "src/greet.rs")
     );
+    let sym: ostra_core::code::CodeGraph = graph(&[
+        ("path", "src/greet.rs"),
+        ("symbol", "hello"),
+        ("depth", "2"),
+    ])
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    assert_eq!(sym.view, ostra_core::code::CodeGraphView::Symbol);
+    assert_eq!(sym.focus, "symbol:src/greet.rs:1:hello");
+    assert_eq!(
+        graph(&[("path", "src/greet.rs"), ("symbol", "nope")])
+            .await
+            .unwrap()
+            .status(),
+        404
+    );
     assert_eq!(graph(&[("path", "nope.rs")]).await.unwrap().status(), 404);
     assert_eq!(graph(&[("path", "../x.rs")]).await.unwrap().status(), 403);
     assert_eq!(

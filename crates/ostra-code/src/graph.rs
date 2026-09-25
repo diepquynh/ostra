@@ -10,8 +10,8 @@ use crate::lex;
 use crate::outline::ImportStyle;
 use crate::resolve::parent;
 use ostra_core::code::{
-    CodeGraph, CodeGraphEdge, CodeGraphNode, CodeGraphNodeKind, CodeGraphView, CodeLocation,
-    SymbolKind,
+    CodeGraph, CodeGraphEdge, CodeGraphNode, CodeGraphNodeKind, CodeGraphSymbol, CodeGraphView,
+    CodeLocation, SymbolKind,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1512,6 +1512,7 @@ impl ProjectIndex {
             test: g.test[f as usize],
             dependents: self.steps(g, f, Direction::Dependents).len() as u32,
             dependencies: self.steps(g, f, Direction::Dependencies).len() as u32,
+            symbol: None,
         }
     }
 
@@ -1560,6 +1561,7 @@ impl ProjectIndex {
                 test: false,
                 dependents: u.used_by.len() as u32,
                 dependencies: u.depends_on.len() as u32,
+                symbol: None,
             })
             .collect();
         let edges = m
@@ -1657,6 +1659,7 @@ impl ProjectIndex {
                 test: false,
                 dependents,
                 dependencies,
+                symbol: None,
             });
         }
         for (&(f, tu), &n) in &out_links {
@@ -1757,6 +1760,233 @@ impl ProjectIndex {
         Some(CodeGraph {
             view: CodeGraphView::File,
             focus: path.to_string(),
+            nodes,
+            edges,
+            indexed_files: self.files() as u32,
+            truncated,
+        })
+    }
+}
+
+/// Callees a symbol view reads per definition.
+const MAX_VIEW_CALLEES: usize = 200;
+/// Stands for the top level of a file in a symbol view key.
+const TOP: u32 = u32::MAX;
+
+/// A definition in a symbol view: (file, index into its defs), or (file, [`TOP`]).
+type DefKey = (u32, u32);
+
+/// Definitions a symbol view follows out of a body: what can be called or named as a type.
+/// Fields, variables, and constants would crowd out the calls.
+fn view_kind(k: SymbolKind) -> bool {
+    matches!(
+        k,
+        SymbolKind::Function
+            | SymbolKind::Method
+            | SymbolKind::Macro
+            | SymbolKind::Class
+            | SymbolKind::Enum
+            | SymbolKind::Interface
+            | SymbolKind::Type
+    )
+}
+
+impl ProjectIndex {
+    fn def_at(&self, f: u32, line: u32, name: &str) -> Option<u32> {
+        let &n = self.names.get(name)?;
+        self.entries[f as usize]
+            .defs
+            .iter()
+            .position(|d| d.name == n && d.line == line)
+            .map(|i| i as u32)
+    }
+
+    /// One step of a symbol view from `(file, def)`: the definitions it names, or the definitions
+    /// (or file top levels) that name it, each with the number of lines that do.
+    fn call_steps(&mut self, (f, d): DefKey, dir: Direction) -> (Vec<(DefKey, u32)>, bool) {
+        if d == TOP {
+            return (vec![], false);
+        }
+        let e = &self.entries[f as usize];
+        let def = &e.defs[d as usize];
+        let (path, name, line) = (
+            e.path.clone(),
+            self.name_list[def.name as usize].to_string(),
+            def.line,
+        );
+        let mut out = vec![];
+        match dir {
+            Direction::Dependencies => {
+                let Some(c) = self.callees(&path, &name, Some(line), MAX_VIEW_CALLEES) else {
+                    return (out, false);
+                };
+                for l in c.uses {
+                    if !l.kind.is_some_and(view_kind) {
+                        continue;
+                    }
+                    let Some(&tf) = self.by_path.get(&l.path) else {
+                        continue;
+                    };
+                    if let Some(td) = self.def_at(tf, l.line, &l.name) {
+                        out.push(((tf, td), 1));
+                    }
+                }
+                (out, c.truncated)
+            }
+            Direction::Dependents => {
+                let c = self.callers(&name, Some(&path), MAX_CALLER_REFS);
+                for x in c.callers {
+                    if x.import {
+                        continue;
+                    }
+                    let Some(&cf) = self.by_path.get(&x.path) else {
+                        continue;
+                    };
+                    let key = match (&x.name, x.line) {
+                        (Some(n), Some(l)) => match self.def_at(cf, l, n) {
+                            Some(cd) => (cf, cd),
+                            None => continue,
+                        },
+                        _ => (cf, TOP),
+                    };
+                    out.push((key, x.lines.len().max(1) as u32));
+                }
+                (out, c.truncated)
+            }
+        }
+    }
+
+    /// `symbol` in `path` (the definition nearest `line`), what references it to the left and
+    /// what it calls or names to the right, one column per hop. A reference from the top level
+    /// of a file shows as that file. `None` when the index does not hold the definition.
+    pub fn symbol_view(
+        &mut self,
+        path: &str,
+        symbol: &str,
+        line: Option<u32>,
+        depth: u32,
+    ) -> Option<CodeGraph> {
+        self.ensure_graph();
+        let &f = self.by_path.get(path)?;
+        let &n = self.names.get(symbol)?;
+        let (d, _) = self.entries[f as usize]
+            .defs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.name == n)
+            .min_by_key(|(_, d)| line.map_or(0, |l| d.line.abs_diff(l)))?;
+        let focus = (f, d as u32);
+        let mut column: HashMap<DefKey, i32> = HashMap::from([(focus, 0)]);
+        let mut order = vec![focus];
+        let mut links: BTreeMap<(DefKey, DefKey), u32> = BTreeMap::new();
+        let mut truncated = false;
+        // Callees stop at half the nodes so the callers keep room.
+        for (dir, sign, cap) in [
+            (Direction::Dependencies, 1, MAX_VIEW_NEIGHBORS / 2),
+            (Direction::Dependents, -1, MAX_VIEW_NEIGHBORS),
+        ] {
+            let mut frontier = vec![focus];
+            for hop in 1..=depth as i32 {
+                let mut next = vec![];
+                for &a in &frontier {
+                    let (steps, cut) = self.call_steps(a, dir);
+                    truncated |= cut;
+                    for (b, w) in steps {
+                        if a == b {
+                            continue;
+                        }
+                        if let std::collections::hash_map::Entry::Vacant(slot) = column.entry(b) {
+                            if order.len() >= cap {
+                                truncated = true;
+                                continue;
+                            }
+                            slot.insert(sign * hop);
+                            order.push(b);
+                            next.push(b);
+                        }
+                        let k = if sign > 0 { (a, b) } else { (b, a) };
+                        let slot = links.entry(k).or_default();
+                        *slot = (*slot).max(w);
+                    }
+                }
+                frontier = next;
+            }
+        }
+        self.ensure_graph();
+        let g = self.graph_ref();
+        let id = |(f, d): DefKey| {
+            let e = &self.entries[f as usize];
+            if d == TOP {
+                e.path.clone()
+            } else {
+                let def = &e.defs[d as usize];
+                format!(
+                    "symbol:{}:{}:{}",
+                    e.path, def.line, self.name_list[def.name as usize]
+                )
+            }
+        };
+        let mut ins: HashMap<DefKey, u32> = HashMap::new();
+        let mut outs: HashMap<DefKey, u32> = HashMap::new();
+        for &(a, b) in links.keys() {
+            *outs.entry(a).or_default() += 1;
+            *ins.entry(b).or_default() += 1;
+        }
+        let nodes = order
+            .iter()
+            .map(|&k| {
+                let (f, d) = k;
+                let e = &self.entries[f as usize];
+                let file = e.path.rsplit('/').next().unwrap_or(&e.path).to_string();
+                let symbol = (d != TOP).then(|| {
+                    let def = &e.defs[d as usize];
+                    CodeGraphSymbol {
+                        path: e.path.clone(),
+                        name: self.name_list[def.name as usize].to_string(),
+                        kind: def.kind,
+                        line: def.line,
+                        container: def.container.as_deref().map(str::to_string),
+                    }
+                });
+                let label = match &symbol {
+                    None => file,
+                    Some(s) => match (&s.container, e.lang.family) {
+                        (Some(c), Family::Rust | Family::C) => format!("{c}::{}", s.name),
+                        (Some(c), _) => format!("{c}.{}", s.name),
+                        (None, _) => s.name.clone(),
+                    },
+                };
+                CodeGraphNode {
+                    id: id(k),
+                    kind: if d == TOP {
+                        CodeGraphNodeKind::File
+                    } else {
+                        CodeGraphNodeKind::Symbol
+                    },
+                    label,
+                    package: g.units[g.unit[f as usize] as usize].clone(),
+                    column: column[&k],
+                    files: 1,
+                    test: g.test[f as usize],
+                    dependents: ins.get(&k).copied().unwrap_or(0),
+                    dependencies: outs.get(&k).copied().unwrap_or(0),
+                    symbol,
+                }
+            })
+            .collect();
+        let edges = links
+            .iter()
+            .map(|(&(a, b), &w)| CodeGraphEdge {
+                from: id(a),
+                to: id(b),
+                weight: w,
+                names: vec![],
+                import: false,
+            })
+            .collect();
+        Some(CodeGraph {
+            view: CodeGraphView::Symbol,
+            focus: id(focus),
             nodes,
             edges,
             indexed_files: self.files() as u32,

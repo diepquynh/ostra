@@ -1,4 +1,10 @@
 import {
+  Scan,
+  Shapes,
+  SquareFunction,
+  Workflow,
+  ZoomIn,
+  ZoomOut,
   Activity,
   ArrowDown,
   ArrowLeft,
@@ -102,6 +108,12 @@ import {
  * these glyphs; add an entry here before using a new name.
  */
 export const ICONS = {
+  scan: Scan,
+  shapes: Shapes,
+  "square-function": SquareFunction,
+  workflow: Workflow,
+  "zoom-in": ZoomIn,
+  "zoom-out": ZoomOut,
   activity: Activity,
   "arrow-down": ArrowDown,
   "arrow-left": ArrowLeft,
