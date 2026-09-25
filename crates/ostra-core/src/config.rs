@@ -286,6 +286,95 @@ pub struct WorkspaceSettings {
     pub permissions: WorkspacePermissions,
     pub notifications: NotificationSettings,
     pub limits: Limits,
+    /// External MCP servers whose tools every executor can call (HANDOVER 10.6).
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+/// `[[mcp_servers]]`: one external MCP server. Set `command` for a local server Ostra starts
+/// over stdio, or `url` for a remote one over streamable HTTP. Values of `env` and `headers` may
+/// name the server's environment as `${VAR}`, so secrets stay out of this file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct McpServerConfig {
+    pub name: String,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Program and arguments of a local server, run in the workspace root.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub command: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[ts(as = "Option<BTreeMap<String, String>>", optional)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[ts(as = "Option<BTreeMap<String, String>>", optional)]
+    pub headers: BTreeMap<String, String>,
+    /// OAuth client settings for a remote server. Without them Ostra still signs in when the
+    /// server asks, registering itself as a client where the server allows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub oauth: Option<McpOAuthConfig>,
+    /// Tools not offered to agents. Every other tool the server lists is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub disabled_tools: Vec<String>,
+    /// Agents that get this server's tools. Empty means every agent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub agents: Vec<String>,
+    /// Seconds one tool call may take.
+    #[serde(default = "default_mcp_timeout")]
+    pub timeout_secs: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[serde(default)]
+#[ts(export)]
+pub struct McpOAuthConfig {
+    /// A client registered with the server's authorization server by hand.
+    #[ts(optional)]
+    pub client_id: Option<String>,
+    /// Environment variable holding that client's secret, for confidential clients.
+    #[ts(optional)]
+    pub client_secret_env: Option<String>,
+    /// Scopes to request. Empty means the scopes the server advertises.
+    pub scopes: Vec<String>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+fn default_mcp_timeout() -> u32 {
+    120
+}
+
+impl McpServerConfig {
+    pub fn remote(name: &str, url: &str) -> Self {
+        McpServerConfig {
+            name: name.into(),
+            enabled: true,
+            command: vec![],
+            env: BTreeMap::new(),
+            url: Some(url.into()),
+            headers: BTreeMap::new(),
+            oauth: None,
+            disabled_tools: vec![],
+            agents: vec![],
+            timeout_secs: default_mcp_timeout(),
+        }
+    }
+
+    pub fn local(name: &str, command: &[&str]) -> Self {
+        McpServerConfig {
+            url: None,
+            command: command.iter().map(|s| s.to_string()).collect(),
+            ..McpServerConfig::remote(name, "")
+        }
+    }
 }
 
 /// Spend and parallelism limits. They exist because a fan-out stage (init scouts, skill
@@ -553,6 +642,10 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "limits.session_budget_usd",
         "Dollars one session may spend before it pauses",
     ),
+    (
+        "mcp_servers",
+        "External MCP servers whose tools agents can use",
+    ),
 ];
 
 impl WorkspaceSettings {
@@ -600,6 +693,7 @@ impl WorkspaceSettings {
             permissions: WorkspacePermissions::default(),
             notifications: NotificationSettings::default(),
             limits: Limits::default(),
+            mcp_servers: vec![],
         }
     }
 
@@ -968,6 +1062,7 @@ pub fn validate_workspace(
             ));
         }
     }
+    crate::mcp::validate(&ws.mcp_servers, &mut issues);
     if ws.limits.max_parallel_executions == 0 {
         issues.push(issue(
             "limits.max_parallel_executions".into(),

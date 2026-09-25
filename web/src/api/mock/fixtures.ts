@@ -79,6 +79,24 @@ export const settings: WorkspaceSettings = {
   },
   notifications: { push: true },
   limits: { max_parallel_executions: 3, session_budget_usd: 25 },
+  mcp_servers: [
+    {
+      name: "github",
+      enabled: true,
+      url: "https://api.githubcopilot.com/mcp/",
+      headers: { Authorization: "Bearer ${GITHUB_TOKEN}" },
+      disabled_tools: ["delete_repository"],
+      timeout_secs: 120,
+    },
+    {
+      name: "docs",
+      enabled: true,
+      command: ["npx", "-y", "@upstash/context7-mcp"],
+      agents: ["explore", "generate-spec"],
+      timeout_secs: 120,
+    },
+    { name: "linear", enabled: true, url: "https://mcp.linear.app/mcp", timeout_secs: 120 },
+  ],
 };
 
 export const workspaces: WorkspaceSummary[] = [

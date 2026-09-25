@@ -43,6 +43,12 @@ const attempt = <T>(fn: () => T): Promise<T> => {
 };
 
 let settings = structuredClone(f.settings);
+const mcpSignedIn = new Set<string>();
+const mcpServer = (name: string) => {
+  const m = settings.mcp_servers.find((s) => s.name === name);
+  if (!m) throw new Error(`This workspace has no MCP server \`${name}\`.`);
+  return m;
+};
 let gitCreds: GitCredentialView[] = [];
 let gates: GateView[] = structuredClone(f.gates);
 let lessons = structuredClone(wf.lessonsByProject);
@@ -253,6 +259,22 @@ export const mockApi: Api = {
     return delay({ ...f.workspaceDetail, settings });
   },
   validateSettings: (_ws, next) => delay(wf.validate(next)),
+  mcpStatus: () =>
+    delay(
+      settings.mcp_servers.map((m) => wf.mockMcpStatus(m, mcpSignedIn)),
+      600,
+    ),
+  mcpRefresh: (_ws, name) => attempt(() => wf.mockMcpStatus(mcpServer(name), mcpSignedIn)),
+  mcpLogin: (_ws, name) => {
+    mcpServer(name);
+    // The mock authorization server signs in at once.
+    setTimeout(() => mcpSignedIn.add(name), 1500);
+    return delay({ authorization_url: "about:blank" });
+  },
+  mcpLogout: (_ws, name) => {
+    mcpSignedIn.delete(name);
+    return attempt(() => wf.mockMcpStatus(mcpServer(name), mcpSignedIn));
+  },
   importProject: (_ws, body) => {
     const issues = mockValidateImport(body, f.workspaceDetail.projects);
     if (issues.length) {

@@ -77,6 +77,8 @@ pub struct Shared {
     pub native: Arc<NativeExecutor>,
     pub harness: crate::bridge::HarnessRuntime,
     pub notifier: Arc<Notifier>,
+    /// Connections to each workspace's external MCP servers.
+    pub mcp: Arc<crate::mcp::McpGateway>,
     pub env: RwLock<EnvStatus>,
     pub exe: PathBuf,
     pub port: u16,
@@ -246,6 +248,7 @@ impl App {
         }
         self.shared.registry.remove_workspace(id)?;
         self.nav.forget(id);
+        self.shared.mcp.forget(&record.root);
         let _ = self.push.send(Pushed {
             channels: vec![format!("workspace:{id}"), "home".into()],
             msg: ServerMsg::WorkspaceUpdated {
@@ -337,11 +340,13 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     ));
     let code_tools = Arc::new(crate::code::CodeTools::default());
     let code_nav: Arc<dyn ostra_tools::CodeNav> = code_tools.clone();
-    let native = Arc::new(NativeExecutor::new(
-        providers.clone(),
-        skill_resolver(),
-        Some(code_nav.clone()),
-    ));
+    let mcp = crate::mcp::McpGateway::new(registry.clone());
+    let mcp_connector: Arc<dyn ostra_tools::McpConnector> =
+        Arc::new(crate::mcp::Connector(mcp.clone()));
+    let native = Arc::new(
+        NativeExecutor::new(providers.clone(), skill_resolver(), Some(code_nav.clone()))
+            .with_mcp(mcp_connector.clone()),
+    );
     let notifier = Arc::new(Notifier::new(
         vapid_keys(&registry)?,
         "mailto:ostra@localhost".into(),
@@ -358,6 +363,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     let (touches, touch_rx) = tokio::sync::mpsc::unbounded_channel();
     harness.set_write_sink(touches.clone());
     harness.set_code_nav(code_nav);
+    harness.set_mcp(mcp_connector);
     let shared = Arc::new(Shared {
         global_path,
         global_cache: RwLock::new(global),
@@ -366,6 +372,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         native,
         harness,
         notifier,
+        mcp,
         env: RwLock::new(env),
         exe: opts.exe.clone(),
         port,

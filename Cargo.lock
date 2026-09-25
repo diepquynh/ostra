@@ -2404,6 +2404,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "ostra-mcp"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.23.1",
+ "eventsource-stream",
+ "futures",
+ "libc",
+ "parking_lot",
+ "rand 0.10.3",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "ostra-notify"
 version = "0.1.0"
 dependencies = [
@@ -2485,6 +2509,7 @@ dependencies = [
  "ostra-engine",
  "ostra-exec-harness",
  "ostra-exec-native",
+ "ostra-mcp",
  "ostra-notify",
  "ostra-policy",
  "ostra-providers",

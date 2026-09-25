@@ -11,11 +11,14 @@ use ostra_core::policy::{PolicyDecision, RuleRef, ToolCall, ToolOutcome};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-/// Project commands the build streak counts, from `project.toml`.
+/// Facts from outside the execution context: the project commands the build streak counts, from
+/// `project.toml`, and the workspace MCP tools their servers mark read-only.
 #[derive(Debug, Clone, Default)]
 pub struct PolicyInputs {
     pub build_commands: Vec<String>,
     pub test_commands: Vec<String>,
+    /// Canonical names (`mcp__<server>__<tool>`).
+    pub read_only_mcp_tools: Vec<String>,
 }
 
 /// Something the caller must do after a tool call.
@@ -459,9 +462,16 @@ impl ExecutionPolicy {
                 ) || ostra_core::agent::is_code_tool(tool)
                     || tool.starts_with("submit_")
                     || harness_internal;
+                // Rule M1: a workspace MCP server's tools are allowed unless a rule says
+                // otherwise. Plan mode allows only those the server marks read-only.
+                let mcp = ostra_core::mcp::is_gateway_tool(tool);
+                let read_only = self.inputs.read_only_mcp_tools.iter().any(|t| t == tool);
                 match self.rule_decision(&subject, &session_allow) {
                     Some(d) => d,
-                    None if known => PolicyDecision::allow(),
+                    None if mcp && mode == PermissionMode::Plan && !read_only => {
+                        self.mode_default(&subject, mode)
+                    }
+                    None if known || mcp => PolicyDecision::allow(),
                     None => self.mode_default(&subject, mode),
                 }
             }

@@ -17,7 +17,7 @@ use ostra_providers::{
     ServerTools, StopReason, StreamEvent, SystemBlock, ToolChoice, ToolDef,
 };
 use ostra_store::MemoryStore;
-use ostra_tools::{CodeNav, SkillResolver, ToolEnv, ToolEnvConfig};
+use ostra_tools::{CodeNav, McpConnector, SkillResolver, ToolEnv, ToolEnvConfig};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::sync::Arc;
@@ -41,6 +41,7 @@ pub struct NativeExecutor {
     providers: Arc<Providers>,
     skill_resolver: SkillResolver,
     code: Option<Arc<dyn CodeNav>>,
+    mcp: Option<Arc<dyn McpConnector>>,
 }
 
 impl NativeExecutor {
@@ -53,7 +54,13 @@ impl NativeExecutor {
             providers,
             skill_resolver,
             code,
+            mcp: None,
         }
+    }
+
+    pub fn with_mcp(mut self, mcp: Arc<dyn McpConnector>) -> Self {
+        self.mcp = Some(mcp);
+        self
     }
 }
 
@@ -73,6 +80,7 @@ impl Executor for NativeExecutor {
             providers: self.providers.clone(),
             skill_resolver: self.skill_resolver.clone(),
             code: self.code.clone(),
+            mcp: self.mcp.clone(),
             host: host.clone(),
             usage: usage.clone(),
             cancel: inner.clone(),
@@ -107,6 +115,7 @@ struct Run {
     providers: Arc<Providers>,
     skill_resolver: SkillResolver,
     code: Option<Arc<dyn CodeNav>>,
+    mcp: Option<Arc<dyn McpConnector>>,
     host: Arc<dyn ExecutionHost>,
     usage: Arc<Mutex<Usage>>,
     cancel: CancellationToken,
@@ -138,6 +147,7 @@ fn policy_inputs(ctx: &ExecContext) -> PolicyInputs {
     PolicyInputs {
         build_commands: some(&[&c.build, &c.test, &c.test_one, &c.lint, &c.typecheck]),
         test_commands: some(&[&c.test, &c.test_one]),
+        read_only_mcp_tools: vec![],
     }
 }
 
@@ -312,7 +322,19 @@ impl Run {
             Err(e) => return self.fail(format!("Cannot run model `{}`: {e}", spec.route.model)),
         };
         let ctx = &spec.ctx;
-        let policy = ExecutionPolicy::new(ctx.clone(), policy_inputs(ctx));
+        let mcp = match &self.mcp {
+            Some(c) => {
+                let opened = c.open(spec).await;
+                for message in opened.notes {
+                    self.host.emit(ExecutionDelta::Status { message });
+                }
+                opened.tools
+            }
+            None => None,
+        };
+        let mut inputs = policy_inputs(ctx);
+        inputs.read_only_mcp_tools = mcp.iter().flat_map(|m| m.read_only()).collect();
+        let policy = ExecutionPolicy::new(ctx.clone(), inputs);
         let env = ToolEnv::new(ToolEnvConfig {
             agent: spec.agent,
             repo_root: ctx.repo_root.clone(),
@@ -322,6 +344,7 @@ impl Run {
             memory_source: format!("{} {}", spec.agent, spec.id),
             skill_resolver: self.skill_resolver.clone(),
             code: self.code.clone(),
+            mcp: mcp.clone(),
         });
 
         let offered = provider.server_tools(&model);
@@ -352,6 +375,12 @@ impl Run {
                 cache: false,
             });
         }
+        tools.extend(mcp.iter().flat_map(|m| m.definitions()).map(|d| ToolDef {
+            name: d.name,
+            description: d.description,
+            input_schema: d.input_schema,
+            cache: false,
+        }));
         let submit_def = ostra_tools::submit_tool_definition(spec.agent);
         tools.push(ToolDef {
             name: submit_def.name,

@@ -251,7 +251,15 @@ impl Rule {
         let tool = subject.tool();
         let fam = family(&self.tool);
         let same_tool = match fam {
-            Family::Other => self.tool == tool,
+            // `mcp__github` covers every tool of the server, as in Claude Code.
+            Family::Other => {
+                self.tool == tool
+                    || (self.tool.starts_with(ostra_core::mcp::PREFIX)
+                        && !ostra_core::mcp::is_gateway_tool(&self.tool)
+                        && tool
+                            .strip_prefix(self.tool.as_str())
+                            .is_some_and(|rest| rest.starts_with(ostra_core::mcp::SEPARATOR)))
+            }
             f => {
                 f == family(tool) && (f != Family::Read || self.tool == "Read" || self.tool == tool)
             }

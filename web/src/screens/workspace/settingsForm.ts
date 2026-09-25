@@ -3,7 +3,14 @@
 // validation and saving are derived from it.
 
 import type { Effort } from "../../api/gen/Effort";
-import type { Complexity, ModelChoice, PermissionMode, ValidationIssue, WorkspaceSettings } from "../../api/types";
+import type {
+  Complexity,
+  McpServerConfig,
+  ModelChoice,
+  PermissionMode,
+  ValidationIssue,
+  WorkspaceSettings,
+} from "../../api/types";
 import { COMPLEXITY_AGENTS, ROUTE_KEYS } from "../../content/agents";
 
 export const COMPLEXITIES: Complexity[] = ["low", "medium", "high"];
@@ -15,6 +22,30 @@ export type ModelKind = "unset" | "default" | "tier" | "custom" | "per-executor"
 export type ModelField = { kind: ModelKind; text: string };
 
 export type ProjectRow = { key: string; path: string; stack: string };
+
+/** One MCP server as the form holds it. Only the fields of the chosen transport are saved. */
+export type McpRow = {
+  /** Stable React key for the row. */
+  id: string;
+  name: string;
+  enabled: boolean;
+  transport: "http" | "stdio";
+  url: string;
+  /** Program and arguments as a shell line, for example `npx -y @upstash/context7-mcp`. */
+  command: string;
+  /** `KEY=value` per line. */
+  env: string;
+  /** `Name: value` per line. */
+  headers: string;
+  disabledTools: string[];
+  /** Empty means every agent. */
+  agents: string[];
+  timeout: string;
+  clientId: string;
+  clientSecretEnv: string;
+  /** Space-separated. */
+  scopes: string;
+};
 
 export type SettingsForm = {
   name: string;
@@ -40,6 +71,7 @@ export type SettingsForm = {
   push: boolean;
   maxParallel: string;
   budget: string;
+  mcp: McpRow[];
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -113,6 +145,113 @@ export function pickModel(prev: ModelField, value: string): ModelField {
 }
 
 // ---------------------------------------------------------------------------------------------
+// MCP servers
+// ---------------------------------------------------------------------------------------------
+
+/** Split a shell line into words: spaces separate, quotes group, a backslash escapes. `null` for an open quote. */
+export function splitCommand(line: string): string[] | null {
+  const words: string[] = [];
+  let word = "";
+  let started = false;
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === "\\" && quote === '"' && i + 1 < line.length) word += line[++i];
+      else word += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      started = true;
+    } else if (c === "\\" && i + 1 < line.length) {
+      word += line[++i];
+      started = true;
+    } else if (/\s/.test(c)) {
+      if (started) words.push(word);
+      word = "";
+      started = false;
+    } else {
+      word += c;
+      started = true;
+    }
+  }
+  if (quote) return null;
+  if (started) words.push(word);
+  return words;
+}
+
+/** The shell line for a word list, quoting words that need it. */
+export function joinCommand(words: string[]): string {
+  return words.map((w) => (w && /^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replaceAll("'", `'\\''`)}'`)).join(" ");
+}
+
+let mcpRowIds = 0;
+
+export function mcpRow(c?: McpServerConfig): McpRow {
+  mcpRowIds += 1;
+  return {
+    id: `mcp-${mcpRowIds}`,
+    name: c?.name ?? "",
+    enabled: c?.enabled ?? true,
+    transport: c && (c.command?.length ?? 0) > 0 ? "stdio" : "http",
+    url: c?.url ?? "",
+    command: joinCommand(c?.command ?? []),
+    env: Object.entries(c?.env ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join("\n"),
+    headers: Object.entries(c?.headers ?? {})
+      .map(([k, v]) => `${k}: ${v}`)
+      .join("\n"),
+    disabledTools: [...(c?.disabled_tools ?? [])],
+    agents: [...(c?.agents ?? [])],
+    timeout: String(c?.timeout_secs ?? 120),
+    clientId: c?.oauth?.client_id ?? "",
+    clientSecretEnv: c?.oauth?.client_secret_env ?? "",
+    scopes: (c?.oauth?.scopes ?? []).join(" "),
+  };
+}
+
+/** Parse `key<sep>value` lines. Returns the table, or the text of the first bad line. */
+function pairs(text: string, sep: "=" | ":"): { value: Record<string, string>; bad: string | null } {
+  const value: Record<string, string> = {};
+  for (const line of unlines(text)) {
+    const at = line.indexOf(sep);
+    const k = at > 0 ? line.slice(0, at).trim() : "";
+    if (!k) return { value, bad: line };
+    value[k] = line.slice(at + 1).trim();
+  }
+  return { value, bad: null };
+}
+
+export function mcpFromRow(row: McpRow, at: string, issues: ValidationIssue[]): McpServerConfig {
+  const c: McpServerConfig = { name: row.name.trim(), enabled: row.enabled, timeout_secs: 120 };
+  if (row.transport === "http") {
+    c.url = row.url.trim();
+    const h = pairs(row.headers, ":");
+    if (h.bad) issues.push({ path: `${at}.headers`, message: `Write each header as Name: value, not \`${h.bad}\`.` });
+    if (Object.keys(h.value).length) c.headers = h.value;
+    const scopes = row.scopes.split(/\s+/).filter(Boolean);
+    if (row.clientId.trim() || row.clientSecretEnv.trim() || scopes.length) {
+      c.oauth = { scopes };
+      if (row.clientId.trim()) c.oauth.client_id = row.clientId.trim();
+      if (row.clientSecretEnv.trim()) c.oauth.client_secret_env = row.clientSecretEnv.trim();
+    }
+  } else {
+    const words = splitCommand(row.command);
+    if (words === null) issues.push({ path: `${at}.command`, message: "Close the quote in the command." });
+    else c.command = words;
+    const e = pairs(row.env, "=");
+    if (e.bad) issues.push({ path: `${at}.env`, message: `Write each variable as KEY=value, not \`${e.bad}\`.` });
+    if (Object.keys(e.value).length) c.env = e.value;
+  }
+  if (row.disabledTools.length) c.disabled_tools = [...row.disabledTools];
+  if (row.agents.length) c.agents = [...row.agents];
+  if (/^\s*\d+\s*$/.test(row.timeout)) c.timeout_secs = Number(row.timeout);
+  else issues.push({ path: `${at}.timeout_secs`, message: "Enter a whole number of seconds, from 1 to 600." });
+  return c;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Form <-> settings
 // ---------------------------------------------------------------------------------------------
 
@@ -182,6 +321,7 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
     push: s.notifications.push,
     maxParallel: String(s.limits.max_parallel_executions),
     budget: String(s.limits.session_budget_usd),
+    mcp: s.mcp_servers.map((c) => mcpRow(c)),
   };
 }
 
@@ -271,6 +411,8 @@ export function fromForm(
   else
     issues.push({ path: "limits.session_budget_usd", message: "Enter a dollar amount such as 25, or 0 for no limit." });
 
+  s.mcp_servers = form.mcp.map((row, i) => mcpFromRow(row, `mcp_servers[${i}]`, issues));
+
   return { settings: s, issues };
 }
 
@@ -289,13 +431,22 @@ export function stableJson(v: unknown): string {
 // Issues, tabs and deep links
 // ---------------------------------------------------------------------------------------------
 
-export type SettingsTab = "general" | "projects" | "git" | "routing" | "permissions" | "instructions" | "notifications";
+export type SettingsTab =
+  | "general"
+  | "projects"
+  | "git"
+  | "routing"
+  | "mcp"
+  | "permissions"
+  | "instructions"
+  | "notifications";
 
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "projects", label: "Projects" },
   { id: "git", label: "Git" },
   { id: "routing", label: "Routing" },
+  { id: "mcp", label: "MCP servers" },
   { id: "permissions", label: "Permissions" },
   { id: "instructions", label: "Instructions" },
   { id: "notifications", label: "Notifications" },
@@ -304,6 +455,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
 /** The tab that holds a settings path or key. */
 export function tabOf(path: string): SettingsTab {
   const head = path.split(/[.[]/)[0];
+  if (head === "mcp_servers") return "mcp";
   if (
     head === "projects" ||
     head === "routing" ||
@@ -328,6 +480,12 @@ export function fieldIds(form: SettingsForm): string[] {
   ];
   ids.push("permissions.mode", "permissions.allow", "permissions.ask", "permissions.deny");
   form.projects.forEach((_, i) => ids.push(`projects[${i}]`));
+  ids.push("mcp_servers");
+  form.mcp.forEach((_, i) => {
+    for (const f of ["name", "url", "command", "env", "headers", "oauth", "agents", "timeout_secs"])
+      ids.push(`mcp_servers[${i}].${f}`);
+    ids.push(`mcp_servers[${i}]`);
+  });
   for (const k of routeKeys(form))
     ids.push(
       `routing.executor.byAgent.${k}`,
@@ -371,6 +529,7 @@ export function mapIssues(issues: ValidationIssue[], fields: string[]): IssueMap
     projects: 0,
     git: 0,
     routing: 0,
+    mcp: 0,
     permissions: 0,
     instructions: 0,
     notifications: 0,

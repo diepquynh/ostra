@@ -1,7 +1,16 @@
 // Mock data for the workspace pages: lessons per project, a cost report, settings keys and
 // settings validation that follows the server's rules closely enough to show issues per field.
 
-import type { CostReport, CostRow, Lesson, Usage, ValidationIssue, WorkspaceSettings } from "../types";
+import type {
+  CostReport,
+  CostRow,
+  Lesson,
+  McpServerConfig,
+  McpServerStatus,
+  Usage,
+  ValidationIssue,
+  WorkspaceSettings,
+} from "../types";
 import { SESSION } from "./fixtures";
 
 const now = new Date("2026-09-22T10:00:00Z");
@@ -235,5 +244,74 @@ export function validate(s: WorkspaceSettings): ValidationIssue[] {
         `\`${key}\` resolves to native model \`${m}\`; native models are written \`anthropic:<model>\` or \`openai:<model>\``,
       );
   }
+  const names = new Set<string>();
+  s.mcp_servers.forEach((m, i) => {
+    const at = `mcp_servers[${i}]`;
+    if (!/^[a-z][a-z0-9-]{0,23}$/.test(m.name))
+      add(
+        `${at}.name`,
+        "Name the server with lowercase letters, digits, and dashes, starting with a letter, at most 24 characters.",
+      );
+    else if (names.has(m.name)) add(`${at}.name`, `Server name \`${m.name}\` is used twice.`);
+    names.add(m.name);
+    if (m.url === undefined && !m.command?.length)
+      add(`${at}.command`, "Set `command` to run a local server, or `url` to reach a remote one.");
+    if (m.url !== undefined && !/^https?:\/\//.test(m.url))
+      add(`${at}.url`, `Use an http or https URL for the server, not \`${m.url}\`.`);
+    if (m.timeout_secs < 1 || m.timeout_secs > 600) add(`${at}.timeout_secs`, "Use a timeout from 1 to 600 seconds.");
+  });
   return issues.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+const MOCK_TOOLS: Record<string, [string, string, boolean][]> = {
+  github: [
+    ["search_code", "Search code across GitHub repositories.", true],
+    ["get_issue", "Read one issue with its comments.", true],
+    ["create_issue", "Open a new issue in a repository.", false],
+    ["delete_repository", "Delete a repository.", false],
+  ],
+  docs: [
+    ["resolve-library-id", "Find the Context7 id of a library by name.", true],
+    ["get-library-docs", "Fetch current documentation for a library.", true],
+  ],
+  linear: [
+    ["list_issues", "List issues in a team.", true],
+    ["create_issue", "Create an issue.", false],
+  ],
+};
+
+/** The status a mock server reports: known names connect, `linear` needs a sign-in until signed in. */
+export function mockMcpStatus(m: McpServerConfig, signedIn: Set<string>): McpServerStatus {
+  const base: McpServerStatus = {
+    name: m.name,
+    transport: m.url !== undefined ? "http" : "stdio",
+    state: "connected",
+    tools: [],
+    signed_in: m.name === "linear" ? signedIn.has(m.name) : undefined,
+  };
+  if (!m.enabled) return { ...base, state: "disabled" };
+  if (m.name === "linear" && !signedIn.has(m.name))
+    return {
+      ...base,
+      state: "needs_auth",
+      message: `Sign in to MCP server \`${m.name}\` in Settings, MCP servers, or give it a token in a header, because it refuses requests without one.`,
+    };
+  const tools = MOCK_TOOLS[m.name];
+  if (!tools)
+    return {
+      ...base,
+      state: "error",
+      message: `MCP server \`${m.name}\` is not available: the server answered 404: Not Found`,
+    };
+  return {
+    ...base,
+    server_info: `${m.name}-mcp 1.4.0`,
+    tools: tools.map(([name, description, read_only]) => ({
+      name,
+      canonical: `mcp__${m.name}__${name}`,
+      description,
+      read_only,
+      enabled: !(m.disabled_tools ?? []).includes(name),
+    })),
+  };
 }

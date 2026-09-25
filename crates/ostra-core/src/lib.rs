@@ -11,6 +11,7 @@ pub mod event;
 pub mod exec;
 pub mod executor;
 pub mod ids;
+pub mod mcp;
 pub mod model;
 pub mod outline;
 pub mod paths;

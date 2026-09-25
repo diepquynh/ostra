@@ -46,6 +46,8 @@ import type {
   ImportProject,
   Lesson,
   LessonEdit,
+  McpLogin,
+  McpServerStatus,
   OverrideDecision,
   ProjectSkills,
   PushSubscription,
@@ -132,6 +134,14 @@ export const httpApi = {
   deleteWorkspace: (ws: string) => request<void>("DELETE", `/api/workspaces/${enc(ws)}`),
   validateSettings: (ws: string, settings: WorkspaceSettings) =>
     request<ValidationIssue[]>("POST", `/api/workspaces/${enc(ws)}/validate`, settings),
+  /** Connects to each saved MCP server, so it can take as long as the slowest one starts. */
+  mcpStatus: (ws: string) => request<McpServerStatus[]>("GET", `/api/workspaces/${enc(ws)}/mcp`),
+  mcpRefresh: (ws: string, name: string) =>
+    request<McpServerStatus>("POST", `/api/workspaces/${enc(ws)}/mcp/${enc(name)}/refresh`),
+  mcpLogin: (ws: string, name: string) =>
+    request<McpLogin>("POST", `/api/workspaces/${enc(ws)}/mcp/${enc(name)}/login`),
+  mcpLogout: (ws: string, name: string) =>
+    request<McpServerStatus>("POST", `/api/workspaces/${enc(ws)}/mcp/${enc(name)}/logout`),
   importProject: (ws: string, body: ImportProject) =>
     request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/projects`, body),
   cloneProject: (ws: string, body: CloneProject) =>

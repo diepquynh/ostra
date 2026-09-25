@@ -7,6 +7,7 @@ mod code;
 mod defs;
 mod doc;
 mod fs;
+mod mcp;
 mod misc;
 mod search;
 mod text;
@@ -25,6 +26,7 @@ pub use code::CodeNav;
 pub use defs::{
     ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search,
 };
+pub use mcp::{McpConnector, McpOpened, McpTools};
 
 /// Resolves an embedded skill name (for example `meta-author`) to its path and content.
 pub type SkillResolver = Arc<dyn Fn(&str) -> Option<(PathBuf, String)> + Send + Sync>;
@@ -44,6 +46,8 @@ pub struct ToolEnvConfig {
     pub skill_resolver: SkillResolver,
     /// Serves the code navigation tools; `None` where no index is wired in.
     pub code: Option<Arc<dyn CodeNav>>,
+    /// The workspace's MCP server tools for this execution.
+    pub mcp: Option<Arc<dyn McpTools>>,
 }
 
 /// Per-execution tool state: the persistent shell working directory, the files read so far, and
@@ -165,6 +169,9 @@ pub async fn execute(
             "Memory" => misc::memory(env, input).await,
             "MemoryRecall" => misc::memory_recall(env, input).await,
             t if ostra_core::agent::is_code_tool(t) => code::run(env, t, input).await,
+            t if ostra_core::mcp::is_gateway_tool(t) => {
+                mcp::run(env, t, input, cancel.clone()).await
+            }
             "WebSearch" => ToolOutput::err(
                 "WebSearch runs on the model provider's side and has no local implementation.",
             ),
@@ -229,6 +236,7 @@ pub(crate) mod testutil {
             repo_root: repo,
             session_dir: session,
             code: None,
+            mcp: None,
         })
     }
 

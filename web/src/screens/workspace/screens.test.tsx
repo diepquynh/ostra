@@ -153,6 +153,37 @@ describe("settings screen", () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
   });
 
+  it("shows MCP servers with their status and tools, and turns a tool off", async () => {
+    vi.spyOn(api, "validateSettings").mockResolvedValue([]);
+    const login = vi.spyOn(api, "mcpLogin");
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const assign = vi.fn();
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...window.location, assign });
+    await mount(`/w/${WS}/settings#setting:mcp_servers`);
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "MCP servers" }).getAttribute("aria-selected")).toBe("true"),
+    );
+    const github = () => document.getElementById("setting:mcp_servers[0]") as HTMLElement;
+    const linear = () => document.getElementById("setting:mcp_servers[2]") as HTMLElement;
+    await waitFor(() => expect(github().textContent).toContain("Connected"));
+    expect(github().textContent).toContain("mcp__github__create_issue");
+    expect(github().textContent).toContain("3 of 4 tools offered to agents");
+    expect(linear().textContent).toContain("Needs sign-in");
+
+    fireEvent.click(within(linear()).getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(login).toHaveBeenCalledWith(WS, "linear"));
+    expect(open).toHaveBeenCalled();
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("about:blank"));
+
+    fireEvent.click(within(github()).getByLabelText("Offer create_issue to agents"));
+    expect(github().textContent).toContain("Unsaved");
+    await waitFor(() =>
+      expect((within(main()).getByRole("button", { name: /Save/ }) as HTMLButtonElement).disabled).toBe(false),
+    );
+    fireEvent.click(within(main()).getByRole("button", { name: /Discard/ }));
+    await waitFor(() => expect(github().textContent).toContain("Connected"));
+  });
+
   it("maps 422 issues from save to their fields and tabs", async () => {
     vi.spyOn(api, "validateSettings").mockResolvedValue([]);
     await mount(`/w/${WS}/settings`);

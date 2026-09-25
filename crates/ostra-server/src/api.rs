@@ -269,6 +269,13 @@ pub fn router(app: Arc<App>) -> axum::Router {
             post(init_project),
         )
         .route("/api/workspaces/{ws}/skills", get(skills_list))
+        .route("/api/workspaces/{ws}/mcp", get(mcp_status))
+        .route("/api/workspaces/{ws}/mcp/{name}/refresh", post(mcp_refresh))
+        .route("/api/workspaces/{ws}/mcp/{name}/login", post(mcp_login))
+        .route("/api/workspaces/{ws}/mcp/{name}/logout", post(mcp_logout))
+        // Outside /api: the authorization server's redirect is a cross-site navigation, so the
+        // SameSite=Strict cookie is not sent. The single-use `state` authenticates it instead.
+        .route(crate::mcp::CALLBACK_PATH, get(mcp_callback))
         .route(
             "/api/workspaces/{ws}/projects/{key}/skills/{name}",
             get(skill_get).put(skill_save).delete(skill_delete),
@@ -1300,6 +1307,118 @@ async fn memory_delete(
 }
 
 // Skills. The logic lives in `crate::skills`.
+
+async fn mcp_status(State(app): AppState, Path(id): Path<String>) -> Res<Vec<McpServerStatus>> {
+    let w = ws(&app, &id)?;
+    Ok(Json(app.shared.mcp.status(&w.root, None).await))
+}
+
+async fn mcp_one(app: &App, w: &WorkspaceRt, name: &str, force: bool) -> Res<McpServerStatus> {
+    app.shared
+        .mcp
+        .one(&w.root, name, force)
+        .await
+        .map(Json)
+        .ok_or_else(|| ApiErr::not_found(format!("This workspace has no MCP server `{name}`.")))
+}
+
+async fn mcp_refresh(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Res<McpServerStatus> {
+    let w = ws(&app, &id)?;
+    mcp_one(&app, &w, &name, true).await
+}
+
+async fn mcp_login(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+) -> Res<McpLogin> {
+    let w = ws(&app, &id)?;
+    // The guard has checked Origin and Host, so either names this server as the browser sees it.
+    let origin = headers
+        .get(header::ORIGIN)
+        .and_then(|h| h.to_str().ok())
+        .filter(|o| o.starts_with("http"))
+        .map(String::from)
+        .or_else(|| {
+            headers
+                .get(header::HOST)
+                .and_then(|h| h.to_str().ok())
+                .map(|h| format!("http://{h}"))
+        })
+        .ok_or_else(|| ApiErr::bad("The request names no host to return to after sign-in."))?;
+    let url = app
+        .shared
+        .mcp
+        .login(&w.root, &name, &origin)
+        .await
+        .map_err(|e| ApiErr::new(StatusCode::BAD_GATEWAY, e))?;
+    Ok(Json(McpLogin {
+        authorization_url: url,
+    }))
+}
+
+async fn mcp_logout(
+    State(app): AppState,
+    Path((id, name)): Path<(String, String)>,
+) -> Res<McpServerStatus> {
+    let w = ws(&app, &id)?;
+    app.shared.mcp.logout(&w.root, &name).await;
+    mcp_one(&app, &w, &name, false).await
+}
+
+#[derive(Deserialize)]
+struct OAuthCallback {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+}
+
+async fn mcp_callback(State(app): AppState, Query(q): Query<OAuthCallback>) -> Response {
+    let outcome = match (&q.state, &q.code, &q.error) {
+        (_, _, Some(e)) => Err(format!(
+            "The authorization server refused the sign-in: {e}{}",
+            q.error_description
+                .as_deref()
+                .map(|d| format!(" ({d})"))
+                .unwrap_or_default()
+        )),
+        (Some(state), Some(code), None) => app.shared.mcp.callback(state, code).await,
+        _ => {
+            Err("The sign-in link is missing its code. Start the sign-in again from Ostra.".into())
+        }
+    };
+    let (status, title, body) = match outcome {
+        Ok(name) => (
+            StatusCode::OK,
+            "Signed in",
+            format!(
+                "Ostra is signed in to MCP server <code>{}</code>. Close this tab and return to Ostra.",
+                html_escape(&name)
+            ),
+        ),
+        Err(e) => (StatusCode::BAD_REQUEST, "Sign-in failed", html_escape(&e)),
+    };
+    let page = format!(
+        "<!doctype html><meta charset=utf-8><title>{title}</title><body style=\"font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem\"><h1>{title}</h1><p>{body}</p>"
+    );
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        page,
+    )
+        .into_response()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
 
 async fn skills_list(State(app): AppState, Path(id): Path<String>) -> Res<Vec<ProjectSkills>> {
     let w = ws(&app, &id)?;

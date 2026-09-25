@@ -113,8 +113,12 @@ pub fn ostra_mcp_tool(name: &str) -> Option<String> {
 }
 
 /// `report` to `Report`, `document` to `Document`, `memory` to `Memory`, `memory_recall` to
-/// `MemoryRecall`, `code_callers` to `CodeCallers`; `submit_*` keeps its name.
+/// `MemoryRecall`, `code_callers` to `CodeCallers`, a workspace server's `github__search` to
+/// `mcp__github__search`; `submit_*` keeps its name.
 pub fn canonical_ostra_tool(bare: &str) -> String {
+    if ostra_core::mcp::is_gateway_bare(bare) {
+        return ostra_core::mcp::canonical(bare);
+    }
     match bare {
         "report" => "Report".into(),
         "document" => "Document".into(),
@@ -342,6 +346,10 @@ mod tests {
             Some("submit_plan")
         );
         assert_eq!(ostra_mcp_tool("mcp__other__report"), None);
+        assert_eq!(
+            ostra_mcp_tool("mcp__ostra__github__search").as_deref(),
+            Some("mcp__github__search")
+        );
         assert_eq!(ostra_mcp_tool("Read"), None);
     }
 

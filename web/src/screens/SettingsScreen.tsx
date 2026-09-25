@@ -6,6 +6,7 @@ import { Banner, Button, Panel, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
 import { GitCredentials } from "./setup/GitCredentials";
 import { ProviderCredentials } from "./setup/ProviderCredentials";
+import { McpSection } from "./workspace/McpSection";
 import { flash, Loading, Page, useAfterPaint, useAnchor } from "./workspace/Page";
 import {
   GeneralSection,
@@ -271,6 +272,7 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
           </Panel>
         </>
       )}
+      {tab === "mcp" && <McpSection {...props} ws={ws} saved={base.mcp_servers} agents={detail.agents} />}
       {tab === "permissions" && <PermissionsSection {...props} global={detail.global_permissions} />}
       {tab === "instructions" && <InstructionsSection {...props} />}
       {tab === "notifications" && <NotificationsSection {...props} />}

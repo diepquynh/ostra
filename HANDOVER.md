@@ -332,6 +332,24 @@ deny = ["Bash(git push *)"]
 
 [notifications]
 push = true
+
+# External MCP servers (10.6). `command` for a local server, `url` for a remote one.
+[[mcp_servers]]
+name = "github"
+url = "https://api.githubcopilot.com/mcp/"
+headers = { Authorization = "Bearer ${GITHUB_TOKEN}" }
+disabled_tools = ["delete_repository"]
+
+[[mcp_servers]]
+name = "docs"
+command = ["npx", "-y", "@upstash/context7-mcp"]
+agents = ["explore", "generate-spec"]   # empty or absent: every agent
+timeout_secs = 120                      # one tool call, 1 to 600
+
+[[mcp_servers]]
+name = "linear"
+url = "https://mcp.linear.app/mcp"      # signs in with OAuth when the server asks
+# oauth = { client_id = "...", client_secret_env = "LINEAR_SECRET", scopes = ["read"] }
 ```
 
 Routing rules, carried from `UC/hooks/model-router.js` and `UC/docs/model-routing.md`:
@@ -530,7 +548,7 @@ into it.
 | Leaf only | The harness's own subagent tool is disabled for the run. Every Ostra agent is a leaf. |
 | Final reply | The tool vocabulary tells the agent to reply with only `Done!` after its submit call, because Ostra reads the submit payload and any other text costs output tokens. Checked live: Claude Code, Codex, and Antigravity comply; Grok Build 4.5 may still summarize after a resume. |
 | Guards and permissions | Ostra writes a per-execution hook config pointing every PreToolUse and PostToolUse event at `ostra hook --execution <id>`, a subcommand of the same binary. It forwards the payload to `/internal/policy` with an execution token and prints the harness's response shape. One Rust policy engine then serves all harnesses. A permission ask waits for the browser answer. |
-| Ostra tools | `ostra mcp-stdio --execution <id>` serves `report`, `memory`, `memory_recall`, and the `submit_*` tools over stdio. Stdio, because it is the one MCP registration shape Ultracode verified on all four harnesses (`UC/docs/hub.md`, "Why a stdio shim"). |
+| Ostra tools | `ostra mcp-stdio --execution <id>` serves `report`, `memory`, `memory_recall`, the `submit_*` tools, and the workspace MCP servers' tools (10.6) over stdio. Stdio, because it is the one MCP registration shape Ultracode verified on all four harnesses (`UC/docs/hub.md`, "Why a stdio shim"). |
 | Completion | Detected from the harness's stop event through the hook bridge, and confirmed from its transcript. Needs verifying per harness (section 18). |
 | Session id | Claude Code and Grok accept a chosen `--session-id`, so Ostra picks it up front. Codex and Antigravity cannot choose one (`UC/README.md`), so Ostra captures it from the first output event or the transcript. |
 | Cost | Read from the harness's own session file. While the execution runs, a file watcher (`notify`) on the file's directory reads each appended line once and reports usage live; the whole file is read again for the final result. Hooks are not used for this, because they exist to enforce policy. Claude Code (`~/.claude/projects/*/<id>.jsonl`) repeats a message's usage on each of its lines, so usage counts once per message id, priced per message model with 5-minute and 1-hour cache writes apart. Codex (`rollout-*.jsonl`) reports running totals whose input includes cached input, priced per increase with the current turn's model. Grok Build (`sessions/<cwd>/<id>/updates.jsonl`) states each turn's cost in `costUsdTicks`, 10^10 per dollar. Antigravity's transcript records no usage, so its executions show no cost. |
@@ -653,6 +671,35 @@ YOLO does not change what must be true, because none of these are questions:
 YOLO can be set per workspace (`yolo.default`) and toggled per session at any time, taking effect from the next
 gate or tool call.
 
+### 10.6 External MCP servers
+
+A workspace lists MCP servers in `mcp_servers` (section 7.2). Their tools reach every agent on every executor,
+because Ostra is the only MCP client. The server process keeps one connection per workspace server
+(`ostra-server/src/mcp.rs` over the `ostra-mcp` client). The native loop offers the tools directly. Harnesses
+get them from Ostra's own MCP server, next to `report` and the `submit_*` tools. No harness registers a
+workspace server itself, so one policy and one allowlist cover all four CLIs and Antigravity needs no global
+`agy mcp add`.
+
+| Concern | Design |
+| --- | --- |
+| Transports | `command` starts a local server over stdio in the workspace root, in its own process group, which is ended with the connection. `url` reaches a remote server over streamable HTTP, JSON or SSE answers, with its `Mcp-Session-Id`. Protocol versions 2024-11-05 to 2025-11-25. The older HTTP+SSE transport is not supported. |
+| Secrets | `env` and `headers` values may name the server's environment as `${VAR}`, so `workspace.toml` holds no secret. An unset variable is a connection error that names it. |
+| OAuth | A remote server that answers 401 needs a sign-in. Discovery follows the MCP authorization spec: the `WWW-Authenticate` resource metadata, else RFC 9728 well-known paths, then RFC 8414 or OpenID metadata, else the 2025-03-26 default endpoints. Ostra registers itself (RFC 7591, public client) unless `oauth.client_id` is set, uses PKCE S256 and the `resource` parameter, and stores the client and tokens in the registry per workspace and server. An expired or refused token is refreshed once; a failed refresh asks for a sign-in again. |
+| Sign-in | `POST .../mcp/:name/login` answers the authorization URL, whose redirect is `<browser origin>/mcp/oauth/callback`. The callback is outside `/api`, because the cross-site redirect does not carry the `SameSite=Strict` cookie. Its single-use `state`, valid for 10 minutes, authenticates it instead. |
+| Discovery | Every tool the server lists is offered, with its own description and input schema, unless `disabled_tools` names it. `agents` limits a server to some agents; empty means all. The status API connects and reports each server's state, server info, and tools. A tool list older than 30 seconds, or one the server says changed, is fetched again when an execution opens. A failed server is retried no sooner than 20 seconds later, because parallel executions would each start it. |
+| Names | A tool keeps Claude Code's canonical name `mcp__<server>__<tool>` in the native loop, the Activity view, and permission rules. A harness sees it as `mcp__ostra__<server>__<tool>`. Server names are lowercase letters, digits, and dashes, at most 24 characters, and not `ostra`. A tool name that is not `[A-Za-z0-9_-]`, or whose bare name passes 52 characters, is shortened with a hash of the original, because providers cap tool names at 64 characters. |
+| Executions | Tools are fixed when an execution opens, before a harness starts, because a harness lists MCP tools once. A server that cannot be reached adds one Activity line and the execution runs without it. A server that exited since is started once more on the next call. Results are text: images and binary resources become a one-line note, structured content becomes JSON, and results are cut at 100 KiB. A read-only session gets no workspace tools. |
+
+Rules:
+
+- **M1.** A workspace MCP tool is allowed unless a permission rule says otherwise, because configuring the
+  server is the decision to use it. `mcp__<server>` in a rule covers every tool of that server. Plan mode
+  allows only tools their server marks `readOnlyHint`, because Ostra cannot tell which of the others write.
+  A harness's own MCP tools (`Other:mcp__...`) are not workspace tools and keep the mode default.
+- **M2.** A harness reaches a workspace tool only through Ostra's MCP server, so the hook bridge passes the
+  call unchecked and the MCP handler checks, asks, runs, and logs it once. Checking at both points would ask
+  the user twice.
+
 ## 11. Sessions and resume
 
 ### 11.1 Tables (`workspace.db`)
@@ -732,7 +779,7 @@ Each workspace opens as one console, laid out like a code editor:
 | Gates | Open questions (recommended option first), spec and plan approval (disabled until PASS, with the findings shown), review cap, STUCK rescue, closing gate, skill approval for init, permission asks, and BLOCKER notices showing the reviewer's Guidance text, with no dismiss button. |
 | Project | A header with the init status, the checked-out branch, the path, and the stack. An Overview tab (profile, commands, skills, review rules) or Initialize for a new project, and a Files tab. |
 | File | One project file with its git mark and the execution that changed it, or its diff against HEAD. Edit opens the text in Monaco (12.6). The text is colored by the project's code provider (12.5), and a click on a name finds its usages. A code pane beside the text has Outline, Usages (with a symbol search), and Dependencies (imports and the files that import this one). A `#L<n>` hash scrolls to a line and marks it. |
-| Settings | Workspace TOML as forms: projects, executor and model routing tables, instructions, permissions, YOLO, notifications. Validated as you edit and again on save. Each routing row names what Agent default means for that agent (tier, model, and effort from its `agent.toml`), the stack choices are the embedded stack references, and the global permission rules from `~/.config/ostra/config.toml` show read-only. |
+| Settings | Workspace TOML as forms: projects, executor and model routing tables, instructions, permissions, YOLO, notifications. Validated as you edit and again on save. Each routing row names what Agent default means for that agent (tier, model, and effort from its `agent.toml`), the stack choices are the embedded stack references, and the global permission rules from `~/.config/ostra/config.toml` show read-only. The MCP servers tab edits `mcp_servers` (10.6): each server's transport, URL and headers or command and environment, agents, timeout, and OAuth client, with its live state, server info, sign-in, reconnect, and a switch per listed tool that edits `disabled_tools`. |
 | Memory | Lessons per project, searchable. The user may edit or delete any lesson. |
 | Cost | Per session, stage, agent, and executor over this week (the status bar's week) or all time: tokens, cache reads, cache writes by TTL (5 minutes, 1 hour), cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
 
@@ -921,6 +968,12 @@ GET             /api/workspaces/:ws/activity              running executions, op
 GET             /api/workspaces/:ws/cost                  ?since=<RFC 3339>; spend per session, stage, agent,
                                                           executor; all time without since
 POST            /api/workspaces/:ws/ask                   side-panel question (streams)
+GET             /api/workspaces/:ws/mcp                   connect each MCP server (10.6); state, server info,
+                                                          sign-in, tools with canonical names
+POST            /api/workspaces/:ws/mcp/:name/refresh     reconnect and list its tools again
+POST            /api/workspaces/:ws/mcp/:name/login       {authorization_url} to open for an OAuth sign-in
+POST            /api/workspaces/:ws/mcp/:name/logout      forget its OAuth tokens
+GET             /mcp/oauth/callback                       ?code=&state=; the authorization server's redirect
 GET             /api/sessions/:id                         state, stages, executions, gates, execution groups
 GET             /api/sessions/:id/events                  ?after=; the event log
 GET             /api/sessions/:id/diff                    ?project=&phase=; review loop files, HEAD against now
@@ -982,6 +1035,7 @@ ostra/
     ostra-providers               anthropic, openai
     ostra-store                   SQLite (rusqlite with bundled FTS5), migrations, event log
     ostra-notify                  Web Push
+    ostra-mcp                     MCP client: stdio and streamable HTTP transports, OAuth
     ostra-code                    tokenizer, project code index, LSP client, code providers for the Files view
     ostra-server                  axum, WebSocket, auth, embedded web build, CLI entry (serve, hook, mcp-stdio)
   assets/

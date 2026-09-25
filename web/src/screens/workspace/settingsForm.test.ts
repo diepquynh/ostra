@@ -7,11 +7,14 @@ import {
   fieldIds,
   fieldToModel,
   fromForm,
+  joinCommand,
   mapIssues,
+  mcpRow,
   modelToField,
   parsePerExecutor,
   pickModel,
   settingKeyOf,
+  splitCommand,
   stableJson,
   tabOf,
   toForm,
@@ -213,6 +216,7 @@ describe("issue paths", () => {
       projects: 0,
       git: 0,
       routing: 2,
+      mcp: 0,
       permissions: 0,
       instructions: 0,
       notifications: 0,
@@ -252,5 +256,78 @@ describe("deep links", () => {
     expect(settingKeyOf("setting:permissions.allow")).toBe("permissions.allow");
     expect(settingKeyOf("gate-1")).toBeNull();
     expect(settingKeyOf(null)).toBeNull();
+  });
+});
+
+describe("MCP servers", () => {
+  it("splits and joins command lines", () => {
+    expect(splitCommand(`npx -y "@scope/pkg" --root '/a b' x\\ y ""`)).toEqual([
+      "npx",
+      "-y",
+      "@scope/pkg",
+      "--root",
+      "/a b",
+      "x y",
+      "",
+    ]);
+    expect(splitCommand(`npx "open`)).toBeNull();
+    const words = ["uvx", "mcp-server", "--dir", "/a b", "it's", ""];
+    expect(splitCommand(joinCommand(words))).toEqual(words);
+  });
+
+  it("keeps each server through the form, and only the chosen transport's fields", () => {
+    const s = clone();
+    const form = toForm(s);
+    expect(form.mcp.map((r) => r.transport)).toEqual(["http", "stdio", "http"]);
+    expect(form.mcp[0].headers).toBe("Authorization: Bearer ${GITHUB_TOKEN}");
+    expect(form.mcp[1].command).toBe("npx -y @upstash/context7-mcp");
+
+    form.mcp[1].transport = "http";
+    form.mcp[1].url = "https://docs.example/mcp";
+    form.mcp[2].scopes = "read  write";
+    const next = mcpRow();
+    next.name = "local";
+    next.transport = "stdio";
+    next.command = "node server.js";
+    next.env = "TOKEN=${LOCAL_TOKEN}";
+    form.mcp.push(next);
+    const { settings, issues } = fromForm(form, s);
+    expect(issues).toEqual([]);
+    expect(settings.mcp_servers[1]).toEqual({
+      name: "docs",
+      enabled: true,
+      url: "https://docs.example/mcp",
+      agents: ["explore", "generate-spec"],
+      timeout_secs: 120,
+    });
+    expect(settings.mcp_servers[2].oauth).toEqual({ scopes: ["read", "write"] });
+    expect(settings.mcp_servers[3]).toEqual({
+      name: "local",
+      enabled: true,
+      command: ["node", "server.js"],
+      env: { TOKEN: "${LOCAL_TOKEN}" },
+      timeout_secs: 120,
+    });
+  });
+
+  it("reports what the browser can see, and routes issues to the MCP tab", () => {
+    const s = clone();
+    const form = toForm(s);
+    form.mcp[0].headers = "Authorization Bearer x";
+    form.mcp[1].command = `npx "open`;
+    form.mcp[1].env = "=x";
+    form.mcp[2].timeout = "soon";
+    const { settings, issues } = fromForm(form, s);
+    expect(issues.map((i) => i.path)).toEqual([
+      "mcp_servers[0].headers",
+      "mcp_servers[1].command",
+      "mcp_servers[1].env",
+      "mcp_servers[2].timeout_secs",
+    ]);
+    expect(settings.mcp_servers[1].command).toBeUndefined();
+    expect(tabOf("mcp_servers[2].timeout_secs")).toBe("mcp");
+    expect(fieldForIssue("mcp_servers[0].headers", fieldIds(form))).toBe("mcp_servers[0].headers");
+    expect(fieldForIssue("mcp_servers[4].name", fieldIds(form))).toBe("mcp_servers");
+    expect(mapIssues(issues, fieldIds(form)).byTab.mcp).toBe(4);
   });
 });

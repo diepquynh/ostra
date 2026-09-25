@@ -363,7 +363,7 @@ fn declared_report_path_and_lesson_gate() {
         ctx,
         PolicyInputs {
             build_commands: vec!["./mvnw compile".into()],
-            test_commands: vec![],
+            ..Default::default()
         },
     );
 
@@ -501,6 +501,7 @@ fn build_streak_forces_escalation_at_five() {
                 "./mvnw test -Ptest".into(),
                 "./mvnw test -Ptest -pl {MODULE} -am -Dtest={TEST}".into(),
             ],
+            ..Default::default()
         },
     );
     assert!(
@@ -1189,4 +1190,76 @@ fn every_decision_names_its_rule() {
         PolicyDecision::Deny { rule, .. } => assert_eq!(rule.layer, "guard"),
         other => panic!("{other:?}"),
     }
+}
+
+// Rule M1: workspace MCP tools are allowed by default, rules narrow them, plan mode refuses them.
+#[test]
+fn workspace_mcp_tools() {
+    let f = fx();
+    let issue = ToolCall::new("mcp__github__create_issue", json!({"title": "x"}));
+    let search = ToolCall::new("mcp__github__search", json!({}));
+    let other_server = ToolCall::new("mcp__githubx__search", json!({}));
+    let p = with_perms(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Default,
+        &[],
+        &[],
+        &[],
+    );
+    allowed(&p, &issue);
+    // A harness's own MCP server is not a workspace server.
+    assert!(is_ask(
+        &p.check(&ToolCall::new("Other:mcp__github__search", json!({})))
+    ));
+
+    let p = with_perms(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Default,
+        &[],
+        &["mcp__github__create_issue"],
+        &["mcp__githubx"],
+    );
+    assert!(is_ask(&p.check(&issue)));
+    allowed(&p, &search);
+    assert!(deny_reason(&p.check(&other_server)).is_some());
+
+    let p = with_perms(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Plan,
+        &["mcp__github__search"],
+        &[],
+        &[],
+    );
+    assert!(
+        deny_reason(&p.check(&issue))
+            .unwrap()
+            .starts_with("Stay read-only")
+    );
+    allowed(&p, &search);
+    let mut ctx = f.ctx(AgentName::Implementer);
+    ctx.permission_mode = PermissionMode::Plan;
+    let p = ExecutionPolicy::new(
+        ctx,
+        PolicyInputs {
+            read_only_mcp_tools: vec!["mcp__githubx__search".into()],
+            ..Default::default()
+        },
+    );
+    allowed(&p, &other_server);
+    assert!(deny_reason(&p.check(&search)).is_some());
+
+    let p = with_perms(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Default,
+        &[],
+        &[],
+        &["mcp__github"],
+    );
+    assert!(deny_reason(&p.check(&issue)).is_some());
+    assert!(deny_reason(&p.check(&search)).is_some());
+    allowed(&p, &other_server);
 }

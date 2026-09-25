@@ -1768,3 +1768,60 @@ mod tests {
         assert!(long.ends_with('…'));
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// External MCP servers
+// ---------------------------------------------------------------------------------------------
+
+/// `GET /api/workspaces/:id/mcp`: one row per `mcp_servers` entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct McpServerStatus {
+    pub name: String,
+    /// `stdio` or `http`.
+    pub transport: String,
+    pub state: McpConnState,
+    /// Why the server is not connected, or what to do about it.
+    #[ts(optional)]
+    pub message: Option<String>,
+    /// The server's own name and version from `initialize`.
+    #[ts(optional)]
+    pub server_info: Option<String>,
+    /// Whether Ostra holds OAuth tokens for this server. `None` when it has never asked for them.
+    #[ts(optional)]
+    pub signed_in: Option<bool>,
+    pub tools: Vec<McpToolInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum McpConnState {
+    Disabled,
+    /// Not connected yet. Ostra connects when an execution or this page needs it.
+    Idle,
+    Connected,
+    /// The server wants a sign-in: `POST /api/workspaces/:id/mcp/:name/login`.
+    NeedsAuth,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct McpToolInfo {
+    /// The tool's name on its server, as `disabled_tools` lists it.
+    pub name: String,
+    /// The name agents, the Activity view, and permission rules use: `mcp__<server>__<tool>`.
+    pub canonical: String,
+    pub description: String,
+    pub enabled: bool,
+    /// The server marks the tool as read-only (`readOnlyHint`).
+    pub read_only: bool,
+}
+
+/// `POST /api/workspaces/:id/mcp/:name/login`: open this URL to sign in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct McpLogin {
+    pub authorization_url: String,
+}

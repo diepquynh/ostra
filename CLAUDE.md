@@ -28,6 +28,7 @@ ostra-engine      event-sourced session state, the pure planner, judges, the run
 ostra-exec-native the native agent loop (providers + tools + policy)
 ostra-exec-harness harness executors: PTY, per-harness adapters, hook bridge, MCP stdio shim
 ostra-notify      Web Push without OpenSSL
+ostra-mcp         MCP client for workspace MCP servers: stdio and streamable HTTP, OAuth
 ostra-code        tokenizer, per-project code index (usages, imports, symbols), LSP client, code providers
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
 ```

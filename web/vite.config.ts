@@ -12,6 +12,8 @@ export default defineConfig({
     proxy: {
       "/api": { target, changeOrigin: false },
       "/ws": { target: target.replace(/^http/, "ws"), ws: true },
+      // The OAuth redirect for MCP servers returns to the page's own origin.
+      "/mcp/oauth": { target, changeOrigin: false },
     },
   },
   build: {

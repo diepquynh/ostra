@@ -52,6 +52,7 @@ struct Registry {
     /// Where successful harness writes are reported for live file updates.
     write_sink: OnceLock<tokio::sync::mpsc::UnboundedSender<Touch>>,
     code: OnceLock<Arc<dyn ostra_tools::CodeNav>>,
+    mcp: OnceLock<Arc<dyn ostra_tools::McpConnector>>,
 }
 
 pub struct HarnessRuntime {
@@ -75,6 +76,7 @@ fn policy_inputs(repo: &std::path::Path) -> PolicyInputs {
     PolicyInputs {
         build_commands: some(&[&c.build, &c.test, &c.test_one, &c.lint, &c.typecheck]),
         test_commands: some(&[&c.test, &c.test_one]),
+        read_only_mcp_tools: vec![],
     }
 }
 
@@ -105,6 +107,10 @@ impl HarnessRuntime {
 
     pub fn set_code_nav(&self, nav: Arc<dyn ostra_tools::CodeNav>) {
         let _ = self.registry.code.set(nav);
+    }
+
+    pub fn set_mcp(&self, mcp: Arc<dyn ostra_tools::McpConnector>) {
+        let _ = self.registry.mcp.set(mcp);
     }
 
     fn inner(&self, global: &GlobalConfig) -> Arc<HarnessExecutor> {
@@ -163,8 +169,21 @@ impl Executor for Wrapped {
         cancel: CancellationToken,
     ) -> ExecutionResult {
         let ctx = spec.ctx.clone();
+        // Opened before the harness starts, because it lists Ostra's MCP tools once at startup.
+        let mcp = match self.registry.mcp.get() {
+            Some(c) => {
+                let opened = c.open(&spec).await;
+                for message in opened.notes {
+                    host.emit(ExecutionDelta::Status { message });
+                }
+                opened.tools
+            }
+            None => None,
+        };
+        let mut inputs = policy_inputs(&ctx.repo_root);
+        inputs.read_only_mcp_tools = mcp.iter().flat_map(|m| m.read_only()).collect();
         let running = Arc::new(Running {
-            policy: ExecutionPolicy::new(ctx.clone(), policy_inputs(&ctx.repo_root)),
+            policy: ExecutionPolicy::new(ctx.clone(), inputs),
             env: ToolEnv::new(ToolEnvConfig {
                 agent: spec.agent,
                 repo_root: ctx.repo_root.clone(),
@@ -174,6 +193,7 @@ impl Executor for Wrapped {
                 memory_source: format!("{} {}", spec.agent, spec.id),
                 skill_resolver: crate::app::skill_resolver(),
                 code: self.registry.code.get().cloned(),
+                mcp,
             }),
             host: host.clone(),
             memory_db: ctx.memory_db.clone(),
@@ -264,6 +284,11 @@ impl BridgeServices for ServerBridge {
                 "This execution is not running in Ostra.",
             );
         };
+        // Rule M2: a workspace MCP tool reaches the harness only through Ostra's MCP server,
+        // which checks and logs the call when it runs it, so the hook passes it unchecked.
+        if ostra_core::mcp::is_gateway_tool(&call.tool) && !r.inspect {
+            return PolicyDecision::Allow { rule: None };
+        }
         let id = self.call_id();
         self.check(&r, call, &id, !served_by_mcp(&call.tool))
     }
@@ -340,11 +365,11 @@ impl BridgeServices for ServerBridge {
         let r = self
             .get(execution)
             .ok_or("This execution is not running in Ostra.")?;
-        let native = MCP_TOOLS
-            .iter()
-            .find(|(name, _, _)| *name == tool)
-            .map(|(_, n, _)| *n)
-            .ok_or_else(|| format!("unknown tool {tool}"))?;
+        let native = match MCP_TOOLS.iter().find(|(name, _, _)| *name == tool) {
+            Some((_, n, _)) => n.to_string(),
+            None if ostra_core::mcp::is_gateway_bare(tool) => ostra_core::mcp::canonical(tool),
+            None => return Err(format!("unknown tool {tool}")),
+        };
         let call = ToolCall::new(native, args);
         let id = self.call_id();
         match self.check(&r, &call, &id, true) {
@@ -401,6 +426,17 @@ impl BridgeServices for ServerBridge {
                     .find(|(_, n, _)| *n == d.name)
                     .map(|(name, _, _)| (name.to_string(), d.description, d.input_schema))
             })
+            .chain(
+                r.env
+                    .config()
+                    .mcp
+                    .iter()
+                    .flat_map(|m| m.definitions())
+                    .filter_map(|d| {
+                        let bare = ostra_core::mcp::bare(&d.name)?.to_string();
+                        Some((bare, d.description, d.input_schema))
+                    }),
+            )
             .collect()
     }
 
@@ -459,4 +495,154 @@ pub async fn hook_cli(args: Vec<String>) -> i32 {
 
 pub async fn mcp_cli(args: Vec<String>) -> i32 {
     ostra_exec_harness::run_mcp_stdio(&args).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ostra_core::AgentName;
+    use ostra_core::config::{PermissionMode, PermissionRules};
+    use ostra_core::exec::ExecContext;
+    use ostra_core::executor::ExecutorKind;
+    use ostra_core::policy::RuleRef;
+    use ostra_tools::{McpTools, ToolDefinition};
+    use serde_json::json;
+
+    #[derive(Default)]
+    struct Host(Mutex<Vec<ExecutionDelta>>);
+
+    #[async_trait::async_trait]
+    impl ExecutionHost for Host {
+        fn emit(&self, delta: ExecutionDelta) {
+            self.0.lock().push(delta);
+        }
+        async fn ask_permission(&self, _: &ToolCall, _: &str, _: &RuleRef) -> PermissionAnswer {
+            PermissionAnswer::Deny
+        }
+    }
+
+    struct Echo;
+
+    #[async_trait::async_trait]
+    impl McpTools for Echo {
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![ToolDefinition {
+                name: "mcp__fake__echo".into(),
+                description: "Echo".into(),
+                input_schema: json!({"type": "object"}),
+            }]
+        }
+        fn read_only(&self) -> Vec<String> {
+            vec![]
+        }
+        async fn call(
+            &self,
+            _: &str,
+            input: &Value,
+            _: CancellationToken,
+        ) -> Result<String, String> {
+            Ok(format!("echo: {}", input["text"].as_str().unwrap_or("")))
+        }
+    }
+
+    fn running(
+        dir: &std::path::Path,
+        deny: &[&str],
+        inspect: bool,
+        host: Arc<Host>,
+    ) -> Arc<Running> {
+        let ctx = ExecContext {
+            execution_id: "x_1".into(),
+            session_id: None,
+            agent: AgentName::Implementer,
+            initializer_mode: None,
+            executor: ExecutorKind::Harness(HarnessKind::Codex),
+            workspace_root: dir.join("ws"),
+            repo_root: dir.join("repo"),
+            project_key: "app".into(),
+            session_dir: dir.join("ws/s"),
+            session_root: dir.join("ws/s"),
+            report_file: None,
+            phase: None,
+            yolo: false,
+            permission_mode: PermissionMode::Default,
+            permissions: PermissionRules {
+                deny: deny.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            protected_paths: vec![],
+            memory_db: dir.join("memory.sqlite3"),
+        };
+        Arc::new(Running {
+            policy: ExecutionPolicy::new(ctx.clone(), Default::default()),
+            env: ToolEnv::new(ToolEnvConfig {
+                agent: ctx.agent,
+                repo_root: ctx.repo_root.clone(),
+                session_dir: ctx.session_dir.clone(),
+                report_file: None,
+                memory_db: ctx.memory_db.clone(),
+                memory_source: "test".into(),
+                skill_resolver: Arc::new(|_: &str| None),
+                code: None,
+                mcp: Some(Arc::new(Echo)),
+            }),
+            host,
+            memory_db: ctx.memory_db.clone(),
+            repo: ctx.repo_root.clone(),
+            inspect,
+        })
+    }
+
+    // Rule M2: the hook passes a workspace MCP tool, and the shim checks and logs it once.
+    #[tokio::test]
+    async fn workspace_mcp_tools_through_the_shim() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = ServerBridge {
+            registry: Arc::new(Registry::default()),
+        };
+        let id = ExecutionId::from("x_1");
+        let host = Arc::new(Host::default());
+        bridge
+            .registry
+            .running
+            .lock()
+            .insert(id.clone(), running(dir.path(), &[], false, host.clone()));
+
+        let listed: Vec<String> = bridge.mcp_tools(&id).into_iter().map(|t| t.0).collect();
+        assert!(listed.contains(&"fake__echo".to_string()), "{listed:?}");
+        let hook = bridge.policy_check(&id, &ToolCall::new("mcp__fake__echo", json!({})));
+        assert_eq!(hook, PolicyDecision::Allow { rule: None });
+        assert!(host.0.lock().is_empty(), "the hook logs nothing");
+
+        let out = bridge
+            .mcp_call(&id, "fake__echo", json!({"text": "hi"}))
+            .await;
+        assert_eq!(out.unwrap(), "echo: hi");
+        let logged = host.0.lock().clone();
+        let calls: Vec<&str> = logged
+            .iter()
+            .filter_map(|d| match d {
+                ExecutionDelta::ToolCall { call, .. } => Some(call.tool.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls, ["mcp__fake__echo"]);
+
+        let denied_host = Arc::new(Host::default());
+        bridge.registry.running.lock().insert(
+            id.clone(),
+            running(dir.path(), &["mcp__fake"], false, denied_host),
+        );
+        let err = bridge
+            .mcp_call(&id, "fake__echo", json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("Denied by permission"), "{err}");
+
+        bridge.registry.running.lock().insert(
+            id.clone(),
+            running(dir.path(), &[], true, Arc::new(Host::default())),
+        );
+        assert!(bridge.mcp_tools(&id).is_empty());
+    }
 }
