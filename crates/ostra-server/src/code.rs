@@ -13,7 +13,10 @@ use ostra_code::hint::{self, At};
 use ostra_code::provider::{self, Answer, CodeProvider, CommandProvider, NativeProvider};
 use ostra_code::{Indexes, LspPool, LspProvider, MAX_FILE_BYTES};
 use ostra_core::api::{FileIndex, ServerMsg};
-use ostra_core::code::{CodeCompletion, CodeSignatureHelp, PROTOCOL_VERSION, ProviderRequest};
+use ostra_core::code::{
+    CodeCompletion, CodeNavigation, CodeSignatureHelp, NavigateTarget, PROTOCOL_VERSION,
+    ProviderRequest,
+};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -331,6 +334,57 @@ impl Code {
         for s in &rig.servers {
             match s.signature(&ask.at(), HINT_WAIT).await {
                 Ok(Some(h)) => return Ok(Some(h)),
+                Ok(None) => {}
+                Err(e) => problems.push(format!("`{}`: {e}", s.name())),
+            }
+        }
+        match problems.is_empty() {
+            true => Ok(None),
+            false => Err(ApiErr::new(StatusCode::BAD_GATEWAY, problems.join(" "))),
+        }
+    }
+}
+
+impl Code {
+    /// Supertypes or implementations of the name at the cursor from the code index, which is
+    /// fast and holds every language it parses. Language servers answer when the index does
+    /// not hold the file or does not know the name; with neither, nothing answers.
+    pub async fn navigate(
+        &self,
+        app: &Arc<App>,
+        w: &WorkspaceRt,
+        key: &str,
+        mut ask: HintAsk,
+        target: NavigateTarget,
+    ) -> Result<Option<CodeNavigation>, ApiErr> {
+        let rig = self.hint_rig(app, w, key, &mut ask).await?;
+        let indexes = self.indexes.clone();
+        let HintRig {
+            id,
+            root,
+            list,
+            servers,
+        } = rig;
+        let (ask, found) = tokio::task::spawn_blocking(move || {
+            let found = indexes.with(&id, &root, &list, |ix| {
+                hint::navigate_index(ix, &ask.at(), target)
+            });
+            (ask, found)
+        })
+        .await
+        .map_err(|e| {
+            ApiErr::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("The code index failed: {e}"),
+            )
+        })?;
+        if found.is_some() {
+            return Ok(found);
+        }
+        let mut problems = vec![];
+        for s in &servers {
+            match s.navigate(&ask.at(), target, HINT_WAIT).await {
+                Ok(Some(n)) => return Ok(Some(n)),
                 Ok(None) => {}
                 Err(e) => problems.push(format!("`{}`: {e}", s.name())),
             }

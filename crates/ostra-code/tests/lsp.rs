@@ -7,7 +7,7 @@ use ostra_code::lsp::{Connector, LspPool, LspProvider};
 use ostra_code::provider::{Answer, CodeProvider, NativeProvider, ask};
 use ostra_code::{CLASSES, Indexes};
 use ostra_core::api::FileIndex;
-use ostra_core::code::{CompletionKind, PROTOCOL_VERSION, ProviderRequest, SymbolKind, TokenClass};
+use ostra_core::code::{CompletionKind, NavigateTarget, PROTOCOL_VERSION, ProviderRequest, SymbolKind, TokenClass};
 use ostra_core::config::LanguageServerConfig;
 use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
@@ -76,7 +76,18 @@ async fn fake_server(root: PathBuf, io: tokio::io::DuplexStream, log: Log) {
                 "workspaceSymbolProvider": true,
                 "completionProvider": {"triggerCharacters": ["."]},
                 "signatureHelpProvider": {"triggerCharacters": ["("], "retriggerCharacters": [","]},
+                "implementationProvider": true,
+                "typeHierarchyProvider": true,
             }}),
+            "textDocument/implementation" => json!([
+                {"targetUri": uri("b.rs"), "targetRange": range(1, 0, 19), "targetSelectionRange": range(1, 3, 1)},
+            ]),
+            "textDocument/prepareTypeHierarchy" => json!([
+                {"name": "helper", "kind": 12, "uri": uri("a.rs"), "range": range(0, 0, 14), "selectionRange": range(0, 3, 6)},
+            ]),
+            "typeHierarchy/supertypes" => json!([
+                {"name": "x", "kind": 12, "uri": uri("b.rs"), "range": range(1, 0, 19), "selectionRange": range(1, 3, 1)},
+            ]),
             "textDocument/completion" => json!({"isIncomplete": false, "items": [
                 {"label": "helper", "kind": 3, "detail": "fn()",
                  "textEdit": {"range": range(1, 12, 3), "newText": "helper()"}},
@@ -696,4 +707,54 @@ async fn live(
     assert!(f.symbols.iter().any(|s| s.name == "helper"), "{f:?}");
     lsp.pool.forget(&0u8);
     f
+}
+
+#[tokio::test]
+async fn navigation_asks_implementations_and_the_type_hierarchy() {
+    let r = rig();
+    let wait = Duration::from_secs(5);
+    let lsp = r.lsp();
+    let cursor = At {
+        path: "a.rs",
+        text: A,
+        line: 1,
+        col: 4,
+        trigger: None,
+        retrigger: false,
+    };
+    let down = lsp
+        .navigate(&cursor, NavigateTarget::Implementations, wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(down.provider, "fake-ls");
+    assert_eq!(down.symbol, "helper");
+    let got: Vec<(&str, u32, u32, &str)> = down
+        .locations
+        .iter()
+        .map(|l| (l.path.as_str(), l.line, l.col, l.name.as_str()))
+        .collect();
+    assert_eq!(got, [("b.rs", 2, 3, "x")]);
+    assert_eq!(
+        r.params("textDocument/implementation")[0]["position"],
+        json!({"line": 0, "character": 4})
+    );
+    let up = lsp
+        .navigate(&cursor, NavigateTarget::Supertypes, wait)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((up.locations[0].path.as_str(), up.locations[0].line), ("b.rs", 2));
+    // The supertypes request carries the item the prepare step returned.
+    assert_eq!(
+        r.params("typeHierarchy/supertypes")[0]["item"]["name"],
+        "helper"
+    );
+    let py = At { path: "c.py", ..cursor };
+    assert!(
+        lsp.navigate(&py, NavigateTarget::Supertypes, wait)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

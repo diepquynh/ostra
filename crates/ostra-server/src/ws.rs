@@ -178,6 +178,7 @@ impl Streams {
 /// older one, which then never answers.
 const HINT_COMPLETE: &str = "hint:complete";
 const HINT_SIGNATURE: &str = "hint:signature";
+const HINT_NAVIGATE: &str = "hint:navigate";
 /// Hint answers queued for one socket.
 const HINT_QUEUE: usize = 8;
 
@@ -317,6 +318,19 @@ async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
                             let _ = tx.send(ServerMsg::CodeSignatureHelp { id, result: result.flatten(), error }).await;
                         });
                         streams.replace(HINT_SIGNATURE, task.abort_handle());
+                    }
+                    ClientMsg::CodeNavigate { id, workspace, key, path, text, line, col, target } => {
+                        let ask = HintAsk { path, text, line, col, trigger: None, retrigger: false };
+                        let (app, tx) = (app.clone(), hint_tx.clone());
+                        let task = tokio::spawn(async move {
+                            let r = match crate::api::ws(&app, workspace.as_str()) {
+                                Ok(w) => app.code.navigate(&app, &w, &key, ask, target).await,
+                                Err(e) => Err(e),
+                            };
+                            let (result, error) = split(r);
+                            let _ = tx.send(ServerMsg::CodeNavigation { id, result: result.flatten(), error }).await;
+                        });
+                        streams.replace(HINT_NAVIGATE, task.abort_handle());
                     }
                     ClientMsg::TermResize { execution, cols, rows } => {
                         if cols == 0 || rows == 0 || cols > ostra_exec_harness::pty::MAX_COLS || rows > ostra_exec_harness::pty::MAX_ROWS {

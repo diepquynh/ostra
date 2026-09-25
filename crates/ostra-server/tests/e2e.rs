@@ -935,6 +935,24 @@ async fn yolo_implement_session_end_to_end() {
             (h["type"].as_str(), &h["result"], &h["error"]),
             (Some("code_signature_help"), &Value::Null, &Value::Null)
         );
+        // Jumps come from the index; a name it does not define, with no language server, gets null.
+        let jump = |id: u32, line: u32, col: u32, target: &str| {
+            json!({"type": "code_navigate", "id": id, "workspace": ws.id, "key": "app",
+                   "path": "src/lib.rs", "text": "mod greet;\npub use greet::hello;\nfn nothing() {}",
+                   "line": line, "col": col, "target": target})
+        };
+        let n = ask(jump(4, 2, 17, "implementations")).await;
+        assert_eq!(
+            (n["type"].as_str(), n["id"].as_u64()),
+            (Some("code_navigation"), Some(4))
+        );
+        assert_eq!(
+            (&n["result"]["symbol"], &n["result"]["locations"], &n["result"]["provider"]),
+            (&json!("hello"), &json!([]), &json!("native")),
+            "{n}"
+        );
+        let none = ask(jump(5, 3, 5, "supertypes")).await;
+        assert_eq!((&none["result"], &none["error"]), (&Value::Null, &Value::Null), "{none}");
         let bad = ask(hint("code_complete", 3, "../outside.rs")).await;
         assert!(bad["result"].is_null() && bad["error"].is_string(), "{bad}");
     }

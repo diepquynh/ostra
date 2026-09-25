@@ -541,6 +541,29 @@ pub struct CodeSignatureHelp {
     pub active_parameter: u32,
 }
 
+/// Where a jump from the editor's cursor leads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum NavigateTarget {
+    /// The types the type at the cursor extends or implements; for a method, the supertype
+    /// methods it implements.
+    Supertypes,
+    /// The types that extend or implement the type at the cursor; for a method, the methods
+    /// that implement it.
+    Implementations,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CodeNavigation {
+    pub provider: String,
+    /// The name at the cursor.
+    pub symbol: String,
+    pub locations: Vec<CodeLocation>,
+    pub truncated: bool,
+}
+
 /// One request to an external provider, written as JSON to its stdin. The provider answers with
 /// the response shape of `op` on stdout, or `null` to let the built-in provider answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

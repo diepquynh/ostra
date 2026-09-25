@@ -7,13 +7,14 @@
 pub mod convert;
 pub mod rpc;
 
-use crate::hint::At;
+use crate::hint::{self, At};
 use crate::provider::{Answer, CodeProvider};
 use crate::{MAX_FILE_BYTES, lang, preview};
 use async_trait::async_trait;
 use convert::{Legend, Range};
 use ostra_core::code::{
-    CodeCompletion, CodeLocation, CodeSignatureHelp, CodeSymbols, CodeUsages, ProviderRequest,
+    CodeCompletion, CodeLocation, CodeNavigation, CodeSignatureHelp, CodeSymbols, CodeUsages,
+    NavigateTarget, ProviderRequest,
 };
 use ostra_core::config::LanguageServerConfig;
 use parking_lot::Mutex;
@@ -191,6 +192,8 @@ async fn start(
             "textDocument": {
                 "synchronization": {"dynamicRegistration": false},
                 "definition": {"linkSupport": true},
+                "implementation": {"linkSupport": true},
+                "typeHierarchy": {},
                 "references": {},
                 "completion": {
                     "completionItem": {
@@ -942,6 +945,70 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
         Ok(convert::signature_help(&v).map(|mut h| {
             h.provider = s.name.clone();
             h
+        }))
+    }
+
+    /// Supertypes through the type hierarchy, or implementations through
+    /// `textDocument/implementation`. None when the server does not answer for this file or
+    /// lacks the request.
+    pub async fn navigate(
+        &self,
+        at: &At<'_>,
+        target: NavigateTarget,
+        wait: Duration,
+    ) -> Result<Option<CodeNavigation>, String> {
+        let Some(lang) = self.language_of(at.path) else {
+            return Ok(None);
+        };
+        let s = self
+            .pool
+            .get(&self.key, &self.root, &self.config, wait)
+            .await?;
+        let needs = match target {
+            NavigateTarget::Supertypes => "typeHierarchyProvider",
+            NavigateTarget::Implementations => "implementationProvider",
+        };
+        if !s.has(needs) {
+            return Ok(None);
+        }
+        s.sync(at.path, lang, at.text).await;
+        let t = self.timeout();
+        let position = json!({"textDocument": {"uri": s.uri(at.path)},
+                              "position": {"line": at.line - 1, "character": at.col}});
+        let found: Vec<(String, Range)> = match target {
+            NavigateTarget::Implementations => convert::locations(
+                &s.client
+                    .request("textDocument/implementation", position, t)
+                    .await?,
+            ),
+            NavigateTarget::Supertypes => {
+                let items = s
+                    .client
+                    .request("textDocument/prepareTypeHierarchy", position, t)
+                    .await?;
+                match items.as_array().and_then(|a| a.first()) {
+                    Some(item) => convert::hierarchy_items(
+                        &s.client
+                            .request("typeHierarchy/supertypes", json!({"item": item}), t)
+                            .await?,
+                    ),
+                    None => vec![],
+                }
+            }
+        };
+        let symbol = hint::word_at(at.text, at.line, at.col);
+        let mut texts = Texts::default();
+        let mut locations: Vec<CodeLocation> = found
+            .into_iter()
+            .filter_map(|(uri, r)| self.location(&s, &mut texts, &uri, r, symbol))
+            .collect();
+        let truncated = locations.len() > hint::MAX_NAVIGATION;
+        locations.truncate(hint::MAX_NAVIGATION);
+        Ok(Some(CodeNavigation {
+            provider: s.name.clone(),
+            symbol: symbol.to_string(),
+            locations,
+            truncated,
         }))
     }
 

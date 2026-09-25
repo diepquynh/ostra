@@ -1,8 +1,9 @@
-// Completions and signature help for the file editor, asked over the socket with the unsaved text. The providers
-// are registered once for every language; a model answers only while `bindModel` names its project file.
+// Completions, signature help, and supertype or implementation jumps for the file editor, asked over the socket
+// with the unsaved text. The providers are registered once for every language; a model answers only while
+// `bindModel` names its project file.
 
 import { socket } from "../../../api/socket";
-import type { CodeDoc, CodeRange, CompletionKind } from "../../../api/types";
+import type { CodeDoc, CodeNavigation, CodeRange, CompletionKind, NavigateTarget } from "../../../api/types";
 import { monaco } from "../../../components/monaco";
 
 type Model = monaco.editor.ITextModel;
@@ -57,6 +58,21 @@ function ask(model: Model, position: monaco.Position) {
   const where = bound.get(model);
   if (!where) return null;
   return { ...where, text: model.getValue(), line: position.lineNumber, col: position.column - 1 };
+}
+
+/**
+ * Supertypes or implementations of the name at `position`. `result` is null when neither the code index nor a
+ * language server knows the name, and the whole answer is null when the model is unbound or the socket is closed.
+ */
+export async function navigate(
+  model: Model,
+  position: monaco.Position,
+  target: NavigateTarget,
+): Promise<{ result: CodeNavigation | null; error: string | null } | null> {
+  const base = ask(model, position);
+  if (!base) return null;
+  const reply = await socket().hint("code_navigate", { ...base, target });
+  return reply ? { result: reply.result, error: reply.error } : null;
 }
 
 let registered = false;

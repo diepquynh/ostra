@@ -824,3 +824,57 @@ fn nodes_list_the_other_definitions_of_their_file() {
         assert_eq!(n.more_file_defs, 0);
     });
 }
+
+#[test]
+fn editor_jumps_follow_implementation_links() {
+    use ostra_code::hint::{At, navigate_index};
+    use ostra_core::code::NavigateTarget::{Implementations, Supertypes};
+    with_files(IMPLS, |ix| {
+        let shape = "pub trait Shape {\n    fn area(&self) -> f64;\n}\n";
+        let at = |path: &'static str, text: &'static str, line: u32, col: u32| At {
+            path,
+            text,
+            line,
+            col,
+            trigger: None,
+            retrigger: false,
+        };
+        let found = |ix: &mut ProjectIndex, a: &At<'_>, t| -> Vec<(String, u32)> {
+            navigate_index(ix, a, t)
+                .unwrap()
+                .locations
+                .into_iter()
+                .map(|l| (l.path, l.line))
+                .collect()
+        };
+        let impls = found(ix, &at("src/shape.rs", shape, 1, 12), Implementations);
+        assert_eq!(
+            impls,
+            [("src/circle.rs".to_string(), 2), ("src/square.rs".to_string(), 2)]
+        );
+        // A trait method leads to the methods that implement it.
+        let area = found(ix, &at("src/shape.rs", shape, 2, 8), Implementations);
+        assert_eq!(
+            area,
+            [("src/circle.rs".to_string(), 7), ("src/square.rs".to_string(), 7)]
+        );
+        let circle = "use crate::shape::Shape;\npub struct Circle { r: f64 }\n";
+        let up = found(ix, &at("src/circle.rs", circle, 2, 13), Supertypes);
+        assert_eq!(up, [("src/shape.rs".to_string(), 1)]);
+        // A name the file only uses is asked across the project.
+        let used = found(ix, &at("src/circle.rs", circle, 1, 20), Implementations);
+        assert_eq!(used.len(), 2);
+        let cat = "package zoo;\npublic class Cat implements Pet {\n";
+        let pet = found(ix, &at("java/Cat.java", cat, 2, 29), Supertypes);
+        assert!(pet.is_empty(), "an interface extends nothing: {pet:?}");
+        assert_eq!(
+            found(ix, &at("java/Cat.java", cat, 2, 14), Supertypes),
+            [("java/Pet.java".to_string(), 2)]
+        );
+
+        // Files and names the index does not know are left to a language server.
+        assert!(navigate_index(ix, &at("src/new.rs", circle, 2, 13), Supertypes).is_none());
+        let other = "fn unknown_name() {}\n";
+        assert!(navigate_index(ix, &at("src/lib.rs", other, 1, 5), Supertypes).is_none());
+    });
+}

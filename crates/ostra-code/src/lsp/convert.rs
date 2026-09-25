@@ -52,6 +52,18 @@ pub fn locations(v: &Value) -> Vec<(String, Range)> {
     }
 }
 
+/// `TypeHierarchyItem`s as (uri, name range).
+pub fn hierarchy_items(v: &Value) -> Vec<(String, Range)> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|i| {
+            let r = i.get("selectionRange").or_else(|| i.get("range"))?;
+            Some((i.get("uri")?.as_str()?.to_string(), range(r)?))
+        })
+        .collect()
+}
+
 /// LSP `SymbolKind` numbers. Value kinds (string, number, key, null) have no Ostra kind.
 pub fn symbol_kind(n: u64) -> Option<SymbolKind> {
     Some(match n {
@@ -553,6 +565,19 @@ mod tests {
             "file:///b"
         );
         assert!(locations(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn hierarchy_items_prefer_the_name_range() {
+        let whole = json!({"start": {"line": 1, "character": 0}, "end": {"line": 9, "character": 1}});
+        let name = json!({"start": {"line": 1, "character": 6}, "end": {"line": 1, "character": 12}});
+        let got = hierarchy_items(&json!([
+            {"name": "Animal", "kind": 5, "uri": "file:///a", "range": whole, "selectionRange": name},
+            {"name": "broken"}
+        ]));
+        assert_eq!(got.len(), 1);
+        assert_eq!((got[0].1.start_line, got[0].1.start_col), (1, 6));
+        assert!(hierarchy_items(&Value::Null).is_empty());
     }
 
     #[test]

@@ -1433,6 +1433,18 @@ pub enum ClientMsg {
         #[serde(default)]
         retrigger: bool,
     },
+    /// The supertypes or implementations of the name at `line`/`col`, answered with
+    /// `code_navigation`. Same rules as `code_complete`.
+    CodeNavigate {
+        id: u32,
+        workspace: WorkspaceId,
+        key: String,
+        path: String,
+        text: String,
+        line: u32,
+        col: u32,
+        target: crate::code::NavigateTarget,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1503,6 +1515,13 @@ pub enum ServerMsg {
     CodeSignatureHelp {
         id: u32,
         result: Option<crate::code::CodeSignatureHelp>,
+        error: Option<String>,
+    },
+    /// The answer to `code_navigate`. `result` is null when neither the code index nor a
+    /// language server knows the name at the cursor.
+    CodeNavigation {
+        id: u32,
+        result: Option<crate::code::CodeNavigation>,
         error: Option<String>,
     },
     /// The workspace's running executions, open gates, or spend changed, on `workspace:<id>`. At

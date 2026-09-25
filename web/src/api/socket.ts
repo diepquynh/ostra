@@ -9,12 +9,13 @@ export type WireMsg = ServerMsg;
 
 type MsgHandler = (msg: WireMsg) => void;
 
-type HintAsk = Extract<ClientMsg, { type: "code_complete" | "code_signature" }>;
+type HintAsk = Extract<ClientMsg, { type: "code_complete" | "code_signature" | "code_navigate" }>;
 /** A hint request without its type and id. */
 export type HintRequest<T extends HintAsk["type"]> = Omit<Extract<HintAsk, { type: T }>, "type" | "id">;
 type HintReplies = {
   code_complete: Extract<ServerMsg, { type: "code_completion" }>;
   code_signature: Extract<ServerMsg, { type: "code_signature_help" }>;
+  code_navigate: Extract<ServerMsg, { type: "code_navigation" }>;
 };
 type HintReply = HintReplies[keyof HintReplies];
 
@@ -95,7 +96,8 @@ export class SocketManager {
   constructor(
     private url: string,
     private factory: SocketFactory,
-    private schedule: (fn: () => void, ms: number) => ReturnType<typeof setTimeout> = setTimeout,
+    // Wrapped, because the browser's setTimeout throws "Illegal invocation" when called as a method.
+    private schedule: (fn: () => void, ms: number) => ReturnType<typeof setTimeout> = (fn, ms) => setTimeout(fn, ms),
   ) {}
 
   start(): void {
@@ -170,7 +172,7 @@ export class SocketManager {
   }
 
   /**
-   * Ask for completions or signature help. Resolves to null when the socket is closed, when the server does not
+   * Ask for completions, signature help, or a supertype or implementation jump. Resolves to null when the socket is closed, when the server does not
    * answer in time, or when a newer request of the same type replaces this one, because the server stops it.
    */
   hint<T extends HintAsk["type"]>(type: T, req: HintRequest<T>): Promise<HintReplies[T] | null> {
@@ -185,7 +187,7 @@ export class SocketManager {
         clearTimeout(timer);
         resolve(reply as HintReplies[T] | null);
       });
-      this.send({ ...req, type, id } as HintAsk);
+      this.send({ ...req, type, id } as unknown as HintAsk);
     });
   }
 
@@ -244,7 +246,7 @@ export class SocketManager {
       } catch {
         return;
       }
-      if (msg.type === "code_completion" || msg.type === "code_signature_help") {
+      if (msg.type === "code_completion" || msg.type === "code_signature_help" || msg.type === "code_navigation") {
         this.settleHint(msg.id, msg);
         return;
       }
