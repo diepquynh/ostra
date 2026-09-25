@@ -9,10 +9,22 @@ import { foldActivity } from "../../lib/events";
 import { ConsoleContext, type ConsoleContextValue, type Nav } from "../../lib/nav";
 import { ExecutionScreen } from "../ExecutionScreen";
 import { ActivityStream } from "./ActivityStream";
-import { diffStat, hookRows, pendingAsk, policyInfo, relativize, replaceDiff, siblingRuns, terminalMode, toolDiff } from "./model";
+import {
+  diffStat,
+  hookRows,
+  pendingAsk,
+  policyInfo,
+  relativize,
+  replaceDiff,
+  siblingRuns,
+  terminalMode,
+  toolDiff,
+} from "./model";
 
 // xterm.js needs a real layout engine; the stream around it is what these tests cover.
-vi.mock("./XtermScreen", () => ({ default: ({ readOnly }: { readOnly: boolean }) => <div data-testid="xterm" data-readonly={String(readOnly)} /> }));
+vi.mock("./XtermScreen", () => ({
+  default: ({ readOnly }: { readOnly: boolean }) => <div data-testid="xterm" data-readonly={String(readOnly)} />,
+}));
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -70,7 +82,10 @@ function withNav(node: ReactNode, open: Nav["open"] = () => {}) {
 }
 
 const text = () => host?.textContent ?? "";
-const tabLabels = () => Array.from(host!.querySelectorAll('[aria-label="Execution views"] [role="tab"]')).map((t) => t.textContent?.replace(/\d+$/, ""));
+const tabLabels = () =>
+  Array.from(host!.querySelectorAll('[aria-label="Execution views"] [role="tab"]')).map((t) =>
+    t.textContent?.replace(/\d+$/, ""),
+  );
 const view = (id: string) => f.executions.find((x) => x.id === id)!;
 
 describe("stream selection", () => {
@@ -156,13 +171,53 @@ describe("activity items", () => {
     { seq: 1, at: "", delta: { kind: "status", message: "Started on native" } },
     { seq: 2, at: "", delta: { kind: "thinking", text: "Read the controller first." } },
     { seq: 3, at: "", delta: { kind: "text", text: "Adding the `cancel` handler." } },
-    { seq: 4, at: "", delta: { kind: "tool_call", call_id: "e", call: { tool: "Edit", input: { file_path: "/r/a.ts", old_string: "a\nb\nc", new_string: "a\nB\nc" } } } },
-    { seq: 5, at: "", delta: { kind: "policy", call_id: "e", decision: { decision: "allow", rule: { layer: "permission", rule: "mode:acceptEdits" } } } },
+    {
+      seq: 4,
+      at: "",
+      delta: {
+        kind: "tool_call",
+        call_id: "e",
+        call: { tool: "Edit", input: { file_path: "/r/a.ts", old_string: "a\nb\nc", new_string: "a\nB\nc" } },
+      },
+    },
+    {
+      seq: 5,
+      at: "",
+      delta: {
+        kind: "policy",
+        call_id: "e",
+        decision: { decision: "allow", rule: { layer: "permission", rule: "mode:acceptEdits" } },
+      },
+    },
     { seq: 6, at: "", delta: { kind: "tool_result", call_id: "e", output: "ok", is_error: false, duration_ms: 5 } },
-    { seq: 7, at: "", delta: { kind: "tool_call", call_id: "w", call: { tool: "Write", input: { file_path: "/r/a.test.ts", content: "x" } } } },
-    { seq: 8, at: "", delta: { kind: "policy", call_id: "w", decision: { decision: "deny", reason: "No tests from the implementer.", rule: { layer: "guard", rule: "no-tests-from-implementer" } } } },
+    {
+      seq: 7,
+      at: "",
+      delta: {
+        kind: "tool_call",
+        call_id: "w",
+        call: { tool: "Write", input: { file_path: "/r/a.test.ts", content: "x" } },
+      },
+    },
+    {
+      seq: 8,
+      at: "",
+      delta: {
+        kind: "policy",
+        call_id: "w",
+        decision: {
+          decision: "deny",
+          reason: "No tests from the implementer.",
+          rule: { layer: "guard", rule: "no-tests-from-implementer" },
+        },
+      },
+    },
     { seq: 9, at: "", delta: { kind: "tool_result", call_id: "w", output: "Denied.", is_error: true, duration_ms: 0 } },
-    { seq: 10, at: "", delta: { kind: "tool_call", call_id: "b", call: { tool: "Bash", input: { command: "npm test" } } } },
+    {
+      seq: 10,
+      at: "",
+      delta: { kind: "tool_call", call_id: "b", call: { tool: "Bash", input: { command: "npm test" } } },
+    },
     { seq: 11, at: "", delta: { kind: "tool_output", call_id: "b", chunk: "running 3 tests" } },
   ];
 
@@ -195,7 +250,17 @@ describe("activity items", () => {
 
   it("renders the mock's native run with inline diffs and a denial", async () => {
     const s = foldActivity(activityFor("x_imp2"));
-    await render(withNav(<ActivityStream entries={s.entries} live={false} summarize={(c) => relativize(String((c.input as { file_path?: string }).file_path ?? c.tool), "/home/me/code/shop-backend")} />));
+    await render(
+      withNav(
+        <ActivityStream
+          entries={s.entries}
+          live={false}
+          summarize={(c) =>
+            relativize(String((c.input as { file_path?: string }).file_path ?? c.tool), "/home/me/code/shop-backend")
+          }
+        />,
+      ),
+    );
     expect(host!.querySelectorAll(".os-tool--denied")).toHaveLength(1);
     expect(text()).toContain("src/main/java/shop/order/OrderService.java");
     expect(text()).not.toContain("Streaming from the agent loop");
@@ -219,7 +284,12 @@ describe("model helpers", () => {
       { type: "add", text: "x" },
       { type: "add", text: "y" },
     ]);
-    expect(toolDiff({ tool: "ApplyPatch", input: { patch: "*** Begin Patch\n*** Update File: a.rs\n-old\n+new\n ctx\n*** End Patch" } })).toEqual([
+    expect(
+      toolDiff({
+        tool: "ApplyPatch",
+        input: { patch: "*** Begin Patch\n*** Update File: a.rs\n-old\n+new\n ctx\n*** End Patch" },
+      }),
+    ).toEqual([
       { type: "ctx", text: "*** Update File: a.rs" },
       { type: "del", text: "old" },
       { type: "add", text: "new" },
@@ -244,7 +314,9 @@ describe("model helpers", () => {
 
   it("maps a policy decision onto the design's policy line", () => {
     expect(policyInfo({ decision: "allow", rule: null })).toBeUndefined();
-    expect(policyInfo({ decision: "deny", reason: "r", rule: { layer: "guard", rule: "build-streak" } })?.advice).toContain("STUCK");
+    expect(
+      policyInfo({ decision: "deny", reason: "r", rule: { layer: "guard", rule: "build-streak" } })?.advice,
+    ).toContain("STUCK");
   });
 
   it("strips the repo root from summaries", () => {

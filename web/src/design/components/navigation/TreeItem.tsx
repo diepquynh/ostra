@@ -35,7 +35,19 @@ function moveFocus(from: HTMLElement, key: string) {
 }
 
 /** One row of the resource sidebar. Indent by depth; pass expanded to show a chevron. */
-export function TreeItem({ label, icon, depth = 0, expanded, selected, meta, trailing, onClick, onToggle, title, style }: TreeItemProps) {
+export function TreeItem({
+  label,
+  icon,
+  depth = 0,
+  expanded,
+  selected,
+  meta,
+  trailing,
+  onClick,
+  onToggle,
+  title,
+  style,
+}: TreeItemProps) {
   const hasChev = expanded !== undefined;
   const activate = (e: SyntheticEvent) => {
     if (hasChev && onToggle && !onClick) onToggle(e);

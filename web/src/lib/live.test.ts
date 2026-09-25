@@ -33,7 +33,10 @@ describe("useWorkspaceTree", () => {
     const groups = result.current.sessions[0].groups;
     expect(groups.length).toBeGreaterThan(0);
 
-    emit(`workspace:${WS}`, { type: "session_updated", summary: { ...sessionSummary, title: "Cancel orders", updated_at: "2026-09-22T11:00:00Z" } });
+    emit(`workspace:${WS}`, {
+      type: "session_updated",
+      summary: { ...sessionSummary, title: "Cancel orders", updated_at: "2026-09-22T11:00:00Z" },
+    });
     expect(result.current.sessions[0]).toMatchObject({ id: "s_demo", title: "Cancel orders" });
     expect(result.current.sessions[0].groups).toBe(groups);
 
@@ -58,8 +61,26 @@ describe("useActivity", () => {
     expect(result.current.activity?.spend_today_usd).toBe(1.84);
     expect(result.current.activity?.open_gates.length).toBeGreaterThan(0);
 
-    emit(`workspace:${WS}`, { type: "activity", workspace: WS, activity: { running: [], open_gates: [], spend_today_usd: 2, spend_week_usd: 5, today_since: "2026-09-24T00:00:00Z", week_since: "2026-09-18T00:00:00Z" } });
-    expect(result.current.activity).toEqual({ running: [], open_gates: [], spend_today_usd: 2, spend_week_usd: 5, today_since: "2026-09-24T00:00:00Z", week_since: "2026-09-18T00:00:00Z" });
+    emit(`workspace:${WS}`, {
+      type: "activity",
+      workspace: WS,
+      activity: {
+        running: [],
+        open_gates: [],
+        spend_today_usd: 2,
+        spend_week_usd: 5,
+        today_since: "2026-09-24T00:00:00Z",
+        week_since: "2026-09-18T00:00:00Z",
+      },
+    });
+    expect(result.current.activity).toEqual({
+      running: [],
+      open_gates: [],
+      spend_today_usd: 2,
+      spend_week_usd: 5,
+      today_since: "2026-09-24T00:00:00Z",
+      week_since: "2026-09-18T00:00:00Z",
+    });
   });
 });
 

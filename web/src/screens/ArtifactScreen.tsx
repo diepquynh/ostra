@@ -9,10 +9,10 @@ import { useAsync, useStoredFlag } from "../lib/hooks";
 import { useWorkspaceTree } from "../lib/live";
 import { useNav, useShell } from "../lib/nav";
 import { ArtifactMarkdown } from "./artifact/ArtifactMarkdown";
-import { approvalBadges, artifactKind, hasEarsNote, KIND_LABEL } from "./artifact/kind";
-import { LedgerView } from "./artifact/LedgerView";
 import { DocumentView } from "./artifact/doc/DocumentView";
 import { pickFactCheck } from "./artifact/doc/model";
+import { approvalBadges, artifactKind, hasEarsNote, KIND_LABEL } from "./artifact/kind";
+import { LedgerView } from "./artifact/LedgerView";
 import "./artifact/artifact.css";
 
 export type ArtifactScreenProps = {
@@ -23,7 +23,8 @@ export type ArtifactScreenProps = {
 
 const SCROLL_OFFSET = 16;
 
-const byId = (box: HTMLElement, id: string) => Array.from(box.querySelectorAll<HTMLElement>("[id]")).find((e) => e.id === id) ?? null;
+const byId = (box: HTMLElement, id: string) =>
+  Array.from(box.querySelectorAll<HTMLElement>("[id]")).find((e) => e.id === id) ?? null;
 
 /**
  * Resource `artifact:<path>`: a spec, plan, report or review ledger. The shell gives this screen the whole
@@ -113,12 +114,29 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
         </Button>
       )}
       {typed && (
-        <Button size="sm" variant="ghost" icon={asMarkdown ? "list-tree" : "file-text"} onClick={() => setAsMarkdown(!asMarkdown)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          icon={asMarkdown ? "list-tree" : "file-text"}
+          onClick={() => setAsMarkdown(!asMarkdown)}
+        >
           {asMarkdown ? "Document" : "Markdown"}
         </Button>
       )}
-      {owner && <IconButton size="sm" icon="kanban" label="Open the session board" onClick={() => nav.open(`session:${owner.id}`)} />}
-      <IconButton size="sm" icon="message-square" label="Ask about this artifact" onClick={() => shell.openDock(`In ${basename(path)}, `)} />
+      {owner && (
+        <IconButton
+          size="sm"
+          icon="kanban"
+          label="Open the session board"
+          onClick={() => nav.open(`session:${owner.id}`)}
+        />
+      )}
+      <IconButton
+        size="sm"
+        icon="message-square"
+        label="Ask about this artifact"
+        onClick={() => shell.openDock(`In ${basename(path)}, `)}
+      />
       <IconButton size="sm" icon="copy" label="Copy path" onClick={() => void navigator.clipboard?.writeText(path)} />
       <IconButton size="sm" icon="refresh-ccw" label="Reload" onClick={art.reload} />
     </div>
@@ -160,7 +178,14 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
         {outline.length === 0 && <div className="art-outline__empty">{art.data ? "No headings." : "…"}</div>}
         <div role="tree">
           {outline.map((h) => (
-            <TreeItem key={h.id} label={h.title} title={h.title} depth={h.level - minLevel} selected={active === h.id} onClick={() => go(h.id)} />
+            <TreeItem
+              key={h.id}
+              label={h.title}
+              title={h.title}
+              depth={h.level - minLevel}
+              selected={active === h.id}
+              onClick={() => go(h.id)}
+            />
           ))}
         </div>
         <div style={{ height: 14 }} />
@@ -173,7 +198,15 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
           {!headings.some((h) => h.level === 1) && <h1 className="art-title">{title}</h1>}
           {earsNote}
           {art.error ? (
-            <Banner tone="bad" title="Ostra could not read this artifact" actions={<Button size="sm" onClick={art.reload}>Try again</Button>}>
+            <Banner
+              tone="bad"
+              title="Ostra could not read this artifact"
+              actions={
+                <Button size="sm" onClick={art.reload}>
+                  Try again
+                </Button>
+              }
+            >
               {art.error.message}
             </Banner>
           ) : !art.data ? (
@@ -182,7 +215,9 @@ export function ArtifactScreen({ ws, path }: ArtifactScreenProps) {
             </div>
           ) : (
             <>
-              {kind === "ledger" && <LedgerView path={path} content={art.data.content} session={owner?.id ?? null} theme={shell.theme} />}
+              {kind === "ledger" && (
+                <LedgerView path={path} content={art.data.content} session={owner?.id ?? null} theme={shell.theme} />
+              )}
               <ArtifactMarkdown text={art.data.content} headings={art.data.headings} onAnchor={go} />
             </>
           )}

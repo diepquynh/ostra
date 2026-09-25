@@ -71,7 +71,13 @@ export function resourceMeta(id: string, ctx: MetaContext): ResourceMeta {
       const name = basename(r.path);
       for (const s of ctx.sessions) {
         const a = s.artifacts.find((x) => x.path === r.path);
-        if (a) return { label: a.label, icon: "file-text", title: r.path, crumbs: [ws, { label: sessionLabel(s), to: `session:${s.id}` }, { label: name }] };
+        if (a)
+          return {
+            label: a.label,
+            icon: "file-text",
+            title: r.path,
+            crumbs: [ws, { label: sessionLabel(s), to: `session:${s.id}` }, { label: name }],
+          };
       }
       return { label: name, icon: "file-text", title: r.path, crumbs: [ws, { label: name }] };
     }

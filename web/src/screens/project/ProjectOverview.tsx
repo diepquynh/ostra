@@ -1,18 +1,33 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../../api";
-import type { ProjectView } from "../../api/types";
 import type { Commands } from "../../api/gen/Commands";
+import type { ProjectView } from "../../api/types";
 import { Banner, Button, Chip, Dialog, Panel, Stepper, Table } from "../../design";
-import { CommandsPanel } from "./CommandsPanel";
 import { useAsync } from "../../lib/hooks";
 import { useWorkspaceTree } from "../../lib/live";
 import { useNav, useWorkspace } from "../../lib/nav";
 import { resourcePath } from "../../lib/resource";
+import { CommandsPanel } from "./CommandsPanel";
 
-const INIT_STEPS = [{ label: "Detect" }, { label: "Scout" }, { label: "Propose skills" }, { label: "Your approval" }, { label: "Generate" }, { label: "Inventory" }];
+const INIT_STEPS = [
+  { label: "Detect" },
+  { label: "Scout" },
+  { label: "Propose skills" },
+  { label: "Your approval" },
+  { label: "Generate" },
+  { label: "Inventory" },
+];
 
-const EMPTY_COMMANDS: Commands = { build: null, test: null, test_one: null, format: null, lint: null, typecheck: null, run: null };
+const EMPTY_COMMANDS: Commands = {
+  build: null,
+  test: null,
+  test_one: null,
+  format: null,
+  lint: null,
+  typecheck: null,
+  run: null,
+};
 
 /** Overview tab: commands, skills, module map and maintenance, or the Initialize flow for a project that has none. */
 export function ProjectOverview({ ws, project }: { ws: string; project: ProjectView }) {
@@ -24,7 +39,10 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const lessons = useAsync(() => (p.init_status === "initialized" ? api.lessons(ws, p.key) : Promise.resolve([])), [ws, p.key, p.init_status]);
+  const lessons = useAsync(
+    () => (p.init_status === "initialized" ? api.lessons(ws, p.key) : Promise.resolve([])),
+    [ws, p.key, p.init_status],
+  );
   const initSession = tree.sessions.find((s) => s.kind.kind === "init" && s.kind.project === p.key);
 
   const init = () => {
@@ -72,13 +90,15 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
       {error && <Banner tone="bad">{error}</Banner>}
       {p.init_status === "missing" ? (
         <Banner tone="bad" title="Folder missing" actions={removeButton("danger")}>
-          Ostra cannot find <code>{p.path}</code>. Restore the folder or remove the project from the workspace. Removing deletes nothing on disk.
+          Ostra cannot find <code>{p.path}</code>. Restore the folder or remove the project from the workspace. Removing
+          deletes nothing on disk.
         </Banner>
       ) : p.init_status === "initializing" ? (
         <Panel title="Initializing" icon="sparkles" tone="highlight">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ lineHeight: 1.55, color: "var(--text-secondary)" }}>
-              The init session is scouting the code and proposing skills. It stops for your approval before it writes any skill.
+              The init session is scouting the code and proposing skills. It stops for your approval before it writes
+              any skill.
             </div>
             <Stepper orientation="horizontal" current={1} steps={INIT_STEPS} />
             {initSession && (
@@ -94,8 +114,9 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
         <Panel title="Initialize this project" icon="sparkles" tone="warn">
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div style={{ lineHeight: 1.55, color: "var(--text-secondary)" }}>
-              Initializing scouts the code for recurring patterns, proposes skills for your approval, then writes <code>.ostra/INVENTORY.md</code>,{" "}
-              <code>.ostra/project.toml</code>, and the skills every agent loads. No pipeline task can target this project until it is done.
+              Initializing scouts the code for recurring patterns, proposes skills for your approval, then writes{" "}
+              <code>.ostra/INVENTORY.md</code>, <code>.ostra/project.toml</code>, and the skills every agent loads. No
+              pipeline task can target this project until it is done.
             </div>
             {p.ultracode_bootstrap && (
               <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
@@ -123,7 +144,12 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
               subtitle={profile?.skills.length ?? 0}
               icon="book-open"
               actions={
-                <Button size="sm" variant="ghost" icon="pencil" onClick={() => navigate(`${resourcePath(ws, "ws:skills")}?project=${encodeURIComponent(p.key)}`)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon="pencil"
+                  onClick={() => navigate(`${resourcePath(ws, "ws:skills")}?project=${encodeURIComponent(p.key)}`)}
+                >
                   Manage
                 </Button>
               }
@@ -140,7 +166,8 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
                 <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>No skills yet.</div>
               )}
               <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginTop: 10 }}>
-                {profile?.review_rules.length ?? 0} review rules · {lessons.data ? `${lessons.data.length} lessons in memory` : "reading lessons…"}
+                {profile?.review_rules.length ?? 0} review rules ·{" "}
+                {lessons.data ? `${lessons.data.length} lessons in memory` : "reading lessons…"}
               </div>
             </Panel>
             <Panel title="Maintenance" icon="wrench">
@@ -148,12 +175,18 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
                 <Button size="sm" icon="refresh-ccw" disabled={busy} onClick={init}>
                   Re-initialize
                 </Button>
-                <Button size="sm" icon="brain" onClick={() => navigate(`${resourcePath(ws, "ws:memory")}?project=${encodeURIComponent(p.key)}`)}>
+                <Button
+                  size="sm"
+                  icon="brain"
+                  onClick={() => navigate(`${resourcePath(ws, "ws:memory")}?project=${encodeURIComponent(p.key)}`)}
+                >
                   Memory
                 </Button>
                 {removeButton("danger")}
               </div>
-              <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginTop: 10 }}>Removing deletes nothing on disk.</div>
+              <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginTop: 10 }}>
+                Removing deletes nothing on disk.
+              </div>
             </Panel>
           </div>
           {profile && profile.module_map.length > 0 && (
@@ -165,7 +198,11 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
                 columns={[
                   { key: "glob", label: "Files", render: (m) => <code>{m.glob}</code> },
                   { key: "area", label: "Area" },
-                  { key: "reference", label: "Reference", render: (m) => (m.reference ? <code>{m.reference}</code> : null) },
+                  {
+                    key: "reference",
+                    label: "Reference",
+                    render: (m) => (m.reference ? <code>{m.reference}</code> : null),
+                  },
                 ]}
               />
             </Panel>
@@ -203,7 +240,8 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
           }
         >
           <div style={{ lineHeight: 1.55, color: "var(--text-secondary)" }}>
-            Nothing on disk is deleted. <code>{p.path}</code> and its <code>.ostra/</code> folder stay, so you can import it again later.
+            Nothing on disk is deleted. <code>{p.path}</code> and its <code>.ostra/</code> folder stay, so you can
+            import it again later.
           </div>
         </Dialog>
       )}

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { api } from "../api";
 import type { ExecutionView, ToolCall, Usage } from "../api/types";
 import { STAGES } from "../content/stages";
-import { Banner, Button, Chip, Icon, Select, Spinner, StatusChip, StatusDot, Tabs, type TabItem } from "../design";
+import { Banner, Button, Chip, Icon, Select, Spinner, StatusChip, StatusDot, type TabItem, Tabs } from "../design";
 import { toolSummary } from "../lib/events";
 import { formatCost, formatDuration, formatTokens, humanize } from "../lib/format";
 import { useNav } from "../lib/nav";
@@ -45,12 +45,31 @@ function UsageStrip({ usage, duration }: { usage: Usage; duration: string }) {
   );
 }
 
-function SpawnSection({ e, nativeSessionId, onOpenReport }: { e: ExecutionView; nativeSessionId: string | null; onOpenReport: (path: string) => void }) {
+function SpawnSection({
+  e,
+  nativeSessionId,
+  onOpenReport,
+}: {
+  e: ExecutionView;
+  nativeSessionId: string | null;
+  onOpenReport: (path: string) => void;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <div className="ex-spawn">
-      <div className="ex-spawn__head" role="button" tabIndex={0} aria-expanded={open} onClick={() => setOpen((o) => !o)} onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && (ev.preventDefault(), setOpen((o) => !o))}>
-        <Icon name="chevron-right" size={12} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform var(--dur-fast)" }} />
+      <div
+        className="ex-spawn__head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(ev) => (ev.key === "Enter" || ev.key === " ") && (ev.preventDefault(), setOpen((o) => !o))}
+      >
+        <Icon
+          name="chevron-right"
+          size={12}
+          style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform var(--dur-fast)" }}
+        />
         <Icon name="braces" size={13} />
         <span className="ex-spawn__title">Spawn parameters</span>
         <span style={{ flex: 1 }} />
@@ -58,7 +77,10 @@ function SpawnSection({ e, nativeSessionId, onOpenReport }: { e: ExecutionView; 
       </div>
       {open && (
         <div className="ex-spawn__body">
-          <div className="ex-hint">The exact parameter block the agent received, followed by the project brief. No agent sees another agent's conversation.</div>
+          <div className="ex-hint">
+            The exact parameter block the agent received, followed by the project brief. No agent sees another agent's
+            conversation.
+          </div>
           <pre>{e.spawn_block}</pre>
           {e.report_path && (
             <div className="ex-hint">
@@ -103,7 +125,15 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
   if (exec.error && !e) {
     return (
       <div className="ex-page">
-        <Banner tone="bad" title="Ostra could not load this execution" actions={<Button size="sm" onClick={exec.reload}>Try again</Button>}>
+        <Banner
+          tone="bad"
+          title="Ostra could not load this execution"
+          actions={
+            <Button size="sm" onClick={exec.reload}>
+              Try again
+            </Button>
+          }
+        >
           {exec.error.message}
         </Banner>
       </div>
@@ -147,7 +177,14 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
 
   const notice =
     gate || pending ? (
-      <PermissionNotice stream={e.stream} gate={gate} pending={pending} summarize={summarize} onAnswered={exec.reload} onOpenGate={openGate} />
+      <PermissionNotice
+        stream={e.stream}
+        gate={gate}
+        pending={pending}
+        summarize={summarize}
+        onAnswered={exec.reload}
+        onOpenGate={openGate}
+      />
     ) : null;
 
   const liveDot = running ? <StatusDot tone="accent" pulse size={6} /> : undefined;
@@ -190,13 +227,25 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
             />
           )}
           {running ? (
-            <Button variant="danger" size="sm" icon="square" disabled={busy !== null} onClick={() => void run("cancel")}>
+            <Button
+              variant="danger"
+              size="sm"
+              icon="square"
+              disabled={busy !== null}
+              onClick={() => void run("cancel")}
+            >
               {busy === "cancel" ? "Cancelling…" : "Cancel"}
             </Button>
           ) : (
             e.can_resume &&
             !e.has_terminal && (
-              <Button size="sm" icon="rotate-ccw" disabled={busy !== null} onClick={() => void run("resume")} title="Reopen the harness session with its own resume command">
+              <Button
+                size="sm"
+                icon="rotate-ccw"
+                disabled={busy !== null}
+                onClick={() => void run("resume")}
+                title="Reopen the harness session with its own resume command"
+              >
                 {busy === "resume" ? "Resuming…" : "Resume"}
               </Button>
             )
@@ -205,7 +254,11 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
       </div>
 
       <UsageStrip usage={usage} duration={duration} />
-      <SpawnSection e={e} nativeSessionId={act.nativeSessionId ?? e.native_session_id} onOpenReport={(p) => nav.open(`artifact:${p}`)} />
+      <SpawnSection
+        e={e}
+        nativeSessionId={act.nativeSessionId ?? e.native_session_id}
+        onOpenReport={(p) => nav.open(`artifact:${p}`)}
+      />
 
       {error && <Banner tone="bad">{error}</Banner>}
       {e.error && (

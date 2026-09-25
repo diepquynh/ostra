@@ -25,7 +25,12 @@ export function Palette({ ws, open, onClose, sessions, projects, filesProject, o
   const index = useFileIndex(ws, open && search.unavailable ? filesProject : null);
   const commands = useMemo(() => paletteCommands(), []);
   const local = useMemo(
-    () => localItems(sessions, projects, search.unavailable && filesProject ? { key: filesProject, paths: index.paths } : null),
+    () =>
+      localItems(
+        sessions,
+        projects,
+        search.unavailable && filesProject ? { key: filesProject, paths: index.paths } : null,
+      ),
     [sessions, projects, search.unavailable, filesProject, index.paths],
   );
   const hits = search.unavailable || search.loading || !query.trim() ? null : search.items;

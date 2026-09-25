@@ -17,7 +17,10 @@ export function DecisionsPanel({ decisions, onChanged }: { decisions: DecisionVi
   return (
     <Panel title="Decisions Ostra made" icon="scale" bodyFlush>
       {decisions.length === 0 ? (
-        <div style={empty}>No decisions yet. The judges decide classification, research sufficiency, stakes, and rescues as the pipeline reaches them.</div>
+        <div style={empty}>
+          No decisions yet. The judges decide classification, research sufficiency, stakes, and rescues as the pipeline
+          reaches them.
+        </div>
       ) : (
         decisions.map((d) => (
           <Decision
@@ -47,7 +50,15 @@ export function DecisionsPanel({ decisions, onChanged }: { decisions: DecisionVi
   );
 }
 
-function OverrideDialog({ decision, onClose, onDone }: { decision: DecisionView; onClose: () => void; onDone: () => void }) {
+function OverrideDialog({
+  decision,
+  onClose,
+  onDone,
+}: {
+  decision: DecisionView;
+  onClose: () => void;
+  onDone: () => void;
+}) {
   const [output, setOutput] = useState(JSON.stringify(decision.output, null, 2));
   const [reason, setReason] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -85,9 +96,17 @@ function OverrideDialog({ decision, onClose, onDone }: { decision: DecisionView;
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
-          Ostra chose {decisionChoice(decision)} because {lowerFirst(decision.reason)} Your decision replaces it and is recorded with your reason.
+          Ostra chose {decisionChoice(decision)} because {lowerFirst(decision.reason)} Your decision replaces it and is
+          recorded with your reason.
         </p>
-        <Input multiline mono rows={9} label="Your decision" value={output} onChange={(e) => setOutput(e.target.value)} />
+        <Input
+          multiline
+          mono
+          rows={9}
+          label="Your decision"
+          value={output}
+          onChange={(e) => setOutput(e.target.value)}
+        />
         <Input label="Why" value={reason} onChange={(e) => setReason(e.target.value)} error={error} />
       </div>
     </Dialog>
@@ -107,7 +126,13 @@ export function ArtifactsPanel({ detail }: { detail: SessionDetail }) {
             <TreeItem
               key={a.path}
               label={a.label}
-              icon={a.kind === "ledger" ? "file-diff" : a.kind === "plan" || a.kind === "phase" ? "list-checks" : "file-text"}
+              icon={
+                a.kind === "ledger"
+                  ? "file-diff"
+                  : a.kind === "plan" || a.kind === "phase"
+                    ? "list-checks"
+                    : "file-text"
+              }
               meta={a.project ?? a.kind}
               title={a.path}
               onClick={() => nav.open(`artifact:${a.path}`, { preview: true })}
@@ -124,11 +149,24 @@ export function ExecutionsPanel({ detail }: { detail: SessionDetail }) {
   const nav = useNav();
   const groups = executionGroups(detail);
   return (
-    <Panel title="Executions" subtitle={`${detail.executions.length} run${detail.executions.length === 1 ? "" : "s"}`} icon="square-terminal" bodyFlush>
+    <Panel
+      title="Executions"
+      subtitle={`${detail.executions.length} run${detail.executions.length === 1 ? "" : "s"}`}
+      icon="square-terminal"
+      bodyFlush
+    >
       {groups.length === 0 ? (
         <div style={empty}>No executions yet.</div>
       ) : (
-        groups.map((g) => <ExecutionGroup key={g.key} agent={g.agent} project={g.project} runs={g.runs} onOpen={(r) => nav.open(`exec:${r.id}`, { preview: true })} />)
+        groups.map((g) => (
+          <ExecutionGroup
+            key={g.key}
+            agent={g.agent}
+            project={g.project}
+            runs={g.runs}
+            onOpen={(r) => nav.open(`exec:${r.id}`, { preview: true })}
+          />
+        ))
       )}
     </Panel>
   );

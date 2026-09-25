@@ -45,7 +45,11 @@ export const LANES: Record<Lane, LaneInfo> = {
 export type StageInfo = { label: string; produces: string; protects: string };
 
 export const STAGES: Record<StageKind, StageInfo> = {
-  intake: { label: "Intake", produces: "The recorded request and its options.", protects: "Losing what you asked for." },
+  intake: {
+    label: "Intake",
+    produces: "The recorded request and its options.",
+    protects: "Losing what you asked for.",
+  },
   classify: {
     label: "Classify",
     produces: "A category, the projects in scope, and the research tasks.",
@@ -63,7 +67,8 @@ export const STAGES: Record<StageKind, StageInfo> = {
   },
   spec: {
     label: "Spec",
-    produces: "One spec file: requirements in EARS form, acceptance criteria, contracts, and an External Evidence table.",
+    produces:
+      "One spec file: requirements in EARS form, acceptance criteria, contracts, and an External Evidence table.",
     protects: "Requirements that live only in someone's head and never reach the plan.",
   },
   "open-questions": {
@@ -161,13 +166,21 @@ export const STAGES: Record<StageKind, StageInfo> = {
     produces: "Updated area references grounded in the real source.",
     protects: "The how-it-works knowledge that is gone six months later.",
   },
-  verify: { label: "Verify", produces: "The project's test command run and reported.", protects: "Claiming it works without running it." },
+  verify: {
+    label: "Verify",
+    produces: "The project's test command run and reported.",
+    protects: "Claiming it works without running it.",
+  },
   "prompt-gen": {
     label: "Prompt generation",
     produces: "Instruction files written to the prompt authoring standard.",
     protects: "Ambiguous instructions that a model follows in the wrong direction.",
   },
-  "quick-answer": { label: "Quick answer", produces: "A direct answer, read-only.", protects: "Running the pipeline for a question." },
+  "quick-answer": {
+    label: "Quick answer",
+    produces: "A direct answer, read-only.",
+    protects: "Running the pipeline for a question.",
+  },
   completion: {
     label: "Completion report",
     produces: "What was done, what did not run and how to run it, and every decision made for you.",

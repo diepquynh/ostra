@@ -1,4 +1,4 @@
-import { useId, type InputHTMLAttributes, type ReactNode, type Ref, type TextareaHTMLAttributes } from "react";
+import { type InputHTMLAttributes, type ReactNode, type Ref, type TextareaHTMLAttributes, useId } from "react";
 import { cx } from "../../cx";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
@@ -21,17 +21,45 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement | 
   ref?: Ref<HTMLInputElement & HTMLTextAreaElement>;
 }
 
-export function Input({ label, hint, error, icon, multiline, mono, size = "md", rows = 3, trailing, className = "", style, id, ref, ...rest }: InputProps) {
+export function Input({
+  label,
+  hint,
+  error,
+  icon,
+  multiline,
+  mono,
+  size = "md",
+  rows = 3,
+  trailing,
+  className = "",
+  style,
+  id,
+  ref,
+  ...rest
+}: InputProps) {
   const autoId = useId();
   const fieldId = id ?? (label ? autoId : undefined);
   const noteId = error || hint ? `${autoId}-note` : undefined;
-  const cls = cx("os-input", multiline && "os-input--multiline", mono && "os-input--mono", error && "os-input--invalid", size === "sm" && "os-input--sm", className);
+  const cls = cx(
+    "os-input",
+    multiline && "os-input--multiline",
+    mono && "os-input--mono",
+    error && "os-input--invalid",
+    size === "sm" && "os-input--sm",
+    className,
+  );
   const aria = { "aria-invalid": error ? true : undefined, "aria-describedby": noteId };
   const control = (
     <div className={cls} style={style}>
       {icon && <Icon name={icon} size={14} className="os-input__icon" />}
       {multiline ? (
-        <textarea id={fieldId} rows={rows} ref={ref} {...aria} {...(rest as TextareaHTMLAttributes<HTMLTextAreaElement>)} />
+        <textarea
+          id={fieldId}
+          rows={rows}
+          ref={ref}
+          {...aria}
+          {...(rest as TextareaHTMLAttributes<HTMLTextAreaElement>)}
+        />
       ) : (
         <input id={fieldId} ref={ref} {...aria} {...(rest as InputHTMLAttributes<HTMLInputElement>)} />
       )}

@@ -123,7 +123,7 @@ regenerate `web/src/api/gen/`, then `cd web && npm run typecheck` and fix only w
 ```bash
 cargo test --workspace                      # unit, conformance, runner, recovery, server end to end
 cargo clippy --workspace --all-targets -- -D warnings
-cd web && npm run typecheck && npx vitest run
+cd web && npm run check && npm run typecheck && npx vitest run   # biome lint + format check
 ```
 
 - `tests/conformance/main.rs`: planner fixtures, one per rule. The fastest way to test engine behavior.

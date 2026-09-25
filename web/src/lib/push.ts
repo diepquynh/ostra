@@ -40,7 +40,8 @@ export async function currentSubscription(): Promise<PushSubscription | null> {
 export async function enablePush(): Promise<string | null> {
   if (!pushSupported()) return "This browser does not support push notifications.";
   const permission = await Notification.requestPermission();
-  if (permission !== "granted") return "Notifications are blocked for this site. Allow them in the browser's site settings.";
+  if (permission !== "granted")
+    return "Notifications are blocked for this site. Allow them in the browser's site settings.";
   const info = await api.info();
   if (!info.vapid_public_key) return "The server has no push key configured.";
   const reg = (await registerServiceWorker()) ?? (await navigator.serviceWorker.ready);

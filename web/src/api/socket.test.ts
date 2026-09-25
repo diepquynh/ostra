@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SocketManager, channelsFor, decodePtyFrame, type SocketLike, type WireMsg } from "./socket";
+import { channelsFor, decodePtyFrame, type SocketLike, SocketManager, type WireMsg } from "./socket";
 import type { ServerMsg } from "./types";
 
 class FakeSocket implements SocketLike {
@@ -87,7 +87,13 @@ describe("SocketManager", () => {
       throw new Error("wrong channel");
     });
     sockets[0].receive(
-      JSON.stringify({ type: "execution_delta", execution: "x1", seq: 1, at: "2026-01-01T00:00:00Z", delta: { kind: "text", text: "hi" } }),
+      JSON.stringify({
+        type: "execution_delta",
+        execution: "x1",
+        seq: 1,
+        at: "2026-01-01T00:00:00Z",
+        delta: { kind: "text", text: "hi" },
+      }),
     );
     sockets[0].receive("not json");
     expect(got).toHaveLength(1);
@@ -132,7 +138,18 @@ describe("frames and channels", () => {
   it("maps file changes, tree patches and activity to the workspace channel", () => {
     const fs: WireMsg = { type: "project_fs_changed", workspace: "w1", key: "backend", paths: ["src/a.rs"] };
     const tree = { type: "tree_patch", workspace: "w1", session: { id: "s1" } } as unknown as WireMsg;
-    const activity = { type: "activity", workspace: "w1", activity: { running: [], open_gates: [], spend_today_usd: 0, spend_week_usd: 0, today_since: "2026-09-24T00:00:00Z", week_since: "2026-09-18T00:00:00Z" } } as WireMsg;
+    const activity = {
+      type: "activity",
+      workspace: "w1",
+      activity: {
+        running: [],
+        open_gates: [],
+        spend_today_usd: 0,
+        spend_week_usd: 0,
+        today_since: "2026-09-24T00:00:00Z",
+        week_since: "2026-09-18T00:00:00Z",
+      },
+    } as WireMsg;
     expect(channelsFor(fs)).toEqual(["workspace:w1"]);
     expect(channelsFor(tree)).toEqual(["workspace:w1"]);
     expect(channelsFor(activity)).toEqual(["workspace:w1"]);
@@ -146,7 +163,13 @@ describe("frames and channels", () => {
     mgr.subscribe("workspace:w2", (m) => got.push(`wrong ${m.type}`));
     mgr.subscribe("home", (m) => got.push(`home ${m.type}`));
     sockets[0].receive(JSON.stringify({ type: "project_fs_changed", workspace: "w1", key: "web", paths: [] }));
-    sockets[0].receive(JSON.stringify({ type: "activity", workspace: "w1", activity: { running: [], open_gates: [], spend_today_usd: 0, spend_week_usd: 0 } }));
+    sockets[0].receive(
+      JSON.stringify({
+        type: "activity",
+        workspace: "w1",
+        activity: { running: [], open_gates: [], spend_today_usd: 0, spend_week_usd: 0 },
+      }),
+    );
     expect(got).toEqual(["project_fs_changed", "activity"]);
   });
 });

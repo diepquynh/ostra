@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { GateView, SessionDetail, StageCard, StoredEvent } from "../../api/types";
 import { sessionDetail } from "../../api/mock/fixtures";
 import { gateSessions } from "../../api/mock/fixtures.session";
-import { answeredGates, defaultLane, eventLine, executionGroups, laneStates, mergeEvents, openGatesInOrder, phaseNodes, stageMeta } from "./board";
+import type { GateView, SessionDetail, StageCard, StoredEvent } from "../../api/types";
+import {
+  answeredGates,
+  defaultLane,
+  eventLine,
+  executionGroups,
+  laneStates,
+  mergeEvents,
+  openGatesInOrder,
+  phaseNodes,
+  stageMeta,
+} from "./board";
 
 const stage = (lane: StageCard["lane"], status: StageCard["status"], extra: Partial<StageCard> = {}): StageCard => ({
   stage: "explore",
@@ -24,7 +34,12 @@ const withStages = (stages: StageCard[], status: SessionDetail["summary"]["statu
   gates: [],
 });
 
-const gate = (id: string, kind: "permission" | "closing_gate", opened: string, answeredAt: string | null = null): GateView => ({
+const gate = (
+  id: string,
+  kind: "permission" | "closing_gate",
+  opened: string,
+  answeredAt: string | null = null,
+): GateView => ({
   ...sessionDetail.gates[0],
   id,
   payload: kind === "permission" ? sessionDetail.gates[0].payload : { kind: "closing_gate", items: [] },
@@ -63,7 +78,10 @@ describe("lane states", () => {
     expect(lanes.design.status).toBe("skipped");
     expect(lanes.test.status).toBe("pending");
     expect(laneStates(withStages([stage("research", "done")], "completed")).docs.status).toBe("skipped");
-    expect(laneStates(withStages([stage("build", "skipped")])).build).toMatchObject({ status: "skipped", detail: "Skipped" });
+    expect(laneStates(withStages([stage("build", "skipped")])).build).toMatchObject({
+      status: "skipped",
+      detail: "Skipped",
+    });
   });
 
   it("opens on the current gate's lane", () => {
@@ -76,12 +94,26 @@ describe("lane states", () => {
 
 describe("gate order", () => {
   it("puts the permission ask first, then the other open gates oldest first", () => {
-    const d = { ...sessionDetail, gates: [gate("c2", "closing_gate", "2026-09-22T10:05:00Z"), gate("c1", "closing_gate", "2026-09-22T10:01:00Z"), gate("p", "permission", "2026-09-22T10:09:00Z")] };
+    const d = {
+      ...sessionDetail,
+      gates: [
+        gate("c2", "closing_gate", "2026-09-22T10:05:00Z"),
+        gate("c1", "closing_gate", "2026-09-22T10:01:00Z"),
+        gate("p", "permission", "2026-09-22T10:09:00Z"),
+      ],
+    };
     expect(openGatesInOrder(d).map((g) => g.id)).toEqual(["p", "c1", "c2"]);
   });
 
   it("lists answered gates newest answer first", () => {
-    const d = { ...sessionDetail, gates: [gate("a", "permission", "2026-09-22T10:00:00Z", "2026-09-22T10:02:00Z"), gate("b", "permission", "2026-09-22T10:01:00Z", "2026-09-22T10:08:00Z"), gate("open", "closing_gate", "2026-09-22T10:00:00Z")] };
+    const d = {
+      ...sessionDetail,
+      gates: [
+        gate("a", "permission", "2026-09-22T10:00:00Z", "2026-09-22T10:02:00Z"),
+        gate("b", "permission", "2026-09-22T10:01:00Z", "2026-09-22T10:08:00Z"),
+        gate("open", "closing_gate", "2026-09-22T10:00:00Z"),
+      ],
+    };
     expect(answeredGates(d).map((g) => g.id)).toEqual(["b", "a"]);
   });
 });
@@ -91,7 +123,9 @@ describe("board rows", () => {
     const execs = new Map(sessionDetail.executions.map((x) => [x.id, x]));
     const running = stage("build", "running", { executions: ["x_imp3"], label: "Phase 3", project: "web" });
     expect(stageMeta(running, execs)).toBe("Update src/components/OrderActions.tsx");
-    expect(stageMeta(stage("review", "done", { detail: "passed", project: "backend", label: "Review phase 1" }), execs)).toBe("passed · backend");
+    expect(
+      stageMeta(stage("review", "done", { detail: "passed", project: "backend", label: "Review phase 1" }), execs),
+    ).toBe("passed · backend");
     expect(stageMeta(stage("research", "done", { project: "web", label: "Explore web" }), execs)).toBeUndefined();
   });
 
@@ -104,19 +138,32 @@ describe("board rows", () => {
       { id: "x_imp1", label: "Phase 1", status: "ok", executor: "codex", cost: "$0.30" },
       { id: "x_imp2", label: "Phase 2", status: "ok", executor: "native", cost: "$0.30" },
     ]);
-    expect(groups.find((g) => g.key === "implementer:web")!.runs[0]).toMatchObject({ executor: "claude", status: "running" });
+    expect(groups.find((g) => g.key === "implementer:web")!.runs[0]).toMatchObject({
+      executor: "claude",
+      status: "running",
+    });
   });
 
   it("lays phases out in dependency columns for the phase graph", () => {
     const layers = phaseNodes(sessionDetail.phases);
     expect(layers.map((l) => l.map((p) => p.id))).toEqual([[1], [2], [3]]);
-    expect(layers[1][0]).toMatchObject({ status: "reviewing", reviewPass: 2, complexity: "high", testPolicy: "Required", dependsOn: [1] });
+    expect(layers[1][0]).toMatchObject({
+      status: "reviewing",
+      reviewPass: 2,
+      complexity: "high",
+      testPolicy: "Required",
+      dependsOn: [1],
+    });
     expect(phaseNodes(board("s_stock").phases)).toEqual([]);
   });
 });
 
 describe("event log", () => {
-  const ev = (seq: number, message: string): StoredEvent => ({ seq, at: "2026-09-22T10:00:00Z", event: { type: "note", message } });
+  const ev = (seq: number, message: string): StoredEvent => ({
+    seq,
+    at: "2026-09-22T10:00:00Z",
+    event: { type: "note", message },
+  });
 
   it("merges the snapshot and live events without duplicates, in sequence order", () => {
     expect(mergeEvents([ev(1, "a"), ev(2, "b")], [ev(3, "c"), ev(2, "b")]).map((e) => e.seq)).toEqual([1, 2, 3]);

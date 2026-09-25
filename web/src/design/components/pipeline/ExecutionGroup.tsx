@@ -5,7 +5,15 @@ import { Chip, type Tone } from "../feedback/Chip";
 import { Spinner } from "../feedback/Spinner";
 import { StatusDot } from "../feedback/StatusDot";
 
-export type ExecutionRunStatus = "running" | "ok" | "stuck" | "handoff" | "error" | "denied" | "interrupted" | "cancelled";
+export type ExecutionRunStatus =
+  | "running"
+  | "ok"
+  | "stuck"
+  | "handoff"
+  | "error"
+  | "denied"
+  | "interrupted"
+  | "cancelled";
 
 export interface ExecutionRun {
   id: string;
@@ -29,10 +37,23 @@ export interface ExecutionGroupProps {
   onOpen?: (run: ExecutionRun) => void;
 }
 
-const DOT: Record<ExecutionRunStatus, Tone> = { ok: "ok", running: "accent", stuck: "warn", interrupted: "warn", handoff: "info", error: "bad", denied: "bad", cancelled: "neutral" };
+const DOT: Record<ExecutionRunStatus, Tone> = {
+  ok: "ok",
+  running: "accent",
+  stuck: "warn",
+  interrupted: "warn",
+  handoff: "info",
+  error: "bad",
+  denied: "bad",
+  cancelled: "neutral",
+};
 
 function RunIcon({ status }: { status: ExecutionRunStatus }) {
-  return status === "running" ? <Spinner size={10} style={{ color: "var(--accent)", margin: "0 1px" }} /> : <StatusDot tone={DOT[status] ?? "neutral"} size={6} />;
+  return status === "running" ? (
+    <Spinner size={10} style={{ color: "var(--accent)", margin: "0 1px" }} />
+  ) : (
+    <StatusDot tone={DOT[status] ?? "neutral"} size={6} />
+  );
 }
 
 /** Executions of one agent in one project, collapsible. A group of one renders as a plain row. */
@@ -66,7 +87,12 @@ export function ExecutionGroup({ agent, project, runs, defaultOpen, selected, on
           <span className="os-xrun__label" style={{ color: "var(--text-muted)" }}>
             {r.label}
           </span>
-          <Icon name={r.executor === "native" ? "activity" : "square-terminal"} size={12} style={{ color: "var(--text-muted)" }} title={r.executor} />
+          <Icon
+            name={r.executor === "native" ? "activity" : "square-terminal"}
+            size={12}
+            style={{ color: "var(--text-muted)" }}
+            title={r.executor}
+          />
           <span className="os-xgroup__cost">{r.cost}</span>
         </div>
       </div>
@@ -76,9 +102,29 @@ export function ExecutionGroup({ agent, project, runs, defaultOpen, selected, on
   const toggle = () => setOpen((o) => !o);
   return (
     <div className="os-xgroup">
-      <div className="os-xgroup__head" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={activateOnKey(toggle)}>
-        <Icon name="chevron-right" size={12} style={{ color: "var(--text-muted)", width: 14, transform: open ? "rotate(90deg)" : "none", transition: "transform var(--dur-fast)" }} />
-        {running ? <Spinner size={10} style={{ color: "var(--accent)", margin: "0 1px" }} /> : <StatusDot tone="ok" size={6} />}
+      <div
+        className="os-xgroup__head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={activateOnKey(toggle)}
+      >
+        <Icon
+          name="chevron-right"
+          size={12}
+          style={{
+            color: "var(--text-muted)",
+            width: 14,
+            transform: open ? "rotate(90deg)" : "none",
+            transition: "transform var(--dur-fast)",
+          }}
+        />
+        {running ? (
+          <Spinner size={10} style={{ color: "var(--accent)", margin: "0 1px" }} />
+        ) : (
+          <StatusDot tone="ok" size={6} />
+        )}
         <span className="os-xgroup__agent">{agent}</span>
         {project && (
           <Chip mono outline>

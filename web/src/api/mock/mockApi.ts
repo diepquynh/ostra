@@ -1,14 +1,34 @@
-import { HttpError, type Api } from "../client";
+import { type Api, HttpError } from "../client";
 import type { SearchHit, TreeSession, WorkspaceActivity } from "../nav";
-import type { DecisionView, ExecutionView, GitCredentialView, GateView, PendingGate, ProjectSkills, SessionDetail, SessionSummary, SkillDoc, WorkspaceUiState } from "../types";
+import type {
+  DecisionView,
+  ExecutionView,
+  GateView,
+  GitCredentialView,
+  PendingGate,
+  ProjectSkills,
+  SessionDetail,
+  SessionSummary,
+  SkillDoc,
+  WorkspaceUiState,
+} from "../types";
 import * as f from "./fixtures";
 import * as fx from "./fixtures.execution";
+import { mockCreateWorkspace, mockValidateCreate, mockValidateImport } from "./fixtures.projects";
 import { eventsFor, gateSessions } from "./fixtures.session";
 import * as wf from "./fixtures.workspace";
-import { mockGit } from "./mockGit";
-import { mockBrowse, mockChanges, mockDiff, mockFile, mockFileIndex, mockMkdir, mockSaveFile, mockTree } from "./projectFiles";
 import { mockCodeDeps, mockCodeFile, mockCodeGraph, mockCodeSymbols, mockCodeUsages } from "./mockCode";
-import { mockCreateWorkspace, mockValidateCreate, mockValidateImport } from "./fixtures.projects";
+import { mockGit } from "./mockGit";
+import {
+  mockBrowse,
+  mockChanges,
+  mockDiff,
+  mockFile,
+  mockFileIndex,
+  mockMkdir,
+  mockSaveFile,
+  mockTree,
+} from "./projectFiles";
 
 const delay = <T>(value: T, ms = 80): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(structuredClone(value)), ms));
@@ -33,7 +53,14 @@ let skillDocs: Record<string, Record<string, SkillDoc>> = Object.fromEntries(
       (p.profile?.skills ?? []).map((e) => [
         e.name,
         {
-          skill: { name: e.name, description: `Use when a task touches a ${e.component_type ?? e.kind}.`, path: e.path, origin: "ostra", entry: e, exists: true },
+          skill: {
+            name: e.name,
+            description: `Use when a task touches a ${e.component_type ?? e.kind}.`,
+            path: e.path,
+            origin: "ostra",
+            entry: e,
+            exists: true,
+          },
           content: `---\nname: ${e.name}\ndescription: Use when a task touches a ${e.component_type ?? e.kind}.\n---\n\n# ${e.name}\n`,
         } satisfies SkillDoc,
       ]),
@@ -41,14 +68,27 @@ let skillDocs: Record<string, Record<string, SkillDoc>> = Object.fromEntries(
   ]),
 );
 const mockSkills = (): ProjectSkills[] =>
-  f.workspaceDetail.projects.map((p) => ({ project: p.key, path: p.path, blocked: null, skills: Object.values(skillDocs[p.key] ?? {}).map((d) => d.skill) }));
+  f.workspaceDetail.projects.map((p) => ({
+    project: p.key,
+    path: p.path,
+    blocked: null,
+    skills: Object.values(skillDocs[p.key] ?? {}).map((d) => d.skill),
+  }));
 const skillDoc = (key: string, name: string) => {
   const d = skillDocs[key]?.[name];
   if (!d) throw new HttpError(404, `No skill \`${name}\` in ${key}.`);
   return d;
 };
 let yolo = false;
-let ui: WorkspaceUiState = { tabs: [], active: null, left_tab: null, files_project: null, sidebar_open: null, dock_open: false, theme: null };
+let ui: WorkspaceUiState = {
+  tabs: [],
+  active: null,
+  left_tab: null,
+  files_project: null,
+  sidebar_open: null,
+  dock_open: false,
+  theme: null,
+};
 
 /** `?first-run` in the page URL shows the first-run setup in mock mode. */
 const firstRun = () => typeof location !== "undefined" && /[?&]first-run\b/.test(location.search);
@@ -59,7 +99,10 @@ const boardFor = (id: string) => boards.find((d) => d.summary.id === id);
 const updateBoard = (id: string, fn: (d: SessionDetail) => SessionDetail) => {
   boards = boards.map((d) => (d.summary.id === id ? fn(d) : d));
 };
-const allSessions = (): SessionSummary[] => [...f.sessions.filter((s) => !boardFor(s.id)).map((s) => summaryFor(s.id)), ...boards.map((d) => d.summary)];
+const allSessions = (): SessionSummary[] => [
+  ...f.sessions.filter((s) => !boardFor(s.id)).map((s) => summaryFor(s.id)),
+  ...boards.map((d) => d.summary),
+];
 const allGates = () => [...gates, ...boards.flatMap((d) => d.gates)];
 /** The latest open gate whose payload names the execution, as the server's fold finds it. */
 function pendingGate(id: string): PendingGate | null {
@@ -68,7 +111,9 @@ function pendingGate(id: string): PendingGate | null {
   return g ? { id: g.id, kind: g.payload.kind, title: g.title } : null;
 }
 const execView = (id: string): ExecutionView => {
-  const e = f.executions.some((x) => x.id === id) ? fx.executionView(id) : (boards.flatMap((d) => d.executions).find((x) => x.id === id) ?? fx.executionView(id));
+  const e = f.executions.some((x) => x.id === id)
+    ? fx.executionView(id)
+    : (boards.flatMap((d) => d.executions).find((x) => x.id === id) ?? fx.executionView(id));
   return { ...e, pending_gate: pendingGate(id) };
 };
 
@@ -84,7 +129,10 @@ const detailFor = (id: string): SessionDetail => {
   if (b) return b;
   if (id === f.SESSION) return { ...f.sessionDetail, summary: summaryFor(id), gates };
   const executions = f.sessionExecutions(id);
-  const base = id === "s_research" ? f.completedDetail : { ...f.sessionDetail, completion: null, stages: [], phases: [], decisions: [], artifacts: [] };
+  const base =
+    id === "s_research"
+      ? f.completedDetail
+      : { ...f.sessionDetail, completion: null, stages: [], phases: [], decisions: [], artifacts: [] };
   return { ...base, summary: summaryFor(id), gates: [], executions, execution_groups: f.groupsFor(executions) };
 };
 
@@ -116,7 +164,10 @@ function treeSession(id: string): TreeSession {
   };
 }
 
-const tree = () => allSessions().map((s) => treeSession(s.id)).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+const tree = () =>
+  allSessions()
+    .map((s) => treeSession(s.id))
+    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
 
 function activity(): WorkspaceActivity {
   const t = tree();
@@ -125,12 +176,27 @@ function activity(): WorkspaceActivity {
       s.groups.flatMap((g) =>
         g.runs
           .filter((r) => r.status === "running")
-          .map((r) => ({ id: r.id, session: s.id, agent: g.agent, project: g.project, run_label: r.run_label, stream: r.stream, summary: r.summary })),
+          .map((r) => ({
+            id: r.id,
+            session: s.id,
+            agent: g.agent,
+            project: g.project,
+            run_label: r.run_label,
+            stream: r.stream,
+            summary: r.summary,
+          })),
       ),
     ),
     open_gates: allGates()
       .filter((g) => g.answer === null)
-      .map((g) => ({ id: g.id, session: g.session, session_title: summaryFor(g.session).title, title: g.title, kind: g.payload.kind, opened_at: g.opened_at })),
+      .map((g) => ({
+        id: g.id,
+        session: g.session,
+        session_title: summaryFor(g.session).title,
+        title: g.title,
+        kind: g.payload.kind,
+        opened_at: g.opened_at,
+      })),
     spend_today_usd: 1.84,
     spend_week_usd: 4.18,
     today_since: "2026-09-22T00:00:00Z",
@@ -147,12 +213,17 @@ function search(query: string, limit: number): SearchHit[] {
   };
   for (const s of tree()) {
     add("session", `session:${s.id}`, s.title ?? s.request, s.status, `${s.title ?? ""} ${s.request}`);
-    for (const g of s.groups) for (const r of g.runs) add("execution", `exec:${r.id}`, `${g.agent} · ${r.run_label} in ${g.project}`, r.status);
-    for (const a of s.artifacts) add("artifact", `artifact:${a.path}`, a.label, a.path.split("/").pop() ?? null, `${a.label} ${a.path}`);
+    for (const g of s.groups)
+      for (const r of g.runs) add("execution", `exec:${r.id}`, `${g.agent} · ${r.run_label} in ${g.project}`, r.status);
+    for (const a of s.artifacts)
+      add("artifact", `artifact:${a.path}`, a.label, a.path.split("/").pop() ?? null, `${a.label} ${a.path}`);
   }
   for (const p of f.workspaceDetail.projects) add("project", `project:${p.key}`, p.key, p.path);
-  for (const key of ["backend", "web"]) for (const p of mockFileIndex(key).paths) add("file", `file:${key}:${p}`, p, key);
-  for (const [key, list] of Object.entries(lessons)) for (const l of list) add("lesson", `lesson:${key}:${l.id}`, l.lesson, `${key} · ${l.area}`, `${l.area} ${l.lesson}`);
+  for (const key of ["backend", "web"])
+    for (const p of mockFileIndex(key).paths) add("file", `file:${key}:${p}`, p, key);
+  for (const [key, list] of Object.entries(lessons))
+    for (const l of list)
+      add("lesson", `lesson:${key}:${l.id}`, l.lesson, `${key} · ${l.area}`, `${l.area} ${l.lesson}`);
   for (const [k, label] of wf.SETTING_KEYS) add("setting", `setting:${k}`, k, label, `${k} ${label}`);
   return hits.sort((a, b) => b.score - a.score).slice(0, limit);
 }
@@ -164,14 +235,20 @@ export const mockApi: Api = {
   workspaces: () => delay(firstRun() ? [] : f.workspaces),
   createWorkspace: (body) => {
     const issues = mockValidateCreate(body, firstRun() ? [] : f.workspaces.map((w) => w.root));
-    if (issues.length) return new Promise((_, reject) => setTimeout(() => reject(new HttpError(422, "The workspace settings have problems.", issues)), 400));
+    if (issues.length)
+      return new Promise((_, reject) =>
+        setTimeout(() => reject(new HttpError(422, "The workspace settings have problems.", issues)), 400),
+      );
     return delay(mockCreateWorkspace(body, { ...f.workspaceDetail, settings }), 1500);
   },
   workspace: () => delay({ ...f.workspaceDetail, settings }),
   deleteWorkspace: () => delay(undefined),
   saveSettings: (_ws, next) => {
     const issues = wf.validate(next);
-    if (issues.length) return new Promise((_, reject) => setTimeout(() => reject(new HttpError(422, "The settings have problems.", issues)), 80));
+    if (issues.length)
+      return new Promise((_, reject) =>
+        setTimeout(() => reject(new HttpError(422, "The settings have problems.", issues)), 80),
+      );
     settings = next;
     return delay({ ...f.workspaceDetail, settings });
   },
@@ -179,14 +256,26 @@ export const mockApi: Api = {
   importProject: (_ws, body) => {
     const issues = mockValidateImport(body, f.workspaceDetail.projects);
     if (issues.length) {
-      const error = issues.length === 1 ? issues[0].message : `Fix these problems and import the project again: ${issues.map((i) => i.message).join(" ")}`;
+      const error =
+        issues.length === 1
+          ? issues[0].message
+          : `Fix these problems and import the project again: ${issues.map((i) => i.message).join(" ")}`;
       return new Promise((_, reject) => setTimeout(() => reject(new HttpError(422, error, issues)), 250));
     }
     return delay({
       ...f.workspaceDetail,
       projects: [
         ...f.workspaceDetail.projects,
-        { key: body.key.trim(), path: body.path, init_status: "not_initialized", ultracode_bootstrap: false, is_git: true, git_branch: "main", stack: body.stack || null, profile: null },
+        {
+          key: body.key.trim(),
+          path: body.path,
+          init_status: "not_initialized",
+          ultracode_bootstrap: false,
+          is_git: true,
+          git_branch: "main",
+          stack: body.stack || null,
+          profile: null,
+        },
       ],
     });
   },
@@ -197,13 +286,23 @@ export const mockApi: Api = {
         ...f.workspaceDetail,
         projects: [
           ...f.workspaceDetail.projects,
-          { key, path: body.path || `${f.workspaceDetail.root}/${key}`, init_status: "not_initialized", ultracode_bootstrap: false, is_git: true, git_branch: body.branch || "main", stack: body.stack || null, profile: null },
+          {
+            key,
+            path: body.path || `${f.workspaceDetail.root}/${key}`,
+            init_status: "not_initialized",
+            ultracode_bootstrap: false,
+            is_git: true,
+            git_branch: body.branch || "main",
+            stack: body.stack || null,
+            profile: null,
+          },
         ],
       },
       1500,
     );
   },
-  pullProject: () => delay({ branch: "main", updated: false, before: "1a2b3c4", after: "1a2b3c4", output: "Already up to date." }),
+  pullProject: () =>
+    delay({ branch: "main", updated: false, before: "1a2b3c4", after: "1a2b3c4", output: "Already up to date." }),
   gitStatus: (_ws, key) => delay(mockGit.status(key)),
   gitBranches: (_ws, key) => delay(mockGit.branches(key)),
   gitStage: (_ws, key, paths) => delay(mockGit.stage(key, paths, true)),
@@ -215,22 +314,46 @@ export const mockApi: Api = {
   gitCredentials: () => delay(gitCreds),
   createGitCredential: (edit) => {
     const host = (edit.host ?? "").trim();
-    gitCreds = [...gitCreds, { id: `gc_${gitCreds.length + 1}`, label: edit.label || host, host, kind: edit.kind === "ssh" ? "ssh" : "https", username: edit.username || null, has_secret: true }];
+    gitCreds = [
+      ...gitCreds,
+      {
+        id: `gc_${gitCreds.length + 1}`,
+        label: edit.label || host,
+        host,
+        kind: edit.kind === "ssh" ? "ssh" : "https",
+        username: edit.username || null,
+        has_secret: true,
+      },
+    ];
     return delay(gitCreds);
   },
   updateGitCredential: (id, edit) => {
-    gitCreds = gitCreds.map((c) => (c.id === id ? { ...c, label: edit.label ?? c.label, host: edit.host ?? c.host, username: edit.username ?? c.username } : c));
+    gitCreds = gitCreds.map((c) =>
+      c.id === id
+        ? { ...c, label: edit.label ?? c.label, host: edit.host ?? c.host, username: edit.username ?? c.username }
+        : c,
+    );
     return delay(gitCreds);
   },
   deleteGitCredential: (id) => {
     gitCreds = gitCreds.filter((c) => c.id !== id);
     return delay(gitCreds);
   },
-  removeProject: (_ws, key) => delay({ ...f.workspaceDetail, projects: f.workspaceDetail.projects.filter((p) => p.key !== key) }),
+  removeProject: (_ws, key) =>
+    delay({ ...f.workspaceDetail, projects: f.workspaceDetail.projects.filter((p) => p.key !== key) }),
   initProject: () => delay(f.sessions[2]),
   sessions: () => delay(allSessions()),
   createSession: (_ws, body): Promise<SessionSummary> =>
-    delay({ ...f.sessionSummary, id: "s_new", request: body.request, status: "running", lane: "research", stage_label: "Classifying", yolo: body.options.yolo, title: null }),
+    delay({
+      ...f.sessionSummary,
+      id: "s_new",
+      request: body.request,
+      status: "running",
+      lane: "research",
+      stage_label: "Classifying",
+      yolo: body.options.yolo,
+      title: null,
+    }),
   session: (id) => delay(detailFor(id)),
   events: (id) => delay(eventsFor(detailFor(id))),
   setYolo: (id, enabled) => {
@@ -243,11 +366,15 @@ export const mockApi: Api = {
   },
   amend: (id) => delay(summaryFor(id)),
   stopSession: (id) => {
-    updateBoard(id, (d) => ({ ...d, summary: { ...d.summary, status: "failed", lane: "done", stage_label: "Stopped", open_gates: 0 } }));
+    updateBoard(id, (d) => ({
+      ...d,
+      summary: { ...d.summary, status: "failed", lane: "done", stage_label: "Stopped", open_gates: 0 },
+    }));
     return delay(summaryFor(id));
   },
   answerGate: (id, body) => {
-    const answer = (g: GateView): GateView => (g.id === id ? { ...g, answer: body.answer, source: "user", answered_at: new Date().toISOString() } : g);
+    const answer = (g: GateView): GateView =>
+      g.id === id ? { ...g, answer: body.answer, source: "user", answered_at: new Date().toISOString() } : g;
     gates = gates.map(answer);
     boards = boards.map((d) => {
       if (!d.gates.some((g) => g.id === id)) return d;
@@ -258,7 +385,8 @@ export const mockApi: Api = {
     return delay(allGates().find((g) => g.id === id)!);
   },
   overrideDecision: (id, body) => {
-    const next = (d: DecisionView): DecisionView => (d.id === id ? { ...d, output: body.output, reason: body.reason, overridden: true } : d);
+    const next = (d: DecisionView): DecisionView =>
+      d.id === id ? { ...d, output: body.output, reason: body.reason, overridden: true } : d;
     boards = boards.map((b) => ({ ...b, decisions: b.decisions.map(next) }));
     return delay(next([...f.decisions, ...boards.flatMap((b) => b.decisions)].find((d) => d.id === id)!));
   },
@@ -270,13 +398,28 @@ export const mockApi: Api = {
   diff: () => delay(fx.ledgerDiff),
   lessons: (_ws, key, query) => {
     const list = lessons[key] ?? [];
-    return delay(query ? list.filter((l) => `${l.area} ${l.lesson}`.toLowerCase().includes(query.toLowerCase())) : list);
+    return delay(
+      query ? list.filter((l) => `${l.area} ${l.lesson}`.toLowerCase().includes(query.toLowerCase())) : list,
+    );
   },
   saveLesson: (_ws, key, body) => {
-    const id = body.id ?? Math.max(0, ...Object.values(lessons).flat().map((l) => l.id)) + 1;
+    const id =
+      body.id ??
+      Math.max(
+        0,
+        ...Object.values(lessons)
+          .flat()
+          .map((l) => l.id),
+      ) + 1;
     const list = lessons[key] ?? [];
     const old = list.find((l) => l.id === id);
-    const lesson = { id, area: body.area, lesson: body.lesson, source: old?.source ?? "user", created_at: old?.created_at ?? new Date().toISOString() };
+    const lesson = {
+      id,
+      area: body.area,
+      lesson: body.lesson,
+      source: old?.source ?? "user",
+      created_at: old?.created_at ?? new Date().toISOString(),
+    };
     lessons = { ...lessons, [key]: old ? list.map((l) => (l.id === id ? lesson : l)) : [...list, lesson] };
     return delay(lesson);
   },
@@ -289,20 +432,46 @@ export const mockApi: Api = {
   harnessSkill: async (_ws, key, path) => delay(skillDoc(key, path)),
   saveSkill: (_ws, key, name, body) => {
     const old = skillDocs[key]?.[name];
-    const entry = { name, kind: body.kind, path: `.ostra/skills/${name}/SKILL.md`, component_type: body.component_type, source: old?.skill.entry?.source ?? "user" };
-    const doc: SkillDoc = { skill: { name, description: old?.skill.description ?? null, path: entry.path, origin: "ostra", entry, exists: true }, content: body.content };
+    const entry = {
+      name,
+      kind: body.kind,
+      path: `.ostra/skills/${name}/SKILL.md`,
+      component_type: body.component_type,
+      source: old?.skill.entry?.source ?? "user",
+    };
+    const doc: SkillDoc = {
+      skill: {
+        name,
+        description: old?.skill.description ?? null,
+        path: entry.path,
+        origin: "ostra",
+        entry,
+        exists: true,
+      },
+      content: body.content,
+    };
     skillDocs = { ...skillDocs, [key]: { ...skillDocs[key], [name]: doc } };
     return delay(doc);
   },
   saveProjectCommands: (_ws, key, commands) => {
     const p = f.workspaceDetail.projects.find((x) => x.key === key);
-    if (!p?.profile) return Promise.reject(new HttpError(409, `Initialize ${key} first: its commands live in .ostra/project.toml.`));
+    if (!p?.profile)
+      return Promise.reject(new HttpError(409, `Initialize ${key} first: its commands live in .ostra/project.toml.`));
     const bad = Object.entries(commands).filter(([, v]) => v && /[\r\n]/.test(v));
     if (bad.length)
       return Promise.reject(
-        new HttpError(422, "Fix the commands and save again.", bad.map(([k]) => ({ path: `commands.${k}`, message: "Write the command on one line; chain steps with `&&`." }))),
+        new HttpError(
+          422,
+          "Fix the commands and save again.",
+          bad.map(([k]) => ({
+            path: `commands.${k}`,
+            message: "Write the command on one line; chain steps with `&&`.",
+          })),
+        ),
       );
-    const clean = Object.fromEntries(Object.entries(commands).map(([k, v]) => [k, v?.trim() ? v.trim() : null])) as typeof commands;
+    const clean = Object.fromEntries(
+      Object.entries(commands).map(([k, v]) => [k, v?.trim() ? v.trim() : null]),
+    ) as typeof commands;
     p.profile.commands = clean;
     return delay(clean);
   },
@@ -330,7 +499,12 @@ export const mockApi: Api = {
   fsMkdir: (path) => delay(mockBrowse(path)),
   harnessSetup: (harness, action) => delay({ terminal: `setup_${harness}_${action}`, command: `${harness} ${action}` }),
 
-  environment: () => delay({ providers: f.workspaceDetail.providers, harnesses: f.workspaceDetail.harnesses, stacks: f.workspaceDetail.stacks }),
+  environment: () =>
+    delay({
+      providers: f.workspaceDetail.providers,
+      harnesses: f.workspaceDetail.harnesses,
+      stacks: f.workspaceDetail.stacks,
+    }),
   saveProvider: (name, edit) => {
     const p = f.workspaceDetail.providers.find((x) => x.name === name);
     if (!p) return Promise.reject(new HttpError(404, `No provider ${name} in the global config.`, []));
@@ -348,8 +522,14 @@ export const mockApi: Api = {
     }
     return delay({ ...p, saved: { ...p.saved } });
   },
-  validateNewWorkspace: (body) => delay(mockValidateCreate(body, firstRun() ? [] : f.workspaces.map((w) => w.root)), 250),
-  onboarding: () => delay(firstRun() ? { onboarded_at: null, workspaces: 0 } : { onboarded_at: "2026-09-01T09:00:00Z", workspaces: f.workspaces.length }),
+  validateNewWorkspace: (body) =>
+    delay(mockValidateCreate(body, firstRun() ? [] : f.workspaces.map((w) => w.root)), 250),
+  onboarding: () =>
+    delay(
+      firstRun()
+        ? { onboarded_at: null, workspaces: 0 }
+        : { onboarded_at: "2026-09-01T09:00:00Z", workspaces: f.workspaces.length },
+    ),
   completeOnboarding: () => delay({ onboarded_at: new Date().toISOString(), workspaces: f.workspaces.length }),
   uiState: () => delay(ui),
   patchUiState: (_ws, patch) => {
@@ -364,7 +544,9 @@ export const mockApi: Api = {
       return delay(mockMkdir(key, path));
     } catch (e) {
       const err = e as Error & { status?: number; issues?: { path: string; message: string }[] };
-      return new Promise((_, reject) => setTimeout(() => reject(new HttpError(err.status ?? 400, err.message, err.issues ?? [])), 80));
+      return new Promise((_, reject) =>
+        setTimeout(() => reject(new HttpError(err.status ?? 400, err.message, err.issues ?? [])), 80),
+      );
     }
   },
   saveProjectFile: (_ws, key, body) => {
@@ -372,7 +554,9 @@ export const mockApi: Api = {
       return delay(mockSaveFile(key, body.path, body.content, body.base_hash));
     } catch (e) {
       const err = e as Error & { status?: number; issues?: { path: string; message: string }[] };
-      return new Promise((_, reject) => setTimeout(() => reject(new HttpError(err.status ?? 404, err.message, err.issues ?? [])), 80));
+      return new Promise((_, reject) =>
+        setTimeout(() => reject(new HttpError(err.status ?? 404, err.message, err.issues ?? [])), 80),
+      );
     }
   },
   projectFiles: (_ws, key) => delay(mockFileIndex(key)),
@@ -382,7 +566,8 @@ export const mockApi: Api = {
   codeDeps: (_ws, key, path) => attempt(() => mockCodeDeps(key, path)),
   codeSymbols: (_ws, key, query, limit = 50) => attempt(() => mockCodeSymbols(key, query, limit)),
   codeGraph: (_ws, key, at = {}) => attempt(() => mockCodeGraph(key, at)),
-  codeReindex: (_ws, key) => delay({ indexed_files: mockCodeGraph(key, {}).indexed_files, millis: 12, truncated: false }),
+  codeReindex: (_ws, key) =>
+    delay({ indexed_files: mockCodeGraph(key, {}).indexed_files, millis: 12, truncated: false }),
   projectChanges: (_ws, key) => delay(mockChanges(key)),
 
   tree: () => delay({ sessions: tree() }),

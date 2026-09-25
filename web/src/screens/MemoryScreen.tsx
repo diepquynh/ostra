@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
 import type { Lesson } from "../api/types";
-import { Banner, Button, Dialog, IconButton, Input, Panel, Select, Table, Tabs, type TableColumn } from "../design";
+import { Banner, Button, Dialog, IconButton, Input, Panel, Select, Table, type TableColumn, Tabs } from "../design";
 import { formatTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { useShell, useWorkspace } from "../lib/nav";
@@ -65,7 +65,10 @@ export function MemoryScreen({ ws }: MemoryScreenProps) {
     }
   }, [anchor, nonce, search]);
 
-  const lessons = useAsync(() => (project ? api.lessons(ws, project, debounced || undefined) : Promise.resolve([])), [ws, project, debounced]);
+  const lessons = useAsync(
+    () => (project ? api.lessons(ws, project, debounced || undefined) : Promise.resolve([])),
+    [ws, project, debounced],
+  );
   const rows = lessons.data ?? [];
 
   // Ring the selected row once it is on screen.
@@ -114,8 +117,18 @@ export function MemoryScreen({ ws }: MemoryScreenProps) {
       width: 64,
       render: (l) => (
         <span className="wp-row" style={{ gap: 2, flexWrap: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-          <IconButton size="sm" icon="pencil" label="Edit this lesson" onClick={() => setEditing({ mode: "edit", lesson: l })} />
-          <IconButton size="sm" icon="x" label="Delete this lesson" onClick={() => setEditing({ mode: "delete", lesson: l })} />
+          <IconButton
+            size="sm"
+            icon="pencil"
+            label="Edit this lesson"
+            onClick={() => setEditing({ mode: "edit", lesson: l })}
+          />
+          <IconButton
+            size="sm"
+            icon="x"
+            label="Delete this lesson"
+            onClick={() => setEditing({ mode: "delete", lesson: l })}
+          />
         </span>
       ),
     },
@@ -141,12 +154,19 @@ export function MemoryScreen({ ws }: MemoryScreenProps) {
       }
     >
       <p className="wp-lead">
-        Lessons are project facts that agents record when something cost real effort to find out: a constraint the code does not state, a
-        version-specific API detail, a workaround. Agents recall them before working in an area and again after a failure. Edit or delete any
-        lesson that is wrong or stale, because agents act on what they recall.
+        Lessons are project facts that agents record when something cost real effort to find out: a constraint the code
+        does not state, a version-specific API detail, a workaround. Agents recall them before working in an area and
+        again after a failure. Edit or delete any lesson that is wrong or stale, because agents act on what they recall.
       </p>
       {projects.length === 0 ? (
-        <Banner tone="info" actions={<Button size="sm" icon="folder-plus" onClick={addProject}>Add project</Button>}>
+        <Banner
+          tone="info"
+          actions={
+            <Button size="sm" icon="folder-plus" onClick={addProject}>
+              Add project
+            </Button>
+          }
+        >
           This workspace has no projects yet. Lessons belong to a project, so add one first.
         </Banner>
       ) : (
@@ -231,7 +251,11 @@ export function MemoryScreen({ ws }: MemoryScreenProps) {
           }}
           onSave={(area, text) =>
             run(async () => {
-              const saved = await api.saveLesson(ws, project, { id: editing.mode === "edit" ? editing.lesson.id : null, area, lesson: text });
+              const saved = await api.saveLesson(ws, project, {
+                id: editing.mode === "edit" ? editing.lesson.id : null,
+                area,
+                lesson: text,
+              });
               setSelected(saved.id);
             })
           }
@@ -253,8 +277,18 @@ export function MemoryScreen({ ws }: MemoryScreenProps) {
           }
         >
           <div className="wp-stack">
-            <span style={{ color: "var(--text-secondary)" }}>Later sessions in {project} will no longer recall it.</span>
-            <div className="wp-stack" style={{ gap: 4, padding: "8px 10px", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-sm)" }}>
+            <span style={{ color: "var(--text-secondary)" }}>
+              Later sessions in {project} will no longer recall it.
+            </span>
+            <div
+              className="wp-stack"
+              style={{
+                gap: 4,
+                padding: "8px 10px",
+                border: "1px solid var(--border-subtle)",
+                borderRadius: "var(--radius-sm)",
+              }}
+            >
               <span className="wp-mono" style={{ color: "var(--text-muted)" }}>
                 {editing.lesson.area}
               </span>

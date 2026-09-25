@@ -3,11 +3,13 @@ import type { SkillProposal } from "../../api/types";
 import { Button, Chip, Select, Table } from "../../design";
 import { humanize } from "../../lib/format";
 import { DISPOSITIONS, skillsAnswer } from "../../lib/gateAnswers";
-import { OpenGate, muted, type GateFormProps } from "./kit";
+import { type GateFormProps, muted, OpenGate } from "./kit";
 
 /** The init flow's skill approval table: per skill, generate, regenerate, reuse, or drop (HANDOVER 8.4). */
 export function SkillsGate({ gate, payload, submit, busy, error }: GateFormProps<"skill_approval">) {
-  const [picks, setPicks] = useState<Record<string, string>>(() => Object.fromEntries(payload.skills.map((s) => [s.name, s.disposition])));
+  const [picks, setPicks] = useState<Record<string, string>>(() =>
+    Object.fromEntries(payload.skills.map((s) => [s.name, s.disposition])),
+  );
   const kept = payload.skills.filter((s) => picks[s.name] !== "drop").length;
   const rows = payload.skills.map((s) => ({ ...s, id: s.name }));
   return (
@@ -40,7 +42,9 @@ export function SkillsGate({ gate, payload, submit, busy, error }: GateFormProps
             render: (s) => (
               <div style={{ display: "flex", flexDirection: "column", gap: 3, whiteSpace: "normal" }}>
                 <span>{s.description}</span>
-                {s.exemplars.length > 0 && <span style={{ ...muted, fontFamily: "var(--font-mono)" }}>{s.exemplars.join(", ")}</span>}
+                {s.exemplars.length > 0 && (
+                  <span style={{ ...muted, fontFamily: "var(--font-mono)" }}>{s.exemplars.join(", ")}</span>
+                )}
               </div>
             ),
           },

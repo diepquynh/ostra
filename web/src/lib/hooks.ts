@@ -2,7 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { socket } from "../api";
 import type { WireMsg } from "../api/socket";
 
-export type Async<T> = { data: T | null; error: Error | null; loading: boolean; reload: () => void; set: (v: T) => void };
+export type Async<T> = {
+  data: T | null;
+  error: Error | null;
+  loading: boolean;
+  reload: () => void;
+  set: (v: T) => void;
+};
 
 /** Load data with a promise factory. Reloads when `deps` change and when the socket reconnects. */
 export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T> {
@@ -58,9 +64,12 @@ export function useThrottled(fn: () => void, ms: number): () => void {
   ref.current = fn;
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pending = useRef(false);
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
   return useCallback(() => {
     if (timer.current) {
       pending.current = true;

@@ -61,7 +61,9 @@ export function PermissionNotice({ stream, gate, pending, summarize, onAnswered,
   return (
     <Banner
       tone="warn"
-      title={stream === "terminal" ? "The harness is paused on a permission ask" : "The agent is paused on a permission ask"}
+      title={
+        stream === "terminal" ? "The harness is paused on a permission ask" : "The agent is paused on a permission ask"
+      }
       actions={
         <>
           {permission && (
@@ -80,7 +82,8 @@ export function PermissionNotice({ stream, gate, pending, summarize, onAnswered,
         </>
       }
     >
-      {call ? <code>{summarize(call)}</code> : permission?.title} needs your answer. {reason && <>{inlineCode(reason)} </>}
+      {call ? <code>{summarize(call)}</code> : permission?.title} needs your answer.{" "}
+      {reason && <>{inlineCode(reason)} </>}
       {holder} holds the call until you decide.
       {error && <div style={{ color: "var(--bad)", marginTop: 4 }}>{error}</div>}
     </Banner>

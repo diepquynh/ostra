@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import type { DocIssue, FactCheckFinding, FactCheckView } from "../../../api/types";
 import type { Severity } from "../../../api/gen/Severity";
+import type { DocIssue, FactCheckFinding, FactCheckView } from "../../../api/types";
 
 /** One page of a typed document. Sub-chapters carry `depth: 1` and follow their parent. */
 export type Chapter = {
@@ -43,7 +43,8 @@ export function findingElement(f: FactCheckFinding): string | null {
   return raw ? normId(raw) : null;
 }
 
-export const severityTone = (s: Severity): MarkTone => (s === "BLOCKER" || s === "HIGH" ? "bad" : s === "MEDIUM" ? "warn" : "info");
+export const severityTone = (s: Severity): MarkTone =>
+  s === "BLOCKER" || s === "HIGH" ? "bad" : s === "MEDIUM" ? "warn" : "info";
 
 const RANK: Record<MarkTone, number> = { bad: 0, warn: 1, info: 2 };
 export const worst = (tones: MarkTone[]): MarkTone | undefined => [...tones].sort((a, b) => RANK[a] - RANK[b])[0];
@@ -52,8 +53,18 @@ export const worst = (tones: MarkTone[]): MarkTone | undefined => [...tones].sor
 export function buildMarks(issues: DocIssue[], check: FactCheckView | null): Map<string, Mark[]> {
   const out = new Map<string, Mark[]>();
   const add = (key: string, m: Mark) => out.set(key, [...(out.get(key) ?? []), m]);
-  for (const i of issues) add(i.element ? normId(i.element) : "", { tone: i.level === "error" ? "bad" : "warn", source: "check", text: i.message });
-  for (const f of check?.findings ?? []) add(findingElement(f) ?? "", { tone: severityTone(f.severity), source: "fact-check", text: `${f.claim}: ${f.issue}` });
+  for (const i of issues)
+    add(i.element ? normId(i.element) : "", {
+      tone: i.level === "error" ? "bad" : "warn",
+      source: "check",
+      text: i.message,
+    });
+  for (const f of check?.findings ?? [])
+    add(findingElement(f) ?? "", {
+      tone: severityTone(f.severity),
+      source: "fact-check",
+      text: `${f.claim}: ${f.issue}`,
+    });
   return out;
 }
 

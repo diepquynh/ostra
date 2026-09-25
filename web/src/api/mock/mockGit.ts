@@ -25,10 +25,38 @@ function repo(key: string): Repo {
       truncated: false,
       busy: null,
       branchList: [
-        { name: "main", remote: false, current: true, upstream: "origin/main", commit: "1a2b3c4", subject: "Split the order service" },
-        { name: "fix/cancel-race", remote: false, current: false, upstream: null, commit: "9f8e7d6", subject: "Lock the order row before cancelling" },
-        { name: "origin/main", remote: true, current: false, upstream: null, commit: "0c0ffee", subject: "Bump dependencies" },
-        { name: "origin/release", remote: true, current: false, upstream: null, commit: "5e5e5e5", subject: "Release 1.4" },
+        {
+          name: "main",
+          remote: false,
+          current: true,
+          upstream: "origin/main",
+          commit: "1a2b3c4",
+          subject: "Split the order service",
+        },
+        {
+          name: "fix/cancel-race",
+          remote: false,
+          current: false,
+          upstream: null,
+          commit: "9f8e7d6",
+          subject: "Lock the order row before cancelling",
+        },
+        {
+          name: "origin/main",
+          remote: true,
+          current: false,
+          upstream: null,
+          commit: "0c0ffee",
+          subject: "Bump dependencies",
+        },
+        {
+          name: "origin/release",
+          remote: true,
+          current: false,
+          upstream: null,
+          commit: "5e5e5e5",
+          subject: "Release 1.4",
+        },
       ],
     };
     repos.set(key, r);
@@ -42,7 +70,10 @@ const move = (from: GitChange[], to: GitChange[], paths: string[]) => {
   const take = paths.length ? from.filter((c) => paths.includes(c.path)) : [...from];
   const rest = from.filter((c) => !take.includes(c));
   const moved = take.map((c) => ({ ...c, mark: c.mark === "?" ? ("A" as const) : c.mark }));
-  return [rest, [...to.filter((t) => !moved.some((m) => m.path === t.path)), ...moved].sort((a, b) => a.path.localeCompare(b.path))];
+  return [
+    rest,
+    [...to.filter((t) => !moved.some((m) => m.path === t.path)), ...moved].sort((a, b) => a.path.localeCompare(b.path)),
+  ];
 };
 
 export const mockGit = {
@@ -73,9 +104,17 @@ export const mockGit = {
   checkout(key: string, req: GitCheckoutRequest): GitOpResult {
     const r = repo(key);
     const name = req.branch.replace(/^origin\//, "");
-    if (req.create && r.branchList.some((b) => !b.remote && b.name === name)) throw new Error(`A branch named \`${name}\` already exists.`);
+    if (req.create && r.branchList.some((b) => !b.remote && b.name === name))
+      throw new Error(`A branch named \`${name}\` already exists.`);
     if (!r.branchList.some((b) => !b.remote && b.name === name))
-      r.branchList.push({ name, remote: false, current: false, upstream: req.create ? null : `origin/${name}`, commit: r.head ?? "", subject: "" });
+      r.branchList.push({
+        name,
+        remote: false,
+        current: false,
+        upstream: req.create ? null : `origin/${name}`,
+        commit: r.head ?? "",
+        subject: "",
+      });
     r.branchList = r.branchList.map((b) => ({ ...b, current: !b.remote && b.name === name }));
     r.branch = name;
     r.upstream = r.branchList.find((b) => b.current)?.upstream ?? null;

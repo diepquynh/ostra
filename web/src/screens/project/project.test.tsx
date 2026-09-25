@@ -1,10 +1,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import type { DiffHunk, ProjectTreeEntry } from "../../api/types";
 import { mockDiff } from "../../api/mock/projectFiles";
+import type { DiffHunk, ProjectTreeEntry } from "../../api/types";
 import { changedByLabel } from "../FileScreen";
-import { diffRows } from "./diff";
 import { DiffPane } from "./DiffPane";
+import { diffRows } from "./diff";
 import { kindOf, modifiedLabel, parentsOf, sortEntries, toggleSort } from "./files";
 
 afterEach(cleanup);
@@ -37,15 +37,39 @@ describe("folder list sorting", () => {
   const names = (s: Parameters<typeof sortEntries>[1]) => sortEntries(rows, s).map((e) => e.name);
 
   it("puts folders first and sorts names case-insensitively with numbers in order", () => {
-    expect(names({ key: "name", dir: 1 })).toEqual([".github", "src", "A.md", "b.rs", "c.toml", "file9.rs", "file10.rs"]);
+    expect(names({ key: "name", dir: 1 })).toEqual([
+      ".github",
+      "src",
+      "A.md",
+      "b.rs",
+      "c.toml",
+      "file9.rs",
+      "file10.rs",
+    ]);
   });
 
   it("keeps folders first when descending", () => {
-    expect(names({ key: "name", dir: -1 })).toEqual(["src", ".github", "file10.rs", "file9.rs", "c.toml", "b.rs", "A.md"]);
+    expect(names({ key: "name", dir: -1 })).toEqual([
+      "src",
+      ".github",
+      "file10.rs",
+      "file9.rs",
+      "c.toml",
+      "b.rs",
+      "A.md",
+    ]);
   });
 
   it("sorts by size and breaks ties by name", () => {
-    expect(names({ key: "size", dir: 1 })).toEqual([".github", "src", "file9.rs", "file10.rs", "A.md", "b.rs", "c.toml"]);
+    expect(names({ key: "size", dir: 1 })).toEqual([
+      ".github",
+      "src",
+      "file9.rs",
+      "file10.rs",
+      "A.md",
+      "b.rs",
+      "c.toml",
+    ]);
   });
 
   it("sorts by modified time and by kind", () => {
@@ -113,7 +137,14 @@ describe("diff hunks", () => {
   });
 
   it("has no leading gap when the first hunk starts at line 1", () => {
-    const rows = diffRows([{ ...hunks[1], old_start: 1, new_start: 1, lines: hunks[1].lines.map((l) => ({ ...l, old_no: l.old_no && 1, new_no: l.new_no && l.new_no - 19 })) }]);
+    const rows = diffRows([
+      {
+        ...hunks[1],
+        old_start: 1,
+        new_start: 1,
+        lines: hunks[1].lines.map((l) => ({ ...l, old_no: l.old_no && 1, new_no: l.new_no && l.new_no - 19 })),
+      },
+    ]);
     expect(rows[0].type).toBe("ctx");
   });
 
@@ -132,7 +163,16 @@ describe("diff hunks", () => {
   });
 
   it("names the execution that changed a file", () => {
-    const by = { session: "s", execution: "x", agent: "write-test" as const, phase: 3, tests: true, staged: false, running: true, at: "" };
+    const by = {
+      session: "s",
+      execution: "x",
+      agent: "write-test" as const,
+      phase: 3,
+      tests: true,
+      staged: false,
+      running: true,
+      at: "",
+    };
     expect(changedByLabel(by)).toBe("Write test · Phase 3 tests");
     expect(changedByLabel({ ...by, agent: "implementer", phase: null, tests: false })).toBe("Implementer");
   });

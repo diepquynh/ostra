@@ -1,13 +1,21 @@
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
 import type { DiffFile } from "../../api/types";
 import { defineThemes, EDITOR_FONT, languageOf, monaco, themeName } from "../../components/monaco";
-import type { Theme } from "../../lib/nav";
 import { findingLine, type LedgerFinding } from "../../lib/ledger";
+import type { Theme } from "../../lib/nav";
 
 const blocking = (severity: string) => severity === "HIGH" || severity === "BLOCKER";
 
 /** A side-by-side diff with the ledger's findings shown as line annotations. */
-export default function MonacoDiff({ file, findings, theme }: { file: DiffFile; findings: LedgerFinding[]; theme: Theme }) {
+export default function MonacoDiff({
+  file,
+  findings,
+  theme,
+}: {
+  file: DiffFile;
+  findings: LedgerFinding[];
+  theme: Theme;
+}) {
   const onMount: DiffOnMount = (editor) => {
     const modified = editor.getModifiedEditor();
     const decorations = findings
@@ -19,7 +27,9 @@ export default function MonacoDiff({ file, findings, theme }: { file: DiffFile; 
           isWholeLine: true,
           className: blocking(f.severity) ? "art-ledger-line--bad" : "art-ledger-line--warn",
           linesDecorationsClassName: blocking(f.severity) ? "art-ledger-mark--bad" : "art-ledger-mark--warn",
-          hoverMessage: { value: `**${f.id ? `${f.id} ` : ""}${f.severity} ${f.rule}** ${f.description}\n\nFix: ${f.fix}` },
+          hoverMessage: {
+            value: `**${f.id ? `${f.id} ` : ""}${f.severity} ${f.rule}** ${f.description}\n\nFix: ${f.fix}`,
+          },
         },
       }));
     modified.createDecorationsCollection(decorations);

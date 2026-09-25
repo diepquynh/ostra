@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { Button } from "../core/Button";
 import { Icon } from "../core/Icon";
 import { Kbd } from "../core/Kbd";
@@ -196,7 +196,11 @@ export function FolderPicker(props: FolderPickerProps) {
   const [createError, setCreateError] = useState<string | null>(null);
   const target = parsed ? (parsed.prefix ? join(parsed.dir, parsed.prefix) : parsed.dir) : null;
   const canCreate =
-    !!props.mkdir && !!target && !b.loading && !b.error && (b.missing ? b.nearest !== null : !!parsed?.prefix && !b.entries.some((e) => e.name === parsed.prefix));
+    !!props.mkdir &&
+    !!target &&
+    !b.loading &&
+    !b.error &&
+    (b.missing ? b.nearest !== null : !!parsed?.prefix && !b.entries.some((e) => e.name === parsed.prefix));
   useEffect(() => setCreateError(null), [target]);
   const create = () => {
     if (!props.mkdir || !target || creating) return;
@@ -251,7 +255,16 @@ export function FolderPicker(props: FolderPickerProps) {
           onKeyDown={onKey}
         />
         {prefix && shown[0] && (
-          <span style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+          <span
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              whiteSpace: "nowrap",
+            }}
+          >
             <Kbd>Tab</Kbd> {shown[hi] ? shown[hi].name : ""}
           </span>
         )}
@@ -259,12 +272,21 @@ export function FolderPicker(props: FolderPickerProps) {
       {value && !parsed && <span className="os-field__error">Type an absolute path, starting with / or ~/.</span>}
       <div className="os-picker">
         <div className="os-picker__bar">
-          <Icon name={b.missing ? "folder-x" : "folder-open"} size={13} style={{ color: b.missing ? "var(--bad)" : "var(--text-muted)" }} />
+          <Icon
+            name={b.missing ? "folder-x" : "folder-open"}
+            size={13}
+            style={{ color: b.missing ? "var(--bad)" : "var(--text-muted)" }}
+          />
           <span className="os-picker__path" title={current}>
             {current}
           </span>
           {b.loading && list && <Spinner size={11} style={{ color: "var(--text-muted)" }} />}
-          <Button size="sm" variant={showSelected ? "default" : "primary"} disabled={b.missing} onClick={() => onChange?.(current)}>
+          <Button
+            size="sm"
+            variant={showSelected ? "default" : "primary"}
+            disabled={b.missing}
+            onClick={() => onChange?.(current)}
+          >
             {showSelected ? "Selected" : "Use this folder"}
           </Button>
         </div>
@@ -275,21 +297,31 @@ export function FolderPicker(props: FolderPickerProps) {
             </div>
           )}
           {b.missing && b.nearest && (
-            <div className="os-picker__row" title="Open the nearest folder that exists" onClick={() => onChange?.(b.nearest === "/" ? "/" : b.nearest + "/")}>
+            <div
+              className="os-picker__row"
+              title="Open the nearest folder that exists"
+              onClick={() => onChange?.(b.nearest === "/" ? "/" : b.nearest + "/")}
+            >
               <Icon name="corner-left-up" size={14} style={{ color: "var(--text-muted)" }} />
               <span style={{ color: "var(--text-secondary)" }}>{b.nearest}</span>
             </div>
           )}
           {canCreate && (
             <div className="os-picker__row" title="Create this folder and any missing parent folders" onClick={create}>
-              {creating ? <Spinner size={12} /> : <Icon name="folder-plus" size={14} style={{ color: "var(--accent-fg)" }} />}
+              {creating ? (
+                <Spinner size={12} />
+              ) : (
+                <Icon name="folder-plus" size={14} style={{ color: "var(--accent-fg)" }} />
+              )}
               <span style={{ flex: 1 }}>
                 {creating ? "Creating " : "Create "}
                 <span style={{ fontFamily: "var(--font-mono)" }}>{target}</span>
               </span>
             </div>
           )}
-          {createError && <div style={{ padding: "8px 10px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>{createError}</div>}
+          {createError && (
+            <div style={{ padding: "8px 10px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>{createError}</div>
+          )}
           {!b.missing && b.parent && !prefix && (
             <div className="os-picker__row" onClick={() => onChange?.(b.parent === "/" ? "/" : b.parent + "/")}>
               <Icon name="corner-left-up" size={14} style={{ color: "var(--text-muted)" }} />
@@ -309,7 +341,11 @@ export function FolderPicker(props: FolderPickerProps) {
                   onDoubleClick={() => onChange?.(path)}
                   title="Click to open, double-click to select"
                 >
-                  <Icon name={e.is_git ? "folder-git-2" : "folder"} size={14} style={{ color: e.is_ostra_project ? "var(--accent-fg)" : "var(--text-muted)" }} />
+                  <Icon
+                    name={e.is_git ? "folder-git-2" : "folder"}
+                    size={14}
+                    style={{ color: e.is_ostra_project ? "var(--accent-fg)" : "var(--text-muted)" }}
+                  />
                   <span style={{ flex: 1 }}>
                     {n ? (
                       <>

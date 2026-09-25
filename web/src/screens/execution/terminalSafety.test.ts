@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { muteQueryReplies, safeLinkTarget, type ParserHooks } from "./terminalSafety";
+import { muteQueryReplies, type ParserHooks, safeLinkTarget } from "./terminalSafety";
 
 function fakeParser() {
   const csi = new Map<string, (p: (number | number[])[]) => boolean>();
   const osc = new Map<number, (d: string) => boolean>();
   const dcs = new Set<string>();
-  const key = (id: { prefix?: string; intermediates?: string; final: string }) => `${id.prefix ?? ""}${id.intermediates ?? ""}${id.final}`;
+  const key = (id: { prefix?: string; intermediates?: string; final: string }) =>
+    `${id.prefix ?? ""}${id.intermediates ?? ""}${id.final}`;
   let live = 0;
   const sub = () => {
     live += 1;

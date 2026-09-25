@@ -18,8 +18,25 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   ref?: Ref<HTMLButtonElement>;
 }
 
-export function Button({ variant = "default", size = "md", icon, iconRight, kbd, active, className = "", children, type = "button", ...rest }: ButtonProps) {
-  const cls = cx("os-btn", variant !== "default" && `os-btn--${variant}`, size !== "md" && `os-btn--${size}`, active && "os-btn--active", className);
+export function Button({
+  variant = "default",
+  size = "md",
+  icon,
+  iconRight,
+  kbd,
+  active,
+  className = "",
+  children,
+  type = "button",
+  ...rest
+}: ButtonProps) {
+  const cls = cx(
+    "os-btn",
+    variant !== "default" && `os-btn--${variant}`,
+    size !== "md" && `os-btn--${size}`,
+    active && "os-btn--active",
+    className,
+  );
   const is = size === "sm" ? 13 : 15;
   return (
     <button type={type} className={cls} aria-pressed={active === undefined ? undefined : active} {...rest}>

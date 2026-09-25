@@ -4,7 +4,10 @@ import type { IDisposable, IFunctionIdentifier, ILinkHandler } from "@xterm/xter
 export interface ParserHooks {
   registerCsiHandler(id: IFunctionIdentifier, cb: (params: (number | number[])[]) => boolean): IDisposable;
   registerOscHandler(ident: number, cb: (data: string) => boolean): IDisposable;
-  registerDcsHandler(id: IFunctionIdentifier, cb: (data: string, params: (number | number[])[]) => boolean): IDisposable;
+  registerDcsHandler(
+    id: IFunctionIdentifier,
+    cb: (data: string, params: (number | number[])[]) => boolean,
+  ): IDisposable;
 }
 
 const always = () => true;
@@ -29,7 +32,9 @@ export function muteQueryReplies(parser: ParserHooks): IDisposable {
     parser.registerCsiHandler({ final: "t" }, (params) => WINDOW_REPORTS.has(Number(params[0]))),
     parser.registerDcsHandler({ intermediates: "$", final: "q" }, always),
     parser.registerDcsHandler({ intermediates: "+", final: "q" }, always),
-    ...[4, 10, 11, 12, 17, 19].map((ident) => parser.registerOscHandler(ident, (data) => data.split(";").includes("?"))),
+    ...[4, 10, 11, 12, 17, 19].map((ident) =>
+      parser.registerOscHandler(ident, (data) => data.split(";").includes("?")),
+    ),
   ];
   return { dispose: () => subs.forEach((s) => s.dispose()) };
 }
@@ -48,6 +53,7 @@ export const linkHandler: ILinkHandler = {
   allowNonHttpProtocols: false,
   activate: (_event, uri) => {
     const href = safeLinkTarget(uri);
-    if (href && window.confirm(`Open this link from the terminal?\n\n${href}`)) window.open(href, "_blank", "noopener,noreferrer");
+    if (href && window.confirm(`Open this link from the terminal?\n\n${href}`))
+      window.open(href, "_blank", "noopener,noreferrer");
   },
 };

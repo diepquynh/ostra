@@ -9,15 +9,57 @@ const at = (minutes: number) => new Date(now.getTime() + minutes * 60000).toISOS
 
 export const lessonsByProject: Record<string, Lesson[]> = {
   backend: [
-    { id: 1, area: "order::OrderService", lesson: "Status changes must go through OrderStateMachine; setStatus skips the event publisher.", source: "implementer", created_at: at(-3000) },
-    { id: 2, area: "build", lesson: "./mvnw needs JAVA_HOME pointing at JDK 21; the system JDK 17 fails with class file version 65.", source: "explore", created_at: at(-2000) },
-    { id: 3, area: "db/migrations", lesson: "Flyway runs migrations in version order, so a new file must use the next V number even on a branch.", source: "code-reviewer", created_at: at(-1500) },
-    { id: 4, area: "payments::RefundWebhook", lesson: "The payment provider retries a webhook for 72 hours; handlers must be idempotent on the event id.", source: "explore", created_at: at(-900) },
-    { id: 5, area: "tests", lesson: "Integration tests need Docker running because Testcontainers starts Postgres 16 for each suite.", source: "user", created_at: at(-300) },
+    {
+      id: 1,
+      area: "order::OrderService",
+      lesson: "Status changes must go through OrderStateMachine; setStatus skips the event publisher.",
+      source: "implementer",
+      created_at: at(-3000),
+    },
+    {
+      id: 2,
+      area: "build",
+      lesson: "./mvnw needs JAVA_HOME pointing at JDK 21; the system JDK 17 fails with class file version 65.",
+      source: "explore",
+      created_at: at(-2000),
+    },
+    {
+      id: 3,
+      area: "db/migrations",
+      lesson: "Flyway runs migrations in version order, so a new file must use the next V number even on a branch.",
+      source: "code-reviewer",
+      created_at: at(-1500),
+    },
+    {
+      id: 4,
+      area: "payments::RefundWebhook",
+      lesson: "The payment provider retries a webhook for 72 hours; handlers must be idempotent on the event id.",
+      source: "explore",
+      created_at: at(-900),
+    },
+    {
+      id: 5,
+      area: "tests",
+      lesson: "Integration tests need Docker running because Testcontainers starts Postgres 16 for each suite.",
+      source: "user",
+      created_at: at(-300),
+    },
   ],
   web: [
-    { id: 6, area: "src/api/client.ts", lesson: "The API client adds the CSRF header only on same-origin requests; tests must set the origin.", source: "implementer", created_at: at(-2500) },
-    { id: 7, area: "build", lesson: "Vite needs `--host 127.0.0.1` in CI because localhost resolves to IPv6 on the runners.", source: "explore", created_at: at(-1200) },
+    {
+      id: 6,
+      area: "src/api/client.ts",
+      lesson: "The API client adds the CSRF header only on same-origin requests; tests must set the origin.",
+      source: "implementer",
+      created_at: at(-2500),
+    },
+    {
+      id: 7,
+      area: "build",
+      lesson: "Vite needs `--host 127.0.0.1` in CI because localhost resolves to IPv6 on the runners.",
+      source: "explore",
+      created_at: at(-1200),
+    },
   ],
 };
 
@@ -34,22 +76,63 @@ const usage = (runs: number, cost: number, calls: number, buildMs = 0): Usage =>
 
 const row = (key: string, executions: number, cost: number, calls: number, buildMs = 0): CostRow => {
   const u = usage(executions, cost, calls, buildMs);
-  return { key, executions, usage: u, cache_reads_per_tool_call: u.tool_calls ? u.cache_read_tokens / u.tool_calls : 0 };
+  return {
+    key,
+    executions,
+    usage: u,
+    cache_reads_per_tool_call: u.tool_calls ? u.cache_read_tokens / u.tool_calls : 0,
+  };
 };
 
 /** The report since `since`: the demo week, which matches the status bar's $4.18. */
 export const costSince = (since: string): CostReport => ({
   since,
-  by_session: [row(SESSION, 16, 3.42, 18, 262000), row("s_refund", 3, 0.62, 16), row("s_init", 2, 0.1, 9), row("side-panel", 2, 0.04, 6)],
-  by_stage: [row("implement", 6, 1.64, 21, 248000), row("fact-check-spec", 4, 0.58, 24), row("explore", 4, 0.5, 19), row("review", 3, 0.46, 15, 45000), row("spec", 2, 0.33, 12), row("plan", 1, 0.16, 11), row("scout", 1, 0.07, 8), row("classify", 3, 0.4, 0), row("quick-answer", 2, 0.04, 6)],
-  by_agent: [row("implementer", 6, 1.64, 21, 248000), row("fact-check", 4, 0.58, 24), row("explore", 4, 0.5, 19), row("code-reviewer", 3, 0.46, 15, 45000), row("judge", 3, 0.4, 0), row("generate-spec", 2, 0.33, 12), row("plan", 1, 0.16, 11), row("initializer", 1, 0.07, 8), row("quick-answer", 2, 0.04, 6)],
-  by_executor: [row("native", 17, 1.8, 16, 45000), row("harness:codex", 5, 1.52, 22, 248000), row("harness:claude", 1, 0.86, 18)],
+  by_session: [
+    row(SESSION, 16, 3.42, 18, 262000),
+    row("s_refund", 3, 0.62, 16),
+    row("s_init", 2, 0.1, 9),
+    row("side-panel", 2, 0.04, 6),
+  ],
+  by_stage: [
+    row("implement", 6, 1.64, 21, 248000),
+    row("fact-check-spec", 4, 0.58, 24),
+    row("explore", 4, 0.5, 19),
+    row("review", 3, 0.46, 15, 45000),
+    row("spec", 2, 0.33, 12),
+    row("plan", 1, 0.16, 11),
+    row("scout", 1, 0.07, 8),
+    row("classify", 3, 0.4, 0),
+    row("quick-answer", 2, 0.04, 6),
+  ],
+  by_agent: [
+    row("implementer", 6, 1.64, 21, 248000),
+    row("fact-check", 4, 0.58, 24),
+    row("explore", 4, 0.5, 19),
+    row("code-reviewer", 3, 0.46, 15, 45000),
+    row("judge", 3, 0.4, 0),
+    row("generate-spec", 2, 0.33, 12),
+    row("plan", 1, 0.16, 11),
+    row("initializer", 1, 0.07, 8),
+    row("quick-answer", 2, 0.04, 6),
+  ],
+  by_executor: [
+    row("native", 17, 1.8, 16, 45000),
+    row("harness:codex", 5, 1.52, 22, 248000),
+    row("harness:claude", 1, 0.86, 18),
+  ],
   total: row("total", 23, 4.18, 17, 293000),
 });
 
 export const cost: CostReport = {
   since: null,
-  by_session: [row(SESSION, 16, 3.42, 18, 262000), row("s_refund", 3, 0.62, 16), row("s_research", 2, 0.41, 22), row("s_n1", 2, 0.33, 14, 31000), row("s_init", 4, 0.2, 9), row("side-panel", 2, 0.04, 6)],
+  by_session: [
+    row(SESSION, 16, 3.42, 18, 262000),
+    row("s_refund", 3, 0.62, 16),
+    row("s_research", 2, 0.41, 22),
+    row("s_n1", 2, 0.33, 14, 31000),
+    row("s_init", 4, 0.2, 9),
+    row("side-panel", 2, 0.04, 6),
+  ],
   by_stage: [
     row("implement", 6, 1.64, 21, 248000),
     row("fact-check-spec", 4, 0.58, 24),
@@ -73,7 +156,11 @@ export const cost: CostReport = {
     row("judge", 6, 0.12, 0),
     row("quick-answer", 2, 0.04, 6),
   ],
-  by_executor: [row("native", 23, 2.64, 16, 45000), row("harness:codex", 5, 1.52, 22, 248000), row("harness:claude", 1, 0.86, 18)],
+  by_executor: [
+    row("native", 23, 2.64, 16, 45000),
+    row("harness:codex", 5, 1.52, 22, 248000),
+    row("harness:claude", 1, 0.86, 18),
+  ],
   total: row("total", 29, 5.02, 17, 293000),
 };
 
@@ -101,7 +188,19 @@ export const SETTING_KEYS: [string, string][] = [
 ];
 
 const TIERS = ["fast", "balanced", "advanced", "frontier", "default"];
-const ROUTED = ["explore", "generate-spec", "fact-check", "plan", "code-reviewer", "execution-path-analyzer", "module-documentation", "prompt-generation", "initializer", "quick-answer", "judge"];
+const ROUTED = [
+  "explore",
+  "generate-spec",
+  "fact-check",
+  "plan",
+  "code-reviewer",
+  "execution-path-analyzer",
+  "module-documentation",
+  "prompt-generation",
+  "initializer",
+  "quick-answer",
+  "judge",
+];
 const NOT_INSTALLED = ["harness:agy"];
 
 /** A subset of `validate_workspace`: the checks a user can trigger from the mock settings form. */
@@ -109,17 +208,32 @@ export function validate(s: WorkspaceSettings): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const add = (path: string, message: string) => issues.push({ path, message });
   if (!s.name.trim()) add("name", "The workspace needs a name.");
-  if (s.limits.max_parallel_executions < 1) add("limits.max_parallel_executions", "Allow at least one execution at a time.");
+  if (s.limits.max_parallel_executions < 1)
+    add("limits.max_parallel_executions", "Allow at least one execution at a time.");
   if (!Number.isFinite(s.limits.session_budget_usd) || s.limits.session_budget_usd < 0)
     add("limits.session_budget_usd", "The budget is a dollar amount of 0 or more; 0 means no limit.");
-  if (s.routing.executor.byAgent.judge) add("routing.executor.byAgent.judge", "Judge calls always run natively; remove this route.");
+  if (s.routing.executor.byAgent.judge)
+    add("routing.executor.byAgent.judge", "Judge calls always run natively; remove this route.");
   for (const [key, ex] of Object.entries(s.routing.executor.byAgent))
-    if (NOT_INSTALLED.includes(ex)) add(`routing.executor.byAgent.${key}`, `\`${key}\` routes to ${ex}, which is not installed on this machine.`);
+    if (NOT_INSTALLED.includes(ex))
+      add(`routing.executor.byAgent.${key}`, `\`${key}\` routes to ${ex}, which is not installed on this machine.`);
   for (const key of ROUTED) {
     const m = s.routing.model.byAgent[key];
-    if (m === undefined) add(`routing.model.byAgent.${key}`, `\`${key}\` has no model route. Add \`${key}\` under \`[routing.model.byAgent]\`.`);
-    else if (typeof m === "string" && !TIERS.includes(m) && (s.routing.executor.byAgent[key] ?? "native") === "native" && !/^(anthropic|openai):./.test(m))
-      add(`routing.model.byAgent.${key}`, `\`${key}\` resolves to native model \`${m}\`; native models are written \`anthropic:<model>\` or \`openai:<model>\``);
+    if (m === undefined)
+      add(
+        `routing.model.byAgent.${key}`,
+        `\`${key}\` has no model route. Add \`${key}\` under \`[routing.model.byAgent]\`.`,
+      );
+    else if (
+      typeof m === "string" &&
+      !TIERS.includes(m) &&
+      (s.routing.executor.byAgent[key] ?? "native") === "native" &&
+      !/^(anthropic|openai):./.test(m)
+    )
+      add(
+        `routing.model.byAgent.${key}`,
+        `\`${key}\` resolves to native model \`${m}\`; native models are written \`anthropic:<model>\` or \`openai:<model>\``,
+      );
   }
   return issues.sort((a, b) => a.path.localeCompare(b.path));
 }

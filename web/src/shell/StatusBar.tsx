@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { isMock } from "../api";
-import { Icon, Menu, Spinner, StatusDot, type MenuItem } from "../design";
+import { Icon, Menu, type MenuItem, Spinner, StatusDot } from "../design";
 import { formatCost, humanize, truncate } from "../lib/format";
 import { useActivity, useSessionSummaries, useSocketState } from "../lib/live";
 import type { OpenOptions, Theme } from "../lib/nav";
@@ -20,11 +20,20 @@ function Connection() {
   const state = useSocketState();
   if (isMock)
     return (
-      <span className="shell-status-item" style={{ cursor: "default" }} title="Mock mode: fixtures stand in for the server">
+      <span
+        className="shell-status-item"
+        style={{ cursor: "default" }}
+        title="Mock mode: fixtures stand in for the server"
+      >
         <StatusDot tone="info" size={6} /> Mock data
       </span>
     );
-  const [tone, label] = state === "open" ? (["ok", `Live · ${location.host}`] as const) : state === "connecting" ? (["warn", "Connecting"] as const) : (["bad", "Offline, reconnecting"] as const);
+  const [tone, label] =
+    state === "open"
+      ? (["ok", `Live · ${location.host}`] as const)
+      : state === "connecting"
+        ? (["warn", "Connecting"] as const)
+        : (["bad", "Offline, reconnecting"] as const);
   return (
     <span className="shell-status-item" style={{ cursor: "default" }} title="Live updates from the Ostra server">
       <StatusDot tone={tone} size={6} pulse={state === "connecting"} /> {label}
@@ -40,7 +49,8 @@ export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarPr
   const gates = activity?.open_gates ?? [];
   const summary = session ? sessions.find((s) => s.id === session) : undefined;
 
-  const openGate = (g: (typeof gates)[number]) => open(`session:${g.session}`, g.id.startsWith("session:") ? {} : { anchor: `gate-${g.id}` });
+  const openGate = (g: (typeof gates)[number]) =>
+    open(`session:${g.session}`, g.id.startsWith("session:") ? {} : { anchor: `gate-${g.id}` });
   const runningItems: MenuItem[] = [
     { type: "heading", label: "Running executions" },
     ...running.map((x) => ({
@@ -53,7 +63,13 @@ export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarPr
   ];
   const gateItems: MenuItem[] = [
     { type: "heading", label: "Waiting for you" },
-    ...gates.map((g) => ({ id: g.id, icon: "hand" as const, label: g.title, sub: g.session_title ?? undefined, onSelect: () => openGate(g) })),
+    ...gates.map((g) => ({
+      id: g.id,
+      icon: "hand" as const,
+      label: g.title,
+      sub: g.session_title ?? undefined,
+      onSelect: () => openGate(g),
+    })),
   ];
 
   return (
@@ -74,10 +90,22 @@ export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarPr
       <Connection />
       {running.length > 0 && (
         <span style={{ position: "relative" }}>
-          <button className="shell-status-item" aria-haspopup="menu" aria-expanded={menu === "running"} onClick={() => setMenu(menu === "running" ? null : "running")}>
+          <button
+            className="shell-status-item"
+            aria-haspopup="menu"
+            aria-expanded={menu === "running"}
+            onClick={() => setMenu(menu === "running" ? null : "running")}
+          >
             <Spinner size={10} style={{ color: "var(--accent)" }} /> {running.length} running
           </button>
-          <Menu open={menu === "running"} onClose={() => setMenu(null)} items={runningItems} width={320} style={ABOVE} label="Running executions" />
+          <Menu
+            open={menu === "running"}
+            onClose={() => setMenu(null)}
+            items={runningItems}
+            width={320}
+            style={ABOVE}
+            label="Running executions"
+          />
         </span>
       )}
       {gates.length > 0 && (
@@ -90,7 +118,14 @@ export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarPr
           >
             <Icon name="hand" size={12} /> {gates.length} waiting for you
           </button>
-          <Menu open={menu === "gates"} onClose={() => setMenu(null)} items={gateItems} width={320} style={ABOVE} label="Gates waiting for you" />
+          <Menu
+            open={menu === "gates"}
+            onClose={() => setMenu(null)}
+            items={gateItems}
+            width={320}
+            style={ABOVE}
+            label="Gates waiting for you"
+          />
         </span>
       )}
       <span style={{ flex: 1 }} />
@@ -98,7 +133,11 @@ export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarPr
         <span
           className="shell-status-item"
           style={{ cursor: "default", color: summary.yolo ? "var(--warn)" : undefined }}
-          title={summary.yolo ? "Ostra answers this session's gates and permission asks, and lists each decision at the end" : "You answer this session's gates"}
+          title={
+            summary.yolo
+              ? "Ostra answers this session's gates and permission asks, and lists each decision at the end"
+              : "You answer this session's gates"
+          }
         >
           YOLO {summary.yolo ? "on" : "off"}
         </span>
@@ -113,7 +152,12 @@ export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarPr
           {formatCost(activity.spend_week_usd)} this week
         </button>
       )}
-      <button className="shell-status-item" onClick={toggleTheme} title={theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"} aria-label="Toggle theme">
+      <button
+        className="shell-status-item"
+        onClick={toggleTheme}
+        title={theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
+        aria-label="Toggle theme"
+      >
         <Icon name={theme === "dark" ? "moon" : "sun"} size={12} />
       </button>
     </footer>

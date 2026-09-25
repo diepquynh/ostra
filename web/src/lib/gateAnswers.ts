@@ -91,7 +91,14 @@ export function choice(option: string, text?: string): GateAnswer {
   return { kind: "choice", option, text: t ? t : null };
 }
 
-export type ChoiceGateKind = "fact_check_recurring" | "review_cap" | "stuck" | "phase_blocked" | "harness_failure" | "execution_failed" | "budget_reached";
+export type ChoiceGateKind =
+  | "fact_check_recurring"
+  | "review_cap"
+  | "stuck"
+  | "phase_blocked"
+  | "harness_failure"
+  | "execution_failed"
+  | "budget_reached";
 
 export type ChoiceOption = {
   /** The option string the engine's fold matches on. */
@@ -152,10 +159,15 @@ export function parseDollars(text: string): number | null {
 }
 
 /** Build a Choice answer for one of the gate's options, checking the text field the option needs. */
-export function choiceAnswer(kind: ChoiceGateKind, option: string, text = ""): { answer: GateAnswer } | { error: string } {
+export function choiceAnswer(
+  kind: ChoiceGateKind,
+  option: string,
+  text = "",
+): { answer: GateAnswer } | { error: string } {
   const spec = CHOICES[kind].find((o) => o.option === option);
   if (!spec) return { error: `This gate has no option ${option}.` };
-  if (spec.text === "required" && !text.trim()) return { error: spec.missing ?? `Fill in the text above before choosing "${spec.label}".` };
+  if (spec.text === "required" && !text.trim())
+    return { error: spec.missing ?? `Fill in the text above before choosing "${spec.label}".` };
   if (kind === "budget_reached" && spec.option === "raise" && text.trim() && parseDollars(text) === null) {
     return { error: "Enter the amount as a number of US dollars, such as 10. Leave it empty to add the budget again." };
   }
@@ -163,7 +175,10 @@ export function choiceAnswer(kind: ChoiceGateKind, option: string, text = ""): {
 }
 
 /** Closing gate: for each project, only the questions asked are taken from the form. */
-export function closingAnswer(items: ClosingItem[], picks: Record<string, { tests: boolean; docs: boolean }>): GateAnswer {
+export function closingAnswer(
+  items: ClosingItem[],
+  picks: Record<string, { tests: boolean; docs: boolean }>,
+): GateAnswer {
   const out: ClosingChoice[] = items.map((item) => {
     const p = picks[item.project] ?? { tests: false, docs: false };
     return { project: item.project, tests: item.ask_tests ? p.tests : false, docs: item.ask_docs ? p.docs : false };
@@ -201,12 +216,18 @@ export function answerSummary(gate: Pick<GateView, "payload" | "answer">): strin
       return a.approved ? "Approved" : `Changes requested: ${a.feedback ?? ""}`;
     case "choice": {
       const kind = gate.payload.kind;
-      const label = (isChoiceKind(kind) ? CHOICES[kind].find((o) => o.option === a.option)?.label : undefined) ?? humanize(a.option);
+      const label =
+        (isChoiceKind(kind) ? CHOICES[kind].find((o) => o.option === a.option)?.label : undefined) ??
+        humanize(a.option);
       if (!a.text) return label;
-      return kind === "budget_reached" && parseDollars(a.text) !== null ? `${label} by $${parseDollars(a.text)!.toFixed(2)}` : `${label}: ${a.text}`;
+      return kind === "budget_reached" && parseDollars(a.text) !== null
+        ? `${label} by $${parseDollars(a.text)!.toFixed(2)}`
+        : `${label}: ${a.text}`;
     }
     case "closing":
-      return a.items.map((i) => `${i.project}: tests ${i.tests ? "yes" : "no"}, docs ${i.docs ? "yes" : "no"}`).join("; ");
+      return a.items
+        .map((i) => `${i.project}: tests ${i.tests ? "yes" : "no"}, docs ${i.docs ? "yes" : "no"}`)
+        .join("; ");
     case "permission":
       return PERMISSION_LABELS[a.answer];
     case "skills":

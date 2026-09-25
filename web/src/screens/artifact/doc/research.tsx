@@ -1,7 +1,21 @@
 import type { ResearchDoc } from "../../../api/types";
 import { Chip, CodeView, cx } from "../../../design";
-import { OutlineBuilder, type Outline } from "./model";
-import { Bullets, Card, Empty, Facts, Grid, Link, Mono, Prose, Questions, Section, SourcesTable, Stats, inlineCode } from "./parts";
+import { type Outline, OutlineBuilder } from "./model";
+import {
+  Bullets,
+  Card,
+  Empty,
+  Facts,
+  Grid,
+  inlineCode,
+  Link,
+  Mono,
+  Prose,
+  Questions,
+  Section,
+  SourcesTable,
+  Stats,
+} from "./parts";
 
 export function researchOutline(d: ResearchDoc): Outline {
   const b = new OutlineBuilder();
@@ -12,7 +26,12 @@ export function researchOutline(d: ResearchDoc): Outline {
       <div className="doc-stack">
         <Facts
           rows={[
-            ["Repo", <Chip key="r" mono>{d.repo}</Chip>],
+            [
+              "Repo",
+              <Chip key="r" mono>
+                {d.repo}
+              </Chip>,
+            ],
             ["Areas", d.areas.length ? d.areas.join(", ") : "none"],
             ["Date", d.date],
           ]}
@@ -22,7 +41,11 @@ export function researchOutline(d: ResearchDoc): Outline {
             { label: "Files", value: d.files.length },
             { label: "Patterns", value: d.patterns.length },
             { label: "Sources", value: d.sources.length },
-            { label: "Open questions", value: d.open_questions.length, tone: d.open_questions.length ? "warn" : undefined },
+            {
+              label: "Open questions",
+              value: d.open_questions.length,
+              tone: d.open_questions.length ? "warn" : undefined,
+            },
             { label: "Not covered", value: d.not_covered.length, tone: d.not_covered.length ? "warn" : undefined },
           ]}
         />
@@ -110,7 +133,12 @@ export function researchOutline(d: ResearchDoc): Outline {
     render: () => (
       <Grid
         head={["Dependency", "Kind", "Version", "Role"]}
-        rows={d.dependencies.map((x) => [<Mono key="n">{x.name}</Mono>, <Chip key="k">{x.kind}</Chip>, x.version ?? "", x.role])}
+        rows={d.dependencies.map((x) => [
+          <Mono key="n">{x.name}</Mono>,
+          <Chip key="k">{x.kind}</Chip>,
+          x.version ?? "",
+          x.role,
+        ])}
       />
     ),
   });
@@ -161,7 +189,12 @@ export function researchOutline(d: ResearchDoc): Outline {
                 <Bullets items={a.pros} empty="None." />
                 <div className="doc-label">Cons</div>
                 <Bullets items={a.cons} empty="None." />
-                <Facts rows={[["Precedent", <span key="p">{inlineCode(a.precedent)}</span>], ["Best for", a.best_for]]} />
+                <Facts
+                  rows={[
+                    ["Precedent", <span key="p">{inlineCode(a.precedent)}</span>],
+                    ["Best for", a.best_for],
+                  ]}
+                />
               </div>
             </section>
           ))}
@@ -180,7 +213,12 @@ export function researchOutline(d: ResearchDoc): Outline {
       title: "Open questions",
       count: d.open_questions.length,
       attention: d.open_questions.length > 0,
-      render: () => <Questions items={d.open_questions} empty="None: every ambiguity was resolved from the code or a retrieved page." />,
+      render: () => (
+        <Questions
+          items={d.open_questions}
+          empty="None: every ambiguity was resolved from the code or a retrieved page."
+        />
+      ),
     },
     d.open_questions.map((q) => q.id),
   );
@@ -197,7 +235,11 @@ export function researchOutline(d: ResearchDoc): Outline {
     render: () => (
       <Grid
         head={["Area", "Lesson", "Verified"]}
-        rows={d.lessons.map((l) => [<Mono key="a">{l.area}</Mono>, l.lesson, l.verified ?? <span className="art-muted">not stated</span>])}
+        rows={d.lessons.map((l) => [
+          <Mono key="a">{l.area}</Mono>,
+          l.lesson,
+          l.verified ?? <span className="art-muted">not stated</span>,
+        ])}
       />
     ),
   });

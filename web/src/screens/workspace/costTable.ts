@@ -5,7 +5,12 @@ import { sessionTitle } from "./sessionFilter";
 
 export type CostGroup = "session" | "stage" | "agent" | "executor";
 
-export const COST_GROUPS: { id: CostGroup; title: string; column: string; field: keyof Omit<CostReport, "total" | "since"> }[] = [
+export const COST_GROUPS: {
+  id: CostGroup;
+  title: string;
+  column: string;
+  field: keyof Omit<CostReport, "total" | "since">;
+}[] = [
   { id: "session", title: "By session", column: "Session", field: "by_session" },
   { id: "stage", title: "By stage", column: "Stage", field: "by_stage" },
   { id: "agent", title: "By agent", column: "Agent", field: "by_agent" },
@@ -34,12 +39,18 @@ export type CostLine = {
   share: string;
 };
 
-function label(group: CostGroup, key: string, sessions: Map<string, SessionSummary>): { label: string; mono: boolean; open: string | null } {
+function label(
+  group: CostGroup,
+  key: string,
+  sessions: Map<string, SessionSummary>,
+): { label: string; mono: boolean; open: string | null } {
   switch (group) {
     case "session": {
       if (key === "side-panel") return { label: "Side-panel questions", mono: false, open: null };
       const s = sessions.get(key);
-      return s ? { label: truncate(sessionTitle(s), 90), mono: false, open: `session:${key}` } : { label: key, mono: true, open: `session:${key}` };
+      return s
+        ? { label: truncate(sessionTitle(s), 90), mono: false, open: `session:${key}` }
+        : { label: key, mono: true, open: `session:${key}` };
     }
     case "stage":
       if (key === "none") return { label: "No stage", mono: false, open: null };
@@ -50,7 +61,12 @@ function label(group: CostGroup, key: string, sessions: Map<string, SessionSumma
 }
 
 /** The rows of one grouping, highest cost first, with labels resolved and numbers formatted. */
-export function costLines(rows: CostRow[], group: CostGroup, total: number, sessions: SessionSummary[] = []): CostLine[] {
+export function costLines(
+  rows: CostRow[],
+  group: CostGroup,
+  total: number,
+  sessions: SessionSummary[] = [],
+): CostLine[] {
   const byId = new Map(sessions.map((s) => [s.id, s]));
   return [...rows]
     .sort((a, b) => b.usage.cost_usd - a.usage.cost_usd || a.key.localeCompare(b.key))

@@ -1,4 +1,4 @@
-import { useId, type Ref, type SelectHTMLAttributes } from "react";
+import { type Ref, type SelectHTMLAttributes, useId } from "react";
 import { cx } from "../../cx";
 import { Icon } from "../core/Icon";
 

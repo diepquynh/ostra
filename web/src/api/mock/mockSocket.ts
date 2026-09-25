@@ -46,7 +46,15 @@ export function mockSocket(): SocketLike {
     const [kind, id] = [channel.slice(0, channel.indexOf(":")), channel.slice(channel.indexOf(":") + 1)];
     if (kind === "execution") {
       // Live items continue the snapshot's seqs, so they apply after it.
-      stream(channel, LIVE_DELTAS[id] ?? [], (item) => emit({ type: "execution_delta", execution: id, seq: item.seq, at: new Date().toISOString(), delta: item.delta }));
+      stream(channel, LIVE_DELTAS[id] ?? [], (item) =>
+        emit({
+          type: "execution_delta",
+          execution: id,
+          seq: item.seq,
+          at: new Date().toISOString(),
+          delta: item.delta,
+        }),
+      );
     }
     if (kind === "term") {
       const backlog = terminalBacklog(id);

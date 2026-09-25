@@ -37,8 +37,25 @@ export function Home() {
 
   return (
     <div style={{ height: "100%", overflow: "auto", background: "var(--surface-editor)" }}>
-      <div style={{ maxWidth: 760, margin: "0 auto", padding: "48px 24px", display: "flex", flexDirection: "column", gap: 20 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, font: "600 15px/1 var(--font-sans)", letterSpacing: "0.02em" }}>
+      <div
+        style={{
+          maxWidth: 760,
+          margin: "0 auto",
+          padding: "48px 24px",
+          display: "flex",
+          flexDirection: "column",
+          gap: 20,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 9,
+            font: "600 15px/1 var(--font-sans)",
+            letterSpacing: "0.02em",
+          }}
+        >
           <img src="/favicon.svg" width={20} height={20} alt="" />
           Ostra
         </div>
@@ -46,8 +63,8 @@ export function Home() {
           <div style={{ flex: "1 1 360px" }}>
             <h1 style={{ margin: "0 0 6px", font: "var(--type-title)" }}>Workspaces</h1>
             <p style={{ margin: 0, color: "var(--text-secondary)", lineHeight: 1.55 }}>
-              A workspace holds your projects and their settings: which executor and model each agent runs on, permissions, memory, and custom
-              instructions.
+              A workspace holds your projects and their settings: which executor and model each agent runs on,
+              permissions, memory, and custom instructions.
             </p>
           </div>
           <Button variant="primary" icon="plus" onClick={() => setCreating(true)}>
@@ -86,7 +103,16 @@ export function Home() {
               <Icon name={w.available ? "box" : "folder-x"} size={16} style={{ color: "var(--text-muted)" }} />
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ display: "block", fontWeight: 600 }}>{w.name}</span>
-                <span style={{ display: "block", font: "var(--text-sm)/1.4 var(--font-mono)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span
+                  style={{
+                    display: "block",
+                    font: "var(--text-sm)/1.4 var(--font-mono)",
+                    color: "var(--text-muted)",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
                   {w.root}
                 </span>
               </span>

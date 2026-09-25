@@ -1,8 +1,32 @@
+import type { CodeDeps } from "./gen/CodeDeps";
+import type { CodeFile } from "./gen/CodeFile";
+import type { CodeGraph } from "./gen/CodeGraph";
+import type { CodeReindex } from "./gen/CodeReindex";
+import type { CodeSymbols } from "./gen/CodeSymbols";
+import type { CodeUsages } from "./gen/CodeUsages";
+import type { Commands } from "./gen/Commands";
+import type { DiffFile } from "./gen/DiffFile";
+import type { EnvironmentStatus } from "./gen/EnvironmentStatus";
+import type { FileDiff } from "./gen/FileDiff";
+import type { FileIndex } from "./gen/FileIndex";
+import type { FsBrowse } from "./gen/FsBrowse";
+import type { HarnessSetupAction } from "./gen/HarnessSetupAction";
+import type { HarnessSetupTerminal } from "./gen/HarnessSetupTerminal";
+import type { OnboardingState } from "./gen/OnboardingState";
+import type { ProjectChange } from "./gen/ProjectChange";
+import type { ProjectFile } from "./gen/ProjectFile";
+import type { ProjectTree } from "./gen/ProjectTree";
+import type { ProviderCredentialsEdit } from "./gen/ProviderCredentialsEdit";
+import type { ProviderStatus } from "./gen/ProviderStatus";
+import type { SaveProjectFile } from "./gen/SaveProjectFile";
+import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
+import type { ArtifactWithHeadings, SearchResults, WorkspaceActivity, WorkspaceTree } from "./nav";
 import type {
   ActivityItem,
   AnswerGate,
   AskQuestion,
   AskStarted,
+  CloneProject,
   CostReport,
   CreateSession,
   CreateWorkspace,
@@ -10,7 +34,6 @@ import type {
   ExecutionView,
   FsListing,
   GateView,
-  CloneProject,
   GitBranch,
   GitCheckoutRequest,
   GitCredentialEdit,
@@ -21,44 +44,21 @@ import type {
   ImportProject,
   Lesson,
   LessonEdit,
-  ProjectSkills,
-  SkillAdopt,
-  SkillDoc,
-  SkillSave,
   OverrideDecision,
+  ProjectSkills,
   PushSubscription,
   ServerInfo,
   SessionDetail,
   SessionSummary,
+  SkillAdopt,
+  SkillDoc,
+  SkillSave,
   StoredEvent,
   ValidationIssue,
   WorkspaceDetail,
   WorkspaceSettings,
   WorkspaceSummary,
 } from "./types";
-import type { CodeDeps } from "./gen/CodeDeps";
-import type { CodeGraph } from "./gen/CodeGraph";
-import type { CodeReindex } from "./gen/CodeReindex";
-import type { Commands } from "./gen/Commands";
-import type { CodeFile } from "./gen/CodeFile";
-import type { CodeSymbols } from "./gen/CodeSymbols";
-import type { CodeUsages } from "./gen/CodeUsages";
-import type { DiffFile } from "./gen/DiffFile";
-import type { EnvironmentStatus } from "./gen/EnvironmentStatus";
-import type { HarnessSetupAction } from "./gen/HarnessSetupAction";
-import type { HarnessSetupTerminal } from "./gen/HarnessSetupTerminal";
-import type { ProviderCredentialsEdit } from "./gen/ProviderCredentialsEdit";
-import type { ProviderStatus } from "./gen/ProviderStatus";
-import type { FileDiff } from "./gen/FileDiff";
-import type { FileIndex } from "./gen/FileIndex";
-import type { FsBrowse } from "./gen/FsBrowse";
-import type { OnboardingState } from "./gen/OnboardingState";
-import type { ProjectChange } from "./gen/ProjectChange";
-import type { ProjectFile } from "./gen/ProjectFile";
-import type { SaveProjectFile } from "./gen/SaveProjectFile";
-import type { ProjectTree } from "./gen/ProjectTree";
-import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
-import type { ArtifactWithHeadings, SearchResults, WorkspaceActivity, WorkspaceTree } from "./nav";
 
 /** An HTTP error from the server, with validation issues when the server sent them. */
 export class HttpError extends Error {
@@ -131,20 +131,31 @@ export const httpApi = {
     request<ValidationIssue[]>("POST", `/api/workspaces/${enc(ws)}/validate`, settings),
   importProject: (ws: string, body: ImportProject) =>
     request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/projects`, body),
-  cloneProject: (ws: string, body: CloneProject) => request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/clone`, body),
-  pullProject: (ws: string, key: string) => request<GitPullResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/pull`),
-  gitStatus: (ws: string, key: string) => request<GitRepoStatus>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git`),
-  gitBranches: (ws: string, key: string) => request<GitBranch[]>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/branches`),
+  cloneProject: (ws: string, body: CloneProject) =>
+    request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/clone`, body),
+  pullProject: (ws: string, key: string) =>
+    request<GitPullResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/pull`),
+  gitStatus: (ws: string, key: string) =>
+    request<GitRepoStatus>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git`),
+  gitBranches: (ws: string, key: string) =>
+    request<GitBranch[]>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/branches`),
   /** An empty list stages every change in the project. */
-  gitStage: (ws: string, key: string, paths: string[]) => request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/stage`, { paths }),
-  gitUnstage: (ws: string, key: string, paths: string[]) => request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/unstage`, { paths }),
-  gitCommit: (ws: string, key: string, message: string) => request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/commit`, { message }),
-  gitFetch: (ws: string, key: string) => request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/fetch`),
-  gitPush: (ws: string, key: string) => request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/push`),
-  gitCheckout: (ws: string, key: string, body: GitCheckoutRequest) => request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/checkout`, body),
+  gitStage: (ws: string, key: string, paths: string[]) =>
+    request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/stage`, { paths }),
+  gitUnstage: (ws: string, key: string, paths: string[]) =>
+    request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/unstage`, { paths }),
+  gitCommit: (ws: string, key: string, message: string) =>
+    request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/commit`, { message }),
+  gitFetch: (ws: string, key: string) =>
+    request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/fetch`),
+  gitPush: (ws: string, key: string) =>
+    request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/push`),
+  gitCheckout: (ws: string, key: string, body: GitCheckoutRequest) =>
+    request<GitOpResult>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/git/checkout`, body),
   gitCredentials: () => request<GitCredentialView[]>("GET", "/api/git/credentials"),
   createGitCredential: (edit: GitCredentialEdit) => request<GitCredentialView[]>("POST", "/api/git/credentials", edit),
-  updateGitCredential: (id: string, edit: GitCredentialEdit) => request<GitCredentialView[]>("PATCH", `/api/git/credentials/${enc(id)}`, edit),
+  updateGitCredential: (id: string, edit: GitCredentialEdit) =>
+    request<GitCredentialView[]>("PATCH", `/api/git/credentials/${enc(id)}`, edit),
   deleteGitCredential: (id: string) => request<GitCredentialView[]>("DELETE", `/api/git/credentials/${enc(id)}`),
   removeProject: (ws: string, key: string) =>
     request<WorkspaceDetail>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}`),
@@ -199,7 +210,8 @@ export const httpApi = {
     request<SkillDoc>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}/adopt`, body),
 
   /** `since` (RFC 3339) limits the report to executions that started at or after it. */
-  cost: (ws: string, since?: string | null) => request<CostReport>("GET", `/api/workspaces/${enc(ws)}/cost${q({ since })}`),
+  cost: (ws: string, since?: string | null) =>
+    request<CostReport>("GET", `/api/workspaces/${enc(ws)}/cost${q({ since })}`),
   ask: (ws: string, body: AskQuestion) => request<AskStarted>("POST", `/api/workspaces/${enc(ws)}/ask`, body),
   pushSubscribe: (body: PushSubscription) => request<void>("POST", "/api/push/subscribe", body),
   listDir: (path?: string) => request<FsListing>("GET", `/api/fs/list${q({ path })}`),
@@ -210,38 +222,59 @@ export const httpApi = {
     request<HarnessSetupTerminal>("POST", `/api/harnesses/${enc(harness)}/setup`, { action }),
 
   environment: () => request<EnvironmentStatus>("GET", "/api/environment"),
-  saveProvider: (name: string, edit: ProviderCredentialsEdit) => request<ProviderStatus>("PATCH", `/api/providers/${enc(name)}`, edit),
+  saveProvider: (name: string, edit: ProviderCredentialsEdit) =>
+    request<ProviderStatus>("PATCH", `/api/providers/${enc(name)}`, edit),
   validateNewWorkspace: (body: CreateWorkspace) => request<ValidationIssue[]>("POST", "/api/workspaces/validate", body),
   onboarding: () => request<OnboardingState>("GET", "/api/onboarding"),
   completeOnboarding: () => request<OnboardingState>("POST", "/api/onboarding/complete"),
   uiState: (ws: string) => request<WorkspaceUiState>("GET", `/api/workspaces/${enc(ws)}/ui`),
-  patchUiState: (ws: string, patch: Partial<WorkspaceUiState>) => request<WorkspaceUiState>("PATCH", `/api/workspaces/${enc(ws)}/ui`, patch),
+  patchUiState: (ws: string, patch: Partial<WorkspaceUiState>) =>
+    request<WorkspaceUiState>("PATCH", `/api/workspaces/${enc(ws)}/ui`, patch),
 
   projectTree: (ws: string, key: string, opts: { path?: string; depth?: number; hidden?: boolean } = {}) =>
-    request<ProjectTree>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/tree${q({ path: opts.path, depth: opts.depth, hidden: opts.hidden ? "true" : undefined })}`),
+    request<ProjectTree>(
+      "GET",
+      `/api/workspaces/${enc(ws)}/projects/${enc(key)}/tree${q({ path: opts.path, depth: opts.depth, hidden: opts.hidden ? "true" : undefined })}`,
+    ),
   projectFile: (ws: string, key: string, path: string) =>
     request<ProjectFile>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/file${q({ path })}`),
   createProjectFolder: (ws: string, key: string, path: string) =>
     request<ProjectTree>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/mkdir`, { path }),
   saveProjectFile: (ws: string, key: string, body: SaveProjectFile) =>
     request<ProjectFile>("PUT", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/file`, body),
-  projectFiles: (ws: string, key: string) => request<FileIndex>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/files`),
+  projectFiles: (ws: string, key: string) =>
+    request<FileIndex>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/files`),
   projectDiff: (ws: string, key: string, path: string, base?: string) =>
     request<FileDiff>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/diff${q({ path, base })}`),
-  projectChanges: (ws: string, key: string) => request<ProjectChange[]>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/changes`),
-  codeFile: (ws: string, key: string, path: string) => request<CodeFile>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/file${q({ path })}`),
-  codeUsages: (ws: string, key: string, symbol: string, at: { path?: string; line?: number; col?: number; limit?: number } = {}) =>
-    request<CodeUsages>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/usages${q({ symbol, ...at })}`),
-  codeDeps: (ws: string, key: string, path: string) => request<CodeDeps>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/deps${q({ path })}`),
+  projectChanges: (ws: string, key: string) =>
+    request<ProjectChange[]>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/changes`),
+  codeFile: (ws: string, key: string, path: string) =>
+    request<CodeFile>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/file${q({ path })}`),
+  codeUsages: (
+    ws: string,
+    key: string,
+    symbol: string,
+    at: { path?: string; line?: number; col?: number; limit?: number } = {},
+  ) => request<CodeUsages>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/usages${q({ symbol, ...at })}`),
+  codeDeps: (ws: string, key: string, path: string) =>
+    request<CodeDeps>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/deps${q({ path })}`),
   codeSymbols: (ws: string, key: string, query: string, limit = 50) =>
-    request<CodeSymbols>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/symbols${q({ q: query, limit })}`),
+    request<CodeSymbols>(
+      "GET",
+      `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/symbols${q({ q: query, limit })}`,
+    ),
   /** No argument: the package view. `package`: one package's files. `path`: one file's neighborhood. `path` and `symbol`: one definition's calls. */
-  codeGraph: (ws: string, key: string, at: { package?: string; path?: string; symbol?: string; line?: number; depth?: number } = {}) =>
-    request<CodeGraph>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/graph${q(at)}`),
-  codeReindex: (ws: string, key: string) => request<CodeReindex>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/reindex`),
+  codeGraph: (
+    ws: string,
+    key: string,
+    at: { package?: string; path?: string; symbol?: string; line?: number; depth?: number } = {},
+  ) => request<CodeGraph>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/graph${q(at)}`),
+  codeReindex: (ws: string, key: string) =>
+    request<CodeReindex>("POST", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/code/reindex`),
 
   tree: (ws: string) => request<WorkspaceTree>("GET", `/api/workspaces/${enc(ws)}/tree`),
-  search: (ws: string, query: string, limit = 30) => request<SearchResults>("GET", `/api/workspaces/${enc(ws)}/search${q({ q: query, limit })}`),
+  search: (ws: string, query: string, limit = 30) =>
+    request<SearchResults>("GET", `/api/workspaces/${enc(ws)}/search${q({ q: query, limit })}`),
   workspaceActivity: (ws: string) => request<WorkspaceActivity>("GET", `/api/workspaces/${enc(ws)}/activity`),
 };
 

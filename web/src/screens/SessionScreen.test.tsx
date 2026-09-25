@@ -61,7 +61,9 @@ describe("session board", () => {
     const cards = gates().getAllByRole("region");
     expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["Allow a shell command?", "Closing gate for web"]);
     expect(gates().getByRole("button", { name: "Allow once" })).toBeTruthy();
-    expect(gates().getByRole("button", { name: /Always in this workspace/ }).textContent).toContain("Bash(./gradlew *)");
+    expect(gates().getByRole("button", { name: /Always in this workspace/ }).textContent).toContain(
+      "Bash(./gradlew *)",
+    );
 
     expect(screen.getByText(/You cannot review code you wrote an hour ago/)).toBeTruthy();
     expect(screen.getByText("Review phase 2")).toBeTruthy();
@@ -73,7 +75,9 @@ describe("session board", () => {
     expect(open).toHaveBeenCalledWith(expect.stringMatching(/^artifact:.*order-cancel\.md$/), { preview: true });
 
     fireEvent.click(screen.getByText("Review phase 2"));
-    expect(screen.getByText(/Protects against:/).parentElement?.textContent).toContain("Defects that compound across phases");
+    expect(screen.getByText(/Protects against:/).parentElement?.textContent).toContain(
+      "Defects that compound across phases",
+    );
     fireEvent.click(screen.getByRole("button", { name: /Code reviewer · Phase 2 · pass 2/ }));
     expect(open).toHaveBeenLastCalledWith("exec:x_rev2");
 
@@ -118,7 +122,9 @@ describe("session board", () => {
     expect(within(card).getByRole("alert").textContent).toContain("Write the missing fact first");
     fireEvent.change(within(card).getByLabelText(/The missing fact/), { target: { value: "Use carrier SDK v2.8" } });
     fireEvent.click(within(card).getByRole("button", { name: "Re-run with this fact" }));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Phase 2 is stuck" })).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Phase 2 is stuck" })).toBeNull(), {
+      timeout: 2000,
+    });
     fireEvent.click(await screen.findByText(/Show answered gates \(1\)/));
     const answered = await screen.findByRole("region", { name: "Phase 2 is stuck" });
     expect(answered.textContent).toContain("Answered by you");

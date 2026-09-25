@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api, socket } from "../api";
 import type { ExecutionStatus } from "../api/types";
 import { Markdown } from "../components/Markdown";
 import { Banner, Button, Icon, IconButton, Input, Kbd, Spinner } from "../design";
-import { applyDelta, emptyActivity, foldActivity, type ActivityState } from "../lib/events";
+import { type ActivityState, applyDelta, emptyActivity, foldActivity } from "../lib/events";
 import { modKeys } from "../lib/keys";
 
 type Turn = { question: string; execution: string | null; error: string | null };
@@ -23,7 +23,15 @@ export function answerText(state: ActivityState): string {
     .join("\n\n");
 }
 
-function Answer({ execution, question, onTurnIntoTask }: { execution: string; question: string; onTurnIntoTask: (q: string) => void }) {
+function Answer({
+  execution,
+  question,
+  onTurnIntoTask,
+}: {
+  execution: string;
+  question: string;
+  onTurnIntoTask: (q: string) => void;
+}) {
   const [state, setState] = useState<ActivityState>(emptyActivity);
   const [status, setStatus] = useState<ExecutionStatus>("running");
 
@@ -55,7 +63,15 @@ function Answer({ execution, question, onTurnIntoTask }: { execution: string; qu
           <Spinner size={11} /> Reading the projects…
         </div>
       )}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: "var(--text-xs)",
+          color: "var(--text-muted)",
+        }}
+      >
         <span>
           {done ? (status === "ok" ? "Done" : `Ended: ${status}`) : "Answering"}
           {lookups > 0 && ` · ${lookups} lookup${lookups === 1 ? "" : "s"}`}
@@ -117,25 +133,70 @@ export function QuickDock({ ws, resizer, session, seed, onClose, onTurnIntoTask 
   return (
     <aside
       aria-label="Quick question"
-      style={{ position: "relative", width: "var(--dock-w)", flex: "none", background: "var(--surface-panel)", borderLeft: "1px solid var(--border-default)", display: "flex", flexDirection: "column", minHeight: 0 }}
+      style={{
+        position: "relative",
+        width: "var(--dock-w)",
+        flex: "none",
+        background: "var(--surface-panel)",
+        borderLeft: "1px solid var(--border-default)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
     >
-      <div style={{ height: "var(--tabbar-h)", display: "flex", alignItems: "center", gap: 8, padding: "0 6px 0 12px", borderBottom: "1px solid var(--border-default)", background: "var(--surface-chrome)", flex: "none" }}>
+      <div
+        style={{
+          height: "var(--tabbar-h)",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "0 6px 0 12px",
+          borderBottom: "1px solid var(--border-default)",
+          background: "var(--surface-chrome)",
+          flex: "none",
+        }}
+      >
         <Icon name="message-square" size={14} style={{ color: "var(--text-muted)" }} />
         <span style={{ fontWeight: 600, flex: 1 }}>Quick question</span>
         <IconButton size="sm" icon="x" label="Close" onClick={onClose} />
       </div>
-      <div style={{ padding: "8px 12px", fontSize: "var(--text-sm)", color: "var(--text-muted)", borderBottom: "1px solid var(--border-subtle)", lineHeight: 1.45, flex: "none" }}>
-        Read-only answers outside the pipeline. Nothing here changes code or session state.{session && " This session's artifacts are included."}
+      <div
+        style={{
+          padding: "8px 12px",
+          fontSize: "var(--text-sm)",
+          color: "var(--text-muted)",
+          borderBottom: "1px solid var(--border-subtle)",
+          lineHeight: 1.45,
+          flex: "none",
+        }}
+      >
+        Read-only answers outside the pipeline. Nothing here changes code or session state.
+        {session && " This session's artifacts are included."}
       </div>
-      <div ref={log} style={{ flex: 1, overflow: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div
+        ref={log}
+        style={{ flex: 1, overflow: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 16 }}
+      >
         {turns.length === 0 && (
           <div style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", lineHeight: 1.5 }}>
-            Ask how something works, where a behavior lives, or what a library does. For a change, use the New task form so it goes through research, spec, and review.
+            Ask how something works, where a behavior lives, or what a library does. For a change, use the New task form
+            so it goes through research, spec, and review.
           </div>
         )}
         {turns.map((t, i) => (
           <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ alignSelf: "flex-end", maxWidth: "88%", background: "var(--surface-active)", padding: "6px 10px", borderRadius: 6, whiteSpace: "pre-wrap" }}>{t.question}</div>
+            <div
+              style={{
+                alignSelf: "flex-end",
+                maxWidth: "88%",
+                background: "var(--surface-active)",
+                padding: "6px 10px",
+                borderRadius: 6,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {t.question}
+            </div>
             {t.error && (
               <Banner tone="bad" style={{ margin: 0 }}>
                 {t.error}
@@ -151,7 +212,14 @@ export function QuickDock({ ws, resizer, session, seed, onClose, onTurnIntoTask 
         ))}
       </div>
       <form
-        style={{ padding: 10, borderTop: "1px solid var(--border-default)", display: "flex", flexDirection: "column", gap: 8, flex: "none" }}
+        style={{
+          padding: 10,
+          borderTop: "1px solid var(--border-default)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          flex: "none",
+        }}
         onSubmit={(e) => {
           e.preventDefault();
           void ask();
@@ -173,7 +241,15 @@ export function QuickDock({ ws, resizer, session, seed, onClose, onTurnIntoTask 
           }}
         />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", display: "flex", gap: 5, alignItems: "center" }}>
+          <span
+            style={{
+              fontSize: "var(--text-xs)",
+              color: "var(--text-muted)",
+              display: "flex",
+              gap: 5,
+              alignItems: "center",
+            }}
+          >
             <Kbd keys={modKeys("↵")} /> to send
           </span>
           <Button type="submit" size="sm" variant="primary" disabled={busy || !question.trim()}>

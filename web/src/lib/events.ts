@@ -156,20 +156,26 @@ export function toolSummary(call: ToolCall): string {
 
 /** What to do instead after a denial, keyed by guard id. Shown under each denied call. */
 const GUARD_ADVICE: Record<string, string> = {
-  "write-scope": "This agent may write only inside its allowed directories. The agent should write its output to the session dir.",
-  "no-tests-from-implementer": "Tests belong to the write-test stage, which runs after every phase passes review and only if you ask for tests.",
-  "state-ownership": "Pipeline state is recorded by the engine from real results. Do the underlying work and the record updates itself.",
-  "artifact-ownership": "Spec and plan files change only when their own agent runs again. Request the change through the pipeline.",
+  "write-scope":
+    "This agent may write only inside its allowed directories. The agent should write its output to the session dir.",
+  "no-tests-from-implementer":
+    "Tests belong to the write-test stage, which runs after every phase passes review and only if you ask for tests.",
+  "state-ownership":
+    "Pipeline state is recorded by the engine from real results. Do the underlying work and the record updates itself.",
+  "artifact-ownership":
+    "Spec and plan files change only when their own agent runs again. Request the change through the pipeline.",
   "report-path": "Write the report at the exact path given in `Report file:`.",
   "lesson-gate": "Record what fixed the failure with the Memory tool before writing the report.",
-  "build-streak": "Five builds in a row failed. The agent must return STUCK with the diagnostic so Ostra can find the missing fact.",
+  "build-streak":
+    "Five builds in a row failed. The agent must return STUCK with the diagnostic so Ostra can find the missing fact.",
   "self-protection": "Ostra's own binary, configuration, and databases are off limits to agents.",
 };
 
 export function denialAdvice(decision: PolicyDecision): string | null {
   if (decision.decision === "allow") return null;
   if (decision.rule.layer === "guard") return GUARD_ADVICE[decision.rule.rule] ?? null;
-  if (decision.decision === "deny") return "A deny rule in your permissions matched. Edit the rule in workspace settings if this should be allowed.";
+  if (decision.decision === "deny")
+    return "A deny rule in your permissions matched. Edit the rule in workspace settings if this should be allowed.";
   return "No rule allows this yet. Allow it once, or allow it for the whole workspace.";
 }
 
@@ -177,7 +183,17 @@ export function denialAdvice(decision: PolicyDecision): string | null {
 // Session board helpers
 // ---------------------------------------------------------------------------------------------
 
-export const LANE_ORDER: Lane[] = ["research", "requirements", "verification", "design", "build", "review", "test", "docs", "done"];
+export const LANE_ORDER: Lane[] = [
+  "research",
+  "requirements",
+  "verification",
+  "design",
+  "build",
+  "review",
+  "test",
+  "docs",
+  "done",
+];
 
 export function stagesByLane(stages: StageCard[]): Map<Lane, StageCard[]> {
   const map = new Map<Lane, StageCard[]>();
@@ -240,11 +256,15 @@ export function decisionChoice(d: DecisionView): string {
     case "sufficiency": {
       const items = Array.isArray(o.items) ? (o.items as { needed?: boolean }[]) : [];
       const needed = items.filter((i) => i.needed).length;
-      return needed ? `to run ${needed} more research pass${needed === 1 ? "" : "es"}` : "that the research is complete";
+      return needed
+        ? `to run ${needed} more research pass${needed === 1 ? "" : "es"}`
+        : "that the research is complete";
     }
     case "stakes": {
       const s = str("stakes");
-      return s ? `${s} stakes${s === "low" ? ", so the plan stage is skipped" : ", so a phased plan is written"}` : "a stakes level";
+      return s
+        ? `${s} stakes${s === "low" ? ", so the plan stage is skipped" : ", so a phased plan is written"}`
+        : "a stakes level";
     }
     case "route_answer":
       return str("route") ? `to route your answer as ${humanize(str("route")!)}` : "a route for your answer";

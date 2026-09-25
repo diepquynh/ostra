@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, FolderPicker, Input, Select } from "../../design";
 import { listFolders, makeFolder, useFolderInfo } from "./folders";
-import { basename, isChosen, keyError, stackOptions, suggestKey, type DraftProject, type ImportErrors } from "./wizard";
+import { basename, type DraftProject, type ImportErrors, isChosen, keyError, stackOptions, suggestKey } from "./wizard";
 
 export type ImportFormProps = {
   /** Keys already used in the workspace (or the wizard's list). */
@@ -21,7 +21,16 @@ export type ImportFormProps = {
 };
 
 /** Folder, key and stack for one project import. The key follows the folder name until the user edits it. */
-export function ImportForm({ takenKeys, takenPaths = {}, onAdd, onDraft, serverErrors = {}, stacks, initialPath = "~/", compact }: ImportFormProps) {
+export function ImportForm({
+  takenKeys,
+  takenPaths = {},
+  onAdd,
+  onDraft,
+  serverErrors = {},
+  stacks,
+  initialPath = "~/",
+  compact,
+}: ImportFormProps) {
   const [path, setPath] = useState(initialPath);
   const [keyEdit, setKeyEdit] = useState<string | null>(null);
   const [stack, setStack] = useState("");
@@ -38,7 +47,9 @@ export function ImportForm({ takenKeys, takenPaths = {}, onAdd, onDraft, serverE
         : null;
   const ok = chosen && info.state === "exists" && !pErr && !kErr && key !== "";
   const draft: DraftProject | null =
-    ok && info.state === "exists" ? { key, path: path.replace(/\/+$/, ""), stack, isGit: info.isGit, isOstraProject: info.isOstraProject } : null;
+    ok && info.state === "exists"
+      ? { key, path: path.replace(/\/+$/, ""), stack, isGit: info.isGit, isOstraProject: info.isOstraProject }
+      : null;
 
   const draftSig = draft ? JSON.stringify(draft) : "";
   useEffect(() => {
@@ -57,7 +68,13 @@ export function ImportForm({ takenKeys, takenPaths = {}, onAdd, onDraft, serverE
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <FolderPicker value={path} onChange={setPath} list={listFolders} mkdir={makeFolder} height={compact ? 150 : 170} />
+        <FolderPicker
+          value={path}
+          onChange={setPath}
+          list={listFolders}
+          mkdir={makeFolder}
+          height={compact ? 150 : 170}
+        />
         {(pErr || serverErrors.path) && (
           <span className="os-field__error" role="alert">
             {pErr ?? serverErrors.path}

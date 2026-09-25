@@ -1,9 +1,9 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { Fragment, type MouseEvent, memo, useEffect, useMemo, useRef, useState } from "react";
 import type { CodeFile } from "../../../api/types";
 import { colorLine, Icon, IconButton } from "../../../design";
 import type { ChangeBlock, ChangeKind } from "../diff";
 import "./code.css";
-import { decodeTokens, isSymbolClass, segments, splitLines, TOKEN_CSS, type Span } from "./tokens";
+import { decodeTokens, isSymbolClass, type Span, segments, splitLines, TOKEN_CSS } from "./tokens";
 
 /** A symbol the user clicked: its name and where. Line is 1-based, col is a 0-based UTF-16 index. */
 export type SymbolRef = { name: string; line: number; col: number };
@@ -56,18 +56,20 @@ const Line = memo(function Line({ n, text, spans, language, hl, selected, mark, 
         {!spans
           ? colorLine(text, language)
           : text === ""
-          ? " "
-          : segments(text, spans).map((s) => {
-              if (!s.cls) return <span key={s.col}>{s.text}</span>;
-              const sym = isSymbolClass(s.cls);
-              const tok = TOKEN_CSS[s.cls];
-              const cls = [tok && `os-tok-${tok}`, sym && "code-sym", sym && s.text === selected && "code-sym--sel"].filter(Boolean).join(" ");
-              return (
-                <span key={s.col} className={cls || undefined} data-col={sym ? s.col : undefined}>
-                  {s.text}
-                </span>
-              );
-            })}
+            ? " "
+            : segments(text, spans).map((s) => {
+                if (!s.cls) return <span key={s.col}>{s.text}</span>;
+                const sym = isSymbolClass(s.cls);
+                const tok = TOKEN_CSS[s.cls];
+                const cls = [tok && `os-tok-${tok}`, sym && "code-sym", sym && s.text === selected && "code-sym--sel"]
+                  .filter(Boolean)
+                  .join(" ");
+                return (
+                  <span key={s.col} className={cls || undefined} data-col={sym ? s.col : undefined}>
+                    {s.text}
+                  </span>
+                );
+              })}
       </span>
     </div>
   );
@@ -75,7 +77,8 @@ const Line = memo(function Line({ n, text, spans, language, hl, selected, mark, 
 
 /** The HEAD text of one change block and its current text, shown under the block. */
 function Compare({ block, language, onClose }: { block: ChangeBlock; language: string; onClose: () => void }) {
-  const range = (ls: { no: number }[]) => (ls.length ? (ls.length === 1 ? `line ${ls[0].no}` : `lines ${ls[0].no}–${ls[ls.length - 1].no}`) : null);
+  const range = (ls: { no: number }[]) =>
+    ls.length ? (ls.length === 1 ? `line ${ls[0].no}` : `lines ${ls[0].no}–${ls[ls.length - 1].no}`) : null;
   const was = range(block.old);
   return (
     <div className="code-compare" role="region" aria-label="Changes against HEAD">
@@ -108,14 +111,30 @@ function Compare({ block, language, onClose }: { block: ChangeBlock; language: s
  * `onSymbol`. Uses CodeView's markup and, when the provider sent no tokens, its coloring. Changed lines carry a
  * gutter mark; clicking one shows the HEAD text under the change.
  */
-export function SourceView({ code, file, language = "", selected = null, onSymbol, highlightLine = null, highlightEnd = null, scrollBlock = "center", scrollNonce = 0, changes = null }: SourceViewProps) {
+export function SourceView({
+  code,
+  file,
+  language = "",
+  selected = null,
+  onSymbol,
+  highlightLine = null,
+  highlightEnd = null,
+  scrollBlock = "center",
+  scrollNonce = 0,
+  changes = null,
+}: SourceViewProps) {
   const box = useRef<HTMLDivElement>(null);
   const lines = useMemo(() => splitLines(code), [code]);
-  const spans = useMemo(() => (file && file.tokens.length > 0 ? decodeTokens(file, lines.length) : null), [file, lines.length]);
+  const spans = useMemo(
+    () => (file && file.tokens.length > 0 ? decodeTokens(file, lines.length) : null),
+    [file, lines.length],
+  );
   // Only lines holding the selected name re-render when the selection changes.
   const hasSel = useMemo(() => {
     if (!spans || !selected) return null;
-    return spans.map((ls, i) => ls.some((s) => isSymbolClass(s.cls) && s.len === selected.length && lines[i].substr(s.col, s.len) === selected));
+    return spans.map((ls, i) =>
+      ls.some((s) => isSymbolClass(s.cls) && s.len === selected.length && lines[i].substr(s.col, s.len) === selected),
+    );
   }, [spans, lines, selected]);
 
   useEffect(() => {
@@ -124,7 +143,8 @@ export function SourceView({ code, file, language = "", selected = null, onSymbo
       const row = box.current?.querySelector<HTMLElement>(`[data-line="${highlightLine}"]`);
       const pane = box.current?.parentElement;
       // Scroll only the pane that holds the view, so the page itself stays put.
-      if (row && pane && scrollBlock === "start") pane.scrollTop += row.getBoundingClientRect().top - pane.getBoundingClientRect().top - 8;
+      if (row && pane && scrollBlock === "start")
+        pane.scrollTop += row.getBoundingClientRect().top - pane.getBoundingClientRect().top - 8;
       else row?.scrollIntoView?.({ block: scrollBlock });
     });
     return () => cancelAnimationFrame(id);
@@ -162,8 +182,22 @@ export function SourceView({ code, file, language = "", selected = null, onSymbo
         const b = byLine.get(n) ?? null;
         return (
           <Fragment key={i}>
-            <Line n={n} text={text} spans={spans ? spans[i] : null} language={language} hl={highlightLine !== null && (n === highlightLine || (highlightEnd !== null && n > highlightLine && n <= highlightEnd))} selected={hasSel?.[i] ? selected : null} mark={b?.kind ?? null} open={!!b && b === openBlock} />
-            {openBlock?.anchor === n && <Compare block={openBlock} language={language} onClose={() => setOpenAt(null)} />}
+            <Line
+              n={n}
+              text={text}
+              spans={spans ? spans[i] : null}
+              language={language}
+              hl={
+                highlightLine !== null &&
+                (n === highlightLine || (highlightEnd !== null && n > highlightLine && n <= highlightEnd))
+              }
+              selected={hasSel?.[i] ? selected : null}
+              mark={b?.kind ?? null}
+              open={!!b && b === openBlock}
+            />
+            {openBlock?.anchor === n && (
+              <Compare block={openBlock} language={language} onClose={() => setOpenAt(null)} />
+            )}
           </Fragment>
         );
       })}

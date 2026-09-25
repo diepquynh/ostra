@@ -15,7 +15,9 @@ describe("GitCredentials", () => {
     vi.spyOn(api, "gitCredentials").mockResolvedValue([]);
     const create = vi
       .spyOn(api, "createGitCredential")
-      .mockResolvedValue([{ id: "gc_1", label: "github.com", host: "github.com", kind: "ssh", username: null, has_secret: true }]);
+      .mockResolvedValue([
+        { id: "gc_1", label: "github.com", host: "github.com", kind: "ssh", username: null, has_secret: true },
+      ]);
     render(<GitCredentials />);
     expect(screen.getByText(/stay on the machine that runs Ostra/)).toBeTruthy();
     fireEvent.change(screen.getByRole("combobox", { name: "Type" }), { target: { value: "ssh" } });

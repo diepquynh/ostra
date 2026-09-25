@@ -10,10 +10,10 @@ import {
   keyError,
   patchName,
   presetsFor,
-  stackOptions,
   projectIndex,
   projectStart,
   repoName,
+  stackOptions,
   stepForIssue,
   stepsFor,
   suggestKey,
@@ -53,11 +53,18 @@ describe("project keys", () => {
       { path: "key", message: "Choose another key." },
     ];
     expect(importErrors(issues, "Fix these problems")).toEqual({
-      fields: { key: "`X` is not a project key. Choose another key.", stack: "`Go Lang` is not a stack name.", path: "/nope does not exist." },
+      fields: {
+        key: "`X` is not a project key. Choose another key.",
+        stack: "`Go Lang` is not a stack name.",
+        path: "/nope does not exist.",
+      },
       general: null,
     });
     expect(importErrors([{ path: "", message: "Disk full." }], "x")).toEqual({ fields: {}, general: "Disk full." });
-    expect(importErrors([], "The server is not reachable.")).toEqual({ fields: {}, general: "The server is not reachable." });
+    expect(importErrors([], "The server is not reachable.")).toEqual({
+      fields: {},
+      general: "The server is not reachable.",
+    });
   });
 
   it("offers detection first, then the server's stacks, keeping an unlisted current value", () => {
@@ -85,7 +92,9 @@ describe("step state", () => {
     const v = initialValues();
     expect(patchName(v, "/home/me/code/shop")).toEqual({ root: "/home/me/code/shop", name: "shop" });
     expect(patchName(v, "/home/me/code/")).toEqual({ root: "/home/me/code/", name: "" });
-    expect(patchName({ ...v, name: "mine", nameTouched: true }, "/home/me/code/shop")).toEqual({ root: "/home/me/code/shop" });
+    expect(patchName({ ...v, name: "mine", nameTouched: true }, "/home/me/code/shop")).toEqual({
+      root: "/home/me/code/shop",
+    });
   });
 
   it("recognises chosen folders and expands the home folder", () => {
@@ -135,7 +144,7 @@ const values = (patch: Partial<WizardValues> = {}): WizardValues => ({
   root: "~/code/shop",
   projects: [
     { key: "backend", path: "~/code/shop-backend", stack: "", isGit: true, isOstraProject: true },
-    { key: "admin", path: "/srv/repos/shop \"admin\"", stack: "typescript-node", isGit: true, isOstraProject: false },
+    { key: "admin", path: '/srv/repos/shop "admin"', stack: "typescript-node", isGit: true, isOstraProject: false },
   ],
   ...patch,
 });
@@ -167,7 +176,9 @@ describe("request body and workspace.toml preview", () => {
   });
 
   it("routes implementer and write-test to the preset's harness", () => {
-    expect(tomlFor(values({ preset: "codex" }))).toContain('[routing.executor.byAgent]\nimplementer = "harness:codex"\n"write-test" = "harness:codex"\n');
+    expect(tomlFor(values({ preset: "codex" }))).toContain(
+      '[routing.executor.byAgent]\nimplementer = "harness:codex"\n"write-test" = "harness:codex"\n',
+    );
     expect(tomlFor(values({ preset: "claude" }))).toContain('implementer = "harness:claude"');
   });
 

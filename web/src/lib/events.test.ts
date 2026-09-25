@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { DecisionView, PhaseView, SessionEvent } from "../api/types";
 import { sessionDetail } from "../api/mock/fixtures";
+import type { DecisionView, PhaseView, SessionEvent } from "../api/types";
 import {
   activeSecurityBlocks,
   applyDelta,
@@ -41,7 +41,16 @@ describe("activity folding", () => {
         at: "",
         delta: {
           kind: "usage",
-          usage: { input_tokens: 1, output_tokens: 2, cache_read_tokens: 3, cache_write_tokens: 0, cache_write_1h_tokens: 0, cost_usd: 0.1, tool_calls: 1, build_ms: 0 },
+          usage: {
+            input_tokens: 1,
+            output_tokens: 2,
+            cache_read_tokens: 3,
+            cache_write_tokens: 0,
+            cache_write_1h_tokens: 0,
+            cost_usd: 0.1,
+            tool_calls: 1,
+            build_ms: 0,
+          },
         },
       },
     ]);
@@ -58,14 +67,28 @@ describe("activity folding", () => {
 
   it("explains denials", () => {
     expect(denialAdvice({ decision: "allow", rule: null })).toBeNull();
-    expect(denialAdvice({ decision: "deny", reason: "x", rule: { layer: "guard", rule: "build-streak" } })).toContain("STUCK");
-    expect(denialAdvice({ decision: "ask", reason: "x", rule: { layer: "permission", rule: "mode:default" } })).toContain("Allow it once");
+    expect(denialAdvice({ decision: "deny", reason: "x", rule: { layer: "guard", rule: "build-streak" } })).toContain(
+      "STUCK",
+    );
+    expect(
+      denialAdvice({ decision: "ask", reason: "x", rule: { layer: "permission", rule: "mode:default" } }),
+    ).toContain("Allow it once");
   });
 });
 
 describe("board helpers", () => {
   const phase = (id: number, deps: number[] | null): PhaseView => ({
-    info: { id, deliverable: null, project: "p", title: `P${id}`, complexity: "low", test_policy: "Required", depends_on: deps, file: null, test_rationale: null },
+    info: {
+      id,
+      deliverable: null,
+      project: "p",
+      title: `P${id}`,
+      complexity: "low",
+      test_policy: "Required",
+      depends_on: deps,
+      file: null,
+      test_rationale: null,
+    },
     status: "queued",
     review_iterations: 0,
     tests: "none",
@@ -105,8 +128,12 @@ describe("board helpers", () => {
       at: "",
     });
     expect(decisionChoice(d("stakes", { stakes: "low" }))).toContain("skipped");
-    expect(decisionChoice(d("classify", { category: "IMPLEMENT", projects: ["a"] }))).toBe("to treat this as Implement in a");
-    expect(decisionChoice(d("sufficiency", { items: [{ needed: true }, { needed: false }] }))).toBe("to run 1 more research pass");
+    expect(decisionChoice(d("classify", { category: "IMPLEMENT", projects: ["a"] }))).toBe(
+      "to treat this as Implement in a",
+    );
+    expect(decisionChoice(d("sufficiency", { items: [{ needed: true }, { needed: false }] }))).toBe(
+      "to run 1 more research pass",
+    );
   });
 
   it("splits the Decided for you section out of a completion report", () => {
@@ -123,7 +150,14 @@ describe("board helpers", () => {
       project: "p",
       phase: 1,
       tests: false,
-      findings: Array.from({ length: n }, () => ({ severity: "BLOCKER" as const, file: "a", rule: "SEC-BLOCK-X", description: "", fix: "", guidance: null })),
+      findings: Array.from({ length: n }, () => ({
+        severity: "BLOCKER" as const,
+        file: "a",
+        rule: "SEC-BLOCK-X",
+        description: "",
+        fix: "",
+        guidance: null,
+      })),
     });
     expect(activeSecurityBlocks([block(1)])).toHaveLength(1);
     expect(activeSecurityBlocks([block(1), block(0)])).toHaveLength(0);

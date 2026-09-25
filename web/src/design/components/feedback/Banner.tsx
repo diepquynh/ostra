@@ -14,7 +14,12 @@ export interface BannerProps {
   style?: CSSProperties;
 }
 
-const ICONS: Record<NonNullable<BannerProps["tone"]>, IconName> = { warn: "triangle-alert", bad: "octagon-alert", info: "info", neutral: "info" };
+const ICONS: Record<NonNullable<BannerProps["tone"]>, IconName> = {
+  warn: "triangle-alert",
+  bad: "octagon-alert",
+  info: "info",
+  neutral: "info",
+};
 
 export function Banner({ tone = "warn", title, icon, actions, children, style }: BannerProps) {
   return (

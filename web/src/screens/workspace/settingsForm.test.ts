@@ -34,10 +34,16 @@ describe("settings form round trip", () => {
     s.routing.model.byAgent.plan = { native: "anthropic:claude-opus-5-5", codex: "gpt-5.6-sol" };
     s.routing.model.byAgent.explore = "anthropic:claude-sonnet-5";
     s.routing.model.byAgent.mystery = "fast";
-    s.routing.effort = { byAgent: { plan: "high", explore: "low" }, byPhaseComplexity: { implementer: { high: "xhigh" } } };
+    s.routing.effort = {
+      byAgent: { plan: "high", explore: "low" },
+      byPhaseComplexity: { implementer: { high: "xhigh" } },
+    };
     s.extra = "kept";
     const f = toForm(s);
-    expect(f.model.plan).toEqual({ kind: "per-executor", text: "native = anthropic:claude-opus-5-5, codex = gpt-5.6-sol" });
+    expect(f.model.plan).toEqual({
+      kind: "per-executor",
+      text: "native = anthropic:claude-opus-5-5, codex = gpt-5.6-sol",
+    });
     expect(f.model.explore).toEqual({ kind: "custom", text: "anthropic:claude-sonnet-5" });
     expect(fromForm(f, s).settings).toEqual(s);
   });
@@ -74,11 +80,23 @@ describe("settings form round trip", () => {
     expect(out.routing.executor.byAgent).toEqual({ "code-reviewer": "harness:claude", "write-test": "harness:codex" });
     expect(out.routing.model.byAgent.plan).toBe("frontier");
     expect("judge" in out.routing.model.byAgent).toBe(false);
-    expect(out.routing.executor.byPhaseComplexity).toEqual({ implementer: { low: "harness:codex", medium: "harness:codex" } });
-    expect(out.routing.model.byPhaseComplexity).toEqual({ implementer: { low: "fast", medium: "fast", high: "balanced" } });
-    expect(out.routing.effort).toEqual({ byAgent: { explore: "max" }, byPhaseComplexity: { implementer: { high: "max" } } });
+    expect(out.routing.executor.byPhaseComplexity).toEqual({
+      implementer: { low: "harness:codex", medium: "harness:codex" },
+    });
+    expect(out.routing.model.byPhaseComplexity).toEqual({
+      implementer: { low: "fast", medium: "fast", high: "balanced" },
+    });
+    expect(out.routing.effort).toEqual({
+      byAgent: { explore: "max" },
+      byPhaseComplexity: { implementer: { high: "max" } },
+    });
     expect(out.instructions).toEqual({ all: null, agents: { plan: "Name every risk." } });
-    expect(out.permissions).toEqual({ mode: "acceptEdits", allow: ["Bash(cargo *)", "Bash(npm run test *)"], ask: [], deny: [] });
+    expect(out.permissions).toEqual({
+      mode: "acceptEdits",
+      allow: ["Bash(cargo *)", "Bash(npm run test *)"],
+      ask: [],
+      deny: [],
+    });
     expect(out.yolo.default).toBe(true);
     expect(out.notifications.push).toBe(false);
     expect(out.limits).toEqual({ max_parallel_executions: 5, session_budget_usd: 12.5 });
@@ -112,7 +130,12 @@ describe("settings form round trip", () => {
     f.maxParallel = "two";
     f.budget = "-1";
     const { settings: out, issues } = fromForm(f, s);
-    expect(issues.map((i) => i.path)).toEqual(["routing.model.byAgent.explore", "routing.model.byAgent.plan", "limits.max_parallel_executions", "limits.session_budget_usd"]);
+    expect(issues.map((i) => i.path)).toEqual([
+      "routing.model.byAgent.explore",
+      "routing.model.byAgent.plan",
+      "limits.max_parallel_executions",
+      "limits.session_budget_usd",
+    ]);
     expect(out.routing.model.byAgent.plan).toBe("advanced");
     expect(out.limits.max_parallel_executions).toBe(3);
   });
@@ -128,13 +151,19 @@ describe("model routes", () => {
   });
 
   it("parses executor = model tables", () => {
-    expect(parsePerExecutor("native = anthropic:x,\ncodex=gpt-y").value).toEqual({ native: "anthropic:x", codex: "gpt-y" });
+    expect(parsePerExecutor("native = anthropic:x,\ncodex=gpt-y").value).toEqual({
+      native: "anthropic:x",
+      codex: "gpt-y",
+    });
     expect(parsePerExecutor("").error).toMatch(/at least one entry/);
     expect(parsePerExecutor("native: x").error).toMatch(/executor = model/);
   });
 
   it("seeds a per-executor table from the current tier", () => {
-    expect(pickModel({ kind: "tier", text: "balanced" }, "per-executor")).toEqual({ kind: "per-executor", text: "native = balanced" });
+    expect(pickModel({ kind: "tier", text: "balanced" }, "per-executor")).toEqual({
+      kind: "per-executor",
+      text: "native = balanced",
+    });
     expect(pickModel({ kind: "tier", text: "balanced" }, "custom")).toEqual({ kind: "custom", text: "" });
   });
 });
@@ -146,10 +175,14 @@ describe("issue paths", () => {
     expect(fieldForIssue("routing.model.byAgent.plan", fields)).toBe("routing.model.byAgent.plan");
     expect(fieldForIssue("routing.executor.byAgent.judge", fields)).toBe("routing.executor.byAgent.judge");
     expect(fieldForIssue("routing.effort.byAgent.explore", fields)).toBe("routing.effort.byAgent.explore");
-    expect(fieldForIssue("routing.effort.byPhaseComplexity.implementer.low", fields)).toBe("routing.effort.byPhaseComplexity.implementer.low");
+    expect(fieldForIssue("routing.effort.byPhaseComplexity.implementer.low", fields)).toBe(
+      "routing.effort.byPhaseComplexity.implementer.low",
+    );
     expect(fieldForIssue("projects[1].key", fields)).toBe("projects[1]");
     expect(fieldForIssue("projects[7].path", fields)).toBe("projects");
-    expect(fieldForIssue("routing.model.byPhaseComplexity.implementer.high", fields)).toBe("routing.model.byPhaseComplexity.implementer.high");
+    expect(fieldForIssue("routing.model.byPhaseComplexity.implementer.high", fields)).toBe(
+      "routing.model.byPhaseComplexity.implementer.high",
+    );
     expect(fieldForIssue("routing.model.byPhaseComplexity.other.low", fields)).toBe("routing.model.byPhaseComplexity");
     expect(fieldForIssue("limits.session_budget_usd", fields)).toBe("limits.session_budget_usd");
     expect(fieldForIssue("name", fields)).toBe("name");
@@ -168,10 +201,22 @@ describe("issue paths", () => {
       ],
       fields,
     );
-    expect(Object.keys(m.byField).sort()).toEqual(["limits.max_parallel_executions", "name", "routing.model.byAgent.plan"]);
+    expect(Object.keys(m.byField).sort()).toEqual([
+      "limits.max_parallel_executions",
+      "name",
+      "routing.model.byAgent.plan",
+    ]);
     expect(m.byField["routing.model.byAgent.plan"].map((i) => i.message)).toEqual(["b", "c"]);
     expect(m.unmatched.map((i) => i.message)).toEqual(["e"]);
-    expect(m.byTab).toEqual({ general: 3, projects: 0, git: 0, routing: 2, permissions: 0, instructions: 0, notifications: 0 });
+    expect(m.byTab).toEqual({
+      general: 3,
+      projects: 0,
+      git: 0,
+      routing: 2,
+      permissions: 0,
+      instructions: 0,
+      notifications: 0,
+    });
   });
 
   it("name the tab of every settings key", () => {
@@ -186,11 +231,21 @@ describe("issue paths", () => {
 
 describe("deep links", () => {
   it("try the field, then its parents, then the panel for a table key", () => {
-    expect(anchorCandidates("routing.model.byAgent.plan")).toEqual(["setting:routing.model.byAgent.plan", "setting:routing.byAgent"]);
+    expect(anchorCandidates("routing.model.byAgent.plan")).toEqual([
+      "setting:routing.model.byAgent.plan",
+      "setting:routing.byAgent",
+    ]);
     expect(anchorCandidates("routing.effort")).toEqual(["setting:routing.byAgent"]);
     expect(anchorCandidates("routing.model.byPhaseComplexity")[0]).toBe("setting:routing.byPhaseComplexity");
-    expect(anchorCandidates("projects[2].key")).toEqual(["setting:projects[2].key", "setting:projects[2]", "setting:projects"]);
-    expect(anchorCandidates("limits.session_budget_usd")).toEqual(["setting:limits.session_budget_usd", "setting:limits"]);
+    expect(anchorCandidates("projects[2].key")).toEqual([
+      "setting:projects[2].key",
+      "setting:projects[2]",
+      "setting:projects",
+    ]);
+    expect(anchorCandidates("limits.session_budget_usd")).toEqual([
+      "setting:limits.session_budget_usd",
+      "setting:limits",
+    ]);
   });
 
   it("read the settings key from an anchor", () => {

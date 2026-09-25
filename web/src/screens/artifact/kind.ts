@@ -41,13 +41,21 @@ export function approvalBadges(detail: SessionDetail | null, kind: ArtifactKind)
   const fc = detail.stages.filter((s) => s.stage === (kind === "spec" ? "fact-check-spec" : "fact-check-plan")).pop();
   if (fc?.status === "done") {
     const pass = !fc.detail || /pass/i.test(fc.detail);
-    out.push(pass ? { tone: "ok", label: "Fact-check PASS", icon: "circle-check" } : { tone: "bad", label: `Fact-check ${fc.detail}`, icon: "circle-x" });
+    out.push(
+      pass
+        ? { tone: "ok", label: "Fact-check PASS", icon: "circle-check" }
+        : { tone: "bad", label: `Fact-check ${fc.detail}`, icon: "circle-x" },
+    );
   } else if (fc?.status === "running") out.push({ tone: "accent", label: "Fact-check running" });
   const approval = detail.stages.filter((s) => s.stage === (kind === "spec" ? "spec-approval" : "plan-approval")).pop();
   const gate = approval?.gate ? detail.gates.find((g) => g.id === approval.gate) : null;
   if (gate?.answer?.kind === "approval") {
     const by = gate.source === "user" ? "you" : gate.source === "yolo" ? "YOLO" : "Ostra";
-    out.push(gate.answer.approved ? { tone: "ok", label: `Approved by ${by}` } : { tone: "warn", label: `Changes requested by ${by}` });
+    out.push(
+      gate.answer.approved
+        ? { tone: "ok", label: `Approved by ${by}` }
+        : { tone: "warn", label: `Changes requested by ${by}` },
+    );
   } else if (gate && !gate.answer) out.push({ tone: "warn", label: "Waiting for your approval", icon: "circle-pause" });
   return out;
 }

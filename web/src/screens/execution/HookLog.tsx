@@ -31,7 +31,9 @@ export function HookLog({ rows }: { rows: HookRow[] }) {
               <div className="ex-hook-input">
                 <span className="ex-mono">{r.summary}</span>
                 {r.reason && <span className="ex-hook-note">{inlineCode(r.reason)}</span>}
-                {r.decision === "deny" && r.advice && <span className="ex-hook-note">What to do instead: {inlineCode(r.advice)}</span>}
+                {r.decision === "deny" && r.advice && (
+                  <span className="ex-hook-note">What to do instead: {inlineCode(r.advice)}</span>
+                )}
               </div>
             ),
           },
@@ -48,7 +50,13 @@ export function HookLog({ rows }: { rows: HookRow[] }) {
                 <span className="ex-muted">default</span>
               ),
           },
-          { key: "duration", label: "Time", num: true, width: 70, render: (r) => (r.durationMs !== null ? formatDuration(r.durationMs) : "") },
+          {
+            key: "duration",
+            label: "Time",
+            num: true,
+            width: 70,
+            render: (r) => (r.durationMs !== null ? formatDuration(r.durationMs) : ""),
+          },
         ]}
         rows={rows}
       />

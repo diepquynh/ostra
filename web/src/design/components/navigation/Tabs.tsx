@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { type CSSProperties, type KeyboardEvent, type ReactNode, useRef } from "react";
 import { arrowIndex } from "../../focus";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
@@ -34,7 +34,16 @@ export interface TabsProps {
  * Tab strip. variant "bar" = editor tabs (closable, with icons); "underline" = in-page sections; "segmented" = compact toggles.
  * Controlled by value/onChange. Arrow keys, Home and End move between tabs and select them.
  */
-export function Tabs({ tabs, value, onChange, onClose, variant = "underline", label, className = "", style }: TabsProps) {
+export function Tabs({
+  tabs,
+  value,
+  onChange,
+  onClose,
+  variant = "underline",
+  label,
+  className = "",
+  style,
+}: TabsProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const selectedIndex = tabs.findIndex((t) => t.id === value);
   const focusIndex = selectedIndex >= 0 ? selectedIndex : 0;
@@ -59,7 +68,13 @@ export function Tabs({ tabs, value, onChange, onClose, variant = "underline", la
   };
 
   return (
-    <div ref={listRef} className={`os-tabs os-tabs--${variant} ${className}`} role="tablist" aria-label={label} style={style}>
+    <div
+      ref={listRef}
+      className={`os-tabs os-tabs--${variant} ${className}`}
+      role="tablist"
+      aria-label={label}
+      style={style}
+    >
       {tabs.map((t, i) => {
         const active = t.id === value;
         return (

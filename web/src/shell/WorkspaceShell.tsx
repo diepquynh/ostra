@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type MouseEvent } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
 import { Button, Kbd, StatusDot, Tabs, type Tone } from "../design";
@@ -8,7 +17,7 @@ import { useWorkspaceTree } from "../lib/live";
 import { ConsoleContext, type ConsoleContextValue, type OpenOptions, type Theme } from "../lib/nav";
 import { paletteTarget } from "../lib/palette";
 import { parseResource, resourceFromPath, resourcePath } from "../lib/resource";
-import { emptyTabs, normalizeTabs, tabsReducer, type TabsState } from "../lib/tabs";
+import { emptyTabs, normalizeTabs, type TabsState, tabsReducer } from "../lib/tabs";
 import { applyTheme, resolveTheme } from "../lib/theme";
 import { AddProjectDialog, NewWorkspaceDialog, Onboarding, selfScrolling } from "../screens";
 import { resourceMeta } from "./meta";
@@ -21,7 +30,13 @@ import { TitleBar } from "./TitleBar";
 import { DEFAULT_PREFS, fromServerUi, loadLocalUi, saveLocalUi, toServerUi, type UiPrefs } from "./uiState";
 import "./shell.css";
 
-const TAB_TONE: Record<string, Tone> = { running: "accent", waiting: "warn", completed: "ok", stalled: "bad", failed: "bad" };
+const TAB_TONE: Record<string, Tone> = {
+  running: "accent",
+  waiting: "warn",
+  completed: "ok",
+  stalled: "bad",
+  failed: "bad",
+};
 const PATCH_DELAY_MS = 800;
 
 /** The console for one workspace: title bar, left dock, editor tabs, quick-question dock, status bar. */
@@ -39,7 +54,10 @@ function initialTabs(local: TabsState | null, routeId: string | null): TabsState
 function Shell({ ws }: { ws: string }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const routeId = useMemo(() => resourceFromPath(location.pathname, location.search)?.id ?? null, [location.pathname, location.search]);
+  const routeId = useMemo(
+    () => resourceFromPath(location.pathname, location.search)?.id ?? null,
+    [location.pathname, location.search],
+  );
 
   const [local] = useState(() => loadLocalUi(ws));
   const [tabs, dispatch] = useReducer(tabsReducer, null, () => initialTabs(local?.tabs ?? null, routeId));
@@ -198,7 +216,12 @@ function Shell({ ws }: { ws: string }) {
       if (s === "palette") setPalette((p) => !p);
       else if (s === "dock") setPref("dockOpen", (d) => !d);
       else if (s === "sidebar") setPref("sidebarOpen", (v) => !v);
-      else if (s === "files") setPrefs((p) => ({ ...p, sidebarOpen: true, leftTab: p.leftTab === "files" && p.sidebarOpen ? "sessions" : "files" }));
+      else if (s === "files")
+        setPrefs((p) => ({
+          ...p,
+          sidebarOpen: true,
+          leftTab: p.leftTab === "files" && p.sidebarOpen ? "sessions" : "files",
+        }));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -210,8 +233,10 @@ function Shell({ ws }: { ws: string }) {
   const activeSession = useMemo(() => {
     const r = active ? parseResource(active) : null;
     if (r?.type === "session") return r.id;
-    if (r?.type === "exec") return tree.sessions.find((s) => s.groups.some((g) => g.runs.some((x) => x.id === r.id)))?.id ?? null;
-    if (r?.type === "artifact") return tree.sessions.find((s) => s.artifacts.some((a) => a.path === r.path))?.id ?? null;
+    if (r?.type === "exec")
+      return tree.sessions.find((s) => s.groups.some((g) => g.runs.some((x) => x.id === r.id)))?.id ?? null;
+    if (r?.type === "artifact")
+      return tree.sessions.find((s) => s.artifacts.some((a) => a.path === r.path))?.id ?? null;
     return null;
   }, [active, tree.sessions]);
 
@@ -239,7 +264,13 @@ function Shell({ ws }: { ws: string }) {
   return (
     <ConsoleContext.Provider value={ctx}>
       <div
-        style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--surface-editor)", ...({ "--sidebar-w": `${widths.sidebar}px`, "--dock-w": `${widths.dock}px` } as CSSProperties) }}
+        style={{
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          background: "var(--surface-editor)",
+          ...({ "--sidebar-w": `${widths.sidebar}px`, "--dock-w": `${widths.dock}px` } as CSSProperties),
+        }}
       >
         <TitleBar
           ws={ws}
@@ -275,7 +306,15 @@ function Shell({ ws }: { ws: string }) {
               onAddProject={() => setDialog("add-project")}
             />
           )}
-          <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", background: "var(--surface-editor)" }}>
+          <main
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              flexDirection: "column",
+              background: "var(--surface-editor)",
+            }}
+          >
             {tabs.tabs.length > 0 && (
               <div ref={tabStrip} className="shell-tabs" onDoubleClick={onTabsDoubleClick} onAuxClick={onTabsAuxClick}>
                 <Tabs
@@ -292,7 +331,9 @@ function Shell({ ws }: { ws: string }) {
                       title: m.title ?? m.label,
                       icon: m.status ? null : m.icon,
                       italic: t.preview,
-                      dot: m.status ? <StatusDot tone={TAB_TONE[m.status]} pulse={m.status === "running"} /> : undefined,
+                      dot: m.status ? (
+                        <StatusDot tone={TAB_TONE[m.status]} pulse={m.status === "running"} />
+                      ) : undefined,
                     };
                   })}
                 />
@@ -300,7 +341,12 @@ function Shell({ ws }: { ws: string }) {
             )}
             <div
               onDoubleClick={pinActive}
-              style={{ flex: 1, overflowY: active && selfScrolling(active) ? "hidden" : "auto", overflowX: "hidden", minHeight: 0 }}
+              style={{
+                flex: 1,
+                overflowY: active && selfScrolling(active) ? "hidden" : "auto",
+                overflowX: "hidden",
+                minHeight: 0,
+              }}
             >
               {detail.error && !detail.data ? (
                 <WorkspaceMissing ws={ws} message={detail.error.message} />
@@ -381,10 +427,20 @@ function NothingOpen() {
 function WorkspaceMissing({ ws, message }: { ws: string; message: string }) {
   const navigate = useNavigate();
   return (
-    <div style={{ maxWidth: 560, margin: "80px auto", padding: "0 24px", display: "flex", flexDirection: "column", gap: 12 }}>
+    <div
+      style={{
+        maxWidth: 560,
+        margin: "80px auto",
+        padding: "0 24px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}
+    >
       <h1 style={{ margin: 0, font: "var(--type-title)" }}>Workspace not available</h1>
       <p style={{ margin: 0, color: "var(--text-secondary)", lineHeight: 1.55 }}>
-        Ostra could not open <code>{ws}</code>: {message} Check that its folder still exists, then open it again from the workspace list.
+        Ostra could not open <code>{ws}</code>: {message} Check that its folder still exists, then open it again from
+        the workspace list.
       </p>
       <div>
         <Button icon="arrow-left" onClick={() => navigate("/")}>

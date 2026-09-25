@@ -27,7 +27,8 @@ export type FileEdit = {
   overwrite: () => void;
 };
 
-const isHashConflict = (e: unknown) => e instanceof HttpError && e.status === 409 && e.issues.some((i) => i.path === "base_hash");
+const isHashConflict = (e: unknown) =>
+  e instanceof HttpError && e.status === 409 && e.issues.some((i) => i.path === "base_hash");
 
 /**
  * Edit state for one project file. Every save carries the hash the edit started from, and the server refuses it
@@ -124,7 +125,9 @@ export function useFileEdit(ws: string, projectKey: string, path: string, file: 
       setConfirmDiscard(false);
     },
     reload: () => {
-      void api.projectFile(ws, projectKey, path).then(take, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+      void api
+        .projectFile(ws, projectKey, path)
+        .then(take, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
     },
     overwrite: () => {
       if (!edit) return;

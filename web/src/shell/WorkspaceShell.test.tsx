@@ -45,7 +45,10 @@ const tabs = () =>
     return italic ? `(${text})` : text;
   });
 
-const row = (label: string) => Array.from(document.querySelectorAll<HTMLElement>('[role="treeitem"]')).find((r) => r.textContent?.startsWith(label))!;
+const row = (label: string) =>
+  Array.from(document.querySelectorAll<HTMLElement>('[role="treeitem"]')).find((r) =>
+    r.textContent?.startsWith(label),
+  )!;
 
 async function click(el: Element, detail = 1) {
   await act(async () => {
@@ -138,7 +141,9 @@ describe("workspace shell", () => {
     await key("b", mod);
     expect(document.querySelector('[aria-label="Left dock"]')).toBeNull();
     await key("/", mod);
-    expect(document.querySelector('aside[aria-label="Quick question"]')?.textContent).toContain("This session's artifacts are included.");
+    expect(document.querySelector('aside[aria-label="Quick question"]')?.textContent).toContain(
+      "This session's artifacts are included.",
+    );
     await key("k", mod);
     expect(document.querySelector('[aria-label="Command palette"]')).not.toBeNull();
   });

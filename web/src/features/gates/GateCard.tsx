@@ -2,7 +2,7 @@ import { useState } from "react";
 import { api } from "../../api";
 import type { GateAnswer, GateView } from "../../api/types";
 import { GateCard as DesignGateCard } from "../../design";
-import { answerSummary, isChoiceKind, type ChoiceGateKind } from "../../lib/gateAnswers";
+import { answerSummary, type ChoiceGateKind, isChoiceKind } from "../../lib/gateAnswers";
 import { ApprovalGate } from "./ApprovalGate";
 import { ChoiceGate } from "./ChoiceGate";
 import { ClosingGate } from "./ClosingGate";
@@ -38,7 +38,14 @@ function OpenForm({ gate, ...rest }: Common) {
  * One gate: the answer form while open, the recorded answer once answered. `#gate-<id>` anchors it. The answer
  * shape per kind is `lib/gateAnswers.ts`, which mirrors the engine's `validate_answer`.
  */
-export function GateCard({ gate, onAnswered }: { gate: GateView; highlight?: boolean; onAnswered?: (g: GateView) => void }) {
+export function GateCard({
+  gate,
+  onAnswered,
+}: {
+  gate: GateView;
+  highlight?: boolean;
+  onAnswered?: (g: GateView) => void;
+}) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submit = (answer: GateAnswer) => {

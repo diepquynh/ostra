@@ -1,9 +1,17 @@
 // Mock data for the Execution and Artifact screens: activity streams, live deltas, terminal transcripts, and
 // artifact files. Used by mockApi.ts and mockSocket.ts under `VITE_MOCK=1`.
 
-import type { DiffFile } from "../types";
-import type { ActivityItem, Artifact, ExecutionDelta, ExecutionView, PolicyDecision, ToolCall, Usage } from "../types";
 import { Slugger } from "../../screens/artifact/outline";
+import type {
+  ActivityItem,
+  Artifact,
+  DiffFile,
+  ExecutionDelta,
+  ExecutionView,
+  PolicyDecision,
+  ToolCall,
+  Usage,
+} from "../types";
 import * as f from "./fixtures";
 import { documentFor } from "./fixtures.documents";
 
@@ -16,7 +24,14 @@ const t0 = new Date("2026-09-22T10:38:00Z").getTime();
 // Activity scripts
 // ---------------------------------------------------------------------------------------------
 
-type ToolOpts = { policy?: PolicyDecision; output?: string; error?: boolean; ms?: number; chunks?: string[]; pending?: boolean };
+type ToolOpts = {
+  policy?: PolicyDecision;
+  output?: string;
+  error?: boolean;
+  ms?: number;
+  chunks?: string[];
+  pending?: boolean;
+};
 
 /** Builds an activity history one delta at a time, so seqs and call ids stay consistent. */
 class Script {
@@ -24,7 +39,11 @@ class Script {
   private n = 0;
   constructor(private startMs: number) {}
   private push(delta: ExecutionDelta) {
-    this.items.push({ seq: this.items.length + 1, at: new Date(this.startMs + this.items.length * 4000).toISOString(), delta });
+    this.items.push({
+      seq: this.items.length + 1,
+      at: new Date(this.startMs + this.items.length * 4000).toISOString(),
+      delta,
+    });
   }
   status(message: string) {
     this.push({ kind: "status", message });
@@ -48,7 +67,14 @@ class Script {
     this.push({ kind: "tool_call", call_id: id, call });
     this.push({ kind: "policy", call_id: id, decision: o.policy ?? { decision: "allow", rule: null } });
     for (const chunk of o.chunks ?? []) this.push({ kind: "tool_output", call_id: id, chunk });
-    if (!o.pending) this.push({ kind: "tool_result", call_id: id, output: o.output ?? "", is_error: !!o.error, duration_ms: o.ms ?? 90 });
+    if (!o.pending)
+      this.push({
+        kind: "tool_result",
+        call_id: id,
+        output: o.output ?? "",
+        is_error: !!o.error,
+        duration_ms: o.ms ?? 90,
+      });
     return this;
   }
   /** Finish a call left pending earlier. */
@@ -62,8 +88,16 @@ class Script {
 }
 
 const allow = (layer: string, rule: string): PolicyDecision => ({ decision: "allow", rule: { layer, rule } });
-const deny = (rule: string, reason: string): PolicyDecision => ({ decision: "deny", reason, rule: { layer: "guard", rule } });
-const ask = (rule: string, reason: string): PolicyDecision => ({ decision: "ask", reason, rule: { layer: "permission", rule } });
+const deny = (rule: string, reason: string): PolicyDecision => ({
+  decision: "deny",
+  reason,
+  rule: { layer: "guard", rule },
+});
+const ask = (rule: string, reason: string): PolicyDecision => ({
+  decision: "ask",
+  reason,
+  rule: { layer: "permission", rule },
+});
 
 const use = (i: number, o: number, cache: number, cost: number, calls: number, build: number): Usage => ({
   input_tokens: i,
@@ -92,7 +126,9 @@ const SERVICE_AFTER = `  public Order cancel(OrderId id, Actor by) {
 
 /** A completed native implementer run with every kind of item the Activity stream shows. */
 const implementerPhase2 = new Script(t0)
-  .status("Started on native · anthropic:claude-sonnet-5 · phase file ostra-plan-20260922-100500-order-cancel-phase-2-service.md")
+  .status(
+    "Started on native · anthropic:claude-sonnet-5 · phase file ostra-plan-20260922-100500-order-cancel-phase-2-service.md",
+  )
   .think(
     "Phase 2 wires the cancel endpoint. R2 says a shipped order must return 409 with cannot_cancel, and the phase names OrderStateMachine for every status change. Load the controller skill, then read the controller and the service.",
   )
@@ -102,17 +138,25 @@ const implementerPhase2 = new Script(t0)
     { file_path: `${BACKEND}/src/main/java/shop/order/OrderController.java` },
     {
       output:
-        "  1\tpackage shop.order;\n  2\t\n  3\timport org.springframework.http.HttpStatus;\n  …\n 38\t  @PostMapping(\"/orders/{id}/cancel\")\n 39\t  public ResponseEntity<OrderDto> cancel(@PathVariable String id, Principal who) {\n 40\t    return ResponseEntity.ok(OrderDto.of(service.cancel(OrderId.of(id), Actor.of(who))));\n 41\t  }",
+        '  1\tpackage shop.order;\n  2\t\n  3\timport org.springframework.http.HttpStatus;\n  …\n 38\t  @PostMapping("/orders/{id}/cancel")\n 39\t  public ResponseEntity<OrderDto> cancel(@PathVariable String id, Principal who) {\n 40\t    return ResponseEntity.ok(OrderDto.of(service.cancel(OrderId.of(id), Actor.of(who))));\n 41\t  }',
       ms: 12,
     },
   )
-  .tool("Grep", { pattern: "isShippedOrLater", path: "src" }, { output: "src/main/java/shop/order/OrderStatus.java:21:  public boolean isShippedOrLater() {", ms: 60 })
+  .tool(
+    "Grep",
+    { pattern: "isShippedOrLater", path: "src" },
+    { output: "src/main/java/shop/order/OrderStatus.java:21:  public boolean isShippedOrLater() {", ms: 60 },
+  )
   .text(
     "`OrderService.cancel` sets the status directly, which skips the event publisher (lesson 1 in project memory). Routing it through `OrderStateMachine` and refusing shipped orders with `CannotCancel`, which the controller maps to 409.",
   )
   .tool(
     "Edit",
-    { file_path: `${BACKEND}/src/main/java/shop/order/OrderService.java`, old_string: SERVICE_BEFORE, new_string: SERVICE_AFTER },
+    {
+      file_path: `${BACKEND}/src/main/java/shop/order/OrderService.java`,
+      old_string: SERVICE_BEFORE,
+      new_string: SERVICE_AFTER,
+    },
     { policy: allow("permission", "mode:acceptEdits"), output: "The file was updated.", ms: 8 },
   )
   .tool(
@@ -142,7 +186,10 @@ const implementerPhase2 = new Script(t0)
       content: "package shop.order;\n\nclass OrderCancelTest {\n  @Test void shippedOrderCannotBeCancelled() { }\n}\n",
     },
     {
-      policy: deny("no-tests-from-implementer", "The implementer may not write a path that matches the project's test patterns (src/test/**)."),
+      policy: deny(
+        "no-tests-from-implementer",
+        "The implementer may not write a path that matches the project's test patterns (src/test/**).",
+      ),
       output: "Denied by guard no-tests-from-implementer.",
       error: true,
       ms: 0,
@@ -162,17 +209,29 @@ const implementerPhase2 = new Script(t0)
   .text("Checkstyle wants the injected `clock` field final. One-line fix, then the check again.")
   .tool(
     "Edit",
-    { file_path: `${BACKEND}/src/main/java/shop/order/OrderService.java`, old_string: "  private Clock clock;", new_string: "  private final Clock clock;" },
+    {
+      file_path: `${BACKEND}/src/main/java/shop/order/OrderService.java`,
+      old_string: "  private Clock clock;",
+      new_string: "  private final Clock clock;",
+    },
     { policy: allow("permission", "mode:acceptEdits"), output: "The file was updated.", ms: 6 },
   )
   .tool(
     "Bash",
     { command: "./gradlew :order:check" },
-    { policy: allow("permission", "Bash(./gradlew *)"), output: "> Task :order:check\n\nBUILD SUCCESSFUL in 7s\n6 actionable tasks: 3 executed, 3 up-to-date", ms: 6800 },
+    {
+      policy: allow("permission", "Bash(./gradlew *)"),
+      output: "> Task :order:check\n\nBUILD SUCCESSFUL in 7s\n6 actionable tasks: 3 executed, 3 up-to-date",
+      ms: 6800,
+    },
   )
   .tool(
     "Memory",
-    { area: "build", lesson: "Checkstyle FinalField fails ./gradlew :order:check for injected fields that are not final.", source: "implementer" },
+    {
+      area: "build",
+      lesson: "Checkstyle FinalField fails ./gradlew :order:check for injected fields that are not final.",
+      source: "implementer",
+    },
     { output: "Recorded lesson 3 in build.", ms: 20 },
   )
   .tool(
@@ -186,7 +245,11 @@ const implementerPhase2 = new Script(t0)
   )
   .tool(
     "submit_implementer",
-    { status: "complete", report: `${SROOT}/backend/ostra-implementer-phase-2.md`, files_changed: ["src/main/java/shop/order/OrderService.java", "src/main/java/shop/order/OrderController.java"] },
+    {
+      status: "complete",
+      report: `${SROOT}/backend/ostra-implementer-phase-2.md`,
+      files_changed: ["src/main/java/shop/order/OrderService.java", "src/main/java/shop/order/OrderController.java"],
+    },
     { output: "Accepted.", ms: 3 },
   )
   .usage(use(184200, 12700, 151000, 0.41, 14, 21400));
@@ -206,18 +269,44 @@ const factCheck = new Script(t0 - 20 * 60000)
       ms: 10,
     },
   )
-  .tool("Grep", { pattern: "fn handle_refund_webhook", path: "src" }, { output: "src/payments/webhooks.rs:57  pub async fn handle_refund_webhook(", ms: 70 })
-  .tool("WebFetch", { url: "https://docs.stripe.com/webhooks#retries", prompt: "How long does Stripe retry a failed webhook?" }, { output: "Automatic retries: up to 3 days with exponential backoff in live mode.", ms: 1400 })
-  .text("E1 holds: the provider retries for up to 3 days, so Ostra's own backoff must dedupe on `event.id`. Checking R3's table next.")
+  .tool(
+    "Grep",
+    { pattern: "fn handle_refund_webhook", path: "src" },
+    { output: "src/payments/webhooks.rs:57  pub async fn handle_refund_webhook(", ms: 70 },
+  )
+  .tool(
+    "WebFetch",
+    { url: "https://docs.stripe.com/webhooks#retries", prompt: "How long does Stripe retry a failed webhook?" },
+    { output: "Automatic retries: up to 3 days with exponential backoff in live mode.", ms: 1400 },
+  )
+  .text(
+    "E1 holds: the provider retries for up to 3 days, so Ostra's own backoff must dedupe on `event.id`. Checking R3's table next.",
+  )
   .tool("Grep", { pattern: "webhook_events", path: "migrations/ src/" }, { pending: true })
   .usage(use(61000, 3100, 48000, 0.19, 5, 0));
 const factCheckBase = factCheck.length;
 factCheck
   .result("c4", "(no matches)", 210)
-  .text("R3 is a FAIL finding: no `webhook_events` table exists in migrations or code. The spec must add it as a new migration or name the existing `payment_events` table.")
-  .tool("Read", { file_path: "/home/me/code/shop-backend/migrations/20260611_payment_events.sql" }, { output: "CREATE TABLE payment_events (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL,\n  payload JSONB NOT NULL\n);", ms: 9 })
-  .think("payment_events has no attempts column, so it cannot serve as the dead-letter table without a change. That is a second finding against R3's contract.")
-  .tool("Grep", { pattern: "attempts", path: "src/payments" }, { output: "src/payments/retry.rs:12  const MAX_ATTEMPTS: u32 = 5;", ms: 55 })
+  .text(
+    "R3 is a FAIL finding: no `webhook_events` table exists in migrations or code. The spec must add it as a new migration or name the existing `payment_events` table.",
+  )
+  .tool(
+    "Read",
+    { file_path: "/home/me/code/shop-backend/migrations/20260611_payment_events.sql" },
+    {
+      output:
+        "CREATE TABLE payment_events (\n  id TEXT PRIMARY KEY,\n  kind TEXT NOT NULL,\n  payload JSONB NOT NULL\n);",
+      ms: 9,
+    },
+  )
+  .think(
+    "payment_events has no attempts column, so it cannot serve as the dead-letter table without a change. That is a second finding against R3's contract.",
+  )
+  .tool(
+    "Grep",
+    { pattern: "attempts", path: "src/payments" },
+    { output: "src/payments/retry.rs:12  const MAX_ATTEMPTS: u32 = 5;", ms: 55 },
+  )
   .text("MAX_ATTEMPTS is 5 in code, while R3 says 8. Recording both findings with their evidence.")
   .usage(use(79000, 4600, 63000, 0.26, 8, 0));
 
@@ -226,17 +315,40 @@ const codexPhase1 = new Script(t0 - 7 * 60000)
   .status("Started on harness:codex · gpt-5.6-luna · hook bridge on")
   .tool("Read", { file_path: `${BACKEND}/src/main/java/shop/order/OrderStatus.java` }, { ms: 20 })
   .tool("Skill", { path: ".ostra/skills/spring-service/SKILL.md" }, { ms: 15 })
-  .tool("Edit", { file_path: `${BACKEND}/src/main/java/shop/order/OrderStatus.java`, old_string: "  SHIPPED,", new_string: "  SHIPPED,\n  CANCELLED," }, { policy: allow("permission", "mode:acceptEdits"), ms: 30 })
+  .tool(
+    "Edit",
+    {
+      file_path: `${BACKEND}/src/main/java/shop/order/OrderStatus.java`,
+      old_string: "  SHIPPED,",
+      new_string: "  SHIPPED,\n  CANCELLED,",
+    },
+    { policy: allow("permission", "mode:acceptEdits"), ms: 30 },
+  )
   .tool(
     "Write",
-    { file_path: `${BACKEND}/src/main/resources/db/migration/V42__order_cancelled_at.sql`, content: "ALTER TABLE orders ADD COLUMN cancelled_at TIMESTAMP NULL;\nALTER TABLE orders ADD COLUMN cancelled_by TEXT NULL;\n" },
+    {
+      file_path: `${BACKEND}/src/main/resources/db/migration/V42__order_cancelled_at.sql`,
+      content:
+        "ALTER TABLE orders ADD COLUMN cancelled_at TIMESTAMP NULL;\nALTER TABLE orders ADD COLUMN cancelled_by TEXT NULL;\n",
+    },
     { policy: allow("permission", "mode:acceptEdits"), ms: 25 },
   )
-  .tool("Bash", { command: "./gradlew :order:compileJava" }, { policy: allow("permission", "Bash(./gradlew *)"), ms: 7900 })
+  .tool(
+    "Bash",
+    { command: "./gradlew :order:compileJava" },
+    { policy: allow("permission", "Bash(./gradlew *)"), ms: 7900 },
+  )
   .tool(
     "Write",
     { file_path: `${BACKEND}/src/test/java/shop/order/OrderCancelTest.java`, content: "class OrderCancelTest {}\n" },
-    { policy: deny("no-tests-from-implementer", "The implementer may not write a path that matches the project's test patterns (src/test/**)."), error: true, ms: 0 },
+    {
+      policy: deny(
+        "no-tests-from-implementer",
+        "The implementer may not write a path that matches the project's test patterns (src/test/**).",
+      ),
+      error: true,
+      ms: 0,
+    },
   )
   .tool("submit_implementer", { status: "complete" }, { ms: 5 })
   .usage(use(142000, 9800, 120000, 0.18, 9, 7900));
@@ -260,19 +372,48 @@ const claudePhase3 = new Script(t0 + 6 * 60000)
   .tool(
     "Write",
     { file_path: `${WEB}/src/components/OrderActions.test.tsx`, content: "test('cancel', () => {});\n" },
-    { policy: deny("no-tests-from-implementer", "The implementer may not write a path that matches the project's test patterns (**/*.test.tsx)."), error: true, ms: 0 },
+    {
+      policy: deny(
+        "no-tests-from-implementer",
+        "The implementer may not write a path that matches the project's test patterns (**/*.test.tsx).",
+      ),
+      error: true,
+      ms: 0,
+    },
   )
-  .tool("Bash", { command: "npx eslint --fix src/components" }, { policy: ask("mode:default", "Bash command `npx eslint --fix src/components` matches no allow rule."), pending: true })
+  .tool(
+    "Bash",
+    { command: "npx eslint --fix src/components" },
+    {
+      policy: ask("mode:default", "Bash command `npx eslint --fix src/components` matches no allow rule."),
+      pending: true,
+    },
+  )
   .usage(use(38000, 2100, 30000, 0.07, 6, 6100));
 
 const stuckRun = new Script(t0 - 3000 * 60000)
   .status("Started on harness:codex · gpt-5.6-luna · hook bridge on")
-  .tool("Bash", { command: "./mvnw -q -pl order compile" }, { policy: allow("permission", "Bash(./mvnw *)"), error: true, ms: 4100 })
-  .tool("Bash", { command: "./mvnw -q -pl order compile" }, { policy: allow("permission", "Bash(./mvnw *)"), error: true, ms: 4000 })
   .tool(
     "Bash",
     { command: "./mvnw -q -pl order compile" },
-    { policy: deny("build-streak", "Five builds in a row failed. Return STUCK with the diagnostic instead of building again."), error: true, ms: 0 },
+    { policy: allow("permission", "Bash(./mvnw *)"), error: true, ms: 4100 },
+  )
+  .tool(
+    "Bash",
+    { command: "./mvnw -q -pl order compile" },
+    { policy: allow("permission", "Bash(./mvnw *)"), error: true, ms: 4000 },
+  )
+  .tool(
+    "Bash",
+    { command: "./mvnw -q -pl order compile" },
+    {
+      policy: deny(
+        "build-streak",
+        "Five builds in a row failed. Return STUCK with the diagnostic instead of building again.",
+      ),
+      error: true,
+      ms: 0,
+    },
   );
 
 function genericActivity(x: ExecutionView): ActivityItem[] {
@@ -311,10 +452,21 @@ export function activityFor(id: string): ActivityItem[] {
 
 const OVERRIDES: Record<string, Partial<ExecutionView>> = {
   x_imp1: { has_transcript: true, usage: use(142000, 9800, 120000, 0.18, 9, 7900) },
-  x_imp2: { usage: use(184200, 12700, 151000, 0.41, 14, 21400), report_path: `${SROOT}/backend/ostra-implementer-phase-2.md` },
+  x_imp2: {
+    usage: use(184200, 12700, 151000, 0.41, 14, 21400),
+    report_path: `${SROOT}/backend/ostra-implementer-phase-2.md`,
+  },
   x_imp3: { usage: use(38000, 2100, 30000, 0.07, 6, 6100) },
-  x_r3: { usage: use(61000, 3100, 48000, 0.19, 5, 0), spawn_block: "Workspace root: /home/me/code/shop\nRepo root: /home/me/code/shop-backend\nTarget: ostra-spec-refund-retries.md\nSource check: refetch" },
-  x_n1: { can_resume: true, native_session_id: "019a-codex-stuck", error: "Five builds in a row failed: `./mvnw` needs JAVA_HOME pointing at JDK 21." },
+  x_r3: {
+    usage: use(61000, 3100, 48000, 0.19, 5, 0),
+    spawn_block:
+      "Workspace root: /home/me/code/shop\nRepo root: /home/me/code/shop-backend\nTarget: ostra-spec-refund-retries.md\nSource check: refetch",
+  },
+  x_n1: {
+    can_resume: true,
+    native_session_id: "019a-codex-stuck",
+    error: "Five builds in a row failed: `./mvnw` needs JAVA_HOME pointing at JDK 21.",
+  },
 };
 
 /** Executions the mock has resumed; their terminals go live. */
@@ -322,7 +474,11 @@ const resumed = new Set<string>();
 
 export function executionView(id: string): ExecutionView {
   const x = f.executions.find((e) => e.id === id) ?? f.executions[0];
-  return { ...x, ...OVERRIDES[x.id], ...(resumed.has(x.id) ? { has_terminal: true, status: "running" as const, ended_at: null } : {}) };
+  return {
+    ...x,
+    ...OVERRIDES[x.id],
+    ...(resumed.has(x.id) ? { has_terminal: true, status: "running" as const, ended_at: null } : {}),
+  };
 }
 
 export function resume(id: string): ExecutionView {
@@ -410,9 +566,16 @@ const CLAUDE_PHASE3 = tty([
 const CLAUDE_PHASE3_LIVE = [
   tty(["⏺ Bash(npm run typecheck)"]),
   tty([`${GREEN}  ⎿  tsc --noEmit  (6.1s, no errors)${RESET}`]),
-  tty([`${RED}⏺ Write(src/components/OrderActions.test.tsx)${RESET}`, `${RED}  ⎿  Denied by Ostra guard no-tests-from-implementer. Leave tests to the write-test stage.${RESET}`, ""]),
+  tty([
+    `${RED}⏺ Write(src/components/OrderActions.test.tsx)${RESET}`,
+    `${RED}  ⎿  Denied by Ostra guard no-tests-from-implementer. Leave tests to the write-test stage.${RESET}`,
+    "",
+  ]),
   tty(["⏺ Tests belong to write-test. Formatting the component before the report."]),
-  tty(["⏺ Bash(npx eslint --fix src/components)", `${YELLOW}  ⏸ Waiting for approval in Ostra (permission · mode:default)${RESET}`]),
+  tty([
+    "⏺ Bash(npx eslint --fix src/components)",
+    `${YELLOW}  ⏸ Waiting for approval in Ostra (permission · mode:default)${RESET}`,
+  ]),
 ];
 
 const RESUMED = tty(["", `${DIM}  Resumed with \`codex resume\` in a new terminal.${RESET}`, `${BLUE}› ${RESET}`]);

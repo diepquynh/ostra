@@ -85,7 +85,9 @@ async function open(path: string, url = "/") {
 }
 
 const button = (label: string) =>
-  Array.from(host!.querySelectorAll("button")).find((b) => b.getAttribute("aria-label") === label || b.textContent?.replace("⌘S", "").trim() === label) as HTMLButtonElement | undefined;
+  Array.from(host!.querySelectorAll("button")).find(
+    (b) => b.getAttribute("aria-label") === label || b.textContent?.replace("⌘S", "").trim() === label,
+  ) as HTMLButtonElement | undefined;
 const click = (label: string) => act(async () => button(label)!.click());
 const editor = () => host!.querySelector<HTMLTextAreaElement>('[data-testid="editor"]')!;
 const text = () => host?.textContent ?? "";
@@ -99,7 +101,11 @@ async function type(value: string) {
 }
 
 const diskChanged = (path: string) =>
-  act(() => handlers.get(`workspace:${WS}`)?.forEach((h) => h({ type: "project_fs_changed", workspace: WS, key: KEY, paths: [path] } as WireMsg)));
+  act(() =>
+    handlers
+      .get(`workspace:${WS}`)
+      ?.forEach((h) => h({ type: "project_fs_changed", workspace: WS, key: KEY, paths: [path] } as WireMsg)),
+  );
 
 // Each test edits its own file, because the mock keeps saved text in memory. Files without git marks open in the
 // File view, where Edit is offered.

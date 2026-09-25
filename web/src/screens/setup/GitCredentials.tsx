@@ -43,12 +43,18 @@ export function GitCredentials() {
     setError(null);
     setIssues([]);
     if (file.size > MAX_KEY_BYTES) {
-      setError(`${file.name} is too large for a private key. Choose the key file itself, for example ~/.ssh/id_ed25519.`);
+      setError(
+        `${file.name} is too large for a private key. Choose the key file itself, for example ~/.ssh/id_ed25519.`,
+      );
       return;
     }
     setSecret(await file.text());
   };
-  const issue = (path: string) => issues.filter((i) => i.path === path).map((i) => i.message).join(" ") || null;
+  const issue = (path: string) =>
+    issues
+      .filter((i) => i.path === path)
+      .map((i) => i.message)
+      .join(" ") || null;
 
   const reset = () => {
     setEditing(null);
@@ -96,19 +102,32 @@ export function GitCredentials() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <p className="wp-lead" style={{ margin: 0 }}>
-        Credentials stay on the machine that runs Ostra, in its data folder (under Docker, the data volume). The browser never
-        receives a saved token or key, and Ostra gives one to git only for a clone or pull that uses it.
+        Credentials stay on the machine that runs Ostra, in its data folder (under Docker, the data volume). The browser
+        never receives a saved token or key, and Ostra gives one to git only for a clone or pull that uses it.
       </p>
-      <Panel title="Saved git credentials" subtitle="for every workspace on this machine; the longest matching host and path wins" bodyFlush>
+      <Panel
+        title="Saved git credentials"
+        subtitle="for every workspace on this machine; the longest matching host and path wins"
+        bodyFlush
+      >
         {loadError && <Banner tone="bad">{loadError}</Banner>}
         <Table<GitCredentialView>
           dense
           rows={list ?? []}
-          empty={list ? "No git credentials yet. Without one, git uses this machine's own SSH keys and credential helpers." : "Loading…"}
+          empty={
+            list
+              ? "No git credentials yet. Without one, git uses this machine's own SSH keys and credential helpers."
+              : "Loading…"
+          }
           columns={[
             { key: "label", label: "Name", render: (c) => c.label },
             { key: "host", label: "Host", render: (c) => <span className="wp-mono">{c.host}</span> },
-            { key: "kind", label: "Type", width: 130, render: (c) => (c.kind === "ssh" ? "SSH key" : `Token${c.username ? ` as ${c.username}` : ""}`) },
+            {
+              key: "kind",
+              label: "Type",
+              width: 130,
+              render: (c) => (c.kind === "ssh" ? "SSH key" : `Token${c.username ? ` as ${c.username}` : ""}`),
+            },
             {
               key: "actions",
               label: "",
@@ -118,7 +137,14 @@ export function GitCredentials() {
                   <Button size="sm" variant="ghost" onClick={() => edit(c)}>
                     Edit
                   </Button>
-                  <Button size="sm" variant="ghost" icon="trash-2" disabled={busy} title={`Delete ${c.label}`} onClick={() => void run(api.deleteGitCredential(c.id), () => editing === c.id && reset())}>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon="trash-2"
+                    disabled={busy}
+                    title={`Delete ${c.label}`}
+                    onClick={() => void run(api.deleteGitCredential(c.id), () => editing === c.id && reset())}
+                  >
                     Delete
                   </Button>
                 </div>
@@ -139,9 +165,29 @@ export function GitCredentials() {
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
-            <Select size="sm" label="Type" value={kind} onChange={(e) => setKind(e.target.value as GitCredentialKind)} options={KINDS} />
-            <Input size="sm" mono label="Host" placeholder="github.com or github.com/acme" value={host} error={issue("host")} onChange={(e) => setHost(e.target.value)} />
-            <Input size="sm" label="Name (optional)" placeholder="Work GitHub" value={label} onChange={(e) => setLabel(e.target.value)} />
+            <Select
+              size="sm"
+              label="Type"
+              value={kind}
+              onChange={(e) => setKind(e.target.value as GitCredentialKind)}
+              options={KINDS}
+            />
+            <Input
+              size="sm"
+              mono
+              label="Host"
+              placeholder="github.com or github.com/acme"
+              value={host}
+              error={issue("host")}
+              onChange={(e) => setHost(e.target.value)}
+            />
+            <Input
+              size="sm"
+              label="Name (optional)"
+              placeholder="Work GitHub"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+            />
             {kind === "https" && (
               <Input
                 size="sm"
@@ -163,7 +209,13 @@ export function GitCredentials() {
             type={kind === "ssh" ? undefined : "password"}
             autoComplete="off"
             label={kind === "ssh" ? "Private key" : "Token"}
-            placeholder={editing ? "Saved. Paste a new value to replace it." : kind === "ssh" ? "-----BEGIN OPENSSH PRIVATE KEY-----" : "Paste a personal access token"}
+            placeholder={
+              editing
+                ? "Saved. Paste a new value to replace it."
+                : kind === "ssh"
+                  ? "-----BEGIN OPENSSH PRIVATE KEY-----"
+                  : "Paste a personal access token"
+            }
             hint={
               kind === "ssh"
                 ? "Paste the key or import its file, for example ~/.ssh/id_ed25519. The file is read in this browser and saved on the Ostra machine. Use a deploy key without a passphrase, with only the access the projects need, because agents run in the same environment."

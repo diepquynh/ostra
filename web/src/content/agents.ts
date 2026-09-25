@@ -25,7 +25,11 @@ export const NATIVE_ONLY = new Set(["judge", "quick-answer"]);
 
 export const PERMISSION_MODES: { mode: PermissionMode; label: string; help: string }[] = [
   { mode: "default", label: "Default", help: "Asks before file edits and before any command no rule allows." },
-  { mode: "acceptEdits", label: "Accept edits", help: "File edits inside the project are allowed; unlisted commands still ask." },
+  {
+    mode: "acceptEdits",
+    label: "Accept edits",
+    help: "File edits inside the project are allowed; unlisted commands still ask.",
+  },
   { mode: "plan", label: "Plan (read-only)", help: "Agents may read but not change the project." },
   { mode: "bypass", label: "Bypass", help: "Nothing asks. Guards and deny rules still apply." },
 ];

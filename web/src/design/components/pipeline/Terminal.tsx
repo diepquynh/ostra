@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Icon } from "../core/Icon";
 
 export type TerminalTone = "" | "muted" | "fn" | "ok" | "add" | "bad" | "del" | "warn";
@@ -28,7 +28,17 @@ export interface TerminalProps {
 }
 
 /** Terminal pane for a harness execution: the bar chrome plus either the static lines or a live xterm.js screen. */
-export function Terminal({ title, meta, lines = [], live, interactive, onInput, height = 420, actions, children }: TerminalProps) {
+export function Terminal({
+  title,
+  meta,
+  lines = [],
+  live,
+  interactive,
+  onInput,
+  height = 420,
+  actions,
+  children,
+}: TerminalProps) {
   const ref = useRef<HTMLDivElement>(null);
   const [stick, setStick] = useState(true);
   const [value, setValue] = useState("");
@@ -65,7 +75,13 @@ export function Terminal({ title, meta, lines = [], live, interactive, onInput, 
           {children}
         </div>
       ) : (
-        <div className="os-term__screen" ref={ref} onScroll={onScroll} role="log" aria-live={live ? "polite" : undefined}>
+        <div
+          className="os-term__screen"
+          ref={ref}
+          onScroll={onScroll}
+          role="log"
+          aria-live={live ? "polite" : undefined}
+        >
           {lines.map((l, i) => {
             const [tone, text] = Array.isArray(l) ? l : [l.tone, l.text];
             return (
@@ -91,11 +107,21 @@ export function Terminal({ title, meta, lines = [], live, interactive, onInput, 
           }}
         >
           <span style={{ color: "var(--term-muted)", fontFamily: "var(--font-mono)" }}>›</span>
-          <input value={value} onChange={(e) => setValue(e.target.value)} placeholder="Type into the harness session. Enter sends." aria-label="Terminal input" />
+          <input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="Type into the harness session. Enter sends."
+            aria-label="Terminal input"
+          />
         </form>
       )}
       {!slot && !stick && live && (
-        <button type="button" onClick={() => setStick(true)} className="os-btn os-btn--sm" style={{ position: "absolute", right: 16, bottom: 44 }}>
+        <button
+          type="button"
+          onClick={() => setStick(true)}
+          className="os-btn os-btn--sm"
+          style={{ position: "absolute", right: 16, bottom: 44 }}
+        >
           Follow output
         </button>
       )}

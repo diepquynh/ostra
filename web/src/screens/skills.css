@@ -1,18 +1,94 @@
 /* Skills screen layout. Components come from the design system; this file only places them. */
-.sk-layout { display: grid; grid-template-columns: minmax(260px, 360px) minmax(0, 1fr); gap: 16px; align-items: start; }
-@media (max-width: 860px) { .sk-layout { grid-template-columns: minmax(0, 1fr); } }
-.sk-list { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.sk-editor { min-width: 0; position: sticky; top: 12px; }
-.sk-note { padding: 10px 12px; }
-.sk-rows { list-style: none; margin: 0; padding: 0; }
-.sk-rows li + li { border-top: 1px solid var(--border-subtle); }
-.sk-row { all: unset; box-sizing: border-box; width: 100%; display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; cursor: pointer; }
-.sk-row:hover { background: var(--surface-hover); }
-.sk-row:focus-visible { box-shadow: var(--ring-focus); }
-.sk-row[data-active] { background: var(--surface-selected, var(--surface-hover)); box-shadow: inset 2px 0 0 var(--accent); }
-.sk-row__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.sk-row__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
-.sk-row__desc { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.sk-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
-.sk-content textarea { min-height: 420px; font-size: var(--text-code, 12.5px); line-height: 1.5; }
-.sk-preview { margin: 0; max-height: 60vh; overflow: auto; white-space: pre-wrap; font: var(--text-sm)/1.5 var(--font-mono); }
+.sk-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .sk-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.sk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.sk-editor {
+  min-width: 0;
+  position: sticky;
+  top: 12px;
+}
+.sk-note {
+  padding: 10px 12px;
+}
+.sk-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.sk-rows li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+.sk-row {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.sk-row:hover {
+  background: var(--surface-hover);
+}
+.sk-row:focus-visible {
+  box-shadow: var(--ring-focus);
+}
+.sk-row[data-active] {
+  background: var(--surface-selected, var(--surface-hover));
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.sk-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.sk-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.sk-row__desc {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sk-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+.sk-content textarea {
+  min-height: 420px;
+  font-size: var(--text-code, 12.5px);
+  line-height: 1.5;
+}
+.sk-preview {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: var(--text-sm) / 1.5 var(--font-mono);
+}

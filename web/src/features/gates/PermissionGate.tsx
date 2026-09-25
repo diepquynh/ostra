@@ -1,7 +1,7 @@
 import { Button, Chip } from "../../design";
 import { humanize } from "../../lib/format";
 import { permission } from "../../lib/gateAnswers";
-import { ExecutionLink, OpenGate, muted, row, type GateFormProps } from "./kit";
+import { ExecutionLink, type GateFormProps, muted, OpenGate, row } from "./kit";
 
 /** The tool call input, as a shell line for Bash and as JSON otherwise. */
 function callText(tool: string, input: unknown): string {
@@ -25,7 +25,11 @@ export function PermissionGate({ gate, payload, submit, busy, error }: GateFormP
           <Button
             disabled={busy || !payload.suggestion}
             onClick={() => submit(permission("always-in-workspace"))}
-            title={payload.suggestion ? `Adds ${payload.suggestion} to the workspace allow rules` : "This call has no rule to add"}
+            title={
+              payload.suggestion
+                ? `Adds ${payload.suggestion} to the workspace allow rules`
+                : "This call has no rule to add"
+            }
           >
             Always in this workspace{payload.suggestion ? ":" : ""}
             {payload.suggestion && <code style={{ marginLeft: 4 }}>{payload.suggestion}</code>}
@@ -49,7 +53,9 @@ export function PermissionGate({ gate, payload, submit, busy, error }: GateFormP
           Rule: {payload.rule.layer} <code>{payload.rule.rule}</code>
         </span>
       </div>
-      <p style={muted}>The execution is paused until you answer. A denial tells the agent to continue without the call.</p>
+      <p style={muted}>
+        The execution is paused until you answer. A denial tells the agent to continue without the call.
+      </p>
     </OpenGate>
   );
 }

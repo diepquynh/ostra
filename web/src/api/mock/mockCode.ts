@@ -1,7 +1,21 @@
 // A naive code provider for the mock server: a regex tokenizer, definitions after a definition keyword,
 // usages by whole-word match, and imports from `use` and `import ... from` lines.
 
-import type { CodeDeps, CodeFile, CodeGraph, CodeGraphEdge, CodeGraphMember, CodeGraphNode, CodeImport, CodeLocation, CodeSymbol, CodeSymbols, CodeUsages, SymbolKind, TokenClass } from "../types";
+import type {
+  CodeDeps,
+  CodeFile,
+  CodeGraph,
+  CodeGraphEdge,
+  CodeGraphMember,
+  CodeGraphNode,
+  CodeImport,
+  CodeLocation,
+  CodeSymbol,
+  CodeSymbols,
+  CodeUsages,
+  SymbolKind,
+  TokenClass,
+} from "../types";
 import { mockTexts } from "./projectFiles";
 
 const KW = new Set(
@@ -127,7 +141,9 @@ function imports(key: string, path: string, code: string): CodeImport[] {
     } else if (rs) {
       const spec = rs[1];
       const mod = spec.startsWith("crate::") ? spec.split("::")[1] : null;
-      const target = mod ? (paths.find((p) => p.endsWith(`src/${mod}.rs`) || p.endsWith(`src/${mod}/mod.rs`)) ?? null) : null;
+      const target = mod
+        ? (paths.find((p) => p.endsWith(`src/${mod}.rs`) || p.endsWith(`src/${mod}/mod.rs`)) ?? null)
+        : null;
       out.push({ spec, line: i + 1, target, folder: false });
     }
   });
@@ -226,12 +242,28 @@ function mockFileDefs(key: string, path: string, except?: number): CodeGraphMemb
   const t = mockTexts(key).find((x) => x.path === path);
   if (!t || !langOf(path)) return [];
   const lines = t.code.split("\n");
-  return analyze(key, path, t.code).symbols
-    .filter((s) => !s.container && (TYPE_KINDS.includes(s.kind) || s.kind === "function" || s.kind === "method") && s.line !== except)
-    .map((s) => ({ path, name: s.name, kind: s.kind, line: s.line, end_line: s.end_line ?? null, via: s.via ?? null, signature: lines[s.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? s.name }));
+  return analyze(key, path, t.code)
+    .symbols.filter(
+      (s) =>
+        !s.container &&
+        (TYPE_KINDS.includes(s.kind) || s.kind === "function" || s.kind === "method") &&
+        s.line !== except,
+    )
+    .map((s) => ({
+      path,
+      name: s.name,
+      kind: s.kind,
+      line: s.line,
+      end_line: s.end_line ?? null,
+      via: s.via ?? null,
+      signature: lines[s.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? s.name,
+    }));
 }
 
-export function mockCodeGraph(key: string, at: { package?: string; path?: string; symbol?: string; line?: number; depth?: number }): CodeGraph {
+export function mockCodeGraph(
+  key: string,
+  at: { package?: string; path?: string; symbol?: string; line?: number; depth?: number },
+): CodeGraph {
   if (at.path && at.symbol) return mockSymbolGraph(key, at.path, at.symbol, at.line);
   const files = mockTexts(key).filter((t) => langOf(t.path));
   const pkgOf = (p: string) => (p.includes("/") ? p.split("/")[0] : "");
@@ -243,10 +275,26 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
   const used = (p: string) => [...uses].filter(([, t]) => t.has(p)).map(([f]) => f);
   const pkgId = (p: string) => `package:${p}`;
   const fileNode = (p: string, column: number): CodeGraphNode => ({
-    id: p, kind: "file", label: p.split("/").pop() ?? p, package: pkgOf(p), column, files: 1,
-    test: /test/.test(p), dependents: used(p).length, dependencies: uses.get(p)?.size ?? 0, file_defs: mockFileDefs(key, p), more_file_defs: 0,
+    id: p,
+    kind: "file",
+    label: p.split("/").pop() ?? p,
+    package: pkgOf(p),
+    column,
+    files: 1,
+    test: /test/.test(p),
+    dependents: used(p).length,
+    dependencies: uses.get(p)?.size ?? 0,
+    file_defs: mockFileDefs(key, p),
+    more_file_defs: 0,
   });
-  const fileEdge = (from: string, to: string): CodeGraphEdge => ({ from, to, weight: 1, names: [], import: true, kind: "uses" });
+  const fileEdge = (from: string, to: string): CodeGraphEdge => ({
+    from,
+    to,
+    weight: 1,
+    names: [],
+    import: true,
+    kind: "uses",
+  });
   /** Longest chain of uses below each node, negated, so users sit left of what they use. */
   const columns = (ids: string[], out: (id: string) => string[]) => {
     const level = new Map<string, number>();
@@ -275,7 +323,9 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
     walk(used, -1);
     const ids = [...col.keys()];
     return {
-      ...base, view: "file", focus: at.path,
+      ...base,
+      view: "file",
+      focus: at.path,
       nodes: ids.map((p) => fileNode(p, col.get(p)!)),
       edges: ids.flatMap((p) => [...(uses.get(p) ?? [])].filter((t) => col.has(t)).map((t) => fileEdge(p, t))),
     };
@@ -289,12 +339,26 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
     const col = columns(members, (id) => (id.startsWith("package:") ? [] : [...inside(id), ...outside(id)]));
     const others = [...new Set(members.flatMap(outside))];
     return {
-      ...base, view: "package", focus: pkg,
+      ...base,
+      view: "package",
+      focus: pkg,
       nodes: [
         ...members.map((p) => fileNode(p, col(p))),
         ...others.map((id): CodeGraphNode => {
           const name = id.slice("package:".length);
-          return { id, kind: "package", label: name || "(project top)", package: name, column: col(id), files: files.filter((f) => pkgOf(f.path) === name).length, test: false, dependents: 0, dependencies: 0, file_defs: [], more_file_defs: 0 };
+          return {
+            id,
+            kind: "package",
+            label: name || "(project top)",
+            package: name,
+            column: col(id),
+            files: files.filter((f) => pkgOf(f.path) === name).length,
+            test: false,
+            dependents: 0,
+            dependencies: 0,
+            file_defs: [],
+            more_file_defs: 0,
+          };
         }),
       ],
       edges: [
@@ -307,17 +371,35 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
   const links = new Map<string, number>();
   for (const [f, targets] of uses)
     for (const t of targets)
-      if (pkgOf(t) !== pkgOf(f)) links.set(`${pkgOf(f)}\u0000${pkgOf(t)}`, (links.get(`${pkgOf(f)}\u0000${pkgOf(t)}`) ?? 0) + 1);
+      if (pkgOf(t) !== pkgOf(f))
+        links.set(`${pkgOf(f)}\u0000${pkgOf(t)}`, (links.get(`${pkgOf(f)}\u0000${pkgOf(t)}`) ?? 0) + 1);
   const pairs = [...links].map(([k, n]) => [...k.split("\u0000"), n] as [string, string, number]);
   const col = columns(pkgs, (p) => pairs.filter(([a]) => a === p).map(([, b]) => b));
   return {
-    ...base, view: "packages", focus: "",
+    ...base,
+    view: "packages",
+    focus: "",
     nodes: pkgs.map((p) => ({
-      id: pkgId(p), kind: "package", label: p || "(project top)", package: p, column: col(p),
-      files: files.filter((f) => pkgOf(f.path) === p).length, test: false,
-      dependents: pairs.filter(([, b]) => b === p).length, dependencies: pairs.filter(([a]) => a === p).length, file_defs: [], more_file_defs: 0,
+      id: pkgId(p),
+      kind: "package",
+      label: p || "(project top)",
+      package: p,
+      column: col(p),
+      files: files.filter((f) => pkgOf(f.path) === p).length,
+      test: false,
+      dependents: pairs.filter(([, b]) => b === p).length,
+      dependencies: pairs.filter(([a]) => a === p).length,
+      file_defs: [],
+      more_file_defs: 0,
     })),
-    edges: pairs.map(([a, b, n]) => ({ from: pkgId(a), to: pkgId(b), weight: n, names: [], import: true, kind: "uses" })),
+    edges: pairs.map(([a, b, n]) => ({
+      from: pkgId(a),
+      to: pkgId(b),
+      weight: n,
+      names: [],
+      import: true,
+      kind: "uses",
+    })),
   };
 }
 
@@ -325,7 +407,9 @@ export function mockCodeGraph(key: string, at: { package?: string; path?: string
 function mockSymbolGraph(key: string, path: string, symbol: string, line?: number): CodeGraph {
   const texts = mockTexts(key).filter((t) => langOf(t.path));
   const own = analyze(key, path, fileText(key, path)).symbols;
-  const focus = own.filter((s) => s.name === symbol).sort((a, b) => Math.abs(a.line - (line ?? 0)) - Math.abs(b.line - (line ?? 0)))[0];
+  const focus = own
+    .filter((s) => s.name === symbol)
+    .sort((a, b) => Math.abs(a.line - (line ?? 0)) - Math.abs(b.line - (line ?? 0)))[0];
   if (!focus) throw Object.assign(new Error(`${symbol} is not defined in ${path}.`), { status: 404 });
   const idOf = (s: CodeSymbol) => `symbol:${path}:${s.line}:${s.name}`;
   const next = own.find((s) => s.line > focus.line)?.line ?? Infinity;
@@ -335,28 +419,73 @@ function mockSymbolGraph(key: string, path: string, symbol: string, line?: numbe
   const callees = own.filter((s) => s !== focus && s.kind !== "module" && word(s.name).test(body));
   const callers = texts.filter((t) => t.path !== path && word(symbol).test(t.code)).map((t) => t.path);
   const symNode = (s: CodeSymbol, column: number, ins: number, outs: number): CodeGraphNode => ({
-    id: idOf(s), kind: "symbol", label: s.container ? `${s.container}.${s.name}` : s.name, package: path.includes("/") ? path.split("/")[0] : "",
-    column, files: 1, test: false, dependents: ins, dependencies: outs, file_defs: mockFileDefs(key, path, s.line), more_file_defs: 0,
+    id: idOf(s),
+    kind: "symbol",
+    label: s.container ? `${s.container}.${s.name}` : s.name,
+    package: path.includes("/") ? path.split("/")[0] : "",
+    column,
+    files: 1,
+    test: false,
+    dependents: ins,
+    dependencies: outs,
+    file_defs: mockFileDefs(key, path, s.line),
+    more_file_defs: 0,
     symbol: {
-      path, name: s.name, kind: s.kind, line: s.line, end_line: s.end_line ?? null, container: s.container ?? null, via: s.via ?? null,
+      path,
+      name: s.name,
+      kind: s.kind,
+      line: s.line,
+      end_line: s.end_line ?? null,
+      container: s.container ?? null,
+      via: s.via ?? null,
       signature: lines[s.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? s.name,
       members: ["class", "enum", "interface", "type"].includes(s.kind)
-        ? own.filter((m) => m.container === s.name && (m.kind === "method" || m.kind === "function"))
-            .map((m) => ({ path, name: m.name, kind: m.kind, line: m.line, end_line: m.end_line ?? null, via: m.via ?? null, signature: lines[m.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? m.name }))
+        ? own
+            .filter((m) => m.container === s.name && (m.kind === "method" || m.kind === "function"))
+            .map((m) => ({
+              path,
+              name: m.name,
+              kind: m.kind,
+              line: m.line,
+              end_line: m.end_line ?? null,
+              via: m.via ?? null,
+              signature: lines[m.line - 1]?.trim().replace(/\s*\{.*$/, "") ?? m.name,
+            }))
         : [],
       more_members: 0,
     },
   });
   return {
-    view: "symbol", focus: idOf(focus), indexed_files: texts.length, truncated: false,
+    view: "symbol",
+    focus: idOf(focus),
+    indexed_files: texts.length,
+    truncated: false,
     nodes: [
       symNode(focus, 0, callers.length, callees.length),
       ...callees.map((s) => symNode(s, 1, 1, 0)),
-      ...callers.map((p): CodeGraphNode => ({ id: p, kind: "file", label: p.split("/").pop() ?? p, package: p.includes("/") ? p.split("/")[0] : "", column: -1, files: 1, test: false, dependents: 0, dependencies: 1, file_defs: mockFileDefs(key, p), more_file_defs: 0 })),
+      ...callers.map(
+        (p): CodeGraphNode => ({
+          id: p,
+          kind: "file",
+          label: p.split("/").pop() ?? p,
+          package: p.includes("/") ? p.split("/")[0] : "",
+          column: -1,
+          files: 1,
+          test: false,
+          dependents: 0,
+          dependencies: 1,
+          file_defs: mockFileDefs(key, p),
+          more_file_defs: 0,
+        }),
+      ),
     ],
     edges: [
-      ...callees.map((s): CodeGraphEdge => ({ from: idOf(focus), to: idOf(s), weight: 1, names: [], import: false, kind: "uses" })),
-      ...callers.map((p): CodeGraphEdge => ({ from: p, to: idOf(focus), weight: 1, names: [], import: false, kind: "uses" })),
+      ...callees.map(
+        (s): CodeGraphEdge => ({ from: idOf(focus), to: idOf(s), weight: 1, names: [], import: false, kind: "uses" }),
+      ),
+      ...callers.map(
+        (p): CodeGraphEdge => ({ from: p, to: idOf(focus), weight: 1, names: [], import: false, kind: "uses" }),
+      ),
     ],
   };
 }

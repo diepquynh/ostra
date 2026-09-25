@@ -41,8 +41,12 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const spec = encodeURIComponent(`/home/me/code/shop/.ostra/sessions/${SESSION}/ostra-spec-20260922-100700-order-cancel.md`);
-const ledger = encodeURIComponent(`/home/me/code/shop/.ostra/sessions/${SESSION}/backend/ostra-review-ledger-phase-1.md`);
+const spec = encodeURIComponent(
+  `/home/me/code/shop/.ostra/sessions/${SESSION}/ostra-spec-20260922-100700-order-cancel.md`,
+);
+const ledger = encodeURIComponent(
+  `/home/me/code/shop/.ostra/sessions/${SESSION}/backend/ostra-review-ledger-phase-1.md`,
+);
 
 describe("every screen renders on mock data inside the shell", () => {
   const shell = ["Sessions", "Files", "Order cancellation", "Mock data", "waiting for you", "Go to anything"];
@@ -51,13 +55,25 @@ describe("every screen renders on mock data inside the shell", () => {
     [`/w/${WS}`, [...shell, "New task", "Write tests", "Phase 2 review, pass 2 of 3", "not initialized", "Overview"]],
     [`/w/${WS}/p/backend`, [...shell, "backend", "Commands", "cargo test --workspace", "Skills", "Browse files"]],
     [`/w/${WS}/p/web`, [...shell, "web", "Initialize web", "Ultracode bootstrap", "Not initialized"]],
-    [`/w/${WS}/settings`, [...shell, "General", "Routing", "Permissions", "Session budget in dollars", "Checked as you edit"]],
+    [
+      `/w/${WS}/settings`,
+      [...shell, "General", "Routing", "Permissions", "Session budget in dollars", "Checked as you edit"],
+    ],
     [`/w/${WS}/memory`, [...shell, "OrderStateMachine", "Add a lesson", "Memory"]],
     [`/w/${WS}/cost`, [...shell, "By session", "Cache reads per tool call"]],
-    [`/w/${WS}/s/${SESSION}`, [...shell, "Waiting for you", "Allow once", "Closing gate", "Research", "Phase graph", "Ostra chose"]],
+    [
+      `/w/${WS}/s/${SESSION}`,
+      [...shell, "Waiting for you", "Allow once", "Closing gate", "Research", "Phase graph", "Ostra chose"],
+    ],
     [`/w/${WS}/s/s_research`, ["Completion report", "Decided for you", "Refund event publishing"]],
-    [`/w/${WS}/x/x_rev2`, [...shell, "Activity", "Denied", "What to do instead", "write-scope", "Code reviewer · Phase 2 · pass 2"]],
-    [`/w/${WS}/artifact?path=${spec}`, ["How to read requirements", "EARS", "order cancellation", "Spec: order cancellation"]],
+    [
+      `/w/${WS}/x/x_rev2`,
+      [...shell, "Activity", "Denied", "What to do instead", "write-scope", "Code reviewer · Phase 2 · pass 2"],
+    ],
+    [
+      `/w/${WS}/artifact?path=${spec}`,
+      ["How to read requirements", "EARS", "order cancellation", "Spec: order cancellation"],
+    ],
     [`/w/${WS}/artifact?path=${ledger}`, ["Code Review Ledger", "Iteration 1"]],
     [`/w/${WS}/f/backend/crates/orders/src/service.rs`, [...shell, "service.rs", "CannotCancel", "read-only"]],
     [`/s/${SESSION}`, ["Waiting for you", "Allow once"]],

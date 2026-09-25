@@ -43,7 +43,13 @@ export function useFolderInfo(path: string, debounceMs = 120): FolderInfo {
       api.fsBrowse({ path: path.replace(/\/+$/, ""), limit: 1 }, { signal: ctrl.signal }).then(
         (b) => {
           if (ctrl.signal.aborted) return;
-          setInfo({ for: path, info: b.exists && b.readable ? { state: "exists", isGit: b.is_git, isOstraProject: b.is_ostra_project } : { state: "missing" } });
+          setInfo({
+            for: path,
+            info:
+              b.exists && b.readable
+                ? { state: "exists", isGit: b.is_git, isOstraProject: b.is_ostra_project }
+                : { state: "missing" },
+          });
         },
         () => {
           if (!ctrl.signal.aborted) setInfo({ for: path, info: { state: "missing" } });

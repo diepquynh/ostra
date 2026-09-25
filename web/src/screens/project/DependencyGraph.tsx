@@ -1,7 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import {
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { api } from "../../api";
-import type { CodeFile, CodeGraph, CodeGraphEdge, CodeGraphMember, CodeGraphNode, CodeGraphSymbol, CodeLocation, CodeReindex, ProjectFile, SymbolKind } from "../../api/types";
-import { Banner, Button, Chip, Combobox, Icon, IconButton, ICONS, Spinner, Tabs, type ComboItem, type IconName } from "../../design";
+import type {
+  CodeFile,
+  CodeGraph,
+  CodeGraphEdge,
+  CodeGraphMember,
+  CodeGraphNode,
+  CodeGraphSymbol,
+  CodeLocation,
+  CodeReindex,
+  ProjectFile,
+  SymbolKind,
+} from "../../api/types";
+import {
+  Banner,
+  Button,
+  Chip,
+  Combobox,
+  type ComboItem,
+  ICONS,
+  Icon,
+  IconButton,
+  type IconName,
+  Spinner,
+  Tabs,
+} from "../../design";
 import { useAsync } from "../../lib/hooks";
 import { useFileIndex } from "../../lib/live";
 import { useNav } from "../../lib/nav";
@@ -52,7 +85,12 @@ export function nodeHeight(n: CodeGraphNode, focus: string): number {
  * Columns left to right as the server numbered them (a node uses nodes to its right), each column
  * ordered by the average row of its neighbors so links cross less. Pure, for tests.
  */
-export function layout(g: CodeGraph): { nodes: Placed[]; width: number; height: number; columns: { column: number; x: number }[] } {
+export function layout(g: CodeGraph): {
+  nodes: Placed[];
+  width: number;
+  height: number;
+  columns: { column: number; x: number }[];
+} {
   const cols = [...new Set(g.nodes.map((n) => n.column))].sort((a, b) => a - b);
   const byCol = cols.map((c) => g.nodes.filter((n) => n.column === c).sort((a, b) => a.label.localeCompare(b.label)));
   const near = new Map<string, string[]>();
@@ -105,7 +143,10 @@ export function layout(g: CodeGraph): { nodes: Placed[]; width: number; height: 
     nodes,
     width: Math.max(PAD * 2, x - COL_GAP + PAD),
     height: top + PAD + tallest,
-    columns: cols.map((column, ci) => ({ column, x: colX[ci] + (lanes[ci] * NODE_W + (lanes[ci] - 1) * LANE_GAP) / 2 })),
+    columns: cols.map((column, ci) => ({
+      column,
+      x: colX[ci] + (lanes[ci] * NODE_W + (lanes[ci] - 1) * LANE_GAP) / 2,
+    })),
   };
 }
 
@@ -133,7 +174,8 @@ export function kindStyle(n: Pick<CodeGraphNode, "kind" | "symbol">): { color: s
 
 function symbolStyle(k: SymbolKind): { color: string; icon: IconName; word: string } {
   if (TYPE_KINDS.includes(k)) return { color: "var(--syntax-number)", icon: "shapes", word: k };
-  if (k === "function" || k === "method" || k === "macro") return { color: "var(--syntax-fn)", icon: "square-function", word: k };
+  if (k === "function" || k === "method" || k === "macro")
+    return { color: "var(--syntax-fn)", icon: "square-function", word: k };
   return { color: "var(--text-secondary)", icon: "braces", word: k };
 }
 
@@ -164,7 +206,8 @@ export function fileDefsHint(n: Pick<CodeGraphNode, "kind" | "symbol" | "file_de
 /** The second line of a node: where it lives, and the trait its impl block implements. */
 function subline(n: CodeGraphNode): string {
   if (n.kind === "package") return `${n.files} file${n.files === 1 ? "" : "s"}`;
-  if (n.kind === "symbol" && n.symbol) return `${n.symbol.path.split("/").pop()}:${n.symbol.line}${n.symbol.via ? ` · ${n.symbol.via}` : ""}`;
+  if (n.kind === "symbol" && n.symbol)
+    return `${n.symbol.path.split("/").pop()}:${n.symbol.line}${n.symbol.via ? ` · ${n.symbol.via}` : ""}`;
   return n.package || "(project top)";
 }
 
@@ -188,7 +231,10 @@ export function matchFiles(paths: string[], query: string, limit: number): strin
     const score = base.startsWith(parts[0]) ? 0 : base.includes(parts[0]) ? 1 : 2;
     hits.push([score * 1000 + p.length, p]);
   }
-  return hits.sort((a, b) => a[0] - b[0]).slice(0, limit).map(([, p]) => p);
+  return hits
+    .sort((a, b) => a[0] - b[0])
+    .slice(0, limit)
+    .map(([, p]) => p);
 }
 
 /** The pan and zoom of the canvas: a point p of the graph sits at p * k + (x, y) on screen. */
@@ -223,12 +269,23 @@ function useDebounced<T>(value: T, ms: number): T {
   return v;
 }
 
-const qualified = (s: { name: string; container?: string | null }) => (s.container ? `${s.container}.${s.name}` : s.name);
+const qualified = (s: { name: string; container?: string | null }) =>
+  s.container ? `${s.container}.${s.name}` : s.name;
 
 type Found = { item: ComboItem; view: GraphView };
 
 /** Search for a function, type, or file, and center the graph on the pick. Same-named definitions carry their signature. */
-function GraphSearch({ ws, projectKey, paths, onPick }: { ws: string; projectKey: string; paths: string[]; onPick: (v: GraphView) => void }) {
+function GraphSearch({
+  ws,
+  projectKey,
+  paths,
+  onPick,
+}: {
+  ws: string;
+  projectKey: string;
+  paths: string[];
+  onPick: (v: GraphView) => void;
+}) {
   const [q, setQ] = useState("");
   const dq = useDebounced(q.trim(), 150);
   const [symbols, setSymbols] = useState<{ q: string; items: CodeLocation[] }>({ q: "", items: [] });
@@ -271,7 +328,14 @@ function GraphSearch({ ws, projectKey, paths, onPick }: { ws: string; projectKey
     });
     for (const p of matchFiles(paths, q, 8))
       out.push({
-        item: { id: `f:${p}`, group: "Files", icon: "file-code-2", iconColor: "var(--syntax-string)", label: <span style={{ fontFamily: "var(--font-mono)" }}>{p.split("/").pop()}</span>, sub: p },
+        item: {
+          id: `f:${p}`,
+          group: "Files",
+          icon: "file-code-2",
+          iconColor: "var(--syntax-string)",
+          label: <span style={{ fontFamily: "var(--font-mono)" }}>{p.split("/").pop()}</span>,
+          sub: p,
+        },
         view: { kind: "file", path: p, depth: 1 },
       });
     return out;
@@ -306,7 +370,17 @@ function GraphSearch({ ws, projectKey, paths, onPick }: { ws: string; projectKey
 }
 
 /** A file's definitions, each a way into the symbol view. */
-function FileSymbols({ ws, projectKey, path, onPick }: { ws: string; projectKey: string; path: string; onPick: (v: GraphView) => void }) {
+function FileSymbols({
+  ws,
+  projectKey,
+  path,
+  onPick,
+}: {
+  ws: string;
+  projectKey: string;
+  path: string;
+  onPick: (v: GraphView) => void;
+}) {
   const file = useAsync(() => api.codeFile(ws, projectKey, path), [ws, projectKey, path]);
   if (file.loading && !file.data)
     return (
@@ -314,7 +388,9 @@ function FileSymbols({ ws, projectKey, path, onPick }: { ws: string; projectKey:
         <Spinner size={10} /> Reading its definitions…
       </span>
     );
-  const defs = (file.data?.symbols ?? []).filter((s) => s.kind !== "field" && s.kind !== "variable" && s.kind !== "module");
+  const defs = (file.data?.symbols ?? []).filter(
+    (s) => s.kind !== "field" && s.kind !== "variable" && s.kind !== "module",
+  );
   if (!defs.length) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -345,14 +421,39 @@ const memberKey = (m: { path: string; line: number }) => `${m.path}:${m.line}`;
 
 /** A method or type as the preview shows it. */
 export function asSymbol(m: CodeGraphMember, container: string | null): CodeGraphSymbol {
-  return { path: m.path, name: m.name, kind: m.kind, line: m.line, end_line: m.end_line ?? null, container, via: m.via ?? null, signature: m.signature, members: [], more_members: 0 };
+  return {
+    path: m.path,
+    name: m.name,
+    kind: m.kind,
+    line: m.line,
+    end_line: m.end_line ?? null,
+    container,
+    via: m.via ?? null,
+    signature: m.signature,
+    members: [],
+    more_members: 0,
+  };
 }
 
 /**
  * Definitions to look through: a click shows one in the code preview, and the button at the start of
  * its row centers the graph on it.
  */
-function DefList({ title, items, more = 0, active, onPeek, onCenter }: { title: string; items: CodeGraphMember[]; more?: number; active: string | null; onPeek: (m: CodeGraphMember) => void; onCenter: (m: CodeGraphMember) => void }) {
+function DefList({
+  title,
+  items,
+  more = 0,
+  active,
+  onPeek,
+  onCenter,
+}: {
+  title: string;
+  items: CodeGraphMember[];
+  more?: number;
+  active: string | null;
+  onPeek: (m: CodeGraphMember) => void;
+  onCenter: (m: CodeGraphMember) => void;
+}) {
   if (!items.length) return null;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -362,25 +463,61 @@ function DefList({ title, items, more = 0, active, onPeek, onCenter }: { title: 
       <div className="dg-members">
         {items.map((m) => (
           <div key={memberKey(m)} className={`dg-member ${active === memberKey(m) ? "dg-member--active" : ""}`}>
-            <IconButton icon="locate-fixed" label={`Center the graph on ${m.name}`} size="sm" onClick={() => onCenter(m)} />
-            <button type="button" className="dg-member__peek" onClick={() => onPeek(m)} title={`Show ${m.path}:${m.line} in the preview`}>
-              <Icon name={symbolStyle(m.kind).icon} size={12} style={{ color: symbolStyle(m.kind).color, flex: "none" }} />
+            <IconButton
+              icon="locate-fixed"
+              label={`Center the graph on ${m.name}`}
+              size="sm"
+              onClick={() => onCenter(m)}
+            />
+            <button
+              type="button"
+              className="dg-member__peek"
+              onClick={() => onPeek(m)}
+              title={`Show ${m.path}:${m.line} in the preview`}
+            >
+              <Icon
+                name={symbolStyle(m.kind).icon}
+                size={12}
+                style={{ color: symbolStyle(m.kind).color, flex: "none" }}
+              />
               <span className="dg-member__sig">{m.signature || m.name}</span>
               {m.via && <Chip>{m.via}</Chip>}
-              <span className="dg-member__where">{m.path.split("/").pop()}:{m.line}</span>
+              <span className="dg-member__where">
+                {m.path.split("/").pop()}:{m.line}
+              </span>
             </button>
           </div>
         ))}
-        {more > 0 && <span style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", paddingLeft: 6 }}>and {more} more</span>}
+        {more > 0 && (
+          <span style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)", paddingLeft: 6 }}>
+            and {more} more
+          </span>
+        )}
       </div>
     </div>
   );
 }
 
 /** The definition's source, colored, with clickable names that move the graph to what they define. */
-function DefinitionPreview({ ws, projectKey, symbol, onPick, onOpen }: { ws: string; projectKey: string; symbol: CodeGraphSymbol; onPick: (v: GraphView) => void; onOpen: () => void }) {
+function DefinitionPreview({
+  ws,
+  projectKey,
+  symbol,
+  onPick,
+  onOpen,
+}: {
+  ws: string;
+  projectKey: string;
+  symbol: CodeGraphSymbol;
+  onPick: (v: GraphView) => void;
+  onOpen: () => void;
+}) {
   const src = useAsync(
-    () => Promise.all([api.projectFile(ws, projectKey, symbol.path), api.codeFile(ws, projectKey, symbol.path).catch(() => null)]) as Promise<[ProjectFile, CodeFile | null]>,
+    () =>
+      Promise.all([
+        api.projectFile(ws, projectKey, symbol.path),
+        api.codeFile(ws, projectKey, symbol.path).catch(() => null),
+      ]) as Promise<[ProjectFile, CodeFile | null]>,
     [ws, projectKey, symbol.path],
   );
   const [miss, setMiss] = useState<string | null>(null);
@@ -412,9 +549,7 @@ function DefinitionPreview({ ws, projectKey, symbol, onPick, onOpen }: { ws: str
         </Button>
       </div>
       {miss && (
-        <div style={{ padding: "4px 10px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
-          {miss}
-        </div>
+        <div style={{ padding: "4px 10px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>{miss}</div>
       )}
       <div className="dg-preview__code">
         {src.error ? (
@@ -426,7 +561,15 @@ function DefinitionPreview({ ws, projectKey, symbol, onPick, onOpen }: { ws: str
         ) : src.data[0].content === null ? (
           <Banner tone="info">This file is binary.</Banner>
         ) : (
-          <SourceView code={src.data[0].content} file={src.data[1]} language={ext} highlightLine={symbol.line} highlightEnd={end} scrollBlock="start" onSymbol={follow} />
+          <SourceView
+            code={src.data[0].content}
+            file={src.data[1]}
+            language={ext}
+            highlightLine={symbol.line}
+            highlightEnd={end}
+            scrollBlock="start"
+            onSymbol={follow}
+          />
         )}
       </div>
     </div>
@@ -523,13 +666,18 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
 
   const placed = useMemo(() => (graph.data ? layout(graph.data) : null), [graph.data]);
   const byId = useMemo(() => new Map((placed?.nodes ?? []).map((n) => [n.id, n])), [placed]);
-  const focusNode = graph.data && (graph.data.view === "file" || graph.data.view === "symbol") ? byId.get(graph.data.focus) : undefined;
+  const focusNode =
+    graph.data && (graph.data.view === "file" || graph.data.view === "symbol") ? byId.get(graph.data.focus) : undefined;
 
   // A new view centers its focus at 100%, or fits the whole graph when there is no focus.
   useEffect(() => {
     if (!placed) return;
     const { w, h } = pz.size();
-    pz.move(focusNode ? centerOn(focusNode.x + NODE_W / 2, focusNode.y + Math.min(focusNode.h, 240) / 2, 1, w, h) : fitCamera(placed.width, placed.height, w, h));
+    pz.move(
+      focusNode
+        ? centerOn(focusNode.x + NODE_W / 2, focusNode.y + Math.min(focusNode.h, 240) / 2, 1, w, h)
+        : fitCamera(placed.width, placed.height, w, h),
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [placed]);
 
@@ -554,7 +702,11 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (e.altKey && e.key === "ArrowLeft" && !(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))) {
+      if (
+        e.altKey &&
+        e.key === "ArrowLeft" &&
+        !(t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
+      ) {
         e.preventDefault();
         back();
       }
@@ -565,22 +717,27 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
   const depth = view.kind === "file" || view.kind === "symbol" ? view.depth : 1;
   const primary = (n: CodeGraphNode) => {
     if (n.kind === "package") go({ kind: "package", pkg: n.package });
-    else if (n.kind === "symbol" && n.symbol) go({ kind: "symbol", path: n.symbol.path, symbol: n.symbol.name, line: n.symbol.line, depth });
+    else if (n.kind === "symbol" && n.symbol)
+      go({ kind: "symbol", path: n.symbol.path, symbol: n.symbol.name, line: n.symbol.line, depth });
     else go({ kind: "file", path: n.id, depth });
   };
   const toMember = (m: CodeGraphMember) => go({ kind: "symbol", path: m.path, symbol: m.name, line: m.line, depth });
   const peekMember = (m: CodeGraphMember, container: string | null) => setPeek(asSymbol(m, container));
-  const openAt = (path: string, line?: number) => nav.open(fileId(projectKey, path), line ? { anchor: `L${line}` } : undefined);
+  const openAt = (path: string, line?: number) =>
+    nav.open(fileId(projectKey, path), line ? { anchor: `L${line}` } : undefined);
   const rebuild = () => {
     setRebuilding(true);
     setRebuilt(null);
-    api.codeReindex(ws, projectKey).then(
-      (ok) => {
-        setRebuilt({ ok });
-        setGeneration((g) => g + 1);
-      },
-      (e: Error) => setRebuilt({ error: e.message }),
-    ).finally(() => setRebuilding(false));
+    api
+      .codeReindex(ws, projectKey)
+      .then(
+        (ok) => {
+          setRebuilt({ ok });
+          setGeneration((g) => g + 1);
+        },
+        (e: Error) => setRebuilt({ error: e.message }),
+      )
+      .finally(() => setRebuilding(false));
   };
 
   const focusId = hover ?? selected;
@@ -630,13 +787,40 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, padding: "0 24px 24px", minHeight: 0 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <IconButton icon="arrow-left" label={history.length ? "Back to the previous view (Alt+Left)" : "No previous view"} size="sm" disabled={!history.length} onClick={back} />
-        <nav aria-label="Graph view" style={{ display: "flex", alignItems: "center", gap: 4, font: "var(--type-ui)", minWidth: 0, flexWrap: "wrap" }}>
+        <IconButton
+          icon="arrow-left"
+          label={history.length ? "Back to the previous view (Alt+Left)" : "No previous view"}
+          size="sm"
+          disabled={!history.length}
+          onClick={back}
+        />
+        <nav
+          aria-label="Graph view"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            font: "var(--type-ui)",
+            minWidth: 0,
+            flexWrap: "wrap",
+          }}
+        >
           {crumbs.map((c, i) => (
             <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
               {i > 0 && <Icon name="chevron-right" size={12} style={{ color: "var(--text-muted)" }} />}
               {i < crumbs.length - 1 ? (
-                <button type="button" onClick={() => go(c.view)} style={{ background: "none", border: 0, padding: 0, color: "var(--text-link)", cursor: "pointer", font: "inherit" }}>
+                <button
+                  type="button"
+                  onClick={() => go(c.view)}
+                  style={{
+                    background: "none",
+                    border: 0,
+                    padding: 0,
+                    color: "var(--text-link)",
+                    cursor: "pointer",
+                    font: "inherit",
+                  }}
+                >
                   {c.label}
                 </button>
               ) : (
@@ -656,7 +840,13 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
           />
         )}
         <GraphSearch ws={ws} projectKey={projectKey} paths={index.paths} onPick={go} />
-        <Button size="sm" icon="refresh-ccw" disabled={rebuilding} onClick={rebuild} title="Read every source file again and rebuild the code index and the graph">
+        <Button
+          size="sm"
+          icon="refresh-ccw"
+          disabled={rebuilding}
+          onClick={rebuild}
+          title="Read every source file again and rebuild the code index and the graph"
+        >
           {rebuilding ? "Rebuilding…" : "Rebuild index"}
         </Button>
       </div>
@@ -679,11 +869,24 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
 
       {graph.data && placed && (
         <>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center", color: "var(--text-muted)", font: "var(--text-sm)/1.4 var(--font-sans)" }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              flexWrap: "wrap",
+              alignItems: "center",
+              color: "var(--text-muted)",
+              font: "var(--text-sm)/1.4 var(--font-sans)",
+            }}
+          >
             <span>
-              {graph.data.nodes.length} {graph.data.view === "packages" ? "packages" : "nodes"}, {graph.data.edges.length} links, {graph.data.indexed_files} files indexed.
+              {graph.data.nodes.length} {graph.data.view === "packages" ? "packages" : "nodes"},{" "}
+              {graph.data.edges.length} links, {graph.data.indexed_files} files indexed.
             </span>
-            <span>Drag to move, scroll to zoom. {isSymbolView ? "Double-click a definition to center on it." : "Double-click to open a node."}</span>
+            <span>
+              Drag to move, scroll to zoom.{" "}
+              {isSymbolView ? "Double-click a definition to center on it." : "Double-click to open a node."}
+            </span>
             {graph.data.truncated && <Chip tone="warn">some nodes or links left out</Chip>}
             {graph.loading && <Spinner size={10} />}
             <div style={{ flex: 1 }} />
@@ -696,17 +899,49 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
               <div ref={canvas} className="dg-canvas" {...pz.handlers}>
                 <svg width="100%" height="100%" role="img" aria-label="Dependency graph" style={{ display: "block" }}>
                   <defs>
-                    <marker id="dg-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <marker
+                      id="dg-arrow"
+                      viewBox="0 0 8 8"
+                      refX="7"
+                      refY="4"
+                      markerWidth="7"
+                      markerHeight="7"
+                      orient="auto-start-reverse"
+                    >
                       <path d="M0,0 L8,4 L0,8 z" fill="var(--border-strong)" />
                     </marker>
-                    <marker id="dg-arrow-lit" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                    <marker
+                      id="dg-arrow-lit"
+                      viewBox="0 0 8 8"
+                      refX="7"
+                      refY="4"
+                      markerWidth="7"
+                      markerHeight="7"
+                      orient="auto-start-reverse"
+                    >
                       <path d="M0,0 L8,4 L0,8 z" fill="var(--accent)" />
                     </marker>
-                    <marker id="dg-impl" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="11" markerHeight="11" orient="auto-start-reverse">
-                      <path d="M1,1 L11,6 L1,11 z" fill="var(--surface-sunken)" stroke="var(--syntax-keyword)" strokeWidth="1.3" />
+                    <marker
+                      id="dg-impl"
+                      viewBox="0 0 12 12"
+                      refX="11"
+                      refY="6"
+                      markerWidth="11"
+                      markerHeight="11"
+                      orient="auto-start-reverse"
+                    >
+                      <path
+                        d="M1,1 L11,6 L1,11 z"
+                        fill="var(--surface-sunken)"
+                        stroke="var(--syntax-keyword)"
+                        strokeWidth="1.3"
+                      />
                     </marker>
                   </defs>
-                  <g className={pz.animate ? "dg-world dg-world--anim" : "dg-world"} style={{ transform: `translate(${pz.cam.x}px, ${pz.cam.y}px) scale(${pz.cam.k})` }}>
+                  <g
+                    className={pz.animate ? "dg-world dg-world--anim" : "dg-world"}
+                    style={{ transform: `translate(${pz.cam.x}px, ${pz.cam.y}px) scale(${pz.cam.k})` }}
+                  >
                     {(graph.data.view === "file" || graph.data.view === "symbol") &&
                       placed.columns.map((c) => (
                         <text key={c.column} x={c.x} y={PAD + 12} textAnchor="middle" className="dg-colhead">
@@ -753,19 +988,44 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                           onClick={() => pick(n.id === selected ? null : n.id)}
                           onDoubleClick={() => primary(n)}
                         >
-                          {isFocus && <rect x={-4} y={-4} width={NODE_W + 8} height={n.h + 8} rx={10} fill="none" stroke="var(--accent)" strokeOpacity={0.35} strokeWidth={4} />}
+                          {isFocus && (
+                            <rect
+                              x={-4}
+                              y={-4}
+                              width={NODE_W + 8}
+                              height={n.h + 8}
+                              rx={10}
+                              fill="none"
+                              stroke="var(--accent)"
+                              strokeOpacity={0.35}
+                              strokeWidth={4}
+                            />
+                          )}
                           <rect
                             width={NODE_W}
                             height={n.h}
                             rx={8}
-                            fill={isFocus ? "var(--accent-soft)" : n.kind === "package" ? "var(--surface-raised)" : "var(--surface-panel)"}
+                            fill={
+                              isFocus
+                                ? "var(--accent-soft)"
+                                : n.kind === "package"
+                                  ? "var(--surface-raised)"
+                                  : "var(--surface-panel)"
+                            }
                             stroke={isSel || isFocus ? "var(--accent)" : "var(--border-default)"}
                             strokeWidth={isSel ? 2 : 1}
                             strokeDasharray={n.test ? "4 3" : undefined}
                             className="dg-node__box"
                           />
                           <rect x={0} y={8} width={3} height={NODE_H - 16} rx={1.5} fill={st.color} />
-                          <Glyph x={12} y={(NODE_H - 16) / 2} width={16} height={16} color={st.color} strokeWidth={1.75} />
+                          <Glyph
+                            x={12}
+                            y={(NODE_H - 16) / 2}
+                            width={16}
+                            height={16}
+                            color={st.color}
+                            strokeWidth={1.75}
+                          />
                           <text x={36} y={19} className="dg-node__label">
                             {clipLabel(n.label, 22)}
                           </text>
@@ -788,7 +1048,15 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                               <title>{`${n.kind === "file" ? "In this file" : "Also in this file"}: ${n.file_defs.map((t) => t.name).join(", ")}${n.more_file_defs ? `, and ${n.more_file_defs} more` : ""}. Select the node to go to one.`}</title>
                             </text>
                           )}
-                          {inline.rows.length > 0 && <line x1={8} x2={NODE_W - 8} y1={NODE_H + 2} y2={NODE_H + 2} stroke="var(--border-subtle)" />}
+                          {inline.rows.length > 0 && (
+                            <line
+                              x1={8}
+                              x2={NODE_W - 8}
+                              y1={NODE_H + 2}
+                              y2={NODE_H + 2}
+                              stroke="var(--border-subtle)"
+                            />
+                          )}
                           {inline.rows.map((m, i) => {
                             const ms = symbolStyle(m.kind);
                             const MGlyph = ICONS[ms.icon];
@@ -806,7 +1074,14 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                                   toMember(m);
                                 }}
                               >
-                                <rect x={4} y={0} width={NODE_W - 8} height={MEMBER_H} rx={4} className={peekKey === memberKey(m) ? "dg-row__bg dg-row__bg--active" : "dg-row__bg"} />
+                                <rect
+                                  x={4}
+                                  y={0}
+                                  width={NODE_W - 8}
+                                  height={MEMBER_H}
+                                  rx={4}
+                                  className={peekKey === memberKey(m) ? "dg-row__bg dg-row__bg--active" : "dg-row__bg"}
+                                />
                                 <MGlyph x={12} y={3} width={13} height={13} color={ms.color} strokeWidth={1.75} />
                                 <text x={32} y={14} className="dg-row__label">
                                   {clip(m.name, m.via ? 16 : 22)}
@@ -826,7 +1101,9 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                             </text>
                           )}
                           <title>
-                            {n.symbol ? `${st.word} ${n.label}\n${n.symbol.signature || ""}\n${n.symbol.path}:${n.symbol.line}` : n.id}
+                            {n.symbol
+                              ? `${st.word} ${n.label}\n${n.symbol.signature || ""}\n${n.symbol.path}:${n.symbol.line}`
+                              : n.id}
                             {n.kind === "symbol"
                               ? `\n${n.dependents} links in, ${n.dependencies} links out, in this view`
                               : `\n${n.dependents} dependents, ${n.dependencies} dependencies${n.kind === "package" ? `, ${n.files} files` : ""}`}
@@ -838,11 +1115,23 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                 </svg>
               </div>
               <div className="dg-zoom" role="group" aria-label="Zoom">
-                <IconButton icon="zoom-out" label="Zoom out" size="sm" disabled={pz.cam.k <= MIN_ZOOM} onClick={() => zoomBy(1 / 1.25)} />
+                <IconButton
+                  icon="zoom-out"
+                  label="Zoom out"
+                  size="sm"
+                  disabled={pz.cam.k <= MIN_ZOOM}
+                  onClick={() => zoomBy(1 / 1.25)}
+                />
                 <button type="button" className="dg-zoom__pct" onClick={recenter} title="Back to 100% on the focus">
                   {Math.round(pz.cam.k * 100)}%
                 </button>
-                <IconButton icon="zoom-in" label="Zoom in" size="sm" disabled={pz.cam.k >= MAX_ZOOM} onClick={() => zoomBy(1.25)} />
+                <IconButton
+                  icon="zoom-in"
+                  label="Zoom in"
+                  size="sm"
+                  disabled={pz.cam.k >= MAX_ZOOM}
+                  onClick={() => zoomBy(1.25)}
+                />
                 <IconButton icon="scan" label="Fit to view" size="sm" onClick={fit} />
               </div>
             </div>
@@ -875,7 +1164,11 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                   ) : (
                     <>
                       {sel.id !== focusNode?.id && (
-                        <Button size="sm" icon={sel.kind === "symbol" ? "workflow" : "git-fork"} onClick={() => primary(sel)}>
+                        <Button
+                          size="sm"
+                          icon={sel.kind === "symbol" ? "workflow" : "git-fork"}
+                          onClick={() => primary(sel)}
+                        >
                           {sel.kind === "symbol" ? "Center on this definition" : "Center on this file"}
                         </Button>
                       )}
@@ -893,7 +1186,18 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                     {selEdges.map((e, i) => {
                       const out = e.from === sel.id;
                       const other = out ? e.to : e.from;
-                      const verb = e.kind === "implements" ? (out ? "implements " : "implemented by ") : isSymbolView ? (out ? "calls or uses " : "referenced by ") : out ? "uses " : "used by ";
+                      const verb =
+                        e.kind === "implements"
+                          ? out
+                            ? "implements "
+                            : "implemented by "
+                          : isSymbolView
+                            ? out
+                              ? "calls or uses "
+                              : "referenced by "
+                            : out
+                              ? "uses "
+                              : "used by ";
                       return (
                         <li key={i}>
                           <button type="button" className="dg-link" onClick={() => pick(other)}>
@@ -908,18 +1212,46 @@ export function DependencyGraph({ ws, projectKey }: { ws: string; projectKey: st
                   </ul>
                 )}
                 {sel.symbol && (
-                  <DefList title="Methods and functions" items={sel.symbol.members} more={sel.symbol.more_members} active={peekKey} onPeek={(m) => peekMember(m, sel.symbol!.name)} onCenter={toMember} />
+                  <DefList
+                    title="Methods and functions"
+                    items={sel.symbol.members}
+                    more={sel.symbol.more_members}
+                    active={peekKey}
+                    onPeek={(m) => peekMember(m, sel.symbol!.name)}
+                    onCenter={toMember}
+                  />
                 )}
-                <DefList title={sel.kind === "file" ? "In this file" : "Also in this file"} items={sel.file_defs} more={sel.more_file_defs} active={peekKey} onPeek={(m) => peekMember(m, null)} onCenter={toMember} />
+                <DefList
+                  title={sel.kind === "file" ? "In this file" : "Also in this file"}
+                  items={sel.file_defs}
+                  more={sel.more_file_defs}
+                  active={peekKey}
+                  onPeek={(m) => peekMember(m, null)}
+                  onCenter={toMember}
+                />
                 {sel.kind === "file" && <FileSymbols ws={ws} projectKey={projectKey} path={sel.id} onPick={go} />}
               </div>
             )}
             {!sel && focusNode && ((focusNode.symbol?.members.length ?? 0) > 0 || focusNode.file_defs.length > 0) && (
               <div className="dg-details">
                 {focusNode.symbol && (
-                  <DefList title="Methods and functions" items={focusNode.symbol.members} more={focusNode.symbol.more_members} active={peekKey} onPeek={(m) => peekMember(m, focusNode.symbol!.name)} onCenter={toMember} />
+                  <DefList
+                    title="Methods and functions"
+                    items={focusNode.symbol.members}
+                    more={focusNode.symbol.more_members}
+                    active={peekKey}
+                    onPeek={(m) => peekMember(m, focusNode.symbol!.name)}
+                    onCenter={toMember}
+                  />
                 )}
-                <DefList title={focusNode.kind === "file" ? "In this file" : "Also in this file"} items={focusNode.file_defs} more={focusNode.more_file_defs} active={peekKey} onPeek={(m) => peekMember(m, null)} onCenter={toMember} />
+                <DefList
+                  title={focusNode.kind === "file" ? "In this file" : "Also in this file"}
+                  items={focusNode.file_defs}
+                  more={focusNode.more_file_defs}
+                  active={peekKey}
+                  onPeek={(m) => peekMember(m, null)}
+                  onCenter={toMember}
+                />
               </div>
             )}
             {previewed && (
@@ -972,7 +1304,12 @@ function Legend({ view }: { view: CodeGraph["view"] }) {
         <span style={sw}>
           <svg width={26} height={10} aria-hidden>
             <line x1={0} y1={5} x2={18} y2={5} stroke="var(--syntax-keyword)" strokeWidth={1.5} strokeDasharray="7 3" />
-            <path d="M17,1 L25,5 L17,9 z" fill="var(--surface-sunken)" stroke="var(--syntax-keyword)" strokeWidth={1.2} />
+            <path
+              d="M17,1 L25,5 L17,9 z"
+              fill="var(--surface-sunken)"
+              stroke="var(--syntax-keyword)"
+              strokeWidth={1.2}
+            />
           </svg>
           implements
         </span>

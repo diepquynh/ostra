@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import type { Document, DocumentView as DocView, FactCheckView } from "../../../api/types";
 import { Banner, Button, TreeItem } from "../../../design";
 import { useNav } from "../../../lib/nav";
-import { buildMarks, normId, parseAnchor, worst, type Chapter, type MarkTone, type Outline } from "./model";
-import { DocContext, FactCheckChapter, Ref, type DocCtx } from "./parts";
+import { buildMarks, type Chapter, type MarkTone, normId, type Outline, parseAnchor, worst } from "./model";
+import { DocContext, type DocCtx, FactCheckChapter, Ref } from "./parts";
 import { phaseOutline, planOutline } from "./plan";
 import { researchOutline } from "./research";
 import { specOutline } from "./spec";
@@ -47,7 +47,12 @@ export function DocumentView({ path, view, check, header }: DocumentViewProps) {
     const o = outlineOf(view.document);
     const chapters: Chapter[] = [...o.chapters];
     if (check) {
-      chapters.push({ id: "fact-check", title: "Fact-check", count: check.findings.length, render: () => <FactCheckChapter check={check} /> });
+      chapters.push({
+        id: "fact-check",
+        title: "Fact-check",
+        count: check.findings.length,
+        render: () => <FactCheckChapter check={check} />,
+      });
     }
     const tones = new Map<string, MarkTone[]>();
     for (const [key, list] of marks) {
@@ -122,7 +127,11 @@ export function DocumentView({ path, view, check, header }: DocumentViewProps) {
               depth={c.depth ?? 0}
               selected={c.id === current.id}
               meta={c.count !== undefined ? String(c.count) : undefined}
-              trailing={c.tone || c.attention ? <span className={`doc-dot doc-dot--${c.tone ?? "warn"}`} aria-label="Needs attention" /> : undefined}
+              trailing={
+                c.tone || c.attention ? (
+                  <span className={`doc-dot doc-dot--${c.tone ?? "warn"}`} aria-label="Needs attention" />
+                ) : undefined
+              }
               onClick={() => show(c.id, null)}
             />
           ))}
@@ -135,7 +144,11 @@ export function DocumentView({ path, view, check, header }: DocumentViewProps) {
         <article className="art-article doc-article">
           {header}
           {current.id === "overview" && view.issues.length > 0 && (
-            <Banner tone={view.issues.some((i) => i.level === "error") ? "bad" : "warn"} title={`Ostra's checks found ${view.issues.length} ${view.issues.length === 1 ? "issue" : "issues"}`} style={{ marginBottom: 18 }}>
+            <Banner
+              tone={view.issues.some((i) => i.level === "error") ? "bad" : "warn"}
+              title={`Ostra's checks found ${view.issues.length} ${view.issues.length === 1 ? "issue" : "issues"}`}
+              style={{ marginBottom: 18 }}
+            >
               <ul className="doc-issues">
                 {view.issues.map((i, n) => (
                   <li key={n}>

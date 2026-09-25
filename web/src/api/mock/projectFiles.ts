@@ -2,7 +2,17 @@
 // with git marks, a few real file bodies, and diffs for the files the running session changed.
 
 import type { DiffLine } from "../gen/DiffLine";
-import type { ChangedBy, DiffHunk, FileDiff, FsBrowse, GitMark, ProjectChange, ProjectFile, ProjectTree, ProjectTreeEntry } from "../types";
+import type {
+  ChangedBy,
+  DiffHunk,
+  FileDiff,
+  FsBrowse,
+  GitMark,
+  ProjectChange,
+  ProjectFile,
+  ProjectTree,
+  ProjectTreeEntry,
+} from "../types";
 import { SESSION } from "./fixtures";
 import { extraDirs, modifiedFor } from "./fixtures.projects";
 
@@ -129,7 +139,14 @@ const TREES: Record<string, Node[]> = {
       children: [
         { name: "INVENTORY.md", code: inventory },
         { name: "project.toml", code: projectToml },
-        { name: "skills", dir: true, children: [{ name: "axum-handler", dir: true, children: [{ name: "SKILL.md" }] }, { name: "sqlx-repo", dir: true, children: [{ name: "SKILL.md" }] }] },
+        {
+          name: "skills",
+          dir: true,
+          children: [
+            { name: "axum-handler", dir: true, children: [{ name: "SKILL.md" }] },
+            { name: "sqlx-repo", dir: true, children: [{ name: "SKILL.md" }] },
+          ],
+        },
         { name: "memory", dir: true, children: [{ name: "knowledge.sqlite3", binary: true }] },
       ],
     },
@@ -155,7 +172,9 @@ const TREES: Record<string, Node[]> = {
                   git: "M",
                   code: serviceRs,
                   added: [23, 24, 25, 26, 27, 28, 29],
-                  removed: { 23: ["    pub async fn cancel(&self, _id: OrderId) -> Result<Order> {", "        todo!()", "    }"] },
+                  removed: {
+                    23: ["    pub async fn cancel(&self, _id: OrderId) -> Result<Order> {", "        todo!()", "    }"],
+                  },
                   by: { execution: "x_imp2", phase: 2, running: false, staged: false },
                 },
               ],
@@ -170,7 +189,12 @@ const TREES: Record<string, Node[]> = {
       dir: true,
       children: [
         { name: "20260611_payment_events.sql" },
-        { name: "20260923_cancelled_at.sql", git: "A", code: migration, by: { execution: "x_imp1", phase: 1, running: false, staged: true } },
+        {
+          name: "20260923_cancelled_at.sql",
+          git: "A",
+          code: migration,
+          by: { execution: "x_imp1", phase: 1, running: false, staged: true },
+        },
       ],
     },
     { name: "tests", dir: true, children: [{ name: "orders_test.rs" }] },
@@ -201,7 +225,18 @@ const TREES: Record<string, Node[]> = {
             { name: "OrderHistory.tsx" },
           ],
         },
-        { name: "hooks", dir: true, children: [{ name: "useOrder.ts" }, { name: "useCancelOrder.ts", git: "?", by: { execution: "x_imp3", phase: 3, running: true, staged: false } }] },
+        {
+          name: "hooks",
+          dir: true,
+          children: [
+            { name: "useOrder.ts" },
+            {
+              name: "useCancelOrder.ts",
+              git: "?",
+              by: { execution: "x_imp3", phase: 3, running: true, staged: false },
+            },
+          ],
+        },
         { name: "pages", dir: true, children: [{ name: "OrderPage.tsx" }] },
       ],
     },
@@ -230,11 +265,21 @@ function nodeAt(key: string, path: string): Node | null {
 }
 
 const hasChanges = (n: Node): boolean => (n.dir ? (n.children ?? []).some(hasChanges) : !!n.git);
-const sizeOf = (n: Node, path: string) => (n.dir ? 0 : n.code ? n.code.length : n.binary ? 98304 + (hash(path) % 40000) : 400 + (hash(path) % 9000));
+const sizeOf = (n: Node, path: string) =>
+  n.dir ? 0 : n.code ? n.code.length : n.binary ? 98304 + (hash(path) % 40000) : 400 + (hash(path) % 9000);
 
 function changedBy(n: Node): ChangedBy | null {
   if (!n.by) return null;
-  return { session: SESSION, execution: n.by.execution, agent: "implementer", phase: n.by.phase, tests: false, staged: n.by.staged, running: n.by.running, at: MODIFIED };
+  return {
+    session: SESSION,
+    execution: n.by.execution,
+    agent: "implementer",
+    phase: n.by.phase,
+    tests: false,
+    staged: n.by.staged,
+    running: n.by.running,
+    at: MODIFIED,
+  };
 }
 
 function entry(key: string, n: Node, path: string): ProjectTreeEntry {
@@ -255,7 +300,8 @@ function entry(key: string, n: Node, path: string): ProjectTreeEntry {
 
 export function mockTree(key: string, path = "", hidden = false): ProjectTree {
   const dir = nodeAt(key, path);
-  if (!dir || !dir.dir) throw Object.assign(new Error(`${path} does not exist in project \`${key}\`.`), { status: 404 });
+  if (!dir || !dir.dir)
+    throw Object.assign(new Error(`${path} does not exist in project \`${key}\`.`), { status: 404 });
   const entries = (dir.children ?? [])
     .filter((c) => hidden || !c.name.startsWith("."))
     .sort((a, b) => (!!a.dir === !!b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1))
@@ -299,7 +345,8 @@ export function mockHash(text: string): string {
 }
 
 /** Write a mock file in memory. Throws a 409-shaped error when `baseHash` is not the current hash. */
-const conflict = (message: string, field: string) => Object.assign(new Error(message), { status: 409, issues: [{ path: field, message }] });
+const conflict = (message: string, field: string) =>
+  Object.assign(new Error(message), { status: 409, issues: [{ path: field, message }] });
 
 /** The folder at `path`, creating missing folders on the way. */
 function ensureDir(key: string, path: string): Node {
@@ -356,13 +403,25 @@ function walk(nodes: Node[], base: string, out: { path: string; node: Node }[]) 
   return out;
 }
 
-export const mockFileIndex = (key: string) => ({ paths: walk(TREES[key] ?? [], "", []).map((f) => f.path).sort(), truncated: false });
+export const mockFileIndex = (key: string) => ({
+  paths: walk(TREES[key] ?? [], "", [])
+    .map((f) => f.path)
+    .sort(),
+  truncated: false,
+});
 
 /** Unified diff of a mock file against HEAD, with three lines of context around each change. */
 export function mockDiff(key: string, path: string): FileDiff {
   const n = nodeAt(key, path);
   if (!n || n.dir) throw new Error(`${path} is not a file in project \`${key}\`.`);
-  const base = { path, base: "HEAD", binary: !!n.binary, truncated: false, git: n.git ?? null, changed_by: changedBy(n) };
+  const base = {
+    path,
+    base: "HEAD",
+    binary: !!n.binary,
+    truncated: false,
+    git: n.git ?? null,
+    changed_by: changedBy(n),
+  };
   if (!n.git || !n.code) return { ...base, hunks: [], added: 0, removed: 0 };
   const lines = n.code.replace(/\n$/, "").split("\n");
   const added = new Set(n.git === "A" || n.git === "?" ? lines.map((_, i) => i + 1) : (n.added ?? []));
@@ -398,7 +457,12 @@ export function mockDiff(key: string, path: string): FileDiff {
       new_lines: h.lines.filter((l) => l.type !== "del").length,
     });
   }
-  return { ...base, hunks, added: rows.filter((r) => r.type === "add").length, removed: rows.filter((r) => r.type === "del").length };
+  return {
+    ...base,
+    hunks,
+    added: rows.filter((r) => r.type === "add").length,
+    removed: rows.filter((r) => r.type === "del").length,
+  };
 }
 
 export function mockChanges(key: string): ProjectChange[] {
@@ -406,14 +470,29 @@ export function mockChanges(key: string): ProjectChange[] {
     .filter((f) => f.node.git && f.node.by)
     .map((f) => {
       const d = mockDiff(key, f.path);
-      return { path: f.path, git: f.node.git ?? null, staged: !!f.node.by?.staged, added: d.added, removed: d.removed, changed_by: changedBy(f.node)! };
+      return {
+        path: f.path,
+        git: f.node.git ?? null,
+        staged: !!f.node.by?.staged,
+        added: d.added,
+        removed: d.removed,
+        changed_by: changedBy(f.node)!,
+      };
     });
 }
 
 // Type-to-browse folders for the folder picker (`GET /api/fs`).
 const DIRS: Record<string, { name: string; is_git?: boolean; is_ostra_project?: boolean }[]> = {
   ...extraDirs,
-  "/": [{ name: "etc" }, { name: "home" }, { name: "opt" }, { name: "srv" }, { name: "tmp" }, { name: "usr" }, { name: "var" }],
+  "/": [
+    { name: "etc" },
+    { name: "home" },
+    { name: "opt" },
+    { name: "srv" },
+    { name: "tmp" },
+    { name: "usr" },
+    { name: "var" },
+  ],
   "/home": [{ name: "me" }],
   "/home/me": [{ name: "code" }, { name: "Downloads" }, { name: "notes" }],
   "/home/me/code": [
@@ -428,7 +507,10 @@ const DIRS: Record<string, { name: string; is_git?: boolean; is_ostra_project?: 
   "/home/me/code/shop-backend": [{ name: ".ostra" }, { name: "crates" }, { name: "migrations" }, { name: "tests" }],
   "/home/me/code/shop-web": [{ name: ".ostra" }, { name: "src" }, { name: "public" }],
   "/srv": [{ name: "repos" }],
-  "/srv/repos": [{ name: "legacy-erp", is_git: true }, { name: "reporting", is_git: true }],
+  "/srv/repos": [
+    { name: "legacy-erp", is_git: true },
+    { name: "reporting", is_git: true },
+  ],
 };
 
 export function mockBrowse(path = "~", prefix = "", limit = 200): FsBrowse {
@@ -439,10 +521,17 @@ export function mockBrowse(path = "~", prefix = "", limit = 200): FsBrowse {
   while (!(nearest in DIRS) && nearest !== "/") nearest = parentOf(nearest)!;
   const exists = full in DIRS;
   const p = prefix.toLowerCase();
-  const names = exists ? DIRS[full].filter((e) => (p ? e.name.toLowerCase().includes(p) : !e.name.startsWith("."))) : [];
-  names.sort((a, b) => Number(!a.name.toLowerCase().startsWith(p)) - Number(!b.name.toLowerCase().startsWith(p)) || a.name.localeCompare(b.name));
+  const names = exists
+    ? DIRS[full].filter((e) => (p ? e.name.toLowerCase().includes(p) : !e.name.startsWith(".")))
+    : [];
+  names.sort(
+    (a, b) =>
+      Number(!a.name.toLowerCase().startsWith(p)) - Number(!b.name.toLowerCase().startsWith(p)) ||
+      a.name.localeCompare(b.name),
+  );
   const parent = parentOf(full);
-  const self = exists && parent !== null ? DIRS[parent]?.find((e) => e.name === full.slice(full.lastIndexOf("/") + 1)) : undefined;
+  const self =
+    exists && parent !== null ? DIRS[parent]?.find((e) => e.name === full.slice(full.lastIndexOf("/") + 1)) : undefined;
   return {
     path: full,
     parent: parentOf(full),
@@ -450,7 +539,9 @@ export function mockBrowse(path = "~", prefix = "", limit = 200): FsBrowse {
     exists,
     readable: exists,
     nearest,
-    entries: names.slice(0, limit).map((e) => ({ name: e.name, is_dir: true, is_git: !!e.is_git, is_ostra_project: !!e.is_ostra_project })),
+    entries: names
+      .slice(0, limit)
+      .map((e) => ({ name: e.name, is_dir: true, is_git: !!e.is_git, is_ostra_project: !!e.is_ostra_project })),
     truncated: names.length > limit,
     is_git: !!self?.is_git,
     is_ostra_project: !!self?.is_ostra_project,

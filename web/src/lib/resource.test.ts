@@ -15,7 +15,10 @@ describe("resource ids and routes", () => {
     ["ws:skills", "/w/shop/skills"],
     ["session:s_1", "/w/shop/s/s_1"],
     ["exec:x9", "/w/shop/x/x9"],
-    ["artifact:/home/me/shop/.ostra/sessions/s 1/ostra-spec.md", "/w/shop/artifact?path=%2Fhome%2Fme%2Fshop%2F.ostra%2Fsessions%2Fs%201%2Fostra-spec.md"],
+    [
+      "artifact:/home/me/shop/.ostra/sessions/s 1/ostra-spec.md",
+      "/w/shop/artifact?path=%2Fhome%2Fme%2Fshop%2F.ostra%2Fsessions%2Fs%201%2Fostra-spec.md",
+    ],
     ["project:backend", "/w/shop/p/backend"],
     ["file:backend:crates/orders/src/service.rs", "/w/shop/f/backend/crates/orders/src/service.rs"],
     ["file:web:src/a b/c#d.ts", "/w/shop/f/web/src/a%20b/c%23d.ts"],

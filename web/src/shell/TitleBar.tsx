@@ -28,8 +28,15 @@ function WorkspaceSwitcher({ ws, wsName, activeId, go, onNewWorkspace, onAddProj
   const { workspaces } = useWorkspaces();
   const { activity } = useActivity(ws);
   const navigate = useNavigate();
-  const list = workspaces.some((w) => w.id === ws) ? workspaces : [{ id: ws, name: wsName, root: "", projects: 0, active_sessions: 0, available: true }, ...workspaces];
-  const page = (id: string, label: string, icon: "layout-dashboard" | "coins" | "settings" | "brain" | "book-open", hint?: string): MenuItem => ({
+  const list = workspaces.some((w) => w.id === ws)
+    ? workspaces
+    : [{ id: ws, name: wsName, root: "", projects: 0, active_sessions: 0, available: true }, ...workspaces];
+  const page = (
+    id: string,
+    label: string,
+    icon: "layout-dashboard" | "coins" | "settings" | "brain" | "book-open",
+    hint?: string,
+  ): MenuItem => ({
     id,
     label,
     icon,
@@ -49,7 +56,9 @@ function WorkspaceSwitcher({ ws, wsName, activeId, go, onNewWorkspace, onAddProj
         checked: current,
         sub: !w.available
           ? "Folder missing"
-          : [plural(w.projects, "project"), w.active_sessions ? `${w.active_sessions} active` : null, w.root || null].filter(Boolean).join(" · "),
+          : [plural(w.projects, "project"), w.active_sessions ? `${w.active_sessions} active` : null, w.root || null]
+              .filter(Boolean)
+              .join(" · "),
         onSelect: current || !w.available ? undefined : () => navigate(workspaceEntry(w.id)),
       };
       if (!current) return [row];
@@ -115,12 +124,22 @@ export function TitleBar({ crumbs, onPalette, sidebar, toggleSidebar, dock, togg
       <WorkspaceSwitcher {...switcher} />
       <span style={{ width: 1, height: 16, background: "var(--border-default)" }} />
       <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-        <Breadcrumbs items={crumbs} onNavigate={(c) => (c as ResourceCrumb).to && switcher.go((c as ResourceCrumb).to!)} />
+        <Breadcrumbs
+          items={crumbs}
+          onNavigate={(c) => (c as ResourceCrumb).to && switcher.go((c as ResourceCrumb).to!)}
+        />
       </div>
       <button
         onClick={onPalette}
         className="os-input os-input--sm"
-        style={{ width: 280, maxWidth: "30vw", cursor: "pointer", gap: 8, color: "var(--text-muted)", fontSize: "var(--text-sm)" }}
+        style={{
+          width: 280,
+          maxWidth: "30vw",
+          cursor: "pointer",
+          gap: 8,
+          color: "var(--text-muted)",
+          fontSize: "var(--text-sm)",
+        }}
       >
         <Icon name="search" size={13} />
         <span style={{ flex: 1, textAlign: "left" }}>Go to anything</span>

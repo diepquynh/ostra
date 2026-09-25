@@ -17,7 +17,16 @@ export interface DecisionProps {
 }
 
 /** A judge decision rendered as "Ostra chose X because Y", with override. */
-export function Decision({ judge, choice, reason, basis, at, overridden, canOverride = true, onOverride }: DecisionProps) {
+export function Decision({
+  judge,
+  choice,
+  reason,
+  basis,
+  at,
+  overridden,
+  canOverride = true,
+  onOverride,
+}: DecisionProps) {
   return (
     <div className="os-decision">
       <div className="os-decision__head">
@@ -30,7 +39,10 @@ export function Decision({ judge, choice, reason, basis, at, overridden, canOver
             Override
           </Button>
         ) : (
-          <span style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }} title="Work that depends on this decision has already started">
+          <span
+            style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}
+            title="Work that depends on this decision has already started"
+          >
             Settled
           </span>
         )}

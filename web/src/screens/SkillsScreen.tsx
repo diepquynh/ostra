@@ -58,13 +58,20 @@ export function SkillsScreen({ ws }: SkillsScreenProps) {
       .filter((g) => !filter || g.project === filter)
       .map((g) => ({
         ...g,
-        skills: q ? g.skills.filter((s) => `${s.name} ${s.description ?? ""} ${s.entry?.component_type ?? ""}`.toLowerCase().includes(q)) : g.skills,
+        skills: q
+          ? g.skills.filter((s) =>
+              `${s.name} ${s.description ?? ""} ${s.entry?.component_type ?? ""}`.toLowerCase().includes(q),
+            )
+          : g.skills,
       }));
   }, [all.data, filter, query]);
 
   const projects = detail?.projects ?? [];
   const group = selected ? all.data?.find((g) => g.project === selected.project) : undefined;
-  const skill = selected && !("creating" in selected) ? group?.skills.find((s) => keyOf(selected.project, s) === keyOf(selected.project, selected)) : undefined;
+  const skill =
+    selected && !("creating" in selected)
+      ? group?.skills.find((s) => keyOf(selected.project, s) === keyOf(selected.project, selected))
+      : undefined;
 
   const newSkill = () => {
     const project = filter || projects.find((p) => p.init_status !== "missing")?.key;
@@ -91,12 +98,20 @@ export function SkillsScreen({ ws }: SkillsScreenProps) {
       }
     >
       <p className="wp-lead">
-        Skills are the per-project instructions agents load before they create a component, write a test, or follow a convention. Only
-        skills registered in <code>.ostra/project.toml</code> reach agents, through the repo brief. Skills in a harness directory such as{" "}
-        <code>.claude/skills/</code> are listed so you can adopt them into <code>.agents/skills/</code>.
+        Skills are the per-project instructions agents load before they create a component, write a test, or follow a
+        convention. Only skills registered in <code>.ostra/project.toml</code> reach agents, through the repo brief.
+        Skills in a harness directory such as <code>.claude/skills/</code> are listed so you can adopt them into{" "}
+        <code>.agents/skills/</code>.
       </p>
       {projects.length === 0 ? (
-        <Banner tone="info" actions={<Button size="sm" icon="folder-plus" onClick={addProject}>Add project</Button>}>
+        <Banner
+          tone="info"
+          actions={
+            <Button size="sm" icon="folder-plus" onClick={addProject}>
+              Add project
+            </Button>
+          }
+        >
           This workspace has no projects yet. Skills belong to a project, so add one first.
         </Banner>
       ) : (
@@ -110,7 +125,16 @@ export function SkillsScreen({ ws }: SkillsScreenProps) {
               options={[{ value: "", label: "All projects" }, ...projects.map((p) => ({ value: p.key, label: p.key }))]}
             />
             <span className="wp-spacer" />
-            <Input size="sm" icon="search" type="search" aria-label="Search skills" placeholder="Search skills" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 260 }} />
+            <Input
+              size="sm"
+              icon="search"
+              type="search"
+              aria-label="Search skills"
+              placeholder="Search skills"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              style={{ width: 260 }}
+            />
           </div>
           {all.error && <LoadError error={all.error} onRetry={all.reload} />}
           <div className="sk-layout">
@@ -165,7 +189,17 @@ export function SkillsScreen({ ws }: SkillsScreenProps) {
   );
 }
 
-function SkillGroup({ group, selected, query, onSelect }: { group: ProjectSkills; selected: Selection | null; query: string; onSelect: (s: Selection) => void }) {
+function SkillGroup({
+  group,
+  selected,
+  query,
+  onSelect,
+}: {
+  group: ProjectSkills;
+  selected: Selection | null;
+  query: string;
+  onSelect: (s: Selection) => void;
+}) {
   const registered = group.skills.filter((s) => s.entry).length;
   return (
     <Panel title={group.project} subtitle={`${registered} registered`} icon="folder-git-2" bodyFlush>
@@ -175,7 +209,9 @@ function SkillGroup({ group, selected, query, onSelect }: { group: ProjectSkills
         </div>
       )}
       {group.skills.length === 0 ? (
-        <div className="sk-note wp-muted">{query ? `No skills match “${query}”.` : "No skills yet. Initialize the project or create one."}</div>
+        <div className="sk-note wp-muted">
+          {query ? `No skills match “${query}”.` : "No skills yet. Initialize the project or create one."}
+        </div>
       ) : (
         <ul className="sk-rows">
           {group.skills.map((s) => {
@@ -184,7 +220,12 @@ function SkillGroup({ group, selected, query, onSelect }: { group: ProjectSkills
             const st = state(s);
             return (
               <li key={k}>
-                <button type="button" className="sk-row" data-active={active || undefined} onClick={() => onSelect({ project: group.project, origin: s.origin, path: s.path })}>
+                <button
+                  type="button"
+                  className="sk-row"
+                  data-active={active || undefined}
+                  onClick={() => onSelect({ project: group.project, origin: s.origin, path: s.path })}
+                >
                   <span className="sk-row__head">
                     <span className="wp-mono sk-row__name">{s.name}</span>
                     <Chip tone={st.tone}>{st.label}</Chip>
@@ -221,7 +262,14 @@ function SkillEditor({
   const harness = skill?.origin === "harness";
   const [project, setProject] = useState(initialProject);
   const doc = useAsync<SkillDoc | null>(
-    () => (skill ? (harness ? api.harnessSkill(ws, project, skill.path) : skill.exists ? api.skill(ws, project, skill.name) : Promise.resolve(null)) : Promise.resolve(null)),
+    () =>
+      skill
+        ? harness
+          ? api.harnessSkill(ws, project, skill.path)
+          : skill.exists
+            ? api.skill(ws, project, skill.name)
+            : Promise.resolve(null)
+        : Promise.resolve(null),
     [ws, project, skill?.path],
   );
   const [name, setName] = useState(skill?.name ?? "");
@@ -261,14 +309,24 @@ function SkillEditor({
 
   const save = () =>
     run(async () => {
-      const saved = await api.saveSkill(ws, project, name.trim(), { kind, component_type: componentType.trim() || null, content: text });
+      const saved = await api.saveSkill(ws, project, name.trim(), {
+        kind,
+        component_type: componentType.trim() || null,
+        content: text,
+      });
       setContent(saved.content);
       doc.set(saved);
       onSaved(project, saved);
     });
 
   const title = creating ? "New skill" : skill.name;
-  const saveLabel = creating ? "Create the skill" : !skill.entry ? "Register the skill" : !skill.exists ? "Write SKILL.md" : "Save";
+  const saveLabel = creating
+    ? "Create the skill"
+    : !skill.entry
+      ? "Register the skill"
+      : !skill.exists
+        ? "Write SKILL.md"
+        : "Save";
 
   return (
     <Panel
@@ -283,11 +341,23 @@ function SkillEditor({
         ) : (
           <span className="wp-row" style={{ gap: 6 }}>
             {!creating && (
-              <Button size="sm" variant="danger" icon="trash-2" disabled={busy || !!blocked} onClick={() => setConfirmDelete(true)}>
+              <Button
+                size="sm"
+                variant="danger"
+                icon="trash-2"
+                disabled={busy || !!blocked}
+                onClick={() => setConfirmDelete(true)}
+              >
                 Delete
               </Button>
             )}
-            <Button size="sm" variant="primary" icon="check" disabled={busy || !!blocked || !dirty || !name.trim() || !text.trim()} onClick={() => void save()}>
+            <Button
+              size="sm"
+              variant="primary"
+              icon="check"
+              disabled={busy || !!blocked || !dirty || !name.trim() || !text.trim()}
+              onClick={() => void save()}
+            >
               {busy ? "Saving…" : saveLabel}
             </Button>
           </span>
@@ -298,18 +368,20 @@ function SkillEditor({
         {blocked && <Banner tone="warn">{blocked}</Banner>}
         {skill && !harness && !skill.entry && (
           <Banner tone="warn" title="Agents do not load this skill yet">
-            It is in <code>{skill.path.replace(/\/[^/]+\/SKILL\.md$/, "/")}</code> but not in <code>project.toml</code>. Set its kind and register it so the repo brief lists it.
+            It is in <code>{skill.path.replace(/\/[^/]+\/SKILL\.md$/, "/")}</code> but not in <code>project.toml</code>.
+            Set its kind and register it so the repo brief lists it.
           </Banner>
         )}
         {skill && !skill.exists && (
           <Banner tone="bad" title="SKILL.md is missing">
-            <code>project.toml</code> names <code>{skill.path}</code>, but the file is not there. Write it here, or delete the entry.
+            <code>project.toml</code> names <code>{skill.path}</code>, but the file is not there. Write it here, or
+            delete the entry.
           </Banner>
         )}
         {harness && (
           <Banner tone="info" title="Executions do not load this skill">
-            It lives in a harness directory. Adopting copies its folder into <code>.agents/skills/</code> and registers it, so every executor
-            loads it.
+            It lives in a harness directory. Adopting copies its folder into <code>.agents/skills/</code> and registers
+            it, so every executor loads it.
           </Banner>
         )}
         {error && <Banner tone="bad">{error}</Banner>}
@@ -317,7 +389,14 @@ function SkillEditor({
           <div className="sk-fields">
             {creating ? (
               <>
-                {projects.length > 1 && <Select label="Project" value={project} onChange={(e) => setProject(e.target.value)} options={projects} />}
+                {projects.length > 1 && (
+                  <Select
+                    label="Project"
+                    value={project}
+                    onChange={(e) => setProject(e.target.value)}
+                    options={projects}
+                  />
+                )}
                 <Input
                   label="Name"
                   mono
@@ -332,8 +411,20 @@ function SkillEditor({
                 />
               </>
             ) : null}
-            <Select label="Kind" value={kind} onChange={(e) => setKind(e.target.value)} options={KINDS} hint="Convention and module-hub skills reach every agent; the others reach the agents that create or test code." />
-            <Input label="Use for" placeholder="JPA entity" hint="The component type this skill creates. The brief shows it next to the skill." value={componentType} onChange={(e) => setComponentType(e.target.value)} />
+            <Select
+              label="Kind"
+              value={kind}
+              onChange={(e) => setKind(e.target.value)}
+              options={KINDS}
+              hint="Convention and module-hub skills reach every agent; the others reach the agents that create or test code."
+            />
+            <Input
+              label="Use for"
+              placeholder="JPA entity"
+              hint="The component type this skill creates. The brief shows it next to the skill."
+              value={componentType}
+              onChange={(e) => setComponentType(e.target.value)}
+            />
           </div>
         )}
         {doc.loading && !creating && content === null && skill?.exists ? (
@@ -382,8 +473,9 @@ function SkillEditor({
         >
           <div className="wp-stack">
             <span>
-              This removes the entry from <code>project.toml</code> and deletes <code>{skill.path.replace(/\/SKILL\.md$/, "/")}</code> with every file in it.
-              Later executions in {project} will no longer load it.
+              This removes the entry from <code>project.toml</code> and deletes{" "}
+              <code>{skill.path.replace(/\/SKILL\.md$/, "/")}</code> with every file in it. Later executions in{" "}
+              {project} will no longer load it.
             </span>
             {error && <Banner tone="bad">{error}</Banner>}
           </div>
@@ -397,7 +489,11 @@ function SkillEditor({
           onClose={() => setAdopting(false)}
           onAdopt={(asName, asKind, ct) =>
             void run(async () => {
-              const saved = await api.adoptSkill(ws, project, asName, { from: skill.path, kind: asKind, component_type: ct || null });
+              const saved = await api.adoptSkill(ws, project, asName, {
+                from: skill.path,
+                kind: asKind,
+                component_type: ct || null,
+              });
               setAdopting(false);
               onSaved(project, saved);
             })
@@ -434,14 +530,24 @@ function AdoptDialog({
         <>
           <span className="wp-spacer" />
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={busy || !name.trim()} onClick={() => onAdopt(name.trim(), kind, ct.trim())}>
+          <Button
+            variant="primary"
+            disabled={busy || !name.trim()}
+            onClick={() => onAdopt(name.trim(), kind, ct.trim())}
+          >
             Adopt
           </Button>
         </>
       }
     >
       <div className="wp-stack">
-        <Input label="Name" mono hint="The folder under .agents/skills/. The harness copy stays where it is." value={name} onChange={(e) => setName(e.target.value)} />
+        <Input
+          label="Name"
+          mono
+          hint="The folder under .agents/skills/. The harness copy stays where it is."
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
         <Select label="Kind" value={kind} onChange={(e) => setKind(e.target.value)} options={KINDS} />
         <Input label="Use for" placeholder="JPA entity" value={ct} onChange={(e) => setCt(e.target.value)} />
         {error && <Banner tone="bad">{error}</Banner>}

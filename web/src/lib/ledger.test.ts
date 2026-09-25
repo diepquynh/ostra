@@ -37,7 +37,10 @@ describe("ledger", () => {
   });
 
   it("reads the loop from the path", () => {
-    expect(ledgerLoop("/w/.ostra/sessions/s1/backend/ostra-review-ledger-phase-3-tests.md")).toEqual({ project: "backend", phase: "3-tests" });
+    expect(ledgerLoop("/w/.ostra/sessions/s1/backend/ostra-review-ledger-phase-3-tests.md")).toEqual({
+      project: "backend",
+      phase: "3-tests",
+    });
     expect(ledgerLoop("/w/.ostra/sessions/s1/web/ostra-review-ledger.md")).toEqual({ project: "web", phase: "none" });
     expect(ledgerLoop("/w/notes.md")).toBeNull();
   });

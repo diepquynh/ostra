@@ -1,7 +1,24 @@
 import type { Phase, PhaseDoc, PlanDoc, PlanStep } from "../../../api/types";
 import { Chip, CodeView, PhaseDag, type Tone } from "../../../design";
-import { layers, OutlineBuilder, type Outline } from "./model";
-import { Bullets, El, Empty, EvidenceCard, Facts, Grid, IdTitle, Mono, Prose, Questions, Ref, Refs, Section, Stats, inlineCode, useDoc } from "./parts";
+import { layers, type Outline, OutlineBuilder } from "./model";
+import {
+  Bullets,
+  El,
+  Empty,
+  EvidenceCard,
+  Facts,
+  Grid,
+  IdTitle,
+  inlineCode,
+  Mono,
+  Prose,
+  Questions,
+  Ref,
+  Refs,
+  Section,
+  Stats,
+  useDoc,
+} from "./parts";
 import { span } from "./spec";
 
 const CHANGE_TONE: Record<PlanStep["change"], Tone> = { Create: "ok", Modify: "info", Delete: "bad" };
@@ -24,8 +41,32 @@ function StepCard({ s }: { s: PlanStep }) {
       <Facts
         rows={[
           ["Delivers", <Refs key="d" ids={s.delivers} />],
-          ["Read first", s.read_first.length ? <span key="r" className="doc-symbols">{s.read_first.map((f) => <Mono key={f}>{f}</Mono>)}</span> : "none"],
-          ["Skills", s.skills.length ? <span key="k" className="doc-symbols">{s.skills.map((k) => <Chip key={k} mono>{k}</Chip>)}</span> : "none"],
+          [
+            "Read first",
+            s.read_first.length ? (
+              <span key="r" className="doc-symbols">
+                {s.read_first.map((f) => (
+                  <Mono key={f}>{f}</Mono>
+                ))}
+              </span>
+            ) : (
+              "none"
+            ),
+          ],
+          [
+            "Skills",
+            s.skills.length ? (
+              <span key="k" className="doc-symbols">
+                {s.skills.map((k) => (
+                  <Chip key={k} mono>
+                    {k}
+                  </Chip>
+                ))}
+              </span>
+            ) : (
+              "none"
+            ),
+          ],
           ["Verify", <Mono key="v">{s.verify}</Mono>],
         ]}
       />
@@ -47,10 +88,30 @@ function PhaseHeader({ p, deliverableTitle }: { p: Phase; deliverableTitle?: str
     <El id={`phase ${p.id}`} as="div" className="doc-stack">
       <Facts
         rows={[
-          ["Deliverable", <span key="d" className="doc-row"><Ref id={p.deliverable} /> {deliverableTitle}</span>],
-          ["Repo", <span key="r" className="doc-row"><Chip mono>{p.repo}</Chip> <span className="art-muted">{p.repo_root}</span></span>],
-          ["Complexity", <Chip key="c" tone={LEVEL_TONE[p.complexity]}>{p.complexity}</Chip>],
-          ["Test policy", <span key="t" className="doc-row"><Chip tone={p.test_policy === "Skip" ? "neutral" : "accent"}>{p.test_policy}</Chip> {p.test_rationale}</span>],
+          [
+            "Deliverable",
+            <span key="d" className="doc-row">
+              <Ref id={p.deliverable} /> {deliverableTitle}
+            </span>,
+          ],
+          [
+            "Repo",
+            <span key="r" className="doc-row">
+              <Chip mono>{p.repo}</Chip> <span className="art-muted">{p.repo_root}</span>
+            </span>,
+          ],
+          [
+            "Complexity",
+            <Chip key="c" tone={LEVEL_TONE[p.complexity]}>
+              {p.complexity}
+            </Chip>,
+          ],
+          [
+            "Test policy",
+            <span key="t" className="doc-row">
+              <Chip tone={p.test_policy === "Skip" ? "neutral" : "accent"}>{p.test_policy}</Chip> {p.test_rationale}
+            </span>,
+          ],
           ["Depends on", <Refs key="p" ids={p.depends_on.map((d) => `phase ${d}`)} />],
           ["Areas", p.areas.join(", ") || "none"],
         ]}
@@ -59,7 +120,17 @@ function PhaseHeader({ p, deliverableTitle }: { p: Phase; deliverableTitle?: str
         <Prose text={p.context} />
       </Section>
       <Section title="Required skills">
-        {p.skills.length ? <span className="doc-symbols">{p.skills.map((k) => <Chip key={k} mono>{k}</Chip>)}</span> : <Empty>None.</Empty>}
+        {p.skills.length ? (
+          <span className="doc-symbols">
+            {p.skills.map((k) => (
+              <Chip key={k} mono>
+                {k}
+              </Chip>
+            ))}
+          </span>
+        ) : (
+          <Empty>None.</Empty>
+        )}
       </Section>
     </El>
   );
@@ -67,11 +138,17 @@ function PhaseHeader({ p, deliverableTitle }: { p: Phase; deliverableTitle?: str
 
 function PhaseRequirements({ p }: { p: Phase }) {
   if (!p.requirements.length) return <Empty>No requirement quoted.</Empty>;
-  return <Grid head={["ID", "Statement"]} rows={p.requirements.map((r) => [<Ref key="i" id={r.id} />, inlineCode(r.statement)])} />;
+  return (
+    <Grid
+      head={["ID", "Statement"]}
+      rows={p.requirements.map((r) => [<Ref key="i" id={r.id} />, inlineCode(r.statement)])}
+    />
+  );
 }
 
 function PhaseConstraints({ p }: { p: Phase }) {
-  if (!p.constraints.length) return <Empty>None: no step in this phase depends on a technology outside the repo.</Empty>;
+  if (!p.constraints.length)
+    return <Empty>None: no step in this phase depends on a technology outside the repo.</Empty>;
   return (
     <div className="doc-stack">
       {p.constraints.map((e) => (
@@ -108,7 +185,13 @@ function PhaseBody({ p, deliverableTitle }: { p: Phase; deliverableTitle?: strin
 function PhaseGraph({ d }: { d: PlanDoc }) {
   const { go } = useDoc();
   const dag = layers(d.phases).map((layer) =>
-    layer.map((p) => ({ id: p.id, title: p.name, project: p.repo, complexity: p.complexity.toLowerCase() as "low" | "medium" | "high", deliverable: p.deliverable })),
+    layer.map((p) => ({
+      id: p.id,
+      title: p.name,
+      project: p.repo,
+      complexity: p.complexity.toLowerCase() as "low" | "medium" | "high",
+      deliverable: p.deliverable,
+    })),
   );
   return <PhaseDag layers={dag} onOpen={(p) => go(`phase ${p.id}`)} />;
 }
@@ -118,7 +201,8 @@ export function planOutline(d: PlanDoc): Outline {
   const steps = d.phases.flatMap((p) => p.steps);
   const title = (id: string) => d.deliverables.find((x) => x.id === id)?.title ?? null;
   const delivered = new Map<string, string[]>();
-  for (const p of d.phases) for (const s of p.steps) for (const r of s.delivers) delivered.set(r, [...(delivered.get(r) ?? []), s.id]);
+  for (const p of d.phases)
+    for (const s of p.steps) for (const r of s.delivers) delivered.set(r, [...(delivered.get(r) ?? []), s.id]);
   const reqs = [...delivered.keys()].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
 
   b.chapter(
@@ -132,7 +216,11 @@ export function planOutline(d: PlanDoc): Outline {
               { label: "Phases", value: d.phases.length },
               { label: "Steps", value: steps.length },
               { label: "Requirements", value: span(reqs) },
-              { label: "Stakes", value: d.stakes, tone: d.stakes === "High" ? "bad" : d.stakes === "Medium" ? "warn" : "ok" },
+              {
+                label: "Stakes",
+                value: d.stakes,
+                tone: d.stakes === "High" ? "bad" : d.stakes === "Medium" ? "warn" : "ok",
+              },
             ]}
           />
           <Section title="Summary">
@@ -142,14 +230,24 @@ export function planOutline(d: PlanDoc): Outline {
             rows={[
               ["Stakes", `${d.stakes}: ${d.stakes_rationale}`],
               ["Date", d.date],
-              ["Repos", <span key="r" className="doc-symbols">{d.repos.map((r) => <Chip key={r.key} mono title={r.root}>{r.key}</Chip>)}</span>],
+              [
+                "Repos",
+                <span key="r" className="doc-symbols">
+                  {d.repos.map((r) => (
+                    <Chip key={r.key} mono title={r.root}>
+                      {r.key}
+                    </Chip>
+                  ))}
+                </span>,
+              ],
             ]}
           />
           <Section title="Success criteria">
             <ul className="doc-checklist">
               {d.success_criteria.map((c, i) => (
                 <li key={i} id={c.id ? `el-${c.id.toLowerCase()}` : undefined}>
-                  <input type="checkbox" disabled aria-label={c.id ?? "Build"} /> {c.id && <span className="doc-id">{c.id}</span>} {inlineCode(c.text)}
+                  <input type="checkbox" disabled aria-label={c.id ?? "Build"} />{" "}
+                  {c.id && <span className="doc-id">{c.id}</span>} {inlineCode(c.text)}
                 </li>
               ))}
             </ul>
@@ -173,7 +271,9 @@ export function planOutline(d: PlanDoc): Outline {
             p.name,
             <Ref key="d" id={p.deliverable} />,
             <Mono key="r">{p.repo}</Mono>,
-            <Chip key="c" tone={LEVEL_TONE[p.complexity]}>{p.complexity}</Chip>,
+            <Chip key="c" tone={LEVEL_TONE[p.complexity]}>
+              {p.complexity}
+            </Chip>,
             p.test_policy,
             <Refs key="p" ids={p.depends_on.map((x) => `phase ${x}`)} />,
             p.steps.length,
@@ -184,7 +284,13 @@ export function planOutline(d: PlanDoc): Outline {
   });
   for (const p of d.phases) {
     b.chapter(
-      { id: `phase-${p.id}`, title: `Phase ${p.id}: ${p.name}`, count: p.steps.length, depth: 1, render: () => <PhaseBody p={p} deliverableTitle={title(p.deliverable)} /> },
+      {
+        id: `phase-${p.id}`,
+        title: `Phase ${p.id}: ${p.name}`,
+        count: p.steps.length,
+        depth: 1,
+        render: () => <PhaseBody p={p} deliverableTitle={title(p.deliverable)} />,
+      },
       [`phase ${p.id}`, ...p.steps.map((s) => `step ${s.id}`), ...p.constraints.map((e) => e.id)],
     );
   }
@@ -198,9 +304,14 @@ export function planOutline(d: PlanDoc): Outline {
           head={["Requirement", "Delivered by", "Acceptance criteria"]}
           ids={reqs}
           rows={reqs.map((r) => [
-            <span key="r" className="doc-id">{r}</span>,
+            <span key="r" className="doc-id">
+              {r}
+            </span>,
             <Refs key="s" ids={delivered.get(r)!.map((s) => `step ${s}`)} />,
-            <Refs key="a" ids={d.success_criteria.flatMap((c) => (c.id?.startsWith(`AC${r.slice(1)}.`) ? [c.id] : []))} />,
+            <Refs
+              key="a"
+              ids={d.success_criteria.flatMap((c) => (c.id?.startsWith(`AC${r.slice(1)}.`) ? [c.id] : []))}
+            />,
           ])}
         />
       ),
@@ -212,7 +323,17 @@ export function planOutline(d: PlanDoc): Outline {
     title: "Risks",
     count: d.risks.length,
     render: () => (
-      <Grid head={["Risk", "Impact", "Likelihood", "Mitigation"]} rows={d.risks.map((r) => [r.risk, r.impact, <Chip key="l" tone={LEVEL_TONE[r.likelihood]}>{r.likelihood}</Chip>, r.mitigation])} />
+      <Grid
+        head={["Risk", "Impact", "Likelihood", "Mitigation"]}
+        rows={d.risks.map((r) => [
+          r.risk,
+          r.impact,
+          <Chip key="l" tone={LEVEL_TONE[r.likelihood]}>
+            {r.likelihood}
+          </Chip>,
+          r.mitigation,
+        ])}
+      />
     ),
   });
   b.chapter(
@@ -232,7 +353,11 @@ export function planOutline(d: PlanDoc): Outline {
     render: () => (
       <div className="doc-stack">
         <Section title="Mechanical pre-checks">
-          {d.pre_checks.length ? <Grid head={["Check", "Scope", "Result"]} rows={d.pre_checks.map((c) => [c.check, c.scope, c.result])} /> : <Empty>Not recorded.</Empty>}
+          {d.pre_checks.length ? (
+            <Grid head={["Check", "Scope", "Result"]} rows={d.pre_checks.map((c) => [c.check, c.scope, c.result])} />
+          ) : (
+            <Empty>Not recorded.</Empty>
+          )}
         </Section>
         <Section title="Verification strategy">
           <Bullets items={d.verification} empty="Not recorded." />
@@ -268,8 +393,41 @@ export function phaseOutline(d: PhaseDoc): Outline {
     },
     [`phase ${p.id}`],
   );
-  b.chapter({ id: "steps", title: "Steps", count: p.steps.length, render: () => <div className="doc-stack">{p.steps.map((s) => <StepCard key={s.id} s={s} />)}<Section title="Phase verification"><CodeView language="bash" code={p.verification} /></Section></div> }, p.steps.map((s) => `step ${s.id}`));
-  b.chapter({ id: "requirements", title: "Requirements delivered", count: p.requirements.length, render: () => <PhaseRequirements p={p} /> }, p.requirements.map((r) => r.id));
-  b.chapter({ id: "constraints", title: "External constraints", count: p.constraints.length, render: () => <PhaseConstraints p={p} /> }, p.constraints.map((e) => e.id));
+  b.chapter(
+    {
+      id: "steps",
+      title: "Steps",
+      count: p.steps.length,
+      render: () => (
+        <div className="doc-stack">
+          {p.steps.map((s) => (
+            <StepCard key={s.id} s={s} />
+          ))}
+          <Section title="Phase verification">
+            <CodeView language="bash" code={p.verification} />
+          </Section>
+        </div>
+      ),
+    },
+    p.steps.map((s) => `step ${s.id}`),
+  );
+  b.chapter(
+    {
+      id: "requirements",
+      title: "Requirements delivered",
+      count: p.requirements.length,
+      render: () => <PhaseRequirements p={p} />,
+    },
+    p.requirements.map((r) => r.id),
+  );
+  b.chapter(
+    {
+      id: "constraints",
+      title: "External constraints",
+      count: p.constraints.length,
+      render: () => <PhaseConstraints p={p} />,
+    },
+    p.constraints.map((e) => e.id),
+  );
   return b.done();
 }

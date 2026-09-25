@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { sessions } from "../../api/mock/fixtures";
 import type { SessionSummary } from "../../api/types";
-import { filterSessions, isFiltered, NO_FILTERS, sessionProjects, sessionTitle, statusCounts, type SessionFilters } from "./sessionFilter";
+import {
+  filterSessions,
+  isFiltered,
+  NO_FILTERS,
+  type SessionFilters,
+  sessionProjects,
+  sessionTitle,
+  statusCounts,
+} from "./sessionFilter";
 
 const ids = (list: SessionSummary[]) => list.map((s) => s.id);
 const f = (patch: Partial<SessionFilters>): SessionFilters => ({ ...NO_FILTERS, ...patch });
@@ -37,7 +45,13 @@ describe("session filters", () => {
 
   it("count each status tab under the other filters", () => {
     expect(statusCounts(sessions, NO_FILTERS)).toEqual({ all: 5, active: 3, waiting: 1, completed: 1, failed: 1 });
-    expect(statusCounts(sessions, f({ project: "web", status: "completed" }))).toEqual({ all: 2, active: 2, waiting: 1, completed: 0, failed: 0 });
+    expect(statusCounts(sessions, f({ project: "web", status: "completed" }))).toEqual({
+      all: 2,
+      active: 2,
+      waiting: 1,
+      completed: 0,
+      failed: 0,
+    });
   });
 
   it("title a session by its classified title, else its request", () => {

@@ -1,10 +1,20 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { useLocation } from "react-router";
 import { Banner, Button, Spinner } from "../../design";
 import "./workspace.css";
 
 /** The column every workspace page uses: title, optional subtitle and actions, then the content. */
-export function Page({ title, sub, actions, children }: { title: ReactNode; sub?: ReactNode; actions?: ReactNode; children?: ReactNode }) {
+export function Page({
+  title,
+  sub,
+  actions,
+  children,
+}: {
+  title: ReactNode;
+  sub?: ReactNode;
+  actions?: ReactNode;
+  children?: ReactNode;
+}) {
   return (
     <div className="wp-page">
       <div className="wp-head">
@@ -38,7 +48,16 @@ export function Loading({ children = "Loading…" }: { children?: ReactNode }) {
 
 export function LoadError({ error, onRetry }: { error: Error; onRetry?: () => void }) {
   return (
-    <Banner tone="bad" actions={onRetry && <Button size="sm" onClick={onRetry}>Try again</Button>}>
+    <Banner
+      tone="bad"
+      actions={
+        onRetry && (
+          <Button size="sm" onClick={onRetry}>
+            Try again
+          </Button>
+        )
+      }
+    >
       {error.message}
     </Banner>
   );

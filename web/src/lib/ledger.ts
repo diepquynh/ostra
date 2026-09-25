@@ -1,5 +1,13 @@
 /** A finding row from a review ledger's markdown tables. */
-export type LedgerFinding = { id: string; severity: string; file: string; rule: string; description: string; fix: string; iteration: number };
+export type LedgerFinding = {
+  id: string;
+  severity: string;
+  file: string;
+  rule: string;
+  description: string;
+  fix: string;
+  iteration: number;
+};
 
 /** Parse the findings tables of `ostra-review-ledger-*.md` (Ultracode's ledger shape). */
 export function parseLedger(markdown: string): LedgerFinding[] {

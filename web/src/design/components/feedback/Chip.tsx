@@ -18,7 +18,13 @@ export interface ChipProps {
 }
 
 export function Chip({ tone = "neutral", icon, mono, outline, title, className = "", children }: ChipProps) {
-  const cls = cx("os-chip", tone !== "neutral" && `os-chip--${tone}`, mono && "os-chip--mono", outline && "os-chip--outline", className);
+  const cls = cx(
+    "os-chip",
+    tone !== "neutral" && `os-chip--${tone}`,
+    mono && "os-chip--mono",
+    outline && "os-chip--outline",
+    className,
+  );
   return (
     <span className={cls} title={title}>
       {icon && <Icon name={icon} size={11} />}

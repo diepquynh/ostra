@@ -31,7 +31,17 @@ export function commandErrors(e: unknown): { fields: Partial<Record<keyof Comman
  * The project's commands from `.ostra/project.toml`, editable in place. Agents and the engine read the
  * profile per execution, so a saved command applies to the next run. `onSaved` refetches the workspace.
  */
-export function CommandsPanel({ ws, projectKey, commands, onSaved }: { ws: string; projectKey: string; commands: Commands; onSaved: () => void }) {
+export function CommandsPanel({
+  ws,
+  projectKey,
+  commands,
+  onSaved,
+}: {
+  ws: string;
+  projectKey: string;
+  commands: Commands;
+  onSaved: () => void;
+}) {
   const [draft, setDraft] = useState<Commands | null>(null);
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<ReturnType<typeof commandErrors> | null>(null);
@@ -45,13 +55,16 @@ export function CommandsPanel({ ws, projectKey, commands, onSaved }: { ws: strin
     if (!draft) return;
     setSaving(true);
     setErrors(null);
-    api.saveProjectCommands(ws, projectKey, draft).then(
-      () => {
-        setDraft(null);
-        onSaved();
-      },
-      (e: unknown) => setErrors(commandErrors(e)),
-    ).finally(() => setSaving(false));
+    api
+      .saveProjectCommands(ws, projectKey, draft)
+      .then(
+        () => {
+          setDraft(null);
+          onSaved();
+        },
+        (e: unknown) => setErrors(commandErrors(e)),
+      )
+      .finally(() => setSaving(false));
   };
 
   const actions = draft ? null : (
@@ -85,7 +98,8 @@ export function CommandsPanel({ ws, projectKey, commands, onSaved }: { ws: strin
             />
           ))}
           <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-            Saved to <code>.ostra/project.toml</code>. Leave a field empty to remove that command. Agents use the new commands from their next run.
+            Saved to <code>.ostra/project.toml</code>. Leave a field empty to remove that command. Agents use the new
+            commands from their next run.
           </div>
           <div style={{ display: "flex", gap: 8 }}>
             <Button variant="primary" size="sm" type="submit" disabled={saving}>
@@ -97,7 +111,15 @@ export function CommandsPanel({ ws, projectKey, commands, onSaved }: { ws: strin
           </div>
         </form>
       ) : set.length ? (
-        <div style={{ display: "grid", gridTemplateColumns: "80px 1fr", gap: "8px 10px", alignItems: "center", fontSize: "var(--text-sm)" }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "80px 1fr",
+            gap: "8px 10px",
+            alignItems: "center",
+            fontSize: "var(--text-sm)",
+          }}
+        >
           {set.map(([k, label]) => (
             <Fragment key={k}>
               <span style={{ color: "var(--text-muted)" }}>{label}</span>
@@ -106,7 +128,16 @@ export function CommandsPanel({ ws, projectKey, commands, onSaved }: { ws: strin
           ))}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-start", fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            alignItems: "flex-start",
+            fontSize: "var(--text-sm)",
+            color: "var(--text-muted)",
+          }}
+        >
           <span>
             No commands in <code>.ostra/project.toml</code>. Agents build, test, and format with these.
           </span>

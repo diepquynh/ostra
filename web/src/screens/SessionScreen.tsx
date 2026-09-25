@@ -1,15 +1,23 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
 import type { GateView, Lane, SessionDetail, StoredEvent } from "../api/types";
-import { Banner, Button, LaneStepper, Panel, PhaseDag, SectionLabel, Spinner } from "../design";
 import { Markdown } from "../components/Markdown";
+import { Banner, Button, LaneStepper, Panel, PhaseDag, SectionLabel, Spinner } from "../design";
 import { BlockerNotice } from "../features/gates/BlockerNotice";
 import { GateCard } from "../features/gates/GateCard";
 import { activeSecurityBlocks, splitDecidedForYou } from "../lib/events";
 import { useAsync, useChannel, useThrottled } from "../lib/hooks";
 import { useNav } from "../lib/nav";
-import { answeredGates, defaultLane, eventLine, laneStates, mergeEvents, openGatesInOrder, phaseNodes } from "./session/board";
+import {
+  answeredGates,
+  defaultLane,
+  eventLine,
+  laneStates,
+  mergeEvents,
+  openGatesInOrder,
+  phaseNodes,
+} from "./session/board";
 import { SessionHeader } from "./session/Header";
 import { LanePanel } from "./session/LanePanel";
 import { ArtifactsPanel, DecisionsPanel, ExecutionsPanel } from "./session/SidePanels";
@@ -42,7 +50,11 @@ export function SessionScreen({ id }: SessionScreenProps) {
   if (detail.error && !detail.data)
     return (
       <Board>
-        <Banner tone="bad" title="Ostra could not load this session" actions={<Button onClick={detail.reload}>Try again</Button>}>
+        <Banner
+          tone="bad"
+          title="Ostra could not load this session"
+          actions={<Button onClick={detail.reload}>Try again</Button>}
+        >
           {detail.error.message}
         </Banner>
       </Board>
@@ -72,7 +84,17 @@ function Board({ children }: { children: ReactNode }) {
   return <div style={{ padding: "20px 28px 40px", display: "flex", flexDirection: "column", gap: 16 }}>{children}</div>;
 }
 
-function SessionBoard({ detail: d, events, onDetail, reload }: { detail: SessionDetail; events: StoredEvent[]; onDetail: (d: SessionDetail) => void; reload: () => void }) {
+function SessionBoard({
+  detail: d,
+  events,
+  onDetail,
+  reload,
+}: {
+  detail: SessionDetail;
+  events: StoredEvent[];
+  onDetail: (d: SessionDetail) => void;
+  reload: () => void;
+}) {
   const nav = useNav();
   const location = useLocation();
   const [lane, setLane] = useState<Lane>(() => defaultLane(d));
@@ -90,14 +112,18 @@ function SessionBoard({ detail: d, events, onDetail, reload }: { detail: Session
     if (!location.hash.startsWith("#gate-")) return;
     const gate = d.gates.find((g) => `#gate-${g.id}` === location.hash);
     if (gate?.answer) setShowAnswered(true);
-    requestAnimationFrame(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    requestAnimationFrame(() =>
+      document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
     // Only on a new hash, not on every live refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.hash]);
 
   const goToGate = (gateId: string) => {
     if (d.gates.find((g) => g.id === gateId)?.answer) setShowAnswered(true);
-    requestAnimationFrame(() => document.getElementById(`gate-${gateId}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    requestAnimationFrame(() =>
+      document.getElementById(`gate-${gateId}`)?.scrollIntoView({ behavior: "smooth", block: "start" }),
+    );
   };
 
   const answeredGate = (g: GateView) => {
@@ -111,8 +137,8 @@ function SessionBoard({ detail: d, events, onDetail, reload }: { detail: Session
 
       {s.yolo && s.status !== "completed" && s.status !== "failed" && (
         <Banner tone="warn" title="YOLO is on">
-          Ostra answers gates and permission asks itself and records each decision. Guards, deny rules, the fact-check PASS requirement, the session
-          budget, and security blocks still apply.
+          Ostra answers gates and permission asks itself and records each decision. Guards, deny rules, the fact-check
+          PASS requirement, the session budget, and security blocks still apply.
         </Banner>
       )}
 
@@ -139,7 +165,12 @@ function SessionBoard({ detail: d, events, onDetail, reload }: { detail: Session
             </Panel>
           )}
           {completion?.decided && (
-            <Panel title="Decided for you" subtitle="each decision Ostra made under YOLO, with its reason" icon="scale" tone="warn">
+            <Panel
+              title="Decided for you"
+              subtitle="each decision Ostra made under YOLO, with its reason"
+              icon="scale"
+              tone="warn"
+            >
               <Markdown className="os-prose" text={completion.decided} />
             </Panel>
           )}
@@ -147,10 +178,22 @@ function SessionBoard({ detail: d, events, onDetail, reload }: { detail: Session
           <LanePanel detail={d} lane={lane} onGate={goToGate} />
 
           {phases.length > 0 && PHASE_LANES.includes(lane) && (
-            <Panel title="Phase graph" subtitle={`${d.phases.length} phase${d.phases.length === 1 ? "" : "s"}`} icon="git-fork">
-              <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", marginBottom: 10, lineHeight: "var(--leading-normal)" }}>
-                A phase starts when every phase it depends on has passed review. Phases of one project run one at a time; phases in different projects run
-                in parallel. If a phase fails, the phases that depend on it are removed from the queue.
+            <Panel
+              title="Phase graph"
+              subtitle={`${d.phases.length} phase${d.phases.length === 1 ? "" : "s"}`}
+              icon="git-fork"
+            >
+              <div
+                style={{
+                  fontSize: "var(--text-sm)",
+                  color: "var(--text-muted)",
+                  marginBottom: 10,
+                  lineHeight: "var(--leading-normal)",
+                }}
+              >
+                A phase starts when every phase it depends on has passed review. Phases of one project run one at a
+                time; phases in different projects run in parallel. If a phase fails, the phases that depend on it are
+                removed from the queue.
               </div>
               <PhaseDag
                 layers={phases}
@@ -165,7 +208,12 @@ function SessionBoard({ detail: d, events, onDetail, reload }: { detail: Session
           {answered.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               <div>
-                <Button size="sm" variant="ghost" icon={showAnswered ? "chevron-down" : "chevron-right"} onClick={() => setShowAnswered(!showAnswered)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon={showAnswered ? "chevron-down" : "chevron-right"}
+                  onClick={() => setShowAnswered(!showAnswered)}
+                >
                   {showAnswered ? "Hide" : "Show"} answered gates ({answered.length})
                 </Button>
               </div>
@@ -174,12 +222,19 @@ function SessionBoard({ detail: d, events, onDetail, reload }: { detail: Session
           )}
 
           <div>
-            <Button size="sm" variant="ghost" icon={showLog ? "chevron-down" : "chevron-right"} onClick={() => setShowLog(!showLog)}>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={showLog ? "chevron-down" : "chevron-right"}
+              onClick={() => setShowLog(!showLog)}
+            >
               {showLog ? "Hide" : "Show"} event log ({events.length})
             </Button>
             {showLog && (
               <div style={{ marginTop: 8, overflowX: "auto" }}>
-                <pre style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>{events.map(eventLine).join("\n") || "No events yet."}</pre>
+                <pre style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-secondary)" }}>
+                  {events.map(eventLine).join("\n") || "No events yet."}
+                </pre>
               </div>
             )}
           </div>

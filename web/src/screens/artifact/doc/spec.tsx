@@ -1,6 +1,6 @@
 import type { Requirement, SpecDoc } from "../../../api/types";
 import { Chip } from "../../../design";
-import { OutlineBuilder, type Outline } from "./model";
+import { type Outline, OutlineBuilder } from "./model";
 import {
   Bullets,
   Card,
@@ -11,6 +11,7 @@ import {
   Facts,
   Grid,
   IdTitle,
+  inlineCode,
   Mono,
   Prose,
   Questions,
@@ -18,7 +19,6 @@ import {
   Refs,
   Section,
   Stats,
-  inlineCode,
   useDoc,
 } from "./parts";
 
@@ -106,9 +106,17 @@ export function specOutline(d: SpecDoc): Outline {
           items={[
             { label: "Deliverables", value: d.deliverables.length },
             { label: "Requirements", value: d.requirements.length },
-            { label: "Criteria covered", value: `${d.criteria.length - uncovered.length} of ${d.criteria.length}`, tone: uncovered.length ? "bad" : "ok" },
+            {
+              label: "Criteria covered",
+              value: `${d.criteria.length - uncovered.length} of ${d.criteria.length}`,
+              tone: uncovered.length ? "bad" : "ok",
+            },
             { label: "Evidence rows", value: d.evidence.length },
-            { label: "Open questions", value: d.open_questions.length, tone: d.open_questions.length ? "warn" : undefined },
+            {
+              label: "Open questions",
+              value: d.open_questions.length,
+              tone: d.open_questions.length ? "warn" : undefined,
+            },
           ]}
         />
         <Section title="Objective">
@@ -120,7 +128,16 @@ export function specOutline(d: SpecDoc): Outline {
         <Facts
           rows={[
             ["Date", d.date],
-            ["Repos", <span key="r" className="doc-symbols">{d.repos.map((r) => <Chip key={r.key} mono title={r.root}>{r.key}</Chip>)}</span>],
+            [
+              "Repos",
+              <span key="r" className="doc-symbols">
+                {d.repos.map((r) => (
+                  <Chip key={r.key} mono title={r.root}>
+                    {r.key}
+                  </Chip>
+                ))}
+              </span>,
+            ],
             ["Research", <ResearchLinks key="d" paths={d.research} />],
           ]}
         />
@@ -167,14 +184,30 @@ export function specOutline(d: SpecDoc): Outline {
           head={["Criterion", "Statement", "Type", "Repo", "Grounding", "Depends on", "Status", "Covered by"]}
           ids={d.criteria.map((c) => c.id)}
           rows={d.criteria.map((c) => [
-            <span key="i" className="doc-id">{c.id}</span>,
+            <span key="i" className="doc-id">
+              {c.id}
+            </span>,
             c.statement,
             <Chip key="k">{c.kind}</Chip>,
             <Mono key="r">{c.repo}</Mono>,
-            <span key="g" className="doc-wrap">{inlineCode(c.grounding)}</span>,
+            <span key="g" className="doc-wrap">
+              {inlineCode(c.grounding)}
+            </span>,
             <Refs key="d" ids={c.depends_on} />,
-            c.provisional ? <span key="s" className="doc-row">Provisional <Ref id={c.provisional} /></span> : "Confirmed",
-            coverers(c.id).length ? <Refs key="v" ids={coverers(c.id)} /> : <Chip key="v" tone="bad">Not covered</Chip>,
+            c.provisional ? (
+              <span key="s" className="doc-row">
+                Provisional <Ref id={c.provisional} />
+              </span>
+            ) : (
+              "Confirmed"
+            ),
+            coverers(c.id).length ? (
+              <Refs key="v" ids={coverers(c.id)} />
+            ) : (
+              <Chip key="v" tone="bad">
+                Not covered
+              </Chip>
+            ),
           ])}
         />
       ),
@@ -261,7 +294,15 @@ export function specOutline(d: SpecDoc): Outline {
         <Section title="Provided">
           {d.contracts_provided.length === 0 && <Empty>None: this spec provides no cross-boundary contract.</Empty>}
           {d.contracts_provided.map((c) => (
-            <Card key={c.name} title={<strong>{c.name}</strong>} badges={<>by <Ref id={c.provided_by} /> for <Refs ids={c.consumed_by} none="no one yet" /></>}>
+            <Card
+              key={c.name}
+              title={<strong>{c.name}</strong>}
+              badges={
+                <>
+                  by <Ref id={c.provided_by} /> for <Refs ids={c.consumed_by} none="no one yet" />
+                </>
+              }
+            >
               <Prose text={c.shape} />
             </Card>
           ))}
@@ -288,7 +329,11 @@ export function specOutline(d: SpecDoc): Outline {
         ) : (
           <div className="doc-stack">
             {d.evidence.map((e) => (
-              <EvidenceCard key={e.id} e={e} restedOnBy={d.requirements.filter((r) => r.rests_on.includes(e.id)).map((r) => r.id)} />
+              <EvidenceCard
+                key={e.id}
+                e={e}
+                restedOnBy={d.requirements.filter((r) => r.rests_on.includes(e.id)).map((r) => r.id)}
+              />
             ))}
           </div>
         ),
@@ -313,7 +358,17 @@ export function specOutline(d: SpecDoc): Outline {
     id: "assumptions",
     title: "Assumptions",
     count: d.assumptions.length,
-    render: () => <Grid head={["Assumption", "Source"]} rows={d.assumptions.map((a) => [inlineCode(a.text), <span key="s" className="doc-wrap">{inlineCode(a.source)}</span>])} />,
+    render: () => (
+      <Grid
+        head={["Assumption", "Source"]}
+        rows={d.assumptions.map((a) => [
+          inlineCode(a.text),
+          <span key="s" className="doc-wrap">
+            {inlineCode(a.source)}
+          </span>,
+        ])}
+      />
+    ),
   });
   b.chapter(
     {
@@ -321,7 +376,12 @@ export function specOutline(d: SpecDoc): Outline {
       title: "Open questions",
       count: d.open_questions.length,
       attention: d.open_questions.length > 0,
-      render: () => <Questions items={d.open_questions} empty="None: every requirement is resolved from the research or the code." />,
+      render: () => (
+        <Questions
+          items={d.open_questions}
+          empty="None: every requirement is resolved from the research or the code."
+        />
+      ),
     },
     d.open_questions.map((q) => q.id),
   );
@@ -339,13 +399,24 @@ export function specOutline(d: SpecDoc): Outline {
           return [
             <Ref key="c" id={c.id} />,
             <Refs key="d" ids={dels} />,
-            reqs.length ? <Refs key="r" ids={reqs.map((r) => r.id)} /> : <Chip key="r" tone="bad">Not covered</Chip>,
+            reqs.length ? (
+              <Refs key="r" ids={reqs.map((r) => r.id)} />
+            ) : (
+              <Chip key="r" tone="bad">
+                Not covered
+              </Chip>
+            ),
             <Refs key="a" ids={reqs.flatMap((r) => r.acceptance.map((a) => a.id))} />,
           ];
         })}
       />
     ),
   });
-  b.maybe(d.notes.length > 0, { id: "notes", title: "Notes", count: d.notes.length, render: () => <Bullets items={d.notes} /> });
+  b.maybe(d.notes.length > 0, {
+    id: "notes",
+    title: "Notes",
+    count: d.notes.length,
+    render: () => <Bullets items={d.notes} />,
+  });
   return b.done();
 }

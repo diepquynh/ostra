@@ -10,9 +10,33 @@ export interface StatusChipProps {
 
 const TONES: Record<StatusKind, Record<string, Tone>> = {
   session: { running: "accent", waiting: "warn", completed: "ok", failed: "bad", stalled: "bad" },
-  execution: { running: "accent", ok: "ok", stuck: "warn", handoff: "info", error: "bad", denied: "bad", interrupted: "warn", cancelled: "neutral" },
-  stage: { pending: "neutral", running: "accent", waiting: "warn", done: "ok", skipped: "neutral", failed: "bad", blocked: "bad" },
-  phase: { queued: "neutral", implementing: "accent", reviewing: "accent", passed: "ok", blocked: "bad", removed: "bad" },
+  execution: {
+    running: "accent",
+    ok: "ok",
+    stuck: "warn",
+    handoff: "info",
+    error: "bad",
+    denied: "bad",
+    interrupted: "warn",
+    cancelled: "neutral",
+  },
+  stage: {
+    pending: "neutral",
+    running: "accent",
+    waiting: "warn",
+    done: "ok",
+    skipped: "neutral",
+    failed: "bad",
+    blocked: "bad",
+  },
+  phase: {
+    queued: "neutral",
+    implementing: "accent",
+    reviewing: "accent",
+    passed: "ok",
+    blocked: "bad",
+    removed: "bad",
+  },
   init: { initialized: "ok", not_initialized: "warn", initializing: "accent", missing: "bad" },
 };
 

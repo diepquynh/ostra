@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type KeyboardEvent, type RefObject } from "react";
+import { type KeyboardEvent, type RefObject, useCallback, useEffect } from "react";
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -12,7 +12,11 @@ export function focusables(root: HTMLElement): HTMLElement[] {
  * focusable, else the container), keeps Tab inside it, and restores the previous focus on deactivate.
  * Returns the keydown handler that wraps Tab; attach it to the container.
  */
-export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean, initial?: RefObject<HTMLElement | null>) {
+export function useFocusTrap(
+  ref: RefObject<HTMLElement | null>,
+  active: boolean,
+  initial?: RefObject<HTMLElement | null>,
+) {
   useEffect(() => {
     if (!active) return;
     const previous = document.activeElement as HTMLElement | null;
@@ -22,7 +26,8 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
       target.focus({ preventScroll: true });
     }
     return () => {
-      if (previous && previous.isConnected && typeof previous.focus === "function") previous.focus({ preventScroll: true });
+      if (previous && previous.isConnected && typeof previous.focus === "function")
+        previous.focus({ preventScroll: true });
     };
   }, [active, ref, initial]);
 
@@ -50,7 +55,13 @@ export function useFocusTrap(ref: RefObject<HTMLElement | null>, active: boolean
 }
 
 /** Move focus among `items` with arrow keys, Home and End. Returns the new index, or null for other keys. */
-export function arrowIndex(key: string, index: number, count: number, orientation: "vertical" | "horizontal", wrap = true): number | null {
+export function arrowIndex(
+  key: string,
+  index: number,
+  count: number,
+  orientation: "vertical" | "horizontal",
+  wrap = true,
+): number | null {
   if (count === 0) return null;
   const next = orientation === "vertical" ? "ArrowDown" : "ArrowRight";
   const prev = orientation === "vertical" ? "ArrowUp" : "ArrowLeft";

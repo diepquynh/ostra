@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createBrowserRouter, Navigate, RouterProvider, useParams, type RouteObject } from "react-router";
+import { createBrowserRouter, Navigate, type RouteObject, RouterProvider, useParams } from "react-router";
 import { api, onUnauthorized } from "./api";
 import { Spinner } from "./design";
 import { useAsync } from "./lib/hooks";
@@ -26,7 +26,12 @@ function SessionRedirect() {
   const s = useAsync(() => api.session(id), [id]);
   if (s.error) return <Problem message={s.error.message} />;
   if (!s.data) return <Loading />;
-  return <Navigate replace to={`/w/${encodeURIComponent(s.data.summary.workspace)}/s/${encodeURIComponent(id)}${location.hash}`} />;
+  return (
+    <Navigate
+      replace
+      to={`/w/${encodeURIComponent(s.data.summary.workspace)}/s/${encodeURIComponent(id)}${location.hash}`}
+    />
+  );
 }
 
 function ExecutionRedirect() {
@@ -38,7 +43,11 @@ function ExecutionRedirect() {
   }, [id]);
   if (e.error) return <Problem message={e.error.message} />;
   if (e.loading) return <Loading />;
-  return e.data ? <Navigate replace to={`/w/${encodeURIComponent(e.data)}/x/${encodeURIComponent(id)}`} /> : <Problem message="This execution belongs to no session." />;
+  return e.data ? (
+    <Navigate replace to={`/w/${encodeURIComponent(e.data)}/x/${encodeURIComponent(id)}`} />
+  ) : (
+    <Problem message="This execution belongs to no session." />
+  );
 }
 
 function NotFound() {
@@ -52,7 +61,9 @@ function NotFound() {
 const screen = { element: <RouteScreen /> };
 
 export const routes: RouteObject[] = [
-  ...(import.meta.env.DEV ? [{ path: "/_design", lazy: async () => ({ Component: (await import("./design/Gallery")).default }) }] : []),
+  ...(import.meta.env.DEV
+    ? [{ path: "/_design", lazy: async () => ({ Component: (await import("./design/Gallery")).default }) }]
+    : []),
   { path: "/", element: <Home /> },
   {
     path: "/w/:ws",

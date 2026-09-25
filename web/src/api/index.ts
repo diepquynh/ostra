@@ -1,4 +1,4 @@
-import { httpApi, type Api } from "./client";
+import { type Api, httpApi } from "./client";
 
 export const isMock = import.meta.env.VITE_MOCK === "1";
 

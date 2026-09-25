@@ -12,6 +12,11 @@ export interface StatusDotProps {
 }
 
 export function StatusDot({ tone = "neutral", pulse, hollow, size = 7, title }: StatusDotProps) {
-  const cls = cx("os-dot", tone !== "neutral" && `os-dot--${tone}`, pulse && "os-dot--pulse", hollow && "os-dot--hollow");
+  const cls = cx(
+    "os-dot",
+    tone !== "neutral" && `os-dot--${tone}`,
+    pulse && "os-dot--pulse",
+    hollow && "os-dot--hollow",
+  );
   return <span className={cls} title={title} style={size !== 7 ? { width: size, height: size } : undefined} />;
 }

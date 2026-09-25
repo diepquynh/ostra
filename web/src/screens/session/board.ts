@@ -2,9 +2,9 @@
 // event log. The screen renders what these return.
 
 import type { ExecutionView, GateView, Lane, PhaseView, SessionDetail, StageCard, StoredEvent } from "../../api/types";
-import type { ExecutionRun, LaneState, PhaseNodeProps } from "../../design";
 import { LANES } from "../../content/stages";
-import { LANE_ORDER, currentGate, describeEvent, phaseLayers, stagesByLane } from "../../lib/events";
+import type { ExecutionRun, LaneState, PhaseNodeProps } from "../../design";
+import { currentGate, describeEvent, LANE_ORDER, phaseLayers, stagesByLane } from "../../lib/events";
 import { formatCost, humanize } from "../../lib/format";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -32,8 +32,13 @@ export function laneStates(d: SessionDetail): Record<Lane, LaneState> {
     else if (failed) out[lane] = { status: "failed", detail: failed.detail ?? humanize(failed.status), why };
     else if (done.length === items.length) {
       const allSkipped = items.every((s) => s.status === "skipped");
-      out[lane] = { status: allSkipped ? "skipped" : "done", detail: allSkipped ? "Skipped" : (done[done.length - 1].detail ?? plural(items.length, "stage")), why };
-    } else if (done.length > 0) out[lane] = { status: "current", detail: `${done.length} of ${items.length} done`, why };
+      out[lane] = {
+        status: allSkipped ? "skipped" : "done",
+        detail: allSkipped ? "Skipped" : (done[done.length - 1].detail ?? plural(items.length, "stage")),
+        why,
+      };
+    } else if (done.length > 0)
+      out[lane] = { status: "current", detail: `${done.length} of ${items.length} done`, why };
     else out[lane] = { status: "pending", why };
   });
   return out;
@@ -45,19 +50,27 @@ export function defaultLane(d: SessionDetail): Lane {
   const byGate = gate && d.stages.find((s) => s.gate === gate.id);
   if (byGate) return byGate.lane;
   const states = laneStates(d);
-  return LANE_ORDER.find((l) => states[l].status === "waiting") ?? LANE_ORDER.find((l) => states[l].status === "current") ?? d.summary.lane;
+  return (
+    LANE_ORDER.find((l) => states[l].status === "waiting") ??
+    LANE_ORDER.find((l) => states[l].status === "current") ??
+    d.summary.lane
+  );
 }
 
 /** Open gates with the current one first (permission asks, then the oldest), then the rest oldest first. */
 export function openGatesInOrder(d: SessionDetail): GateView[] {
   const current = currentGate(d);
-  const rest = d.gates.filter((g) => g.answer === null && g !== current).sort((a, b) => a.opened_at.localeCompare(b.opened_at));
+  const rest = d.gates
+    .filter((g) => g.answer === null && g !== current)
+    .sort((a, b) => a.opened_at.localeCompare(b.opened_at));
   return current ? [current, ...rest] : rest;
 }
 
 /** Answered gates, newest answer first. */
 export function answeredGates(d: SessionDetail): GateView[] {
-  return d.gates.filter((g) => g.answer !== null).sort((a, b) => (b.answered_at ?? b.opened_at).localeCompare(a.answered_at ?? a.opened_at));
+  return d.gates
+    .filter((g) => g.answer !== null)
+    .sort((a, b) => (b.answered_at ?? b.opened_at).localeCompare(a.answered_at ?? a.opened_at));
 }
 
 /** The right-aligned text of a stage row: what a running execution is doing, else the stage's detail. */
@@ -102,7 +115,17 @@ export function executionGroups(d: SessionDetail): ExecutionGroupRows[] {
     runs: g.executions.flatMap((id) => {
       const x = byId.get(id);
       // The design picks the stream glyph from `native`; harness names stay short so a group row fits the side column.
-      return x ? [{ id: x.id, label: x.run_label, status: x.status, executor: x.stream === "activity" ? "native" : x.executor.replace(/^harness:/, ""), cost: formatCost(x.usage.cost_usd) }] : [];
+      return x
+        ? [
+            {
+              id: x.id,
+              label: x.run_label,
+              status: x.status,
+              executor: x.stream === "activity" ? "native" : x.executor.replace(/^harness:/, ""),
+              cost: formatCost(x.usage.cost_usd),
+            },
+          ]
+        : [];
     }),
   }));
 }

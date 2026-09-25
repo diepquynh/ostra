@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useFocusTrap } from "../../focus";
 import { Icon } from "../core/Icon";
@@ -44,7 +44,14 @@ export function CommandPalette(props: CommandPaletteProps) {
   return createPortal(<PaletteBody {...props} />, document.body);
 }
 
-function PaletteBody({ items, onSelect, onClose, onQueryChange, filterItems = filterPaletteItems, placeholder = "Go to a session, execution, artifact or setting…" }: CommandPaletteProps) {
+function PaletteBody({
+  items,
+  onSelect,
+  onClose,
+  onQueryChange,
+  filterItems = filterPaletteItems,
+  placeholder = "Go to a session, execution, artifact or setting…",
+}: CommandPaletteProps) {
   const [q, setQ] = useState("");
   const [i, setI] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -86,7 +93,16 @@ function PaletteBody({ items, onSelect, onClose, onQueryChange, filterItems = fi
   return (
     <div
       onClick={onClose}
-      style={{ position: "fixed", inset: 0, background: "var(--surface-scrim)", display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "12vh", zIndex: 100 }}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "var(--surface-scrim)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "flex-start",
+        paddingTop: "12vh",
+        zIndex: 100,
+      }}
     >
       <div
         ref={panelRef}
@@ -95,9 +111,26 @@ function PaletteBody({ items, onSelect, onClose, onQueryChange, filterItems = fi
         aria-label="Command palette"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKey}
-        style={{ width: 560, maxWidth: "calc(100vw - 32px)", background: "var(--surface-overlay)", borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-dialog)", overflow: "hidden", animation: "os-fade-in var(--dur-base) var(--ease-out)" }}
+        style={{
+          width: 560,
+          maxWidth: "calc(100vw - 32px)",
+          background: "var(--surface-overlay)",
+          borderRadius: "var(--radius-lg)",
+          boxShadow: "var(--shadow-dialog)",
+          overflow: "hidden",
+          animation: "os-fade-in var(--dur-base) var(--ease-out)",
+        }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, height: 44, padding: "0 14px", borderBottom: "1px solid var(--border-default)" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            height: 44,
+            padding: "0 14px",
+            borderBottom: "1px solid var(--border-default)",
+          }}
+        >
           <Icon name="search" size={15} style={{ color: "var(--text-muted)" }} />
           <input
             ref={inputRef}
@@ -115,12 +148,30 @@ function PaletteBody({ items, onSelect, onClose, onQueryChange, filterItems = fi
             aria-activedescendant={list[active] ? `${listId}-${active}` : undefined}
             spellCheck={false}
             autoComplete="off"
-            style={{ flex: 1, background: "none", border: 0, outline: 0, boxShadow: "none", color: "var(--text-primary)", font: "var(--weight-regular) var(--text-md)/1 var(--font-sans)" }}
+            style={{
+              flex: 1,
+              background: "none",
+              border: 0,
+              outline: 0,
+              boxShadow: "none",
+              color: "var(--text-primary)",
+              font: "var(--weight-regular) var(--text-md)/1 var(--font-sans)",
+            }}
           />
           <Kbd>Esc</Kbd>
         </div>
-        <div ref={listRef} id={listId} role="listbox" aria-label="Results" style={{ maxHeight: 360, overflowY: "auto", overflowX: "hidden", padding: 4 }}>
-          {list.length === 0 && <div style={{ padding: "18px 12px", color: "var(--text-muted)", textAlign: "center" }}>Nothing matches “{q}”.</div>}
+        <div
+          ref={listRef}
+          id={listId}
+          role="listbox"
+          aria-label="Results"
+          style={{ maxHeight: 360, overflowY: "auto", overflowX: "hidden", padding: 4 }}
+        >
+          {list.length === 0 && (
+            <div style={{ padding: "18px 12px", color: "var(--text-muted)", textAlign: "center" }}>
+              Nothing matches “{q}”.
+            </div>
+          )}
           {list.map((it, idx) => {
             const head = it.group && it.group !== lastGroup ? it.group : null;
             lastGroup = it.group;
@@ -139,17 +190,54 @@ function PaletteBody({ items, onSelect, onClose, onQueryChange, filterItems = fi
                   aria-selected={on}
                   onMouseEnter={() => setI(idx)}
                   onClick={() => pick(it)}
-                  style={{ display: "flex", alignItems: "center", gap: 10, height: 32, padding: "0 10px", borderRadius: "var(--radius-sm)", cursor: "pointer", background: on ? "var(--surface-selected)" : "transparent" }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    height: 32,
+                    padding: "0 10px",
+                    borderRadius: "var(--radius-sm)",
+                    cursor: "pointer",
+                    background: on ? "var(--surface-selected)" : "transparent",
+                  }}
                 >
-                  {it.icon && <Icon name={it.icon} size={14} style={{ color: on ? "var(--accent-fg)" : "var(--text-muted)" }} />}
-                  <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-primary)" }}>{it.label}</span>
-                  {it.hint && <span style={{ font: "var(--text-2xs)/1 var(--font-mono)", color: "var(--text-muted)" }}>{it.hint}</span>}
+                  {it.icon && (
+                    <Icon name={it.icon} size={14} style={{ color: on ? "var(--accent-fg)" : "var(--text-muted)" }} />
+                  )}
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      color: "var(--text-primary)",
+                    }}
+                  >
+                    {it.label}
+                  </span>
+                  {it.hint && (
+                    <span style={{ font: "var(--text-2xs)/1 var(--font-mono)", color: "var(--text-muted)" }}>
+                      {it.hint}
+                    </span>
+                  )}
                 </div>
               </Fragment>
             );
           })}
         </div>
-        <div style={{ display: "flex", gap: 14, alignItems: "center", height: 30, padding: "0 12px", borderTop: "1px solid var(--border-subtle)", color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 14,
+            alignItems: "center",
+            height: 30,
+            padding: "0 12px",
+            borderTop: "1px solid var(--border-subtle)",
+            color: "var(--text-muted)",
+            fontSize: "var(--text-xs)",
+          }}
+        >
           <span style={{ display: "flex", gap: 5, alignItems: "center" }}>
             <Kbd keys={["↑", "↓"]} /> move
           </span>

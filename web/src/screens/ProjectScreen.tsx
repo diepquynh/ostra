@@ -34,10 +34,13 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
   const pull = () => {
     setPulling(true);
     setPulled(null);
-    api.pullProject(ws, projectKey).then(
-      (ok) => setPulled({ ok }),
-      (e: Error) => setPulled({ error: e.message }),
-    ).finally(() => setPulling(false));
+    api
+      .pullProject(ws, projectKey)
+      .then(
+        (ok) => setPulled({ ok }),
+        (e: Error) => setPulled({ error: e.message }),
+      )
+      .finally(() => setPulling(false));
   };
 
   if (!detail)
@@ -48,7 +51,16 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
     );
   if (!p)
     return (
-      <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 12, alignItems: "flex-start", color: "var(--text-secondary)" }}>
+      <div
+        style={{
+          padding: 24,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+          alignItems: "flex-start",
+          color: "var(--text-secondary)",
+        }}
+      >
         <span>
           No project <code>{projectKey}</code> in this workspace. It may have been removed.
         </span>
@@ -61,7 +73,16 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
   const stack = stackLabel(p);
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <div style={{ padding: "20px 24px 0", display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap", flex: "none" }}>
+      <div
+        style={{
+          padding: "20px 24px 0",
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 12,
+          flexWrap: "wrap",
+          flex: "none",
+        }}
+      >
         <div style={{ flex: "1 1 360px", minWidth: 0 }}>
           <h1 style={{ margin: "0 0 6px", font: "var(--type-title)", display: "flex", alignItems: "center", gap: 10 }}>
             <Icon name="folder-git-2" size={20} style={{ color: "var(--text-muted)" }} />
@@ -70,20 +91,32 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
             <StatusChip kind="init" status={p.init_status} />
             {p.is_git ? (
-              <Chip mono icon="git-branch" title={p.git_branch ? "The checked-out branch, from .git/HEAD" : "A git checkout"}>
+              <Chip
+                mono
+                icon="git-branch"
+                title={p.git_branch ? "The checked-out branch, from .git/HEAD" : "A git checkout"}
+              >
                 {p.git_branch ?? "git"}
               </Chip>
             ) : (
               <Chip tone="warn">not a git checkout</Chip>
             )}
-            <span style={{ font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", wordBreak: "break-all" }}>
+            <span
+              style={{ font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", wordBreak: "break-all" }}
+            >
               {p.path}
               {stack && ` · ${stack}`}
             </span>
           </div>
         </div>
         {p.is_git && (
-          <Button size="sm" icon="git-pull-request" disabled={pulling} title="Fast-forward the checked-out branch from its upstream" onClick={pull}>
+          <Button
+            size="sm"
+            icon="git-pull-request"
+            disabled={pulling}
+            title="Fast-forward the checked-out branch from its upstream"
+            onClick={pull}
+          >
             {pulling ? "Pulling…" : "Pull"}
           </Button>
         )}
@@ -116,7 +149,11 @@ export function ProjectScreen({ ws, projectKey }: ProjectScreenProps) {
         />
       </div>
       <div style={{ flex: 1, overflow: "auto", minHeight: 0, paddingTop: 12 }}>
-        {section === "overview" ? <ProjectOverview ws={ws} project={p} /> : <DependencyGraph key={p.key} ws={ws} projectKey={p.key} />}
+        {section === "overview" ? (
+          <ProjectOverview ws={ws} project={p} />
+        ) : (
+          <DependencyGraph key={p.key} ws={ws} projectKey={p.key} />
+        )}
       </div>
     </div>
   );

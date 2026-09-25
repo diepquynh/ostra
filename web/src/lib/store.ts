@@ -78,7 +78,14 @@ export class SharedStore<T> {
   private entry(key: string): Entry<T> {
     let e = this.entries.get(key);
     if (!e) {
-      e = { snap: { data: null, error: null, loading: true }, listeners: new Set(), running: false, gen: 0, cleanup: null, stopTimer: null };
+      e = {
+        snap: { data: null, error: null, loading: true },
+        listeners: new Set(),
+        running: false,
+        gen: 0,
+        cleanup: null,
+        stopTimer: null,
+      };
       this.entries.set(key, e);
     }
     return e;
@@ -124,7 +131,9 @@ export class SharedStore<T> {
     if (!e.snap.loading) this.set(e, { ...e.snap, loading: true });
     this.def.load(key, this.feed(key, e)).then(
       (data) => gen === e.gen && this.set(e, { data, error: null, loading: false }),
-      (err: unknown) => gen === e.gen && this.set(e, { ...e.snap, error: err instanceof Error ? err : new Error(String(err)), loading: false }),
+      (err: unknown) =>
+        gen === e.gen &&
+        this.set(e, { ...e.snap, error: err instanceof Error ? err : new Error(String(err)), loading: false }),
     );
   }
 }

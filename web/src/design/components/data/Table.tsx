@@ -24,7 +24,15 @@ export interface TableProps<T = object> {
 const cell = (row: object, key: string): ReactNode => (row as Record<string, unknown>)[key] as ReactNode;
 
 /** Dense data table. columns: [{ key, label, num?, width?, render? }]. */
-export function Table<T extends object>({ columns, rows, onRowClick, selectedKey, rowKey = "id", dense, empty = "Nothing yet." }: TableProps<T>) {
+export function Table<T extends object>({
+  columns,
+  rows,
+  onRowClick,
+  selectedKey,
+  rowKey = "id",
+  dense,
+  empty = "Nothing yet.",
+}: TableProps<T>) {
   return (
     <div className="os-table-wrap">
       <table className={`os-table ${dense ? "os-table--dense" : ""}`}>

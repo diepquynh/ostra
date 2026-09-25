@@ -25,11 +25,17 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const preview = !!action.preview;
       const existing = state.tabs.find((t) => t.id === id);
       if (existing) {
-        const tabs = !preview && existing.preview ? state.tabs.map((t) => (t.id === id ? { ...t, preview: false } : t)) : state.tabs;
+        const tabs =
+          !preview && existing.preview
+            ? state.tabs.map((t) => (t.id === id ? { ...t, preview: false } : t))
+            : state.tabs;
         return tabs === state.tabs && state.active === id ? state : { tabs, active: id };
       }
       const slot = preview ? state.tabs.findIndex((t) => t.preview) : -1;
-      const tabs = slot >= 0 ? state.tabs.map((t, i) => (i === slot ? { id, preview: true } : t)) : [...state.tabs, { id, preview }];
+      const tabs =
+        slot >= 0
+          ? state.tabs.map((t, i) => (i === slot ? { id, preview: true } : t))
+          : [...state.tabs, { id, preview }];
       return { tabs, active: id };
     }
     case "pin": {
@@ -40,12 +46,15 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const i = state.tabs.findIndex((t) => t.id === action.id);
       if (i < 0) return state;
       const tabs = state.tabs.filter((t) => t.id !== action.id);
-      const active = state.active === action.id ? (tabs.length ? tabs[Math.min(i, tabs.length - 1)].id : null) : state.active;
+      const active =
+        state.active === action.id ? (tabs.length ? tabs[Math.min(i, tabs.length - 1)].id : null) : state.active;
       return { tabs, active };
     }
     case "activate": {
       if (state.active === action.id && state.tabs.some((t) => t.id === action.id)) return state;
-      const tabs = state.tabs.some((t) => t.id === action.id) ? state.tabs : [...state.tabs, { id: action.id, preview: false }];
+      const tabs = state.tabs.some((t) => t.id === action.id)
+        ? state.tabs
+        : [...state.tabs, { id: action.id, preview: false }];
       return { tabs, active: action.id };
     }
     case "restore":
@@ -69,5 +78,6 @@ export function normalizeTabs(state: TabsState): TabsState {
   return { tabs, active };
 }
 
-export const toUiTabs = (tabs: Tab[]): UiTab[] => tabs.map((t) => ({ id: t.id, preview: t.preview, pinned: !t.preview }));
+export const toUiTabs = (tabs: Tab[]): UiTab[] =>
+  tabs.map((t) => ({ id: t.id, preview: t.preview, pinned: !t.preview }));
 export const fromUiTabs = (tabs: UiTab[]): Tab[] => tabs.map((t) => ({ id: t.id, preview: !!t.preview }));

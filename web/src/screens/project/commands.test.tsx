@@ -9,7 +9,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const commands: Commands = { build: "cargo build", test: "cargo test", test_one: null, format: "cargo fmt", lint: null, typecheck: null, run: null };
+const commands: Commands = {
+  build: "cargo build",
+  test: "cargo test",
+  test_one: null,
+  format: "cargo fmt",
+  lint: null,
+  typecheck: null,
+  run: null,
+};
 
 describe("project commands", () => {
   it("places 422 issues on their fields and keeps other messages general", () => {
@@ -36,7 +44,9 @@ describe("project commands", () => {
 
   it("shows a refused field under its input and stays in edit mode", async () => {
     vi.spyOn(api, "saveProjectCommands").mockRejectedValue(
-      new HttpError(422, "Fix the commands and save again.", [{ path: "commands.build", message: "Write the command on one line." }]),
+      new HttpError(422, "Fix the commands and save again.", [
+        { path: "commands.build", message: "Write the command on one line." },
+      ]),
     );
     const onSaved = vi.fn();
     render(<CommandsPanel ws="w" projectKey="app" commands={commands} onSaved={onSaved} />);
@@ -49,7 +59,15 @@ describe("project commands", () => {
 
   it("cancels without saving, and offers to add commands when there are none", () => {
     const save = vi.spyOn(api, "saveProjectCommands");
-    const empty: Commands = { build: null, test: null, test_one: null, format: null, lint: null, typecheck: null, run: null };
+    const empty: Commands = {
+      build: null,
+      test: null,
+      test_one: null,
+      format: null,
+      lint: null,
+      typecheck: null,
+      run: null,
+    };
     render(<CommandsPanel ws="w" projectKey="app" commands={empty} onSaved={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Add commands" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

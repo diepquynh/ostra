@@ -10,10 +10,21 @@ import { SettingsScreen } from "./SettingsScreen";
 import { SkillsScreen } from "./SkillsScreen";
 import { WorkspaceScreen } from "./WorkspaceScreen";
 
-export { ArtifactScreen, CostScreen, ExecutionScreen, FileScreen, MemoryScreen, ProjectScreen, SessionScreen, SettingsScreen, SkillsScreen, WorkspaceScreen };
-export { Onboarding } from "./setup/Onboarding";
-export { NewWorkspaceDialog } from "./setup/NewWorkspaceDialog";
 export { AddProjectDialog } from "./setup/AddProjectDialog";
+export { NewWorkspaceDialog } from "./setup/NewWorkspaceDialog";
+export { Onboarding } from "./setup/Onboarding";
+export {
+  ArtifactScreen,
+  CostScreen,
+  ExecutionScreen,
+  FileScreen,
+  MemoryScreen,
+  ProjectScreen,
+  SessionScreen,
+  SettingsScreen,
+  SkillsScreen,
+  WorkspaceScreen,
+};
 
 /** Resources whose screen scrolls its own content, so the shell's center pane must not scroll. */
 export const selfScrolling = (id: string) => /^(artifact|file|project):/.test(id);

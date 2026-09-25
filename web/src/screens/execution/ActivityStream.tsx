@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from "react";
 import type { ToolCall as Call } from "../../api/types";
 import { Markdown } from "../../components/Markdown";
 import { DiffView, StatusDot, ToolCall } from "../../design";
-import { toolSummary, type ActivityEntry, type ToolEntry } from "../../lib/events";
+import { type ActivityEntry, type ToolEntry, toolSummary } from "../../lib/events";
 import { formatDuration, truncate } from "../../lib/format";
 import { diffStat, policyInfo, toolDiff } from "./model";
 
@@ -40,7 +40,8 @@ function ToolBody({ entry }: { entry: ToolEntry }) {
 
 export function ActivityTool({ entry, summarize }: { entry: ToolEntry; summarize: (c: Call) => string }) {
   const diff = toolDiff(entry.call);
-  const summary = diff && entry.call.tool !== "ApplyPatch" ? `${summarize(entry.call)}  ${diffStat(diff)}` : summarize(entry.call);
+  const summary =
+    diff && entry.call.tool !== "ApplyPatch" ? `${summarize(entry.call)}  ${diffStat(diff)}` : summarize(entry.call);
   const policy = policyInfo(entry.policy);
   const state = !entry.done ? "running" : entry.isError ? "error" : "done";
   return (
@@ -113,11 +114,17 @@ export function ActivityStream({ entries, live, summarize = toolSummary }: Activ
   return (
     <div className="ex-activity">
       {entries.length === 0 && (
-        <div className="ex-empty">{live ? "No activity yet. Items appear here as the agent works." : "This execution recorded no activity."}</div>
+        <div className="ex-empty">
+          {live ? "No activity yet. Items appear here as the agent works." : "This execution recorded no activity."}
+        </div>
       )}
       {/* A tool row is keyed by its decision, so a deny or ask that arrives after the call remounts it open. */}
       {entries.map((e) => (
-        <ActivityItem key={e.kind === "tool" ? `${e.callId}:${e.policy?.decision ?? ""}` : e.seq} entry={e} summarize={summarize} />
+        <ActivityItem
+          key={e.kind === "tool" ? `${e.callId}:${e.policy?.decision ?? ""}` : e.seq}
+          entry={e}
+          summarize={summarize}
+        />
       ))}
       {live && (
         <div className="ex-live">

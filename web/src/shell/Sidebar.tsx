@@ -1,7 +1,7 @@
-import { Fragment, useState, type MouseEvent, type ReactNode } from "react";
+import { Fragment, type MouseEvent, type ReactNode, useState } from "react";
 import type { TreeGroup, TreeSession } from "../api/nav";
 import type { ExecutionStatus, ProjectView, SessionStatus } from "../api/types";
-import { Chip, IconButton, Input, Spinner, StatusDot, Tabs, TreeItem, TreeSection, type Tone } from "../design";
+import { Chip, IconButton, Input, Spinner, StatusDot, Tabs, type Tone, TreeItem, TreeSection } from "../design";
 import { formatCost, humanize } from "../lib/format";
 import type { OpenOptions } from "../lib/nav";
 import { parseResource } from "../lib/resource";
@@ -44,14 +44,27 @@ function sessionOf(activeId: string | null, sessions: TreeSession[]): string | n
   const r = activeId ? parseResource(activeId) : null;
   if (!r) return null;
   if (r.type === "session") return r.id;
-  if (r.type === "exec") return sessions.find((s) => s.groups.some((g) => g.runs.some((x) => x.id === r.id)))?.id ?? null;
+  if (r.type === "exec")
+    return sessions.find((s) => s.groups.some((g) => g.runs.some((x) => x.id === r.id)))?.id ?? null;
   if (r.type === "artifact") return sessions.find((s) => s.artifacts.some((a) => a.path === r.path))?.id ?? null;
   return null;
 }
 
 type OpenFn = (id: string, opts?: OpenOptions) => void;
 
-function GroupRows({ g, activeId, open, expanded, toggle }: { g: TreeGroup; activeId: string | null; open: OpenFn; expanded: (k: string, d: boolean) => boolean; toggle: (k: string, d: boolean) => void }) {
+function GroupRows({
+  g,
+  activeId,
+  open,
+  expanded,
+  toggle,
+}: {
+  g: TreeGroup;
+  activeId: string | null;
+  open: OpenFn;
+  expanded: (k: string, d: boolean) => boolean;
+  toggle: (k: string, d: boolean) => void;
+}) {
   if (g.runs.length === 1) {
     const x = g.runs[0];
     return (
@@ -121,15 +134,35 @@ function SessionsPanel({ sessions, loading, error, projects, activeId, open, onA
   const shown = f ? sessions.filter((s) => `${s.title ?? ""} ${s.request}`.toLowerCase().includes(f)) : sessions;
 
   let body: ReactNode;
-  if (error && sessions.length === 0) body = <div style={{ padding: "6px 8px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>{error.message}</div>;
+  if (error && sessions.length === 0)
+    body = <div style={{ padding: "6px 8px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>{error.message}</div>;
   else if (loading && sessions.length === 0)
     body = (
-      <div style={{ padding: "6px 8px", display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+      <div
+        style={{
+          padding: "6px 8px",
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          color: "var(--text-muted)",
+          fontSize: "var(--text-sm)",
+        }}
+      >
         <Spinner size={10} /> Reading the sessions…
       </div>
     );
-  else if (sessions.length === 0) body = <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>No sessions yet. Start one with the New task form.</div>;
-  else if (shown.length === 0) body = <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>No session matches.</div>;
+  else if (sessions.length === 0)
+    body = (
+      <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+        No sessions yet. Start one with the New task form.
+      </div>
+    );
+  else if (shown.length === 0)
+    body = (
+      <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+        No session matches.
+      </div>
+    );
   else
     body = shown.map((s) => {
       const isOpen = expanded(s.id, s.id === current);
@@ -150,16 +183,35 @@ function SessionsPanel({ sessions, loading, error, projects, activeId, open, onA
             onClick={() => open(`session:${s.id}`, { preview: true })}
             title={s.request}
           />
-          {isOpen && runs === 0 && s.artifacts.length === 0 && <TreeItem depth={1} label="Board" icon="kanban" onClick={() => open(`session:${s.id}`)} />}
+          {isOpen && runs === 0 && s.artifacts.length === 0 && (
+            <TreeItem depth={1} label="Board" icon="kanban" onClick={() => open(`session:${s.id}`)} />
+          )}
           {isOpen && runs > 0 && (
             <>
-              <TreeItem depth={1} label="Executions" icon="square-terminal" expanded={expanded(xKey, true)} meta={runs} onToggle={() => toggle(xKey, true)} />
-              {expanded(xKey, true) && s.groups.map((g) => <GroupRows key={g.group} g={g} activeId={activeId} open={open} expanded={expanded} toggle={toggle} />)}
+              <TreeItem
+                depth={1}
+                label="Executions"
+                icon="square-terminal"
+                expanded={expanded(xKey, true)}
+                meta={runs}
+                onToggle={() => toggle(xKey, true)}
+              />
+              {expanded(xKey, true) &&
+                s.groups.map((g) => (
+                  <GroupRows key={g.group} g={g} activeId={activeId} open={open} expanded={expanded} toggle={toggle} />
+                ))}
             </>
           )}
           {isOpen && s.artifacts.length > 0 && (
             <>
-              <TreeItem depth={1} label="Artifacts" icon="files" expanded={expanded(aKey, aDefault)} meta={s.artifacts.length} onToggle={() => toggle(aKey, aDefault)} />
+              <TreeItem
+                depth={1}
+                label="Artifacts"
+                icon="files"
+                expanded={expanded(aKey, aDefault)}
+                meta={s.artifacts.length}
+                onToggle={() => toggle(aKey, aDefault)}
+              />
               {expanded(aKey, aDefault) &&
                 s.artifacts.map((a) => (
                   <TreeItem
@@ -179,16 +231,37 @@ function SessionsPanel({ sessions, loading, error, projects, activeId, open, onA
     });
 
   return (
-    <div role="tree" aria-label="Sessions" style={{ padding: "8px 8px 4px", flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-      <TreeSection label="Sessions" actions={<IconButton size="sm" icon="plus" label="New task" onClick={() => open("ws:overview")} />}>
+    <div
+      role="tree"
+      aria-label="Sessions"
+      style={{ padding: "8px 8px 4px", flex: 1, overflowY: "auto", overflowX: "hidden" }}
+    >
+      <TreeSection
+        label="Sessions"
+        actions={<IconButton size="sm" icon="plus" label="New task" onClick={() => open("ws:overview")} />}
+      >
         <div style={{ padding: "2px 0 6px" }}>
-          <Input size="sm" icon="list-filter" placeholder="Filter" aria-label="Filter sessions" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <Input
+            size="sm"
+            icon="list-filter"
+            placeholder="Filter"
+            aria-label="Filter sessions"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
         </div>
         {body}
       </TreeSection>
       <div style={{ height: 8 }} />
-      <TreeSection label="Projects" actions={<IconButton size="sm" icon="plus" label="Add project" onClick={onAddProject} />}>
-        {projects.length === 0 && <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>No projects yet. Add one to start work.</div>}
+      <TreeSection
+        label="Projects"
+        actions={<IconButton size="sm" icon="plus" label="Add project" onClick={onAddProject} />}
+      >
+        {projects.length === 0 && (
+          <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+            No projects yet. Add one to start work.
+          </div>
+        )}
         {projects.map((p) => (
           <TreeItem
             key={p.key}
@@ -225,7 +298,22 @@ export type SidebarProps = {
   onAddProject: () => void;
 };
 
-export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, projects, activeId, open, pinActive, filesProject, setFilesProject, onAddProject }: SidebarProps) {
+export function Sidebar({
+  ws,
+  resizer,
+  tab,
+  setTab,
+  sessions,
+  loading,
+  error,
+  projects,
+  activeId,
+  open,
+  pinActive,
+  filesProject,
+  setFilesProject,
+  onAddProject,
+}: SidebarProps) {
   const onDoubleClick = (e: MouseEvent) => {
     const row = (e.target as HTMLElement).closest('[role="treeitem"]');
     if (row?.getAttribute("aria-selected") === "true") pinActive();
@@ -237,7 +325,16 @@ export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, pr
   return (
     <aside
       onDoubleClick={onDoubleClick}
-      style={{ position: "relative", width: "var(--sidebar-w)", flex: "none", background: "var(--surface-panel)", borderRight: "1px solid var(--border-default)", display: "flex", flexDirection: "column", minHeight: 0 }}
+      style={{
+        position: "relative",
+        width: "var(--sidebar-w)",
+        flex: "none",
+        background: "var(--surface-panel)",
+        borderRight: "1px solid var(--border-default)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
     >
       <div style={{ padding: "0 8px", flex: "none" }}>
         <Tabs
@@ -258,7 +355,9 @@ export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, pr
           project={filesProject}
           setProject={setFilesProject}
           selected={selectedFile}
-          onOpenFile={(key, path, opts) => open(`file:${key}:${path}`, opts?.edit ? { anchor: "edit" } : { preview: true })}
+          onOpenFile={(key, path, opts) =>
+            open(`file:${key}:${path}`, opts?.edit ? { anchor: "edit" } : { preview: true })
+          }
           onOpenProject={(key) => open(`project:${key}`)}
           onAddProject={onAddProject}
         />
@@ -273,7 +372,15 @@ export function Sidebar({ ws, resizer, tab, setTab, sessions, loading, error, pr
           onAddProject={onAddProject}
         />
       ) : (
-        <SessionsPanel sessions={sessions} loading={loading} error={error} projects={projects} activeId={activeId} open={open} onAddProject={onAddProject} />
+        <SessionsPanel
+          sessions={sessions}
+          loading={loading}
+          error={error}
+          projects={projects}
+          activeId={activeId}
+          open={open}
+          onAddProject={onAddProject}
+        />
       )}
       {resizer}
     </aside>

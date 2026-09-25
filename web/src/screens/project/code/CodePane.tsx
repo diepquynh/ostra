@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { api } from "../../../api";
 import type { CodeFile, CodeLocation, CodeSymbol, SymbolKind } from "../../../api/types";
-import { Banner, Button, Icon, Input, Spinner, Tabs, type IconName, type TabItem } from "../../../design";
+import { Banner, Button, Icon, type IconName, Input, Spinner, type TabItem, Tabs } from "../../../design";
 import { useAsync } from "../../../lib/hooks";
 import { useNav, useShell } from "../../../lib/nav";
 import { fileId } from "../../../lib/resource";
@@ -133,7 +133,9 @@ export function CodePane({ ws, projectKey, path, file, fileError, selected, onSe
         }}
       >
         {tab === "outline" && <Outline file={file} error={fileError} onGoto={onGoto} onSelect={onSelect} />}
-        {tab === "usages" && <Usages ws={ws} projectKey={projectKey} path={path} selected={selected} onSelect={onSelect} onGoto={onGoto} />}
+        {tab === "usages" && (
+          <Usages ws={ws} projectKey={projectKey} path={path} selected={selected} onSelect={onSelect} onGoto={onGoto} />
+        )}
         {tab === "deps" && <Deps ws={ws} projectKey={projectKey} path={path} onGoto={onGoto} />}
       </div>
       <div
@@ -180,7 +182,11 @@ function Outline({
         </Banner>
       )}
       {file.symbols.length === 0 ? (
-        <Empty>{file.language ? "This file defines no symbols the provider found." : "The provider does not know this file type."}</Empty>
+        <Empty>
+          {file.language
+            ? "This file defines no symbols the provider found."
+            : "The provider does not know this file type."}
+        </Empty>
       ) : (
         <div style={{ padding: "4px 0" }}>
           {file.symbols.map((s, i) => (
@@ -192,7 +198,15 @@ function Outline({
   );
 }
 
-function SymbolRow({ s, onGoto, onSelect }: { s: CodeSymbol; onGoto: (line: number) => void; onSelect: (s: SymbolRef) => void }) {
+function SymbolRow({
+  s,
+  onGoto,
+  onSelect,
+}: {
+  s: CodeSymbol;
+  onGoto: (line: number) => void;
+  onSelect: (s: SymbolRef) => void;
+}) {
   return (
     <div style={{ display: "flex", alignItems: "center" }}>
       <button
@@ -251,7 +265,15 @@ function useOpenLocation(projectKey: string, path: string, onGoto: (line: number
   };
 }
 
-function LocationList({ title, locs, open }: { title: string; locs: CodeLocation[]; open: (path: string, line: number) => void }) {
+function LocationList({
+  title,
+  locs,
+  open,
+}: {
+  title: string;
+  locs: CodeLocation[];
+  open: (path: string, line: number) => void;
+}) {
   if (locs.length === 0) return null;
   return (
     <div style={{ paddingBottom: 6 }}>
@@ -264,7 +286,13 @@ function LocationList({ title, locs, open }: { title: string; locs: CodeLocation
             {p}
           </div>
           {ls.map((l, i) => (
-            <button key={i} type="button" style={rowStyle} onClick={() => open(l.path, l.line)} title={`${l.path}:${l.line}`}>
+            <button
+              key={i}
+              type="button"
+              style={rowStyle}
+              onClick={() => open(l.path, l.line)}
+              title={`${l.path}:${l.line}`}
+            >
               <span
                 style={{
                   ...mutedStyle,
@@ -306,7 +334,10 @@ function Usages({
     return () => clearTimeout(t);
   }, [query]);
   const open = useOpenLocation(projectKey, path, onGoto, selected);
-  const found = useAsync(() => (debounced ? api.codeSymbols(ws, projectKey, debounced, 30) : Promise.resolve(null)), [ws, projectKey, debounced]);
+  const found = useAsync(
+    () => (debounced ? api.codeSymbols(ws, projectKey, debounced, 30) : Promise.resolve(null)),
+    [ws, projectKey, debounced],
+  );
   const usages = useAsync(
     () =>
       selected
@@ -442,7 +473,9 @@ function Usages({
               {u.warning}
             </Banner>
           )}
-          {u.definitions.length === 0 && u.references.length === 0 && <Empty>The provider found no definition or use of this name.</Empty>}
+          {u.definitions.length === 0 && u.references.length === 0 && (
+            <Empty>The provider found no definition or use of this name.</Empty>
+          )}
           <LocationList title="Definitions" locs={u.definitions} open={open} />
           <LocationList title="Uses" locs={u.references} open={open} />
           {u.truncated && <Empty>The list stops at the result cap.</Empty>}
@@ -466,7 +499,17 @@ export function takeCarried(key: string, path: string): SymbolRef | null {
   return c && c.key === key && c.path === path ? c.symbol : null;
 }
 
-function Deps({ ws, projectKey, path, onGoto }: { ws: string; projectKey: string; path: string; onGoto: (line: number) => void }) {
+function Deps({
+  ws,
+  projectKey,
+  path,
+  onGoto,
+}: {
+  ws: string;
+  projectKey: string;
+  path: string;
+  onGoto: (line: number) => void;
+}) {
   const shell = useShell();
   const deps = useAsync(() => api.codeDeps(ws, projectKey, path), [ws, projectKey, path]);
   const open = useOpenLocation(projectKey, path, onGoto);
@@ -545,7 +588,13 @@ function Deps({ ws, projectKey, path, onGoto }: { ws: string; projectKey: string
             {p}
           </div>
           {ls.map((l, i) => (
-            <button key={i} type="button" style={rowStyle} onClick={() => open(l.path, l.line)} title={`${l.path}:${l.line}`}>
+            <button
+              key={i}
+              type="button"
+              style={rowStyle}
+              onClick={() => open(l.path, l.line)}
+              title={`${l.path}:${l.line}`}
+            >
               <span
                 style={{
                   ...mutedStyle,

@@ -9,7 +9,15 @@ afterEach(cleanup);
 function panel(key: string) {
   const onOpenFile = vi.fn();
   render(
-    <GitPanel ws="shop" projects={[{ key, init_status: "initialized" } as ProjectView]} project={key} setProject={() => {}} selected={null} onOpenFile={onOpenFile} onAddProject={() => {}} />,
+    <GitPanel
+      ws="shop"
+      projects={[{ key, init_status: "initialized" } as ProjectView]}
+      project={key}
+      setProject={() => {}}
+      selected={null}
+      onOpenFile={onOpenFile}
+      onAddProject={() => {}}
+    />,
   );
   return onOpenFile;
 }

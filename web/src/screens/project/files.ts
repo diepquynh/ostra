@@ -80,7 +80,10 @@ export type SortKey = "name" | "kind" | "size" | "modified";
 export type Sort = { key: SortKey; dir: 1 | -1 };
 
 /** Folders first, then by the sort key; ties fall back to the name so the order is stable. */
-export function sortEntries<T extends Pick<ProjectTreeEntry, "is_dir" | "is_symlink" | "name" | "size" | "modified">>(entries: T[], sort: Sort): T[] {
+export function sortEntries<T extends Pick<ProjectTreeEntry, "is_dir" | "is_symlink" | "name" | "size" | "modified">>(
+  entries: T[],
+  sort: Sort,
+): T[] {
   const byName = (a: T, b: T) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
   const cmp = (a: T, b: T): number => {
     switch (sort.key) {
@@ -101,7 +104,8 @@ export function sortEntries<T extends Pick<ProjectTreeEntry, "is_dir" | "is_syml
 }
 
 /** The next sort after clicking a column header: the same column flips, a new one starts ascending. */
-export const toggleSort = (s: Sort, key: SortKey): Sort => (s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: 1 });
+export const toggleSort = (s: Sort, key: SortKey): Sort =>
+  s.key === key ? { key, dir: s.dir === 1 ? -1 : 1 } : { key, dir: 1 };
 
 /** Every ancestor folder of a project-relative path, outermost first. */
 export function parentsOf(path: string): string[] {

@@ -1,6 +1,6 @@
-import type { DiffLine, PolicyInfo, SelectOption } from "../../design";
 import type { ExecutionStatus, ExecutionView, PolicyDecision, SessionDetail, ToolCall } from "../../api/types";
-import { denialAdvice, type ActivityEntry, type ToolEntry } from "../../lib/events";
+import type { DiffLine, PolicyInfo, SelectOption } from "../../design";
+import { type ActivityEntry, denialAdvice, type ToolEntry } from "../../lib/events";
 
 /**
  * How the Terminal stream shows a harness run: `live` while a PTY exists or the run is still going (keys and
@@ -9,13 +9,19 @@ import { denialAdvice, type ActivityEntry, type ToolEntry } from "../../lib/even
  */
 export type TerminalMode = "live" | "replay" | "none";
 
-export function terminalMode(e: Pick<ExecutionView, "has_terminal" | "has_transcript">, status: ExecutionStatus): TerminalMode {
+export function terminalMode(
+  e: Pick<ExecutionView, "has_terminal" | "has_transcript">,
+  status: ExecutionStatus,
+): TerminalMode {
   if (e.has_terminal || status === "running") return "live";
   return e.has_transcript ? "replay" : "none";
 }
 
 /** The other runs of this execution's group (same agent and project in the session), oldest first. */
-export function siblingRuns(detail: SessionDetail | null, e: Pick<ExecutionView, "id" | "group" | "run_label">): SelectOption[] {
+export function siblingRuns(
+  detail: SessionDetail | null,
+  e: Pick<ExecutionView, "id" | "group" | "run_label">,
+): SelectOption[] {
   const group = detail?.execution_groups.find((g) => g.group === e.group);
   if (!group) return [{ value: e.id, label: e.run_label }];
   const labels = new Map(detail!.executions.map((x) => [x.id, x.run_label]));
@@ -31,13 +37,20 @@ export function pendingAsk(entries: ActivityEntry[]): ToolEntry | null {
   return null;
 }
 
-export const toolEntries = (entries: ActivityEntry[]): ToolEntry[] => entries.filter((e): e is ToolEntry => e.kind === "tool");
+export const toolEntries = (entries: ActivityEntry[]): ToolEntry[] =>
+  entries.filter((e): e is ToolEntry => e.kind === "tool");
 
 /** The design's ToolCall policy line for a decision. An allow with no rule is the default and shows nothing. */
 export function policyInfo(p: PolicyDecision | null): PolicyInfo | undefined {
   if (!p) return undefined;
   if (p.decision === "allow") return p.rule ? { decision: "allow", layer: p.rule.layer, rule: p.rule.rule } : undefined;
-  return { decision: p.decision, layer: p.rule.layer, rule: p.rule.rule, reason: p.reason, advice: denialAdvice(p) ?? undefined };
+  return {
+    decision: p.decision,
+    layer: p.rule.layer,
+    rule: p.rule.rule,
+    reason: p.reason,
+    advice: denialAdvice(p) ?? undefined,
+  };
 }
 
 const str = (input: unknown, key: string): string | null => {

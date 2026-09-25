@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import {
   Banner,
   Breadcrumbs,
@@ -11,15 +11,20 @@ import {
   Dialog,
   DiffView,
   ExecutionGroup,
+  type FolderLister,
   FolderPicker,
+  type FsEntry,
   GateCard,
+  ICON_NAMES,
   Icon,
   IconButton,
-  ICON_NAMES,
+  type IconName,
   Input,
   Kbd,
+  type LaneId,
   LaneStepper,
   Menu,
+  type PaletteItem,
   Panel,
   PhaseDag,
   SectionLabel,
@@ -33,15 +38,10 @@ import {
   Table,
   Tabs,
   Terminal,
+  type TerminalLine,
   ToolCall,
   TreeItem,
   TreeSection,
-  type FolderLister,
-  type FsEntry,
-  type IconName,
-  type LaneId,
-  type PaletteItem,
-  type TerminalLine,
 } from "./index";
 
 const GALLERY_CSS = `
@@ -56,7 +56,17 @@ const GALLERY_CSS = `
 .gx-l{font:var(--type-label);letter-spacing:var(--tracking-label);text-transform:uppercase;color:var(--text-muted);width:72px;flex:none}
 `;
 
-function Card({ name, subtitle, width = 700, children }: { name: string; subtitle: string; width?: number; children: ReactNode }) {
+function Card({
+  name,
+  subtitle,
+  width = 700,
+  children,
+}: {
+  name: string;
+  subtitle: string;
+  width?: number;
+  children: ReactNode;
+}) {
   return (
     <section className="gx-card">
       <div className="gx-card__head">
@@ -71,7 +81,24 @@ function Card({ name, subtitle, width = 700, children }: { name: string; subtitl
 }
 
 function CoreCard() {
-  const glyphs: IconName[] = ["folder", "file-text", "git-pull-request", "terminal", "square-terminal", "shield-alert", "circle-check", "circle-alert", "brain", "coins", "message-square", "settings", "play", "square", "list-checks", "file-diff"];
+  const glyphs: IconName[] = [
+    "folder",
+    "file-text",
+    "git-pull-request",
+    "terminal",
+    "square-terminal",
+    "shield-alert",
+    "circle-check",
+    "circle-alert",
+    "brain",
+    "coins",
+    "message-square",
+    "settings",
+    "play",
+    "square",
+    "list-checks",
+    "file-diff",
+  ];
   return (
     <Card name="Core" subtitle="Button, IconButton, Kbd, Icon">
       <div className="gx-c">
@@ -120,11 +147,27 @@ function CoreCard() {
 function IconsCard() {
   return (
     <Card name="Icon map" subtitle={`Every mapped Lucide name (${ICON_NAMES.length})`} width={900}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8, color: "var(--text-secondary)" }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+          gap: 8,
+          color: "var(--text-secondary)",
+        }}
+      >
         {ICON_NAMES.map((n) => (
           <div key={n} style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
             <Icon name={n} />
-            <span style={{ font: "var(--text-2xs)/1.2 var(--font-mono)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis" }}>{n}</span>
+            <span
+              style={{
+                font: "var(--text-2xs)/1.2 var(--font-mono)",
+                color: "var(--text-muted)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {n}
+            </span>
           </div>
         ))}
       </div>
@@ -173,10 +216,19 @@ function FormsCard() {
           <div className="gx-c">
             <Input icon="search" placeholder="Search lessons" />
             <Input label="Project key" mono defaultValue="shop-backend" hint="Lowercase letters, digits and dashes." />
-            <Input label="Allow rule" mono defaultValue="Bash(rm -rf *)" error="Deny beats allow: this pattern is already denied globally." />
+            <Input
+              label="Allow rule"
+              mono
+              defaultValue="Bash(rm -rf *)"
+              error="Deny beats allow: this pattern is already denied globally."
+            />
           </div>
           <div className="gx-c">
-            <Input multiline rows={2} placeholder="Add order cancellation: customers can cancel until the order ships." />
+            <Input
+              multiline
+              rows={2}
+              placeholder="Add order cancellation: customers can cancel until the order ships."
+            />
             <div className="gx-r">
               <Select size="sm" mono options={["native", "harness:claude", "harness:codex"]} />
               <Select size="sm" options={["fast", "balanced", "advanced", "frontier"]} defaultValue="advanced" />
@@ -187,12 +239,36 @@ function FormsCard() {
               <Switch label="YOLO" tone="warn" checked={yolo} onChange={(e) => setYolo(e.target.checked)} />
               <Switch label="Push" />
             </div>
-            <Checkbox radio name="q" checked={answer === "soft"} onChange={() => setAnswer("soft")} label="Soft delete" description="Keep the row and set cancelled_at. Recommended." />
-            <Checkbox radio name="q" checked={answer === "hard"} onChange={() => setAnswer("hard")} label="Hard delete" description="Remove the row." />
+            <Checkbox
+              radio
+              name="q"
+              checked={answer === "soft"}
+              onChange={() => setAnswer("soft")}
+              label="Soft delete"
+              description="Keep the row and set cancelled_at. Recommended."
+            />
+            <Checkbox
+              radio
+              name="q"
+              checked={answer === "hard"}
+              onChange={() => setAnswer("hard")}
+              label="Hard delete"
+              description="Remove the row."
+            />
           </div>
         </div>
         <SectionLabel>Controlled browsing (the design card)</SectionLabel>
-        <FolderPicker value={v} onChange={setV} browsePath={browse} parent={parentOf(browse)} home="/home/me" onBrowse={setBrowse} height={150} entries={FS[browse] ?? []} missing={!FS[browse]} />
+        <FolderPicker
+          value={v}
+          onChange={setV}
+          browsePath={browse}
+          parent={parentOf(browse)}
+          home="/home/me"
+          onBrowse={setBrowse}
+          height={150}
+          entries={FS[browse] ?? []}
+          missing={!FS[browse]}
+        />
         <SectionLabel>With a list function (type ~/co, Tab, sh, Tab)</SectionLabel>
         <FolderPicker value={live} onChange={setLive} list={fakeList} height={150} />
       </div>
@@ -281,7 +357,12 @@ function FeedbackCard() {
             </>
           }
         >
-          <Input label="Project key" mono defaultValue="shop-admin" hint="Names the project in every stage and session folder." />
+          <Input
+            label="Project key"
+            mono
+            defaultValue="shop-admin"
+            hint="Names the project in every stage and session folder."
+          />
         </Dialog>
       </div>
     </Card>
@@ -291,7 +372,13 @@ function FeedbackCard() {
 const PALETTE: PaletteItem[] = [
   { id: "s1", group: "Sessions", icon: "git-pull-request", label: "Add order cancellation", hint: "waiting" },
   { id: "s2", group: "Sessions", icon: "git-pull-request", label: "Refund webhook retries", hint: "completed" },
-  { id: "x1", group: "Executions", icon: "square-terminal", label: "Implementer · Phase 2 in backend", hint: "harness:codex" },
+  {
+    id: "x1",
+    group: "Executions",
+    icon: "square-terminal",
+    label: "Implementer · Phase 2 in backend",
+    hint: "harness:codex",
+  },
   { id: "x2", group: "Executions", icon: "activity", label: "Explore · Research in backend", hint: "native" },
   { id: "a1", group: "Artifacts", icon: "file-text", label: "Order cancellation spec", hint: "spec.md" },
   { id: "w1", group: "Workspace", icon: "coins", label: "Cost" },
@@ -317,7 +404,16 @@ function NavigationCard() {
   return (
     <Card name="Navigation" subtitle="Tabs, TreeItem, Breadcrumbs, Menu, Stepper, CommandPalette">
       <div style={{ display: "grid", gridTemplateColumns: "230px 1fr", gap: 16 }}>
-        <div role="tree" aria-label="Sessions" style={{ background: "var(--surface-panel)", border: "1px solid var(--border-default)", borderRadius: 6, padding: 4 }}>
+        <div
+          role="tree"
+          aria-label="Sessions"
+          style={{
+            background: "var(--surface-panel)",
+            border: "1px solid var(--border-default)",
+            borderRadius: 6,
+            padding: 4,
+          }}
+        >
           <TreeSection label="Sessions" actions={<IconButton size="sm" icon="plus" label="New task" />}>
             <TreeItem
               label="Add order cancellation"
@@ -330,8 +426,21 @@ function NavigationCard() {
             />
             {expanded.s1 && (
               <>
-                <TreeItem depth={1} icon="file-text" label="spec.md" selected={sel === "spec"} onClick={() => setSel("spec")} />
-                <TreeItem depth={1} icon="square-terminal" label="Implementer · phase 2" meta="run" selected={sel === "impl"} onClick={() => setSel("impl")} />
+                <TreeItem
+                  depth={1}
+                  icon="file-text"
+                  label="spec.md"
+                  selected={sel === "spec"}
+                  onClick={() => setSel("spec")}
+                />
+                <TreeItem
+                  depth={1}
+                  icon="square-terminal"
+                  label="Implementer · phase 2"
+                  meta="run"
+                  selected={sel === "impl"}
+                  onClick={() => setSel("impl")}
+                />
               </>
             )}
             <TreeItem
@@ -345,8 +454,21 @@ function NavigationCard() {
           </TreeSection>
         </div>
         <div className="gx-c">
-          <Tabs variant="bar" value={t} onChange={setT} onClose={(id) => setBar((b) => b.filter((x) => x.id !== id))} tabs={bar} />
-          <Breadcrumbs items={[{ label: "shop", icon: "box" }, { label: "Order cancellation" }, { label: "Implementer · phase 2" }]} onNavigate={() => {}} />
+          <Tabs
+            variant="bar"
+            value={t}
+            onChange={setT}
+            onClose={(id) => setBar((b) => b.filter((x) => x.id !== id))}
+            tabs={bar}
+          />
+          <Breadcrumbs
+            items={[
+              { label: "shop", icon: "box" },
+              { label: "Order cancellation" },
+              { label: "Implementer · phase 2" },
+            ]}
+            onNavigate={() => {}}
+          />
           <Tabs
             value={u}
             onChange={setU}
@@ -386,7 +508,11 @@ function NavigationCard() {
               { id: "d", icon: "folder-plus", label: "Add project to shop…" },
             ]}
           />
-          {!menu && <div style={{ marginTop: 8, fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Click the trigger to open the menu.</div>}
+          {!menu && (
+            <div style={{ marginTop: 8, fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+              Click the trigger to open the menu.
+            </div>
+          )}
         </div>
         <div className="gx-c" style={{ paddingTop: 4 }}>
           <Stepper
@@ -399,7 +525,17 @@ function NavigationCard() {
               { label: "Defaults" },
             ]}
           />
-          <Stepper orientation="horizontal" current={1} steps={[{ label: "Detect" }, { label: "Scout" }, { label: "Propose" }, { label: "Approve" }, { label: "Generate" }]} />
+          <Stepper
+            orientation="horizontal"
+            current={1}
+            steps={[
+              { label: "Detect" },
+              { label: "Scout" },
+              { label: "Propose" },
+              { label: "Approve" },
+              { label: "Generate" },
+            ]}
+          />
           <div className="gx-r">
             <Button size="sm" icon="search" kbd="⌘K" onClick={() => setPalette(true)}>
               Go to anything
@@ -408,7 +544,12 @@ function NavigationCard() {
           </div>
         </div>
       </div>
-      <CommandPalette open={palette} items={PALETTE} onClose={() => setPalette(false)} onSelect={(it) => setPicked(it.label)} />
+      <CommandPalette
+        open={palette}
+        items={PALETTE}
+        onClose={() => setPalette(false)}
+        onSelect={(it) => setPicked(it.label)}
+      />
     </Card>
   );
 }
@@ -461,7 +602,15 @@ function DataCard() {
             columns={[
               { key: "agent", label: "Agent" },
               { key: "project", label: "Project" },
-              { key: "executor", label: "Executor", render: (r) => <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)" }}>{r.executor}</span> },
+              {
+                key: "executor",
+                label: "Executor",
+                render: (r) => (
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-secondary)" }}>
+                    {r.executor}
+                  </span>
+                ),
+              },
               { key: "status", label: "Status", render: (r) => <StatusChip kind="execution" status={r.status} /> },
               { key: "cost", label: "Cost", num: true },
             ]}
@@ -481,7 +630,10 @@ function DataCard() {
         </div>
         <Table columns={[{ key: "a", label: "Lesson" }]} rows={[]} empty="No lessons yet." />
         <CodeView language="rs" startLine={23} highlight={[25]} added={[26, 27, 28, 29]} code={SRC} />
-        <CodeView language="toml" code={'[project]\nkey = "shop-backend" # the project key\nstack = "rust-axum"\nmax = 3'} />
+        <CodeView
+          language="toml"
+          code={'[project]\nkey = "shop-backend" # the project key\nstack = "rust-axum"\nmax = 3'}
+        />
       </div>
     </Card>
   );
@@ -499,13 +651,21 @@ function PipelineCard() {
     ["warn", "  ⏸ Waiting for approval in Ostra"],
   ]);
   return (
-    <Card name="Pipeline" subtitle="LaneStepper, StageRow, PhaseDag, ToolCall, GateCard, Decision, ExecutionGroup, Terminal" width={900}>
+    <Card
+      name="Pipeline"
+      subtitle="LaneStepper, StageRow, PhaseDag, ToolCall, GateCard, Decision, ExecutionGroup, Terminal"
+      width={900}
+    >
       <div className="gx-c">
         <LaneStepper
           selected={l}
           onSelect={setL}
           lanes={{
-            research: { status: "done", detail: "2 docs", why: "Research gathers context before anything is specified." },
+            research: {
+              status: "done",
+              detail: "2 docs",
+              why: "Research gathers context before anything is specified.",
+            },
             requirements: { status: "done", detail: "6 reqs" },
             verification: { status: "done", detail: "PASS" },
             design: { status: "done", detail: "4 phases" },
@@ -522,8 +682,28 @@ function PipelineCard() {
               selected={phase}
               onOpen={(p) => setPhase(p.id)}
               layers={[
-                [{ id: 1, title: "Cancellation model", project: "backend", complexity: "low", testPolicy: "Required", status: "passed" }],
-                [{ id: 2, title: "Cancel endpoint", project: "backend", complexity: "medium", testPolicy: "Required", status: "reviewing", reviewPass: 2, dependsOn: [1] }],
+                [
+                  {
+                    id: 1,
+                    title: "Cancellation model",
+                    project: "backend",
+                    complexity: "low",
+                    testPolicy: "Required",
+                    status: "passed",
+                  },
+                ],
+                [
+                  {
+                    id: 2,
+                    title: "Cancel endpoint",
+                    project: "backend",
+                    complexity: "medium",
+                    testPolicy: "Required",
+                    status: "reviewing",
+                    reviewPass: 2,
+                    dependsOn: [1],
+                  },
+                ],
               ]}
             />
             <ToolCall tool="Edit" summary="src/orders/service.rs" duration="0.2s" defaultOpen>
@@ -538,17 +718,50 @@ function PipelineCard() {
             <ToolCall
               tool="Write"
               summary="tests/cancel_test.rs"
-              policy={{ decision: "deny", layer: "guard", rule: "no-tests-from-implementer", reason: "The implementer may not write test paths.", advice: "Leave tests to the write-test stage." }}
+              policy={{
+                decision: "deny",
+                layer: "guard",
+                rule: "no-tests-from-implementer",
+                reason: "The implementer may not write test paths.",
+                advice: "Leave tests to the write-test stage.",
+              }}
             />
-            <ToolCall tool="Bash" summary="sqlx migrate run" state="running" policy={{ decision: "ask", layer: "permission", rule: "Bash(*)" }} />
-            <ToolCall tool="Read" summary="src/orders/model.rs" duration="0.1s" policy={{ decision: "allow", layer: "permission", rule: "Read(**)" }}>
+            <ToolCall
+              tool="Bash"
+              summary="sqlx migrate run"
+              state="running"
+              policy={{ decision: "ask", layer: "permission", rule: "Bash(*)" }}
+            />
+            <ToolCall
+              tool="Read"
+              summary="src/orders/model.rs"
+              duration="0.1s"
+              policy={{ decision: "allow", layer: "permission", rule: "Read(**)" }}
+            >
               <pre>pub struct Order {"{ … }"}</pre>
             </ToolCall>
             <ToolCall tool="Grep" summary="cancelled_at" state="error" duration="0.3s" />
             <Panel bodyFlush>
-              <StageRow label="Fact-check the spec" status="done" meta="PASS · 2 passes" selected={stage === "fc"} onClick={() => setStage("fc")} />
-              <StageRow label="Implement phase 2" status="running" selected={stage === "im"} onClick={() => setStage("im")} />
-              <StageRow label="Review phase 2" status="waiting" meta="Waiting for you" selected={stage === "rv"} onClick={() => setStage("rv")} />
+              <StageRow
+                label="Fact-check the spec"
+                status="done"
+                meta="PASS · 2 passes"
+                selected={stage === "fc"}
+                onClick={() => setStage("fc")}
+              />
+              <StageRow
+                label="Implement phase 2"
+                status="running"
+                selected={stage === "im"}
+                onClick={() => setStage("im")}
+              />
+              <StageRow
+                label="Review phase 2"
+                status="waiting"
+                meta="Waiting for you"
+                selected={stage === "rv"}
+                onClick={() => setStage("rv")}
+              />
               <StageRow label="Write docs" status="skipped" meta="Not asked" />
               <StageRow label="Run tests" status="pending" />
             </Panel>
@@ -572,7 +785,14 @@ function PipelineCard() {
             >
               <pre>$ sqlx migrate run</pre>
             </GateCard>
-            <GateCard kind="spec_approval" title="Approve the spec" answered answeredBy="yolo" answer="Approved" reason="Fact-check PASS, no open questions." />
+            <GateCard
+              kind="spec_approval"
+              title="Approve the spec"
+              answered
+              answeredBy="yolo"
+              answer="Approved"
+              reason="Fact-check PASS, no open questions."
+            />
             <Panel bodyFlush>
               <ExecutionGroup
                 agent="Implementer"
@@ -585,7 +805,13 @@ function PipelineCard() {
                   { id: "c", label: "Phase 2", status: "running", executor: "harness:codex", cost: "$0.41" },
                 ]}
               />
-              <ExecutionGroup agent="Implementer" project="web" selected={run} onOpen={(r) => setRun(r.id)} runs={[{ id: "d", label: "Phase 3", status: "running", executor: "native", cost: "$0.07" }]} />
+              <ExecutionGroup
+                agent="Implementer"
+                project="web"
+                selected={run}
+                onOpen={(r) => setRun(r.id)}
+                runs={[{ id: "d", label: "Phase 3", status: "running", executor: "native", cost: "$0.07" }]}
+              />
             </Panel>
             <Terminal
               height={180}
@@ -597,14 +823,40 @@ function PipelineCard() {
               lines={lines}
             />
             <Terminal height={120} title="claude · claude-sonnet-5" meta="xterm.js slot">
-              <div style={{ flex: 1, minHeight: 0, display: "grid", placeItems: "center", color: "var(--term-muted)", border: "1px dashed var(--term-border)" }}>
+              <div
+                style={{
+                  flex: 1,
+                  minHeight: 0,
+                  display: "grid",
+                  placeItems: "center",
+                  color: "var(--term-muted)",
+                  border: "1px dashed var(--term-border)",
+                }}
+              >
                 The live xterm.js host renders here.
               </div>
             </Terminal>
             <Panel bodyFlush>
-              <Decision judge="Stakes" choice="medium" reason="the change touches the order state machine and adds one migration." basis="spec.md, 6 requirements" at="14:02" />
-              <Decision judge="Classify" choice="feature" reason="the request adds a new endpoint." overridden at="13:58" />
-              <Decision judge="Route answer" choice="the spec agent" reason="the answer changes a requirement." canOverride={false} />
+              <Decision
+                judge="Stakes"
+                choice="medium"
+                reason="the change touches the order state machine and adds one migration."
+                basis="spec.md, 6 requirements"
+                at="14:02"
+              />
+              <Decision
+                judge="Classify"
+                choice="feature"
+                reason="the request adds a new endpoint."
+                overridden
+                at="13:58"
+              />
+              <Decision
+                judge="Route answer"
+                choice="the spec agent"
+                reason="the answer changes a requirement."
+                canOverride={false}
+              />
             </Panel>
           </div>
         </div>
@@ -615,7 +867,9 @@ function PipelineCard() {
 
 /** Dev-only gallery of every design-system component in its variants, translated from the design's cards. */
 export default function Gallery() {
-  const [theme, setTheme] = useState<"dark" | "light">(() => (document.documentElement.dataset.theme === "light" ? "light" : "dark"));
+  const [theme, setTheme] = useState<"dark" | "light">(() =>
+    document.documentElement.dataset.theme === "light" ? "light" : "dark",
+  );
   useEffect(() => {
     const root = document.documentElement;
     if (theme === "light") root.dataset.theme = "light";

@@ -52,14 +52,30 @@ const KIND_ICON: Record<GateKind, IconName> = {
 };
 
 /** Shell for every gate: header, explanation, then either the answer form (children) or the recorded answer. */
-export function GateCard({ kind, title, explanation, answered, answeredBy, answer, reason, actions, children }: GateCardProps) {
+export function GateCard({
+  kind,
+  title,
+  explanation,
+  answered,
+  answeredBy,
+  answer,
+  reason,
+  actions,
+  children,
+}: GateCardProps) {
   return (
     <section className={`os-gate ${answered ? "" : "os-gate--open"}`} aria-label={title}>
       <header className="os-gate__head">
-        <Icon name={KIND_ICON[kind as GateKind] ?? "circle-pause"} size={16} style={{ color: answered ? "var(--text-muted)" : "var(--warn)" }} />
+        <Icon
+          name={KIND_ICON[kind as GateKind] ?? "circle-pause"}
+          size={16}
+          style={{ color: answered ? "var(--text-muted)" : "var(--warn)" }}
+        />
         <span className="os-gate__title">{title}</span>
         {answered ? (
-          <Chip tone={answeredBy === "yolo" ? "warn" : "ok"}>Answered by {answeredBy === "yolo" ? "Ostra (YOLO)" : "you"}</Chip>
+          <Chip tone={answeredBy === "yolo" ? "warn" : "ok"}>
+            Answered by {answeredBy === "yolo" ? "Ostra (YOLO)" : "you"}
+          </Chip>
         ) : (
           <Chip tone="warn">Waiting for you</Chip>
         )}

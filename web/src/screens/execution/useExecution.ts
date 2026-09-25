@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, socket } from "../../api";
 import type { ExecutionDelta, ExecutionStatus } from "../../api/types";
-import { applyDelta, emptyActivity, foldActivity, type ActivityState } from "../../lib/events";
+import { type ActivityState, applyDelta, emptyActivity, foldActivity } from "../../lib/events";
 import { useAsync, useChannel, useThrottled } from "../../lib/hooks";
 
 /**
@@ -34,7 +34,10 @@ export function useActivity(id: string, onStatus: (s: ExecutionStatus) => void) 
       (e: Error) => alive && setError(e),
     );
     const off = socket().onReconnect(() => {
-      api.activity(id, lastSeq.current).then((items) => alive && setState((s) => foldActivity(items, s)), () => {});
+      api.activity(id, lastSeq.current).then(
+        (items) => alive && setState((s) => foldActivity(items, s)),
+        () => {},
+      );
     });
     return () => {
       alive = false;

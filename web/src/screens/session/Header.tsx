@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { api } from "../../api";
 import type { SessionSummary } from "../../api/types";
-import { Button, Chip, Dialog, IconButton, Input, StatusChip, Switch } from "../../design";
 import { LANES } from "../../content/stages";
+import { Button, Chip, Dialog, IconButton, Input, StatusChip, Switch } from "../../design";
 import { formatCost, humanize } from "../../lib/format";
 import { startedLabel } from "./board";
 
@@ -25,11 +25,27 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
         <div style={{ flex: "1 1 420px", minWidth: 0 }}>
           <h1 style={{ margin: "0 0 6px", font: "var(--type-title)", textWrap: "pretty" }}>{s.title ?? "Untitled"}</h1>
           {s.request && (
-            <p style={{ margin: "0 0 12px", fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: "var(--leading-normal)" }}>
+            <p
+              style={{
+                margin: "0 0 12px",
+                fontSize: "var(--text-sm)",
+                color: "var(--text-secondary)",
+                lineHeight: "var(--leading-normal)",
+              }}
+            >
               {s.request}
             </p>
           )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 6,
+              alignItems: "center",
+              fontSize: "var(--text-sm)",
+              color: "var(--text-muted)",
+            }}
+          >
             {category && <Chip tone={s.kind.kind === "init" ? "info" : "neutral"}>{category}</Chip>}
             <StatusChip status={s.status} />
             <Chip tone="accent">
@@ -58,7 +74,15 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
               Change the request
             </Button>
           )}
-          {!ended(s) && <IconButton size="sm" variant="default" icon="square" label="Stop the session" onClick={() => setDialog("stop")} />}
+          {!ended(s) && (
+            <IconButton
+              size="sm"
+              variant="default"
+              icon="square"
+              label="Stop the session"
+              onClick={() => setDialog("stop")}
+            />
+          )}
         </div>
       </div>
       {yoloError && <div className="os-field__error">{yoloError}</div>}
@@ -86,7 +110,15 @@ export function SessionHeader({ summary: s, onSummary, onChanged }: Props) {
   );
 }
 
-function AmendDialog({ id, onClose, onDone }: { id: string; onClose: () => void; onDone: (s: SessionSummary) => void }) {
+function AmendDialog({
+  id,
+  onClose,
+  onDone,
+}: {
+  id: string;
+  onClose: () => void;
+  onDone: (s: SessionSummary) => void;
+}) {
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -118,11 +150,25 @@ function AmendDialog({ id, onClose, onDone }: { id: string; onClose: () => void;
       }
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--text-secondary)", lineHeight: "var(--leading-normal)" }}>
-          A requirement change goes through research for the new part, then the spec is rewritten and approved again. If a plan exists, a new plan is
-          written from the updated spec.
+        <p
+          style={{
+            margin: 0,
+            fontSize: "var(--text-sm)",
+            color: "var(--text-secondary)",
+            lineHeight: "var(--leading-normal)",
+          }}
+        >
+          A requirement change goes through research for the new part, then the spec is rewritten and approved again. If
+          a plan exists, a new plan is written from the updated spec.
         </p>
-        <Input multiline rows={4} label="What changes" value={text} error={error} onChange={(e) => setText(e.target.value)} />
+        <Input
+          multiline
+          rows={4}
+          label="What changes"
+          value={text}
+          error={error}
+          onChange={(e) => setText(e.target.value)}
+        />
       </div>
     </Dialog>
   );
@@ -158,8 +204,8 @@ function StopDialog({ id, onClose, onDone }: { id: string; onClose: () => void; 
       }
     >
       <p style={{ margin: 0, lineHeight: "var(--leading-normal)" }}>
-        Ostra cancels every running execution, denies any waiting permission ask, and marks the session failed. Files the agents already wrote stay
-        in the project.
+        Ostra cancels every running execution, denies any waiting permission ask, and marks the session failed. Files
+        the agents already wrote stay in the project.
       </p>
       {error && <div className="os-field__error">{error}</div>}
     </Dialog>

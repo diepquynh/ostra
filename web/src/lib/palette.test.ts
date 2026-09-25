@@ -39,7 +39,15 @@ describe("palette", () => {
       "Ask a quick question",
       "Toggle light and dark theme",
     ]);
-    expect(commands.map((c) => c.id)).toEqual(["ws:overview", "cmd:new-workspace", "cmd:add-project", "ws:cost", "ws:settings", "cmd:dock", "cmd:theme"]);
+    expect(commands.map((c) => c.id)).toEqual([
+      "ws:overview",
+      "cmd:new-workspace",
+      "cmd:add-project",
+      "ws:cost",
+      "ws:settings",
+      "cmd:dock",
+      "cmd:theme",
+    ]);
   });
 
   it("builds local rows for sessions, executions, artifacts and projects", () => {
@@ -65,13 +73,25 @@ describe("palette", () => {
 
   it("puts server hits first, grouped in a fixed order and by score, then matching commands", () => {
     const hits: SearchHit[] = [
-      { kind: "setting", id: "setting:limits.session_budget_usd", label: "limits.session_budget_usd", hint: null, score: 0.9 },
+      {
+        kind: "setting",
+        id: "setting:limits.session_budget_usd",
+        label: "limits.session_budget_usd",
+        hint: null,
+        score: 0.9,
+      },
       { kind: "file", id: "file:backend:src/cost.rs", label: "src/cost.rs", hint: "backend", score: 0.5 },
       { kind: "session", id: "session:s2", label: "Cost report", hint: "completed", score: 0.2 },
       { kind: "file", id: "file:backend:cost.md", label: "cost.md", hint: "backend", score: 0.8 },
     ];
     const rows = mergePalette("cost", hits, local, commands);
-    expect(rows.map((r) => r.id)).toEqual(["session:s2", "file:backend:cost.md", "file:backend:src/cost.rs", "setting:limits.session_budget_usd", "ws:cost"]);
+    expect(rows.map((r) => r.id)).toEqual([
+      "session:s2",
+      "file:backend:cost.md",
+      "file:backend:src/cost.rs",
+      "setting:limits.session_budget_usd",
+      "ws:cost",
+    ]);
     expect(rows.map((r) => r.group)).toEqual(["Sessions", "Files", "Files", "Settings", "Workspace"]);
   });
 
@@ -81,7 +101,9 @@ describe("palette", () => {
   });
 
   it("maps hit kinds to groups and icons", () => {
-    expect(hitToItem({ kind: "lesson", id: "lesson:backend:3", label: "Use the state machine", hint: "orders", score: 1 })).toEqual({
+    expect(
+      hitToItem({ kind: "lesson", id: "lesson:backend:3", label: "Use the state machine", hint: "orders", score: 1 }),
+    ).toEqual({
       id: "lesson:backend:3",
       group: "Lessons",
       icon: "brain",
@@ -93,7 +115,11 @@ describe("palette", () => {
   it("routes a selection to a command or a resource", () => {
     expect(paletteTarget("cmd:theme")).toEqual({ kind: "command", command: "theme" });
     expect(paletteTarget("lesson:backend:3")).toEqual({ kind: "open", id: "ws:memory", anchor: "lesson:backend:3" });
-    expect(paletteTarget("setting:yolo.default")).toEqual({ kind: "open", id: "ws:settings", anchor: "setting:yolo.default" });
+    expect(paletteTarget("setting:yolo.default")).toEqual({
+      kind: "open",
+      id: "ws:settings",
+      anchor: "setting:yolo.default",
+    });
     expect(paletteTarget("file:web:src/a.ts")).toEqual({ kind: "open", id: "file:web:src/a.ts" });
   });
 });

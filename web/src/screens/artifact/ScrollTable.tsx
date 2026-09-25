@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 /**
  * A report table that scrolls sideways. Its scrollbar is a sticky copy pinned to the bottom of the
@@ -44,7 +44,13 @@ export function ScrollTable({ children }: { children: ReactNode }) {
       <div className="art-table" ref={box} onScroll={() => sync(box.current, bar.current)}>
         {children}
       </div>
-      <div className="art-hscroll" ref={bar} hidden={!overflows} aria-hidden="true" onScroll={() => sync(bar.current, box.current)}>
+      <div
+        className="art-hscroll"
+        ref={bar}
+        hidden={!overflows}
+        aria-hidden="true"
+        onScroll={() => sync(bar.current, box.current)}
+      >
         <div style={{ width, height: 1 }} />
       </div>
     </div>

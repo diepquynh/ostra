@@ -21,7 +21,18 @@ export interface PanelProps {
 }
 
 /** Bordered container with an optional 36px header; the only card shape. */
-export function Panel({ title, subtitle, icon, actions, tone, flush, bodyFlush, children, style, className = "" }: PanelProps) {
+export function Panel({
+  title,
+  subtitle,
+  icon,
+  actions,
+  tone,
+  flush,
+  bodyFlush,
+  children,
+  style,
+  className = "",
+}: PanelProps) {
   const cls = cx("os-panel", tone && `os-panel--${tone}`, flush && "os-panel--flush", className);
   return (
     <section className={cls} style={style}>

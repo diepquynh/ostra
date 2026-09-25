@@ -30,19 +30,31 @@ export function CloneForm({ takenKeys, stacks, root, credentials, serverErrors, 
   const kErr = key || keyEdit !== null ? keyError(key, takenKeys) : null;
   const dest = path.trim().replace(/(.)\/+$/, "$1") || `${root.replace(/\/+$/, "")}/${key || "<key>"}`;
 
-  const emit = (next: Partial<{ url: string; key: string; branch: string; credential: string; path: string; stack: string }>) => {
+  const emit = (
+    next: Partial<{ url: string; key: string; branch: string; credential: string; path: string; stack: string }>,
+  ) => {
     const v = { url, key, branch, credential, path, stack, ...next };
     const ok = v.url.trim() !== "" && v.key !== "" && !keyError(v.key, takenKeys);
     onDraft(
       ok
-        ? { url: v.url.trim(), key: v.key, branch: v.branch.trim() || undefined, credential: v.credential || undefined, path: v.path.trim().replace(/(.)\/+$/, "$1") || undefined, stack: v.stack || undefined }
+        ? {
+            url: v.url.trim(),
+            key: v.key,
+            branch: v.branch.trim() || undefined,
+            credential: v.credential || undefined,
+            path: v.path.trim().replace(/(.)\/+$/, "$1") || undefined,
+            stack: v.stack || undefined,
+          }
         : null,
     );
   };
 
   const credOptions = [
     { value: "", label: "Match by host" },
-    ...(credentials ?? []).map((c) => ({ value: c.id, label: `${c.label} (${c.kind === "ssh" ? "SSH" : "token"}, ${c.host})` })),
+    ...(credentials ?? []).map((c) => ({
+      value: c.id,
+      label: `${c.label} (${c.kind === "ssh" ? "SSH" : "token"}, ${c.host})`,
+    })),
   ];
 
   return (
@@ -92,7 +104,10 @@ export function CloneForm({ takenKeys, stacks, root, credentials, serverErrors, 
           disabled={disabled}
           value={credential}
           options={credOptions}
-          hint={serverErrors.credential ?? "Match by host uses the saved credential for the URL's host, else this machine's own git setup."}
+          hint={
+            serverErrors.credential ??
+            "Match by host uses the saved credential for the URL's host, else this machine's own git setup."
+          }
           onChange={(e) => {
             setCredential(e.target.value);
             emit({ credential: e.target.value });
@@ -113,7 +128,10 @@ export function CloneForm({ takenKeys, stacks, root, credentials, serverErrors, 
       <div className="os-field">
         <span className="os-field__label">Folder (optional)</span>
         <span className="os-field__hint">{`The checkout goes to ${dest}. The folder must not exist yet, or be empty.`}</span>
-        <fieldset disabled={disabled} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, pointerEvents: disabled ? "none" : undefined }}>
+        <fieldset
+          disabled={disabled}
+          style={{ border: 0, padding: 0, margin: 0, minWidth: 0, pointerEvents: disabled ? "none" : undefined }}
+        >
           <FolderPicker
             value={path}
             onChange={(p) => {

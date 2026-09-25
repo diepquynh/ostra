@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { GitBranch, GitChange, GitOpResult, GitRepoStatus, ProjectView } from "../api/types";
-import { Banner, Button, Icon, IconButton, Input, Menu, Select, Spinner, TreeItem, type MenuItem } from "../design";
+import { Banner, Button, Icon, IconButton, Input, Menu, type MenuItem, Select, Spinner, TreeItem } from "../design";
 import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges } from "../lib/live";
 import { throttle } from "../lib/store";
@@ -35,7 +35,10 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
   const [message, setMessage] = useState("");
   const [branchMenu, setBranchMenu] = useState(false);
   const [newBranch, setNewBranch] = useState<string | null>(null);
-  const branches = useAsync(() => (key && branchMenu ? api.gitBranches(ws, key) : Promise.resolve([] as GitBranch[])), [ws, key, branchMenu]);
+  const branches = useAsync(
+    () => (key && branchMenu ? api.gitBranches(ws, key) : Promise.resolve([] as GitBranch[])),
+    [ws, key, branchMenu],
+  );
 
   const reload = useMemo(() => throttle(() => status.reload(), 500), [status.reload]);
   useEffect(() => reload.cancel, [reload]);
@@ -53,7 +56,16 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
 
   if (!key)
     return (
-      <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+      <div
+        style={{
+          padding: 12,
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          color: "var(--text-muted)",
+          fontSize: "var(--text-sm)",
+        }}
+      >
         This workspace has no projects yet. Add one to see its git changes.
         <div>
           <Button size="sm" icon="folder-plus" onClick={onAddProject}>
@@ -65,11 +77,20 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
 
   const st: GitRepoStatus | null = status.data;
   const locked = !!running || !!st?.busy;
-  const canCommit = !!message.trim() && !!st && (st.staged.length > 0 || st.staged_elsewhere > 0) && st.conflicted.length === 0 && !locked;
+  const canCommit =
+    !!message.trim() &&
+    !!st &&
+    (st.staged.length > 0 || st.staged_elsewhere > 0) &&
+    st.conflicted.length === 0 &&
+    !locked;
   const clean = st && !st.staged.length && !st.unstaged.length && !st.conflicted.length;
 
   /** Run one git command; a status in its answer replaces the shown one. */
-  const run = (label: string, fn: () => Promise<GitOpResult | { output: string; status?: undefined }>, done?: (out: string) => string | null) => {
+  const run = (
+    label: string,
+    fn: () => Promise<GitOpResult | { output: string; status?: undefined }>,
+    done?: (out: string) => string | null,
+  ) => {
     setRunning(label);
     setResult(null);
     fn()
@@ -90,15 +111,23 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
   const unstage = (paths: string[]) => run("unstage", () => api.gitUnstage(ws, key, paths));
   const commit = () => {
     if (!canCommit) return;
-    run("commit", () => api.gitCommit(ws, key, message), (out) => {
-      setMessage("");
-      return out.split("\n")[0] || "Committed.";
-    });
+    run(
+      "commit",
+      () => api.gitCommit(ws, key, message),
+      (out) => {
+        setMessage("");
+        return out.split("\n")[0] || "Committed.";
+      },
+    );
   };
   const checkout = (branch: string, create = false) => {
     setBranchMenu(false);
     setNewBranch(null);
-    run("checkout", () => api.gitCheckout(ws, key, { branch, create, start: null }), () => (create ? `Created and switched to ${branch}.` : `Switched to ${branch}.`));
+    run(
+      "checkout",
+      () => api.gitCheckout(ws, key, { branch, create, start: null }),
+      () => (create ? `Created and switched to ${branch}.` : `Switched to ${branch}.`),
+    );
   };
 
   const branchItems = (): MenuItem[] => {
@@ -151,20 +180,37 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
                 />
               </span>
             )}
-            <span style={{ color: mark.color, fontWeight: 600, width: 12, textAlign: "center", fontSize: "var(--text-sm)" }}>{mark.letter}</span>
+            <span
+              style={{ color: mark.color, fontWeight: 600, width: 12, textAlign: "center", fontSize: "var(--text-sm)" }}
+            >
+              {mark.letter}
+            </span>
           </span>
         }
       />
     );
   };
 
-  const section = (id: Section, title: string, list: GitChange[], action?: { icon: "plus" | "minus"; label: string; onClick: () => void }) =>
+  const section = (
+    id: Section,
+    title: string,
+    list: GitChange[],
+    action?: { icon: "plus" | "minus"; label: string; onClick: () => void },
+  ) =>
     list.length > 0 && (
       <div key={id}>
         <div className="os-tree-section">
           <span>{title}</span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            {action && <IconButton size="sm" icon={action.icon} label={action.label} disabled={locked} onClick={action.onClick} />}
+            {action && (
+              <IconButton
+                size="sm"
+                icon={action.icon}
+                label={action.label}
+                disabled={locked}
+                onClick={action.onClick}
+              />
+            )}
             <span style={{ fontFamily: "var(--font-mono)" }}>{list.length}</span>
           </span>
         </div>
@@ -177,35 +223,91 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
       <div style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 8px 6px" }}>
         <div style={{ display: "flex", gap: 4 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <Select size="sm" mono aria-label="Project" value={key} onChange={(e) => setProject(e.target.value)} options={projects.map((p) => ({ value: p.key, label: p.key }))} />
+            <Select
+              size="sm"
+              mono
+              aria-label="Project"
+              value={key}
+              onChange={(e) => setProject(e.target.value)}
+              options={projects.map((p) => ({ value: p.key, label: p.key }))}
+            />
           </div>
-          <IconButton size="sm" icon="refresh-ccw" label="Fetch from the remote" disabled={locked || !st?.is_git} onClick={() => run("fetch", () => api.gitFetch(ws, key), () => "Fetched.")} />
+          <IconButton
+            size="sm"
+            icon="refresh-ccw"
+            label="Fetch from the remote"
+            disabled={locked || !st?.is_git}
+            onClick={() =>
+              run(
+                "fetch",
+                () => api.gitFetch(ws, key),
+                () => "Fetched.",
+              )
+            }
+          />
           <IconButton
             size="sm"
             icon="arrow-down"
             label={st?.behind ? `Pull ${st.behind} commit${st.behind === 1 ? "" : "s"}` : "Pull"}
             disabled={locked || !st?.upstream}
-            onClick={() => run("pull", () => api.pullProject(ws, key), (out) => out.split("\n").pop() || "Pulled.")}
+            onClick={() =>
+              run(
+                "pull",
+                () => api.pullProject(ws, key),
+                (out) => out.split("\n").pop() || "Pulled.",
+              )
+            }
           />
           <IconButton
             size="sm"
             icon="arrow-up"
-            label={st?.upstream ? (st.ahead ? `Push ${st.ahead} commit${st.ahead === 1 ? "" : "s"}` : "Push") : "Push and set the upstream"}
+            label={
+              st?.upstream
+                ? st.ahead
+                  ? `Push ${st.ahead} commit${st.ahead === 1 ? "" : "s"}`
+                  : "Push"
+                : "Push and set the upstream"
+            }
             disabled={locked || !st?.branch}
-            onClick={() => run("push", () => api.gitPush(ws, key), () => "Pushed.")}
+            onClick={() =>
+              run(
+                "push",
+                () => api.gitPush(ws, key),
+                () => "Pushed.",
+              )
+            }
           />
         </div>
         {st?.is_git && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
             <div style={{ position: "relative", minWidth: 0, flex: "0 1 auto" }}>
-              <Button size="sm" variant="ghost" icon="git-branch" iconRight="chevron-down" disabled={locked} onClick={() => setBranchMenu((o) => !o)} title="Switch or create a branch">
-                <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis" }}>{st.branch ?? `detached at ${st.head ?? "?"}`}</span>
+              <Button
+                size="sm"
+                variant="ghost"
+                icon="git-branch"
+                iconRight="chevron-down"
+                disabled={locked}
+                onClick={() => setBranchMenu((o) => !o)}
+                title="Switch or create a branch"
+              >
+                <span style={{ fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {st.branch ?? `detached at ${st.head ?? "?"}`}
+                </span>
               </Button>
-              <Menu open={branchMenu} onClose={() => setBranchMenu(false)} items={branchItems()} label="Branches" width={280} />
+              <Menu
+                open={branchMenu}
+                onClose={() => setBranchMenu(false)}
+                items={branchItems()}
+                label="Branches"
+                width={280}
+              />
             </div>
             <span style={{ flex: 1 }} />
             {st.upstream && (
-              <span style={{ font: "var(--text-xs)/1 var(--font-mono)", color: "var(--text-muted)", whiteSpace: "nowrap" }} title={`Tracking ${st.upstream}`}>
+              <span
+                style={{ font: "var(--text-xs)/1 var(--font-mono)", color: "var(--text-muted)", whiteSpace: "nowrap" }}
+                title={`Tracking ${st.upstream}`}
+              >
                 {st.ahead > 0 && <span title={`${st.ahead} to push`}>↑{st.ahead} </span>}
                 {st.behind > 0 && <span title={`${st.behind} to pull`}>↓{st.behind} </span>}
                 {st.upstream}
@@ -248,21 +350,45 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
                 }
               }}
             />
-            <Button size="sm" variant="primary" icon={running === "commit" ? undefined : "check"} disabled={!canCommit} onClick={commit} style={{ justifyContent: "center" }}>
+            <Button
+              size="sm"
+              variant="primary"
+              icon={running === "commit" ? undefined : "check"}
+              disabled={!canCommit}
+              onClick={commit}
+              style={{ justifyContent: "center" }}
+            >
               {running === "commit" ? <Spinner size={10} /> : null}
               {st.staged.length ? `Commit ${st.staged.length} file${st.staged.length === 1 ? "" : "s"}` : "Commit"}
             </Button>
             {st.staged_elsewhere > 0 && (
-              <div style={{ fontSize: "var(--text-xs)", color: "var(--warn)", display: "flex", gap: 5, alignItems: "center" }}>
+              <div
+                style={{
+                  fontSize: "var(--text-xs)",
+                  color: "var(--warn)",
+                  display: "flex",
+                  gap: 5,
+                  alignItems: "center",
+                }}
+              >
                 <Icon name="circle-alert" size={12} />
-                {st.staged_elsewhere} staged file{st.staged_elsewhere === 1 ? "" : "s"} outside this project will be committed too, because a commit takes the whole index.
+                {st.staged_elsewhere} staged file{st.staged_elsewhere === 1 ? "" : "s"} outside this project will be
+                committed too, because a commit takes the whole index.
               </div>
             )}
           </>
         )}
         {st?.busy && <Banner tone="info">{st.busy}</Banner>}
         {running && running !== "commit" && (
-          <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", display: "flex", gap: 6, alignItems: "center" }}>
+          <div
+            style={{
+              fontSize: "var(--text-sm)",
+              color: "var(--text-muted)",
+              display: "flex",
+              gap: 6,
+              alignItems: "center",
+            }}
+          >
             <Spinner size={10} /> Running git {running}…
           </div>
         )}
@@ -272,12 +398,27 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
           </Banner>
         )}
       </div>
-      <div role="tree" aria-label={`Git changes in ${key}`} style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "0 8px 8px" }}>
+      <div
+        role="tree"
+        aria-label={`Git changes in ${key}`}
+        style={{ flex: 1, overflowY: "auto", overflowX: "hidden", padding: "0 8px 8px" }}
+      >
         {!st ? (
           status.error ? (
-            <div style={{ padding: "12px 8px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>{status.error.message}</div>
+            <div style={{ padding: "12px 8px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>
+              {status.error.message}
+            </div>
           ) : (
-            <div style={{ padding: "12px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)", display: "flex", gap: 6, alignItems: "center" }}>
+            <div
+              style={{
+                padding: "12px 8px",
+                color: "var(--text-muted)",
+                fontSize: "var(--text-sm)",
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+              }}
+            >
               <Spinner size={10} /> Reading git status…
             </div>
           )
@@ -286,13 +427,27 @@ export function GitPanel({ ws, projects, project, setProject, selected, onOpenFi
             <code>{key}</code> is not in a git repository.
           </div>
         ) : clean ? (
-          <div style={{ padding: "12px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>No changes. The work tree matches {st.head ?? "the empty repository"}.</div>
+          <div style={{ padding: "12px 8px", color: "var(--text-muted)", fontSize: "var(--text-sm)" }}>
+            No changes. The work tree matches {st.head ?? "the empty repository"}.
+          </div>
         ) : (
           <>
             {section("conflicted", "Merge conflicts", st.conflicted)}
-            {section("staged", "Staged changes", st.staged, { icon: "minus", label: "Unstage all", onClick: () => unstage([]) })}
-            {section("unstaged", "Changes", st.unstaged, { icon: "plus", label: "Stage all", onClick: () => stage([]) })}
-            {st.truncated && <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>Only the first 2,000 changes of each list are shown.</div>}
+            {section("staged", "Staged changes", st.staged, {
+              icon: "minus",
+              label: "Unstage all",
+              onClick: () => unstage([]),
+            })}
+            {section("unstaged", "Changes", st.unstaged, {
+              icon: "plus",
+              label: "Stage all",
+              onClick: () => stage([]),
+            })}
+            {st.truncated && (
+              <div style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>
+                Only the first 2,000 changes of each list are shown.
+              </div>
+            )}
           </>
         )}
       </div>

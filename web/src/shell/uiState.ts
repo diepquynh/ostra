@@ -1,5 +1,5 @@
 import type { WorkspaceUiState } from "../api/types";
-import { fromUiTabs, normalizeTabs, toUiTabs, type TabsState } from "../lib/tabs";
+import { fromUiTabs, normalizeTabs, type TabsState, toUiTabs } from "../lib/tabs";
 
 export type LeftTab = "sessions" | "files" | "git";
 
@@ -15,7 +15,13 @@ export type UiPrefs = {
 
 export type ShellUi = { tabs: TabsState; prefs: UiPrefs };
 
-export const DEFAULT_PREFS: UiPrefs = { leftTab: "sessions", filesProject: null, sidebarOpen: true, dockOpen: false, theme: null };
+export const DEFAULT_PREFS: UiPrefs = {
+  leftTab: "sessions",
+  filesProject: null,
+  sidebarOpen: true,
+  dockOpen: false,
+  theme: null,
+};
 
 const key = (ws: string) => `ostra.ui.${ws}`;
 

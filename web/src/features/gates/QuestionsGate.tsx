@@ -1,7 +1,14 @@
 import { useState } from "react";
 import { Button, Checkbox, Chip, Input } from "../../design";
-import { OTHER, defaultSelections, orderedOptions, questionsAnswer, toggleSelection, type QuestionSelection } from "../../lib/gateAnswers";
-import { ArtifactLink, OpenGate, muted, row, type GateFormProps } from "./kit";
+import {
+  defaultSelections,
+  OTHER,
+  orderedOptions,
+  type QuestionSelection,
+  questionsAnswer,
+  toggleSelection,
+} from "../../lib/gateAnswers";
+import { ArtifactLink, type GateFormProps, muted, OpenGate, row } from "./kit";
 
 /** Open questions from the spec or plan, recommended option first, with an Other answer. */
 export function QuestionsGate({ gate, payload, submit, fail, busy, error }: GateFormProps<"open_questions">) {
@@ -28,7 +35,18 @@ export function QuestionsGate({ gate, payload, submit, fail, busy, error }: Gate
         const s = sel[q.id];
         const set = (next: QuestionSelection) => setSel({ ...sel, [q.id]: next });
         return (
-          <fieldset key={q.id} style={{ border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", margin: 0, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+          <fieldset
+            key={q.id}
+            style={{
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "var(--radius-md)",
+              margin: 0,
+              padding: "10px 12px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+            }}
+          >
             <legend style={{ ...row, padding: "0 4px" }}>
               <Chip mono>{q.id}</Chip>
               <Chip tone="info">{q.tag}</Chip>
@@ -64,7 +82,14 @@ export function QuestionsGate({ gate, payload, submit, fail, busy, error }: Gate
               description="Write your own answer."
             />
             {s.selected.includes(OTHER) && (
-              <Input multiline rows={2} aria-label={`${q.id} answer`} placeholder="Your answer" value={s.other} onChange={(e) => set({ ...s, other: e.target.value })} />
+              <Input
+                multiline
+                rows={2}
+                aria-label={`${q.id} answer`}
+                placeholder="Your answer"
+                value={s.other}
+                onChange={(e) => set({ ...s, other: e.target.value })}
+              />
             )}
           </fieldset>
         );

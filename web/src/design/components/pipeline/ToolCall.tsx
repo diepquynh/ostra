@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import { activateOnKey } from "../../keys";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
@@ -53,8 +53,23 @@ export function ToolCall({ tool, summary, state = "done", duration, policy, defa
   const toggle = () => setOpen((o) => !o);
   return (
     <div className={`os-tool ${denied ? "os-tool--denied" : asked ? "os-tool--asked" : ""}`}>
-      <div className="os-tool__head" role="button" tabIndex={0} aria-expanded={open} onClick={toggle} onKeyDown={activateOnKey(toggle)}>
-        <Icon name="chevron-right" size={12} style={{ color: "var(--text-muted)", transform: open ? "rotate(90deg)" : "none", transition: "transform var(--dur-fast)" }} />
+      <div
+        className="os-tool__head"
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={toggle}
+        onKeyDown={activateOnKey(toggle)}
+      >
+        <Icon
+          name="chevron-right"
+          size={12}
+          style={{
+            color: "var(--text-muted)",
+            transform: open ? "rotate(90deg)" : "none",
+            transition: "transform var(--dur-fast)",
+          }}
+        />
         <Icon name={TOOL_ICON[tool] ?? "wrench"} size={13} style={{ color: "var(--text-muted)" }} />
         <span className="os-tool__name">{tool}</span>
         <span className="os-tool__summary">{summary}</span>
@@ -69,10 +84,13 @@ export function ToolCall({ tool, summary, state = "done", duration, policy, defa
           {policy && policy.decision !== "allow" && (
             <div className={`os-policy os-policy--${policy.decision}`}>
               <div>
-                <strong>{denied ? "Denied" : "Needs permission"}</strong> by {policy.layer} rule <code>{policy.rule}</code>
+                <strong>{denied ? "Denied" : "Needs permission"}</strong> by {policy.layer} rule{" "}
+                <code>{policy.rule}</code>
               </div>
               {policy.reason && <div>{policy.reason}</div>}
-              {policy.advice && <div style={{ color: "var(--text-secondary)" }}>What to do instead: {policy.advice}</div>}
+              {policy.advice && (
+                <div style={{ color: "var(--text-secondary)" }}>What to do instead: {policy.advice}</div>
+              )}
             </div>
           )}
           {policy && policy.decision === "allow" && policy.rule && (

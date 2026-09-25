@@ -20,7 +20,17 @@ export function paletteCommands(dockHint = modHint("/")): PaletteItem[] {
 /** Result rows before the commands; the palette renders every row, so keep the list short. */
 const MAX_ROWS = 200;
 
-const GROUPS = ["Sessions", "Executions", "Artifacts", "Projects", "Files", "Lessons", "Settings", "Workspace", "Actions"];
+const GROUPS = [
+  "Sessions",
+  "Executions",
+  "Artifacts",
+  "Projects",
+  "Files",
+  "Lessons",
+  "Settings",
+  "Workspace",
+  "Actions",
+];
 
 const KIND: Record<SearchHitKind, { group: string; icon: IconName }> = {
   session: { group: "Sessions", icon: "git-pull-request" },
@@ -38,9 +48,20 @@ export function hitToItem(hit: SearchHit): PaletteItem {
 }
 
 /** Palette rows from data the shell already holds, for an empty query and for servers without search. */
-export function localItems(sessions: TreeSession[], projects: ProjectView[], files: { key: string; paths: string[] } | null = null): PaletteItem[] {
+export function localItems(
+  sessions: TreeSession[],
+  projects: ProjectView[],
+  files: { key: string; paths: string[] } | null = null,
+): PaletteItem[] {
   const items: PaletteItem[] = [];
-  for (const s of sessions) items.push({ id: `session:${s.id}`, group: "Sessions", icon: "git-pull-request", label: s.title ? `${s.title}: ${s.request}` : s.request, hint: s.status });
+  for (const s of sessions)
+    items.push({
+      id: `session:${s.id}`,
+      group: "Sessions",
+      icon: "git-pull-request",
+      label: s.title ? `${s.title}: ${s.request}` : s.request,
+      hint: s.status,
+    });
   for (const s of sessions)
     for (const g of s.groups)
       for (const r of g.runs)
@@ -51,9 +72,20 @@ export function localItems(sessions: TreeSession[], projects: ProjectView[], fil
           label: `${humanize(g.agent)} · ${r.run_label} in ${g.project}`,
           hint: r.status,
         });
-  for (const s of sessions) for (const a of s.artifacts) items.push({ id: `artifact:${a.path}`, group: "Artifacts", icon: "file-text", label: a.label, hint: a.path.split("/").pop() });
-  for (const p of projects) items.push({ id: `project:${p.key}`, group: "Projects", icon: "folder-git-2", label: p.key, hint: p.path });
-  if (files) for (const f of files.paths) items.push({ id: `file:${files.key}:${f}`, group: "Files", icon: "file-code-2", label: f, hint: files.key });
+  for (const s of sessions)
+    for (const a of s.artifacts)
+      items.push({
+        id: `artifact:${a.path}`,
+        group: "Artifacts",
+        icon: "file-text",
+        label: a.label,
+        hint: a.path.split("/").pop(),
+      });
+  for (const p of projects)
+    items.push({ id: `project:${p.key}`, group: "Projects", icon: "folder-git-2", label: p.key, hint: p.path });
+  if (files)
+    for (const f of files.paths)
+      items.push({ id: `file:${files.key}:${f}`, group: "Files", icon: "file-code-2", label: f, hint: files.key });
   return items;
 }
 
@@ -61,9 +93,18 @@ export function localItems(sessions: TreeSession[], projects: ProjectView[], fil
  * The rows the palette shows. An empty query lists local rows and commands. A query shows the server's
  * hits when it has answered (`hits` not null), else the local rows filtered, then the matching commands.
  */
-export function mergePalette(query: string, hits: SearchHit[] | null, local: PaletteItem[], commands: PaletteItem[]): PaletteItem[] {
+export function mergePalette(
+  query: string,
+  hits: SearchHit[] | null,
+  local: PaletteItem[],
+  commands: PaletteItem[],
+): PaletteItem[] {
   const q = query.trim();
-  const found = !q ? local.filter((it) => it.group !== "Files") : hits ? [...hits].sort((a, b) => b.score - a.score).map(hitToItem) : filterPaletteItems(local, q);
+  const found = !q
+    ? local.filter((it) => it.group !== "Files")
+    : hits
+      ? [...hits].sort((a, b) => b.score - a.score).map(hitToItem)
+      : filterPaletteItems(local, q);
   const all = [...found.slice(0, MAX_ROWS), ...filterPaletteItems(commands, q)];
   const seen = new Set<string>();
   const unique = all.filter((it) => !seen.has(it.id) && (seen.add(it.id), true));
@@ -72,7 +113,10 @@ export function mergePalette(query: string, hits: SearchHit[] | null, local: Pal
     return i < 0 ? GROUPS.length : i;
   };
   // Stable: rows keep their order within a group.
-  return unique.map((it, i) => ({ it, i })).sort((a, b) => rank(a.it.group) - rank(b.it.group) || a.i - b.i).map((x) => x.it);
+  return unique
+    .map((it, i) => ({ it, i }))
+    .sort((a, b) => rank(a.it.group) - rank(b.it.group) || a.i - b.i)
+    .map((x) => x.it);
 }
 
 export type PaletteTarget = { kind: "command"; command: string } | { kind: "open"; id: string; anchor?: string };

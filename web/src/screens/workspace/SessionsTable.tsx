@@ -1,21 +1,21 @@
 import { useMemo, useState } from "react";
 import type { SessionSummary } from "../../api/types";
-import { Button, Chip, Input, Panel, Select, StatusChip, Table, Tabs, type TableColumn } from "../../design";
 import { LANES } from "../../content/stages";
+import { Button, Chip, Input, Panel, Select, StatusChip, Table, type TableColumn, Tabs } from "../../design";
 import { formatCost, humanize, relativeTime, truncate } from "../../lib/format";
 import { useNav } from "../../lib/nav";
 import { SessionDot } from "../../shell/Sidebar";
 import {
   filterSessions,
   isFiltered,
+  type KindFilter,
   NO_FILTERS,
+  type SessionFilters,
+  STATUS_TABS,
+  type StatusFilter,
   sessionProjects,
   sessionTitle,
-  STATUS_TABS,
   statusCounts,
-  type KindFilter,
-  type SessionFilters,
-  type StatusFilter,
 } from "./sessionFilter";
 
 const columns: TableColumn<SessionSummary>[] = [
@@ -45,7 +45,9 @@ const columns: TableColumn<SessionSummary>[] = [
     label: "Stage",
     render: (s) => (
       <span className="wp-stage">
-        <span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>{LANES[s.lane]?.title ?? humanize(s.lane)}</span>
+        <span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>
+          {LANES[s.lane]?.title ?? humanize(s.lane)}
+        </span>
         {s.stage_label}
       </span>
     ),
@@ -71,7 +73,11 @@ const columns: TableColumn<SessionSummary>[] = [
     key: "updated",
     label: "Updated",
     render: (s) => (
-      <span className="wp-nowrap" style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }} title={s.updated_at}>
+      <span
+        className="wp-nowrap"
+        style={{ color: "var(--text-muted)", fontSize: "var(--text-sm)" }}
+        title={s.updated_at}
+      >
         {relativeTime(s.updated_at)}
       </span>
     ),
@@ -79,7 +85,15 @@ const columns: TableColumn<SessionSummary>[] = [
 ];
 
 /** The sessions of a workspace with status, kind, project and text filters. Rows open a preview tab. */
-export function SessionsTable({ sessions, projects, loading }: { sessions: SessionSummary[]; projects: string[]; loading: boolean }) {
+export function SessionsTable({
+  sessions,
+  projects,
+  loading,
+}: {
+  sessions: SessionSummary[];
+  projects: string[];
+  loading: boolean;
+}) {
   const { open } = useNav();
   const [filters, setFilters] = useState<SessionFilters>(NO_FILTERS);
   const set = <K extends keyof SessionFilters>(k: K, v: SessionFilters[K]) => setFilters((f) => ({ ...f, [k]: v }));
@@ -150,7 +164,12 @@ export function SessionsTable({ sessions, projects, loading }: { sessions: Sessi
         />
       </div>
       <Panel bodyFlush>
-        <Table<SessionSummary> onRowClick={(s) => open(`session:${s.id}`, { preview: true })} columns={columns} rows={rows} empty={empty} />
+        <Table<SessionSummary>
+          onRowClick={(s) => open(`session:${s.id}`, { preview: true })}
+          columns={columns}
+          rows={rows}
+          empty={empty}
+        />
       </Panel>
       {isFiltered(filters) && rows.length > 0 && rows.length < sessions.length && (
         <div className="wp-muted">

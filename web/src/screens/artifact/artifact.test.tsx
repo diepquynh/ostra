@@ -2,14 +2,14 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Heading } from "../../api/gen/Heading";
 import * as f from "../../api/mock/fixtures";
 import { artifactFor, mockHeadings } from "../../api/mock/fixtures.execution";
-import type { Heading } from "../../api/gen/Heading";
 import { ConsoleContext, type ConsoleContextValue, type Nav } from "../../lib/nav";
 import { ArtifactScreen } from "../ArtifactScreen";
 import { ArtifactMarkdown } from "./ArtifactMarkdown";
 import { approvalBadges, artifactKind } from "./kind";
-import { slugify, Slugger } from "./outline";
+import { Slugger, slugify } from "./outline";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -58,7 +58,8 @@ describe("heading slugs match the server", () => {
 
   it("gives rendered headings the server's ids, and unlisted ones a fresh slug", async () => {
     // The server outline of this document, as `atx_and_setext_headings_outside_code` produces it.
-    const md = "# Spec: `cancel` orders #\n\n## Requirements\n### Requirements\n\n> ## Quoted\n\nSetext title\n============\n\nSecond *level*\n---\n\n## [Link](http://x) ##\n";
+    const md =
+      "# Spec: `cancel` orders #\n\n## Requirements\n### Requirements\n\n> ## Quoted\n\nSetext title\n============\n\nSecond *level*\n---\n\n## [Link](http://x) ##\n";
     const server: Heading[] = [
       { level: 1, id: "spec-cancel-orders", title: "Spec: cancel orders" },
       { level: 2, id: "requirements", title: "Requirements" },
@@ -68,11 +69,22 @@ describe("heading slugs match the server", () => {
       { level: 2, id: "link", title: "Link" },
     ];
     await render(<ArtifactMarkdown text={md} headings={server} onAnchor={() => {}} />, 1);
-    expect(ids()).toEqual(["spec-cancel-orders", "requirements", "requirements-1", "quoted", "setext-title", "second-level", "link"]);
+    expect(ids()).toEqual([
+      "spec-cancel-orders",
+      "requirements",
+      "requirements-1",
+      "quoted",
+      "setext-title",
+      "second-level",
+      "link",
+    ]);
   });
 
   it("slugs on its own when the server sent no outline", async () => {
-    await render(<ArtifactMarkdown text={"## Reqs\n## Reqs\n## C++ & Rust (2024)"} headings={[]} onAnchor={() => {}} />, 1);
+    await render(
+      <ArtifactMarkdown text={"## Reqs\n## Reqs\n## C++ & Rust (2024)"} headings={[]} onAnchor={() => {}} />,
+      1,
+    );
     expect(ids()).toEqual(["reqs", "reqs-1", "c--rust-2024"]);
   });
 
@@ -88,7 +100,10 @@ describe("heading slugs match the server", () => {
 
   it("follows in-document links through onAnchor", async () => {
     const onAnchor = vi.fn();
-    await render(<ArtifactMarkdown text={"## Requirements\n\nSee [the list](#requirements)."} headings={[]} onAnchor={onAnchor} />, 1);
+    await render(
+      <ArtifactMarkdown text={"## Requirements\n\nSee [the list](#requirements)."} headings={[]} onAnchor={onAnchor} />,
+      1,
+    );
     await act(async () => host!.querySelector<HTMLAnchorElement>('a[href="#requirements"]')!.click());
     expect(onAnchor).toHaveBeenCalledWith("requirements");
   });
@@ -96,7 +111,13 @@ describe("heading slugs match the server", () => {
 
 describe("report tables", () => {
   it("resizes a column from its header and resets on double-click", async () => {
-    await render(<ArtifactMarkdown text={"| ID | Statement |\n| --- | --- |\n| R1 | THE SYSTEM SHALL x. |\n"} headings={[]} onAnchor={() => {}} />);
+    await render(
+      <ArtifactMarkdown
+        text={"| ID | Statement |\n| --- | --- |\n| R1 | THE SYSTEM SHALL x. |\n"}
+        headings={[]}
+        onAnchor={() => {}}
+      />,
+    );
     const handles = host!.querySelectorAll<HTMLElement>('th [role="separator"]');
     expect(handles).toHaveLength(2);
     const table = host!.querySelector("table")!;
@@ -116,7 +137,10 @@ describe("report tables", () => {
 
 describe("sideways scrolling", () => {
   it("keeps the sticky scrollbar and the table in step", async () => {
-    await render(<ArtifactMarkdown text={"| A | B |\n| --- | --- |\n| 1 | 2 |\n"} headings={[]} onAnchor={() => {}} />, 1);
+    await render(
+      <ArtifactMarkdown text={"| A | B |\n| --- | --- |\n| 1 | 2 |\n"} headings={[]} onAnchor={() => {}} />,
+      1,
+    );
     const box = host!.querySelector<HTMLDivElement>(".art-table")!;
     const bar = host!.querySelector<HTMLDivElement>(".art-hscroll")!;
     await act(async () => {
@@ -155,7 +179,18 @@ describe("artifact screen", () => {
     const noop = () => {};
     const ctx: ConsoleContextValue = {
       nav: { ws: f.WS, activeId: null, tabs: [], open, close: noop, pin: noop, href: (id) => id },
-      shell: { openDock: noop, closeDock: noop, taskDraft: null, setTaskDraft: noop, newWorkspace: noop, addProject: noop, runSetup: noop, browseFiles: noop, theme: "dark", toggleTheme: noop },
+      shell: {
+        openDock: noop,
+        closeDock: noop,
+        taskDraft: null,
+        setTaskDraft: noop,
+        newWorkspace: noop,
+        addProject: noop,
+        runSetup: noop,
+        browseFiles: noop,
+        theme: "dark",
+        toggleTheme: noop,
+      },
       workspace: { detail: null, reload: noop },
     };
     return (
@@ -175,17 +210,22 @@ describe("artifact screen", () => {
       meta: r.querySelector(".os-tree-item__meta")?.textContent ?? null,
     }));
   const chapter = (label: string) => chapters().find((c) => c.label.startsWith(label))!.el;
-  const button = (text: string) => Array.from(host!.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === text)!;
+  const button = (text: string) =>
+    Array.from(host!.querySelectorAll<HTMLButtonElement>("button")).find((b) => b.textContent === text)!;
 
   it("lists the outline, shows the EARS note for a spec, and deep-links a heading", async () => {
     const open = vi.fn();
     await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, open));
     await act(async () => button("Markdown").click());
-    const outline = Array.from(host!.querySelectorAll('[aria-label="Outline"] [role="treeitem"]')).map((r) => r.textContent);
+    const outline = Array.from(host!.querySelectorAll('[aria-label="Outline"] [role="treeitem"]')).map(
+      (r) => r.textContent,
+    );
     expect(outline).toContain("Requirements");
     expect(outline).toContain("External Evidence");
     expect(host!.textContent).toContain("How to read requirements and acceptance criteria");
-    const reqs = Array.from(host!.querySelectorAll<HTMLElement>('[aria-label="Outline"] [role="treeitem"]')).find((r) => r.textContent === "Requirements")!;
+    const reqs = Array.from(host!.querySelectorAll<HTMLElement>('[aria-label="Outline"] [role="treeitem"]')).find(
+      (r) => r.textContent === "Requirements",
+    )!;
     await act(async () => reqs.click());
     expect(open).toHaveBeenCalledWith(`artifact:${spec}`, { anchor: "requirements" });
     expect(host!.querySelector("#requirements")?.tagName).toBe("H2");
@@ -202,7 +242,17 @@ describe("artifact screen", () => {
     const open = vi.fn();
     await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, open));
     const list = chapters();
-    expect(list.map((c) => c.label)).toEqual(expect.arrayContaining(["Overview", "Criteria", "Requirements", "D1: Cancellation endpoint", "External evidence", "Traceability", "Fact-check"]));
+    expect(list.map((c) => c.label)).toEqual(
+      expect.arrayContaining([
+        "Overview",
+        "Criteria",
+        "Requirements",
+        "D1: Cancellation endpoint",
+        "External evidence",
+        "Traceability",
+        "Fact-check",
+      ]),
+    );
     expect(list.find((c) => c.label === "Requirements")!.meta).toBe("4");
     expect(host!.querySelector(".doc-chapter")!.getAttribute("data-chapter")).toBe("overview");
     expect(host!.textContent).toContain("4 of 4");
@@ -217,7 +267,9 @@ describe("artifact screen", () => {
     const open = vi.fn();
     await render(withNav(<ArtifactScreen ws={f.WS} path={spec} />, open));
     await act(async () => chapter("External evidence").click());
-    const r3 = Array.from(host!.querySelectorAll<HTMLButtonElement>("button.doc-ref")).find((b) => b.textContent === "R3")!;
+    const r3 = Array.from(host!.querySelectorAll<HTMLButtonElement>("button.doc-ref")).find(
+      (b) => b.textContent === "R3",
+    )!;
     await act(async () => r3.click());
     expect(open).toHaveBeenLastCalledWith(`artifact:${spec}`, { anchor: "req-d1/r3" });
     expect(host!.querySelector(".doc-chapter")!.getAttribute("data-chapter")).toBe("req-d1");
@@ -237,19 +289,28 @@ describe("artifact screen", () => {
 
   it("renders a plan's phases and a phase file", async () => {
     await render(withNav(<ArtifactScreen ws={f.WS} path={plan} />, () => {}));
-    expect(chapters().map((c) => c.label)).toEqual(expect.arrayContaining(["Phases", "Phase 1: Cancel transition", "Phase 2: Cancel button"]));
+    expect(chapters().map((c) => c.label)).toEqual(
+      expect.arrayContaining(["Phases", "Phase 1: Cancel transition", "Phase 2: Cancel button"]),
+    );
     await act(async () => chapter("Phase 1: Cancel transition").click());
     expect(host!.querySelector("#el-step-1\\.1")?.textContent).toContain("src/orders/service.ts");
     expect(host!.querySelector('#el-step-1\\.2 [aria-label="Notes on step 1.2"]')).not.toBeNull();
     act(() => root?.unmount());
     host?.remove();
     await render(withNav(<ArtifactScreen ws={f.WS} path={plan.replace(".md", "-phase-2.md")} />, () => {}));
-    expect(chapters().map((c) => c.label)).toEqual(["Overview", "Steps", "Requirements delivered", "External constraints"]);
+    expect(chapters().map((c) => c.label)).toEqual([
+      "Overview",
+      "Steps",
+      "Requirements delivered",
+      "External constraints",
+    ]);
   });
 
   it("shows a research document's chapters", async () => {
     await render(withNav(<ArtifactScreen ws={f.WS} path={research} />, () => {}));
-    expect(chapters().map((c) => c.label)).toEqual(expect.arrayContaining(["Files", "Patterns", "Data flow", "Approaches", "Open questions", "Sources"]));
+    expect(chapters().map((c) => c.label)).toEqual(
+      expect.arrayContaining(["Files", "Patterns", "Data flow", "Approaches", "Open questions", "Sources"]),
+    );
     await act(async () => chapter("Open questions").click());
     expect(host!.querySelector("#el-q1")?.textContent).toContain("Recommended");
     expect(host!.textContent).not.toContain("How to read requirements");

@@ -1,13 +1,19 @@
-import { useMemo, type ComponentProps, type ReactNode } from "react";
+import { type ComponentProps, type ReactNode, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Heading } from "../../api/gen/Heading";
 import { CodeView } from "../../design";
-import { headingText, rehypeHeadingIds } from "./outline";
 import { ColumnResizer } from "./ColumnResizer";
+import { headingText, rehypeHeadingIds } from "./outline";
 import { ScrollTable } from "./ScrollTable";
 
-type HastLike = { type: string; tagName?: string; value?: string; properties?: Record<string, unknown>; children?: HastLike[] };
+type HastLike = {
+  type: string;
+  tagName?: string;
+  value?: string;
+  properties?: Record<string, unknown>;
+  children?: HastLike[];
+};
 
 const ID_CELL = /^(R\d+[\w.-]*|AC[\w.-]*\d|E\d+|F\d+|P\d+)$/;
 
@@ -49,7 +55,9 @@ export function ArtifactMarkdown({ text, headings, onAnchor }: ArtifactMarkdownP
         const code = (node as HastLike | undefined)?.children?.find((c) => c.tagName === "code");
         const cls = (code?.properties?.className as string[] | undefined)?.find((c) => c.startsWith("language-"));
         const source = code ? collect(code) : "";
-        return <CodeView language={cls?.slice("language-".length) ?? "txt"} code={source} style={{ margin: "0 0 14px" }} />;
+        return (
+          <CodeView language={cls?.slice("language-".length) ?? "txt"} code={source} style={{ margin: "0 0 14px" }} />
+        );
       },
       table: ({ node: _node, ...rest }: ComponentProps<"table"> & { node?: unknown }) => (
         <ScrollTable>
@@ -82,4 +90,5 @@ export function ArtifactMarkdown({ text, headings, onAnchor }: ArtifactMarkdownP
   );
 }
 
-const collect = (n: HastLike): string => (n.type === "text" ? (n.value ?? "") : (n.children ?? []).map(collect).join(""));
+const collect = (n: HastLike): string =>
+  n.type === "text" ? (n.value ?? "") : (n.children ?? []).map(collect).join("");

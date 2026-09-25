@@ -4,7 +4,17 @@ import { HttpError } from "../../api/client";
 import type { ValidationIssue, WorkspaceDetail } from "../../api/types";
 import { useAsync } from "../../lib/hooks";
 import { useHome } from "./folders";
-import { canContinue, creationTasks, expandHome, initialValues, issuesByStep, stepsFor, toCreateBody, type StepId, type WizardValues } from "./wizard";
+import {
+  canContinue,
+  creationTasks,
+  expandHome,
+  initialValues,
+  issuesByStep,
+  type StepId,
+  stepsFor,
+  toCreateBody,
+  type WizardValues,
+} from "./wizard";
 
 /** Time each creation checklist row stays in progress before the next one starts. */
 export const TASK_MS = 420;

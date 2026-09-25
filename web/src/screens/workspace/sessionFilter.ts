@@ -68,7 +68,8 @@ export function statusCounts(list: SessionSummary[], f: SessionFilters): Record<
   };
 }
 
-export const isFiltered = (f: SessionFilters) => f.status !== "all" || f.kind !== "all" || f.project !== "all" || f.text.trim() !== "";
+export const isFiltered = (f: SessionFilters) =>
+  f.status !== "all" || f.kind !== "all" || f.project !== "all" || f.text.trim() !== "";
 
 /** Project keys that appear in any session, for the project filter. */
 export function sessionProjects(list: SessionSummary[], known: string[]): string[] {

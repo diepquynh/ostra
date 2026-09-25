@@ -1,11 +1,11 @@
 import { useMemo, useState } from "react";
 import { api } from "../api";
-import { Button, Panel, Table, Tabs, type TableColumn } from "../design";
+import { Button, Panel, Table, type TableColumn, Tabs } from "../design";
 import { formatCost } from "../lib/format";
 import { useAsync, useChannel, useThrottled } from "../lib/hooks";
 import { useActivity, useSessionSummaries } from "../lib/live";
 import { useNav } from "../lib/nav";
-import { COST_GROUPS, costLines, costTotals, type CostLine } from "./workspace/costTable";
+import { COST_GROUPS, type CostLine, costLines, costTotals } from "./workspace/costTable";
 import { LoadError, Loading, Page, Stat } from "./workspace/Page";
 
 export type CostScreenProps = { ws: string };
@@ -20,11 +20,30 @@ function columns(first: string): TableColumn<CostLine>[] {
     { key: "output", label: "Output", num: true },
     { key: "cacheReads", label: "Cache reads", num: true },
     { key: "cacheWrites5m", label: <span title="Cache writes with the 5-minute TTL">Cache writes 5m</span>, num: true },
-    { key: "cacheWrites1h", label: <span title="Cache writes with the 1-hour TTL, which cost more than 5-minute writes">Cache writes 1h</span>, num: true },
-    { key: "perCall", label: <span title="Cache reads divided by tool calls. A rising value means each tool call re-reads more context.">Cache / tool call</span>, num: true },
+    {
+      key: "cacheWrites1h",
+      label: (
+        <span title="Cache writes with the 1-hour TTL, which cost more than 5-minute writes">Cache writes 1h</span>
+      ),
+      num: true,
+    },
+    {
+      key: "perCall",
+      label: (
+        <span title="Cache reads divided by tool calls. A rising value means each tool call re-reads more context.">
+          Cache / tool call
+        </span>
+      ),
+      num: true,
+    },
     { key: "build", label: "Build time", num: true },
     { key: "cost", label: "Cost", num: true },
-    { key: "share", label: "Share", num: true, render: (r) => <span style={{ color: "var(--text-muted)" }}>{r.share}</span> },
+    {
+      key: "share",
+      label: "Share",
+      num: true,
+      render: (r) => <span style={{ color: "var(--text-muted)" }}>{r.share}</span>,
+    },
   ];
 }
 
@@ -55,18 +74,28 @@ export function CostScreen({ ws }: CostScreenProps) {
 
   const r = report.data;
   const tables = useMemo(
-    () => (r ? COST_GROUPS.map((g) => ({ ...g, lines: costLines(r[g.field], g.id, r.total.usage.cost_usd, sessions) })) : []),
+    () =>
+      r ? COST_GROUPS.map((g) => ({ ...g, lines: costLines(r[g.field], g.id, r.total.usage.cost_usd, sessions) })) : [],
     [r, sessions],
   );
 
   const lead = (
     <p className="wp-lead">
-      Two numbers matter most. Cache reads per tool call show how much context each step re-reads, which grows when an agent loops. Build time
-      shows how long agents spend in build and test commands, because a run with many consecutive build failures spends without progress.
+      Two numbers matter most. Cache reads per tool call show how much context each step re-reads, which grows when an
+      agent loops. Build time shows how long agents spend in build and test commands, because a run with many
+      consecutive build failures spends without progress.
     </p>
   );
 
-  const picker = <Tabs variant="segmented" label="Time range" value={range} onChange={(id) => setRange(id as CostRange)} tabs={RANGES} />;
+  const picker = (
+    <Tabs
+      variant="segmented"
+      label="Time range"
+      value={range}
+      onChange={(id) => setRange(id as CostRange)}
+      tabs={RANGES}
+    />
+  );
   if (report.error && !r) {
     return (
       <Page title="Cost" actions={picker}>
@@ -88,9 +117,27 @@ export function CostScreen({ ws }: CostScreenProps) {
     <Page title="Cost" actions={picker}>
       {lead}
       <div className="wp-stats">
-        <Stat label={week ? "This week" : "All time"} value={t.total} title={week && r.since ? `Executions that started since ${new Date(r.since).toLocaleString()}` : "Every execution in this workspace"} />
-        <Stat label="Today" value={activity ? formatCost(activity.spend_today_usd) : "…"} title="Execution spend since local midnight on the server" />
-        {!week && <Stat label="This week" value={activity ? formatCost(activity.spend_week_usd) : "…"} title="Today and the six days before it" />}
+        <Stat
+          label={week ? "This week" : "All time"}
+          value={t.total}
+          title={
+            week && r.since
+              ? `Executions that started since ${new Date(r.since).toLocaleString()}`
+              : "Every execution in this workspace"
+          }
+        />
+        <Stat
+          label="Today"
+          value={activity ? formatCost(activity.spend_today_usd) : "…"}
+          title="Execution spend since local midnight on the server"
+        />
+        {!week && (
+          <Stat
+            label="This week"
+            value={activity ? formatCost(activity.spend_week_usd) : "…"}
+            title="Today and the six days before it"
+          />
+        )}
         <Stat label="Runs" value={t.runs} />
         <Stat label="Cache reads" value={t.cacheReads} />
         <Stat label="Tool calls" value={t.toolCalls} />
@@ -101,7 +148,9 @@ export function CostScreen({ ws }: CostScreenProps) {
         <Panel>
           <div className="wp-row">
             <span style={{ color: "var(--text-secondary)" }}>
-              {week ? "No spend this week. Switch to All time for earlier runs." : "No spend yet. Costs appear here after a session runs its first execution."}
+              {week
+                ? "No spend this week. Switch to All time for earlier runs."
+                : "No spend yet. Costs appear here after a session runs its first execution."}
             </span>
             <span className="wp-spacer" />
             <Button size="sm" icon="plus" onClick={() => open("ws:overview")}>

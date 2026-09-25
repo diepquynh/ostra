@@ -21,7 +21,11 @@ const provider = (over: Partial<ProviderStatus> = {}): ProviderStatus => ({
 
 describe("ProviderCredentials", () => {
   it("saves one kind of secret and clears the other", async () => {
-    const saved = provider({ has_key: true, source: "saved", saved: { base_url: "https://gw.example", has_api_key: false, has_auth_token: true } });
+    const saved = provider({
+      has_key: true,
+      source: "saved",
+      saved: { base_url: "https://gw.example", has_api_key: false, has_auth_token: true },
+    });
     const spy = vi.spyOn(api, "saveProvider").mockResolvedValue(saved);
     const onSaved = vi.fn();
     render(<ProviderCredentials providers={[provider()]} onSaved={onSaved} />);
@@ -35,8 +39,14 @@ describe("ProviderCredentials", () => {
   });
 
   it("says when the environment shadows a saved key, and shows field issues", async () => {
-    const p = provider({ has_key: true, source: "env:ANTHROPIC_API_KEY", saved: { base_url: null, has_api_key: true, has_auth_token: false } });
-    vi.spyOn(api, "saveProvider").mockRejectedValue(new HttpError(422, "bad", [{ path: "base_url", message: "Enter the base URL as http:// or https://." }]));
+    const p = provider({
+      has_key: true,
+      source: "env:ANTHROPIC_API_KEY",
+      saved: { base_url: null, has_api_key: true, has_auth_token: false },
+    });
+    vi.spyOn(api, "saveProvider").mockRejectedValue(
+      new HttpError(422, "bad", [{ path: "base_url", message: "Enter the base URL as http:// or https://." }]),
+    );
     render(<ProviderCredentials providers={[p]} onSaved={() => {}} />);
     expect(screen.getByText(/ANTHROPIC_API_KEY is set in the environment/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Base URL for Anthropic"), { target: { value: "gw" } });

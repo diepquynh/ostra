@@ -20,7 +20,12 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
   const { addProject } = useShell();
   const sessions = useSessionSummaries(ws);
 
-  if (!detail) return <Page title="Workspace"><Loading>Reading the workspace…</Loading></Page>;
+  if (!detail)
+    return (
+      <Page title="Workspace">
+        <Loading>Reading the workspace…</Loading>
+      </Page>
+    );
   const uninitialized = detail.projects.filter((p) => p.init_status === "not_initialized");
   const count = detail.projects.length;
 
@@ -43,8 +48,8 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
             </Button>
           }
         >
-          Settings have {detail.validation.length} problem{detail.validation.length === 1 ? "" : "s"}. Fix them in Settings before starting work,
-          because an agent whose route does not resolve cannot start.
+          Settings have {detail.validation.length} problem{detail.validation.length === 1 ? "" : "s"}. Fix them in
+          Settings before starting work, because an agent whose route does not resolve cannot start.
         </Banner>
       )}
       {count === 0 && (
@@ -75,8 +80,8 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
             </>
           }
         >
-          {uninitialized.map((p) => p.key).join(", ")} {uninitialized.length === 1 ? "is" : "are"} not initialized. Pipeline tasks cannot target an
-          uninitialized project.
+          {uninitialized.map((p) => p.key).join(", ")} {uninitialized.length === 1 ? "is" : "are"} not initialized.
+          Pipeline tasks cannot target an uninitialized project.
         </Banner>
       )}
       <NewTask
@@ -89,7 +94,11 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
         }}
       />
       {sessions.error && <LoadError error={sessions.error} onRetry={sessions.reload} />}
-      <SessionsTable sessions={sessions.sessions} projects={detail.projects.map((p) => p.key)} loading={sessions.loading} />
+      <SessionsTable
+        sessions={sessions.sessions}
+        projects={detail.projects.map((p) => p.key)}
+        loading={sessions.loading}
+      />
     </Page>
   );
 }

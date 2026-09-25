@@ -1,39 +1,147 @@
 /* Shell chrome that the design components do not cover. Everything else is inline, as in the design kit. */
-html, body, #root { height: 100%; }
-body { overflow: hidden; }
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  overflow: hidden;
+}
 
 .shell-status-item {
-  display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 6px;
-  border: 0; border-radius: 3px; background: none; color: inherit; font: inherit; white-space: nowrap; cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
 }
-.shell-status-item:hover { background: var(--surface-hover); color: var(--text-primary); }
-.shell-status-item:disabled { cursor: default; background: none; }
+.shell-status-item:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+.shell-status-item:disabled {
+  cursor: default;
+  background: none;
+}
 
-.shell-tabs { flex: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; background: var(--surface-chrome); }
-.shell-tabs::-webkit-scrollbar { display: none; }
-.shell-tabs .os-tabs--bar { width: max-content; min-width: 100%; }
+.shell-tabs {
+  flex: none;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  background: var(--surface-chrome);
+}
+.shell-tabs::-webkit-scrollbar {
+  display: none;
+}
+.shell-tabs .os-tabs--bar {
+  width: max-content;
+  min-width: 100%;
+}
 
 /* Rendered markdown outside the old pages: the dock's answers. */
-.os-prose { font: var(--type-prose); color: var(--text-primary); overflow-wrap: anywhere; }
-.os-prose > :first-child { margin-top: 0; }
-.os-prose > :last-child { margin-bottom: 0; }
-.os-prose p, .os-prose ul, .os-prose ol, .os-prose pre, .os-prose table, .os-prose blockquote { margin: 0 0 8px; }
-.os-prose ul, .os-prose ol { padding-left: 20px; }
-.os-prose h1, .os-prose h2, .os-prose h3 { font: var(--type-heading); margin: 12px 0 6px; }
-.os-prose pre { white-space: pre-wrap; }
-.os-prose table { border-collapse: collapse; font-size: var(--text-sm); }
-.os-prose th, .os-prose td { border: 1px solid var(--border-default); padding: 4px 8px; text-align: left; }
-.os-prose blockquote { border-left: 2px solid var(--border-strong); padding-left: 10px; color: var(--text-secondary); }
+.os-prose {
+  font: var(--type-prose);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+.os-prose > :first-child {
+  margin-top: 0;
+}
+.os-prose > :last-child {
+  margin-bottom: 0;
+}
+.os-prose p,
+.os-prose ul,
+.os-prose ol,
+.os-prose pre,
+.os-prose table,
+.os-prose blockquote {
+  margin: 0 0 8px;
+}
+.os-prose ul,
+.os-prose ol {
+  padding-left: 20px;
+}
+.os-prose h1,
+.os-prose h2,
+.os-prose h3 {
+  font: var(--type-heading);
+  margin: 12px 0 6px;
+}
+.os-prose pre {
+  white-space: pre-wrap;
+}
+.os-prose table {
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+.os-prose th,
+.os-prose td {
+  border: 1px solid var(--border-default);
+  padding: 4px 8px;
+  text-align: left;
+}
+.os-prose blockquote {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 10px;
+  color: var(--text-secondary);
+}
 
 /* Drag handles on the docks' inner edges. The panel is `position: relative`; the handle straddles its border. */
-.shell-resize { position: absolute; top: 0; bottom: 0; width: 7px; z-index: 5; cursor: col-resize; touch-action: none; }
-.shell-resize--right { right: -4px; }
-.shell-resize--left { left: -4px; }
-.shell-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background var(--dur-fast); }
-.shell-resize:hover::after, .shell-resize:focus-visible::after, .shell-resizing .shell-resize::after { background: var(--accent); }
-.shell-resize:focus-visible { outline: none; }
-body.shell-resizing { cursor: col-resize; user-select: none; }
-body.shell-resizing iframe, body.shell-resizing .xterm { pointer-events: none; }
+.shell-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.shell-resize--right {
+  right: -4px;
+}
+.shell-resize--left {
+  left: -4px;
+}
+.shell-resize::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+  transition: background var(--dur-fast);
+}
+.shell-resize:hover::after,
+.shell-resize:focus-visible::after,
+.shell-resizing .shell-resize::after {
+  background: var(--accent);
+}
+.shell-resize:focus-visible {
+  outline: none;
+}
+body.shell-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.shell-resizing iframe,
+body.shell-resizing .xterm {
+  pointer-events: none;
+}
 
-.git-row-action { visibility: hidden; }
-.os-tree-item:hover .git-row-action, .os-tree-item:focus-within .git-row-action { visibility: visible; }
+.git-row-action {
+  visibility: hidden;
+}
+.os-tree-item:hover .git-row-action,
+.os-tree-item:focus-within .git-row-action {
+  visibility: visible;
+}

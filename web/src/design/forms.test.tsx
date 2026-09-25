@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Checkbox, Combobox, FolderPicker, Input, splitPath, Switch, type FolderLister, type FsEntry } from "./index";
+import { Checkbox, Combobox, type FolderLister, FolderPicker, type FsEntry, Input, Switch, splitPath } from "./index";
 
 afterEach(cleanup);
 
@@ -106,11 +106,28 @@ const CODE: FsEntry[] = [
 ];
 
 describe("FolderPicker, controlled browsing", () => {
-  function Harness({ initial, onBrowse, missing }: { initial: string; onBrowse?: (p: string) => void; missing?: boolean }) {
+  function Harness({
+    initial,
+    onBrowse,
+    missing,
+  }: {
+    initial: string;
+    onBrowse?: (p: string) => void;
+    missing?: boolean;
+  }) {
     const [value, setValue] = useState(initial);
     return (
       <>
-        <FolderPicker value={value} onChange={setValue} browsePath="/home/me/code" parent="/home/me" entries={CODE} home="/home/me" missing={missing} onBrowse={onBrowse} />
+        <FolderPicker
+          value={value}
+          onChange={setValue}
+          browsePath="/home/me/code"
+          parent="/home/me"
+          entries={CODE}
+          home="/home/me"
+          missing={missing}
+          onBrowse={onBrowse}
+        />
         <output data-testid="value">{value}</output>
       </>
     );
@@ -163,7 +180,10 @@ describe("FolderPicker, controlled browsing", () => {
 });
 
 describe("FolderPicker, with a list function", () => {
-  const FS: Record<string, string[]> = { "/home/me": ["code", "Downloads"], "/home/me/code": ["shop-backend", "shop-web"] };
+  const FS: Record<string, string[]> = {
+    "/home/me": ["code", "Downloads"],
+    "/home/me/code": ["shop-backend", "shop-web"],
+  };
   const list = vi.fn<FolderLister>(async (raw) => {
     const path = raw.startsWith("~") ? "/home/me" + raw.slice(1) : raw;
     const names = FS[path];
@@ -240,7 +260,9 @@ describe("Combobox", () => {
   ];
   function Harness({ onSelect }: { onSelect: (id: string) => void }) {
     const [q, setQ] = useState("");
-    return <Combobox label="Find" value={q} onChange={setQ} items={q ? items : []} onSelect={(it) => onSelect(it.id)} />;
+    return (
+      <Combobox label="Find" value={q} onChange={setQ} items={q ? items : []} onSelect={(it) => onSelect(it.id)} />
+    );
   }
 
   it("opens on typing, moves with arrows, picks with Enter", () => {

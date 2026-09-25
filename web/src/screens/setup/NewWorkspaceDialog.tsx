@@ -31,7 +31,15 @@ export function NewWorkspaceDialog({ onClose }: NewWorkspaceDialogProps) {
       bodyStyle={{ padding: 0, display: "flex", minHeight: 480 }}
       footer={<WizardNav w={w} onCancel={onClose} onOpen={open} onInit={init.init} initializing={init.busy} />}
     >
-      <div style={{ width: 220, flex: "none", padding: 12, borderRight: "1px solid var(--border-subtle)", background: "var(--surface-panel)" }}>
+      <div
+        style={{
+          width: 220,
+          flex: "none",
+          padding: 12,
+          borderRight: "1px solid var(--border-subtle)",
+          background: "var(--surface-panel)",
+        }}
+      >
         <Stepper steps={w.steps} current={locked ? w.steps.length - 1 : w.i} onSelect={locked ? undefined : w.go} />
       </div>
       <div style={{ flex: 1, minWidth: 0, overflow: "auto" }}>

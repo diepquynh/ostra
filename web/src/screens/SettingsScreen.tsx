@@ -8,19 +8,6 @@ import { GitCredentials } from "./setup/GitCredentials";
 import { ProviderCredentials } from "./setup/ProviderCredentials";
 import { flash, Loading, Page, useAfterPaint, useAnchor } from "./workspace/Page";
 import {
-  anchorCandidates,
-  fieldIds,
-  fromForm,
-  mapIssues,
-  SETTINGS_TABS,
-  settingKeyOf,
-  stableJson,
-  tabOf,
-  toForm,
-  type SettingsForm,
-  type SettingsTab,
-} from "./workspace/settingsForm";
-import {
   GeneralSection,
   InstructionsSection,
   NotificationsSection,
@@ -29,6 +16,19 @@ import {
   RoutingSection,
   type SectionProps,
 } from "./workspace/SettingsSections";
+import {
+  anchorCandidates,
+  fieldIds,
+  fromForm,
+  mapIssues,
+  SETTINGS_TABS,
+  type SettingsForm,
+  type SettingsTab,
+  settingKeyOf,
+  stableJson,
+  tabOf,
+  toForm,
+} from "./workspace/settingsForm";
 
 export type SettingsScreenProps = { ws: string };
 
@@ -111,10 +111,13 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
     let alive = true;
     setChecking(true);
     const t = setTimeout(() => {
-      api.validateSettings(ws, JSON.parse(settingsKey)).then(
-        (list) => alive && setServerIssues(list),
-        () => {},
-      ).finally(() => alive && setChecking(false));
+      api
+        .validateSettings(ws, JSON.parse(settingsKey))
+        .then(
+          (list) => alive && setServerIssues(list),
+          () => {},
+        )
+        .finally(() => alive && setChecking(false));
     }, VALIDATE_DELAY_MS);
     return () => {
       alive = false;
@@ -186,7 +189,10 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
           : { text: "Checked as you edit", color: "var(--text-muted)" };
 
   // Issues the current tab cannot show next to a field: those on other tabs, and those no field claims.
-  const elsewhere = [...issues.filter((i) => tabOf(i.path) !== tab), ...map.unmatched.filter((i) => tabOf(i.path) === tab)];
+  const elsewhere = [
+    ...issues.filter((i) => tabOf(i.path) !== tab),
+    ...map.unmatched.filter((i) => tabOf(i.path) === tab),
+  ];
   const props: SectionProps = { form, update, issues: issuesFor };
 
   return (
@@ -200,7 +206,13 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
           <Button size="sm" variant="ghost" disabled={!dirty || saving} onClick={discard}>
             Discard
           </Button>
-          <Button variant="primary" size="sm" icon="check" disabled={!dirty || saving || checking || issues.length > 0} onClick={() => void save()}>
+          <Button
+            variant="primary"
+            size="sm"
+            icon="check"
+            disabled={!dirty || saving || checking || issues.length > 0}
+            onClick={() => void save()}
+          >
             {saving ? "Saving…" : "Save"}
           </Button>
         </div>
@@ -251,7 +263,10 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
       {tab === "routing" && (
         <>
           <RoutingSection {...props} harnesses={detail.harnesses} agentInfo={detail.agents} />
-          <Panel title="Native providers" subtitle="saved for every workspace on this machine; environment variables take precedence">
+          <Panel
+            title="Native providers"
+            subtitle="saved for every workspace on this machine; environment variables take precedence"
+          >
             <ProviderCredentials providers={detail.providers} onSaved={onSaved} />
           </Panel>
         </>
@@ -282,8 +297,10 @@ function DeleteWorkspace({ ws, root }: { ws: string; root: string }) {
   return (
     <Panel title="Delete workspace" tone="bad" subtitle="removes this workspace from Ostra">
       <p style={{ margin: 0, color: "var(--text-secondary)", lineHeight: 1.55 }}>
-        Deleting removes the workspace from the list and deletes <code>.ostra/workspace.toml</code> and <code>.ostra/workspace.db</code> in <code>{root}</code>, so its settings and session history are gone.
-        Project folders, session folders under <code>.ostra/sessions</code>, and each project's <code>.ostra</code> files stay on disk.
+        Deleting removes the workspace from the list and deletes <code>.ostra/workspace.toml</code> and{" "}
+        <code>.ostra/workspace.db</code> in <code>{root}</code>, so its settings and session history are gone. Project
+        folders, session folders under <code>.ostra/sessions</code>, and each project's <code>.ostra</code> files stay
+        on disk.
       </p>
       {error && <Banner tone="bad">{error}</Banner>}
       <div className="wp-row" style={{ marginTop: 12 }}>
@@ -306,4 +323,12 @@ function DeleteWorkspace({ ws, root }: { ws: string; root: string }) {
   );
 }
 
-const linkButton = { background: "none", border: 0, padding: 0, color: "inherit", font: "inherit", cursor: "pointer", textDecoration: "underline" } as const;
+const linkButton = {
+  background: "none",
+  border: 0,
+  padding: 0,
+  color: "inherit",
+  font: "inherit",
+  cursor: "pointer",
+  textDecoration: "underline",
+} as const;

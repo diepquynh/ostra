@@ -1,10 +1,18 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import type { AgentInfo, Complexity, HarnessStatus, PermissionRules, ValidationIssue } from "../../api/types";
-import { Button, Checkbox, Input, Panel, Select, Switch, Table, type SelectOption } from "../../design";
 import { COMPLEXITY_AGENTS, NATIVE_ONLY, PERMISSION_MODES, ROUTE_KEYS } from "../../content/agents";
+import { Button, Checkbox, Input, Panel, Select, type SelectOption, Switch, Table } from "../../design";
 import { currentSubscription, disablePush, enablePush, pushSupported } from "../../lib/push";
 import { stackOptions } from "../setup/wizard";
-import { COMPLEXITIES, EFFORTS, modelSelectValue, pickModel, routeKeys, type ModelField, type SettingsForm } from "./settingsForm";
+import {
+  COMPLEXITIES,
+  EFFORTS,
+  type ModelField,
+  modelSelectValue,
+  pickModel,
+  routeKeys,
+  type SettingsForm,
+} from "./settingsForm";
 
 export type SectionProps = {
   form: SettingsForm;
@@ -46,17 +54,27 @@ export function GeneralSection({ form, update, issues }: SectionProps) {
     <>
       <Panel title="Workspace">
         <Anchor id="name">
-          <Input label="Name" value={form.name} error={errorText(issues("name"))} onChange={(e) => update((f) => void (f.name = e.target.value))} />
+          <Input
+            label="Name"
+            value={form.name}
+            error={errorText(issues("name"))}
+            onChange={(e) => update((f) => void (f.name = e.target.value))}
+          />
         </Anchor>
       </Panel>
       <Panel title="YOLO">
         <Anchor id="yolo.default">
           <div className="wp-stack" style={{ gap: 8 }}>
-            <Switch tone="warn" label="Start new sessions with YOLO on" checked={form.yolo} onChange={(e) => update((f) => void (f.yolo = e.target.checked))} />
+            <Switch
+              tone="warn"
+              label="Start new sessions with YOLO on"
+              checked={form.yolo}
+              onChange={(e) => update((f) => void (f.yolo = e.target.checked))}
+            />
             <p className="wp-lead">
-              Under YOLO, Ostra grants every permission ask and answers every gate itself, then lists each decision in the completion report.
-              Guards, deny rules, the fact-check PASS requirement, security blocks, and the session budget still apply. You can switch it per
-              session.
+              Under YOLO, Ostra grants every permission ask and answers every gate itself, then lists each decision in
+              the completion report. Guards, deny rules, the fact-check PASS requirement, security blocks, and the
+              session budget still apply. You can switch it per session.
             </p>
           </div>
         </Anchor>
@@ -102,7 +120,13 @@ export function GeneralSection({ form, update, issues }: SectionProps) {
 
 type ProjectCell = { id: string; i: number };
 
-export function ProjectsSection({ form, update, issues, onAdd, stacks }: SectionProps & { onAdd: () => void; stacks: string[] }) {
+export function ProjectsSection({
+  form,
+  update,
+  issues,
+  onAdd,
+  stacks,
+}: SectionProps & { onAdd: () => void; stacks: string[] }) {
   const rows: ProjectCell[] = form.projects.map((p, i) => ({ id: `${i}:${p.key}`, i }));
   return (
     <Anchor id="projects">
@@ -116,7 +140,8 @@ export function ProjectsSection({ form, update, issues, onAdd, stacks }: Section
         }
       >
         <div className="wp-muted" style={{ padding: "10px 12px 4px" }}>
-          Add and initialize projects from the sidebar. Removing a project here deletes nothing on disk, and it takes effect when you save.
+          Add and initialize projects from the sidebar. Removing a project here deletes nothing on disk, and it takes
+          effect when you save.
         </div>
         <Table<ProjectCell>
           dense
@@ -133,7 +158,15 @@ export function ProjectsSection({ form, update, issues, onAdd, stacks }: Section
                 </div>
               ),
             },
-            { key: "path", label: "Path", render: ({ i }) => <span className="wp-mono" style={{ color: "var(--text-secondary)" }}>{form.projects[i].path}</span> },
+            {
+              key: "path",
+              label: "Path",
+              render: ({ i }) => (
+                <span className="wp-mono" style={{ color: "var(--text-secondary)" }}>
+                  {form.projects[i].path}
+                </span>
+              ),
+            },
             {
               key: "stack",
               label: "Stack",
@@ -153,7 +186,14 @@ export function ProjectsSection({ form, update, issues, onAdd, stacks }: Section
               label: "",
               width: 80,
               render: ({ i }) => (
-                <Button size="sm" variant="ghost" title={`Remove ${form.projects[i].key} from this workspace`} onClick={() => update((f) => void f.projects.splice(i, 1))}>Remove</Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title={`Remove ${form.projects[i].key} from this workspace`}
+                  onClick={() => update((f) => void f.projects.splice(i, 1))}
+                >
+                  Remove
+                </Button>
               ),
             },
           ]}
@@ -178,7 +218,10 @@ function withCurrent(options: SelectOption[], value: string): SelectOption[] {
 export function executorOptions(harnesses: HarnessStatus[]): SelectOption[] {
   return [
     { value: "native", label: "native" },
-    ...harnesses.map((h) => ({ value: `harness:${h.harness}`, label: `harness:${h.harness}${h.installed ? "" : " (not installed)"}` })),
+    ...harnesses.map((h) => ({
+      value: `harness:${h.harness}`,
+      label: `harness:${h.harness}${h.installed ? "" : " (not installed)"}`,
+    })),
   ];
 }
 
@@ -214,9 +257,19 @@ function ModelPicker({
   const def = value.kind === "default" ? agent?.default_route : null;
   return (
     <div className="wp-stack wp-cell-input" style={{ gap: 4 }}>
-      <Select size="sm" style={{ width: 170 }} aria-label={label} value={modelSelectValue(value)} onChange={(e) => onChange(pickModel(value, e.target.value))} options={modelOptions(unsetLabel, agent)} />
+      <Select
+        size="sm"
+        style={{ width: 170 }}
+        aria-label={label}
+        value={modelSelectValue(value)}
+        onChange={(e) => onChange(pickModel(value, e.target.value))}
+        options={modelOptions(unsetLabel, agent)}
+      />
       {def && (
-        <span className="wp-mono wp-muted" title={`What Agent default resolves to on ${def.executor}, from the saved executor route`}>
+        <span
+          className="wp-mono wp-muted"
+          title={`What Agent default resolves to on ${def.executor}, from the saved executor route`}
+        >
           {def.model}
         </span>
       )}
@@ -225,7 +278,11 @@ function ModelPicker({
           size="sm"
           mono
           aria-label={`${label}, ${value.kind === "custom" ? "model" : "per executor"}`}
-          placeholder={value.kind === "custom" ? "anthropic:claude-sonnet-5" : "native = anthropic:claude-sonnet-5, codex = gpt-5.6-terra"}
+          placeholder={
+            value.kind === "custom"
+              ? "anthropic:claude-sonnet-5"
+              : "native = anthropic:claude-sonnet-5, codex = gpt-5.6-terra"
+          }
           value={value.text}
           error={error}
           onChange={(e) => onChange({ ...value, text: e.target.value })}
@@ -240,19 +297,28 @@ const effortDefaultLabel = (agent?: AgentInfo) => (agent ? `Agent default (${age
 type AgentRow = { id: string };
 type ComplexityRow = { id: string; agent: string; c: Complexity };
 
-export function RoutingSection({ form, update, issues, harnesses, agentInfo }: SectionProps & { harnesses: HarnessStatus[]; agentInfo: AgentInfo[] }) {
+export function RoutingSection({
+  form,
+  update,
+  issues,
+  harnesses,
+  agentInfo,
+}: SectionProps & { harnesses: HarnessStatus[]; agentInfo: AgentInfo[] }) {
   const execOpts = executorOptions(harnesses);
   const info = (id: string) => agentInfo.find((a) => a.name === id);
   const byComplexity = (k: string) => (COMPLEXITY_AGENTS as readonly string[]).includes(k) || k in form.complexityModel;
   const agents: AgentRow[] = routeKeys(form).map((id) => ({ id }));
-  const complexityRows: ComplexityRow[] = Object.keys(form.complexityModel).flatMap((agent) => COMPLEXITIES.map((c) => ({ id: `${agent}.${c}`, agent, c })));
+  const complexityRows: ComplexityRow[] = Object.keys(form.complexityModel).flatMap((agent) =>
+    COMPLEXITIES.map((c) => ({ id: `${agent}.${c}`, agent, c })),
+  );
 
   return (
     <>
       <p className="wp-lead">
-        Each agent runs on an executor (Ostra&apos;s native loop, or an installed harness CLI) and a model. A tier resolves through that
-        executor&apos;s tier table in <code>~/.config/ostra/config.toml</code>; Agent default uses the agent&apos;s own tier. Native models are
-        written <code>provider:model</code>. A route that does not resolve shows here as you edit, because an agent without a route cannot start.
+        Each agent runs on an executor (Ostra&apos;s native loop, or an installed harness CLI) and a model. A tier
+        resolves through that executor&apos;s tier table in <code>~/.config/ostra/config.toml</code>; Agent default uses
+        the agent&apos;s own tier. Native models are written <code>provider:model</code>. A route that does not resolve
+        shows here as you edit, because an agent without a route cannot start.
       </p>
       <Anchor id="routing.byAgent">
         <Panel title="Executor and model per agent" subtitle="byPhaseComplexity wins over byAgent" bodyFlush>
@@ -264,7 +330,11 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
               {
                 key: "role",
                 label: "Role",
-                render: ({ id }) => <span style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>{ROLE.get(id) ?? "Not an agent Ostra knows. Set its model to Not set to remove it."}</span>,
+                render: ({ id }) => (
+                  <span style={{ color: "var(--text-secondary)", fontSize: "var(--text-sm)" }}>
+                    {ROLE.get(id) ?? "Not an agent Ostra knows. Set its model to Not set to remove it."}
+                  </span>
+                ),
               },
               {
                 key: "executor",
@@ -331,7 +401,13 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
                         style={{ width: 130 }}
                         value={form.effort[id] ?? ""}
                         onChange={(e) => update((f) => void (f.effort[id] = e.target.value))}
-                        options={withCurrent([{ value: "", label: effortDefaultLabel(info(id)) }, ...EFFORTS.map((e) => ({ value: e, label: e }))], form.effort[id] ?? "")}
+                        options={withCurrent(
+                          [
+                            { value: "", label: effortDefaultLabel(info(id)) },
+                            ...EFFORTS.map((e) => ({ value: e, label: e })),
+                          ],
+                          form.effort[id] ?? "",
+                        )}
                       />
                     )}
                     <FieldIssues issues={issues(`routing.effort.byAgent.${id}`)} />
@@ -346,14 +422,19 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
       <Anchor id="routing.byPhaseComplexity">
         <Panel title="By phase complexity" subtitle="the phase file's Complexity line picks the route" bodyFlush>
           <div className="wp-muted" style={{ padding: "10px 12px 4px" }}>
-            For these agents a phase&apos;s complexity picks the route and wins over the table above. Work with no phase file counts as low.
+            For these agents a phase&apos;s complexity picks the route and wins over the table above. Work with no phase
+            file counts as low.
           </div>
           <Table<ComplexityRow>
             dense
             rows={complexityRows}
             columns={[
               { key: "agent", label: "Agent", render: (r) => <span className="wp-mono">{r.agent}</span> },
-              { key: "c", label: "Complexity", render: (r) => <span style={{ color: "var(--text-secondary)" }}>{r.c}</span> },
+              {
+                key: "c",
+                label: "Complexity",
+                render: (r) => <span style={{ color: "var(--text-secondary)" }}>{r.c}</span>,
+              },
               {
                 key: "executor",
                 label: "Executor",
@@ -371,7 +452,10 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
                           f.complexityExecutor[r.agent][r.c] = e.target.value;
                         })
                       }
-                      options={withCurrent([{ value: "", label: "Same as the agent route" }, ...execOpts], form.complexityExecutor[r.agent]?.[r.c] ?? "")}
+                      options={withCurrent(
+                        [{ value: "", label: "Same as the agent route" }, ...execOpts],
+                        form.complexityExecutor[r.agent]?.[r.c] ?? "",
+                      )}
                     />
                     <FieldIssues issues={issues(`routing.executor.byPhaseComplexity.${r.agent}.${r.c}`)} />
                   </Anchor>
@@ -417,7 +501,13 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
                             f.complexityEffort[r.agent][r.c] = e.target.value;
                           })
                         }
-                        options={withCurrent([{ value: "", label: "Same as the agent effort" }, ...EFFORTS.map((e) => ({ value: e, label: e }))], current)}
+                        options={withCurrent(
+                          [
+                            { value: "", label: "Same as the agent effort" },
+                            ...EFFORTS.map((e) => ({ value: e, label: e })),
+                          ],
+                          current,
+                        )}
                       />
                       <FieldIssues issues={issues(path)} />
                     </Anchor>
@@ -428,7 +518,11 @@ export function RoutingSection({ form, update, issues, harnesses, agentInfo }: S
           />
           <div style={{ padding: "0 12px" }}>
             <FieldIssues
-              issues={[...issues("routing.executor.byPhaseComplexity"), ...issues("routing.model.byPhaseComplexity"), ...issues("routing.effort.byPhaseComplexity")]}
+              issues={[
+                ...issues("routing.executor.byPhaseComplexity"),
+                ...issues("routing.model.byPhaseComplexity"),
+                ...issues("routing.effort.byPhaseComplexity"),
+              ]}
             />
           </div>
         </Panel>
@@ -452,9 +546,10 @@ export function PermissionsSection({ form, update, issues, global }: SectionProp
   return (
     <>
       <p className="wp-lead">
-        Two layers check every tool call. Guards come first and nothing overrides them: write scopes, state ownership, the build streak limit.
-        Then your permissions: a mode plus rules such as <code>Bash(npm run test *)</code>, <code>Edit(src/**)</code>, or{" "}
-        <code>WebFetch(domain:docs.rs)</code>. Each part of a chained command is checked on its own.
+        Two layers check every tool call. Guards come first and nothing overrides them: write scopes, state ownership,
+        the build streak limit. Then your permissions: a mode plus rules such as <code>Bash(npm run test *)</code>,{" "}
+        <code>Edit(src/**)</code>, or <code>WebFetch(domain:docs.rs)</code>. Each part of a chained command is checked
+        on its own.
       </p>
       <div className="wp-grid-2">
         <Anchor id="permissions.mode">
@@ -498,8 +593,8 @@ export function PermissionsSection({ form, update, issues, global }: SectionProp
       <Panel title="Global rules" subtitle="read-only, from ~/.config/ostra/config.toml">
         <div className="wp-stack" style={{ gap: 8 }}>
           <p className="wp-lead">
-            These rules apply in every workspace on this machine, together with the workspace rules above. Edit <code>[permissions]</code> in the global
-            config to change them.
+            These rules apply in every workspace on this machine, together with the workspace rules above. Edit{" "}
+            <code>[permissions]</code> in the global config to change them.
           </p>
           {globalCount === 0 ? (
             <span className="wp-muted">The global config sets no permission rules.</span>
@@ -536,7 +631,8 @@ export function InstructionsSection({ form, update, issues }: SectionProps) {
   return (
     <>
       <p className="wp-lead">
-        Ostra adds these to every agent&apos;s brief: the text for all agents first, then the agent&apos;s own. Routing settings are never included.
+        Ostra adds these to every agent&apos;s brief: the text for all agents first, then the agent&apos;s own. Routing
+        settings are never included.
       </p>
       <Anchor id="instructions.all">
         <Panel title="All agents">
@@ -625,7 +721,9 @@ export function NotificationsSection({ form, update }: SectionProps) {
             checked={form.push}
             onChange={(e) => update((f) => void (f.push = e.target.checked))}
           />
-          <p className="wp-lead">Each notification opens the screen that needs you. This switch applies to every browser you subscribe below.</p>
+          <p className="wp-lead">
+            Each notification opens the screen that needs you. This switch applies to every browser you subscribe below.
+          </p>
           <div className="wp-row" style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: 12 }}>
             <span style={{ fontWeight: 500 }}>This browser</span>
             <span className="wp-muted">

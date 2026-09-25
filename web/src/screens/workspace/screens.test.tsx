@@ -37,21 +37,29 @@ describe("memory screen", () => {
     fireEvent.click(within(main()).getAllByRole("button", { name: /Add a lesson/ })[0]);
     const dialog = await screen.findByRole("dialog");
     fireEvent.change(within(dialog).getByLabelText(/^Area/), { target: { value: "src/routes" } });
-    fireEvent.change(within(dialog).getByLabelText(/^Lesson/), { target: { value: "Routes load lazily, so a new page needs an import() entry." } });
+    fireEvent.change(within(dialog).getByLabelText(/^Lesson/), {
+      target: { value: "Routes load lazily, so a new page needs an import() entry." },
+    });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save the lesson" }));
     await waitFor(() => expect(rowTexts().some((t) => t.includes("Routes load lazily"))).toBe(true));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(main().querySelector(".os-row--selected")?.textContent).toContain("Routes load lazily");
 
-    const added = Array.from(main().querySelectorAll("tbody tr")).find((tr) => tr.textContent?.includes("Routes load lazily")) as HTMLElement;
+    const added = Array.from(main().querySelectorAll("tbody tr")).find((tr) =>
+      tr.textContent?.includes("Routes load lazily"),
+    ) as HTMLElement;
     fireEvent.click(within(added).getByRole("button", { name: "Edit this lesson" }));
     const edit = await screen.findByRole("dialog");
     expect((within(edit).getByLabelText(/^Area/) as HTMLInputElement).value).toBe("src/routes");
-    fireEvent.change(within(edit).getByLabelText(/^Lesson/), { target: { value: "Routes load lazily; add an import() entry per page." } });
+    fireEvent.change(within(edit).getByLabelText(/^Lesson/), {
+      target: { value: "Routes load lazily; add an import() entry per page." },
+    });
     fireEvent.click(within(edit).getByRole("button", { name: "Save the lesson" }));
     await waitFor(() => expect(rowTexts().some((t) => t.includes("add an import() entry per page"))).toBe(true));
 
-    const edited = Array.from(main().querySelectorAll("tbody tr")).find((tr) => tr.textContent?.includes("per page")) as HTMLElement;
+    const edited = Array.from(main().querySelectorAll("tbody tr")).find((tr) =>
+      tr.textContent?.includes("per page"),
+    ) as HTMLElement;
     fireEvent.click(within(edited).getByRole("button", { name: "Delete this lesson" }));
     const confirm = await screen.findByRole("dialog");
     fireEvent.click(within(confirm).getByRole("button", { name: "Delete the lesson" }));
@@ -90,7 +98,9 @@ describe("skills screen", () => {
     expect((within(main()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(editor(), { target: { value: `${editor().value}\nRun sqlx migrate.\n` } });
     fireEvent.click(within(main()).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect((within(main()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() =>
+      expect((within(main()).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true),
+    );
 
     fireEvent.click(within(main()).getByRole("button", { name: /Delete/ }));
     const confirm = await screen.findByRole("dialog");
@@ -102,8 +112,12 @@ describe("skills screen", () => {
 describe("settings screen", () => {
   it("opens the tab a setting deep link names and rings the field", async () => {
     await mount(`/w/${WS}/settings#setting:permissions.deny`);
-    await waitFor(() => expect(screen.getByRole("tab", { name: "Permissions" }).getAttribute("aria-selected")).toBe("true"));
-    await waitFor(() => expect(document.getElementById("setting:permissions.deny")?.classList.contains("wp-flash")).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Permissions" }).getAttribute("aria-selected")).toBe("true"),
+    );
+    await waitFor(() =>
+      expect(document.getElementById("setting:permissions.deny")?.classList.contains("wp-flash")).toBe(true),
+    );
   });
 
   it("validates as you edit, shows issues on the field, and saves", async () => {
@@ -122,7 +136,9 @@ describe("settings screen", () => {
 
     fireEvent.change(name, { target: { value: "shop-renamed" } });
     await waitFor(() => expect(main().textContent).not.toContain("The workspace needs a name."));
-    await waitFor(() => expect((within(main()).getByRole("button", { name: /Save/ }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() =>
+      expect((within(main()).getByRole("button", { name: /Save/ }) as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(within(main()).getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     expect(save.mock.calls[0][1].name).toBe("shop-renamed");
@@ -130,7 +146,9 @@ describe("settings screen", () => {
 
     // Put the mock back for the other tests.
     fireEvent.change(within(main()).getByLabelText("Name"), { target: { value: "shop" } });
-    await waitFor(() => expect((within(main()).getByRole("button", { name: /Save/ }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() =>
+      expect((within(main()).getByRole("button", { name: /Save/ }) as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(within(main()).getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
   });
@@ -141,7 +159,9 @@ describe("settings screen", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Routing" }));
     const executor = within(main()).getByLabelText("Executor for plan") as HTMLSelectElement;
     fireEvent.change(executor, { target: { value: "harness:agy" } });
-    await waitFor(() => expect((within(main()).getByRole("button", { name: /Save/ }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() =>
+      expect((within(main()).getByRole("button", { name: /Save/ }) as HTMLButtonElement).disabled).toBe(false),
+    );
     fireEvent.click(within(main()).getByRole("button", { name: /Save/ }));
     await waitFor(() => expect(main().textContent).toContain("routes to harness:agy, which is not installed"));
     const cell = document.getElementById("setting:routing.executor.byAgent.plan")!;
@@ -156,13 +176,23 @@ describe("settings screen", () => {
     const labels = Array.from(model.options).map((o) => o.textContent);
     expect(labels).toContain("Agent default (advanced)");
     fireEvent.change(model, { target: { value: "default" } });
-    await waitFor(() => expect(document.getElementById("setting:routing.model.byAgent.plan")?.textContent).toContain("anthropic:claude-opus-5-5"));
+    await waitFor(() =>
+      expect(document.getElementById("setting:routing.model.byAgent.plan")?.textContent).toContain(
+        "anthropic:claude-opus-5-5",
+      ),
+    );
     const effort = within(main()).getByLabelText("Effort for quick-answer") as HTMLSelectElement;
     expect(effort.options[0].textContent).toBe("Agent default (medium)");
 
     fireEvent.click(screen.getByRole("tab", { name: "Projects" }));
     const stack = within(main()).getByLabelText("Stack of backend") as HTMLSelectElement;
-    expect(Array.from(stack.options).map((o) => o.value)).toEqual(["", "go", "java-spring", "python", "typescript-node"]);
+    expect(Array.from(stack.options).map((o) => o.value)).toEqual([
+      "",
+      "go",
+      "java-spring",
+      "python",
+      "typescript-node",
+    ]);
 
     fireEvent.click(screen.getByRole("tab", { name: "Permissions" }));
     expect(main().textContent).toContain("read-only, from ~/.config/ostra/config.toml");
@@ -190,7 +220,18 @@ describe("workspace screen", () => {
     const base = { ...detail, projects: detail.projects.map((p) => ({ ...p, init_status: "initialized" as const })) };
     const ctx = (draft: string | null): ConsoleContextValue => ({
       nav: { ws: WS, activeId: "ws:overview", tabs: [], open, close: () => {}, pin: () => {}, href: (id) => id },
-      shell: { openDock: () => {}, closeDock: () => {}, taskDraft: draft, setTaskDraft, newWorkspace: () => {}, addProject: () => {}, runSetup: () => {}, browseFiles: () => {}, theme: "dark", toggleTheme: () => {} },
+      shell: {
+        openDock: () => {},
+        closeDock: () => {},
+        taskDraft: draft,
+        setTaskDraft,
+        newWorkspace: () => {},
+        addProject: () => {},
+        runSetup: () => {},
+        browseFiles: () => {},
+        theme: "dark",
+        toggleTheme: () => {},
+      },
       workspace: { detail: base, reload: () => {} },
     });
     const view = (draft: string | null) => (
@@ -212,7 +253,11 @@ describe("workspace screen", () => {
     fireEvent.click(screen.getByRole("button", { name: "web" }));
     fireEvent.keyDown(request, { key: "Enter", metaKey: true, ctrlKey: true });
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
-    expect(create.mock.calls[0][1]).toEqual({ request: "Why does checkout retry twice?", options: { tests: false, docs: false, yolo: false }, projects: ["web"] });
+    expect(create.mock.calls[0][1]).toEqual({
+      request: "Why does checkout retry twice?",
+      options: { tests: false, docs: false, yolo: false },
+      projects: ["web"],
+    });
     await waitFor(() => expect(open).toHaveBeenCalledWith("session:s_new"));
     expect(request.value).toBe("");
   });

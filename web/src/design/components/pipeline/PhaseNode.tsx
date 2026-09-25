@@ -18,7 +18,20 @@ export interface PhaseNodeProps {
 }
 
 /** One phase in the build-lane DAG. */
-export function PhaseNode({ id, title, project, complexity, testPolicy, deliverable, status = "queued", reviewPass, securityBlock, dependsOn, onClick, selected }: PhaseNodeProps) {
+export function PhaseNode({
+  id,
+  title,
+  project,
+  complexity,
+  testPolicy,
+  deliverable,
+  status = "queued",
+  reviewPass,
+  securityBlock,
+  dependsOn,
+  onClick,
+  selected,
+}: PhaseNodeProps) {
   return (
     <div
       className={`os-phase os-phase--${status}`}
@@ -51,7 +64,9 @@ export function PhaseNode({ id, title, project, complexity, testPolicy, delivera
             security block
           </Chip>
         )}
-        {dependsOn && dependsOn.length > 0 && <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}>← {dependsOn.join(", ")}</span>}
+        {dependsOn && dependsOn.length > 0 && (
+          <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}>← {dependsOn.join(", ")}</span>
+        )}
       </div>
     </div>
   );

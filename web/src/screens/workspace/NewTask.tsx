@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { ProjectView, SessionSummary } from "../../api/types";
 import { Banner, Button, Checkbox, Input, Panel } from "../../design";
@@ -42,7 +42,11 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
     setBusy(true);
     setError(null);
     try {
-      const s = await api.createSession(ws, { request: request.trim(), options: { tests, docs, yolo }, projects: pins });
+      const s = await api.createSession(ws, {
+        request: request.trim(),
+        options: { tests, docs, yolo },
+        projects: pins,
+      });
       setRequest("");
       setPins([]);
       onCreated(s);
@@ -66,8 +70,8 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
     <Panel title="New task" icon="plus">
       <div className="wp-stack" style={{ gap: 10 }}>
         <div className="wp-muted" style={{ color: "var(--text-secondary)", lineHeight: 1.45 }}>
-          Describe the work. Ostra classifies it, researches the code, writes a spec for your approval, plans phases, builds and reviews each
-          one, and asks before any optional stage.
+          Describe the work. Ostra classifies it, researches the code, writes a spec for your approval, plans phases,
+          builds and reviews each one, and asks before any optional stage.
         </div>
         <Input
           ref={field}
@@ -80,8 +84,18 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
           placeholder="Add order cancellation: customers can cancel until the order ships."
         />
         <div className="wp-row" style={{ gap: 14 }}>
-          <Checkbox label="Write tests" title="Tests are written after every phase passes review" checked={tests} onChange={(e) => setTests(e.target.checked)} />
-          <Checkbox label="Update docs" title="The area references are refreshed once every phase passes review" checked={docs} onChange={(e) => setDocs(e.target.checked)} />
+          <Checkbox
+            label="Write tests"
+            title="Tests are written after every phase passes review"
+            checked={tests}
+            onChange={(e) => setTests(e.target.checked)}
+          />
+          <Checkbox
+            label="Update docs"
+            title="The area references are refreshed once every phase passes review"
+            checked={docs}
+            onChange={(e) => setDocs(e.target.checked)}
+          />
           <Checkbox
             label="YOLO"
             title="Ostra answers every question and permission ask itself and lists each decision at the end"
@@ -118,8 +132,8 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
         </div>
         {yolo && (
           <Banner tone="warn">
-            YOLO: every permission is granted and every gate is answered by Ostra. Guards, deny rules, the fact-check PASS requirement, and
-            security blocks still apply. The completion report lists every decision made for you.
+            YOLO: every permission is granted and every gate is answered by Ostra. Guards, deny rules, the fact-check
+            PASS requirement, and security blocks still apply. The completion report lists every decision made for you.
           </Banner>
         )}
         {error && <Banner tone="bad">{error}</Banner>}

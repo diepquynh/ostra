@@ -1,10 +1,10 @@
-import { createContext, Fragment, useContext, type ReactNode } from "react";
+import { createContext, Fragment, type ReactNode, useContext } from "react";
 import type { Evidence, FactCheckView, Question, Source } from "../../../api/types";
 import { Markdown } from "../../../components/Markdown";
 import { Chip, cx, Icon, SectionLabel, type Tone } from "../../../design";
-import { findingElement, normId, severityTone, type Mark, type MarkTone } from "./model";
 import { ColumnResizer } from "../ColumnResizer";
 import { ScrollTable } from "../ScrollTable";
+import { findingElement, type Mark, type MarkTone, normId, severityTone } from "./model";
 
 export type DocCtx = {
   /** Go to an element id (`R3`, `step 2.1`) or a chapter id. */
@@ -17,7 +17,13 @@ export type DocCtx = {
   known: (ref: string) => boolean;
 };
 
-export const DocContext = createContext<DocCtx>({ go: () => {}, open: () => {}, marks: new Map(), focus: null, known: () => false });
+export const DocContext = createContext<DocCtx>({
+  go: () => {},
+  open: () => {},
+  marks: new Map(),
+  focus: null,
+  known: () => false,
+});
 export const useDoc = () => useContext(DocContext);
 
 const MARK_CHIP: Record<MarkTone, Tone> = { bad: "bad", warn: "warn", info: "info" };
@@ -35,7 +41,12 @@ export function Ref({ id }: { id: string }) {
   const tone = marks.get(key)?.length ? worstTone(marks.get(key)!) : undefined;
   if (!known(id)) return <span className="doc-ref doc-ref--inert">{id}</span>;
   return (
-    <button type="button" className={cx("doc-ref", tone && `doc-ref--${tone}`)} onClick={() => go(id)} title={`Go to ${id}`}>
+    <button
+      type="button"
+      className={cx("doc-ref", tone && `doc-ref--${tone}`)}
+      onClick={() => go(id)}
+      title={`Go to ${id}`}
+    >
       {id}
     </button>
   );
@@ -52,7 +63,8 @@ export function Refs({ ids, none = "none" }: { ids: string[]; none?: string }) {
   );
 }
 
-const worstTone = (m: Mark[]): MarkTone => (m.some((x) => x.tone === "bad") ? "bad" : m.some((x) => x.tone === "warn") ? "warn" : "info");
+const worstTone = (m: Mark[]): MarkTone =>
+  m.some((x) => x.tone === "bad") ? "bad" : m.some((x) => x.tone === "warn") ? "warn" : "info";
 
 /** The markers on one element, listed under it. */
 export function Marks({ id }: { id: string }) {
@@ -71,7 +83,17 @@ export function Marks({ id }: { id: string }) {
 }
 
 /** A block addressable by id: the jump target, highlighted when focused, with its markers. */
-export function El({ id, children, className, as = "section" }: { id: string; children: ReactNode; className?: string; as?: "section" | "div" | "li" }) {
+export function El({
+  id,
+  children,
+  className,
+  as = "section",
+}: {
+  id: string;
+  children: ReactNode;
+  className?: string;
+  as?: "section" | "div" | "li";
+}) {
   const { focus } = useDoc();
   const key = normId(id);
   const Tag = as;
@@ -83,7 +105,19 @@ export function El({ id, children, className, as = "section" }: { id: string; ch
   );
 }
 
-export function Card({ id, title, badges, children, tone }: { id?: string; title: ReactNode; badges?: ReactNode; children?: ReactNode; tone?: "accent" }) {
+export function Card({
+  id,
+  title,
+  badges,
+  children,
+  tone,
+}: {
+  id?: string;
+  title: ReactNode;
+  badges?: ReactNode;
+  children?: ReactNode;
+  tone?: "accent";
+}) {
   const body = (
     <>
       <div className="doc-card__head">
@@ -220,14 +254,20 @@ export function Questions({ items, empty }: { items: Question[]; empty: string }
 /** An external fact with the rule it forces. */
 export function EvidenceCard({ e, restedOnBy }: { e: Evidence; restedOnBy?: string[] }) {
   return (
-    <Card id={e.id} title={<IdTitle id={e.id} title="External evidence" />} badges={e.note ? <Chip tone="warn">{e.note}</Chip> : undefined}>
+    <Card
+      id={e.id}
+      title={<IdTitle id={e.id} title="External evidence" />}
+      badges={e.note ? <Chip tone="warn">{e.note}</Chip> : undefined}
+    >
       <Facts
         rows={[
           ["Fact", <Prose key="f" text={e.fact} />],
           ["Binding rule", <strong key="r">{e.rule}</strong>],
           ["Source", <Link key="s" url={e.source} />],
           ["Version", e.version],
-          ...(restedOnBy ? ([["Rested on by", <Refs key="b" ids={restedOnBy} none="no requirement" />]] as [string, ReactNode][]) : []),
+          ...(restedOnBy
+            ? ([["Rested on by", <Refs key="b" ids={restedOnBy} none="no requirement" />]] as [string, ReactNode][])
+            : []),
         ]}
       />
     </Card>
@@ -291,7 +331,12 @@ export function Grid({ head, rows, ids }: { head: string[]; rows: ReactNode[][];
             const id = ids?.[i];
             const key = id ? normId(id) : undefined;
             return (
-              <tr key={i} id={key ? `el-${key}` : undefined} data-el={key} className={cx(key && focus === key && "doc-row--focus")}>
+              <tr
+                key={i}
+                id={key ? `el-${key}` : undefined}
+                data-el={key}
+                className={cx(key && focus === key && "doc-row--focus")}
+              >
                 {r.map((c, j) => (
                   <td key={j} className="art-cell">
                     {c}
@@ -313,7 +358,11 @@ export function FactCheckChapter({ check }: { check: FactCheckView }) {
   return (
     <div className="doc-stack">
       <div className="doc-row">
-        {check.verdict ? <Chip tone={VERDICT_TONE[check.verdict]}>{check.verdict}</Chip> : <Chip tone="accent">Running</Chip>}
+        {check.verdict ? (
+          <Chip tone={VERDICT_TONE[check.verdict]}>{check.verdict}</Chip>
+        ) : (
+          <Chip tone="accent">Running</Chip>
+        )}
         <span className="art-muted">
           Pass over version {check.version}
           {check.current ? ", the version shown here" : ", an earlier version"}.
@@ -351,12 +400,22 @@ export function Ears({ text }: { text: string }) {
   const parts = text.split(EARS);
   return (
     <p className="doc-ears">
-      {parts.map((p, i) => (i % 2 === 1 ? <strong key={i} className="doc-ears__kw">{p}</strong> : <Fragment key={i}>{inlineCode(p)}</Fragment>))}
+      {parts.map((p, i) =>
+        i % 2 === 1 ? (
+          <strong key={i} className="doc-ears__kw">
+            {p}
+          </strong>
+        ) : (
+          <Fragment key={i}>{inlineCode(p)}</Fragment>
+        ),
+      )}
     </p>
   );
 }
 
 /** Backticked spans as code, the rest as text. */
 export function inlineCode(text: string): ReactNode {
-  return text.split(/(`[^`]+`)/g).map((p, i) => (p.startsWith("`") && p.endsWith("`") && p.length > 1 ? <code key={i}>{p.slice(1, -1)}</code> : p));
+  return text
+    .split(/(`[^`]+`)/g)
+    .map((p, i) => (p.startsWith("`") && p.endsWith("`") && p.length > 1 ? <code key={i}>{p.slice(1, -1)}</code> : p));
 }

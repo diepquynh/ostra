@@ -50,12 +50,12 @@
   --violet-50: #ebe7fa;
 
   /* Semantic: surfaces (dark) */
-  --surface-chrome: var(--gray-900);     /* title bar, status bar, docks */
-  --surface-panel: var(--gray-850);      /* sidebar, side dock */
-  --surface-editor: var(--gray-800);     /* the center pane */
-  --surface-raised: var(--gray-750);     /* cards inside the editor */
-  --surface-sunken: var(--gray-850);     /* code blocks, inputs */
-  --surface-overlay: var(--gray-750);    /* popovers, palette, dialogs */
+  --surface-chrome: var(--gray-900); /* title bar, status bar, docks */
+  --surface-panel: var(--gray-850); /* sidebar, side dock */
+  --surface-editor: var(--gray-800); /* the center pane */
+  --surface-raised: var(--gray-750); /* cards inside the editor */
+  --surface-sunken: var(--gray-850); /* code blocks, inputs */
+  --surface-overlay: var(--gray-750); /* popovers, palette, dialogs */
   --surface-terminal: var(--gray-950);
   --surface-hover: rgba(255, 255, 255, 0.045);
   --surface-active: rgba(255, 255, 255, 0.075);

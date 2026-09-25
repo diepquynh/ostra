@@ -4,15 +4,21 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, HttpError } from "../../api";
 import { httpApi } from "../../api/client";
+import { workspaceDetail } from "../../api/mock/fixtures";
 import type { FsBrowse } from "../../api/types";
 import { FolderPicker } from "../../design";
 import { ConsoleContext, type ConsoleContextValue } from "../../lib/nav";
-import { workspaceDetail } from "../../api/mock/fixtures";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { makeLister } from "./folders";
 import { NewWorkspaceDialog } from "./NewWorkspaceDialog";
 
-vi.mock("../execution/XtermScreen", () => ({ default: ({ execution }: { execution: string }) => <div data-testid="xterm" className="ex-xterm" tabIndex={0}>{execution}</div> }));
+vi.mock("../execution/XtermScreen", () => ({
+  default: ({ execution }: { execution: string }) => (
+    <div data-testid="xterm" className="ex-xterm" tabIndex={0}>
+      {execution}
+    </div>
+  ),
+}));
 
 afterEach(() => {
   cleanup();
@@ -45,7 +51,12 @@ describe("FolderPicker over GET /api/fs", () => {
       urls.push(url);
       signals.push(init.signal!);
       const path = new URL(url, "http://x").searchParams.get("path")!;
-      const body = path === "/home/me/code" ? browse(path, ["billing-service", "shop-backend"]) : path === "/nope" ? browse(path, [], false) : browse(path, ["code", "notes"]);
+      const body =
+        path === "/home/me/code"
+          ? browse(path, ["billing-service", "shop-backend"])
+          : path === "/nope"
+            ? browse(path, [], false)
+            : browse(path, ["code", "notes"]);
       return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -99,7 +110,15 @@ describe("FolderPicker over GET /api/fs", () => {
 
 const ctx = (open = vi.fn()): ConsoleContextValue =>
   ({
-    nav: { ws: workspaceDetail.id, activeId: null, tabs: [], open, close: vi.fn(), pin: vi.fn(), href: (id: string) => id },
+    nav: {
+      ws: workspaceDetail.id,
+      activeId: null,
+      tabs: [],
+      open,
+      close: vi.fn(),
+      pin: vi.fn(),
+      href: (id: string) => id,
+    },
     shell: {},
     workspace: { detail: workspaceDetail, reload: vi.fn() },
   }) as unknown as ConsoleContextValue;
@@ -109,7 +128,8 @@ function Where() {
   return <div data-testid="where">{l.pathname}</div>;
 }
 
-const type = (label: string | RegExp, value: string) => fireEvent.change(screen.getByRole("textbox", { name: label }), { target: { value } });
+const type = (label: string | RegExp, value: string) =>
+  fireEvent.change(screen.getByRole("textbox", { name: label }), { target: { value } });
 const click = (name: string | RegExp) => fireEvent.click(screen.getByRole("button", { name }));
 
 describe("New workspace dialog", () => {
@@ -117,7 +137,15 @@ describe("New workspace dialog", () => {
     render(
       <MemoryRouter initialEntries={["/w/ws_demo"]}>
         <Routes>
-          <Route path="*" element={<><NewWorkspaceDialog onClose={onClose} /><Where /></>} />
+          <Route
+            path="*"
+            element={
+              <>
+                <NewWorkspaceDialog onClose={onClose} />
+                <Where />
+              </>
+            }
+          />
         </Routes>
       </MemoryRouter>,
     );
@@ -159,14 +187,18 @@ describe("New workspace dialog", () => {
     await screen.findByText("Anthropic");
     click("Continue");
     type("Folder path", "/home/me/code/shop-three");
-    await waitFor(() => expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe("shop-three"));
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe("shop-three"),
+    );
     click("Continue");
 
     await screen.findByText("Import a folder");
     fireEvent.click(screen.getByRole("tab", { name: /Clone from git/ }));
     for (const url of ["https://github.com/acme/shop-api.git", "https://github.com/acme/private.git"]) {
       type(/^Repository URL/, url);
-      await waitFor(() => expect(screen.getByRole("button", { name: "Add to the list" })).toHaveProperty("disabled", false));
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Add to the list" })).toHaveProperty("disabled", false),
+      );
       click("Add to the list");
     }
     await screen.findByRole("button", { name: "Remove private" });
@@ -201,13 +233,17 @@ describe("New workspace dialog", () => {
     // Name and folder: the name follows the chosen folder.
     expect(screen.getByRole("button", { name: "Continue" })).toHaveProperty("disabled", true);
     type("Folder path", "/home/me/code/shop");
-    await waitFor(() => expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe("shop"));
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe("shop"),
+    );
     click("Continue");
 
     // Add projects: the key comes from the folder name.
     await screen.findByText("Import a folder");
     type("Folder path", "/home/me/code/billing-service");
-    await waitFor(() => expect((screen.getByRole("textbox", { name: /^Project key/ }) as HTMLInputElement).value).toBe("billing-service"));
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: /^Project key/ }) as HTMLInputElement).value).toBe("billing-service"),
+    );
     await waitFor(() => expect(screen.getByRole("button", { name: "Add project" })).toHaveProperty("disabled", false));
     click("Add project");
     await screen.findByRole("button", { name: "Remove billing-service" });
@@ -227,7 +263,9 @@ describe("New workspace dialog", () => {
     expect(screen.getByRole("alert").textContent).toBe("That folder is already a registered workspace.");
 
     type("Folder path", "/home/me/code/shop-two");
-    await waitFor(() => expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe("shop-two"));
+    await waitFor(() =>
+      expect((screen.getByRole("textbox", { name: /^Name/ }) as HTMLInputElement).value).toBe("shop-two"),
+    );
     click("Continue");
     click("Continue");
     click("Continue");
@@ -253,7 +291,9 @@ describe("Add project dialog", () => {
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText(/to shop\./)).toBeTruthy();
     type("Folder path", "/home/me/code/shop-backend");
-    await waitFor(() => expect(screen.getByRole("textbox", { name: /^Project key/ })).toHaveProperty("value", "shop-backend"));
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: /^Project key/ })).toHaveProperty("value", "shop-backend"),
+    );
     // The folder is already the workspace's backend project.
     await screen.findByText("This folder is already added as backend.");
     expect(screen.getByRole("button", { name: "Import project" })).toHaveProperty("disabled", true);
@@ -264,7 +304,9 @@ describe("Add project dialog", () => {
     type(/^Project key/, "web");
     await screen.findByText("This key is already used in the workspace.");
     type(/^Project key/, "admin");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Import project" })).toHaveProperty("disabled", false));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Import project" })).toHaveProperty("disabled", false),
+    );
     await act(async () => click("Import project"));
     await waitFor(() => expect(onAdded).toHaveBeenCalled());
     expect(onAdded.mock.calls[0][1]).toBe("admin");
@@ -276,14 +318,18 @@ describe("Add project dialog", () => {
       { path: "key", message: "A project named `admin` already exists in this workspace. Choose another key." },
       { path: "stack", message: "`Go Lang` is not a stack name." },
     ];
-    vi.spyOn(api, "importProject").mockRejectedValueOnce(new HttpError(422, "Fix these problems and import the project again.", issues));
+    vi.spyOn(api, "importProject").mockRejectedValueOnce(
+      new HttpError(422, "Fix these problems and import the project again.", issues),
+    );
     render(
       <ConsoleContext.Provider value={ctx()}>
         <AddProjectDialog ws="ws_demo" onClose={vi.fn()} onAdded={vi.fn()} />
       </ConsoleContext.Provider>,
     );
     type("Folder path", "/home/me/code/shop-admin");
-    await waitFor(() => expect(screen.getByRole("button", { name: "Import project" })).toHaveProperty("disabled", false));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Import project" })).toHaveProperty("disabled", false),
+    );
     await act(async () => click("Import project"));
     await screen.findByText(/already exists in this workspace/);
     expect(screen.getByRole("textbox", { name: /^Project key/ }).getAttribute("aria-invalid")).toBe("true");
@@ -292,7 +338,9 @@ describe("Add project dialog", () => {
   });
 
   it("clones from git with the key from the URL and places the server's issues on their fields", async () => {
-    vi.spyOn(api, "gitCredentials").mockResolvedValue([{ id: "gc_1", label: "Work", host: "github.com", kind: "https", username: null, has_secret: true }]);
+    vi.spyOn(api, "gitCredentials").mockResolvedValue([
+      { id: "gc_1", label: "Work", host: "github.com", kind: "https", username: null, has_secret: true },
+    ]);
     const clone = vi
       .spyOn(api, "cloneProject")
       .mockRejectedValueOnce(new HttpError(422, "x", [{ path: "url", message: "Ostra does not clone file:// URLs." }]))
@@ -308,7 +356,11 @@ describe("Add project dialog", () => {
     await screen.findByRole("option", { name: /Work/ });
     fireEvent.change(screen.getByRole("combobox", { name: /^Credential/ }), { target: { value: "gc_1" } });
     await act(async () => click("Clone and import"));
-    expect(clone.mock.calls[0][1]).toMatchObject({ url: "https://github.com/acme/shop-api.git", key: "shop-api", credential: "gc_1" });
+    expect(clone.mock.calls[0][1]).toMatchObject({
+      url: "https://github.com/acme/shop-api.git",
+      key: "shop-api",
+      credential: "gc_1",
+    });
     await screen.findByText("Ostra does not clone file:// URLs.");
     expect(screen.getByRole("textbox", { name: /^Repository URL/ }).getAttribute("aria-invalid")).toBe("true");
     await act(async () => click("Clone and import"));

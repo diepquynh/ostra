@@ -1,8 +1,9 @@
-import type { ClientMsg, ServerMsg } from "./types";
 import type { PtyFrame, SocketState } from "./extra";
+import type { ClientMsg, ServerMsg } from "./types";
 
 // Dynamic, so the fixtures stay out of the production bundle (see `api/index.ts`).
-const mockSocket: SocketFactory | null = import.meta.env.VITE_MOCK === "1" ? (await import("./mock/mockSocket")).mockSocket : null;
+const mockSocket: SocketFactory | null =
+  import.meta.env.VITE_MOCK === "1" ? (await import("./mock/mockSocket")).mockSocket : null;
 /** Every message the server can send. */
 export type WireMsg = ServerMsg;
 

@@ -17,7 +17,17 @@ export type GateFormProps<K extends GatePayload["kind"]> = {
 };
 
 /** The open gate shell: design GateCard with the form body, an error line, and the button row. */
-export function OpenGate({ gate, error, actions, children }: { gate: GateView; error: string | null; actions: ReactNode; children?: ReactNode }) {
+export function OpenGate({
+  gate,
+  error,
+  actions,
+  children,
+}: {
+  gate: GateView;
+  error: string | null;
+  actions: ReactNode;
+  children?: ReactNode;
+}) {
   return (
     <DesignGateCard kind={gate.payload.kind} title={gate.title} explanation={gate.explanation} actions={actions}>
       {children}
@@ -30,12 +40,25 @@ export function OpenGate({ gate, error, actions, children }: { gate: GateView; e
   );
 }
 
-export const muted: CSSProperties = { fontSize: "var(--text-sm)", color: "var(--text-muted)", margin: 0, lineHeight: "var(--leading-normal)" };
+export const muted: CSSProperties = {
+  fontSize: "var(--text-sm)",
+  color: "var(--text-muted)",
+  margin: 0,
+  lineHeight: "var(--leading-normal)",
+};
 export const para: CSSProperties = { margin: 0, lineHeight: "var(--leading-normal)" };
 export const row: CSSProperties = { display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" };
 
 /** Opens a spec, plan, ledger, or report in a tab. */
-export function ArtifactLink({ path, children, icon = "file-text" }: { path: string; children: ReactNode; icon?: IconName }) {
+export function ArtifactLink({
+  path,
+  children,
+  icon = "file-text",
+}: {
+  path: string;
+  children: ReactNode;
+  icon?: IconName;
+}) {
   const nav = useNav();
   return (
     <Button size="sm" variant="ghost" icon={icon} onClick={() => nav.open(`artifact:${path}`)}>
@@ -45,7 +68,15 @@ export function ArtifactLink({ path, children, icon = "file-text" }: { path: str
 }
 
 /** Opens an execution's Activity or Terminal tab. */
-export function ExecutionLink({ id, children, icon = "square-terminal" }: { id: string; children: ReactNode; icon?: IconName }) {
+export function ExecutionLink({
+  id,
+  children,
+  icon = "square-terminal",
+}: {
+  id: string;
+  children: ReactNode;
+  icon?: IconName;
+}) {
   const nav = useNav();
   return (
     <Button size="sm" variant="ghost" icon={icon} onClick={() => nav.open(`exec:${id}`)}>

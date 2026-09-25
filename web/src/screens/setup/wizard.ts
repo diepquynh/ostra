@@ -1,7 +1,15 @@
 // Pure state for the setup steps: values, step order, what each step needs before Continue, the
 // request body, the workspace.toml preview, and which step a validation issue belongs to.
 
-import type { CloneProject, CreateWorkspace, EnvironmentStatus, HarnessKind, PermissionMode, RoutingPreset, ValidationIssue } from "../../api/types";
+import type {
+  CloneProject,
+  CreateWorkspace,
+  EnvironmentStatus,
+  HarnessKind,
+  PermissionMode,
+  RoutingPreset,
+  ValidationIssue,
+} from "../../api/types";
 
 export type StepId = "welcome" | "check" | "name" | "projects" | "defaults" | "review";
 
@@ -16,7 +24,8 @@ export const ALL_STEPS: WizardStep[] = [
   { id: "review", label: "Review", hint: "Create the workspace" },
 ];
 
-export const stepsFor = (skipWelcome: boolean): WizardStep[] => (skipWelcome ? ALL_STEPS.filter((s) => s.id !== "welcome") : ALL_STEPS);
+export const stepsFor = (skipWelcome: boolean): WizardStep[] =>
+  skipWelcome ? ALL_STEPS.filter((s) => s.id !== "welcome") : ALL_STEPS;
 
 /**
  * Stack choices: detection first, then the stacks the server has a seed reference for
@@ -90,9 +99,11 @@ export function keyError(key: string, taken: string[]): string | null {
 export const basename = (p: string) => p.replace(/\/+$/, "").split("/").pop() ?? "";
 
 /** A typed path picks a folder when it is absolute (or starts with "~/") and does not end in "/". */
-export const isChosen = (p: string) => (p.startsWith("/") || p.startsWith("~/")) && !p.endsWith("/") && basename(p) !== "";
+export const isChosen = (p: string) =>
+  (p.startsWith("/") || p.startsWith("~/")) && !p.endsWith("/") && basename(p) !== "";
 
-export const expandHome = (p: string, home: string | null) => (home && (p === "~" || p.startsWith("~/")) ? home + p.slice(1) : p);
+export const expandHome = (p: string, home: string | null) =>
+  home && (p === "~" || p.startsWith("~/")) ? home + p.slice(1) : p;
 
 /** Set the folder. Until the user types a name, the name follows the chosen folder's. */
 export function patchName(v: WizardValues, root: string): Partial<WizardValues> {
@@ -115,11 +126,15 @@ export type ImportErrors = Partial<Record<ImportField, string>>;
  * Place the import endpoint's 422 issues on the form's fields (`key`, `path`, `stack`). Issues on no known field,
  * or an error without issues, come back as `general`.
  */
-export function importErrors(issues: ValidationIssue[], message: string): { fields: ImportErrors; general: string | null } {
+export function importErrors(
+  issues: ValidationIssue[],
+  message: string,
+): { fields: ImportErrors; general: string | null } {
   const fields: ImportErrors = {};
   const rest: string[] = [];
   for (const i of issues) {
-    if (i.path === "key" || i.path === "path" || i.path === "stack") fields[i.path] = fields[i.path] ? `${fields[i.path]} ${i.message}` : i.message;
+    if (i.path === "key" || i.path === "path" || i.path === "stack")
+      fields[i.path] = fields[i.path] ? `${fields[i.path]} ${i.message}` : i.message;
     else rest.push(i.message);
   }
   const general = rest.length ? rest.join(" ") : issues.length ? null : message;
@@ -145,11 +160,17 @@ export const HARNESS_AGENTS = ["implementer", "write-test"];
 
 export const presetExecutor = (p: RoutingPreset) => (p === "native" ? "native" : `harness:${PRESET_HARNESS[p]}`);
 
-export const PRESET_LABEL: Record<RoutingPreset, string> = { native: "All native", codex: "Implementers on Codex", claude: "Implementers on Claude Code" };
+export const PRESET_LABEL: Record<RoutingPreset, string> = {
+  native: "All native",
+  codex: "Implementers on Codex",
+  claude: "Implementers on Claude Code",
+};
 
 /** Presets for the harnesses that are installed and logged in. Native is always offered. */
 export function presetsFor(env: EnvironmentStatus | null): RoutingPreset[] {
-  const ready = new Set((env?.harnesses ?? []).filter((h) => h.installed && h.logged_in === true).map((h) => h.harness));
+  const ready = new Set(
+    (env?.harnesses ?? []).filter((h) => h.installed && h.logged_in === true).map((h) => h.harness),
+  );
   return ["native", ...(["codex", "claude"] as const).filter((p) => ready.has(PRESET_HARNESS[p]))];
 }
 
@@ -163,14 +184,31 @@ export function tomlFor(v: WizardValues, home: string | null = null): string {
     if (p.stack) out.push(`stack = ${tomlString(p.stack)}`);
   }
   for (const c of v.clones) {
-    out.push("", `# Cloned from ${c.url} after the workspace is created.`, "[[projects]]", `key = ${tomlString(c.key)}`, `path = ${tomlString(clonePath(c, v.root, home))}`);
+    out.push(
+      "",
+      `# Cloned from ${c.url} after the workspace is created.`,
+      "[[projects]]",
+      `key = ${tomlString(c.key)}`,
+      `path = ${tomlString(clonePath(c, v.root, home))}`,
+    );
     if (c.stack) out.push(`stack = ${tomlString(c.stack)}`);
   }
   if (v.preset !== "native") {
     out.push("", "[routing.executor.byAgent]");
-    for (const a of HARNESS_AGENTS) out.push(`${/^[a-z]+$/.test(a) ? a : tomlString(a)} = ${tomlString(presetExecutor(v.preset))}`);
+    for (const a of HARNESS_AGENTS)
+      out.push(`${/^[a-z]+$/.test(a) ? a : tomlString(a)} = ${tomlString(presetExecutor(v.preset))}`);
   }
-  out.push("", "[yolo]", `default = ${v.yolo}`, "", "[permissions]", `mode = ${tomlString(v.mode)}`, "", "[notifications]", `push = ${v.push}`);
+  out.push(
+    "",
+    "[yolo]",
+    `default = ${v.yolo}`,
+    "",
+    "[permissions]",
+    `mode = ${tomlString(v.mode)}`,
+    "",
+    "[notifications]",
+    `push = ${v.push}`,
+  );
   return out.join("\n") + "\n";
 }
 
@@ -208,7 +246,12 @@ export const clonePath = (c: CloneProject, root: string, home: string | null) =>
   c.path ? expandHome(c.path, home) : `${expandHome(root.trim(), home).replace(/\/+$/, "")}/${c.key}`;
 
 export const PROVIDER_LABEL: Record<string, string> = { anthropic: "Anthropic", openai: "OpenAI" };
-export const HARNESS_LABEL: Record<HarnessKind, string> = { claude: "Claude Code", codex: "Codex", grok: "Grok Build", agy: "Antigravity" };
+export const HARNESS_LABEL: Record<HarnessKind, string> = {
+  claude: "Claude Code",
+  codex: "Codex",
+  grok: "Grok Build",
+  agy: "Antigravity",
+};
 
 /** `env:ANTHROPIC_API_KEY` reads as "env ANTHROPIC_API_KEY"; `none` as "not set". */
 export const keySource = (s: string) => (s === "none" ? "not set" : s.replace(/^env:/, "env "));

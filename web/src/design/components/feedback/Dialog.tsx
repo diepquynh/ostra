@@ -1,4 +1,4 @@
-import { useId, useRef, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useFocusTrap } from "../../focus";
 import { IconButton } from "../core/IconButton";
@@ -21,7 +21,18 @@ export interface DialogProps {
 }
 
 /** Modal dialog. inline renders the panel without the scrim (for docs and cards). */
-export function Dialog({ open = true, title, subtitle, onClose, footer, width = 560, inline, bodyStyle, initialFocus, children }: DialogProps) {
+export function Dialog({
+  open = true,
+  title,
+  subtitle,
+  onClose,
+  footer,
+  width = 560,
+  inline,
+  bodyStyle,
+  initialFocus,
+  children,
+}: DialogProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   const downOnScrim = useRef(false);

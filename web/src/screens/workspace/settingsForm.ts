@@ -52,7 +52,8 @@ export function formatPerExecutor(table: Record<string, string>): string {
     .join(", ");
 }
 
-const PER_EXECUTOR_HELP = "Write each entry as executor = model, for example native = anthropic:claude-sonnet-5, codex = gpt-5.6-terra.";
+const PER_EXECUTOR_HELP =
+  "Write each entry as executor = model, for example native = anthropic:claude-sonnet-5, codex = gpt-5.6-terra.";
 
 export function parsePerExecutor(text: string): { value: Record<string, string> | null; error: string | null } {
   const parts = text
@@ -86,7 +87,9 @@ export function fieldToModel(f: ModelField): { value: ModelChoice | undefined; e
     case "tier":
       return { value: f.text, error: null };
     case "custom":
-      return f.text.trim() ? { value: f.text.trim(), error: null } : { value: undefined, error: "Enter a model, such as anthropic:claude-sonnet-5 or gpt-5.6-terra." };
+      return f.text.trim()
+        ? { value: f.text.trim(), error: null }
+        : { value: undefined, error: "Enter a model, such as anthropic:claude-sonnet-5 or gpt-5.6-terra." };
     case "per-executor": {
       const { value, error } = parsePerExecutor(f.text);
       return { value: value ?? undefined, error };
@@ -123,7 +126,9 @@ export const unlines = (text: string) =>
 /** Route keys the form shows: the known ones, then any the file names that Ostra does not know. */
 export function routeKeys(form: Pick<SettingsForm, "executor" | "model">): string[] {
   const known = ROUTE_KEYS.map((r) => r.key as string);
-  const extra = [...new Set([...Object.keys(form.executor), ...Object.keys(form.model)])].filter((k) => !known.includes(k)).sort();
+  const extra = [...new Set([...Object.keys(form.executor), ...Object.keys(form.model)])]
+    .filter((k) => !known.includes(k))
+    .sort();
   return [...known, ...extra];
 }
 
@@ -136,7 +141,11 @@ export function complexityAgents(s: WorkspaceSettings): string[] {
 }
 
 export function toForm(s: WorkspaceSettings): SettingsForm {
-  const keys = new Set<string>([...ROUTE_KEYS.map((r) => r.key as string), ...Object.keys(s.routing.executor.byAgent), ...Object.keys(s.routing.model.byAgent)]);
+  const keys = new Set<string>([
+    ...ROUTE_KEYS.map((r) => r.key as string),
+    ...Object.keys(s.routing.executor.byAgent),
+    ...Object.keys(s.routing.model.byAgent),
+  ]);
   const executor: Record<string, string> = {};
   const model: Record<string, ModelField> = {};
   for (const k of keys) {
@@ -181,7 +190,10 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
  * problems the browser can see before the server does (a model table it cannot parse, a budget that is
  * not a number); the settings then keep the base value for that field.
  */
-export function fromForm(form: SettingsForm, base: WorkspaceSettings): { settings: WorkspaceSettings; issues: ValidationIssue[] } {
+export function fromForm(
+  form: SettingsForm,
+  base: WorkspaceSettings,
+): { settings: WorkspaceSettings; issues: ValidationIssue[] } {
   const s = structuredClone(base);
   const issues: ValidationIssue[] = [];
   const route = (path: string, f: ModelField, keep: ModelChoice | undefined) => {
@@ -224,7 +236,11 @@ export function fromForm(form: SettingsForm, base: WorkspaceSettings): { setting
   for (const [a, byC] of Object.entries(form.complexityModel)) {
     const m: Partial<Record<Complexity, ModelChoice>> = {};
     for (const c of COMPLEXITIES) {
-      const v = route(`routing.model.byPhaseComplexity.${a}.${c}`, byC[c], base.routing.model.byPhaseComplexity[a]?.[c]);
+      const v = route(
+        `routing.model.byPhaseComplexity.${a}.${c}`,
+        byC[c],
+        base.routing.model.byPhaseComplexity[a]?.[c],
+      );
       if (v !== undefined) m[c] = v;
     }
     if (Object.keys(m).length) s.routing.model.byPhaseComplexity[a] = m;
@@ -252,7 +268,8 @@ export function fromForm(form: SettingsForm, base: WorkspaceSettings): { setting
   if (/^\s*\d+\s*$/.test(form.maxParallel)) s.limits.max_parallel_executions = Number(form.maxParallel);
   else issues.push({ path: "limits.max_parallel_executions", message: "Enter a whole number of 1 or more." });
   if (/^\s*\d+(\.\d+)?\s*$/.test(form.budget)) s.limits.session_budget_usd = Number(form.budget);
-  else issues.push({ path: "limits.session_budget_usd", message: "Enter a dollar amount such as 25, or 0 for no limit." });
+  else
+    issues.push({ path: "limits.session_budget_usd", message: "Enter a dollar amount such as 25, or 0 for no limit." });
 
   return { settings: s, issues };
 }
@@ -261,7 +278,9 @@ export function fromForm(form: SettingsForm, base: WorkspaceSettings): { setting
 export function stableJson(v: unknown): string {
   return JSON.stringify(v, (_k, x: unknown) =>
     x && typeof x === "object" && !Array.isArray(x)
-      ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      ? Object.fromEntries(
+          Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+        )
       : x,
   );
 }
@@ -285,25 +304,51 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
 /** The tab that holds a settings path or key. */
 export function tabOf(path: string): SettingsTab {
   const head = path.split(/[.[]/)[0];
-  if (head === "projects" || head === "routing" || head === "permissions" || head === "instructions" || head === "notifications") return head;
+  if (
+    head === "projects" ||
+    head === "routing" ||
+    head === "permissions" ||
+    head === "instructions" ||
+    head === "notifications"
+  )
+    return head;
   return "general";
 }
 
 /** Every field the form renders an issue list for, as dotted settings paths. */
 export function fieldIds(form: SettingsForm): string[] {
-  const ids = ["name", "yolo.default", "limits.max_parallel_executions", "limits.session_budget_usd", "projects", "instructions.all", "notifications.push"];
+  const ids = [
+    "name",
+    "yolo.default",
+    "limits.max_parallel_executions",
+    "limits.session_budget_usd",
+    "projects",
+    "instructions.all",
+    "notifications.push",
+  ];
   ids.push("permissions.mode", "permissions.allow", "permissions.ask", "permissions.deny");
   form.projects.forEach((_, i) => ids.push(`projects[${i}]`));
-  for (const k of routeKeys(form)) ids.push(`routing.executor.byAgent.${k}`, `routing.model.byAgent.${k}`, `routing.effort.byAgent.${k}`, `instructions.agents.${k}`);
+  for (const k of routeKeys(form))
+    ids.push(
+      `routing.executor.byAgent.${k}`,
+      `routing.model.byAgent.${k}`,
+      `routing.effort.byAgent.${k}`,
+      `instructions.agents.${k}`,
+    );
   for (const k of Object.keys(form.effort)) ids.push(`routing.effort.byAgent.${k}`);
   for (const a of Object.keys(form.complexityModel))
     for (const c of COMPLEXITIES)
-      ids.push(`routing.executor.byPhaseComplexity.${a}.${c}`, `routing.model.byPhaseComplexity.${a}.${c}`, `routing.effort.byPhaseComplexity.${a}.${c}`);
+      ids.push(
+        `routing.executor.byPhaseComplexity.${a}.${c}`,
+        `routing.model.byPhaseComplexity.${a}.${c}`,
+        `routing.effort.byPhaseComplexity.${a}.${c}`,
+      );
   ids.push("routing.executor.byPhaseComplexity", "routing.model.byPhaseComplexity", "routing.effort.byPhaseComplexity");
   return [...new Set(ids)];
 }
 
-const covers = (field: string, path: string) => path === field || path.startsWith(`${field}.`) || path.startsWith(`${field}[`);
+const covers = (field: string, path: string) =>
+  path === field || path.startsWith(`${field}.`) || path.startsWith(`${field}[`);
 
 /** The field an issue belongs to: the longest field id that is the path or a parent of it. */
 export function fieldForIssue(path: string, fields: string[]): string | null {
@@ -312,12 +357,24 @@ export function fieldForIssue(path: string, fields: string[]): string | null {
   return best;
 }
 
-export type IssueMap = { byField: Record<string, ValidationIssue[]>; unmatched: ValidationIssue[]; byTab: Record<SettingsTab, number> };
+export type IssueMap = {
+  byField: Record<string, ValidationIssue[]>;
+  unmatched: ValidationIssue[];
+  byTab: Record<SettingsTab, number>;
+};
 
 export function mapIssues(issues: ValidationIssue[], fields: string[]): IssueMap {
   const byField: Record<string, ValidationIssue[]> = {};
   const unmatched: ValidationIssue[] = [];
-  const byTab: Record<SettingsTab, number> = { general: 0, projects: 0, git: 0, routing: 0, permissions: 0, instructions: 0, notifications: 0 };
+  const byTab: Record<SettingsTab, number> = {
+    general: 0,
+    projects: 0,
+    git: 0,
+    routing: 0,
+    permissions: 0,
+    instructions: 0,
+    notifications: 0,
+  };
   for (const i of issues) {
     byTab[tabOf(i.path)] += 1;
     const f = fieldForIssue(i.path, fields);
@@ -356,4 +413,5 @@ export function anchorCandidates(key: string): string[] {
 }
 
 /** The settings key a `setting:<key>` anchor names, or null for any other anchor. */
-export const settingKeyOf = (anchor: string | null): string | null => (anchor?.startsWith("setting:") ? anchor.slice(8) || null : null);
+export const settingKeyOf = (anchor: string | null): string | null =>
+  anchor?.startsWith("setting:") ? anchor.slice(8) || null : null;

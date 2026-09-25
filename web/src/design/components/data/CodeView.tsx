@@ -22,7 +22,8 @@ const KW = new Set(
   ),
 );
 const TYPES = /^[A-Z][A-Za-z0-9_]*$/;
-const RE = /(\/\/[^\n]*|#[^\n]*|--[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)|(\b\d[\d_.]*\b)|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|([A-Za-z_][A-Za-z0-9_]*)/g;
+const RE =
+  /(\/\/[^\n]*|#[^\n]*|--[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`)|(\b\d[\d_.]*\b)|([A-Za-z_][A-Za-z0-9_]*)(?=\s*\()|([A-Za-z_][A-Za-z0-9_]*)/g;
 
 function tokens(line: string, lang: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -30,7 +31,9 @@ function tokens(line: string, lang: string): ReactNode[] {
   let i = 0;
   let m: RegExpExecArray | null;
   const commentOk = (s: string) =>
-    (s.startsWith("//") && lang !== "sql") || (s.startsWith("#") && ["toml", "sh", "py", "md"].includes(lang)) || (s.startsWith("--") && lang === "sql");
+    (s.startsWith("//") && lang !== "sql") ||
+    (s.startsWith("#") && ["toml", "sh", "py", "md"].includes(lang)) ||
+    (s.startsWith("--") && lang === "sql");
   RE.lastIndex = 0;
   while ((m = RE.exec(line))) {
     if (m.index > last) out.push(<span key={i++}>{line.slice(last, m.index)}</span>);
@@ -40,7 +43,21 @@ function tokens(line: string, lang: string): ReactNode[] {
       RE.lastIndex = last;
       continue;
     }
-    const cls = m[1] ? "c" : m[2] ? "s" : m[3] ? "n" : m[4] ? (KW.has(m[4]) ? "k" : "f") : KW.has(m[5]) ? "k" : TYPES.test(m[5]) ? "t" : null;
+    const cls = m[1]
+      ? "c"
+      : m[2]
+        ? "s"
+        : m[3]
+          ? "n"
+          : m[4]
+            ? KW.has(m[4])
+              ? "k"
+              : "f"
+            : KW.has(m[5])
+              ? "k"
+              : TYPES.test(m[5])
+                ? "t"
+                : null;
     out.push(
       cls ? (
         <span key={i++} className={"os-tok-" + cls}>
@@ -58,16 +75,33 @@ function tokens(line: string, lang: string): ReactNode[] {
 }
 
 /** One line with CodeView's light syntax color; md and txt stay plain. */
-export const colorLine = (line: string, language = ""): ReactNode => (line === "" ? " " : language === "md" || language === "txt" ? line : tokens(line, language));
+export const colorLine = (line: string, language = ""): ReactNode =>
+  line === "" ? " " : language === "md" || language === "txt" ? line : tokens(line, language);
 
 /** Read-only source view with line numbers and light syntax color. */
-export function CodeView({ code, language = "", startLine = 1, highlight = [], added = [], removed = [], flush, maxHeight, style }: CodeViewProps) {
+export function CodeView({
+  code,
+  language = "",
+  startLine = 1,
+  highlight = [],
+  added = [],
+  removed = [],
+  flush,
+  maxHeight,
+  style,
+}: CodeViewProps) {
   const lines = code.replace(/\n$/, "").split("\n");
   return (
     <div className={`os-code ${flush ? "os-code--flush" : ""}`} style={{ maxHeight, ...style }}>
       {lines.map((l, idx) => {
         const n = startLine + idx;
-        const cls = highlight.includes(n) ? "os-code__line--hl" : added.includes(n) ? "os-code__line--add" : removed.includes(n) ? "os-code__line--del" : "";
+        const cls = highlight.includes(n)
+          ? "os-code__line--hl"
+          : added.includes(n)
+            ? "os-code__line--add"
+            : removed.includes(n)
+              ? "os-code__line--del"
+              : "";
         return (
           <div key={idx} className={`os-code__line ${cls}`}>
             <span className="os-code__ln">{n}</span>

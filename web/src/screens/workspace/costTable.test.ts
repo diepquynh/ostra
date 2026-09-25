@@ -4,8 +4,23 @@ import type { CostReport, CostRow } from "../../api/types";
 import { COST_GROUPS, costLines, costTotals } from "./costTable";
 
 const row = (key: string, cost: number, extra: Partial<CostRow["usage"]> = {}, n = 1): CostRow => {
-  const usage = { input_tokens: 12000, output_tokens: 1800, cache_read_tokens: 90000, cache_write_tokens: 0, cache_write_1h_tokens: 0, cost_usd: cost, tool_calls: 10, build_ms: 0, ...extra };
-  return { key, executions: n, usage, cache_reads_per_tool_call: usage.tool_calls ? usage.cache_read_tokens / usage.tool_calls : 0 };
+  const usage = {
+    input_tokens: 12000,
+    output_tokens: 1800,
+    cache_read_tokens: 90000,
+    cache_write_tokens: 0,
+    cache_write_1h_tokens: 0,
+    cost_usd: cost,
+    tool_calls: 10,
+    build_ms: 0,
+    ...extra,
+  };
+  return {
+    key,
+    executions: n,
+    usage,
+    cache_reads_per_tool_call: usage.tool_calls ? usage.cache_read_tokens / usage.tool_calls : 0,
+  };
 };
 
 describe("cost tables", () => {
@@ -25,11 +40,11 @@ describe("cost tables", () => {
   });
 
   it("label stages by their pipeline name and keep agents and executors as machine names", () => {
-    expect(costLines([row("fact-check-spec", 1), row("none", 0.5), row("mystery-stage", 0.1)], "stage", 1.6).map((l) => l.label)).toEqual([
-      "Fact-check the spec",
-      "No stage",
-      "Mystery stage",
-    ]);
+    expect(
+      costLines([row("fact-check-spec", 1), row("none", 0.5), row("mystery-stage", 0.1)], "stage", 1.6).map(
+        (l) => l.label,
+      ),
+    ).toEqual(["Fact-check the spec", "No stage", "Mystery stage"]);
     const [agent] = costLines([row("code-reviewer", 1)], "agent", 1);
     expect([agent.label, agent.mono]).toEqual(["code-reviewer", true]);
     const [ex] = costLines([row("harness:codex", 1)], "executor", 1);
@@ -37,15 +52,44 @@ describe("cost tables", () => {
   });
 
   it("format numbers and leave empty what did not happen", () => {
-    const [l] = costLines([row("judge", 0.004, { tool_calls: 0, build_ms: 0, input_tokens: 1_250_000, output_tokens: 950 })], "agent", 0);
-    expect(l).toMatchObject({ runs: 1, input: "1.3M", output: "950", cacheReads: "90.0k", cacheWrites5m: "0", cacheWrites1h: "0", perCall: "", build: "", cost: "<$0.01", share: "" });
+    const [l] = costLines(
+      [row("judge", 0.004, { tool_calls: 0, build_ms: 0, input_tokens: 1_250_000, output_tokens: 950 })],
+      "agent",
+      0,
+    );
+    expect(l).toMatchObject({
+      runs: 1,
+      input: "1.3M",
+      output: "950",
+      cacheReads: "90.0k",
+      cacheWrites5m: "0",
+      cacheWrites1h: "0",
+      perCall: "",
+      build: "",
+      cost: "<$0.01",
+      share: "",
+    });
     const [b] = costLines([row("implementer", 1.2, { build_ms: 125000 })], "agent", 1.2);
     expect(b).toMatchObject({ perCall: "9.0k", build: "2 min 5 s", cost: "$1.20", share: "100%" });
   });
 
   it("cover every grouping of the report and total it", () => {
-    const report: CostReport = { since: null, by_session: [], by_stage: [], by_agent: [], by_executor: [], total: row("total", 4.18, { tool_calls: 312, build_ms: 0 }, 29) };
+    const report: CostReport = {
+      since: null,
+      by_session: [],
+      by_stage: [],
+      by_agent: [],
+      by_executor: [],
+      total: row("total", 4.18, { tool_calls: 312, build_ms: 0 }, 29),
+    };
     expect(COST_GROUPS.map((g) => g.field)).toEqual(["by_session", "by_stage", "by_agent", "by_executor"]);
-    expect(costTotals(report)).toEqual({ total: "$4.18", runs: "29", cacheReads: "90.0k", toolCalls: "312", perCall: "288", build: "none" });
+    expect(costTotals(report)).toEqual({
+      total: "$4.18",
+      runs: "29",
+      cacheReads: "90.0k",
+      toolCalls: "312",
+      perCall: "288",
+      build: "none",
+    });
   });
 });

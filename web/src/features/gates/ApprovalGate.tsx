@@ -3,7 +3,7 @@ import type { PhaseInfo } from "../../api/types";
 import { Button, Chip, Input, Table } from "../../design";
 import { approval, changeRequest } from "../../lib/gateAnswers";
 import { FactFindings } from "./Findings";
-import { ArtifactLink, OpenGate, muted, para, row, type GateFormProps } from "./kit";
+import { ArtifactLink, type GateFormProps, muted, OpenGate, para, row } from "./kit";
 
 type Props = GateFormProps<"spec_approval" | "plan_approval">;
 
@@ -28,7 +28,13 @@ export function ApprovalGate({ gate, payload, submit, fail, busy, error }: Props
       error={error}
       actions={
         <>
-          <Button variant="primary" icon="check" disabled={busy || Boolean(feedback.trim())} onClick={() => submit(approval(true))} title={feedback.trim() ? "Clear the change request to approve" : undefined}>
+          <Button
+            variant="primary"
+            icon="check"
+            disabled={busy || Boolean(feedback.trim())}
+            onClick={() => submit(approval(true))}
+            title={feedback.trim() ? "Clear the change request to approve" : undefined}
+          >
             Approve the {what}
           </Button>
           <Button disabled={busy} onClick={requestChanges}>
@@ -75,11 +81,20 @@ function PhaseTable({ phases }: { phases: PhaseInfo[] }) {
           label: "Phase",
           render: (p) => (
             <span style={row}>
-              <span style={{ fontFamily: "var(--font-mono)" }}>{p.id}</span> {p.title} {p.deliverable && <Chip>{p.deliverable}</Chip>}
+              <span style={{ fontFamily: "var(--font-mono)" }}>{p.id}</span> {p.title}{" "}
+              {p.deliverable && <Chip>{p.deliverable}</Chip>}
             </span>
           ),
         },
-        { key: "project", label: "Project", render: (p) => <Chip mono outline>{p.project}</Chip> },
+        {
+          key: "project",
+          label: "Project",
+          render: (p) => (
+            <Chip mono outline>
+              {p.project}
+            </Chip>
+          ),
+        },
         { key: "complexity", label: "Complexity" },
         {
           key: "test_policy",
@@ -96,7 +111,13 @@ function PhaseTable({ phases }: { phases: PhaseInfo[] }) {
           key: "depends_on",
           label: "Depends on",
           render: (p) =>
-            p.depends_on === null ? <span style={muted}>Unclear, runs after earlier phases</span> : p.depends_on.length ? p.depends_on.join(", ") : <span style={muted}>None</span>,
+            p.depends_on === null ? (
+              <span style={muted}>Unclear, runs after earlier phases</span>
+            ) : p.depends_on.length ? (
+              p.depends_on.join(", ")
+            ) : (
+              <span style={muted}>None</span>
+            ),
         },
       ]}
     />

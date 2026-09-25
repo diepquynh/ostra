@@ -6,5 +6,7 @@ export interface SpinnerProps {
 }
 
 export function Spinner({ size = 12, style }: SpinnerProps) {
-  return <span className="os-spinner" role="status" style={{ width: size, height: size, ...style }} aria-label="Loading" />;
+  return (
+    <span className="os-spinner" role="status" style={{ width: size, height: size, ...style }} aria-label="Loading" />
+  );
 }

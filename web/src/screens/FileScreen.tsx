@@ -3,7 +3,7 @@ import { useLocation } from "react-router";
 import { api } from "../api";
 import type { ChangedBy } from "../api/types";
 import { Markdown } from "../components/Markdown";
-import { Banner, Breadcrumbs, Button, Icon, IconButton, Spinner, Tabs, type TabItem } from "../design";
+import { Banner, Breadcrumbs, Button, Icon, IconButton, Spinner, type TabItem, Tabs } from "../design";
 import { humanize } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges, useWorkspaceTree } from "../lib/live";
@@ -45,7 +45,15 @@ const barStyle = {
   flex: "none",
 } as const;
 
-const linkStyle = { background: "none", border: 0, padding: 0, font: "inherit", fontWeight: 500, color: "var(--text-primary)", cursor: "pointer" } as const;
+const linkStyle = {
+  background: "none",
+  border: 0,
+  padding: 0,
+  font: "inherit",
+  fontWeight: 500,
+  color: "var(--text-primary)",
+  cursor: "pointer",
+} as const;
 
 /**
  * Resource `file:<key>:<path>`: a project file using the whole center pane, rendered markdown for `.md`,
@@ -60,7 +68,10 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
   const tree = useWorkspaceTree(ws);
   const file = useAsync(() => api.projectFile(ws, projectKey, path), [ws, projectKey, path]);
   const changed = !!file.data?.git;
-  const diff = useAsync(() => (changed ? api.projectDiff(ws, projectKey, path) : Promise.resolve(null)), [ws, projectKey, path, changed]);
+  const diff = useAsync(
+    () => (changed ? api.projectDiff(ws, projectKey, path) : Promise.resolve(null)),
+    [ws, projectKey, path, changed],
+  );
   const [mode, setMode] = useState<View | null>(null);
   const [copied, setCopied] = useState(false);
   const code = useAsync(() => api.codeFile(ws, projectKey, path), [ws, projectKey, path]);
@@ -130,7 +141,17 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, height: 36, padding: "0 8px 0 12px", borderBottom: "1px solid var(--border-subtle)", flex: "none" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          height: 36,
+          padding: "0 8px 0 12px",
+          borderBottom: "1px solid var(--border-subtle)",
+          flex: "none",
+        }}
+      >
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           <Breadcrumbs
             onNavigate={(_, i) => (i === 0 ? nav.open(`project:${projectKey}`) : shell.browseFiles(projectKey))}
@@ -138,29 +159,66 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
           />
         </div>
         {d && (
-          <span style={{ font: "var(--text-sm)/1 var(--font-mono)", whiteSpace: "nowrap" }} title={`${d.added} added, ${d.removed} removed against ${d.base}`}>
-            <span style={{ color: "var(--diff-add-fg)" }}>+{d.added}</span> <span style={{ color: "var(--diff-del-fg)" }}>−{d.removed}</span>
+          <span
+            style={{ font: "var(--text-sm)/1 var(--font-mono)", whiteSpace: "nowrap" }}
+            title={`${d.added} added, ${d.removed} removed against ${d.base}`}
+          >
+            <span style={{ color: "var(--diff-add-fg)" }}>+{d.added}</span>{" "}
+            <span style={{ color: "var(--diff-del-fg)" }}>−{d.removed}</span>
           </span>
         )}
-        {views.length > 1 && !edit.editing && <Tabs variant="segmented" label="View" value={view} onChange={(v) => setMode(v as View)} tabs={views} />}
+        {views.length > 1 && !edit.editing && (
+          <Tabs variant="segmented" label="View" value={view} onChange={(v) => setMode(v as View)} tabs={views} />
+        )}
         {edit.editing && (
           <>
             {edit.dirty && (
-              <span style={{ color: "var(--warn)", fontSize: "var(--text-sm)", whiteSpace: "nowrap" }} title="Unsaved changes">
+              <span
+                style={{ color: "var(--warn)", fontSize: "var(--text-sm)", whiteSpace: "nowrap" }}
+                title="Unsaved changes"
+              >
                 ● unsaved
               </span>
             )}
             <Button size="sm" variant={edit.confirmDiscard ? "danger" : "ghost"} onClick={edit.discard}>
               {!edit.dirty ? "Done" : edit.confirmDiscard ? "Discard changes?" : "Discard"}
             </Button>
-            <Button size="sm" variant="primary" icon="check" kbd="⌘S" disabled={!edit.dirty || edit.saving || edit.conflict || !!f?.read_only} onClick={edit.save}>
+            <Button
+              size="sm"
+              variant="primary"
+              icon="check"
+              kbd="⌘S"
+              disabled={!edit.dirty || edit.saving || edit.conflict || !!f?.read_only}
+              onClick={edit.save}
+            >
               {edit.saving ? "Saving…" : "Save"}
             </Button>
           </>
         )}
-        {canEdit && <IconButton size="sm" icon="pencil" label={f?.read_only ?? "Edit this file"} disabled={!!f?.read_only} onClick={edit.start} />}
-        {canPane && <IconButton size="sm" icon="panel-right" active={showPane} label={showPane ? "Hide the code pane" : "Show the code pane"} onClick={() => setPaneOpen(!showPane)} />}
-        <IconButton size="sm" icon="message-square" label="Ask about this file" onClick={() => shell.openDock(`About ${projectKey}/${path}: `)} />
+        {canEdit && (
+          <IconButton
+            size="sm"
+            icon="pencil"
+            label={f?.read_only ?? "Edit this file"}
+            disabled={!!f?.read_only}
+            onClick={edit.start}
+          />
+        )}
+        {canPane && (
+          <IconButton
+            size="sm"
+            icon="panel-right"
+            active={showPane}
+            label={showPane ? "Hide the code pane" : "Show the code pane"}
+            onClick={() => setPaneOpen(!showPane)}
+          />
+        )}
+        <IconButton
+          size="sm"
+          icon="message-square"
+          label="Ask about this file"
+          onClick={() => shell.openDock(`About ${projectKey}/${path}: `)}
+        />
         <IconButton size="sm" icon={copied ? "check" : "copy"} label={copied ? "Copied" : "Copy path"} onClick={copy} />
       </div>
       {by && view === "diff" && (
@@ -168,11 +226,21 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
           <Icon name="git-commit-horizontal" size={13} style={{ color: "var(--text-muted)" }} />
           <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {f?.git === "A" || f?.git === "?" ? "Added" : "Changed"} by{" "}
-            <button type="button" style={linkStyle} onClick={() => nav.open(`exec:${by.execution}`)} title="Open the execution">
+            <button
+              type="button"
+              style={linkStyle}
+              onClick={() => nav.open(`exec:${by.execution}`)}
+              title="Open the execution"
+            >
               {changedByLabel(by)}
             </button>
             {by.running ? " (running)" : by.staged ? " (staged)" : ""} in{" "}
-            <button type="button" style={linkStyle} onClick={() => nav.open(`session:${by.session}`)} title="Open the session">
+            <button
+              type="button"
+              style={linkStyle}
+              onClick={() => nav.open(`session:${by.session}`)}
+              title="Open the session"
+            >
               {session?.title ?? session?.request ?? by.session}
             </button>
           </span>
@@ -184,7 +252,14 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
         <div className="os-rise" key={view} style={{ flex: 1, overflow: "auto", minHeight: 0, minWidth: 0 }}>
           {file.error ? (
             <div style={{ padding: 16 }}>
-              <Banner tone="bad" actions={<Button size="sm" onClick={file.reload}>Try again</Button>}>
+              <Banner
+                tone="bad"
+                actions={
+                  <Button size="sm" onClick={file.reload}>
+                    Try again
+                  </Button>
+                }
+              >
                 {file.error.message}
               </Banner>
             </div>
@@ -209,7 +284,8 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
                       </>
                     }
                   >
-                    This file changed on disk after you started editing. Reload to take the disk version and drop your changes, or overwrite it with yours.
+                    This file changed on disk after you started editing. Reload to take the disk version and drop your
+                    changes, or overwrite it with yours.
                   </Banner>
                 </div>
               )}
@@ -226,12 +302,20 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
               <div style={{ flex: 1, minHeight: 0, paddingTop: edit.conflict || edit.error || f.read_only ? 8 : 0 }}>
                 <Suspense
                   fallback={
-                    <div style={{ padding: 20, display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)" }}>
+                    <div
+                      style={{ padding: 20, display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)" }}
+                    >
                       <Spinner size={11} /> Loading the editor…
                     </div>
                   }
                 >
-                  <FileEditor path={path} value={edit.draft} onChange={edit.change} theme={shell.theme} onSave={edit.save} />
+                  <FileEditor
+                    path={path}
+                    value={edit.draft}
+                    onChange={edit.change}
+                    theme={shell.theme}
+                    onSave={edit.save}
+                  />
                 </Suspense>
               </div>
             </div>
@@ -241,7 +325,10 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
             <>
               {f.truncated && view !== "diff" && (
                 <div style={{ padding: "8px 12px 0" }}>
-                  <Banner tone="info">Showing the start of the file. At {fmtSize(f.size)} it is larger than the size Ostra reads for the browser.</Banner>
+                  <Banner tone="info">
+                    Showing the start of the file. At {fmtSize(f.size)} it is larger than the size Ostra reads for the
+                    browser.
+                  </Banner>
                 </div>
               )}
               {view === "diff" && d ? (
@@ -273,8 +360,26 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
           )}
         </div>
         {showPane && (
-          <aside style={{ width: 320, flex: "none", borderLeft: "1px solid var(--border-subtle)", minHeight: 0, background: "var(--surface-panel)" }} aria-label="Code navigation">
-            <CodePane ws={ws} projectKey={projectKey} path={path} file={c} fileError={code.error} selected={selected} onSelect={setSelected} onGoto={gotoLine} />
+          <aside
+            style={{
+              width: 320,
+              flex: "none",
+              borderLeft: "1px solid var(--border-subtle)",
+              minHeight: 0,
+              background: "var(--surface-panel)",
+            }}
+            aria-label="Code navigation"
+          >
+            <CodePane
+              ws={ws}
+              projectKey={projectKey}
+              path={path}
+              file={c}
+              fileError={code.error}
+              selected={selected}
+              onSelect={setSelected}
+              onGoto={gotoLine}
+            />
           </aside>
         )}
       </div>
@@ -298,7 +403,12 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
           {lines !== null && <span>{lines} lines</span>}
           <span>{fmtSize(f.size)}</span>
           {f.modified && <span title={f.modified}>modified {modifiedLabel(f.modified)}</span>}
-          {f.git && <span style={{ color: GIT_MARK[f.git].color }}>{GIT_MARK[f.git].word}{f.staged ? ", staged" : ""}</span>}
+          {f.git && (
+            <span style={{ color: GIT_MARK[f.git].color }}>
+              {GIT_MARK[f.git].word}
+              {f.staged ? ", staged" : ""}
+            </span>
+          )}
           {f.truncated && <span>cut at the size cap</span>}
           <span style={{ flex: 1 }} />
           <span>{edit.editing ? (edit.dirty ? "unsaved changes" : "editing") : "read-only"}</span>

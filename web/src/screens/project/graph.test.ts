@@ -1,7 +1,21 @@
 import { describe, expect, it } from "vitest";
-import type { CodeGraph, CodeGraphNode } from "../../api/types";
 import { mockCodeGraph, mockCodeSymbols } from "../../api/mock/mockCode";
-import { asSymbol, centerOn, fileDefsHint, clipLabel, fitCamera, inlineMembers, kindStyle, layout, matchFiles, MAX_ZOOM, MIN_ZOOM, nodeHeight, zoomAround } from "./DependencyGraph";
+import type { CodeGraph, CodeGraphNode } from "../../api/types";
+import {
+  asSymbol,
+  centerOn,
+  clipLabel,
+  fileDefsHint,
+  fitCamera,
+  inlineMembers,
+  kindStyle,
+  layout,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  matchFiles,
+  nodeHeight,
+  zoomAround,
+} from "./DependencyGraph";
 
 const node = (id: string, column: number): CodeGraphNode => ({
   id,
@@ -28,7 +42,13 @@ const graph = (nodes: CodeGraphNode[], edges: [string, string][]): CodeGraph => 
 
 describe("dependency graph layout", () => {
   it("places columns left to right in the server's order", () => {
-    const g = graph([node("c", 0), node("user", -1), node("dep", 1)], [["user", "c"], ["c", "dep"]]);
+    const g = graph(
+      [node("c", 0), node("user", -1), node("dep", 1)],
+      [
+        ["user", "c"],
+        ["c", "dep"],
+      ],
+    );
     const { nodes, width, height } = layout(g);
     const x = (id: string) => nodes.find((n) => n.id === id)!.x;
     expect(x("user")).toBeLessThan(x("c"));
@@ -39,14 +59,23 @@ describe("dependency graph layout", () => {
 
   it("orders a column by its neighbors so links cross less", () => {
     // a1 links to b2 and a2 to b1: the right column flips to follow them.
-    const g = graph([node("a1", 0), node("a2", 0), node("b1", 1), node("b2", 1)], [["a1", "b2"], ["a2", "b1"]]);
+    const g = graph(
+      [node("a1", 0), node("a2", 0), node("b1", 1), node("b2", 1)],
+      [
+        ["a1", "b2"],
+        ["a2", "b1"],
+      ],
+    );
     const y = (id: string) => layout(g).nodes.find((n) => n.id === id)!.y;
     expect(y("b2") < y("b1")).toBe(y("a1") < y("a2"));
   });
 
   it("wraps a tall column into lanes", () => {
     const many = Array.from({ length: 25 }, (_, i) => node(`d${i}`, 1));
-    const g = graph([node("c", 0), ...many], many.map((n) => ["c", n.id] as [string, string]));
+    const g = graph(
+      [node("c", 0), ...many],
+      many.map((n) => ["c", n.id] as [string, string]),
+    );
     const p = layout(g);
     const xs = new Set(p.nodes.filter((n) => n.column === 1).map((n) => n.x));
     expect(xs.size).toBe(3);
@@ -110,8 +139,14 @@ describe("graph search", () => {
   });
 
   it("colors functions and types apart", () => {
-    const fn = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "f", kind: "function", line: 1, signature: "fn f()", members: [], more_members: 0 } });
-    const ty = kindStyle({ kind: "symbol", symbol: { path: "a.rs", name: "T", kind: "class", line: 1, signature: "struct T", members: [], more_members: 0 } });
+    const fn = kindStyle({
+      kind: "symbol",
+      symbol: { path: "a.rs", name: "f", kind: "function", line: 1, signature: "fn f()", members: [], more_members: 0 },
+    });
+    const ty = kindStyle({
+      kind: "symbol",
+      symbol: { path: "a.rs", name: "T", kind: "class", line: 1, signature: "struct T", members: [], more_members: 0 },
+    });
     expect(fn.icon).toBe("square-function");
     expect(ty.icon).toBe("shapes");
     expect(kindStyle({ kind: "package" }).icon).toBe("box");
@@ -141,11 +176,27 @@ describe("graph camera", () => {
 });
 
 describe("type members in the graph", () => {
-  const member = (name: string, line: number) => ({ path: "a.rs", name, kind: "method" as const, line, end_line: line + 2, via: null, signature: `fn ${name}()` });
+  const member = (name: string, line: number) => ({
+    path: "a.rs",
+    name,
+    kind: "method" as const,
+    line,
+    end_line: line + 2,
+    via: null,
+    signature: `fn ${name}()`,
+  });
   const typeNode = (id: string, n: number, column = 0): CodeGraphNode => ({
     ...node(id, column),
     kind: "symbol",
-    symbol: { path: "a.rs", name: id, kind: "class", line: 1, signature: `struct ${id}`, members: Array.from({ length: n }, (_, i) => member(`m${i}`, i + 2)), more_members: 0 },
+    symbol: {
+      path: "a.rs",
+      name: id,
+      kind: "class",
+      line: 1,
+      signature: `struct ${id}`,
+      members: Array.from({ length: n }, (_, i) => member(`m${i}`, i + 2)),
+      more_members: 0,
+    },
   });
 
   it("lists members inside the focused type only, capped with a count", () => {
@@ -157,7 +208,17 @@ describe("type members in the graph", () => {
   });
 
   it("stacks a tall focused node without overlapping its column", () => {
-    const g: CodeGraph = { ...graph([typeNode("T", 6), node("a", 1), node("b", 1)], [["T", "a"], ["T", "b"]]), focus: "T", view: "symbol" };
+    const g: CodeGraph = {
+      ...graph(
+        [typeNode("T", 6), node("a", 1), node("b", 1)],
+        [
+          ["T", "a"],
+          ["T", "b"],
+        ],
+      ),
+      focus: "T",
+      view: "symbol",
+    };
     const p = layout(g).nodes;
     const [a, b] = ["a", "b"].map((id) => p.find((n) => n.id === id)!).sort((x, y) => x.y - y.y);
     expect(b.y).toBeGreaterThanOrEqual(a.y + a.h);
@@ -180,18 +241,47 @@ describe("node labels", () => {
 
 describe("previewing a member", () => {
   it("turns a member into the symbol the preview shows, keeping its range", () => {
-    const s = asSymbol({ path: "a/Zoo.java", name: "open", kind: "method", line: 3, end_line: 5, via: null, signature: "void open()" }, "Zoo");
+    const s = asSymbol(
+      { path: "a/Zoo.java", name: "open", kind: "method", line: 3, end_line: 5, via: null, signature: "void open()" },
+      "Zoo",
+    );
     expect(s).toMatchObject({ path: "a/Zoo.java", name: "open", line: 3, end_line: 5, container: "Zoo", members: [] });
   });
 });
 
 describe("the file badge", () => {
-  const d = (name: string, kind: "class" | "function" = "class") => ({ path: "Zoo.java", name, kind, line: 1, end_line: null, via: null, signature: name });
+  const d = (name: string, kind: "class" | "function" = "class") => ({
+    path: "Zoo.java",
+    name,
+    kind,
+    line: 1,
+    end_line: null,
+    via: null,
+    signature: name,
+  });
   it("counts what a file defines, and for a method what else its file defines besides its own type", () => {
-    expect(fileDefsHint({ kind: "file", file_defs: [d("Zoo"), d("load", "function")], more_file_defs: 3 })).toBe("5 inside");
+    expect(fileDefsHint({ kind: "file", file_defs: [d("Zoo"), d("load", "function")], more_file_defs: 3 })).toBe(
+      "5 inside",
+    );
     expect(fileDefsHint({ kind: "file", file_defs: [], more_file_defs: 0 })).toBe("");
-    const method = { path: "Zoo.java", name: "open", kind: "method" as const, line: 3, container: "Zoo", signature: "void open()", members: [], more_members: 0 };
-    expect(fileDefsHint({ kind: "symbol", symbol: method, file_defs: [d("Zoo"), d("Keeper"), d("load", "function")], more_file_defs: 0 })).toBe("+2 in file");
+    const method = {
+      path: "Zoo.java",
+      name: "open",
+      kind: "method" as const,
+      line: 3,
+      container: "Zoo",
+      signature: "void open()",
+      members: [],
+      more_members: 0,
+    };
+    expect(
+      fileDefsHint({
+        kind: "symbol",
+        symbol: method,
+        file_defs: [d("Zoo"), d("Keeper"), d("load", "function")],
+        more_file_defs: 0,
+      }),
+    ).toBe("+2 in file");
     expect(fileDefsHint({ kind: "symbol", symbol: method, file_defs: [d("Zoo")], more_file_defs: 0 })).toBe("");
     expect(fileDefsHint({ kind: "package", file_defs: [d("Zoo")], more_file_defs: 0 })).toBe("");
   });

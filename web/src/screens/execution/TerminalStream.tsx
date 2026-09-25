@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
 import { Banner, Button, IconButton, Spinner, Terminal } from "../../design";
 import type { TerminalMode } from "./model";
 
@@ -20,7 +20,16 @@ export interface TerminalStreamProps {
 const HEIGHT = "max(360px, calc(100vh - 400px))";
 
 /** The Terminal stream: the harness's own interface in the design's terminal chrome. */
-export function TerminalStream({ execution, mode, title, project, canResume, resuming, onResume, notice }: TerminalStreamProps) {
+export function TerminalStream({
+  execution,
+  mode,
+  title,
+  project,
+  canResume,
+  resuming,
+  onResume,
+  notice,
+}: TerminalStreamProps) {
   const [size, setSize] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
@@ -52,7 +61,12 @@ export function TerminalStream({ execution, mode, title, project, canResume, res
   return (
     <div className="ex-stack">
       {mode === "replay" && (
-        <Banner tone="info" icon="rotate-ccw" title={canResume ? "Replaying the ended session. Resume to continue." : "Replaying the ended session"} actions={resume}>
+        <Banner
+          tone="info"
+          icon="rotate-ccw"
+          title={canResume ? "Replaying the ended session. Resume to continue." : "Replaying the ended session"}
+          actions={resume}
+        >
           {canResume
             ? "Input is off during the replay. Resume reopens the harness session with its own resume command, and you can type into it again."
             : "Input is off during the replay. This harness session cannot be resumed."}
@@ -81,7 +95,12 @@ export function TerminalStream({ execution, mode, title, project, canResume, res
               </div>
             }
           >
-            <XtermScreen key={`${execution}:${mode}`} execution={execution} readOnly={mode !== "live"} onSize={(c, r) => setSize(`${c}×${r}`)} />
+            <XtermScreen
+              key={`${execution}:${mode}`}
+              execution={execution}
+              readOnly={mode !== "live"}
+              onSize={(c, r) => setSize(`${c}×${r}`)}
+            />
           </Suspense>
         </Terminal>
       </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { emptyTabs, fromUiTabs, normalizeTabs, tabsReducer, toUiTabs, type TabsAction, type TabsState } from "./tabs";
+import { emptyTabs, fromUiTabs, normalizeTabs, type TabsAction, type TabsState, tabsReducer, toUiTabs } from "./tabs";
 
 const run = (actions: TabsAction[], from: TabsState = emptyTabs) => actions.reduce(tabsReducer, from);
 const ids = (s: TabsState) => s.tabs.map((t) => (t.preview ? `(${t.id})` : t.id));
@@ -76,7 +76,13 @@ describe("tab model", () => {
     ]);
 
     it("focuses the right neighbour of the closed active tab", () => {
-      const s = run([{ type: "activate", id: "b:2" }, { type: "close", id: "b:2" }], three);
+      const s = run(
+        [
+          { type: "activate", id: "b:2" },
+          { type: "close", id: "b:2" },
+        ],
+        three,
+      );
       expect(ids(s)).toEqual(["a:1", "c:3"]);
       expect(s.active).toBe("c:3");
     });
@@ -99,7 +105,10 @@ describe("tab model", () => {
   });
 
   it("activate adds a missing resource as a normal tab (deep link, history step)", () => {
-    const s = run([{ type: "open", id: "exec:x1", preview: true }, { type: "activate", id: "session:s9" }]);
+    const s = run([
+      { type: "open", id: "exec:x1", preview: true },
+      { type: "activate", id: "session:s9" },
+    ]);
     expect(ids(s)).toEqual(["(exec:x1)", "session:s9"]);
     expect(s.active).toBe("session:s9");
   });

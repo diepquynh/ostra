@@ -138,7 +138,13 @@ export const changesStore = new SharedStore<ProjectChange[]>({
 /** Every non-ignored file path of a project, kept current on `project_fs_changed`. */
 export function useFileIndex(ws: string | null, key: string | null) {
   const s = useShared(fileIndexStore, ws && key ? projectKey(ws, key) : null);
-  return { paths: s.data?.paths ?? [], truncated: s.data?.truncated ?? false, loading: s.loading, error: s.error, reload: s.reload };
+  return {
+    paths: s.data?.paths ?? [],
+    truncated: s.data?.truncated ?? false,
+    loading: s.loading,
+    error: s.error,
+    reload: s.reload,
+  };
 }
 
 /** Files that sessions changed in a project and that still differ from HEAD. */

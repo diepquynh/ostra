@@ -2,7 +2,14 @@ import type { CSSProperties } from "react";
 import type { DiffHunk } from "../../api/types";
 import { diffRows } from "./diff";
 
-const ln: CSSProperties = { width: 44, flex: "none", paddingRight: 10, textAlign: "right", color: "var(--text-disabled)", userSelect: "none" };
+const ln: CSSProperties = {
+  width: 44,
+  flex: "none",
+  paddingRight: 10,
+  textAlign: "right",
+  color: "var(--text-disabled)",
+  userSelect: "none",
+};
 
 /** Unified diff against HEAD with old and new line numbers, one gap row between hunks. */
 export function DiffPane({ hunks }: { hunks: DiffHunk[] }) {
@@ -25,7 +32,12 @@ export function DiffPane({ hunks }: { hunks: DiffHunk[] }) {
               textOverflow: "ellipsis",
             }}
           >
-            ⋯ {r.skipped === null ? "unchanged lines" : r.skipped === 1 ? "1 unchanged line" : `${r.skipped} unchanged lines`}
+            ⋯{" "}
+            {r.skipped === null
+              ? "unchanged lines"
+              : r.skipped === 1
+                ? "1 unchanged line"
+                : `${r.skipped} unchanged lines`}
             {r.header && <span style={{ marginLeft: 12, fontFamily: "var(--font-mono)" }}>{r.header}</span>}
           </div>
         ) : (

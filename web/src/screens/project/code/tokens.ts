@@ -25,7 +25,8 @@ export const TOKEN_CSS: Record<TokenClass, string | null> = {
 };
 
 /** Classes that name a symbol, so a click finds its usages. Mirrors `TokenClass::is_symbol` on the server. */
-export const isSymbolClass = (c: TokenClass): boolean => c === "type" || c === "function" || c === "name" || c === "constant" || c === "macro";
+export const isSymbolClass = (c: TokenClass): boolean =>
+  c === "type" || c === "function" || c === "name" || c === "constant" || c === "macro";
 
 /**
  * Group the flat `[line, col, len, class]` runs by line in one pass. Index 0 is line 1. Runs with an unknown class,

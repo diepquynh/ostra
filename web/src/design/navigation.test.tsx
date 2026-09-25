@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CommandPalette, filterPaletteItems, Menu, Tabs, TreeItem, type PaletteItem } from "./index";
+import { CommandPalette, filterPaletteItems, Menu, type PaletteItem, Tabs, TreeItem } from "./index";
 
 afterEach(cleanup);
 
@@ -98,7 +98,8 @@ function ControlledTabs({ onClose }: { onClose?: (id: string) => void }) {
 }
 
 describe("Tabs", () => {
-  const selected = () => screen.getAllByRole("tab").find((t) => t.getAttribute("aria-selected") === "true")?.textContent;
+  const selected = () =>
+    screen.getAllByRole("tab").find((t) => t.getAttribute("aria-selected") === "true")?.textContent;
 
   it("selects on click and keeps a single tab stop on the selected tab", () => {
     render(<ControlledTabs />);
@@ -202,7 +203,9 @@ describe("TreeItem", () => {
   it("activates with Enter, toggles with the chevron and the arrow keys", () => {
     const onClick = vi.fn();
     const onToggle = vi.fn();
-    const { rerender } = render(<TreeItem label="Order cancellation" expanded={false} onClick={onClick} onToggle={onToggle} />);
+    const { rerender } = render(
+      <TreeItem label="Order cancellation" expanded={false} onClick={onClick} onToggle={onToggle} />,
+    );
     const row = screen.getByRole("treeitem");
     fireEvent.keyDown(row, { key: "Enter" });
     expect(onClick).toHaveBeenCalledTimes(1);

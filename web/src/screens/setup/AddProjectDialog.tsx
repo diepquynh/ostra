@@ -4,11 +4,11 @@ import type { CloneProject, ValidationIssue, WorkspaceDetail } from "../../api/t
 import { Banner, Button, Dialog, Spinner, Tabs } from "../../design";
 import { useChannel } from "../../lib/hooks";
 import { useWorkspace } from "../../lib/nav";
-import { CloneForm, type CloneErrors } from "./CloneForm";
+import { type CloneErrors, CloneForm } from "./CloneForm";
 import { useHome } from "./folders";
 import { useGitCredentials } from "./GitCredentials";
 import { ImportForm } from "./ImportForm";
-import { expandHome, importErrors, projectStart, type DraftProject, type ImportErrors } from "./wizard";
+import { type DraftProject, expandHome, type ImportErrors, importErrors, projectStart } from "./wizard";
 
 export type AddProjectDialogProps = {
   ws: string;
@@ -103,7 +103,16 @@ export function AddProjectDialog({ ws, onClose, onAdded }: AddProjectDialogProps
       footer={
         <>
           {busy && progress && (
-            <span style={{ display: "flex", gap: 6, alignItems: "center", minWidth: 0, color: "var(--text-muted)", font: "var(--text-sm)/1.2 var(--font-mono)" }}>
+            <span
+              style={{
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+                minWidth: 0,
+                color: "var(--text-muted)",
+                font: "var(--text-sm)/1.2 var(--font-mono)",
+              }}
+            >
               <Spinner size={11} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{progress}</span>
             </span>
@@ -165,7 +174,8 @@ export function AddProjectDialog({ ws, onClose, onAdded }: AddProjectDialogProps
             }}
           />
           <span className="wp-muted" style={{ fontSize: "var(--text-sm)" }}>
-            Save tokens and SSH keys under Settings, Git; they stay on the machine that runs Ostra. Closing this dialog does not stop a clone that has started.
+            Save tokens and SSH keys under Settings, Git; they stay on the machine that runs Ostra. Closing this dialog
+            does not stop a clone that has started.
           </span>
         </>
       )}

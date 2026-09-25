@@ -1,6 +1,6 @@
-import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal as Xterm, type ITheme } from "@xterm/xterm";
+import { type ITheme, Terminal as Xterm } from "@xterm/xterm";
+import { useEffect, useRef } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { socket } from "../../api";
 import { linkHandler, muteQueryReplies } from "./terminalSafety";

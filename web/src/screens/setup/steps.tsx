@@ -1,6 +1,5 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import type { CloneProject, ValidationIssue, WorkspaceDetail } from "../../api/types";
-import { useChannel } from "../../lib/hooks";
 import {
   Banner,
   Button,
@@ -10,43 +9,45 @@ import {
   FolderPicker,
   Icon,
   IconButton,
+  type IconName,
   Input,
   LANE_ORDER,
+  type LaneState,
   LaneStepper,
   Panel,
   Spinner,
   StatusChip,
   Switch,
   Tabs,
-  type IconName,
-  type LaneState,
 } from "../../design";
-import { HarnessAction, SetupTerminalPanel, useHarnessSetup } from "./HarnessSetup";
+import { useChannel } from "../../lib/hooks";
 import { CloneForm } from "./CloneForm";
+import { listFolders, makeFolder, useFolderInfo } from "./folders";
 import { useGitCredentials } from "./GitCredentials";
+import { HarnessAction, SetupTerminalPanel, useHarnessSetup } from "./HarnessSetup";
 import { ImportForm } from "./ImportForm";
 import { ProviderCredentials } from "./ProviderCredentials";
-import { listFolders, makeFolder, useFolderInfo } from "./folders";
 import type { Wizard } from "./useWizard";
 import {
   clonePath,
   expandHome,
   HARNESS_LABEL,
   keySource,
+  PRESET_LABEL,
+  PROVIDER_LABEL,
   patchName,
   presetExecutor,
-  PRESET_LABEL,
   presetsFor,
   projectIndex,
   projectStart,
-  PROVIDER_LABEL,
   stepForIssue,
   tomlFor,
   type WizardValues,
 } from "./wizard";
 
 export function useReducedMotion(): boolean {
-  const q = typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
+  const q =
+    typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : null;
   const [reduced, setReduced] = useState(!!q?.matches);
   useEffect(() => {
     if (!q) return;
@@ -80,9 +81,21 @@ function FieldErrors({ issues }: { issues?: ValidationIssue[] }) {
 }
 
 const FACTS: [IconName, string, string][] = [
-  ["git-pull-request", "Work goes through a pipeline", "Research, spec, fact-check, plan, build, review, test and docs. Each stage says what it produces and why it exists."],
-  ["hand", "You approve at gates", "Ostra stops for your answer before a spec or plan is used, and before any command no rule allows."],
-  ["square-terminal", "Agents run where you choose", "On Ostra's own loop with an API key, or inside Claude Code, Codex, Grok Build or Antigravity."],
+  [
+    "git-pull-request",
+    "Work goes through a pipeline",
+    "Research, spec, fact-check, plan, build, review, test and docs. Each stage says what it produces and why it exists.",
+  ],
+  [
+    "hand",
+    "You approve at gates",
+    "Ostra stops for your answer before a spec or plan is used, and before any command no rule allows.",
+  ],
+  [
+    "square-terminal",
+    "Agents run where you choose",
+    "On Ostra's own loop with an API key, or inside Claude Code, Codex, Grok Build or Antigravity.",
+  ],
 ];
 
 function StepWelcome() {
@@ -93,14 +106,24 @@ function StepWelcome() {
     const t = setInterval(() => setN((x) => (x + 1) % (LANE_ORDER.length + 3)), 700);
     return () => clearInterval(t);
   }, [reduced]);
-  const lanes = Object.fromEntries(LANE_ORDER.map((id, i) => [id, { status: i < n ? "done" : i === n ? "current" : "pending" } satisfies LaneState]));
+  const lanes = Object.fromEntries(
+    LANE_ORDER.map((id, i) => [id, { status: i < n ? "done" : i === n ? "current" : "pending" } satisfies LaneState]),
+  );
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
-        <h1 style={{ margin: "0 0 8px", font: "var(--weight-semibold) var(--text-2xl)/1.2 var(--font-sans)", letterSpacing: "var(--tracking-tight)" }}>Set up Ostra</h1>
+        <h1
+          style={{
+            margin: "0 0 8px",
+            font: "var(--weight-semibold) var(--text-2xl)/1.2 var(--font-sans)",
+            letterSpacing: "var(--tracking-tight)",
+          }}
+        >
+          Set up Ostra
+        </h1>
         <div style={{ fontSize: "var(--text-md)", color: "var(--text-secondary)", lineHeight: 1.55 }}>
-          Ostra runs a software development lifecycle on your own machine. You describe a change; code drives it from stage to stage and models do the work inside
-          each stage.
+          Ostra runs a software development lifecycle on your own machine. You describe a change; code drives it from
+          stage to stage and models do the work inside each stage.
         </div>
       </div>
       <LaneStepper lanes={lanes} />
@@ -130,7 +153,8 @@ function StepWelcome() {
         ))}
       </div>
       <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-        Setup takes about two minutes: check this machine, create a workspace, add the project folders Ostra should work on.
+        Setup takes about two minutes: check this machine, create a workspace, add the project folders Ostra should work
+        on.
       </div>
     </div>
   );
@@ -138,7 +162,21 @@ function StepWelcome() {
 
 type Tone = "ok" | "warn" | "neutral";
 
-function CheckRow({ delay, label, sub, result, tone, action }: { delay: number; label: string; sub: string; result: string; tone: Tone; action?: ReactNode }) {
+function CheckRow({
+  delay,
+  label,
+  sub,
+  result,
+  tone,
+  action,
+}: {
+  delay: number;
+  label: string;
+  sub: string;
+  result: string;
+  tone: Tone;
+  action?: ReactNode;
+}) {
   const [done, setDone] = useState(delay === 0);
   useEffect(() => {
     if (delay === 0) return;
@@ -150,15 +188,34 @@ function CheckRow({ delay, label, sub, result, tone, action }: { delay: number; 
   return (
     <div
       className="os-rise"
-      style={{ display: "flex", alignItems: "center", gap: 10, height: 38, padding: "0 12px", borderBottom: "1px solid var(--border-subtle)", animationDelay: `${delay / 4}ms` }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        height: 38,
+        padding: "0 12px",
+        borderBottom: "1px solid var(--border-subtle)",
+        animationDelay: `${delay / 4}ms`,
+      }}
     >
       <span style={{ width: 16, display: "grid", placeItems: "center" }}>
-        {done ? <Icon name={icon} size={15} style={{ color }} /> : <Spinner size={12} style={{ color: "var(--text-muted)" }} />}
+        {done ? (
+          <Icon name={icon} size={15} style={{ color }} />
+        ) : (
+          <Spinner size={12} style={{ color: "var(--text-muted)" }} />
+        )}
       </span>
       <span style={{ flex: 1, minWidth: 0 }}>
-        {label} <span style={{ font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", marginLeft: 4 }}>{sub}</span>
+        {label}{" "}
+        <span style={{ font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", marginLeft: 4 }}>
+          {sub}
+        </span>
       </span>
-      {done ? <Chip tone={tone}>{result}</Chip> : <span style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Checking…</span>}
+      {done ? (
+        <Chip tone={tone}>{result}</Chip>
+      ) : (
+        <span style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Checking…</span>
+      )}
       {done && action}
     </div>
   );
@@ -172,7 +229,14 @@ function StepCheck({ w }: { w: Wizard }) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <StepHead title="Check this machine" />
-        <Banner tone="bad" actions={<Button size="sm" onClick={w.env.reload}>Check again</Button>}>
+        <Banner
+          tone="bad"
+          actions={
+            <Button size="sm" onClick={w.env.reload}>
+              Check again
+            </Button>
+          }
+        >
           Ostra could not read this machine's setup: {w.env.error.message}
         </Banner>
       </div>
@@ -194,8 +258,8 @@ function StepCheck({ w }: { w: Wizard }) {
         <>
           {!anyKey && (
             <Banner tone="bad">
-              No model provider has a usable API key. Save one below, or set <code>ANTHROPIC_API_KEY</code> or <code>OPENAI_API_KEY</code> in the environment
-              that starts <code>ostra</code> and restart it.
+              No model provider has a usable API key. Save one below, or set <code>ANTHROPIC_API_KEY</code> or{" "}
+              <code>OPENAI_API_KEY</code> in the environment that starts <code>ostra</code> and restart it.
             </Banner>
           )}
           <div>
@@ -232,9 +296,23 @@ function StepCheck({ w }: { w: Wizard }) {
                   delay={d()}
                   label={HARNESS_LABEL[h.harness] ?? h.harness}
                   sub={h.command + (h.version ? ` ${h.version}` : "")}
-                  result={!h.installed ? "Not installed" : h.logged_in === true ? "Logged in" : h.logged_in === false ? "Not logged in" : "Installed"}
+                  result={
+                    !h.installed
+                      ? "Not installed"
+                      : h.logged_in === true
+                        ? "Logged in"
+                        : h.logged_in === false
+                          ? "Not logged in"
+                          : "Installed"
+                  }
                   tone={!h.installed ? "neutral" : h.logged_in === false ? "warn" : "ok"}
-                  action={<HarnessAction h={h} starting={setup.starting === h.harness} onStart={(a) => setup.start(h.harness, a)} />}
+                  action={
+                    <HarnessAction
+                      h={h}
+                      starting={setup.starting === h.harness}
+                      onStart={(a) => setup.start(h.harness, a)}
+                    />
+                  }
                 />
               ))}
             </div>
@@ -243,8 +321,9 @@ function StepCheck({ w }: { w: Wizard }) {
         </>
       )}
       <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)", lineHeight: 1.5 }}>
-        Agents run on the native executor unless workspace settings route them to an installed harness. Install runs the vendor's official installer script, and
-        Log in runs the CLI's own login, both in a terminal here. A harness that is not logged in can also log in later from an execution's Terminal tab.
+        Agents run on the native executor unless workspace settings route them to an installed harness. Install runs the
+        vendor's official installer script, and Log in runs the CLI's own login, both in a terminal here. A harness that
+        is not logged in can also log in later from an execution's Terminal tab.
       </div>
     </div>
   );
@@ -260,24 +339,39 @@ function StepName({ w }: { w: Wizard }) {
         text="A workspace holds your projects and their settings: which executor and model each agent runs on, permissions, memory, and custom instructions."
       />
       <div className="os-field">
-        <Input label="Name" value={v.name} onChange={(e) => set({ name: e.target.value, nameTouched: true })} placeholder="shop" autoFocus />
+        <Input
+          label="Name"
+          value={v.name}
+          onChange={(e) => set({ name: e.target.value, nameTouched: true })}
+          placeholder="shop"
+          autoFocus
+        />
         <FieldErrors issues={w.byStep.name?.filter((i) => i.path === "name")} />
       </div>
       <div className="os-field">
         <span className="os-field__label">Directory</span>
         <span className="os-field__hint">
-          Ostra writes <code>.ostra/</code> here: workspace settings, the session database, and session artifacts. Projects are referenced by path and never copied.
+          Ostra writes <code>.ostra/</code> here: workspace settings, the session database, and session artifacts.
+          Projects are referenced by path and never copied.
         </span>
       </div>
       <div className="os-field">
-        <FolderPicker value={v.root} onChange={(root) => set(patchName(v, root))} list={listFolders} mkdir={makeFolder} height={180} />
+        <FolderPicker
+          value={v.root}
+          onChange={(root) => set(patchName(v, root))}
+          list={listFolders}
+          mkdir={makeFolder}
+          height={180}
+        />
         {info.state === "missing" && (
           <span className="os-field__hint">
             No folder at <code>{v.root}</code> yet. Ostra creates it when it creates the workspace.
           </span>
         )}
         {info.state === "exists" && info.isOstraProject && (
-          <span className="os-field__hint">This folder is an Ostra project. A workspace usually lives next to its projects, not inside one.</span>
+          <span className="os-field__hint">
+            This folder is an Ostra project. A workspace usually lives next to its projects, not inside one.
+          </span>
         )}
         <FieldErrors issues={w.byStep.name?.filter((i) => i.path === "root")} />
       </div>
@@ -308,19 +402,38 @@ function StepProjects({ w }: { w: Wizard }) {
           {v.projects.map((p, i) => {
             const mine = issues.filter((x) => projectIndex(x.path) === i);
             return (
-              <div key={p.key} className="os-rise" style={{ borderBottom: i < v.projects.length - 1 || v.clones.length ? "1px solid var(--border-subtle)" : 0 }}>
+              <div
+                key={p.key}
+                className="os-rise"
+                style={{
+                  borderBottom: i < v.projects.length - 1 || v.clones.length ? "1px solid var(--border-subtle)" : 0,
+                }}
+              >
                 <div style={{ display: "flex", alignItems: "center", gap: 10, height: 40, padding: "0 8px 0 12px" }}>
                   <Icon name="folder-git-2" size={15} style={{ color: "var(--accent-fg)" }} />
                   <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{p.key}</span>
                   <span
-                    style={{ flex: 1, minWidth: 0, font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      font: "var(--text-sm)/1 var(--font-mono)",
+                      color: "var(--text-muted)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
                     title={p.path}
                   >
                     {p.path}
                   </span>
                   <Chip>{p.stack || "detect"}</Chip>
                   <StatusChip kind="init" status={p.isOstraProject ? "initialized" : "not_initialized"} />
-                  <IconButton size="sm" icon="x" label={`Remove ${p.key}`} onClick={() => set({ projects: v.projects.filter((x) => x.key !== p.key) })} />
+                  <IconButton
+                    size="sm"
+                    icon="x"
+                    label={`Remove ${p.key}`}
+                    onClick={() => set({ projects: v.projects.filter((x) => x.key !== p.key) })}
+                  />
                 </div>
                 {mine.length > 0 && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "0 12px 8px 37px" }}>
@@ -334,19 +447,39 @@ function StepProjects({ w }: { w: Wizard }) {
             <div
               key={c.key}
               className="os-rise"
-              style={{ display: "flex", alignItems: "center", gap: 10, height: 40, padding: "0 8px 0 12px", borderBottom: i < v.clones.length - 1 ? "1px solid var(--border-subtle)" : 0 }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                height: 40,
+                padding: "0 8px 0 12px",
+                borderBottom: i < v.clones.length - 1 ? "1px solid var(--border-subtle)" : 0,
+              }}
             >
               <Icon name="git-fork" size={15} style={{ color: "var(--accent-fg)" }} />
               <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{c.key}</span>
               <span
-                style={{ flex: 1, minWidth: 0, font: "var(--text-sm)/1 var(--font-mono)", color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  font: "var(--text-sm)/1 var(--font-mono)",
+                  color: "var(--text-muted)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
                 title={`${c.url} → ${clonePath(c, v.root, w.home)}`}
               >
                 {c.url}
               </span>
               <Chip>{c.stack || "detect"}</Chip>
               <Chip tone="info">clone</Chip>
-              <IconButton size="sm" icon="x" label={`Remove ${c.key}`} onClick={() => set({ clones: v.clones.filter((x) => x.key !== c.key) })} />
+              <IconButton
+                size="sm"
+                icon="x"
+                label={`Remove ${c.key}`}
+                onClick={() => set({ clones: v.clones.filter((x) => x.key !== c.key) })}
+              />
             </div>
           ))}
         </div>
@@ -394,7 +527,8 @@ function StepProjects({ w }: { w: Wizard }) {
                 />
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                   <span className="os-field__hint" style={{ flex: 1 }}>
-                    Save tokens and SSH keys under Settings, Git, or let the machine's own git and SSH setup answer. The clone runs when you create the workspace.
+                    Save tokens and SSH keys under Settings, Git, or let the machine's own git and SSH setup answer. The
+                    clone runs when you create the workspace.
                   </span>
                   <Button
                     icon="plus"
@@ -439,12 +573,23 @@ function StepDefaults({ w }: { w: Wizard }) {
   }, [w.env.data, presets, v.preset, set]);
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <StepHead title="Choose defaults" text="Everything here is saved in .ostra/workspace.toml and can change later under Settings. Changes apply to the next execution." />
+      <StepHead
+        title="Choose defaults"
+        text="Everything here is saved in .ostra/workspace.toml and can change later under Settings. Changes apply to the next execution."
+      />
       <div className="os-field">
         <span className="os-field__label">Permission mode</span>
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 4 }}>
           {MODES.map(([k, l, d]) => (
-            <Checkbox key={k} radio name="wizard-mode" checked={v.mode === k} onChange={() => set({ mode: k })} label={l} description={d} />
+            <Checkbox
+              key={k}
+              radio
+              name="wizard-mode"
+              checked={v.mode === k}
+              onChange={() => set({ mode: k })}
+              label={l}
+              description={d}
+            />
           ))}
         </div>
         <FieldErrors issues={issues.filter((i) => i.path.startsWith("permissions"))} />
@@ -460,18 +605,24 @@ function StepDefaults({ w }: { w: Wizard }) {
             tabs={presets.map((p) => ({ id: p, label: PRESET_LABEL[p] }))}
           />
         </div>
-        <span className="os-field__hint">Only logged-in harnesses are offered. Research, spec, fact-check and review stay on the native loop.</span>
+        <span className="os-field__hint">
+          Only logged-in harnesses are offered. Research, spec, fact-check and review stay on the native loop.
+        </span>
         <FieldErrors issues={issues.filter((i) => i.path.startsWith("routing"))} />
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <Switch label="YOLO by default" tone="warn" checked={v.yolo} onChange={() => set({ yolo: !v.yolo })} />
         {v.yolo && (
           <Banner tone="warn">
-            Ostra answers every gate and permission ask itself and lists each decision at the end. Guards, deny rules, the fact-check PASS requirement, and security
-            blocks still apply.
+            Ostra answers every gate and permission ask itself and lists each decision at the end. Guards, deny rules,
+            the fact-check PASS requirement, and security blocks still apply.
           </Banner>
         )}
-        <Switch label="Browser notifications when a gate is waiting" checked={v.push} onChange={() => set({ push: !v.push })} />
+        <Switch
+          label="Browser notifications when a gate is waiting"
+          checked={v.push}
+          onChange={() => set({ push: !v.push })}
+        />
         <FieldErrors issues={issues.filter((i) => i.path.startsWith("yolo") || i.path.startsWith("notifications"))} />
       </div>
     </div>
@@ -519,7 +670,14 @@ function Checklist({ w }: { w: Wizard }) {
                   <span className="os-dot os-dot--hollow" />
                 )}
               </span>
-              <span style={{ fontFamily: mono ? "var(--font-mono)" : undefined, fontSize: mono ? "var(--text-sm)" : undefined }}>{t}</span>
+              <span
+                style={{
+                  fontFamily: mono ? "var(--font-mono)" : undefined,
+                  fontSize: mono ? "var(--text-sm)" : undefined,
+                }}
+              >
+                {t}
+              </span>
               {note && (
                 <span
                   style={{
@@ -538,7 +696,10 @@ function Checklist({ w }: { w: Wizard }) {
         })}
       </div>
       {w.done && failed.length > 0 && (
-        <Banner tone="warn" title={failed.length === 1 ? `${failed[0]} was not cloned` : `${failed.length} repositories were not cloned`}>
+        <Banner
+          tone="warn"
+          title={failed.length === 1 ? `${failed[0]} was not cloned` : `${failed.length} repositories were not cloned`}
+        >
           The workspace was created. Fix the problem above, then clone again from Add project in the workspace.
         </Banner>
       )}
@@ -554,7 +715,12 @@ function StepReview({ w }: { w: Wizard }) {
   const rows: [string, string][] = [
     ["Name", v.name],
     ["Directory", w.home && v.root.startsWith("~/") ? w.home + v.root.slice(1) : v.root],
-    ["Projects", v.projects.length || v.clones.length ? [...v.projects.map((p) => p.key), ...v.clones.map((c) => `${c.key} (clone)`)].join(", ") : "none yet"],
+    [
+      "Projects",
+      v.projects.length || v.clones.length
+        ? [...v.projects.map((p) => p.key), ...v.clones.map((c) => `${c.key} (clone)`)].join(", ")
+        : "none yet",
+    ],
     ["Permission mode", v.mode],
     ["Implementers", presetExecutor(v.preset)],
     ["YOLO", v.yolo ? "on" : "off"],
@@ -562,12 +728,24 @@ function StepReview({ w }: { w: Wizard }) {
   ];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <StepHead title="Review and create" text="Ostra writes this file and registers the workspace. Nothing in your project folders changes until you initialize a project." />
+      <StepHead
+        title="Review and create"
+        text="Ostra writes this file and registers the workspace. Nothing in your project folders changes until you initialize a project."
+      />
       <ReviewIssues w={w} />
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1.2fr)", gap: 16 }}>
         <div className="os-panel" style={{ padding: "6px 0" }}>
           {rows.map(([k, val]) => (
-            <div key={k} style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10, padding: "6px 12px", fontSize: "var(--text-base)" }}>
+            <div
+              key={k}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "120px 1fr",
+                gap: 10,
+                padding: "6px 12px",
+                fontSize: "var(--text-base)",
+              }}
+            >
               <span style={{ color: "var(--text-muted)" }}>{k}</span>
               <span
                 style={{
@@ -596,18 +774,43 @@ function ReviewIssues({ w }: { w: Wizard }) {
     );
   if (w.validating)
     return (
-      <div style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--text-muted)", fontSize: "var(--text-sm)", height: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          color: "var(--text-muted)",
+          fontSize: "var(--text-sm)",
+          height: 20,
+        }}
+      >
         <Spinner size={11} /> Checking the settings…
       </div>
     );
   if (w.issues.length === 0)
     return (
-      <div style={{ display: "flex", gap: 8, alignItems: "center", color: "var(--text-secondary)", fontSize: "var(--text-sm)", height: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          color: "var(--text-secondary)",
+          fontSize: "var(--text-sm)",
+          height: 20,
+        }}
+      >
         <Icon name="circle-check" size={14} style={{ color: "var(--ok)" }} /> The settings pass validation.
       </div>
     );
   return (
-    <Banner tone="bad" title={w.issues.length === 1 ? "Fix this before creating the workspace" : `Fix these ${w.issues.length} problems before creating the workspace`}>
+    <Banner
+      tone="bad"
+      title={
+        w.issues.length === 1
+          ? "Fix this before creating the workspace"
+          : `Fix these ${w.issues.length} problems before creating the workspace`
+      }
+    >
       <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
         {w.issues.map((i) => {
           const step = stepForIssue(i.path);
@@ -639,7 +842,11 @@ export function WizardBody({ w, padding }: { w: Wizard; padding: string }) {
     review: <StepReview w={w} />,
   }[w.id];
   return (
-    <div key={w.id + (w.creating ? "-c" : "")} className={w.dir === "back" ? "os-enter-back" : "os-enter-forward"} style={{ padding }}>
+    <div
+      key={w.id + (w.creating ? "-c" : "")}
+      className={w.dir === "back" ? "os-enter-back" : "os-enter-forward"}
+      style={{ padding }}
+    >
       {body}
     </div>
   );

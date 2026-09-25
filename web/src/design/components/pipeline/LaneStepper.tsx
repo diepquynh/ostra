@@ -1,10 +1,19 @@
-import { useRef, type KeyboardEvent } from "react";
+import { type KeyboardEvent, useRef } from "react";
 import { cx } from "../../cx";
 import { arrowIndex } from "../../focus";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
 
-export type LaneId = "research" | "requirements" | "verification" | "design" | "build" | "review" | "test" | "docs" | "done";
+export type LaneId =
+  | "research"
+  | "requirements"
+  | "verification"
+  | "design"
+  | "build"
+  | "review"
+  | "test"
+  | "docs"
+  | "done";
 
 export interface LaneState {
   status: "pending" | "current" | "waiting" | "done" | "failed" | "skipped";
@@ -20,7 +29,17 @@ export interface LaneStepperProps {
   onSelect?: (lane: LaneId) => void;
 }
 
-export const LANE_ORDER: LaneId[] = ["research", "requirements", "verification", "design", "build", "review", "test", "docs", "done"];
+export const LANE_ORDER: LaneId[] = [
+  "research",
+  "requirements",
+  "verification",
+  "design",
+  "build",
+  "review",
+  "test",
+  "docs",
+  "done",
+];
 
 const TITLES: Record<LaneId, string> = {
   research: "Research",
@@ -34,9 +53,20 @@ const TITLES: Record<LaneId, string> = {
   done: "Done",
 };
 
-const ICON: Record<LaneState["status"], IconName | null> = { done: "check", current: null, waiting: "hand", failed: "x", skipped: "minus", pending: null };
+const ICON: Record<LaneState["status"], IconName | null> = {
+  done: "check",
+  current: null,
+  waiting: "hand",
+  failed: "x",
+  skipped: "minus",
+  pending: null,
+};
 
-const ICON_COLOR: Partial<Record<LaneState["status"], string>> = { done: "var(--ok)", waiting: "var(--warn)", failed: "var(--bad)" };
+const ICON_COLOR: Partial<Record<LaneState["status"], string>> = {
+  done: "var(--ok)",
+  waiting: "var(--warn)",
+  failed: "var(--bad)",
+};
 
 /** The nine SDLC lanes as a horizontal progress strip. Arrow keys, Home and End move between lanes and select them. */
 export function LaneStepper({ lanes, selected, onSelect }: LaneStepperProps) {

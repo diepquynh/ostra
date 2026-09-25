@@ -11,13 +11,20 @@ const KEY_KINDS = [
   { value: "auth_token", label: "Auth token (Bearer)" },
 ];
 
-const urlSource = (p: ProviderStatus) => (p.base_url_source === "default" ? "provider default" : p.base_url_source.replace(/^env:/, "env "));
+const urlSource = (p: ProviderStatus) =>
+  p.base_url_source === "default" ? "provider default" : p.base_url_source.replace(/^env:/, "env ");
 
 /**
  * Base URL and key per native provider, saved on the server. Environment variables still win, so a saved
  * value that is shadowed says so. Secrets are write-only: the server reports only whether one is saved.
  */
-export function ProviderCredentials({ providers, onSaved }: { providers: ProviderStatus[]; onSaved: (p: ProviderStatus) => void }) {
+export function ProviderCredentials({
+  providers,
+  onSaved,
+}: {
+  providers: ProviderStatus[];
+  onSaved: (p: ProviderStatus) => void;
+}) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       {providers
@@ -36,7 +43,11 @@ function ProviderForm({ provider: p, onSaved }: { provider: ProviderStatus; onSa
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
-  const issue = (path: string) => issues.filter((i) => i.path === path).map((i) => i.message).join(" ") || null;
+  const issue = (path: string) =>
+    issues
+      .filter((i) => i.path === path)
+      .map((i) => i.message)
+      .join(" ") || null;
   const savedSecret = p.saved.has_api_key || p.saved.has_auth_token;
   const shadowedKey = savedSecret && p.source.startsWith("env:");
   const shadowedUrl = p.saved.base_url && p.base_url_source !== "saved";
@@ -74,15 +85,24 @@ function ProviderForm({ provider: p, onSaved }: { provider: ProviderStatus; onSa
       subtitle={p.has_key ? `key from ${keySource(p.source)}, URL from ${urlSource(p)}` : "no key"}
       actions={
         savedSecret || p.saved.base_url ? (
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void send({ base_url: "", api_key: "", auth_token: "" })}>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void send({ base_url: "", api_key: "", auth_token: "" })}
+          >
             Clear saved
           </Button>
         ) : undefined
       }
     >
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {shadowedKey && <Banner tone="info">{`${p.source.replace(/^env:/, "")} is set in the environment, so it is used instead of the saved key.`}</Banner>}
-        {shadowedUrl && <Banner tone="info">{`The base URL comes from ${urlSource(p)}, which takes precedence over the saved URL.`}</Banner>}
+        {shadowedKey && (
+          <Banner tone="info">{`${p.source.replace(/^env:/, "")} is set in the environment, so it is used instead of the saved key.`}</Banner>
+        )}
+        {shadowedUrl && (
+          <Banner tone="info">{`The base URL comes from ${urlSource(p)}, which takes precedence over the saved URL.`}</Banner>
+        )}
         <Input
           size="sm"
           mono
@@ -95,7 +115,13 @@ function ProviderForm({ provider: p, onSaved }: { provider: ProviderStatus; onSa
           onChange={(e) => setBaseUrl(e.target.value)}
         />
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <Select size="sm" aria-label={`Key type for ${label}`} value={kind} onChange={(e) => setKind(e.target.value as KeyKind)} options={KEY_KINDS} />
+          <Select
+            size="sm"
+            aria-label={`Key type for ${label}`}
+            value={kind}
+            onChange={(e) => setKind(e.target.value as KeyKind)}
+            options={KEY_KINDS}
+          />
           <Input
             size="sm"
             mono

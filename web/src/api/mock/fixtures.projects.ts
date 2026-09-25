@@ -26,10 +26,34 @@ export const backendProfile: ProjectProfile = {
     { glob: "migrations/**", area: "schema", reference: null },
   ],
   skills: [
-    { name: "axum-handler", kind: "creation", path: ".ostra/skills/axum-handler/SKILL.md", component_type: "handler", source: "generated" },
-    { name: "sqlx-repo", kind: "creation", path: ".ostra/skills/sqlx-repo/SKILL.md", component_type: "repository", source: "generated" },
-    { name: "convention", kind: "convention", path: ".ostra/skills/convention/SKILL.md", component_type: null, source: "generated" },
-    { name: "module-hub", kind: "module-hub", path: ".ostra/skills/module-hub/SKILL.md", component_type: null, source: "generated" },
+    {
+      name: "axum-handler",
+      kind: "creation",
+      path: ".ostra/skills/axum-handler/SKILL.md",
+      component_type: "handler",
+      source: "generated",
+    },
+    {
+      name: "sqlx-repo",
+      kind: "creation",
+      path: ".ostra/skills/sqlx-repo/SKILL.md",
+      component_type: "repository",
+      source: "generated",
+    },
+    {
+      name: "convention",
+      kind: "convention",
+      path: ".ostra/skills/convention/SKILL.md",
+      component_type: null,
+      source: "generated",
+    },
+    {
+      name: "module-hub",
+      kind: "module-hub",
+      path: ".ostra/skills/module-hub/SKILL.md",
+      component_type: null,
+      source: "generated",
+    },
   ],
   conventions: { immutability_keyword: null, naming: "snake_case modules, CamelCase types", notes: [] },
   review_rules: [
@@ -79,16 +103,36 @@ export const modifiedFor = (path: string, changed: boolean) =>
 
 const isAbs = (p: string) => p.startsWith("/");
 const isKey = (k: string) => /^[a-z0-9][a-z0-9-]*$/.test(k);
-const KNOWN = new Set(["/home/me/code/shop-backend", "/home/me/code/shop-web", "/home/me/code/shop-admin", "/home/me/code/billing-service", "/home/me/code/dotfiles", "/srv/repos/legacy-erp", "/srv/repos/reporting"]);
+const KNOWN = new Set([
+  "/home/me/code/shop-backend",
+  "/home/me/code/shop-web",
+  "/home/me/code/shop-admin",
+  "/home/me/code/billing-service",
+  "/home/me/code/dotfiles",
+  "/srv/repos/legacy-erp",
+  "/srv/repos/reporting",
+]);
 
 /** `POST /api/workspaces/:ws/projects`: the server's refusals, each on its request field. */
 export function mockValidateImport(body: ImportProject, existing: ProjectView[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const key = body.key.trim();
-  if (!isKey(key)) issues.push({ path: "key", message: `\`${key}\` is not a project key. Use lowercase letters, digits, and dashes, starting with a letter or digit.` });
-  else if (existing.some((p) => p.key === key)) issues.push({ path: "key", message: `A project named \`${key}\` already exists in this workspace. Choose another key.` });
+  if (!isKey(key))
+    issues.push({
+      path: "key",
+      message: `\`${key}\` is not a project key. Use lowercase letters, digits, and dashes, starting with a letter or digit.`,
+    });
+  else if (existing.some((p) => p.key === key))
+    issues.push({
+      path: "key",
+      message: `A project named \`${key}\` already exists in this workspace. Choose another key.`,
+    });
   const stack = body.stack?.trim();
-  if (stack && !isKey(stack)) issues.push({ path: "stack", message: `\`${stack}\` is not a stack name. Pick a listed stack, or leave it empty so the initializer detects it from the code.` });
+  if (stack && !isKey(stack))
+    issues.push({
+      path: "stack",
+      message: `\`${stack}\` is not a stack name. Pick a listed stack, or leave it empty so the initializer detects it from the code.`,
+    });
   if (!isAbs(body.path)) issues.push({ path: "path", message: "Use an absolute path." });
   else if (!KNOWN.has(body.path)) issues.push({ path: "path", message: `${body.path} does not exist.` });
   else {
@@ -105,14 +149,24 @@ export function mockValidateCreate(body: CreateWorkspace, registeredRoots: strin
   if (!body.name.trim()) issues.push({ path: "name", message: "Give the workspace a name." });
   if (!root) issues.push({ path: "root", message: "Choose a folder for the workspace." });
   else if (!isAbs(root)) issues.push({ path: "root", message: "Choose an absolute folder for the workspace." });
-  else if (registeredRoots.includes(root)) issues.push({ path: "root", message: "That folder is already a registered workspace." });
+  else if (registeredRoots.includes(root))
+    issues.push({ path: "root", message: "That folder is already a registered workspace." });
   const seen = new Map<string, number>();
   (body.projects ?? []).forEach((p, i) => {
-    if (!isKey(p.key)) issues.push({ path: `projects[${i}].key`, message: `\`${p.key}\` is not a project key. Use lowercase letters, digits, and dashes.` });
-    else if (seen.has(p.key)) issues.push({ path: `projects[${i}].key`, message: `The key \`${p.key}\` is used twice.` });
+    if (!isKey(p.key))
+      issues.push({
+        path: `projects[${i}].key`,
+        message: `\`${p.key}\` is not a project key. Use lowercase letters, digits, and dashes.`,
+      });
+    else if (seen.has(p.key))
+      issues.push({ path: `projects[${i}].key`, message: `The key \`${p.key}\` is used twice.` });
     seen.set(p.key, i);
     if (!KNOWN.has(p.path)) issues.push({ path: `projects[${i}].path`, message: `${p.path} is not a folder.` });
-    if (root && p.path.startsWith(`${root}/.ostra`)) issues.push({ path: `projects[${i}].path`, message: "A project cannot live inside the workspace's .ostra directory." });
+    if (root && p.path.startsWith(`${root}/.ostra`))
+      issues.push({
+        path: `projects[${i}].path`,
+        message: "A project cannot live inside the workspace's .ostra directory.",
+      });
   });
   return issues.sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -134,7 +188,11 @@ export function mockCreateWorkspace(body: CreateWorkspace, base: WorkspaceDetail
     ...base,
     id: "ws_new",
     root: body.root,
-    settings: { ...base.settings, name: body.name, projects: projects.map((p) => ({ key: p.key, path: p.path, stack: p.stack })) },
+    settings: {
+      ...base.settings,
+      name: body.name,
+      projects: projects.map((p) => ({ key: p.key, path: p.path, stack: p.stack })),
+    },
     projects,
   };
 }

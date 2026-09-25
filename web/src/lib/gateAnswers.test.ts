@@ -2,19 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { GateAnswer, GateView, Question } from "../api/types";
 import {
   ANSWER_KIND,
-  CHOICES,
-  OTHER,
   answerSummary,
-  choiceAnswer,
-  isChoiceKind,
-  parseDollars,
-  type ChoiceGateKind,
   approval,
+  CHOICES,
+  type ChoiceGateKind,
   changeRequest,
   choice,
+  choiceAnswer,
   closingAnswer,
   defaultSelections,
+  isChoiceKind,
+  OTHER,
   orderedOptions,
+  parseDollars,
   permission,
   questionsAnswer,
   skillsAnswer,
@@ -151,34 +151,57 @@ describe("answer shapes per gate kind", () => {
       budget_reached: ["raise", "stop"],
     });
     for (const [kind, opts] of Object.entries(CHOICES)) {
-      expect(opts.filter((o) => o.variant === "primary"), kind).toHaveLength(1);
+      expect(
+        opts.filter((o) => o.variant === "primary"),
+        kind,
+      ).toHaveLength(1);
       expect(isChoiceKind(kind as ChoiceGateKind)).toBe(true);
     }
     expect(isChoiceKind("permission")).toBe(false);
   });
 
   it("sends the text field only for options that take it", () => {
-    expect(choiceAnswer("review_cap", "another-pass", " Keep the 409 ")).toEqual({ answer: { kind: "choice", option: "another-pass", text: "Keep the 409" } });
-    expect(choiceAnswer("review_cap", "stop", "ignored")).toEqual({ answer: { kind: "choice", option: "stop", text: null } });
-    expect(choiceAnswer("fact_check_recurring", "another-round", "")).toEqual({ answer: { kind: "choice", option: "another-round", text: null } });
-    expect(choiceAnswer("phase_blocked", "retry", "Use the v2 client")).toEqual({ answer: { kind: "choice", option: "retry", text: "Use the v2 client" } });
-    expect(choiceAnswer("harness_failure", "native", "x")).toEqual({ answer: { kind: "choice", option: "native", text: null } });
-    expect(choiceAnswer("execution_failed", "abandon")).toEqual({ answer: { kind: "choice", option: "abandon", text: null } });
+    expect(choiceAnswer("review_cap", "another-pass", " Keep the 409 ")).toEqual({
+      answer: { kind: "choice", option: "another-pass", text: "Keep the 409" },
+    });
+    expect(choiceAnswer("review_cap", "stop", "ignored")).toEqual({
+      answer: { kind: "choice", option: "stop", text: null },
+    });
+    expect(choiceAnswer("fact_check_recurring", "another-round", "")).toEqual({
+      answer: { kind: "choice", option: "another-round", text: null },
+    });
+    expect(choiceAnswer("phase_blocked", "retry", "Use the v2 client")).toEqual({
+      answer: { kind: "choice", option: "retry", text: "Use the v2 client" },
+    });
+    expect(choiceAnswer("harness_failure", "native", "x")).toEqual({
+      answer: { kind: "choice", option: "native", text: null },
+    });
+    expect(choiceAnswer("execution_failed", "abandon")).toEqual({
+      answer: { kind: "choice", option: "abandon", text: null },
+    });
     expect(choiceAnswer("stuck", "nope")).toEqual({ error: "This gate has no option nope." });
   });
 
   it("requires the missing fact before a stuck agent re-runs", () => {
     expect(choiceAnswer("stuck", "fact", "  ")).toHaveProperty("error");
-    expect(choiceAnswer("stuck", "fact", "Use SDK v2.8")).toEqual({ answer: { kind: "choice", option: "fact", text: "Use SDK v2.8" } });
+    expect(choiceAnswer("stuck", "fact", "Use SDK v2.8")).toEqual({
+      answer: { kind: "choice", option: "fact", text: "Use SDK v2.8" },
+    });
     expect(choiceAnswer("stuck", "block", "")).toEqual({ answer: { kind: "choice", option: "block", text: null } });
   });
 
   it("accepts an empty or positive dollar amount when raising the budget", () => {
-    expect(choiceAnswer("budget_reached", "raise", "")).toEqual({ answer: { kind: "choice", option: "raise", text: null } });
-    expect(choiceAnswer("budget_reached", "raise", "$12.50")).toEqual({ answer: { kind: "choice", option: "raise", text: "$12.50" } });
+    expect(choiceAnswer("budget_reached", "raise", "")).toEqual({
+      answer: { kind: "choice", option: "raise", text: null },
+    });
+    expect(choiceAnswer("budget_reached", "raise", "$12.50")).toEqual({
+      answer: { kind: "choice", option: "raise", text: "$12.50" },
+    });
     expect(choiceAnswer("budget_reached", "raise", "ten")).toHaveProperty("error");
     expect(choiceAnswer("budget_reached", "raise", "-3")).toHaveProperty("error");
-    expect(choiceAnswer("budget_reached", "stop", "ten")).toEqual({ answer: { kind: "choice", option: "stop", text: null } });
+    expect(choiceAnswer("budget_reached", "stop", "ten")).toEqual({
+      answer: { kind: "choice", option: "stop", text: null },
+    });
     expect(parseDollars(" 7 ")).toBe(7);
     expect(parseDollars("0")).toBeNull();
   });
@@ -188,11 +211,16 @@ describe("answer shapes per gate kind", () => {
     const budget: GateView["payload"] = { kind: "budget_reached", spent_usd: 5, budget_usd: 5 };
     expect(g(budget, choice("raise", "10"))).toBe("Raise the budget by $10.00");
     expect(g(budget, choice("stop"))).toBe("Stop the session");
-    expect(g({ kind: "phase_blocked", project: "web", phase: 3, reason: "" }, choice("retry", "Try v2"))).toBe("Retry the phase: Try v2");
-    expect(g({ kind: "spec_approval", spec_path: "", summary: "", findings: [] }, approval(true))).toBe("Approved");
-    expect(g({ kind: "plan_approval", plan_path: "", summary: "", phases: [], findings: [] }, approval(false, "Split phase 2"))).toBe(
-      "Changes requested: Split phase 2",
+    expect(g({ kind: "phase_blocked", project: "web", phase: 3, reason: "" }, choice("retry", "Try v2"))).toBe(
+      "Retry the phase: Try v2",
     );
+    expect(g({ kind: "spec_approval", spec_path: "", summary: "", findings: [] }, approval(true))).toBe("Approved");
+    expect(
+      g(
+        { kind: "plan_approval", plan_path: "", summary: "", phases: [], findings: [] },
+        approval(false, "Split phase 2"),
+      ),
+    ).toBe("Changes requested: Split phase 2");
     const perm: GateView["payload"] = {
       kind: "permission",
       execution: "x",
@@ -204,11 +232,24 @@ describe("answer shapes per gate kind", () => {
     };
     expect(g(perm, permission("deny"))).toBe("Deny");
     expect(g(perm, permission("always-in-workspace"))).toBe("Always in this workspace");
-    expect(g({ kind: "closing_gate", items: [] }, { kind: "closing", items: [{ project: "web", tests: true, docs: false }] })).toBe("web: tests yes, docs no");
-    expect(g({ kind: "skill_approval", project: "web", skills: [] }, { kind: "skills", decisions: [{ name: "entity", disposition: "drop" }] })).toBe("entity drop");
-    expect(g({ kind: "open_questions", artifact: "spec", artifact_path: "", questions: [] }, { kind: "questions", answers: [{ id: "Q1", question: "", answer: "A" }] })).toBe(
-      "Q1: A",
-    );
+    expect(
+      g(
+        { kind: "closing_gate", items: [] },
+        { kind: "closing", items: [{ project: "web", tests: true, docs: false }] },
+      ),
+    ).toBe("web: tests yes, docs no");
+    expect(
+      g(
+        { kind: "skill_approval", project: "web", skills: [] },
+        { kind: "skills", decisions: [{ name: "entity", disposition: "drop" }] },
+      ),
+    ).toBe("entity drop");
+    expect(
+      g(
+        { kind: "open_questions", artifact: "spec", artifact_path: "", questions: [] },
+        { kind: "questions", answers: [{ id: "Q1", question: "", answer: "A" }] },
+      ),
+    ).toBe("Q1: A");
     expect(answerSummary({ payload: budget, answer: null })).toBe("");
   });
 });

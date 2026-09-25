@@ -6,7 +6,12 @@ import { ScreenFor } from "../screens";
 export function RouteScreen() {
   const { pathname, search } = useLocation();
   const r = resourceFromPath(pathname, search);
-  if (!r) return <div style={{ padding: 24, color: "var(--text-muted)" }}>Nothing here. Press the workspace name to go back to its overview.</div>;
+  if (!r)
+    return (
+      <div style={{ padding: 24, color: "var(--text-muted)" }}>
+        Nothing here. Press the workspace name to go back to its overview.
+      </div>
+    );
   return <ScreenFor ws={r.ws} id={r.id} />;
 }
 

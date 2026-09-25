@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { type KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, socket } from "../../api";
 import type { HarnessSetupAction } from "../../api/gen/HarnessSetupAction";
 import type { HarnessSetupTerminal } from "../../api/gen/HarnessSetupTerminal";
@@ -27,7 +27,8 @@ export function useHarnessSetup(shown: HarnessStatus[] | undefined, reload: () =
   useEffect(() => {
     if (!open) return;
     return socket().subscribe("home", (m) => {
-      if (m.type === "harness_status" && JSON.stringify(m.statuses) !== JSON.stringify(current.current)) reloadRef.current();
+      if (m.type === "harness_status" && JSON.stringify(m.statuses) !== JSON.stringify(current.current))
+        reloadRef.current();
     });
   }, [open]);
   const start = (harness: HarnessKind, action: HarnessSetupAction) => {
@@ -48,7 +49,15 @@ export function useHarnessSetup(shown: HarnessStatus[] | undefined, reload: () =
 }
 
 /** The Install or Log in button for one harness row, or nothing when it is ready. */
-export function HarnessAction({ h, starting, onStart }: { h: HarnessStatus; starting: boolean; onStart: (action: HarnessSetupAction) => void }) {
+export function HarnessAction({
+  h,
+  starting,
+  onStart,
+}: {
+  h: HarnessStatus;
+  starting: boolean;
+  onStart: (action: HarnessSetupAction) => void;
+}) {
   if (h.installed && h.logged_in === true) return null;
   const action: HarnessSetupAction = h.installed ? "login" : "install";
   return (
@@ -59,7 +68,17 @@ export function HarnessAction({ h, starting, onStart }: { h: HarnessStatus; star
 }
 
 /** The live terminal of an install or login, typed into like a harness execution's Terminal tab. */
-export function SetupTerminalPanel({ run, error, onClose, onCheck }: { run: SetupRun | null; error: string | null; onClose: () => void; onCheck: () => void }) {
+export function SetupTerminalPanel({
+  run,
+  error,
+  onClose,
+  onCheck,
+}: {
+  run: SetupRun | null;
+  error: string | null;
+  onClose: () => void;
+  onCheck: () => void;
+}) {
   const [maximized, setMaximized] = useState(false);
   if (error) return <Banner tone="bad">{error}</Banner>;
   if (!run) return null;
@@ -103,8 +122,9 @@ export function SetupTerminalPanel({ run, error, onClose, onCheck }: { run: Setu
       </div>
       <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
         <span className="os-field__hint" style={{ flex: 1 }}>
-          This terminal runs on the machine that runs Ostra. Type into it to answer the installer or finish the login. The check updates when the command
-          exits; if a login opens a browser page on another machine, paste the code it shows here.
+          This terminal runs on the machine that runs Ostra. Type into it to answer the installer or finish the login.
+          The check updates when the command exits; if a login opens a browser page on another machine, paste the code
+          it shows here.
         </span>
         <Button size="sm" onClick={onCheck}>
           Check again

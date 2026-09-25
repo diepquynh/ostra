@@ -1,5 +1,5 @@
-import type { FactCheckFinding, ReviewFinding } from "../../api/types";
 import type { Severity } from "../../api/gen/Severity";
+import type { FactCheckFinding, ReviewFinding } from "../../api/types";
 import { Chip, Table, type Tone } from "../../design";
 
 const tone = (s: Severity): Tone => (s === "BLOCKER" || s === "HIGH" ? "bad" : s === "MEDIUM" ? "warn" : "neutral");
@@ -27,7 +27,11 @@ export function ReviewFindings({ findings }: { findings: ReviewFinding[] }) {
             </div>
           ),
         },
-        { key: "file", label: "File", render: (f) => <span style={{ ...mono, overflowWrap: "anywhere" }}>{f.file}</span> },
+        {
+          key: "file",
+          label: "File",
+          render: (f) => <span style={{ ...mono, overflowWrap: "anywhere" }}>{f.file}</span>,
+        },
         {
           key: "description",
           label: "Finding",
@@ -55,7 +59,12 @@ export function FactFindings({ findings }: { findings: FactCheckFinding[] }) {
       dense
       rows={rows}
       columns={[
-        { key: "severity", label: "Severity", width: 90, render: (f) => <Chip tone={tone(f.severity)}>{f.severity}</Chip> },
+        {
+          key: "severity",
+          label: "Severity",
+          width: 90,
+          render: (f) => <Chip tone={tone(f.severity)}>{f.severity}</Chip>,
+        },
         { key: "location", label: "Location", width: 150 },
         {
           key: "claim",

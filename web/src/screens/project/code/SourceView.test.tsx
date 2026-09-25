@@ -19,7 +19,9 @@ const file: CodeFile = {
 describe("SourceView", () => {
   it("reports a clicked name and tints its occurrences", () => {
     const onSymbol = vi.fn();
-    const { container, rerender } = render(<SourceView code={"fn main() {}\n    main();\n"} file={file} onSymbol={onSymbol} />);
+    const { container, rerender } = render(
+      <SourceView code={"fn main() {}\n    main();\n"} file={file} onSymbol={onSymbol} />,
+    );
     expect(container.querySelector(".os-tok-k")?.textContent).toBe("fn");
     fireEvent.click(screen.getAllByText("main")[1]);
     expect(onSymbol).toHaveBeenCalledWith({ name: "main", line: 2, col: 4 });
@@ -28,7 +30,9 @@ describe("SourceView", () => {
   });
 
   it("colors lines the way CodeView does without tokens", () => {
-    const { container } = render(<SourceView code="let x = 1;" file={{ ...file, tokens: [] }} language="ts" highlightLine={1} />);
+    const { container } = render(
+      <SourceView code="let x = 1;" file={{ ...file, tokens: [] }} language="ts" highlightLine={1} />,
+    );
     expect(container.querySelector(".code-sym")).toBeNull();
     expect(container.querySelector(".os-code__line--hl")).not.toBeNull();
   });
@@ -56,7 +60,9 @@ describe("SourceView", () => {
       ["mod", [2, 3], 3],
       ["del", [4], 4],
     ]);
-    const { container } = render(<SourceView code={"a\nnew b\nextra\nc\n"} file={null} language="txt" changes={blocks} />);
+    const { container } = render(
+      <SourceView code={"a\nnew b\nextra\nc\n"} file={null} language="txt" changes={blocks} />,
+    );
     expect(container.querySelectorAll(".code-gutter--mod")).toHaveLength(2);
     expect(container.querySelectorAll(".code-gutter--del")).toHaveLength(1);
     fireEvent.click(container.querySelector('[data-mark="2"]')!);

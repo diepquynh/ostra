@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react";
 import type { WorkspaceDetail } from "../api/types";
-import type { Tab } from "./tabs";
 import { resourcePath } from "./resource";
+import type { Tab } from "./tabs";
 
 export type OpenOptions = {
   /** Open in the italic preview tab, which the next preview open replaces. Default: a normal tab. */

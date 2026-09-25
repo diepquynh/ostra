@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode } from "react";
+import { type CSSProperties, type KeyboardEvent, type ReactElement, type ReactNode, useEffect, useRef } from "react";
 import { arrowIndex } from "../../focus";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
@@ -83,7 +83,14 @@ export function Menu({ open, onClose, items, align = "left", width, label, style
   return (
     <>
       <div className="os-menu-scrim" onClick={onClose} />
-      <div ref={menuRef} className="os-menu" role="menu" aria-label={label} style={{ [align]: 0, width, ...style }} onKeyDown={onKeyDown}>
+      <div
+        ref={menuRef}
+        className="os-menu"
+        role="menu"
+        aria-label={label}
+        style={{ [align]: 0, width, ...style }}
+        onKeyDown={onKeyDown}
+      >
         {items.map((it, i) => {
           if (it.type === "divider") return <div key={i} className="os-menu__divider" role="separator" />;
           if (it.type === "heading")
@@ -121,7 +128,12 @@ export function Menu({ open, onClose, items, align = "left", width, label, style
             >
               {it.icon &&
                 (typeof it.icon === "string" ? (
-                  <Icon name={it.icon} size={14} className="os-menu__icon" style={it.sub ? { marginTop: 2 } : undefined} />
+                  <Icon
+                    name={it.icon}
+                    size={14}
+                    className="os-menu__icon"
+                    style={it.sub ? { marginTop: 2 } : undefined}
+                  />
                 ) : (
                   it.icon
                 ))}

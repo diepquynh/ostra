@@ -1,4 +1,13 @@
-import { Fragment, useEffect, useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import {
+  type CSSProperties,
+  Fragment,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { cx } from "../../cx";
 import { Icon } from "../core/Icon";
 import type { IconName } from "../core/icons";
@@ -45,7 +54,24 @@ export interface ComboboxProps {
  * Text field with a list of suggestions below it. Arrow keys move the highlight, Enter picks the
  * highlighted item, Escape closes the list. The caller filters `items` for the query.
  */
-export function Combobox({ value, onChange, items, onSelect, onSubmit, placeholder, label, icon = "search", mono, size = "md", loading, empty = "No matches", width, listWidth, align = "left", style }: ComboboxProps) {
+export function Combobox({
+  value,
+  onChange,
+  items,
+  onSelect,
+  onSubmit,
+  placeholder,
+  label,
+  icon = "search",
+  mono,
+  size = "md",
+  loading,
+  empty = "No matches",
+  width,
+  listWidth,
+  align = "left",
+  style,
+}: ComboboxProps) {
   const [open, setOpen] = useState(false);
   const [i, setI] = useState(0);
   const listId = useId();
@@ -107,7 +133,14 @@ export function Combobox({ value, onChange, items, onSelect, onSubmit, placehold
         {loading && <Spinner size={11} />}
       </div>
       {show && (
-        <div ref={listRef} id={listId} role="listbox" className="os-menu os-combobox__list" style={{ width: listWidth ?? "100%", [align]: 0, [align === "left" ? "right" : "left"]: "auto" }} onMouseDown={(e) => e.preventDefault()}>
+        <div
+          ref={listRef}
+          id={listId}
+          role="listbox"
+          className="os-menu os-combobox__list"
+          style={{ width: listWidth ?? "100%", [align]: 0, [align === "left" ? "right" : "left"]: "auto" }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
           {items.length === 0 && <div className="os-combobox__empty">{empty}</div>}
           {items.map((it, n) => (
             <Fragment key={it.id}>
@@ -121,11 +154,22 @@ export function Combobox({ value, onChange, items, onSelect, onSubmit, placehold
                 data-index={n}
                 role="option"
                 aria-selected={n === active}
-                className={cx("os-menu__item", it.sub != null && "os-menu__item--tall", n === active && "os-menu__item--active")}
+                className={cx(
+                  "os-menu__item",
+                  it.sub != null && "os-menu__item--tall",
+                  n === active && "os-menu__item--active",
+                )}
                 onMouseMove={() => n !== active && setI(n)}
                 onClick={() => pick(it)}
               >
-                {it.icon && <Icon name={it.icon} size={14} className="os-menu__icon" style={{ color: it.iconColor, marginTop: it.sub ? 2 : undefined }} />}
+                {it.icon && (
+                  <Icon
+                    name={it.icon}
+                    size={14}
+                    className="os-menu__icon"
+                    style={{ color: it.iconColor, marginTop: it.sub ? 2 : undefined }}
+                  />
+                )}
                 <span className="os-menu__label">
                   {it.label}
                   {it.sub && <span className="os-menu__sub">{it.sub}</span>}
