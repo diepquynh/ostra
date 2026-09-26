@@ -511,6 +511,15 @@ pub(crate) fn ws(app: &App, id: &str) -> Result<Arc<WorkspaceRt>, ApiErr> {
         .ok_or_else(|| ApiErr::not_found(format!("No workspace {id}.")))
 }
 
+/// Hold while starting work, so a removal cannot pass its busy check in between.
+async fn start_work(w: &WorkspaceRt) -> Result<tokio::sync::RwLockReadGuard<'_, bool>, ApiErr> {
+    let work = w.work.read().await;
+    if *work {
+        return Err(ApiErr::not_found(format!("No workspace {}.", w.id)));
+    }
+    Ok(work)
+}
+
 fn ws_of_session(app: &App, id: &SessionId) -> Result<Arc<WorkspaceRt>, ApiErr> {
     app.all_workspaces()
         .into_iter()
@@ -1123,7 +1132,12 @@ async fn remove_project(
     Path((id, key)): Path<(String, String)>,
 ) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
-    w.remove_project(&key).map_err(ApiErr::not_found)?;
+    use crate::workspace::RemoveProjectError;
+    w.remove_project(&key).map_err(|e| match e {
+        RemoveProjectError::NotFound(m) => ApiErr::not_found(m),
+        RemoveProjectError::Busy(m) => ApiErr::new(StatusCode::CONFLICT, m),
+        RemoveProjectError::Failed(m) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m),
+    })?;
     Ok(Json(w.detail()))
 }
 
@@ -1132,6 +1146,7 @@ async fn init_project(
     Path((id, key)): Path<(String, String)>,
 ) -> Res<SessionSummary> {
     let w = ws(&app, &id)?;
+    let _work = start_work(&w).await?;
     Ok(Json(w.engine.create_init_session(&key, None)?))
 }
 
@@ -1144,7 +1159,9 @@ async fn create_session(
     Path(id): Path<String>,
     Json(body): Json<CreateSession>,
 ) -> Res<SessionSummary> {
-    Ok(Json(ws(&app, &id)?.engine.create_session(body)?))
+    let w = ws(&app, &id)?;
+    let _work = start_work(&w).await?;
+    Ok(Json(w.engine.create_session(body)?))
 }
 
 async fn get_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionDetail> {
@@ -1205,6 +1222,7 @@ async fn amend(
 async fn inspect_execution(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView> {
     let eid = ExecutionId::from(id);
     let w = ws_of_execution(&app, &eid)?;
+    let _work = start_work(&w).await?;
     let new = w.engine.inspect_execution(&eid)?;
     Ok(Json(w.engine.execution(&new)?))
 }
@@ -1722,6 +1740,7 @@ async fn ask(
     if body.question.trim().is_empty() {
         return Err(ApiErr::bad("Ask a question first."));
     }
+    let _work = start_work(&w).await?;
     Ok(Json(AskStarted {
         execution: w.engine.ask(body.question, body.session).await?,
     }))

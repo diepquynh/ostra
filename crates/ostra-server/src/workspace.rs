@@ -21,6 +21,27 @@ use ostra_store::{ProjectRow, WorkspaceDb};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// A session that has not been scoped yet may still pick any project it started with.
+fn may_use(st: &ostra_engine::SessionState, key: &str) -> bool {
+    if !st.created {
+        return true;
+    }
+    if st.scope.is_empty() {
+        st.projects.iter().any(|p| p.key == key)
+    } else {
+        st.scope.iter().any(|p| p == key)
+    }
+}
+
+pub const STARTING: &str =
+    "Wait a moment and try again, because Ostra is starting work in this workspace.";
+
+pub enum RemoveProjectError {
+    NotFound(String),
+    Busy(String),
+    Failed(String),
+}
+
 pub struct WorkspaceRt {
     pub id: WorkspaceId,
     pub root: PathBuf,
@@ -29,6 +50,9 @@ pub struct WorkspaceRt {
     pub shared: Arc<Shared>,
     /// Project keys and folders with a clone or pull in progress.
     pub cloning: parking_lot::Mutex<Vec<(String, PathBuf)>>,
+    /// Held shared while a request starts work and exclusively while a project or the workspace
+    /// is removed, so no work starts between the busy check and the removal. True once deleted.
+    pub work: tokio::sync::RwLock<bool>,
 }
 
 pub fn default_tier(key: &str) -> Tier {
@@ -260,6 +284,7 @@ impl WorkspaceRt {
             engine,
             shared,
             cloning: Default::default(),
+            work: Default::default(),
         };
         rt.sync_projects();
         Ok(rt)
@@ -402,16 +427,62 @@ impl WorkspaceRt {
     }
 
     /// Removing a project from a workspace deletes nothing on disk.
-    pub fn remove_project(&self, key: &str) -> Result<(), String> {
+    pub fn remove_project(&self, key: &str) -> Result<(), RemoveProjectError> {
         let mut settings = self.settings();
         let before = settings.projects.len();
         settings.projects.retain(|p| p.key != key);
         if settings.projects.len() == before {
-            return Err(format!("No project `{key}`."));
+            return Err(RemoveProjectError::NotFound(format!("No project `{key}`.")));
         }
-        self.write_settings(&settings).map_err(|e| e.to_string())?;
+        let Ok(_work) = self.work.try_write() else {
+            return Err(RemoveProjectError::Busy(STARTING.into()));
+        };
+        if let Some(reason) = self
+            .project_busy(key)
+            .map_err(|e| RemoveProjectError::Failed(e.to_string()))?
+        {
+            return Err(RemoveProjectError::Busy(reason));
+        }
+        self.write_settings(&settings)
+            .map_err(|e| RemoveProjectError::Failed(e.to_string()))?;
         self.sync_projects();
         Ok(())
+    }
+
+    /// Why a project cannot be removed now: a live session on it, a running execution, or a clone.
+    pub fn project_busy(&self, key: &str) -> Result<Option<String>, ostra_store::StoreError> {
+        if let Some(s) = self.db.list_sessions()?.into_iter().find(|s| {
+            matches!(
+                s.status,
+                SessionStatus::Running | SessionStatus::Waiting | SessionStatus::Paused
+            ) && self.session_may_use(&s.id, key)
+        }) {
+            return Ok(Some(format!(
+                "Stop session {} or wait for it to finish, then try again, because it works on `{key}`.",
+                s.id
+            )));
+        }
+        if let Some(e) = self
+            .db
+            .running_executions()?
+            .into_iter()
+            .find(|e| e.project == key)
+        {
+            return Ok(Some(format!(
+                "Cancel execution {} or wait for it to finish, then try again, because it is running in `{key}`.",
+                e.id
+            )));
+        }
+        if self.cloning.lock().iter().any(|(k, _)| k == key) {
+            return Ok(Some(format!(
+                "Wait for the git operation on `{key}` to finish, then try again."
+            )));
+        }
+        Ok(None)
+    }
+
+    fn session_may_use(&self, id: &ostra_core::ids::SessionId, key: &str) -> bool {
+        self.engine.state(id).map_or(true, |st| may_use(&st, key))
     }
 
     /// Why the workspace cannot be deleted now: a live session, a running execution, or a clone.
@@ -484,6 +555,24 @@ fn browser_view(mut s: WorkspaceSettings) -> WorkspaceSettings {
 mod tests {
     use super::*;
     use ostra_core::executor::{ExecutorKind, HarnessKind};
+
+    #[test]
+    fn an_unscoped_session_may_use_every_project_it_started_with() {
+        let mut st = ostra_engine::SessionState::new("s_1".into());
+        assert!(may_use(&st, "app"), "a session with no log is assumed to use anything");
+        st.created = true;
+        st.projects = ["app", "lib"]
+            .map(|k| ostra_core::event::ProjectRef {
+                key: k.into(),
+                path: PathBuf::from("/x").join(k),
+            })
+            .to_vec();
+        assert!(may_use(&st, "app") && may_use(&st, "lib"));
+        assert!(!may_use(&st, "other"));
+        st.scope = vec!["lib".into()];
+        assert!(!may_use(&st, "app"));
+        assert!(may_use(&st, "lib"));
+    }
 
     #[test]
     fn the_browser_never_sees_a_literal_mcp_value() {

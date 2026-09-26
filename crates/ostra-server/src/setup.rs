@@ -104,13 +104,14 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
         .as_deref()
         .map(load_toml_required::<WorkspaceSettings>)
     {
-        // Rule A2: a folder file's mode, YOLO, and spend limits are ignored; only the request
-        // sets them.
+        // Rule A2: a folder file's mode, YOLO, spend limits, and sandbox mode are ignored; only
+        // the request sets them.
         Some(Ok(mut s)) => {
             adopted = true;
             s.permissions.mode = PermissionMode::default();
             s.yolo.default = false;
             s.limits = Default::default();
+            s.sandbox_mode = None;
             s
         }
         Some(Err(e)) => {
@@ -480,6 +481,7 @@ mod tests {
         old.instructions.all = Some("Keep it short.".into());
         old.permissions.mode = PermissionMode::Bypass;
         old.yolo.default = true;
+        old.sandbox_mode = Some(ostra_core::config::SandboxMode::Off);
         save_toml(&paths::workspace_toml(&root), &old).unwrap();
         let mut req = body(&root);
         req.projects = Some(vec![project(&a, "gone")]);
@@ -495,6 +497,10 @@ mod tests {
         assert!(
             !d.settings.yolo.default,
             "a folder file never turns YOLO on"
+        );
+        assert_eq!(
+            d.settings.sandbox_mode, None,
+            "a folder file never turns the sandbox off"
         );
 
         std::fs::write(paths::workspace_toml(&root), "name = [").unwrap();

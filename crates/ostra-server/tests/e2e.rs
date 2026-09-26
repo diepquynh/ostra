@@ -3318,3 +3318,77 @@ async fn a_loopback_server_lives_at_its_private_name() {
     let env = private.get(format!("{origin}/api/environment")).send().await.unwrap();
     assert_eq!(env.status(), 200);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn live_or_starting_work_blocks_removing_a_project_or_the_workspace() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { app, base, client } = boot(dir.path()).await;
+    let (repo, lib) = (dir.path().join("app"), dir.path().join("lib"));
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&lib).unwrap();
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "rm", "root": dir.path().join("ws"),
+            "projects": [{"path": repo, "key": "app"}, {"path": lib, "key": "lib"}]}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let wsp = format!("{base}/api/workspaces/{}", ws.id);
+    let remove = |key: &str| client.delete(format!("{wsp}/projects/{key}")).send();
+    let rt = app.workspace(&ws.id).unwrap();
+    let id = ostra_core::ids::SessionId::from("s_live");
+    rt.db
+        .create_session(&ostra_store::NewSession {
+            id: id.clone(),
+            kind: ostra_core::event::SessionKind::Pipeline,
+            request: "work".into(),
+            category: None,
+            projects: vec!["app".into()],
+            yolo: false,
+        })
+        .unwrap();
+
+    let r = remove("app").await.unwrap();
+    assert_eq!(r.status(), 409);
+    let body: Value = r.json().await.unwrap();
+    assert!(body["error"].as_str().unwrap().contains("s_live"), "{body}");
+    assert!(rt.project_path("app").is_some());
+    rt.db
+        .update_session(
+            &id,
+            &ostra_store::SessionUpdate {
+                status: Some(ostra_core::api::SessionStatus::Completed),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    rt.cloning.lock().push(("lib".into(), lib.clone()));
+    assert_eq!(remove("lib").await.unwrap().status(), 409);
+    rt.cloning.lock().clear();
+
+    let starting = rt.work.read().await;
+    assert_eq!(
+        remove("lib").await.unwrap().status(),
+        409,
+        "work that is starting blocks the removal"
+    );
+    assert_eq!(client.delete(&wsp).send().await.unwrap().status(), 409);
+    drop(starting);
+
+    assert_eq!(remove("lib").await.unwrap().status(), 200);
+    assert_eq!(remove("app").await.unwrap().status(), 200);
+    assert!(rt.project_path("app").is_none());
+    assert!(repo.is_dir(), "removing a project deletes nothing on disk");
+    assert_eq!(remove("app").await.unwrap().status(), 404);
+
+    assert_eq!(client.delete(&wsp).send().await.unwrap().status(), 204);
+    assert!(
+        *rt.work.read().await,
+        "a request still holding the workspace sees it deleted and starts nothing"
+    );
+}

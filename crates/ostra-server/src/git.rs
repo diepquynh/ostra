@@ -749,6 +749,10 @@ impl Drop for Claim<'_> {
 }
 
 pub(crate) fn claim<'a>(w: &'a WorkspaceRt, key: &str, dest: &Path) -> Result<Claim<'a>, GitError> {
+    let work = w.work.try_read().ok().filter(|deleted| !**deleted);
+    if work.is_none() {
+        return Err(GitError::Busy(crate::workspace::STARTING.into()));
+    }
     let mut busy = w.cloning.lock();
     if let Some((k, _)) = busy
         .iter()

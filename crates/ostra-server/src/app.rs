@@ -263,9 +263,14 @@ impl App {
             // Held across the check, so no request reaches the engine between the check and removal.
             let mut open = self.workspaces.write();
             if let Some(rt) = open.get(id) {
+                let Ok(mut deleted) = rt.work.try_write() else {
+                    return Err(DeleteError::Busy(crate::workspace::STARTING.into()));
+                };
                 if let Some(reason) = rt.busy()? {
                     return Err(DeleteError::Busy(reason));
                 }
+                *deleted = true;
+                drop(deleted);
                 open.remove(id);
             }
         }
