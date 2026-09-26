@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod api;
 pub mod args;
+pub mod artifacts;
 pub mod code;
 pub mod config;
 pub mod doc;

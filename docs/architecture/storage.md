@@ -17,10 +17,12 @@ files are protected.
   models-dev.json                             the cached model price catalog
   assets/                                     embedded prompts and skills, written out at startup
   tmp/                                        short-lived private files, such as an SSH key for one git clone
+  hidden-artifacts/<workspace-id>/            workspace artifacts the user hid from every agent
 
 <workspace>/.ostra/
   workspace.toml                              workspace settings
   workspace.db                                the event log and the tables built from it
+  artifacts/                                  workspace artifacts: skills, docs, guidelines, sample data
   sessions/<session-id>/                      spec, plan, phases, reports, ledgers, uploads
     <project-key>/                            per-project reports of that session
     .state/                                   engine-owned; no agent may write here

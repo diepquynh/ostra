@@ -1,4 +1,16 @@
-import { Banner, Button, Icon, IconButton, Input, Menu, type MenuItem, Select, Spinner, TreeItem } from "@ostra/design";
+import {
+  Banner,
+  Button,
+  fileIcon,
+  Icon,
+  IconButton,
+  Input,
+  Menu,
+  type MenuItem,
+  Select,
+  Spinner,
+  TreeItem,
+} from "@ostra/design";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { GitBranch, GitChange, GitOpResult, GitRepoStatus, ProjectView } from "../api/types";
@@ -6,7 +18,6 @@ import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges } from "../lib/live";
 import { throttle } from "../lib/store";
 import { GIT_MARK } from "../screens/project/files";
-import { fileIcon } from "./FilesPanel";
 
 /** Reload the status this often while the panel shows, because edits outside Ostra send no message. */
 const POLL_MS = 10_000;

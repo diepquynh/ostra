@@ -23,6 +23,8 @@ import type { ProviderStatus } from "./gen/ProviderStatus";
 import type { RevokedSignIns } from "./gen/RevokedSignIns";
 import type { SaveProjectFile } from "./gen/SaveProjectFile";
 import type { SignInSession } from "./gen/SignInSession";
+import type { WorkspaceArtifact } from "./gen/WorkspaceArtifact";
+import type { WorkspaceArtifacts } from "./gen/WorkspaceArtifacts";
 import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
 import type { ArtifactWithHeadings, SearchResults, WorkspaceActivity, WorkspaceTree } from "./nav";
 import type {
@@ -124,6 +126,29 @@ const q = (params: Record<string, string | number | undefined | null>): string =
 };
 
 const enc = encodeURIComponent;
+
+/** POST raw bytes and read a JSON answer, with the same errors as `request`. */
+async function rawPost<T>(path: string, body: Blob): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/octet-stream" },
+    body,
+  });
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    let issues: ValidationIssue[] = [];
+    try {
+      const data = await res.json();
+      if (data && typeof data.error === "string") message = data.error;
+      if (data && Array.isArray(data.issues)) issues = data.issues;
+    } catch {
+      // Keep the status line.
+    }
+    throw new HttpError(res.status, message, issues);
+  }
+  return (await res.json()) as T;
+}
 
 export const httpApi = {
   info: () => request<ServerInfo>("GET", "/api/info"),
@@ -277,6 +302,18 @@ export const httpApi = {
   uiState: (ws: string) => request<WorkspaceUiState>("GET", `/api/workspaces/${enc(ws)}/ui`),
   patchUiState: (ws: string, patch: Partial<WorkspaceUiState>) =>
     request<WorkspaceUiState>("PATCH", `/api/workspaces/${enc(ws)}/ui`, patch),
+
+  artifacts: (ws: string) => request<WorkspaceArtifacts>("GET", `/api/workspaces/${enc(ws)}/artifacts`),
+  /** Add a file from the user's computer as a new artifact at `path`. */
+  uploadArtifact: (ws: string, path: string, file: Blob) =>
+    rawPost<WorkspaceArtifact>(`/api/workspaces/${enc(ws)}/artifacts${q({ path })}`, file),
+  setArtifactHidden: (ws: string, path: string, hidden: boolean) =>
+    request<WorkspaceArtifacts>("POST", `/api/workspaces/${enc(ws)}/artifacts/hidden`, { path, hidden }),
+  moveArtifact: (ws: string, from: string, to: string) =>
+    request<WorkspaceArtifacts>("POST", `/api/workspaces/${enc(ws)}/artifacts/move`, { from, to }),
+  deleteArtifact: (ws: string, path: string) =>
+    request<WorkspaceArtifacts>("DELETE", `/api/workspaces/${enc(ws)}/artifacts${q({ path })}`),
+  artifactDownloadUrl: (ws: string, path: string) => `/api/workspaces/${enc(ws)}/artifacts/download${q({ path })}`,
 
   projectTree: (ws: string, key: string, opts: { path?: string; depth?: number; hidden?: boolean } = {}) =>
     request<ProjectTree>(

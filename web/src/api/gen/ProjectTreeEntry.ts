@@ -29,4 +29,8 @@ staged: boolean,
 /**
  * A file with a git mark, or a folder holding one.
  */
-has_changes: boolean, changed_by: ChangedBy | null, };
+has_changes: boolean, changed_by: ChangedBy | null, 
+/**
+ * A workspace artifact the user hid from every agent (HANDOVER 6.5). False for project files.
+ */
+hidden_from_agents: boolean, };

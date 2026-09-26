@@ -1550,3 +1550,31 @@ fn listing_forms_of_git_stay_read_only() {
     }
     allowed(&p, &bash("echo see ~/.ssh/config"));
 }
+
+#[test]
+fn workspace_artifacts_are_read_but_never_written() {
+    // Rule W1.
+    let f = fx();
+    let dir = ostra_core::artifacts::dir(&f.ws);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sample.csv"), "a,b\n").unwrap();
+    let p = f.policy(AgentName::Implementer);
+    let file = dir.join("sample.csv");
+    allowed(
+        &p,
+        &ToolCall::new("Read", json!({"file_path": file.to_string_lossy()})),
+    );
+    allowed(
+        &p,
+        &bash(format!("python3 scripts/load.py {}", file.display())),
+    );
+    assert_eq!(guard_of(&p, &write(&file)), "workspace-artifacts");
+    assert_eq!(
+        guard_of(&p, &bash(format!("cp src/x {}/y.md", dir.display()))),
+        "workspace-artifacts"
+    );
+    assert_eq!(
+        guard_of(&p, &bash(format!("rm {}", file.display()))),
+        "workspace-artifacts"
+    );
+}

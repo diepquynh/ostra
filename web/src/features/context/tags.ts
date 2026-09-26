@@ -1,5 +1,8 @@
 import type { ContextFile } from "../../api/types";
 
+/** The tag root of workspace artifacts: `@_artifacts/<path>`. No project key can take it. */
+export const ARTIFACTS_ROOT = "_artifacts";
+
 /** `@project/path`, the tag that names a file in request text. */
 export const tagOf = (f: ContextFile) => `@${f.project}/${f.path}`;
 export const fileKey = (f: ContextFile) => `${f.project}/${f.path}`;
@@ -33,7 +36,8 @@ export const CONTEXT_DRAG_TYPE = "application/x-ostra-context";
 export function setContextDrag(dt: DataTransfer, f: ContextFile) {
   dt.setData(CONTEXT_DRAG_TYPE, JSON.stringify(f));
   dt.setData("text/plain", tagOf(f));
-  dt.effectAllowed = "copy";
+  // An artifact also moves when dropped on another folder of the Artifacts tab.
+  dt.effectAllowed = f.project === ARTIFACTS_ROOT ? "copyMove" : "copy";
 }
 
 export function readContextDrag(dt: DataTransfer): ContextFile | null {

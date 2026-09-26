@@ -190,6 +190,43 @@ project in scope, because it would change files under an implementer.
 - Every git command runs with `GIT_TERMINAL_PROMPT=0` and SSH `BatchMode=yes` with
   `StrictHostKeyChecking=accept-new`, so a missing credential fails instead of waiting on a prompt.
 
+### 6.5 Workspace artifacts
+
+Workspace artifacts are files the user keeps for every session of a workspace: custom skills, technical
+documentation, guidelines that apply to all projects, and test materials or sample data. The Artifacts tab of
+the left dock shows them in the same file tree as the Files tab, in folders such as `skills/house/SKILL.md`: a
+row drags into a request field as a tag or onto another folder to move it, a right click opens the menu (new file or folder, upload, copy path or
+tag, download, hide or show, delete), and files from the computer drop onto a folder to upload. Selecting an
+artifact opens it in the file editor, as tab `file:_artifacts:<path>`, because the Files endpoints serve the
+`_artifacts` key from the artifacts folders. Visible artifacts live in `<workspace>/.ostra/artifacts/`, which
+`.ostra/.gitignore` does not list, so a team can commit them.
+
+- Rule W1: every agent can find and read the visible artifacts, and none can write them. The repo brief lists
+  them after the project instruction files (at most 40, then a count and the folder for Glob), harness CLIs get
+  the folder as an extra directory, and the Bash sandbox mounts it read-only. The `workspace-artifacts` guard
+  refuses any write, move, or delete in the folder, in every mode. A `skills/<name>/SKILL.md` artifact loads
+  with the Skill tool by name, after the project's own skills.
+- Rule W2: the user hides a folder or a file as one unit, and a hidden folder hides everything in it, including
+  files created, uploaded, or moved into it later. Ostra records the units in
+  `<data dir>/hidden-artifacts/<workspace id>.units.json` and keeps one invariant: a path is stored under
+  `<data dir>/hidden-artifacts/<workspace id>/` exactly when it lies within a unit, so the secret-read guard and
+  the sandbox keep it from every agent and harness. A hidden artifact is left out of the brief and the `@` tag
+  list, a task or addition that tags it is refused, and an instruction that tags it fails validation. The tree
+  still lists it with a hidden mark, so the user can open, show, or delete it. What lies inside a hidden folder is
+  shown only with the folder. A move keeps a hidden artifact hidden. Hiding is allowed at any time. Hidden
+  artifacts stay on this machine and do not travel with the folder. The sandbox is what keeps a shell command out
+  of the data dir; while agent commands run unsandboxed (mode `off`, or `auto` without a sandbox), the Artifacts
+  tab and the Sandbox setting warn that shell commands can read hidden artifacts.
+- Rule W3: a task, an addition, or an instruction tags an artifact as `@_artifacts/<path>`. No project key can
+  take `_artifacts`, because project keys start with a letter or digit. A tagged artifact reaches the agents as
+  its absolute path, like a tagged project file (Rule C1). An instruction may also tag a project file as
+  `@<key>/<path>`; each tag becomes a line with the absolute path under the instruction. Saving settings refuses
+  an instruction tag that names a missing or hidden artifact.
+- Rule W4: an artifact is deleted or moved only while no session in the workspace is running, waiting, stalled,
+  or paused and no execution runs, because an agent may be reading it at its old path. Both take the workspace's
+  work lock, so no session starts between the check and the change. A move keeps a hidden artifact hidden.
+- Caps: 25 MB per upload, 1 MB for a save from the editor, 2,000 artifacts per workspace.
+
 ## 7. Settings
 
 ### 7.1 Global config

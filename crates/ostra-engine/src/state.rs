@@ -846,8 +846,12 @@ impl SessionState {
             "\n\n{heading}. Read each file and look through each folder before you start, because the user chose them as context:"
         );
         for f in files {
-            let abs = self
-                .project_path(&f.project)
+            let root = if f.project == ostra_core::artifacts::TAG_ROOT {
+                Some(ostra_core::artifacts::dir(&self.workspace_root))
+            } else {
+                self.project_path(&f.project)
+            };
+            let abs = root
                 .map(|p| p.join(&f.path).display().to_string())
                 .unwrap_or_else(|| f.path.clone());
             let kind = if f.is_folder() { "folder, " } else { "" };

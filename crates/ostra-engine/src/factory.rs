@@ -4,13 +4,13 @@
 use crate::init::STACK_REFERENCE_NAME;
 use crate::plan::{SpawnInputs, SpawnRequest};
 use crate::services::{AgentMeta, BuiltSpawn, SpawnEnv, SpawnFactory};
-use ostra_agents::brief::{BriefInput, augment};
+use ostra_agents::brief::{ArtifactsBrief, BriefInput, augment};
 use ostra_agents::spawn::*;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, FactTarget, WorkKind};
 use ostra_core::executor::ExecutorKind;
 use ostra_core::pipeline::{Category, PhaseInfo};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct AgentsFactory;
 
@@ -271,7 +271,20 @@ impl SpawnFactory for AgentsFactory {
             }
         };
         let block = params.render();
-        let instructions = env.settings.instructions_for(req.agent);
+        let ws = &env.state.workspace_root;
+        let projects: Vec<(String, PathBuf)> = env
+            .settings
+            .projects
+            .iter()
+            .map(|p| (p.key.clone(), p.path.clone()))
+            .collect();
+        let instructions: Vec<String> = env
+            .settings
+            .instructions_for(req.agent)
+            .into_iter()
+            .map(|text| with_tagged_files(text, ws, &projects))
+            .collect();
+        let artifacts = ArtifactsBrief::read(ws);
         let first_message = augment(
             &block,
             &BriefInput {
@@ -282,6 +295,7 @@ impl SpawnFactory for AgentsFactory {
                 inventory: env.inventory,
                 instructions: &instructions,
                 project_docs: env.project_docs,
+                artifacts: artifacts.as_ref(),
             },
         );
         let system_prompt =
@@ -300,4 +314,22 @@ impl SpawnFactory for AgentsFactory {
             .unwrap_or_else(|| ostra_agents::effort_for(req.agent, env.executor)),
         })
     }
+}
+
+/// Rule W3: an instruction that tags files or artifacts carries their absolute paths, so every
+/// executor can read them. A tag naming a hidden or missing artifact resolves to nothing.
+fn with_tagged_files(text: String, workspace: &Path, projects: &[(String, PathBuf)]) -> String {
+    let files = ostra_core::artifacts::tagged_files(&text, workspace, projects);
+    if files.is_empty() {
+        return text;
+    }
+    let rows: Vec<String> = files
+        .iter()
+        .map(|(tag, path)| format!("- `{}` ({tag})", path.display()))
+        .collect();
+    format!(
+        "{}\n\nFiles these instructions name. Read each before you start, because the user chose them:\n{}",
+        text.trim_end(),
+        rows.join("\n")
+    )
 }

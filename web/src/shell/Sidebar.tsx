@@ -345,12 +345,15 @@ export function Sidebar({
           tabs={[
             { id: "sessions", label: "Sessions", icon: "git-pull-request", count: sessions.length },
             { id: "files", label: "Files", icon: "folder-tree" },
+            { id: "artifacts", label: "Artifacts", icon: "package" },
             { id: "git", label: "Git", icon: "git-branch" },
           ]}
         />
       </div>
-      {tab === "files" ? (
+      {tab === "files" || tab === "artifacts" ? (
         <FilesPanel
+          key={tab}
+          root={tab === "artifacts" ? "artifacts" : "project"}
           ws={ws}
           projects={projects}
           project={filesProject}

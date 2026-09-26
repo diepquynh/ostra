@@ -420,6 +420,24 @@ pub fn router(app: Arc<App>) -> axum::Router {
                 ostra_engine::uploads::MAX_UPLOAD_BYTES + 1024,
             )),
         )
+        .route(
+            "/api/workspaces/{ws}/artifacts",
+            get(artifacts_list)
+                .post(artifact_upload)
+                .delete(artifact_delete)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    ostra_core::artifacts::MAX_ARTIFACT_BYTES + 1024,
+                )),
+        )
+        .route(
+            "/api/workspaces/{ws}/artifacts/download",
+            get(workspace_artifact_download),
+        )
+        .route(
+            "/api/workspaces/{ws}/artifacts/hidden",
+            post(artifact_hidden),
+        )
+        .route("/api/workspaces/{ws}/artifacts/move", post(artifact_move))
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/fs/list", get(fs_list))
         .route("/api/environment", get(environment))
@@ -1368,7 +1386,85 @@ async fn artifact_download(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "download".into());
-    // RFC 5987 form, so any file name survives the header.
+    Ok(attachment(&name, bytes))
+}
+
+// Workspace artifacts (HANDOVER 6.5). The logic lives in `crate::artifacts`.
+
+async fn artifacts_list(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceArtifacts> {
+    Ok(Json(crate::artifacts::list(&*ws(&app, &id)?)))
+}
+
+async fn artifact_upload(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<files::FileQuery>,
+    body: axum::body::Bytes,
+) -> Res<WorkspaceArtifact> {
+    let w = ws(&app, &id)?;
+    let a = crate::artifacts::upload(&w, &q.path, &body)?;
+    files::announce_save(&app, &w.id, ostra_core::artifacts::TAG_ROOT, &a.path);
+    Ok(Json(a))
+}
+
+async fn artifact_hidden(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SetArtifactHidden>,
+) -> Res<WorkspaceArtifacts> {
+    let w = ws(&app, &id)?;
+    crate::artifacts::set_hidden(&w, &body.path, body.hidden)?;
+    files::announce_git(&app, &w.id, ostra_core::artifacts::TAG_ROOT);
+    Ok(Json(crate::artifacts::list(&w)))
+}
+
+async fn artifact_move(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<MoveArtifact>,
+) -> Res<WorkspaceArtifacts> {
+    let w = ws(&app, &id)?;
+    // Rule W4: no session starts between the busy check and the move.
+    let Ok(_work) = w.work.try_write() else {
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "Try again in a moment, because work is starting in this workspace.",
+        ));
+    };
+    crate::artifacts::move_to(&w, &body.from, &body.to)?;
+    files::announce_git(&app, &w.id, ostra_core::artifacts::TAG_ROOT);
+    Ok(Json(crate::artifacts::list(&w)))
+}
+
+async fn artifact_delete(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<files::FileQuery>,
+) -> Res<WorkspaceArtifacts> {
+    let w = ws(&app, &id)?;
+    // Rule W4: no session starts between the busy check and the removal.
+    let Ok(_work) = w.work.try_write() else {
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "Try again in a moment, because work is starting in this workspace.",
+        ));
+    };
+    crate::artifacts::delete(&w, &q.path)?;
+    files::announce_git(&app, &w.id, ostra_core::artifacts::TAG_ROOT);
+    Ok(Json(crate::artifacts::list(&w)))
+}
+
+async fn workspace_artifact_download(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Query(q): Query<files::FileQuery>,
+) -> Result<Response, ApiErr> {
+    let (name, bytes) = crate::artifacts::download(&*ws(&app, &id)?, &q.path)?;
+    Ok(attachment(&name, bytes))
+}
+
+/// A download response. The RFC 5987 file name survives any character.
+fn attachment(name: &str, bytes: Vec<u8>) -> Response {
     let encoded: String = name
         .bytes()
         .map(|b| {
@@ -1379,7 +1475,7 @@ async fn artifact_download(
             }
         })
         .collect();
-    Ok((
+    (
         [
             (header::CONTENT_TYPE, "application/octet-stream".to_string()),
             (
@@ -1389,7 +1485,7 @@ async fn artifact_download(
         ],
         bytes,
     )
-        .into_response())
+        .into_response()
 }
 
 #[derive(Deserialize)]

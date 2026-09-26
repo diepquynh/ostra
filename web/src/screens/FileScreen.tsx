@@ -4,6 +4,7 @@ import { useLocation } from "react-router";
 import { api } from "../api";
 import type { ChangedBy } from "../api/types";
 import { Markdown } from "../components/Markdown";
+import { ARTIFACTS_ROOT } from "../features/context/tags";
 import { humanize } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges, useWorkspaceTree } from "../lib/live";
@@ -113,6 +114,7 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
   const lines = f?.content ? f.content.replace(/\n$/, "").split("\n").length : null;
   const by = f?.changed_by ?? d?.changed_by ?? null;
   const session = by ? tree.sessions.find((s) => s.id === by.session) : null;
+  const artifact = projectKey === ARTIFACTS_ROOT;
   const segs = path.split("/");
   const c = code.data?.path === path ? code.data : null;
   const canPane = view === "file" && !!f && !f.binary && !edit.editing;
@@ -175,9 +177,12 @@ export function FileScreen({ ws, projectKey, path }: FileScreenProps) {
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           <Breadcrumbs
             onNavigate={(_, i) =>
-              i === 0 ? nav.open(`project:${projectKey}`, { beside: true }) : shell.browseFiles(projectKey)
+              i === 0 && !artifact ? nav.open(`project:${projectKey}`, { beside: true }) : shell.browseFiles(projectKey)
             }
-            items={[{ label: projectKey, icon: "folder-git-2" }, ...segs.map((label) => ({ label }))]}
+            items={[
+              artifact ? { label: "Artifacts", icon: "package" } : { label: projectKey, icon: "folder-git-2" },
+              ...segs.map((label) => ({ label })),
+            ]}
           />
         </div>
         {d && (

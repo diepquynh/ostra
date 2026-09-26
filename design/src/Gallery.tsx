@@ -7,10 +7,12 @@ import {
   Chip,
   CodeView,
   CommandPalette,
+  ContextMenu,
   Decision,
   Dialog,
   DiffView,
   ExecutionGroup,
+  FileTree,
   type FolderLister,
   FolderPicker,
   type FsEntry,
@@ -386,6 +388,16 @@ const PALETTE: PaletteItem[] = [
   { id: "t1", group: "Actions", icon: "sun-moon", label: "Toggle light and dark theme" },
 ];
 
+const TREE: Record<string, { name: string; path: string; is_dir: boolean }[]> = {
+  "": [
+    { name: "guides", path: "guides", is_dir: true },
+    { name: "notes", path: "notes", is_dir: true },
+    { name: "orders-sample.csv", path: "orders-sample.csv", is_dir: false },
+  ],
+  guides: [{ name: "style.md", path: "guides/style.md", is_dir: false }],
+  notes: [{ name: "draft.md", path: "notes/draft.md", is_dir: false }],
+};
+
 function NavigationCard() {
   const [t, setT] = useState("s1");
   const [u, setU] = useState("activity");
@@ -401,8 +413,13 @@ function NavigationCard() {
   const [step, setStep] = useState(2);
   const [palette, setPalette] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
+  const [openDirs, setOpenDirs] = useState<Record<string, boolean>>({ guides: true });
+  const [ctx, setCtx] = useState<{ x: number; y: number } | null>(null);
   return (
-    <Card name="Navigation" subtitle="Tabs, TreeItem, Breadcrumbs, Menu, Stepper, CommandPalette">
+    <Card
+      name="Navigation"
+      subtitle="Tabs, TreeItem, FileTree, Breadcrumbs, Menu, ContextMenu, Stepper, CommandPalette"
+    >
       <div style={{ display: "grid", gridTemplateColumns: "230px 1fr", gap: 16 }}>
         <div
           role="tree"
@@ -513,6 +530,46 @@ function NavigationCard() {
               Click the trigger to open the menu.
             </div>
           )}
+        </div>
+        <div
+          role="tree"
+          aria-label="Artifacts"
+          style={{
+            background: "var(--surface-panel)",
+            border: "1px solid var(--border-default)",
+            borderRadius: 6,
+            padding: 4,
+          }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setCtx({ x: e.clientX, y: e.clientY });
+          }}
+        >
+          <FileTree
+            folder={(dir) => ({ entries: TREE[dir] ?? [], error: null })}
+            open={openDirs}
+            selected={picked}
+            onToggle={(e) => setOpenDirs((o) => ({ ...o, [e.path]: !o[e.path] }))}
+            onOpen={(e) => setPicked(e.path)}
+            onContextMenu={(_, e) => setCtx({ x: e.clientX, y: e.clientY })}
+            row={(e) => (e.path === "notes/draft.md" ? { muted: true, title: "Hidden from agents" } : {})}
+            empty="Nothing here yet."
+          />
+          <ContextMenu
+            at={ctx}
+            onClose={() => setCtx(null)}
+            items={[
+              { icon: "file-plus", label: "New file" },
+              { icon: "folder-plus", label: "New folder" },
+              { type: "divider" },
+              { icon: "download", label: "Download" },
+              { icon: "trash-2", label: "Delete", danger: true },
+            ]}
+          />
+        </div>
+        <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
+          FileTree renders a lazily loaded folder tree: folders first, then files. Right-click a row for the
+          ContextMenu.
         </div>
         <div className="gx-c" style={{ paddingTop: 4 }}>
           <Stepper

@@ -159,3 +159,9 @@
 .wp-lesson {
   line-height: 1.45;
 }
+
+.wp-field-error {
+  color: var(--bad);
+  font-size: 12px;
+  margin: 4px 0 0;
+}

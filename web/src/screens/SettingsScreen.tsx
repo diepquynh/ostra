@@ -276,8 +276,17 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
         </>
       )}
       {tab === "mcp" && <McpSection {...props} ws={ws} saved={base.mcp_servers} agents={detail.agents} />}
-      {tab === "permissions" && <PermissionsSection {...props} global={detail.global_permissions} />}
-      {tab === "instructions" && <InstructionsSection {...props} />}
+      {tab === "permissions" && (
+        <PermissionsSection
+          {...props}
+          global={detail.global_permissions}
+          sandbox={detail.sandbox}
+          savedSandbox={detail.settings.sandbox_mode}
+        />
+      )}
+      {tab === "instructions" && (
+        <InstructionsSection {...props} ws={ws} projects={detail.projects.map((p) => p.key)} />
+      )}
       {tab === "notifications" && <NotificationsSection {...props} />}
       {tab === "signin" && <SignInSessions />}
     </Page>

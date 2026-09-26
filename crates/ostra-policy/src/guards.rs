@@ -21,6 +21,7 @@ pub const BUILD_STREAK: &str = "build-streak";
 pub const SELF_PROTECTION: &str = "self-protection";
 pub const GIT_METADATA: &str = "git-metadata";
 pub const SECRET_READ: &str = "secret-read";
+pub const WORKSPACE_ARTIFACTS: &str = "workspace-artifacts";
 
 /// A refusal: which guard, and the message for the model (correction first).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +64,8 @@ pub struct Roots {
     pub assets: PathBuf,
     pub home: PathBuf,
     pub report_file: Option<PathBuf>,
+    /// The workspace's visible artifacts, which agents read and never write (Rule W1).
+    pub artifacts: PathBuf,
 }
 
 impl Roots {
@@ -103,6 +106,11 @@ impl Roots {
             assets: canon(&paths::data_dir().join("assets")),
             home,
             report_file: ctx.report_file.as_ref().map(|p| canon(p)),
+            artifacts: if ws.as_os_str().is_empty() {
+                PathBuf::new()
+            } else {
+                canon(&ostra_core::artifacts::dir(ws))
+            },
         }
     }
 
@@ -393,6 +401,17 @@ pub fn check_write(
                 "Leave \"{raw}\" alone: it is part of Ostra itself (its binary, configuration, or databases). Agents may read \
                  these files but never write, move, or delete them, because they are what enforces the pipeline. If Ostra \
                  is behaving wrongly, say so in your report."
+            ),
+        ));
+    }
+
+    // Rule W1: agents read workspace artifacts; only the user changes them.
+    if inside(&roots.artifacts, target) {
+        return Some(deny(
+            WORKSPACE_ARTIFACTS,
+            format!(
+                "Write your result in your session dir instead of \"{raw}\": workspace artifacts belong to the user, \
+                 so agents read them but never write, move, or delete them. Propose a change in your report."
             ),
         ));
     }

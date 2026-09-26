@@ -339,6 +339,7 @@ impl Run {
         let env = ToolEnv::new(ToolEnvConfig {
             agent: spec.agent,
             repo_root: ctx.repo_root.clone(),
+            workspace_root: ctx.workspace_root.clone(),
             session_dir: ctx.session_dir.clone(),
             report_file: ctx.report_file.clone(),
             memory_db: ctx.memory_db.clone(),

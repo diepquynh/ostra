@@ -1,7 +1,7 @@
 import type { WorkspaceUiState } from "../api/types";
 import { fromUiTabs, normalizeTabs, type TabsState, toUiTabs } from "../lib/tabs";
 
-export type LeftTab = "sessions" | "files" | "git";
+export type LeftTab = "sessions" | "files" | "artifacts" | "git";
 
 /** Shell layout besides the tabs. */
 export type UiPrefs = {
@@ -43,7 +43,7 @@ export function fromServerUi(s: WorkspaceUiState | null | undefined): ShellUi | 
   return {
     tabs: normalizeTabs({ tabs: fromUiTabs(s.tabs ?? []), active: s.active }),
     prefs: {
-      leftTab: s.left_tab === "files" || s.left_tab === "git" ? s.left_tab : "sessions",
+      leftTab: s.left_tab === "files" || s.left_tab === "artifacts" || s.left_tab === "git" ? s.left_tab : "sessions",
       filesProject: s.files_project ?? null,
       sidebarOpen: s.sidebar_open ?? true,
       dockOpen: !!s.dock_open,

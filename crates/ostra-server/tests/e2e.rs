@@ -3392,3 +3392,353 @@ async fn live_or_starting_work_blocks_removing_a_project_or_the_workspace() {
         "a request still holding the workspace sees it deleted and starts nothing"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
+    use ostra_core::api::{WorkspaceArtifact, WorkspaceArtifacts};
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, .. } = boot(root).await;
+    let app_dir = root.join("app");
+    std::fs::create_dir_all(app_dir.join(".ostra")).unwrap();
+    std::fs::write(app_dir.join(".ostra/INVENTORY.md"), "# app Inventory\n").unwrap();
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "arts", "root": root.join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let _: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces/{}/projects", ws.id))
+        .json(&json!({"path": app_dir, "key": "app", "stack": null}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let arts = format!("{base}/api/workspaces/{}/artifacts", ws.id);
+    let at = |suffix: &str, path: &str| {
+        reqwest::Url::parse_with_params(&format!("{arts}{suffix}"), &[("path", path)]).unwrap()
+    };
+    for (path, body) in [
+        ("guides/style.md", "Use tabs.\n"),
+        ("data/sample.csv", "a,b\n1,2\n"),
+    ] {
+        let a: WorkspaceArtifact = client
+            .post(at("", path))
+            .body(body)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(!a.hidden);
+    }
+    let again = client
+        .post(at("", "guides/style.md"))
+        .body("x")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        again.status(),
+        409,
+        "an artifact is never overwritten by an upload"
+    );
+    let escape = client
+        .post(at("", "../escape.md"))
+        .body("x")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(escape.status(), 400);
+
+    // The Files editor opens artifacts through the project endpoints, under the `_artifacts` key.
+    let files = format!("{base}/api/workspaces/{}/projects/_artifacts", ws.id);
+    let in_files = |suffix: &str, path: &str| {
+        reqwest::Url::parse_with_params(&format!("{files}{suffix}"), &[("path", path)]).unwrap()
+    };
+    let f: ProjectFile = client
+        .get(in_files("/file", "guides/style.md"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let saved: ProjectFile = client
+        .put(format!("{files}/file"))
+        .json(&json!({"path": "guides/style.md", "content": "Use spaces.\n", "base_hash": f.hash}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved.content.as_deref(), Some("Use spaces.\n"));
+    assert_eq!(saved.read_only, None, "artifacts are editable though they sit in .ostra/");
+    let visible = ostra_core::artifacts::dir(&root.join("ws"));
+    assert_eq!(
+        std::fs::read_to_string(visible.join("guides/style.md")).unwrap(),
+        "Use spaces.\n"
+    );
+
+    // Rule W3: an instruction may tag a visible artifact.
+    let fresh: WorkspaceDetail = client
+        .get(format!("{base}/api/workspaces/{}", ws.id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut settings = fresh.settings;
+    settings.instructions.all = Some("Follow @_artifacts/guides/style.md.".into());
+    let ok = client
+        .patch(format!("{base}/api/workspaces/{}", ws.id))
+        .json(&settings)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+
+    // Rule W2: hiding moves the file out of every agent's reach.
+    let listed: WorkspaceArtifacts = client
+        .post(format!("{arts}/hidden"))
+        .json(&json!({"path": "guides/style.md", "hidden": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        listed
+            .artifacts
+            .iter()
+            .any(|a| a.path == "guides/style.md" && a.hidden)
+    );
+    assert!(
+        !visible.join("guides").exists(),
+        "the empty folder is pruned"
+    );
+    let hidden = ostra_core::artifacts::hidden_dir(ws.id.as_str()).join("guides/style.md");
+    assert!(hidden.is_file());
+    assert!(
+        hidden.starts_with(root.join("data")),
+        "hidden artifacts live in the data dir"
+    );
+    let tree: ProjectTree = client
+        .get(in_files("/tree", ""))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let guides = tree
+        .entries
+        .iter()
+        .find(|e| e.path == "guides")
+        .expect("the folder of a hidden file is listed");
+    assert!(
+        guides.is_dir && !guides.hidden_from_agents,
+        "hiding a file does not hide its folder"
+    );
+    let hidden_file: ProjectFile = client
+        .get(in_files("/file", "guides/style.md"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(hidden_file.content.as_deref(), Some("Use spaces.\n"));
+    let refused = client
+        .patch(format!("{base}/api/workspaces/{}", ws.id))
+        .json(&settings)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 422);
+    let err: ApiError = refused.json().await.unwrap();
+    assert_eq!(issue_paths(&err.issues), ["instructions.all"]);
+    let tag_hidden = client
+        .post(format!("{base}/api/workspaces/{}/sessions", ws.id))
+        .json(&json!({"request": "Check style", "files": [{"project": "_artifacts", "path": "guides/style.md"}]}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        tag_hidden.status(),
+        409,
+        "a hidden artifact cannot be tagged"
+    );
+
+    let r = client
+        .post(format!("{base}/api/workspaces/{}/sessions", ws.id))
+        .json(&json!({"request": "Load the sample", "files": [{"project": "_artifacts", "path": "data/sample.csv"}]}))
+        .send()
+        .await
+        .unwrap();
+    let text = r.text().await.unwrap();
+    let s: SessionSummary = serde_json::from_str(&text).unwrap_or_else(|_| panic!("{text}"));
+    let d: SessionDetail = client
+        .get(format!("{base}/api/sessions/{}", s.id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(d.files[0].project, "_artifacts");
+
+    // Rule W4: no delete while a session has not ended.
+    let listed: WorkspaceArtifacts = client
+        .get(&arts)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed.delete_blocked.is_some());
+    let busy = client
+        .delete(at("", "data/sample.csv"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(busy.status(), 409);
+    let moved = client
+        .post(format!("{arts}/move"))
+        .json(&json!({"from": "data/sample.csv", "to": "fixtures/sample.csv"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(moved.status(), 409, "no move while a session is live");
+    let _ = client
+        .post(format!("{base}/api/sessions/{}/stop", s.id))
+        .send()
+        .await;
+    wait_for(&client, &base, s.id.as_str(), |d| {
+        matches!(
+            d.summary.status,
+            SessionStatus::Failed | SessionStatus::Completed
+        )
+    })
+    .await;
+
+    let r = client
+        .get(at("/download", "data/sample.csv"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.headers()["content-disposition"],
+        "attachment; filename*=UTF-8''sample.csv"
+    );
+    assert_eq!(r.text().await.unwrap(), "a,b\n1,2\n");
+    let into_itself = client
+        .post(format!("{arts}/move"))
+        .json(&json!({"from": "data", "to": "data/inner/data"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(into_itself.status(), 400);
+    let listed: WorkspaceArtifacts = client
+        .post(format!("{arts}/move"))
+        .json(&json!({"from": "data", "to": "fixtures/data"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed.artifacts.iter().any(|a| a.path == "fixtures/data/sample.csv"));
+    assert!(!visible.join("data").exists(), "the old folder is gone");
+    // A hidden artifact moves inside the hidden folder, so it stays hidden.
+    let listed: WorkspaceArtifacts = client
+        .post(format!("{arts}/move"))
+        .json(&json!({"from": "guides/style.md", "to": "archive/style.md"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed.artifacts.iter().any(|a| a.path == "archive/style.md" && a.hidden));
+    // Rule W2: a hidden folder hides all it holds, including files added to it later.
+    let listed: WorkspaceArtifacts = client
+        .post(format!("{arts}/hidden"))
+        .json(&json!({"path": "fixtures", "hidden": true}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed.artifacts.iter().any(|a| a.path == "fixtures/data/sample.csv" && a.hidden));
+    assert!(!visible.join("fixtures").exists(), "nothing of the folder stays visible");
+    let later: WorkspaceArtifact = client
+        .post(at("", "fixtures/later.csv"))
+        .body("x")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(later.hidden, "an upload into a hidden folder is hidden");
+    assert!(!visible.join("fixtures/later.csv").exists());
+    let tree: ProjectTree = client
+        .get(in_files("/tree", "fixtures"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(tree.entries.iter().all(|e| e.hidden_from_agents));
+    let one = client
+        .post(format!("{arts}/hidden"))
+        .json(&json!({"path": "fixtures/later.csv", "hidden": false}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(one.status(), 409, "a file inside a hidden folder is shown with its folder");
+    let listed: WorkspaceArtifacts = client
+        .post(format!("{arts}/hidden"))
+        .json(&json!({"path": "fixtures", "hidden": false}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed.artifacts.iter().all(|a| !a.path.starts_with("fixtures/") || !a.hidden));
+    assert!(visible.join("fixtures/later.csv").is_file());
+    let _ = client.delete(at("", "fixtures/later.csv")).send().await.unwrap();
+    let listed: WorkspaceArtifacts = client
+        .delete(at("", "fixtures/data/sample.csv"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(listed.delete_blocked, None);
+    assert_eq!(listed.artifacts.len(), 1);
+    assert!(!visible.join("fixtures").exists());
+    let gone = client
+        .delete(at("", "archive/style.md"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 200, "a hidden artifact can be deleted too");
+}

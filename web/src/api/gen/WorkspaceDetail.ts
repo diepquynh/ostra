@@ -5,6 +5,7 @@ import type { PendingCommands } from "./PendingCommands";
 import type { PermissionRules } from "./PermissionRules";
 import type { ProjectView } from "./ProjectView";
 import type { ProviderStatus } from "./ProviderStatus";
+import type { SandboxStatus } from "./SandboxStatus";
 import type { ValidationIssue } from "./ValidationIssue";
 import type { WorkspaceId } from "./WorkspaceId";
 import type { WorkspaceSettings } from "./WorkspaceSettings";
@@ -30,4 +31,9 @@ global_permissions: PermissionRules,
  * Folder files whose commands changed outside Ostra and wait for approval. Ostra starts
  * none of their programs until the user approves.
  */
-pending_commands: Array<PendingCommands>, };
+pending_commands: Array<PendingCommands>, 
+/**
+ * Whether this workspace's agent commands run sandboxed: the global `[sandbox]` config with
+ * the workspace's own mode in place of the global one.
+ */
+sandbox: SandboxStatus, };

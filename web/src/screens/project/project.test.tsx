@@ -21,6 +21,7 @@ const entry = (name: string, extra: Partial<ProjectTreeEntry> = {}): ProjectTree
   staged: false,
   has_changes: false,
   changed_by: null,
+  hidden_from_agents: false,
   ...extra,
 });
 

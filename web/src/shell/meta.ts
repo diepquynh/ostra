@@ -1,6 +1,7 @@
 import type { Crumb, IconName } from "@ostra/design";
 import type { TreeSession } from "../api/nav";
 import type { SessionStatus } from "../api/types";
+import { ARTIFACTS_ROOT } from "../features/context/tags";
 import { basename, humanize, truncate } from "../lib/format";
 import { depName, parseResource } from "../lib/resource";
 
@@ -45,7 +46,11 @@ export function resourceMeta(id: string, ctx: MetaContext): ResourceMeta {
         label: basename(r.path),
         icon: "file-code-2",
         title: `${r.key}/${r.path}`,
-        crumbs: [ws, { label: r.key, to: `project:${r.key}` }, ...r.path.split("/").map((label) => ({ label }))],
+        crumbs: [
+          ws,
+          r.key === ARTIFACTS_ROOT ? { label: "Artifacts" } : { label: r.key, to: `project:${r.key}` },
+          ...r.path.split("/").map((label) => ({ label })),
+        ],
       };
     case "dep": {
       const label = depName(r.uri);

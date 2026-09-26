@@ -252,8 +252,11 @@ Each agent gets only the sections it uses:
 The reviewer is the only agent that receives the complete rule catalog, because it is the only one that
 grades against it.
 
-After the brief come the project's own instruction files (`CLAUDE.md`, `AGENTS.md`, `AGENT.md`) and then the
-workspace's custom instructions: first the entry for all agents, then the entry for this agent. If a repo ships
+After the brief come the project's own instruction files (`CLAUDE.md`, `AGENTS.md`, `AGENT.md`), then the
+workspace artifacts (the folder and up to 40 files, see
+[Workspace artifacts](workspaces.md#workspace-artifacts)), and then the workspace's custom instructions: first
+the entry for all agents, then the entry for this agent. A file or artifact an instruction tags with `@` is
+listed under that instruction with its absolute path. If a repo ships
 `AGENTS.md` as a symlink to, or a copy of, `CLAUDE.md`, it is included once.
 
 A few rules keep the brief small and correct:
@@ -270,7 +273,7 @@ A few rules keep the brief small and correct:
 
 The Instructions tab of Settings holds the custom instructions for all agents and for each agent:
 
-![The Instructions settings tab with text for all agents and per agent](../images/console/settings-instructions.png)
+![The Instructions settings tab with a workspace artifact tagged in the text for all agents](../images/console/settings-instructions.png)
 
 ## Structured returns
 

@@ -31,6 +31,13 @@ export interface TreeItemProps {
   style?: CSSProperties;
   /** Makes the row draggable; set the drag data here. */
   onDragStart?: (e: DragEvent<HTMLDivElement>) => void;
+  /** Something dragged over the row, such as files from the computer. Call `preventDefault` to accept a drop. */
+  onDragOver?: (e: DragEvent<HTMLDivElement>) => void;
+  onDrop?: (e: DragEvent<HTMLDivElement>) => void;
+  onDragLeave?: (e: DragEvent<HTMLDivElement>) => void;
+  onDragEnd?: (e: DragEvent<HTMLDivElement>) => void;
+  /** Right click, or the context menu key, on the row. */
+  onContextMenu?: (e: MouseEvent<HTMLDivElement>) => void;
 }
 
 /** Arrow Up/Down move focus to the neighbouring row within the enclosing tree, or the enclosing sections' parent. */
@@ -58,6 +65,11 @@ export function TreeItem({
   title,
   style,
   onDragStart,
+  onDragOver,
+  onDrop,
+  onDragLeave,
+  onDragEnd,
+  onContextMenu,
 }: TreeItemProps) {
   const hasChev = expanded !== undefined;
   const activate = (e: SyntheticEvent) => {
@@ -92,6 +104,11 @@ export function TreeItem({
       onKeyDown={onKeyDown}
       draggable={onDragStart ? true : undefined}
       onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragLeave={onDragLeave}
+      onDragEnd={onDragEnd}
+      onContextMenu={onContextMenu}
       title={title ?? (typeof label === "string" ? label : undefined)}
     >
       <span

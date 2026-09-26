@@ -14,6 +14,7 @@ use ostra_core::api::{
     ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary,
     TreeSession, UploadRef,
 };
+use ostra_core::artifacts;
 use ostra_core::config::{PermissionRules, ProjectProfile, RouteQuery, load_toml, resolve_route};
 use ostra_core::event::{
     AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, GateAnswer,
@@ -293,7 +294,7 @@ impl Engine {
                 projects.sort_by_key(|p| !pinned.contains(&p.key));
             }
         }
-        let files = validate_files(files, &projects)?;
+        let files = validate_files(files, &projects, &self.inner.workspace_root)?;
         uploads::check(&self.inner.workspace_root, uploads)?;
         let id = SessionId::new();
         let session_root = paths::session_root(&self.inner.workspace_root, id.as_str());
@@ -539,7 +540,7 @@ impl Engine {
                 "This session has ended. Start a new task instead.".into(),
             ));
         }
-        let files = validate_files(&files, &st.projects)?;
+        let files = validate_files(&files, &st.projects, &self.inner.workspace_root)?;
         let uploads = uploads::claim(&self.inner.workspace_root, &st.session_root, &uploads)?;
         self.inner.append(
             session,
@@ -916,11 +917,13 @@ pub const PAUSE_RESUME_NOTE: &str = "Continue the workflow.";
 /// Files one request or addition may attach (Rule C1).
 pub const MAX_CONTEXT_FILES: usize = 50;
 
-/// Rule C1: every attached path is an existing file or folder inside one of the session's projects.
-/// Returns them with normalized paths, a folder ending in `/`, deduplicated.
+/// Rule C1: every attached path is an existing file or folder inside one of the session's projects,
+/// or a visible workspace artifact (Rule W2). Returns them with normalized paths, a folder ending in
+/// `/`, deduplicated.
 fn validate_files(
     files: &[ContextFile],
     projects: &[ProjectRef],
+    workspace_root: &Path,
 ) -> Result<Vec<ContextFile>, EngineError> {
     if files.len() > MAX_CONTEXT_FILES {
         return Err(EngineError::Invalid(format!(
@@ -929,6 +932,26 @@ fn validate_files(
     }
     let mut out: Vec<ContextFile> = vec![];
     for f in files {
+        if f.project == artifacts::TAG_ROOT {
+            // Rule W2: a hidden artifact is not in the folder, so it cannot be tagged.
+            let file = artifacts::normalize(&f.path)
+                .ok()
+                .filter(|rel| artifacts::visible_file(workspace_root, rel).is_some())
+                .map(|path| ContextFile {
+                    project: f.project.clone(),
+                    path,
+                })
+                .ok_or_else(|| {
+                    EngineError::Invalid(format!(
+                        "Tag a workspace artifact that exists and is not hidden. `{}` is not one.",
+                        f.path
+                    ))
+                })?;
+            if !out.contains(&file) {
+                out.push(file);
+            }
+            continue;
+        }
         let Some(project) = projects.iter().find(|p| p.key == f.project) else {
             return Err(EngineError::Invalid(format!(
                 "Tag files from this session's projects only. `{}` is not one of them.",

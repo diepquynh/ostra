@@ -180,6 +180,10 @@ A few guards were added on top of the Ultracode ports during Ostra's security re
   (which holds every tool output of every session), any execution's harness state (which holds its bridge
   token), or `/proc/<pid>/environ`, `mem`, and `fd`. The check covers file tools and every path-like word of a
   shell command.
+- **Workspace artifacts.** Agents read the files in `<workspace>/.ostra/artifacts/` and never write, move, or
+  delete them (`guard: workspace-artifacts`), because they belong to the user. A hidden artifact is moved into
+  the data dir, so the secret-read guard keeps it from every agent without a list of hidden names
+  ([Workspace artifacts](../internals/workspaces.md#workspace-artifacts)).
 - **Read-only session.** When a user reopens an ended harness run to look back over it, every tool call in that
   session is refused with `guard: read-only-session`.
 
@@ -357,6 +361,16 @@ The policy is not the only layer around a harness. Where the machine supports it
 macOS), Ostra also runs agent commands and each harness CLI inside an OS sandbox profile set by `[sandbox]` in
 `config.toml`. The sandbox limits what the CLI and its children can reach on disk, including actions no hook
 reports.
+
+Without the sandbox, some protections hold only for what the policy can read in a tool call. The file tools still
+refuse the data dir, the credential stores, and hidden workspace artifacts, and Grep and Glob skip them when they
+walk. A shell command that walks the disk without naming them, such as `find ~`, reads them all the same, a program
+a command starts can write anywhere your user can, and `[sandbox] network = false` does not apply. This happens
+when the sandbox mode is `off`, or `auto` on a machine without a sandbox; `required` refuses to start the execution
+instead. The console says so: the Sandbox panel in Settings lists these effects while the chosen mode runs commands
+unsandboxed, and the Artifacts tab warns that shell commands can read hidden artifacts. The workspace detail
+carries the workspace's own `sandbox` status (the global `[sandbox]` config with the workspace's mode in its place)
+for both.
 
 ## Why a denial leads with the correction
 

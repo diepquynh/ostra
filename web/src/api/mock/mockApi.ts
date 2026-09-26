@@ -11,6 +11,7 @@ import type {
   SessionSummary,
   SignInSession,
   SkillDoc,
+  WorkspaceArtifacts,
   WorkspaceUiState,
 } from "../types";
 import * as f from "./fixtures";
@@ -21,14 +22,19 @@ import * as wf from "./fixtures.workspace";
 import { mockCodeDeps, mockCodeFile, mockCodeGraph, mockCodeSymbols, mockCodeUsages } from "./mockCode";
 import { mockGit } from "./mockGit";
 import {
+  mockArtifacts,
   mockBrowse,
   mockChanges,
+  mockDeleteArtifact,
   mockDiff,
   mockFile,
   mockFileIndex,
   mockMkdir,
+  mockMoveArtifact,
   mockSaveFile,
+  mockSetArtifactHidden,
   mockTree,
+  mockUploadArtifact,
 } from "./projectFiles";
 
 const delay = <T>(value: T, ms = 80): Promise<T> =>
@@ -257,6 +263,12 @@ let mockSignIns: SignInSession[] = [
 ];
 
 /** In-memory stand-in for the server, used with `VITE_MOCK=1`. */
+const artifactList = (): WorkspaceArtifacts => ({
+  dir: "/home/me/code/shop/.ostra/artifacts",
+  artifacts: mockArtifacts(),
+  delete_blocked: null,
+});
+
 export const mockApi: Api = {
   info: () => delay({ version: "0.1.0-mock", vapid_public_key: "" }),
   exchange: () => delay(undefined),
@@ -613,6 +625,27 @@ export const mockApi: Api = {
     ui = { ...ui, ...patch };
     return delay(ui);
   },
+
+  artifacts: () => delay(artifactList()),
+  uploadArtifact: async (_ws, path, file) => delay(mockUploadArtifact(path, await file.text())),
+  setArtifactHidden: (_ws, path, hidden) => {
+    try {
+      mockSetArtifactHidden(path, hidden);
+    } catch (e) {
+      const err = e as Error & { status?: number; issues?: { path: string; message: string }[] };
+      return Promise.reject(new HttpError(err.status ?? 409, err.message, err.issues ?? []));
+    }
+    return delay(artifactList());
+  },
+  moveArtifact: (_ws, from, to) => {
+    mockMoveArtifact(from, to);
+    return delay(artifactList());
+  },
+  deleteArtifact: (_ws, path) => {
+    mockDeleteArtifact(path);
+    return delay(artifactList());
+  },
+  artifactDownloadUrl: () => "#",
 
   projectTree: (_ws, key, opts = {}) => attempt(() => mockTree(key, opts.path, opts.hidden)),
   projectFile: (_ws, key, path) => attempt(() => mockFile(key, path)),

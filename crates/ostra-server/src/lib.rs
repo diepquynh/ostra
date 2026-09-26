@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod app;
+pub mod artifacts;
 pub mod assets;
 pub mod auth;
 pub mod bridge;

@@ -39,6 +39,8 @@ pub type LiveOutput = Arc<dyn Fn(&str, &str) + Send + Sync>;
 pub struct ToolEnvConfig {
     pub agent: AgentName,
     pub repo_root: PathBuf,
+    /// Empty outside a workspace. Custom skills among its artifacts load by name.
+    pub workspace_root: PathBuf,
     pub session_dir: PathBuf,
     pub report_file: Option<PathBuf>,
     pub memory_db: PathBuf,
@@ -317,6 +319,7 @@ pub(crate) mod testutil {
                 })
             }),
             repo_root: repo,
+            workspace_root: dir.to_path_buf(),
             session_dir: session,
             code: None,
             mcp: None,

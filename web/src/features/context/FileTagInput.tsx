@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { api } from "../../api";
 import type { ContextFile } from "../../api/types";
 import {
+  ARTIFACTS_ROOT,
   baseName,
   CONTEXT_DRAG_TYPE,
   fileKey,
@@ -18,7 +19,10 @@ import {
 import { type PendingUpload, PendingUploadChip, UploadButton } from "./uploads";
 import "./context.css";
 
-/** Every file of the given projects and the folders holding them, loaded once the first `@` is typed. */
+/**
+ * Every file of the given projects and the folders holding them, then the workspace's visible artifacts, loaded once
+ * the first `@` is typed. Hidden artifacts are never offered, because agents never see them.
+ */
 export function useProjectFiles(ws: string, projects: string[]) {
   const [wanted, setWanted] = useState(false);
   const [files, setFiles] = useState<ContextFile[] | null>(null);
@@ -27,14 +31,21 @@ export function useProjectFiles(ws: string, projects: string[]) {
   useEffect(() => {
     if (!wanted) return;
     let live = true;
-    Promise.all(
+    const lists = Promise.all(
       projects.map((p) =>
         api.projectFiles(ws, p).then(
           (ix) => ix.paths.map((path) => ({ project: p, path })),
           () => [] as ContextFile[],
         ),
       ),
-    ).then((lists) => live && setFiles(withFolders(lists.flat())));
+    );
+    const artifacts = api.artifacts(ws).then(
+      (r) => r.artifacts.filter((a) => !a.hidden).map((a) => ({ project: ARTIFACTS_ROOT, path: a.path })),
+      () => [] as ContextFile[],
+    );
+    Promise.all([lists, artifacts]).then(
+      ([lists, artifacts]) => live && setFiles([...withFolders(lists.flat()), ...artifacts]),
+    );
     return () => {
       live = false;
     };
@@ -167,7 +178,7 @@ export type FileTagInputProps = {
  */
 export function FileTagInput({
   ws,
-  projects,
+  projects: projectKeys,
   value,
   onChange,
   onFiles,
@@ -183,7 +194,9 @@ export function FileTagInput({
 }: FileTagInputProps) {
   const [dropping, setDropping] = useState(false);
   const el = useRef<HTMLDivElement | null>(null);
-  const { files, known, load } = useProjectFiles(ws, projects);
+  const { files, known, load } = useProjectFiles(ws, projectKeys);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the joined keys stand for `projectKeys`.
+  const projects = useMemo(() => [...projectKeys, ARTIFACTS_ROOT], [projectKeys.join("\n")]);
   const [q, setQ] = useState<Query | null>(null);
   const [pos, setPos] = useState<ReturnType<typeof listPosition>>(null);
   const [active, setActive] = useState(0);

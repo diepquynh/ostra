@@ -33,6 +33,7 @@ import { isShot, useShotBridge } from "./shot";
 import { TitleBar } from "./TitleBar";
 import { DEFAULT_PREFS, fromServerUi, loadLocalUi, saveLocalUi, toServerUi, type UiPrefs } from "./uiState";
 import "./shell.css";
+import { ARTIFACTS_ROOT } from "../features/context/tags";
 
 const TAB_TONE: Record<string, Tone> = {
   running: "accent",
@@ -208,7 +209,11 @@ function Shell({ ws }: { ws: string }) {
         addProject: () => setDialog("add-project"),
         runSetup: () => setDialog("setup"),
         browseFiles: (key) => {
-          setPrefs((p) => ({ ...p, sidebarOpen: true, leftTab: "files", filesProject: key }));
+          setPrefs((p) =>
+            key === ARTIFACTS_ROOT
+              ? { ...p, sidebarOpen: true, leftTab: "artifacts" }
+              : { ...p, sidebarOpen: true, leftTab: "files", filesProject: key },
+          );
         },
         theme,
         toggleTheme: () => setPref("theme", theme === "dark" ? "light" : "dark"),

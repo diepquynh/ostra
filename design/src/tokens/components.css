@@ -549,18 +549,27 @@
   background: var(--surface-active);
   color: var(--text-primary);
 }
+/* Scrolls sideways when the tabs outgrow their container. The bottom rule is an inset shadow, so the active tab's
+   underline paints over it without leaving the scroll box. */
 .os-tabs--underline {
   gap: 2px;
-  border-bottom: 1px solid var(--border-default);
+  box-shadow: inset 0 -1px 0 var(--border-default);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.os-tabs--underline::-webkit-scrollbar {
+  display: none;
 }
 .os-tabs--underline .os-tab {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 6px;
   height: 32px;
   padding: 0 10px;
-  margin-bottom: -1px;
   border: 0;
+  white-space: nowrap;
   border-bottom: 2px solid transparent;
   background: none;
   color: var(--text-muted);

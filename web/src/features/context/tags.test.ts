@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { activeQuery, baseName, filesInText, rankFiles, removeTag, splitTags, withFolders } from "./tags";
+import {
+  ARTIFACTS_ROOT,
+  activeQuery,
+  baseName,
+  filesInText,
+  rankFiles,
+  removeTag,
+  splitTags,
+  withFolders,
+} from "./tags";
 
 const f = (project: string, path: string) => ({ project, path });
 
@@ -55,5 +64,12 @@ describe("file tags", () => {
     expect(baseName("src/a/")).toBe("a/");
     expect(baseName("src/a/x.ts")).toBe("x.ts");
     expect(filesInText("look in @api/src/a/ first", ["api"], new Set(["api/src/a/"]))).toEqual([f("api", "src/a/")]);
+  });
+
+  it("reads workspace artifact tags beside project tags", () => {
+    const known = new Set(["_artifacts/guides/style.md", "web/src/a.ts"]);
+    expect(filesInText("Use @_artifacts/guides/style.md, then @web/src/a.ts.", ["web", ARTIFACTS_ROOT], known)).toEqual(
+      [f(ARTIFACTS_ROOT, "guides/style.md"), f("web", "src/a.ts")],
+    );
   });
 });

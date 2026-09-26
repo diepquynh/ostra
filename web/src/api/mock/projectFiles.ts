@@ -12,6 +12,7 @@ import type {
   ProjectFile,
   ProjectTree,
   ProjectTreeEntry,
+  WorkspaceArtifact,
 } from "../types";
 import { SESSION } from "./fixtures";
 import { extraDirs, modifiedFor } from "./fixtures.projects";
@@ -27,6 +28,8 @@ type Node = {
   /** Old lines removed before the given new-file line number. */
   removed?: Record<number, string[]>;
   binary?: boolean;
+  /** A workspace artifact folder or file the user hid, as one unit: it hides all it holds. */
+  hidden?: boolean;
   by?: { execution: string; phase: number | null; running: boolean; staged: boolean };
 };
 
@@ -132,6 +135,43 @@ const inventory = `# Inventory: backend
 `;
 
 const TREES: Record<string, Node[]> = {
+  // Workspace artifacts, listed under the reserved `_artifacts` root.
+  _artifacts: [
+    {
+      name: "data",
+      dir: true,
+      children: [
+        {
+          name: "orders-sample.csv",
+          code: "id,customer,total_cents,status\n1001,ana,1999,paid\n1002,ben,4500,refunded\n",
+        },
+        { name: "webhook-replay.json", code: '{\n  "type": "refund.succeeded",\n  "order_id": 1002\n}\n' },
+      ],
+    },
+    {
+      name: "guides",
+      dir: true,
+      children: [
+        {
+          name: "style.md",
+          code: "# Code style for every project\n\n- Keep functions under 40 lines.\n- Money is integer cents, never floats.\n",
+        },
+        { name: "api-errors.md", code: "# API errors\n\nEvery endpoint answers errors as `{ error, issues }`.\n" },
+      ],
+    },
+    { name: "notes", dir: true, hidden: true, children: [{ name: "pricing-draft.md", code: "# Pricing draft\n" }] },
+    {
+      name: "skills",
+      dir: true,
+      children: [
+        {
+          name: "refund-flow",
+          dir: true,
+          children: [{ name: "SKILL.md", code: "---\nname: refund-flow\n---\n\n# Refund flow\n" }],
+        },
+      ],
+    },
+  ],
   backend: [
     {
       name: ".ostra",
@@ -295,7 +335,65 @@ function entry(key: string, n: Node, path: string): ProjectTreeEntry {
     staged: !!n.by?.staged,
     has_changes: hasChanges(n),
     changed_by: n.dir ? null : changedBy(n),
+    hidden_from_agents: key === "_artifacts" && hiddenAt(path),
   };
+}
+
+/** The artifact at `path`, or a folder above it, is a hidden unit. */
+function hiddenAt(path: string): boolean {
+  const segs = path.split("/");
+  return segs.some((_, i) => !!nodeAt("_artifacts", segs.slice(0, i + 1).join("/"))?.hidden);
+}
+
+/** The mock workspace artifacts, visible and hidden. */
+export function mockArtifacts(): WorkspaceArtifact[] {
+  return walk(TREES._artifacts, "", []).map(({ path, node }) => ({
+    path,
+    size: sizeOf(node, path),
+    modified: MODIFIED,
+    hidden: hiddenAt(path),
+  }));
+}
+
+/** Hide or show a folder or file as one unit, like the server: a unit inside a hidden folder is shown with it. */
+export function mockSetArtifactHidden(path: string, hidden: boolean) {
+  const n = nodeAt("_artifacts", path);
+  if (!n) return;
+  if (hidden) {
+    if (hiddenAt(path)) return;
+    for (const { node } of walk(n.children ?? [], "", [])) node.hidden = false;
+    n.hidden = true;
+  } else if (n.hidden) {
+    n.hidden = false;
+  } else if (hiddenAt(path)) {
+    throw conflict("Show the folder instead: a hidden folder hides everything in it.", "path");
+  }
+}
+
+export function mockDeleteArtifact(path: string) {
+  const { parent, name } = splitPath(path);
+  const dir = nodeAt("_artifacts", parent);
+  if (dir?.children) dir.children = dir.children.filter((c) => c.name !== name);
+}
+
+export function mockMoveArtifact(from: string, to: string) {
+  const src = splitPath(from);
+  const node = nodeAt("_artifacts", from);
+  const parent = nodeAt("_artifacts", src.parent);
+  if (!node || !parent?.children) return;
+  const hiddenByFolder = hiddenAt(from) && !node.hidden;
+  parent.children = parent.children.filter((c) => c.name !== src.name);
+  const dest = splitPath(to);
+  ensureDir("_artifacts", dest.parent).children?.push({
+    ...node,
+    name: dest.name,
+    hidden: node.hidden || hiddenByFolder,
+  });
+}
+
+export function mockUploadArtifact(path: string, text: string): WorkspaceArtifact {
+  mockSaveFile("_artifacts", path, text, null);
+  return { path, size: text.length, modified: MODIFIED, hidden: false };
 }
 
 export function mockTree(key: string, path = "", hidden = false): ProjectTree {

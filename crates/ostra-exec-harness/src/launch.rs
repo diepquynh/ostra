@@ -306,6 +306,7 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
         "--effort".into(),
         effort_word(spec.effort, Effort::Max).into(),
     ]);
+    args.extend(artifacts_dir_args(spec));
     args.extend(prompt_arg(inp, &mut files));
     LaunchPlan {
         program: inp.command.clone(),
@@ -645,6 +646,7 @@ fn plan_agy(inp: &LaunchInput<'_>) -> LaunchPlan {
         "--effort".into(),
         effort_word(spec.effort, Effort::High).into(),
     ]);
+    args.extend(artifacts_dir_args(spec));
     if let Some(prompt) = prompt_arg(inp, &mut files) {
         args.extend(["-i".into(), prompt]);
     }
@@ -699,6 +701,15 @@ pub fn materialize(plan: &LaunchPlan) -> std::io::Result<()> {
         std::os::unix::fs::symlink(target, link)?;
     }
     Ok(())
+}
+
+/// Rule W1: the harness may read the workspace artifacts folder, outside its working directory.
+fn artifacts_dir_args(spec: &ExecutionSpec) -> Vec<String> {
+    let dir = ostra_core::artifacts::dir(&spec.ctx.workspace_root);
+    if spec.ctx.workspace_root.as_os_str().is_empty() || !dir.is_dir() {
+        return vec![];
+    }
+    vec!["--add-dir".into(), dir.to_string_lossy().into()]
 }
 
 #[cfg(test)]

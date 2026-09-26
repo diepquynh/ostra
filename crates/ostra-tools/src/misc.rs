@@ -40,6 +40,13 @@ pub async fn skill(env: &ToolEnv, input: &Value) -> ToolOutput {
         env.mark_read(&local);
         return skill_output(&local, &content);
     }
+    // HANDOVER 6.5: a custom skill kept as a workspace artifact, after the project's own.
+    if let Some(path) = ostra_core::artifacts::skill_path(&env.config().workspace_root, bare)
+        && let Ok(content) = tokio::fs::read_to_string(&path).await
+    {
+        env.mark_read(&path);
+        return skill_output(&path, &content);
+    }
     if let Some((path, content)) = (env.config().skill_resolver)(bare) {
         return skill_output(&path, &content);
     }
@@ -180,6 +187,11 @@ mod tests {
         assert!(out.text.contains("Use const."), "{}", out.text);
         let out = run(&env, "Skill", json!({"name": "meta-author"})).await;
         assert!(out.text.contains("# Meta"));
+        let custom = ostra_core::artifacts::dir(&env.config().workspace_root).join("skills/house");
+        std::fs::create_dir_all(&custom).unwrap();
+        std::fs::write(custom.join("SKILL.md"), "# House\nTabs.").unwrap();
+        let out = run(&env, "Skill", json!({"name": "house"})).await;
+        assert!(out.text.contains("Tabs."), "{}", out.text);
         let out = run(&env, "Skill", json!({"name": "nope"})).await;
         assert!(out.is_error);
         let out = run(&env, "Skill", json!({"name": "../etc"})).await;

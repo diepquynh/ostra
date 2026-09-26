@@ -1,7 +1,24 @@
-import { Button, Checkbox, Input, Panel, Select, type SelectOption, Switch, Table } from "@ostra/design";
+import { Banner, Button, Checkbox, Input, Panel, Select, type SelectOption, Switch, Table } from "@ostra/design";
 import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
-import type { AgentInfo, Complexity, HarnessStatus, PermissionRules, ValidationIssue } from "../../api/types";
-import { COMPLEXITY_AGENTS, NATIVE_ONLY, PERMISSION_MODES, ROUTE_KEYS, SANDBOX_MODES } from "../../content/agents";
+import type {
+  AgentInfo,
+  Complexity,
+  HarnessStatus,
+  PermissionRules,
+  SandboxMode,
+  SandboxStatus,
+  ValidationIssue,
+} from "../../api/types";
+import {
+  COMPLEXITY_AGENTS,
+  NATIVE_ONLY,
+  PERMISSION_MODES,
+  ROUTE_KEYS,
+  runsUnsandboxed,
+  SANDBOX_MODES,
+  UNSANDBOXED_EFFECTS,
+} from "../../content/agents";
+import { FileTagInput } from "../../features/context/FileTagInput";
 import { currentSubscription, disablePush, enablePush, pushSupported } from "../../lib/push";
 import { StackInput } from "../setup/StackInput";
 import {
@@ -541,7 +558,33 @@ const RULE_LISTS = [
   { key: "deny", label: "Deny", placeholder: "Bash(git push *)" },
 ] as const;
 
-export function PermissionsSection({ form, update, issues, global }: SectionProps & { global: PermissionRules }) {
+/** Warns what stops working when this workspace's agent commands run without a sandbox. */
+export function UnsandboxedBanner({ status }: { status: SandboxStatus }) {
+  return (
+    <Banner tone="warn" title="Turn the sandbox on to keep these protections, because agent commands run without one">
+      <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+        {UNSANDBOXED_EFFECTS.map((t) => (
+          <li key={t}>{t}</li>
+        ))}
+      </ul>
+      {status.message && <p style={{ margin: "6px 0 0" }}>{status.message}</p>}
+    </Banner>
+  );
+}
+
+export function PermissionsSection({
+  form,
+  update,
+  issues,
+  global,
+  sandbox,
+  savedSandbox,
+}: SectionProps & { global: PermissionRules; sandbox: SandboxStatus; savedSandbox: SandboxMode | null }) {
+  // The chosen mode before it is saved: off never sandboxes, auto only where a sandbox works.
+  const unsandboxed =
+    form.sandbox === "off" ||
+    (form.sandbox === "auto" && !sandbox.available) ||
+    (form.sandbox === (savedSandbox ?? "") && runsUnsandboxed(sandbox));
   const globalCount = global.allow.length + global.ask.length + global.deny.length;
   return (
     <>
@@ -585,6 +628,7 @@ export function PermissionsSection({ form, update, issues, global }: SectionProp
                 />
               ))}
               <FieldIssues issues={issues("sandbox_mode")} />
+              {unsandboxed && <UnsandboxedBanner status={sandbox} />}
             </div>
           </Panel>
         </Anchor>
@@ -644,24 +688,52 @@ export function PermissionsSection({ form, update, issues, global }: SectionProp
 
 type InstructionRow = { id: string };
 
-export function InstructionsSection({ form, update, issues }: SectionProps) {
+/** An instruction field where `@` tags a project file or a visible workspace artifact (Rule W3). */
+function TaggedField({
+  error,
+  ...props
+}: { ws: string; projects: string[]; rows: number; label: string; placeholder?: string; value: string } & {
+  error: string | null;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div>
+      <FileTagInput {...props} />
+      {error && (
+        <p className="wp-field-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function InstructionsSection({
+  form,
+  update,
+  issues,
+  ws,
+  projects,
+}: SectionProps & { ws: string; projects: string[] }) {
   const rows: InstructionRow[] = ROUTE_KEYS.filter((r) => r.key !== "judge").map((r) => ({ id: r.key }));
   return (
     <>
       <p className="wp-lead">
         Ostra adds these to every agent&apos;s brief: the text for all agents first, then the agent&apos;s own. Routing
-        settings are never included.
+        settings are never included. Type @ to tag a project file or a workspace artifact, and each agent gets its path
+        to read.
       </p>
       <Anchor id="instructions.all">
         <Panel title="All agents">
-          <Input
-            multiline
+          <TaggedField
+            ws={ws}
+            projects={projects}
             rows={3}
-            aria-label="Instructions for all agents"
-            placeholder="Write British English in comments and docs."
+            label="Instructions for all agents"
+            placeholder="Write British English in comments and docs. Tag a file or artifact with @."
             value={form.instructionsAll}
             error={errorText(issues("instructions.all"))}
-            onChange={(e) => update((f) => void (f.instructionsAll = e.target.value))}
+            onChange={(v) => update((f) => void (f.instructionsAll = v))}
           />
         </Panel>
       </Anchor>
@@ -677,13 +749,14 @@ export function InstructionsSection({ form, update, issues }: SectionProps) {
                 label: "Instructions",
                 render: ({ id }) => (
                   <Anchor id={`instructions.agents.${id}`}>
-                    <Input
-                      multiline
+                    <TaggedField
+                      ws={ws}
+                      projects={projects}
                       rows={1}
-                      aria-label={`Instructions for ${id}`}
+                      label={`Instructions for ${id}`}
                       value={form.instructionsAgents[id] ?? ""}
                       error={errorText(issues(`instructions.agents.${id}`))}
-                      onChange={(e) => update((f) => void (f.instructionsAgents[id] = e.target.value))}
+                      onChange={(v) => update((f) => void (f.instructionsAgents[id] = v))}
                     />
                   </Anchor>
                 ),

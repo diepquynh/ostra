@@ -175,6 +175,7 @@ export const workspaceDetail: WorkspaceDetail = {
   stacks,
   global_permissions: { allow: [], ask: [], deny: ["Bash(rm -rf /*)"] },
   pending_commands: [],
+  sandbox: { mode: "required", available: true, backend: "bubblewrap", active: true },
 };
 
 export const phases: PhaseInfo[] = [

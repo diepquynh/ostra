@@ -46,6 +46,19 @@ export {
   filterPaletteItems,
   type PaletteItem,
 } from "./components/navigation/CommandPalette";
+export { ContextMenu, type ContextMenuProps } from "./components/navigation/ContextMenu";
+export {
+  FileTree,
+  type FileTreeCreating,
+  type FileTreeEntry,
+  type FileTreeFolder,
+  type FileTreeProps,
+  type FileTreeRow,
+  dragHasFiles,
+  fileIcon,
+  NewEntryField,
+  parentDir,
+} from "./components/navigation/FileTree";
 export { Menu, type MenuActionItem, type MenuItem, type MenuProps } from "./components/navigation/Menu";
 export { type StepItem, Stepper, type StepperProps } from "./components/navigation/Stepper";
 export { type TabItem, Tabs, type TabsProps } from "./components/navigation/Tabs";

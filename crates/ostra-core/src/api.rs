@@ -92,6 +92,9 @@ pub struct WorkspaceDetail {
     /// Folder files whose commands changed outside Ostra and wait for approval. Ostra starts
     /// none of their programs until the user approves.
     pub pending_commands: Vec<PendingCommands>,
+    /// Whether this workspace's agent commands run sandboxed: the global `[sandbox]` config with
+    /// the workspace's own mode in place of the global one.
+    pub sandbox: SandboxStatus,
 }
 
 /// The command-bearing settings of one folder file, as the user approves them together.
@@ -1423,6 +1426,9 @@ pub struct ProjectTreeEntry {
     /// A file with a git mark, or a folder holding one.
     pub has_changes: bool,
     pub changed_by: Option<ChangedBy>,
+    /// A workspace artifact the user hid from every agent (HANDOVER 6.5). False for project files.
+    #[serde(default)]
+    pub hidden_from_agents: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -1436,6 +1442,48 @@ pub struct ProjectTree {
     pub is_git: bool,
     /// The entry cap was reached.
     pub truncated: bool,
+}
+
+/// `GET /api/workspaces/:ws/artifacts`: one workspace artifact (HANDOVER 6.5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceArtifact {
+    /// `/`-separated path inside the artifacts folder. Tag it as `@_artifacts/<path>`.
+    pub path: String,
+    #[ts(type = "number")]
+    pub size: u64,
+    pub modified: Option<DateTime<Utc>>,
+    /// Hidden from every agent, tag picker, and instruction (Rule W2).
+    pub hidden: bool,
+}
+
+/// `GET /api/workspaces/:ws/artifacts`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkspaceArtifacts {
+    /// Absolute path of the visible artifacts folder, which agents read.
+    #[ts(type = "string")]
+    pub dir: PathBuf,
+    pub artifacts: Vec<WorkspaceArtifact>,
+    /// Why deleting is refused right now, such as a session that has not ended (Rule W4).
+    pub delete_blocked: Option<String>,
+}
+
+/// `POST /api/workspaces/:ws/artifacts/move`: move an artifact file or folder to a new path.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MoveArtifact {
+    pub from: String,
+    /// The full new path, such as `guides/style.md` for `style.md` dropped on `guides`.
+    pub to: String,
+}
+
+/// `POST /api/workspaces/:ws/artifacts/hidden`: hide or unhide one artifact.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SetArtifactHidden {
+    pub path: String,
+    pub hidden: bool,
 }
 
 /// `GET /api/workspaces/:ws/projects/:key/file?path=`.

@@ -1,5 +1,7 @@
 use super::*;
-use crate::brief::{BriefInput, ProjectDoc, augment, build_brief, project_docs, stated_in};
+use crate::brief::{
+    ArtifactsBrief, BriefInput, ProjectDoc, augment, build_brief, project_docs, stated_in,
+};
 use crate::spawn::*;
 use ostra_core::HarnessKind;
 use ostra_core::config::{Commands, ModuleRow, ProjectProfile, ReviewRule, SkillEntry};
@@ -635,6 +637,7 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
         inventory: Some(inv),
         instructions: &instructions,
         project_docs: &[],
+        artifacts: None,
     };
     let brief = build_brief(&input).unwrap();
     assert!(brief.starts_with("## Repo brief for implementer"));
@@ -678,6 +681,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         inventory: None,
         instructions: &[],
         project_docs: &[],
+        artifacts: None,
     };
     let once = augment("Task: x", &input);
     assert_eq!(augment(&once, &input), once);
@@ -705,6 +709,21 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     assert!(brief.contains("### `/r/AGENTS.md`\n\nRun make check before you finish."));
     let once = augment("Task: x", &init_docs);
     assert_eq!(augment(&once, &init_docs), once);
+    let artifacts = ArtifactsBrief {
+        dir: "/ws/.ostra/artifacts".into(),
+        entries: vec![("guides/style.md".into(), 12)],
+        total: 3,
+    };
+    let with_artifacts = BriefInput {
+        artifacts: Some(&artifacts),
+        ..init_docs
+    };
+    let brief = build_brief(&with_artifacts).unwrap();
+    assert!(brief.contains("## Workspace artifacts"));
+    assert!(brief.contains("- `/ws/.ostra/artifacts/guides/style.md` (12 bytes)"));
+    assert!(brief.contains("- and 2 more; find them with Glob in `/ws/.ostra/artifacts`"));
+    let once = augment("Task: x", &with_artifacts);
+    assert_eq!(augment(&once, &with_artifacts), once);
     assert!(stated_in("a  b   c", "a\nb c"));
     assert!(stated_in("", "ab"));
 }

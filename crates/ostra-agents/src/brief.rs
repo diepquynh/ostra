@@ -22,6 +22,7 @@ const MAX_MODULE_ROWS: usize = 10;
 pub const BRIEF_HEADING: &str = "## Repo brief for ";
 pub const INSTRUCTIONS_HEADING: &str = "## Workspace instructions";
 pub const PROJECT_DOCS_HEADING: &str = "## Project instructions";
+pub const ARTIFACTS_HEADING: &str = "## Workspace artifacts";
 
 /// An agent instruction file at the project root and its text.
 #[derive(Debug, Clone)]
@@ -78,6 +79,33 @@ fn sections(agent: AgentName) -> &'static [Section] {
     }
 }
 
+/// The workspace's visible artifacts (HANDOVER 6.5), read when the spawn is built.
+#[derive(Debug, Clone, Default)]
+pub struct ArtifactsBrief {
+    pub dir: PathBuf,
+    /// Path inside the folder and size in bytes, at most [`ostra_core::artifacts::MAX_BRIEF_ARTIFACTS`].
+    pub entries: Vec<(String, u64)>,
+    /// Every visible artifact, listed or not.
+    pub total: usize,
+}
+
+impl ArtifactsBrief {
+    /// The visible artifacts of the workspace at `workspace`, or `None` when it holds none.
+    pub fn read(workspace: &Path) -> Option<ArtifactsBrief> {
+        let dir = ostra_core::artifacts::dir(workspace);
+        let all = ostra_core::artifacts::list(&dir);
+        (!all.is_empty()).then(|| ArtifactsBrief {
+            total: all.len(),
+            entries: all
+                .into_iter()
+                .take(ostra_core::artifacts::MAX_BRIEF_ARTIFACTS)
+                .map(|e| (e.path, e.size))
+                .collect(),
+            dir,
+        })
+    }
+}
+
 /// What the brief is built from.
 pub struct BriefInput<'a> {
     pub agent: AgentName,
@@ -91,6 +119,7 @@ pub struct BriefInput<'a> {
     pub instructions: &'a [String],
     /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
     pub project_docs: &'a [ProjectDoc],
+    pub artifacts: Option<&'a ArtifactsBrief>,
 }
 
 fn squash(s: &str) -> String {
@@ -382,6 +411,29 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         ));
     }
 
+    // Rule W1: every agent learns where the workspace artifacts are, so it can read them.
+    if let Some(a) = input.artifacts.filter(|a| !a.entries.is_empty()) {
+        let dir = a.dir.display();
+        let mut rows: Vec<String> = a
+            .entries
+            .iter()
+            .map(|(path, size)| format!("- `{dir}/{path}` ({size} bytes)"))
+            .collect();
+        if a.total > a.entries.len() {
+            rows.push(format!(
+                "- and {} more; find them with Glob in `{dir}`",
+                a.total - a.entries.len()
+            ));
+        }
+        out.push(format!(
+            "{ARTIFACTS_HEADING}\n\nThe user keeps these files for every task in this workspace: documentation, \
+             guidelines, skills, and sample data. Read the ones that bear on your task with Read. Do not write \
+             in `{dir}`, because the folder belongs to the user. An artifact named `skills/<name>/SKILL.md` is a \
+             skill: load it with the Skill tool by its path.\n\n{}",
+            rows.join("\n")
+        ));
+    }
+
     let instructions: Vec<&String> = input
         .instructions
         .iter()
@@ -406,9 +458,14 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
 /// The first message with the brief appended. Idempotent: a message that already carries a brief is
 /// returned unchanged.
 pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String {
-    if [BRIEF_HEADING, PROJECT_DOCS_HEADING, INSTRUCTIONS_HEADING]
-        .iter()
-        .any(|h| first_message.contains(h))
+    if [
+        BRIEF_HEADING,
+        PROJECT_DOCS_HEADING,
+        ARTIFACTS_HEADING,
+        INSTRUCTIONS_HEADING,
+    ]
+    .iter()
+    .any(|h| first_message.contains(h))
     {
         return first_message.to_string();
     }

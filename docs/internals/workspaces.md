@@ -17,7 +17,7 @@ Three things make up a workspace, and each has a different owner.
 
 | Part | Where | What it holds |
 | --- | --- | --- |
-| The folder | `<workspace>/.ostra/` | `workspace.toml` (settings), `workspace.db` (the event log and the tables built from it), `sessions/` (each session's spec, plan, reports, and uploads), `uploads/` (files waiting for a session) |
+| The folder | `<workspace>/.ostra/` | `workspace.toml` (settings), `workspace.db` (the event log and the tables built from it), `sessions/` (each session's spec, plan, reports, and uploads), `uploads/` (files waiting for a session), `artifacts/` (the workspace artifacts every agent reads) |
 | The registry row | `registry.db` in the data dir | The workspace's id, name, root folder, and creation time |
 | The registry records | `registry.db`, keyed by the root folder | The permission mode, the YOLO default, the spend limits, the sandbox mode, command approvals, and sealed MCP header and env values |
 
@@ -245,6 +245,96 @@ Project folders, each project's `.ostra/` files, and the workspace's `.ostra/ses
 The session folders keep the specs, plans, and reports, but without the database the console no longer lists
 those sessions.
 
+## Workspace artifacts
+
+Workspace artifacts are files you keep for every session of a workspace rather than for one task: a custom skill, a
+design document, a guideline that applies to all projects, or a sample data set a test loads. They live in the
+Artifacts tab of the left dock, next to Sessions, Files, and Git. The tab is the Files tab's own file tree pointed
+at the artifacts folder, so it behaves the same way: folders open lazily, "Find an artifact" searches every path, a
+row drags into a task or addition as a tag or onto another folder to move it there (onto empty space moves it to
+the top), and a click opens the artifact in the file editor, with its pencil, save, and conflict check. Only the
+actions differ. The header and the right-click menu add Upload files, Download, Hide from agents or Show to agents,
+and Delete, and files dragged in from the computer upload into the folder they are dropped on.
+
+![The Artifacts tab with the guides folder open and style.md in the file editor](../images/console/artifacts.png)
+
+![The right-click menu on a hidden artifact](../images/console/artifacts-menu.png)
+
+This works because the Files endpoints treat `_artifacts` as one more root. A tree listing, a file read, a
+save, a new folder, and the file index for `_artifacts` read the visible folder, then the hidden one, so a
+hidden artifact still appears in the tree, marked with a crossed-out eye, and opens like any other file. The
+file editor refuses edits under `.ostra/`, because that is Ostra's own state, except in the artifacts folder,
+which belongs to the user. An artifact has no git history, so its diff and "Changed by sessions" are empty.
+
+### Where they are stored, and why hidden ones move
+
+A visible artifact is a plain file in `<workspace>/.ostra/artifacts/`. The folder's `.gitignore` does not list
+it, so a team that commits the workspace folder shares its artifacts the way it shares `workspace.toml`.
+
+Hiding works on a folder or a file as one unit (Rule W2). Ostra records each hidden unit, the folder or file you
+hid, in `<data dir>/hidden-artifacts/<workspace id>.units.json`, and a path is hidden when it or a folder above it
+is a unit. A hidden folder therefore hides everything in it, including files you create, upload, or move into it
+later: the new file lands hidden. A file inside a hidden folder cannot be shown on its own; its menu offers to show
+the folder instead. Hiding a file hides only that file, not the folder that holds it.
+
+Where a file is stored follows from the units. Everything within a unit lives under
+`<data dir>/hidden-artifacts/<workspace id>/`, at the same relative path, and everything else in
+`.ostra/artifacts/`. Every change keeps that true: hiding moves the unit's files into the hidden folder, showing
+moves them back, and a move or an upload puts each file where its new path belongs. The data dir is already closed
+to agents: the `secret-read` guard refuses every file tool and every path-like word of a shell command that points
+into it, and the Bash sandbox mounts nothing there. A hidden artifact is therefore out of reach by any path, for
+native and harness executors alike, from the moment the change returns, and no reader has to check a flag. The cost
+is that hidden artifacts stay on this machine: they do not travel with the folder or a `git push`.
+
+That protection against shell commands needs the sandbox. With the sandbox off, or on `auto` on a machine without
+one, the file tools still refuse hidden artifacts, but a shell command that walks the disk, such as `find ~`, can
+read them. The Artifacts tab then shows a warning with a link to the Sandbox setting, and the setting lists
+everything else that stops working ([Agent containment](../security/agent-containment.md)).
+
+### How agents find and read them
+
+Agents read visible artifacts and never change them (Rule W1):
+
+- **The brief lists them.** After the project's instruction files, the first message of every execution names
+  the folder and up to 40 artifacts with their sizes, then how many more there are, which the agent finds with
+  Glob. The agent reads the ones that bear on its task with Read, the same way it reads a project file.
+- **Custom skills load by name.** `skills/<name>/SKILL.md` answers `Skill(name)` after the project's own
+  `.agents/skills/`, so a skill every project should follow can be kept once for the workspace. Harness CLIs load
+  it by the path the brief lists.
+- **Harnesses may read the folder.** Claude Code and Antigravity get it with `--add-dir`, and the Bash sandbox
+  mounts it read-only for every executor.
+- **Nothing writes there.** The `workspace-artifacts` guard refuses any write, move, or delete under the folder,
+  in every permission mode and under YOLO. A command that only reads an artifact, such as
+  `python3 load.py .ostra/artifacts/data/orders.csv`, is allowed.
+
+### Tagging an artifact
+
+Type `@` in a new task, an addition, or an instruction field, and the list offers visible artifacts next to project
+files. Dragging a row from the Artifacts tab onto the field does the same. A picked artifact becomes the tag
+`@_artifacts/<path>` (Rule W3). `_artifacts` cannot collide with a project, because a project key starts with a
+letter or digit. In a task or addition the tag works like a tagged project file: the engine checks that the
+artifact exists and is visible, and the agents receive its absolute path in the request. In an instruction, Ostra
+adds one line per tag under the instruction's text with the absolute path, and a tag of a project file
+(`@web/docs/api.md`) resolves the same way.
+
+![Typing @sample in a new task lists the orders sample artifact](../images/console/artifacts-tag.png)
+
+Hidden artifacts are never offered. A request that tags one is refused, and saving settings with an instruction
+that tags a hidden or missing artifact fails with an issue on that field, so a stale tag shows up at save time
+instead of reaching an agent as a path that does not exist. A session that tagged an artifact before it was
+hidden still names the old path, and that path no longer holds a file.
+
+### Deleting and moving
+
+An artifact can be deleted or moved only while no session in the workspace is running, waiting, stalled, or paused
+and no execution is running (Rule W4), because an agent may be reading it at its current path, and both change that
+path. Delete asks first. When a session is still live, the server refuses the delete or the move, and the tab shows
+the reason under its header, naming the session to stop. Both take the workspace's work lock, the same lock that
+removing a project takes, so a session cannot start between the check and the change. A folder moves with
+everything in it, and hidden artifacts inside it stay hidden. A move does not rewrite tags, so an instruction that
+tagged the old path fails validation at the next save and names the tag to fix. Hiding, editing, and uploading are
+allowed at any time.
+
 ## How workspaces are kept apart
 
 Each workspace has its own database, its own engine, and its own settings file. The engine holds the
@@ -284,4 +374,6 @@ database for the session, because the command line does not know which workspace
 | Every workspace path | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |
 | `WorkspaceSettings`, `seeded`, `validate_workspace` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
 | Execution slots | `acquire_slot` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
+| Workspace artifacts: paths, tags, listing | [`crates/ostra-core/src/artifacts.rs`](../../crates/ostra-core/src/artifacts.rs) |
+| Workspace artifacts: upload, save, hide, delete | [`crates/ostra-server/src/artifacts.rs`](../../crates/ostra-server/src/artifacts.rs) |
 | The design brief | [HANDOVER section 6](../../HANDOVER.md#6-workspaces-and-projects) |

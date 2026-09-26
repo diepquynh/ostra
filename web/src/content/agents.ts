@@ -1,4 +1,4 @@
-import type { AgentName, PermissionMode, SandboxMode } from "../api/types";
+import type { AgentName, PermissionMode, SandboxMode, SandboxStatus } from "../api/types";
 
 /** Every route key in `routing.model.byAgent`, with a one-line role. */
 export const ROUTE_KEYS: { key: AgentName | "judge"; role: string }[] = [
@@ -56,4 +56,15 @@ export const PERMISSION_MODES: { mode: PermissionMode; label: string; help: stri
   },
   { mode: "plan", label: "Plan (read-only)", help: "Agents may read but not change the project." },
   { mode: "bypass", label: "Bypass", help: "Nothing asks. Guards and deny rules still apply." },
+];
+
+/** Agent commands start without a sandbox: the mode is off, or auto on a machine without one. Required never does. */
+export const runsUnsandboxed = (s: SandboxStatus) => !s.active && s.mode !== "required";
+
+/** What works only for Ostra's own file tools, not for shell commands, while agent commands run without a sandbox. */
+export const UNSANDBOXED_EFFECTS = [
+  "Hidden workspace artifacts can be read by a shell command that walks the disk, such as find ~.",
+  "Ostra's data dir and your CLI sign-in files can be read by a shell command that does not name them.",
+  "A program a command starts can write anywhere your user can. Ostra checks the writes it can read in the command itself.",
+  "[sandbox] network = false does not apply.",
 ];

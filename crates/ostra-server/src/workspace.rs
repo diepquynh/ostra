@@ -318,7 +318,26 @@ impl WorkspaceRt {
     }
 
     pub fn validate(&self, settings: &WorkspaceSettings) -> Vec<ValidationIssue> {
-        validate_settings(&self.shared.global(), &self.environment(), settings)
+        let mut issues = validate_settings(&self.shared.global(), &self.environment(), settings);
+        // Rule W3: a tag in an instruction names an artifact every agent can read.
+        let texts = settings
+            .instructions
+            .all
+            .iter()
+            .map(|t| ("instructions.all".to_string(), t))
+            .chain(
+                settings
+                    .instructions
+                    .agents
+                    .iter()
+                    .map(|(a, t)| (format!("instructions.agents.{a}"), t)),
+            );
+        for (path, text) in texts {
+            for message in ostra_core::artifacts::tag_issues(text, &self.root, self.id.as_str()) {
+                issues.push(field_issue(&path, message));
+            }
+        }
+        issues
     }
 
     pub fn save_settings(&self, settings: &WorkspaceSettings) -> Result<(), Vec<ValidationIssue>> {
@@ -532,6 +551,9 @@ impl WorkspaceRt {
             stacks: ostra_agents::stack_names(),
             global_permissions: global.permissions.clone(),
             pending_commands: crate::trust::pending(&self.shared.registry, &self.root, &settings),
+            sandbox: ostra_core::api::SandboxStatus::check(
+                &global.sandbox.for_workspace(settings.sandbox_mode),
+            ),
             settings: browser_view(settings),
         }
     }

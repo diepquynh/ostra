@@ -1,24 +1,5 @@
-import type { IconName } from "@ostra/design";
+import { fileIcon, type IconName } from "@ostra/design";
 import type { GitMark, ProjectTreeEntry } from "../../api/types";
-
-const FILE_ICON: Record<string, IconName> = {
-  rs: "file-code-2",
-  ts: "file-code-2",
-  tsx: "file-code-2",
-  js: "file-code-2",
-  jsx: "file-code-2",
-  py: "file-code-2",
-  go: "file-code-2",
-  java: "file-code-2",
-  kt: "file-code-2",
-  sql: "database",
-  toml: "file-cog",
-  yaml: "file-cog",
-  yml: "file-cog",
-  json: "file-json",
-  md: "file-text",
-  txt: "file-text",
-};
 
 /** Lowercase extension of the last path segment, or "" when it has none. */
 export function extOf(path: string): string {
@@ -26,8 +7,6 @@ export function extOf(path: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
-
-export const fileIcon = (path: string): IconName => FILE_ICON[extOf(path)] ?? "file";
 
 export const entryIcon = (e: Pick<ProjectTreeEntry, "is_dir" | "name">, open = false): IconName =>
   e.is_dir ? (open ? "folder-open" : "folder") : fileIcon(e.name);

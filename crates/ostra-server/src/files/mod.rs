@@ -21,6 +21,7 @@ use ostra_core::api::{
 use ostra_core::event::ExecPurpose;
 use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::{ExecutionId, WorkspaceId};
+use ostra_core::artifacts;
 use ostra_core::paths;
 use ostra_engine::EngineNotice;
 use parking_lot::Mutex;
@@ -142,6 +143,54 @@ pub(crate) fn project_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr
     })
 }
 
+/// The folders the Files view lists under `key`: a project's root, or for the workspace artifacts
+/// the visible folder and then the hidden one, created when missing (HANDOVER 6.5).
+fn view_roots(w: &WorkspaceRt, key: &str) -> Result<(PathBuf, Option<PathBuf>), ApiErr> {
+    if key != artifacts::TAG_ROOT {
+        return Ok((project_root(w, key)?, None));
+    }
+    let make = |p: PathBuf| -> Result<PathBuf, ApiErr> {
+        std::fs::create_dir_all(&p).map_err(internal)?;
+        p.canonicalize().map_err(internal)
+    };
+    Ok((
+        make(artifacts::dir(&w.root))?,
+        Some(make(artifacts::hidden_dir(w.id.as_str()))?),
+    ))
+}
+
+/// A file under the view's roots: the visible one, else a hidden artifact at the same path.
+fn locate_view_file(root: &Path, hidden: Option<&PathBuf>, raw: &str) -> Result<tree::Contained, ApiErr> {
+    let file = contain(root, raw)?;
+    if !file.real.exists()
+        && let Some(h) = hidden
+    {
+        let other = contain(h, raw)?;
+        if other.real.exists() {
+            return Ok(other);
+        }
+    }
+    Ok(file)
+}
+
+/// Rule W2: a new artifact path inside a hidden folder goes into the hidden folder, so what the user
+/// adds to a hidden folder is hidden too.
+fn within_hidden_unit(
+    w: &WorkspaceRt,
+    hidden: Option<&PathBuf>,
+    target: tree::Contained,
+) -> Result<tree::Contained, ApiErr> {
+    match hidden {
+        Some(h)
+            if !target.real.exists()
+                && artifacts::is_hidden(&crate::artifacts::hidden_units(w), &target.rel) =>
+        {
+            contain(h, &target.rel)
+        }
+        _ => Ok(target),
+    }
+}
+
 pub(crate) fn contain(root: &Path, raw: &str) -> Result<tree::Contained, ApiErr> {
     tree::contain(root, raw).map_err(|m| ApiErr::new(StatusCode::FORBIDDEN, m))
 }
@@ -231,16 +280,23 @@ impl Files {
     /// Every non-ignored file of a project, cached until a write lands or 30 seconds pass. This is
     /// the index "Find a file" and search read.
     pub async fn index(&self, w: &WorkspaceRt, key: &str) -> Result<Arc<FileIndex>, ApiErr> {
-        let root = project_root(w, key)?;
+        let (root, hidden) = view_roots(w, key)?;
         let id = (w.id.clone(), key.to_string());
         if let Some(v) = cached(&self.index, &id, &root) {
             return Ok(v);
         }
         let walk_root = root.clone();
-        let (paths, truncated) =
-            tokio::task::spawn_blocking(move || tree::index(&walk_root, INDEX_CAP))
-                .await
-                .map_err(internal)?;
+        let (paths, truncated) = tokio::task::spawn_blocking(move || {
+            let (mut paths, truncated) = tree::index(&walk_root, INDEX_CAP);
+            if let Some(h) = hidden {
+                paths.extend(tree::index(&h, INDEX_CAP).0);
+                paths.sort();
+                paths.dedup();
+            }
+            (paths, truncated)
+        })
+        .await
+        .map_err(internal)?;
         Ok(store(
             &self.index,
             id,
@@ -340,9 +396,15 @@ impl Files {
         key: &str,
         q: TreeQuery,
     ) -> Result<ProjectTree, ApiErr> {
-        let root = project_root(w, key)?;
-        let dir = contain(&root, q.path.as_deref().unwrap_or(""))?;
-        if !dir.real.exists() {
+        let (root, hidden_root) = view_roots(w, key)?;
+        let raw = q.path.as_deref().unwrap_or("");
+        let dir = contain(&root, raw)?;
+        let hidden_dir = hidden_root
+            .as_ref()
+            .map(|h| contain(h, raw))
+            .transpose()?
+            .filter(|d| d.real.is_dir());
+        if !dir.real.exists() && hidden_dir.is_none() {
             return Err(not_found(format!(
                 "{} does not exist in project `{key}`.",
                 dir.rel
@@ -351,19 +413,42 @@ impl Files {
         let depth = q.depth.unwrap_or(1).clamp(1, MAX_DEPTH);
         let hidden = q.hidden.unwrap_or(false);
         let (list_root, list_dir) = (root.clone(), dir.clone());
-        let listing = tokio::task::spawn_blocking(move || {
-            tree::list(&list_root, &list_dir, depth, hidden, TREE_CAP)
+        let (listing, concealed) = tokio::task::spawn_blocking(move || {
+            let listing = if list_dir.real.exists() {
+                tree::list(&list_root, &list_dir, depth, hidden, TREE_CAP)?
+            } else {
+                tree::Listing {
+                    entries: vec![],
+                    truncated: false,
+                }
+            };
+            // Rule W2: hidden artifacts show in the tree, marked, so the user can find and unhide them.
+            let concealed = match (hidden_root, hidden_dir) {
+                (Some(h), Some(d)) => tree::list(&h, &d, depth, hidden, TREE_CAP)?.entries,
+                _ => vec![],
+            };
+            Ok::<_, String>((listing, concealed))
         })
         .await
         .map_err(internal)?
         .map_err(bad)?;
         let git = self.git_status(w, key, &root).await;
         let by = self.attribution(w, key, &root);
+        let visible: BTreeSet<String> = listing.entries.iter().map(|e| e.rel.clone()).collect();
+        let units = if key == artifacts::TAG_ROOT {
+            crate::artifacts::hidden_units(w)
+        } else {
+            vec![]
+        };
         let entries = listing
             .entries
             .into_iter()
-            .map(|e| {
-                let (git_mark, staged, has_changes) = if e.is_dir {
+            .chain(concealed.into_iter().filter(|e| !visible.contains(&e.rel)))
+            .map(|e| (artifacts::is_hidden(&units, &e.rel), e))
+            .map(|(hidden_from_agents, e)| {
+                let (git_mark, staged, has_changes) = if hidden_from_agents {
+                    (None, false, false)
+                } else if e.is_dir {
                     let (m, has) = git.dir(&e.rel);
                     (m, false, has)
                 } else {
@@ -386,6 +471,7 @@ impl Files {
                     git: git_mark,
                     staged,
                     has_changes,
+                    hidden_from_agents,
                 }
             })
             .collect();
@@ -399,8 +485,8 @@ impl Files {
     }
 
     pub async fn file(&self, w: &WorkspaceRt, key: &str, raw: &str) -> Result<ProjectFile, ApiErr> {
-        let root = project_root(w, key)?;
-        let file = contain(&root, raw)?;
+        let (root, hidden) = view_roots(w, key)?;
+        let file = locate_view_file(&root, hidden.as_ref(), raw)?;
         if !file.real.exists() {
             return Err(not_found(format!(
                 "{} does not exist in project `{key}`.",
@@ -439,8 +525,13 @@ impl Files {
         key: &str,
         raw: &str,
     ) -> Result<(String, ProjectTree), ApiErr> {
-        let root = project_root(w, key)?;
-        let dir = contain(&root, raw)?;
+        let (visible, hidden) = view_roots(w, key)?;
+        let dir = within_hidden_unit(w, hidden.as_ref(), contain(&visible, raw)?)?;
+        let root = if dir.real.starts_with(&visible) {
+            visible
+        } else {
+            hidden.unwrap_or(visible)
+        };
         if dir.rel.is_empty() {
             return Err(bad("Name the folder to create with path."));
         }
@@ -479,10 +570,15 @@ impl Files {
         key: &str,
         body: SaveProjectFile,
     ) -> Result<ProjectFile, ApiErr> {
-        let root = project_root(w, key)?;
-        let file = contain(&root, &body.path)?;
+        let (root, hidden) = view_roots(w, key)?;
+        let file = locate_view_file(&root, hidden.as_ref(), &body.path)?;
+        let file = within_hidden_unit(w, hidden.as_ref(), file)?;
         if file.rel.is_empty() || file.real.is_dir() {
             return Err(bad("Name a file with path. Folders cannot be saved."));
+        }
+        if key == artifacts::TAG_ROOT && !file.real.exists() {
+            artifacts::normalize(&file.rel).map_err(bad)?;
+            crate::artifacts::check_room(w)?;
         }
         if body.content.len() > TEXT_CAP {
             return Err(bad(format!(
@@ -525,6 +621,20 @@ impl Files {
             .filter(|b| !b.is_empty())
             .unwrap_or("HEAD")
             .to_string();
+        if key == artifacts::TAG_ROOT {
+            // Workspace artifacts have no history to compare with.
+            return Ok(FileDiff {
+                path: q.path,
+                base,
+                hunks: vec![],
+                added: 0,
+                removed: 0,
+                binary: false,
+                truncated: false,
+                git: None,
+                changed_by: None,
+            });
+        }
         if !git::valid_base(&base) {
             return Err(bad(
                 "Use a commit, branch, or tag name for base, such as HEAD or main.",
@@ -572,6 +682,9 @@ impl Files {
 
     /// Files sessions changed that still differ from HEAD, with line counts.
     pub async fn changes(&self, w: &WorkspaceRt, key: &str) -> Result<Vec<ProjectChange>, ApiErr> {
+        if key == artifacts::TAG_ROOT {
+            return Ok(vec![]);
+        }
         let root = project_root(w, key)?;
         let git = self.git_status(w, key, &root).await;
         let by = self.attribution(w, key, &root);
@@ -644,7 +757,12 @@ fn read_only_reason(
     let runtime = paths::workspace_runtime(&w.root);
     let runtime = std::fs::canonicalize(&runtime).unwrap_or(runtime);
     let memory = paths::project_runtime(root).join("memory");
-    if paths::is_inside(&runtime, &file.real) || paths::is_inside(&memory, &file.real) {
+    let artifacts = artifacts::dir(&w.root);
+    let artifacts = std::fs::canonicalize(&artifacts).unwrap_or(artifacts);
+    let is_artifact = paths::is_inside(&artifacts, &file.real);
+    if (paths::is_inside(&runtime, &file.real) && !is_artifact)
+        || paths::is_inside(&memory, &file.real)
+    {
         return Some(
             "Ostra's own state is read-only here. Change workspace settings on the Settings screen, because a direct edit skips their validation.".into(),
         );
@@ -655,7 +773,11 @@ fn read_only_reason(
 }
 
 /// Check the base hash against the disk and write the new text atomically.
-fn save_file(file: &tree::Contained, content: &[u8], base: Option<&str>) -> Result<(), ApiErr> {
+pub(crate) fn save_file(
+    file: &tree::Contained,
+    content: &[u8],
+    base: Option<&str>,
+) -> Result<(), ApiErr> {
     use std::io::Write;
     let changed = "The file changed on disk after you opened it. Reload it and apply your change again, or save over it.";
     let current = match std::fs::read(&file.real) {

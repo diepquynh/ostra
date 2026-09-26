@@ -4,8 +4,10 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  useEffect,
   useRef,
   useState,
+  type WheelEvent,
 } from "react";
 import { arrowIndex } from "../../focus";
 import { Icon } from "../core/Icon";
@@ -90,6 +92,20 @@ export function Tabs({
   };
   const focusIndex = selectedIndex >= 0 ? selectedIndex : 0;
 
+  // A strip wider than its box scrolls sideways; keep the selected tab in view.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the selection changes.
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [value]);
+
+  const onWheel = (e: WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollWidth <= el.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    el.scrollLeft += e.deltaY;
+  };
+
   const onKeyDown = (e: KeyboardEvent, i: number) => {
     const t = tabs[i];
     if (movable && (e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
@@ -122,6 +138,7 @@ export function Tabs({
       role="tablist"
       aria-label={label}
       style={style}
+      onWheel={variant === "segmented" ? undefined : onWheel}
     >
       {tabs.map((t, i) => {
         const active = t.id === value;

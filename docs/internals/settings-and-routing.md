@@ -109,7 +109,9 @@ typo therefore never switches your machine back to defaults halfway through a se
   `path`. Optional `code_provider` and `[[projects.language_servers]]` feed code navigation in the Files view.
 - `[routing.*]`: executor, model, and effort per agent, covered in the next section.
 - `[instructions]`: `all` is given to every agent, and `agents.<name>` to one agent. Both are added to the
-  agent's spawn block, after the rules the prompt already carries.
+  agent's spawn block, after the rules the prompt already carries. Type `@` in either field to tag a project
+  file or a workspace artifact; each agent gets its absolute path under the instruction. A tag that names a
+  hidden or missing artifact fails at save time.
 - `[permissions]`: `allow`, `ask`, and `deny` lists in Claude Code's rule syntax, such as `Bash(npm run test *)`.
   They merge with the global rules, global first. Each rule is parsed at save time.
 - `[notifications]`: `push = true` sends Web Push for open gates and finished sessions.
@@ -123,7 +125,7 @@ The Settings screen has a tab for each part. Projects lists each project's key, 
 
 Instructions holds the text for all agents and for each agent:
 
-![The Instructions settings tab with text for all agents and per agent](../images/console/settings-instructions.png)
+![The Instructions settings tab with a workspace artifact tagged in the text for all agents](../images/console/settings-instructions.png)
 
 Permissions holds the mode, the sandbox, and the rules, with the global rules shown read-only:
 
