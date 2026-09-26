@@ -409,6 +409,10 @@ impl Drop for Members {
     }
 }
 
+/// A mach name every Ostra policy refuses, through `(deny default)`.
+#[cfg(target_os = "macos")]
+const CANARY: &str = "dev.ostra.sandbox.canary";
+
 /// The marker every sandbox of this data dir carries, so a restarted server finds the processes
 /// an earlier one left behind.
 fn group_marker() -> String {
