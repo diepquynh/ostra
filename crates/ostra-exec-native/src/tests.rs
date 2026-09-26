@@ -135,6 +135,7 @@ fn spec(
             permissions: PermissionRules::default(),
             protected_paths: vec![],
             memory_db: f.repo.join(".ostra/memory/knowledge.sqlite3"),
+            sandbox_mode: None,
         },
         resume: None,
         harness_session_id: None,

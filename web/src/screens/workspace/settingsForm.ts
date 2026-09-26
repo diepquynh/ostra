@@ -8,6 +8,7 @@ import type {
   McpServerConfig,
   ModelChoice,
   PermissionMode,
+  SandboxMode,
   ValidationIssue,
   WorkspaceSettings,
 } from "../../api/types";
@@ -65,6 +66,8 @@ export type SettingsForm = {
   instructionsAgents: Record<string, string>;
   yolo: boolean;
   mode: PermissionMode;
+  /** `""` follows the global `[sandbox] mode`. */
+  sandbox: SandboxMode | "";
   allow: string;
   ask: string;
   deny: string;
@@ -315,6 +318,7 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
     instructionsAgents: { ...s.instructions.agents },
     yolo: s.yolo.default,
     mode: s.permissions.mode,
+    sandbox: s.sandbox_mode ?? "",
     allow: lines(s.permissions.allow),
     ask: lines(s.permissions.ask),
     deny: lines(s.permissions.deny),
@@ -352,7 +356,7 @@ export function fromForm(
     return {
       key: p.key,
       path: p.path,
-      stack: p.stack || null,
+      stack: p.stack.trim() || null,
       ...(was?.code_provider ? { code_provider: was.code_provider } : {}),
       ...(was?.language_servers?.length ? { language_servers: was.language_servers } : {}),
     };
@@ -400,6 +404,7 @@ export function fromForm(
 
   s.yolo.default = form.yolo;
   s.permissions.mode = form.mode;
+  s.sandbox_mode = form.sandbox || null;
   s.permissions.allow = unlines(form.allow);
   s.permissions.ask = unlines(form.ask);
   s.permissions.deny = unlines(form.deny);

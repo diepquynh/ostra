@@ -179,6 +179,72 @@ fn submit_needs_a_clean_document_that_matches() {
     assert!(check_submit(AgentName::Implementer, &json!({})).is_ok());
 }
 
+const PROFILE: &str = r#"schema_version = 1
+stack = "rust-axum"
+build_tool = "cargo"
+
+[commands]
+build = "cargo build"
+
+[[module_map]]
+glob = "src/**"
+area = "app"
+
+[conventions]
+notes = ["one"]
+"#;
+
+#[test]
+fn inventory_submit_needs_a_profile_that_parses() {
+    let dir = tempfile_dir();
+    let inventory = dir.join("INVENTORY.md");
+    let profile = dir.join("project.toml");
+    let submit = json!({"status": "ok", "summary": "s", "result": {"inventory_path": inventory, "profile_path": profile, "report_path": "/r"}});
+    let refused = |text: &str| {
+        std::fs::write(&profile, text).unwrap();
+        check_submit(AgentName::Initializer, &submit).unwrap_err()
+    };
+
+    std::fs::write(&profile, PROFILE).unwrap();
+    assert!(
+        check_submit(AgentName::Initializer, &submit)
+            .unwrap_err()
+            .contains("INVENTORY.md before you submit")
+    );
+    std::fs::write(&inventory, "# Inventory\n").unwrap();
+    check_submit(AgentName::Initializer, &submit).unwrap();
+
+    let err = refused(&PROFILE.replace("area = \"app\"", "area = \"app\"\nreference = null"));
+    assert!(
+        err.contains("Line 11: TOML has no null. Omit `reference`"),
+        "{err}"
+    );
+    let err = refused(&PROFILE.replace("[conventions]", "[[conventions]]"));
+    assert!(
+        err.contains("Write `[conventions]`, not `[[conventions]]`"),
+        "{err}"
+    );
+    let err = refused(&PROFILE.replace("schema_version = 1", "schema_version = \"0.1\""));
+    assert!(err.contains("Write `schema_version = 1`"), "{err}");
+
+    std::fs::remove_file(&profile).unwrap();
+    assert!(
+        check_submit(AgentName::Initializer, &submit)
+            .unwrap_err()
+            .contains("project.toml before you submit")
+    );
+
+    for result in [
+        json!({"scout_plan_path": "/p", "stack": "rust", "slices": []}),
+        json!({"findings_path": "/f"}),
+        json!({"proposal_path": "/p", "skills": []}),
+        json!({"skill_path": "/s"}),
+    ] {
+        let other = json!({"status": "ok", "summary": "s", "result": result});
+        check_submit(AgentName::Initializer, &other).unwrap();
+    }
+}
+
 #[test]
 fn plan_submit_must_match_the_phases() {
     let dir = tempfile_dir();

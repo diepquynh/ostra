@@ -573,6 +573,7 @@ mod tests {
             },
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
+            sandbox_mode: None,
         };
         Arc::new(Running {
             policy: ExecutionPolicy::new(ctx.clone(), Default::default()),

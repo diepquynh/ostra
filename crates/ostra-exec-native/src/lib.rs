@@ -868,18 +868,20 @@ fn mcp_secret_vars(ctx: &ostra_core::exec::ExecContext) -> Vec<String> {
         .collect()
 }
 
-/// The `[sandbox]` table is read fresh, so a change applies to the next execution.
+/// The `[sandbox]` table is read fresh, so a change applies to the next execution. The workspace's
+/// own mode, when it sets one, takes the place of the global mode.
 fn sandbox_for(ctx: &ostra_core::exec::ExecContext) -> Result<Sandbox, String> {
     let global: ostra_core::config::GlobalConfig =
         ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
+    let sandbox = global.sandbox.for_workspace(ctx.sandbox_mode);
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "/".into());
-    Ok(match ostra_core::sandbox::decide(&global.sandbox)? {
+    Ok(match ostra_core::sandbox::decide(&sandbox)? {
         ostra_core::sandbox::Decision::Sandboxed(backend) => {
             let scratch = ostra_core::sandbox::new_scratch()
                 .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
-            let profile = ostra_core::sandbox::Profile::for_execution(ctx, &global.sandbox, &home)
+            let profile = ostra_core::sandbox::Profile::for_execution(ctx, &sandbox, &home)
                 .scratch(&scratch)
                 .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
             Sandbox::On(backend, profile)

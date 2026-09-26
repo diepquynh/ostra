@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Button, FolderPicker, Input, Select } from "../../design";
+import { Button, FolderPicker, Input } from "../../design";
 import { listFolders, makeFolder, useFolderInfo } from "./folders";
-import { basename, type DraftProject, type ImportErrors, isChosen, keyError, stackOptions, suggestKey } from "./wizard";
+import { StackInput } from "./StackInput";
+import { basename, type DraftProject, type ImportErrors, isChosen, keyError, suggestKey } from "./wizard";
 
 export type ImportFormProps = {
   /** Keys already used in the workspace (or the wizard's list). */
@@ -94,12 +95,12 @@ export function ImportForm({
             if (e.key === "Enter" && onAdd) add();
           }}
         />
-        <Select
+        <StackInput
           label="Stack (optional)"
+          stacks={stacks}
           value={stack}
           onChange={(e) => setStack(e.target.value)}
-          options={stackOptions(stacks, stack)}
-          hint="For an empty folder, the stack seeds the first skills."
+          hint="Name it in your own words, for example rust-axum. For an empty folder, the stack seeds the first skills."
         />
       </div>
       {serverErrors.stack && (

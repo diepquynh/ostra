@@ -223,9 +223,8 @@ describe("settings screen", () => {
     expect(effort.options[0].textContent).toBe("Agent default (medium)");
 
     fireEvent.click(screen.getByRole("tab", { name: "Projects" }));
-    const stack = within(main()).getByLabelText("Stack of backend") as HTMLSelectElement;
-    expect(Array.from(stack.options).map((o) => o.value)).toEqual([
-      "",
+    const stack = within(main()).getByLabelText("Stack of backend") as HTMLInputElement;
+    expect(Array.from(stack.list?.options ?? []).map((o) => o.value)).toEqual([
       "go",
       "java-spring",
       "python",

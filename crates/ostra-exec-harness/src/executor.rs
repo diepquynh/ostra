@@ -250,6 +250,7 @@ impl HarnessExecutor {
         host: &Arc<dyn ExecutionHost>,
     ) -> Result<Arc<PtySession>, String> {
         let cfg = self.config();
+        let sandbox = cfg.global.sandbox.for_workspace(spec.ctx.sandbox_mode);
         let command = cfg.global.harness_command(harness);
         if which::which(&command).is_err() {
             return Err(launch_error(format!(
@@ -289,7 +290,7 @@ impl HarnessExecutor {
                 .and_then(|r| r.native_session_id.clone()),
             home: cfg.home.clone(),
             sandboxed: matches!(
-                ostra_core::sandbox::decide(&cfg.global.sandbox),
+                ostra_core::sandbox::decide(&sandbox),
                 Ok(ostra_core::sandbox::Decision::Sandboxed(_))
             ),
             credential_env: {
@@ -309,7 +310,7 @@ impl HarnessExecutor {
             plan,
             members,
             warning: unsandboxed,
-        } = crate::sandbox::wrap(plan, &input, &cfg.global.sandbox).map_err(launch_error)?;
+        } = crate::sandbox::wrap(plan, &input, &sandbox).map_err(launch_error)?;
         if let Some(w) = unsandboxed {
             if ostra_core::sandbox::first_warning() {
                 tracing::warn!("agent commands run without a sandbox: {w}");
@@ -526,6 +527,7 @@ impl Executor for HarnessExecutor {
                         &live.snapshot(),
                         &screen,
                         &home,
+                        spec.ctx.sandbox_mode,
                     )
                 }
             }

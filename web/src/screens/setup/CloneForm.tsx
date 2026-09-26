@@ -2,7 +2,8 @@ import { useState } from "react";
 import type { CloneProject, GitCredentialView } from "../../api/types";
 import { FolderPicker, Input, Select } from "../../design";
 import { listFolders, makeFolder } from "./folders";
-import { keyError, repoName, stackOptions, suggestKey } from "./wizard";
+import { StackInput } from "./StackInput";
+import { keyError, repoName, suggestKey } from "./wizard";
 
 export type CloneErrors = Partial<Record<"url" | "key" | "path" | "stack" | "branch" | "credential", string>>;
 
@@ -113,16 +114,16 @@ export function CloneForm({ takenKeys, stacks, root, credentials, serverErrors, 
             emit({ credential: e.target.value });
           }}
         />
-        <Select
+        <StackInput
           label="Stack (optional)"
+          stacks={stacks}
           disabled={disabled}
           value={stack}
           onChange={(e) => {
             setStack(e.target.value);
             emit({ stack: e.target.value });
           }}
-          options={stackOptions(stacks, stack)}
-          hint={serverErrors.stack}
+          error={serverErrors.stack}
         />
       </div>
       <div className="os-field">

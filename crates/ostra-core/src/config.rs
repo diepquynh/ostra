@@ -137,9 +137,9 @@ pub struct ServerConfig {
 pub enum SandboxMode {
     /// Sandbox when this machine can (bubblewrap on Linux, Seatbelt on macOS), and run unsandboxed
     /// with a warning otherwise.
-    #[default]
     Auto,
     /// Refuse to start an execution that cannot be sandboxed.
+    #[default]
     Required,
     Off,
 }
@@ -172,10 +172,20 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         SandboxConfig {
-            mode: SandboxMode::Auto,
+            mode: SandboxMode::Required,
             network: true,
             extra_writable: vec![],
             extra_hidden: vec![],
+        }
+    }
+}
+
+impl SandboxConfig {
+    /// This config with a workspace's own mode in place of the global one, when it sets one.
+    pub fn for_workspace(&self, mode: Option<SandboxMode>) -> SandboxConfig {
+        SandboxConfig {
+            mode: mode.unwrap_or(self.mode),
+            ..self.clone()
         }
     }
 }
@@ -289,7 +299,12 @@ pub const DEFAULT_CREDENTIAL_ENV: &[&str] = &[
 
 /// Variables through which Ostra hands a harness or MCP child its own execution identity. A child
 /// inherits them from Ostra's environment only by accident, so they are dropped and set afresh.
-pub const BRIDGE_ENV: &[&str] = &["OSTRA_TOKEN", "OSTRA_EXECUTION", "OSTRA_URL", "OSTRA_HARNESS"];
+pub const BRIDGE_ENV: &[&str] = &[
+    "OSTRA_TOKEN",
+    "OSTRA_EXECUTION",
+    "OSTRA_URL",
+    "OSTRA_HARNESS",
+];
 
 /// Every variable that holds a credential Ostra must not pass to agent processes or MCP servers:
 /// the provider variables (defaults and each `providers.*` name), the bridge variables, and each
@@ -407,6 +422,9 @@ pub struct WorkspaceSettings {
     pub permissions: WorkspacePermissions,
     pub notifications: NotificationSettings,
     pub limits: Limits,
+    /// Sandbox mode for this workspace in place of the global `[sandbox] mode`. `None` follows the
+    /// global one. Kept in the registry, never in `workspace.toml`.
+    pub sandbox_mode: Option<SandboxMode>,
     /// External MCP servers whose tools every executor can call (HANDOVER 10.6).
     pub mcp_servers: Vec<McpServerConfig>,
 }
@@ -764,6 +782,10 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "Dollars one session may spend before it pauses",
     ),
     (
+        "sandbox_mode",
+        "Sandbox mode for agent commands, in place of the global one",
+    ),
+    (
         "mcp_servers",
         "External MCP servers whose tools agents can use",
     ),
@@ -814,6 +836,7 @@ impl WorkspaceSettings {
             permissions: WorkspacePermissions::default(),
             notifications: NotificationSettings::default(),
             limits: Limits::default(),
+            sandbox_mode: None,
             mcp_servers: vec![],
         }
     }
@@ -1083,6 +1106,7 @@ pub fn validate_workspace(
         if let Some(stack) = p
             .stack
             .as_deref()
+            .map(str::trim)
             .filter(|s| !s.is_empty() && !is_stack_name(s))
         {
             issues.push(issue(format!("projects[{i}].stack"), stack_issue(stack)));
@@ -1273,13 +1297,15 @@ pub fn validate_workspace(
 // Project profile (`<project>/.ostra/project.toml`)
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS, Default)]
 #[serde(default)]
 #[ts(export)]
 pub struct ProjectProfile {
     pub schema_version: u32,
     pub generated_at: Option<String>,
-    pub stack: Stack,
+    /// The model's own name for the stack (`rust`, `python-django`, `elixir-phoenix`).
+    pub stack: Option<String>,
+    pub build_tool: Option<String>,
     pub commands: Commands,
     pub test_framework: Option<String>,
     pub test_types: BTreeMap<String, TestType>,
@@ -1289,13 +1315,70 @@ pub struct ProjectProfile {
     pub review_rules: Vec<ReviewRule>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
+/// What `project.toml` holds on disk: `stack` is a name, or the `[stack]` table that projects
+/// initialized before stacks became free text still carry.
+#[derive(Deserialize, Default)]
 #[serde(default)]
-#[ts(export)]
-pub struct Stack {
-    pub language: Option<String>,
-    pub frameworks: Vec<String>,
-    pub build_tool: Option<String>,
+struct RawProfile {
+    schema_version: u32,
+    generated_at: Option<String>,
+    stack: Option<StackField>,
+    build_tool: Option<String>,
+    commands: Commands,
+    test_framework: Option<String>,
+    test_types: BTreeMap<String, TestType>,
+    module_map: Vec<ModuleRow>,
+    skills: Vec<SkillEntry>,
+    conventions: Conventions,
+    review_rules: Vec<ReviewRule>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StackField {
+    Name(String),
+    Table(LegacyStack),
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct LegacyStack {
+    language: Option<String>,
+    frameworks: Vec<String>,
+    build_tool: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ProjectProfile {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let r = RawProfile::deserialize(d)?;
+        let (stack, legacy_build_tool) = match r.stack {
+            Some(StackField::Name(n)) => (Some(n), None),
+            Some(StackField::Table(t)) => (
+                t.language.map(|l| {
+                    if t.frameworks.is_empty() {
+                        l
+                    } else {
+                        format!("{l}/{}", t.frameworks.join(","))
+                    }
+                }),
+                t.build_tool,
+            ),
+            None => (None, None),
+        };
+        Ok(ProjectProfile {
+            schema_version: r.schema_version,
+            generated_at: r.generated_at,
+            stack: stack.filter(|s| !s.trim().is_empty()),
+            build_tool: r.build_tool.or(legacy_build_tool),
+            commands: r.commands,
+            test_framework: r.test_framework,
+            test_types: r.test_types,
+            module_map: r.module_map,
+            skills: r.skills,
+            conventions: r.conventions,
+            review_rules: r.review_rules,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
@@ -1388,6 +1471,55 @@ pub struct ReviewRule {
     pub auto_fixable: bool,
 }
 
+/// Parse a generated `project.toml`, or say what is wrong with it and how to fix it. The fixes
+/// name the shapes models get wrong when they copy the JSON they read into TOML.
+pub fn check_profile(path: &Path) -> Result<ProjectProfile, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "Write {} before you submit: it cannot be read ({e}).",
+            path.display()
+        )
+    })?;
+    let err = match toml::from_str::<ProjectProfile>(&text) {
+        Ok(p) => return Ok(p),
+        Err(e) => e,
+    };
+    let null = regex::Regex::new(r#"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*null\b"#).expect("static regex");
+    let mut fixes: Vec<String> = vec![];
+    for (n, line) in text.lines().enumerate() {
+        let code = line.split('#').next().unwrap_or("");
+        for c in null.captures_iter(code) {
+            fixes.push(format!(
+                "Line {}: TOML has no null. Omit `{}` instead of writing `null`.",
+                n + 1,
+                &c[1]
+            ));
+        }
+        match code.trim() {
+            "[[conventions]]" => fixes.push(format!(
+                "Line {}: `conventions` is one table. Write `[conventions]`, not `[[conventions]]`.",
+                n + 1
+            )),
+            "[[stack]]" | "[stack]" => fixes.push(format!(
+                "Line {}: `stack` is a string, for example `stack = \"rust\"`. Put `build_tool` at the top level.",
+                n + 1
+            )),
+            t if t.starts_with("schema_version") && t.contains('"') => fixes.push(format!(
+                "Line {}: `schema_version` is the number 1. Write `schema_version = 1`.",
+                n + 1
+            )),
+            _ => {}
+        }
+    }
+    // The fixes come before the parser's text, because some harnesses clip a tool error.
+    fixes.push(err.to_string().trim_end().to_string());
+    Err(format!(
+        "Fix {} with the edit tool, then submit again, because Ostra cannot parse it.\n{}",
+        path.display(),
+        fixes.join("\n")
+    ))
+}
+
 impl ProjectProfile {
     /// Rule IDs the engine may apply directly. `SEC-BLOCK-*` and `PHASE-REQ-*` never qualify.
     pub fn auto_fixable_ids(&self) -> Vec<String> {
@@ -1467,6 +1599,29 @@ pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sandbox_is_required_unless_a_workspace_or_the_global_config_says_otherwise() {
+        let global = SandboxConfig::default();
+        assert_eq!(global.mode, SandboxMode::Required);
+        assert_eq!(
+            toml::from_str::<GlobalConfig>("").unwrap().sandbox.mode,
+            SandboxMode::Required
+        );
+        assert_eq!(global.for_workspace(None).mode, SandboxMode::Required);
+        assert_eq!(
+            global.for_workspace(Some(SandboxMode::Off)).mode,
+            SandboxMode::Off
+        );
+        let auto = SandboxConfig {
+            mode: SandboxMode::Auto,
+            network: false,
+            ..Default::default()
+        };
+        let ws = auto.for_workspace(Some(SandboxMode::Required));
+        assert_eq!((ws.mode, ws.network), (SandboxMode::Required, false));
+        assert_eq!(auto.for_workspace(None).mode, SandboxMode::Auto);
+    }
 
     #[test]
     fn setting_keys_name_fields() {
@@ -1561,13 +1716,15 @@ deny = ["Bash(git push *)"]
     }
 
     #[test]
-    fn project_stacks_follow_the_key_rule() {
+    fn project_stacks_are_free_text() {
         let mut ws = WorkspaceSettings::seeded("x");
         for (key, stack) in [
             ("a", Some("rust-axum")),
             ("b", Some("")),
             ("c", None),
-            ("d", Some("Type Script")),
+            ("d", Some("Type\u{1b}Script")),
+            ("e", Some("Kotlin Ktor")),
+            ("f", Some("elixir-phoenix")),
         ] {
             ws.projects.push(ProjectEntry {
                 key: key.into(),
@@ -1589,8 +1746,32 @@ deny = ["Bash(git push *)"]
         assert!(
             issues[0]
                 .message
-                .starts_with("`Type Script` is not a stack name.")
+                .starts_with("Remove the control character from the stack")
         );
+    }
+
+    #[test]
+    fn profile_stack_is_a_name_or_the_legacy_table() {
+        let p: ProjectProfile = toml::from_str("stack = \"rust\"\nbuild_tool = \"cargo\"").unwrap();
+        assert_eq!(
+            (p.stack.as_deref(), p.build_tool.as_deref()),
+            (Some("rust"), Some("cargo"))
+        );
+        let p: ProjectProfile = toml::from_str(
+            "[stack]\nlanguage = \"rust\"\nframeworks = [\"axum\"]\nbuild_tool = \"cargo\"",
+        )
+        .unwrap();
+        assert_eq!(
+            (p.stack.as_deref(), p.build_tool.as_deref()),
+            (Some("rust/axum"), Some("cargo"))
+        );
+        let p: ProjectProfile = toml::from_str("[stack]\nlanguage = \"rust\"").unwrap();
+        assert_eq!(p.stack.as_deref(), Some("rust"));
+        let p: ProjectProfile = toml::from_str(
+            "[[review_rules]]\nid = \"C1\"\nrule = \"r\"\nseverity = \"M\"\nauto_fixable = true",
+        )
+        .unwrap();
+        assert_eq!(p.auto_fixable_ids(), ["C1"]);
     }
 
     #[test]

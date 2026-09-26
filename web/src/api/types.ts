@@ -177,6 +177,7 @@ export type * from "./gen/RevokedSignIns";
 export type * from "./gen/Risk";
 export type * from "./gen/RoutingPreset";
 export type * from "./gen/RuleRef";
+export type * from "./gen/SandboxMode";
 export type * from "./gen/SavedProviderView";
 export type * from "./gen/SaveProjectFile";
 export type * from "./gen/ScopeItem";

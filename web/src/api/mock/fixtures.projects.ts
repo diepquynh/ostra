@@ -8,7 +8,8 @@ import type { CreateWorkspace, ImportProject, ProjectView, ValidationIssue, Work
 export const backendProfile: ProjectProfile = {
   schema_version: 1,
   generated_at: "2026-09-02T14:10:00Z",
-  stack: { language: "rust", frameworks: ["axum", "sqlx"], build_tool: "cargo" },
+  stack: "rust-axum",
+  build_tool: "cargo",
   commands: {
     build: "cargo check --workspace",
     test: "cargo test --workspace",

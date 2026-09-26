@@ -33,7 +33,7 @@ you mean. When a literal phrase is available, use it.
 | --- | --- |
 | **session dir** | A scratch directory provided in the prompt as `Session dir:`. It already exists. Do NOT `mkdir` it. `detect`, `scout`, and `propose` write their outputs here. The `generate-skill` and `generate-inventory` modes write skills under `.agents/skills/` and the inventory under `.ostra/` (their generation report still lands here). Trust the given path as-is. `propose` reads every scout's findings from this exact path. |
 | **target repo** | The project being initialized. Its absolute root is provided as the required `Repo root:` parameter in every mode. **Before your first tool call, make that root your working directory** (`cd {repo-root}`) and stay there for the whole invocation. Ostra may start you above the repo, and the skills you generate must land in this repo's `.agents/skills`. |
-| **stack** | The primary language, build tool, and framework of the target repo (for example `java-spring`, `typescript-node`, `python-django`, `go`). |
+| **stack** | The primary language and main framework of the target repo, named in your own words in kebab-case (for example `java-spring`, `typescript-node`, `python-django`, `go`, `elixir-phoenix`). It is free text, not a pick from the reference list. |
 | **stack reference** | A file at `{{assets_dir}}/refs/<name>.md` describing that stack's detection signals, component catalog (with grep/glob patterns and invariants), conventional commands, and test framework. Falls back to `{{assets_dir}}/refs/_generic.md`. Its `<name>` stem (for example `java-spring` or `_generic`) is the **reference name**. |
 | **slice** | One unit of parallel scouting: usually one top-level module, package, or area. For a monolith, a component-type bucket or a directory subtree. |
 | **component type** | A recurring kind of source unit (for example entity, DTO, repository, service, controller, route handler, model, migration, event handler, scheduler). |
@@ -151,21 +151,25 @@ project settings, and a `User focus:` line or the brief names it. Choose that st
 plan a single slice covering the repo root, so `propose` recommends convention-seeded skills from the stack
 reference (Archetype D in `{{assets_dir}}/refs/skill-archetypes.md`).
 
-### Step D2: Choose the stack reference
+### Step D2: Name the stack and choose the stack reference
 
-Map the detected manifests and dominant extension to a stack, then read that reference:
+Name the stack in your own words: the language, then the main framework when there is one, in kebab-case
+(`java-spring`, `python-django`, `rust-axum`, `elixir-phoenix`, `zig`). Never name it `generic`, because the
+stack tells later agents what the repo is built with.
 
-| Signal | Stack | Reference |
-| --- | --- | --- |
-| `pom.xml` / `build.gradle` + `@SpringBootApplication` or `spring-boot` dep | `java-spring` | `{{assets_dir}}/refs/java-spring.md` |
-| `package.json` + `tsconfig.json` (Express/Nest/Fastify/Next) | `typescript-node` | `{{assets_dir}}/refs/typescript-node.md` |
-| `pyproject.toml`/`requirements.txt`/`manage.py` (Django/FastAPI/Flask) | `python` | `{{assets_dir}}/refs/python.md` |
-| `go.mod` | `go` | `{{assets_dir}}/refs/go.md` |
-| none of the above match cleanly | `generic` | `{{assets_dir}}/refs/_generic.md` |
+Then choose the stack reference separately. Use the reference whose signals match:
+
+| Signal | Reference |
+| --- | --- |
+| `pom.xml` / `build.gradle` + `@SpringBootApplication` or `spring-boot` dep | `{{assets_dir}}/refs/java-spring.md` |
+| `package.json` + `tsconfig.json` (Express/Nest/Fastify/Next) | `{{assets_dir}}/refs/typescript-node.md` |
+| `pyproject.toml`/`requirements.txt`/`manage.py` (Django/FastAPI/Flask) | `{{assets_dir}}/refs/python.md` |
+| `go.mod` | `{{assets_dir}}/refs/go.md` |
+| none of the above match cleanly | `{{assets_dir}}/refs/_generic.md` |
 
 {{tool_read}} the chosen reference file in full. It defines the component catalog, grep/glob patterns, invariants to capture, conventional commands, and test framework for this stack.
 
-**Fail condition:** No reference file exists for a clearly detected stack. Use `_generic.md` and note in the scout plan that a stack reference should be authored later.
+**Fail condition:** No reference file exists for a clearly detected stack. Keep your own stack name, use `_generic.md` as the reference, and note in the scout plan that a stack reference should be authored later.
 
 ### Step D3: Plan the slices
 
@@ -540,11 +544,17 @@ Per the contract, write:
 - `{repo}/.ostra/INVENTORY.md`: Commands table, Skills Inventory table, Skill Application Mapping, Module/Area map, Review Rule Set.
 - `{repo}/.ostra/project.toml`: the machine profile in TOML with snake_case keys, as the contract's section 2 shows. It has no `models` or `harnesses` table: model and executor routing belong to the workspace settings.
 
-The repo's skill set is `Generated skills` PLUS `Reused skills`. EVERY skill in BOTH arrays MUST appear in the INVENTORY Skills Inventory table AND in the profile's `[[skills]]` array (mirror them 1:1). On each profile `[[skills]]` entry set `source`: `generated` for a skill from `Generated skills`, `reused` for a skill from `Reused skills`. Build each skill's Skills Inventory `Load when` cell and Skill Application Mapping row from its component type when it has one. For a reused skill whose `component_type` is `null` (a bespoke skill), derive the `Load when` cell from the trigger in its own `SKILL.md` front-matter description, and add a Skill Application Mapping row only if a concrete file type triggers it. `commands` and `module_map` come from the proposal. A command that is `null` in the proposal is omitted from `[commands]`, because TOML has no null. The Review Rule Set is seeded from the stack reference with stable IDs.
+The repo's skill set is `Generated skills` PLUS `Reused skills`. EVERY skill in BOTH arrays MUST appear in the INVENTORY Skills Inventory table AND in the profile's `[[skills]]` array (mirror them 1:1). On each profile `[[skills]]` entry set `source`: `generated` for a skill from `Generated skills`, `reused` for a skill from `Reused skills`. Build each skill's Skills Inventory `Load when` cell and Skill Application Mapping row from its component type when it has one. For a reused skill whose `component_type` is `null` (a bespoke skill), derive the `Load when` cell from the trigger in its own `SKILL.md` front-matter description, and add a Skill Application Mapping row only if a concrete file type triggers it. `commands` and `module_map` come from the proposal. The Review Rule Set is seeded from the stack reference with stable IDs.
+
+The inputs are JSON, and the profile is TOML, so do not copy their shapes across:
+- TOML has no null. Omit any key whose value would be null (`reference`, `component_type`, a command), and never write `null`, because Ostra refuses a profile it cannot parse.
+- `stack` is one string (`stack = "java-spring"`), never a `[stack]` table. `build_tool` and `test_framework` are top-level strings.
+- `conventions` is one table (`[conventions]`), never `[[conventions]]`.
+- `schema_version` is the number `1`.
 
 ### Step GI4: Self-review
 
-Verify: the INVENTORY Skills Inventory lists every skill in `Generated skills` AND every skill in `Reused skills`; the profile's `[[skills]]` array mirrors it 1:1 with a `source` of `generated` or `reused` on each entry; `[commands]` matches the proposal; the Module/Area map mirrors the proposal's module map; the profile has no `models` or `harnesses` table; every key is snake_case; and the file parses as TOML. Fix any mismatch by editing.
+Verify: the INVENTORY Skills Inventory lists every skill in `Generated skills` AND every skill in `Reused skills`; the profile's `[[skills]]` array mirrors it 1:1 with a `source` of `generated` or `reused` on each entry; `[commands]` matches the proposal; the Module/Area map mirrors the proposal's module map; the profile has no `models` or `harnesses` table; every key is snake_case; the profile contains no `null`, no `[stack]` table, and no `[[conventions]]`; and `schema_version` is `1`. Fix any mismatch by editing. When you submit, Ostra parses the profile, and if it does not parse, the submit is refused with the line and the fix. Correct the file and submit again.
 
 ### Step GI5: {{tool_write}} the generation report
 

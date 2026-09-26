@@ -382,7 +382,7 @@ impl WorkspaceRt {
                     stack: p
                         .stack
                         .clone()
-                        .or_else(|| profile.as_ref().and_then(|pr| pr.stack.language.clone())),
+                        .or_else(|| profile.as_ref().and_then(|pr| pr.stack.clone())),
                     profile,
                 }
             })
@@ -547,7 +547,7 @@ mod tests {
             fields(import_entry(
                 &settings,
                 &root,
-                &request(&app, "App", Some("Go Lang"))
+                &request(&app, "App", Some("Go\u{7}Lang"))
             )),
             ["key", "stack"]
         );

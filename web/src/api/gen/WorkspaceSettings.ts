@@ -5,10 +5,16 @@ import type { McpServerConfig } from "./McpServerConfig";
 import type { NotificationSettings } from "./NotificationSettings";
 import type { ProjectEntry } from "./ProjectEntry";
 import type { Routing } from "./Routing";
+import type { SandboxMode } from "./SandboxMode";
 import type { WorkspacePermissions } from "./WorkspacePermissions";
 import type { YoloSettings } from "./YoloSettings";
 
 export type WorkspaceSettings = { name: string, projects: Array<ProjectEntry>, routing: Routing, instructions: Instructions, yolo: YoloSettings, permissions: WorkspacePermissions, notifications: NotificationSettings, limits: Limits, 
+/**
+ * Sandbox mode for this workspace in place of the global `[sandbox] mode`. `None` follows the
+ * global one. Kept in the registry, never in `workspace.toml`.
+ */
+sandbox_mode: SandboxMode | null, 
 /**
  * External MCP servers whose tools every executor can call (HANDOVER 10.6).
  */

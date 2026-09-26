@@ -8,7 +8,7 @@ use ostra_code::provider::{Answer, CodeProvider, NativeProvider, ask};
 use ostra_code::{CLASSES, Indexes};
 use ostra_core::api::FileIndex;
 use ostra_core::code::{CompletionKind, NavigateTarget, PROTOCOL_VERSION, ProviderRequest, SymbolKind, TokenClass};
-use ostra_core::config::LanguageServerConfig;
+use ostra_core::config::{LanguageServerConfig, SandboxMode};
 use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
@@ -152,7 +152,7 @@ fn rig() -> Rig {
     let log: Log = Arc::default();
     let starts = Arc::new(AtomicUsize::new(0));
     let (l, s) = (log.clone(), starts.clone());
-    let connect: Connector = Arc::new(move |_cmd: &[String], root: &Path| {
+    let connect: Connector = Arc::new(move |_cmd: &[String], root: &Path, _sandbox|  {
         s.fetch_add(1, Ordering::SeqCst);
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         tokio::spawn(fake_server(root.to_path_buf(), theirs, l.clone()));
@@ -197,6 +197,7 @@ impl Rig {
                     initialization_options: None,
                 },
                 base: native.clone(),
+                sandbox: None,
             }),
             native,
         ]
@@ -215,6 +216,7 @@ impl Rig {
                 initialization_options: None,
             },
             base: chain[1].clone(),
+            sandbox: None,
         }
     }
 
@@ -502,6 +504,24 @@ async fn other_languages_and_deps_go_to_the_built_in_provider_without_a_server()
 }
 
 #[tokio::test]
+async fn a_changed_sandbox_mode_starts_the_server_again() {
+    let r = rig();
+    let cfg = LanguageServerConfig {
+        command: vec!["/usr/bin/fake-ls".into()],
+        languages: vec!["rust".into()],
+        timeout_secs: 5,
+        initialization_options: None,
+    };
+    let key = "p".to_string();
+    let get = |mode| r.pool.get(&key, r.dir.path(), &cfg, mode, Duration::from_secs(5));
+    get(None).await.unwrap();
+    get(None).await.unwrap();
+    assert_eq!(r.starts.load(Ordering::SeqCst), 1);
+    get(Some(SandboxMode::Off)).await.unwrap();
+    assert_eq!(r.starts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn one_server_serves_every_request_and_hears_changes() {
     let r = rig();
     let chain = r.chain();
@@ -562,6 +582,7 @@ async fn a_server_that_cannot_start_falls_through_with_the_reason() {
                 initialization_options: None,
             },
             base: native.clone(),
+            sandbox: None,
         }),
         native,
     ];
@@ -680,6 +701,7 @@ async fn live(
             initialization_options: options,
         },
         base: native,
+        sandbox: None,
     };
     let roots = root.to_string_lossy().into_owned();
     let req = ProviderRequest::Usages {
@@ -888,6 +910,7 @@ async fn live_gopls_into_the_standard_library() {
             initialization_options: None,
         },
         base: Arc::new(ostra_code::provider::Unanswered),
+        sandbox: None,
     };
     let req = ProviderRequest::Usages {
         version: PROTOCOL_VERSION,

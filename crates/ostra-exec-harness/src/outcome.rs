@@ -3,6 +3,7 @@
 use crate::live::LiveState;
 use crate::transcript;
 use ostra_core::HarnessKind;
+use ostra_core::config::SandboxMode;
 use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use std::path::Path;
 use std::time::Duration;
@@ -34,11 +35,12 @@ pub fn status_of(submit: &serde_json::Value) -> ExecutionStatus {
     }
 }
 
-/// Harness executions run under Seatbelt with the current config, which keeps the keychain closed.
-fn seatbelt() -> bool {
+/// Harness executions run under Seatbelt with the current config and the workspace's mode, which
+/// keeps the keychain closed.
+fn seatbelt(mode: Option<SandboxMode>) -> bool {
     let global: ostra_core::config::GlobalConfig =
         ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
-    ostra_core::sandbox::decide(&global.sandbox)
+    ostra_core::sandbox::decide(&global.sandbox.for_workspace(mode))
         == Ok(ostra_core::sandbox::Decision::Sandboxed(
             ostra_core::sandbox::Backend::Seatbelt,
         ))
@@ -60,6 +62,7 @@ pub fn result(
     state: &LiveState,
     screen: &str,
     home: &Path,
+    sandbox_mode: Option<SandboxMode>,
 ) -> ExecutionResult {
     let facts = transcript::facts(
         harness,
@@ -88,7 +91,7 @@ pub fn result(
             };
         }
         End::Cancelled => (ExecutionStatus::Cancelled, None),
-        End::Auth if harness == HarnessKind::Agy && seatbelt() => (
+        End::Auth if harness == HarnessKind::Agy && seatbelt(sandbox_mode) => (
             ExecutionStatus::Error,
             Some(format!(
                 "{AUTH_PREFIX} {name} cannot read its sign-in: set `GEMINI_API_KEY` or `GOOGLE_API_KEY` in Ostra's environment, then retry, because on macOS it keeps its login in the keychain, which the sandbox closes to agents."
@@ -198,6 +201,7 @@ mod tests {
             &l.snapshot(),
             "error: unknown model\n",
             tmp.path(),
+            None,
         );
         assert!(r.error.unwrap().starts_with(LAUNCH_PREFIX));
         let r = result(
@@ -207,6 +211,7 @@ mod tests {
             &l.snapshot(),
             "Not logged in. Run codex login",
             tmp.path(),
+            None,
         );
         assert!(r.error.unwrap().starts_with(AUTH_PREFIX));
     }

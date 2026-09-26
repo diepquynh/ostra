@@ -1,7 +1,7 @@
 //! The contract between the engine and whatever runs an execution (native loop or harness PTY).
 
 use crate::agent::{AgentName, Capability, InitializerMode};
-use crate::config::{PermissionMode, PermissionRules, ResolvedRoute};
+use crate::config::{PermissionMode, PermissionRules, ResolvedRoute, SandboxMode};
 use crate::executor::ExecutorKind;
 use crate::ids::{ExecutionId, SessionId};
 use crate::model::Effort;
@@ -92,6 +92,9 @@ pub struct ExecContext {
     pub protected_paths: Vec<PathBuf>,
     /// Absolute path of each project's memory database (engine-owned).
     pub memory_db: PathBuf,
+    /// The workspace's sandbox mode in place of the global one, when it sets one.
+    #[serde(default)]
+    pub sandbox_mode: Option<SandboxMode>,
 }
 
 /// Everything needed to run one execution.

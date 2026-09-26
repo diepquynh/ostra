@@ -203,16 +203,10 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
 
         if wanted.contains(&Section::Stack) {
             let mut bits = vec![];
-            if let Some(l) = &profile.stack.language {
-                bits.push(format!("- language {l}"));
+            if let Some(st) = &profile.stack {
+                bits.push(format!("- stack {st}"));
             }
-            if !profile.stack.frameworks.is_empty() {
-                bits.push(format!(
-                    "- frameworks {}",
-                    profile.stack.frameworks.join(", ")
-                ));
-            }
-            if let Some(b) = &profile.stack.build_tool {
+            if let Some(b) = &profile.build_tool {
                 bits.push(format!("- build tool {b}"));
             }
             if let Some(t) = &profile.test_framework {

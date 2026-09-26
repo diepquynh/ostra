@@ -315,6 +315,7 @@ async fn main() {
             permissions: PermissionRules::default(),
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
+            sandbox_mode: None,
         },
         resume: resume_sid.map(|sid| ResumeInfo {
             from: ExecutionId::new(),
@@ -422,6 +423,7 @@ async fn pause_probe(args: &[String]) {
             permissions: PermissionRules::default(),
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
+            sandbox_mode: None,
         },
         resume,
         harness_session_id: sid,
@@ -574,6 +576,7 @@ async fn inspect_probe(args: &[String]) {
             permissions: PermissionRules::default(),
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
+            sandbox_mode: None,
         },
         resume: Some(ResumeInfo {
             from: ExecutionId::new(),

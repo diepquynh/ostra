@@ -1,4 +1,4 @@
-import type { AgentName, PermissionMode } from "../api/types";
+import type { AgentName, PermissionMode, SandboxMode } from "../api/types";
 
 /** Every route key in `routing.model.byAgent`, with a one-line role. */
 export const ROUTE_KEYS: { key: AgentName | "judge"; role: string }[] = [
@@ -22,6 +22,30 @@ export const COMPLEXITY_AGENTS = ["implementer", "write-test"] as const;
 
 /** Route keys that always run on the native executor. */
 export const NATIVE_ONLY = new Set(["judge", "quick-answer"]);
+
+/** Workspace sandbox choices. `""` follows the global `[sandbox] mode`, which is required unless it says otherwise. */
+export const SANDBOX_MODES: { mode: SandboxMode | ""; label: string; help: string }[] = [
+  {
+    mode: "",
+    label: "Use the global setting",
+    help: "Follows [sandbox] mode in ~/.config/ostra/config.toml, which is required unless set.",
+  },
+  {
+    mode: "required",
+    label: "Required",
+    help: "Agent commands run in the sandbox. An execution that cannot be sandboxed does not start.",
+  },
+  {
+    mode: "auto",
+    label: "Auto",
+    help: "Agent commands run in the sandbox when this machine has one, and without it, with a warning, otherwise.",
+  },
+  {
+    mode: "off",
+    label: "Off",
+    help: "Agent commands run with the full rights of your user. Use it only to test a harness the sandbox blocks.",
+  },
+];
 
 export const PERMISSION_MODES: { mode: PermissionMode; label: string; help: string }[] = [
   { mode: "default", label: "Default", help: "Asks before file edits and before any command no rule allows." },

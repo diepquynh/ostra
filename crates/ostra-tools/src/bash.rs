@@ -510,6 +510,7 @@ mod tests {
             permissions: Default::default(),
             protected_paths: vec![],
             memory_db: root.join("session/memory/knowledge.sqlite3"),
+            sandbox_mode: None,
         };
         let profile = ostra_core::sandbox::Profile::for_execution(
             &ctx,

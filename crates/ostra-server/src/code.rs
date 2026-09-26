@@ -159,7 +159,9 @@ impl Code {
             },
         };
         let list = files.index(w, key).await?;
-        let project = w.effective_settings().projects.into_iter().find(|p| p.key == key);
+        let settings = w.effective_settings();
+        let sandbox = settings.sandbox_mode;
+        let project = settings.projects.into_iter().find(|p| p.key == key);
         let id: ProjectId = (w.id.clone(), key.to_string());
         let native: Arc<dyn CodeProvider> = Arc::new(NativeProvider {
             indexes: self.indexes.clone(),
@@ -174,6 +176,7 @@ impl Code {
                 command: cp.command,
                 root: root.clone(),
                 timeout: Duration::from_secs(cp.timeout_secs.into()),
+                sandbox,
             }));
         }
         for config in project.map(|p| p.language_servers).unwrap_or_default() {
@@ -183,6 +186,7 @@ impl Code {
                 root: root.clone(),
                 config,
                 base: native.clone(),
+                sandbox,
             }));
         }
         chain.push(native);
@@ -262,7 +266,9 @@ impl Code {
             root: root.clone(),
             list: list.clone(),
         });
-        let project = w.effective_settings().projects.into_iter().find(|p| p.key == key);
+        let settings = w.effective_settings();
+        let sandbox = settings.sandbox_mode;
+        let project = settings.projects.into_iter().find(|p| p.key == key);
         let servers = project
             .map(|p| p.language_servers)
             .unwrap_or_default()
@@ -273,6 +279,7 @@ impl Code {
                 root: root.clone(),
                 config,
                 base: base.clone(),
+                sandbox,
             })
             .collect();
         Ok(HintRig {
@@ -422,7 +429,9 @@ impl Code {
                 "Ostra does not know this dependency file, because no language server of this project has pointed at it since the Ostra server started. Open it again from the code that uses it.",
             )
         })?;
-        let project = w.effective_settings().projects.into_iter().find(|p| p.key == key);
+        let settings = w.effective_settings();
+        let sandbox = settings.sandbox_mode;
+        let project = settings.projects.into_iter().find(|p| p.key == key);
         let config = project
             .into_iter()
             .flat_map(|p| p.language_servers)
@@ -440,6 +449,7 @@ impl Code {
             root,
             config,
             base,
+            sandbox,
         })
     }
 

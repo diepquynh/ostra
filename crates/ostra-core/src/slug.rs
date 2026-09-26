@@ -8,16 +8,30 @@ pub fn is_project_key(value: &str) -> bool {
     chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-/// A project stack names a reference file (`go`, `typescript-node`), so it follows the key rule.
+/// Longest stack a project setting may hold.
+pub const MAX_STACK_LEN: usize = 64;
+
+/// A project stack is free text (`rust`, `elixir-phoenix`, `Kotlin Ktor`), because the set of real
+/// stacks has no end. It must be trimmed, non-empty, short, and free of control characters.
 pub fn is_stack_name(value: &str) -> bool {
-    is_project_key(value)
+    !value.is_empty()
+        && value.trim() == value
+        && value.chars().count() <= MAX_STACK_LEN
+        && !value.chars().any(char::is_control)
 }
 
 /// Why a stack value is refused.
 pub fn stack_issue(value: &str) -> String {
-    format!(
-        "`{value}` is not a stack name. Pick a listed stack, or leave it empty so the initializer detects it from the code."
-    )
+    if value.chars().any(char::is_control) {
+        "Remove the control character from the stack, because the stack is one line of plain text."
+            .into()
+    } else if value.chars().count() > MAX_STACK_LEN {
+        format!(
+            "Shorten the stack to {MAX_STACK_LEN} characters or fewer, for example `rust` or `python-django`."
+        )
+    } else {
+        "Name the stack in plain text, for example `rust` or `python-django`, or leave it empty so the initializer detects it from the code.".into()
+    }
 }
 
 /// Suggest a project key from a folder name, the way init-kit Step 0 does.
@@ -69,5 +83,23 @@ mod tests {
         assert!(!is_project_key(""));
         assert_eq!(suggest_project_key("Shop Backend_v2"), "shop-backend-v2");
         assert_eq!(suggest_project_key("___"), "project");
+    }
+
+    #[test]
+    fn stacks_are_free_text() {
+        for ok in ["elixir-phoenix", "rust", "Kotlin Ktor", "c++/qt"] {
+            assert!(is_stack_name(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            " rust",
+            "rust\tx",
+            "go\nlang",
+            &"x".repeat(MAX_STACK_LEN + 1),
+        ] {
+            assert!(!is_stack_name(bad), "{bad:?}");
+        }
+        assert!(stack_issue("a\u{7}b").starts_with("Remove the control character"));
+        assert!(stack_issue(&"x".repeat(65)).starts_with("Shorten the stack"));
     }
 }

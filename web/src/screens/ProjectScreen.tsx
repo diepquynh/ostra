@@ -12,11 +12,9 @@ export type ProjectScreenProps = {
   projectKey: string;
 };
 
-/** "rust · axum" from the initializer's profile, else the stack chosen at import. */
+/** The stack chosen at import, else the initializer's name for it. */
 export function stackLabel(p: ProjectView): string | null {
-  const s = p.profile?.stack;
-  if (s?.language) return [s.language, ...s.frameworks].join(" · ");
-  return p.stack;
+  return p.stack ?? p.profile?.stack ?? null;
 }
 
 /**

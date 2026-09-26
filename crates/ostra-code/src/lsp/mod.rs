@@ -17,7 +17,7 @@ use ostra_core::code::{
     CodeCompletion, CodeExternalFile, CodeLocation, CodeNavigation, CodeSignatureHelp, CodeSymbols,
     CodeUsages, NavigateTarget, ProviderRequest,
 };
-use ostra_core::config::LanguageServerConfig;
+use ostra_core::config::{LanguageServerConfig, SandboxMode};
 use parking_lot::Mutex;
 use rpc::{Client, Transport};
 use serde_json::{Value, json};
@@ -45,15 +45,20 @@ const SWEEP: Duration = Duration::from_secs(60);
 /// Outside URIs the pool remembers, across projects. Remembering one more forgets the oldest.
 const MAX_EXTERNALS: usize = 20_000;
 
-/// Opens a connection to a server: `command` run in `root`.
-pub type Connector = Arc<dyn Fn(&[String], &Path) -> std::io::Result<Transport> + Send + Sync>;
+/// Opens a connection to a server: `command` run in `root`, under the workspace's sandbox mode.
+pub type Connector =
+    Arc<dyn Fn(&[String], &Path, Option<SandboxMode>) -> std::io::Result<Transport> + Send + Sync>;
 
-pub fn spawn_process(command: &[String], root: &Path) -> std::io::Result<Transport> {
+pub fn spawn_process(
+    command: &[String],
+    root: &Path,
+    sandbox: Option<SandboxMode>,
+) -> std::io::Result<Transport> {
     let (program, args) = command
         .split_first()
         .ok_or_else(|| std::io::Error::other("The command is empty."))?;
     // The server runs the project's build scripts and macros, so it runs under the sandbox.
-    let hc = ostra_core::sandbox::host_command(program, args, root, &[root])
+    let hc = ostra_core::sandbox::host_command(program, args, root, &[root], sandbox)
         .map_err(std::io::Error::other)?;
     let mut cmd = tokio::process::Command::new(&hc.program);
     for k in &hc.env_remove {
@@ -176,10 +181,12 @@ async fn start(
     connect: Connector,
     command: Vec<String>,
     root: PathBuf,
+    sandbox: Option<SandboxMode>,
     options: Option<Value>,
 ) -> Result<Arc<Server>, String> {
     let name = program_name(&command);
-    let t = connect(&command, &root).map_err(|e| format!("Cannot start `{name}`: {e}."))?;
+    let t =
+        connect(&command, &root, sandbox).map_err(|e| format!("Cannot start `{name}`: {e}."))?;
     let root_uri = Url::from_directory_path(&root)
         .map(String::from)
         .map_err(|_| format!("{} is not an absolute folder.", root.display()))?;
@@ -300,6 +307,8 @@ struct Entry {
     cell: Arc<OnceCell<Started>>,
     begun: Instant,
     used: Mutex<Instant>,
+    /// The workspace sandbox mode the server started under.
+    sandbox: Option<SandboxMode>,
 }
 
 impl Entry {
@@ -371,12 +380,14 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspPool<K> {
         }
     }
 
-    /// The running server for `key` and `cfg`, started when needed, waiting at most `wait`.
+    /// The running server for `key` and `cfg`, started when needed, waiting at most `wait`. A
+    /// server started under another sandbox mode is replaced, so a saved mode applies next time.
     pub async fn get(
         &self,
         key: &K,
         root: &Path,
         cfg: &LanguageServerConfig,
+        sandbox: Option<SandboxMode>,
         wait: Duration,
     ) -> Result<Arc<Server>, String> {
         self.sweep_later();
@@ -384,7 +395,10 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspPool<K> {
         let (entry, evicted) = {
             let mut map = self.inner.entries.lock();
             let mut evicted = vec![];
-            if map.get(&id).is_none_or(|e| e.stale()) {
+            if map
+                .get(&id)
+                .is_none_or(|e| e.stale() || e.sandbox != sandbox)
+            {
                 if let Some(old) = map.remove(&id) {
                     evicted.push(old);
                 }
@@ -402,6 +416,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspPool<K> {
                         cell: Arc::new(OnceCell::new()),
                         begun: Instant::now(),
                         used: Mutex::new(Instant::now()),
+                        sandbox,
                     }),
                 );
             }
@@ -420,7 +435,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspPool<K> {
         );
         // Spawned so that a caller that stops waiting leaves the server starting for the next one.
         let task = tokio::spawn(async move {
-            cell.get_or_init(|| start(connect, command, root, options))
+            cell.get_or_init(|| start(connect, command, root, sandbox, options))
                 .await
                 .clone()
         });
@@ -545,6 +560,8 @@ pub struct LspProvider<K> {
     pub root: PathBuf,
     pub config: LanguageServerConfig,
     pub base: Arc<dyn CodeProvider>,
+    /// The workspace's sandbox mode in place of the global one, when it sets one.
+    pub sandbox: Option<SandboxMode>,
 }
 
 /// Text of project files read while building one answer.
@@ -605,7 +622,13 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
 
     async fn server(&self) -> Result<Arc<Server>, String> {
         self.pool
-            .get(&self.key, &self.root, &self.config, self.timeout())
+            .get(
+                &self.key,
+                &self.root,
+                &self.config,
+                self.sandbox,
+                self.timeout(),
+            )
             .await
     }
 
@@ -1042,7 +1065,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
         };
         let s = self
             .pool
-            .get(&self.key, &self.root, &self.config, wait)
+            .get(&self.key, &self.root, &self.config, self.sandbox, wait)
             .await?;
         if !s.has("completionProvider") {
             return Ok(None);
@@ -1093,7 +1116,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
         };
         let s = self
             .pool
-            .get(&self.key, &self.root, &self.config, wait)
+            .get(&self.key, &self.root, &self.config, self.sandbox, wait)
             .await?;
         let caps = &s.caps["signatureHelpProvider"];
         if !s.has("signatureHelpProvider") {
@@ -1146,7 +1169,7 @@ impl<K: Hash + Eq + Clone + Send + Sync + 'static> LspProvider<K> {
         };
         let s = self
             .pool
-            .get(&self.key, &self.root, &self.config, wait)
+            .get(&self.key, &self.root, &self.config, self.sandbox, wait)
             .await?;
         let needs = match target {
             NavigateTarget::Supertypes => "typeHierarchyProvider",

@@ -1668,7 +1668,7 @@ async fn setup_wizard_creates_a_workspace_in_one_call() {
     let projects = format!("/api/workspaces/{}/projects", ws.id);
     let r = post(
         &projects,
-        json!({"path": root.join("missing"), "key": "Bad Key", "stack": "Type Script"}),
+        json!({"path": root.join("missing"), "key": "Bad Key", "stack": "Type\u{7}Script"}),
     )
     .await
     .unwrap();

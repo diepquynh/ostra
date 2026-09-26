@@ -598,6 +598,23 @@ fn phase_body(p: &super::Phase, out: &mut Issues) {
     }
 }
 
+/// The generate-inventory submit: the inventory exists and the profile parses, checked while the
+/// agent can still fix them, because the init fails at its last step otherwise. It is the only
+/// initializer mode whose `result` names both files.
+fn check_inventory_submit(input: &serde_json::Value) -> Result<(), String> {
+    let result = input.get("result");
+    let path = |k: &str| result.and_then(|r| r.get(k)).and_then(|v| v.as_str());
+    let (Some(inventory), Some(profile)) = (path("inventory_path"), path("profile_path")) else {
+        return Ok(());
+    };
+    if !Path::new(inventory).is_file() {
+        return Err(format!(
+            "Write {inventory} before you submit: the file does not exist."
+        ));
+    }
+    crate::config::check_profile(Path::new(profile)).map(|_| ())
+}
+
 fn read_doc(kind: DocKind, path: &str) -> Result<Document, String> {
     let md = Path::new(path);
     let value = load(md).ok_or_else(|| {
@@ -629,6 +646,9 @@ fn blocking(doc: &Document) -> Result<(), String> {
 /// For agents that write a document: the submitted path has a document with no errors, and the
 /// submit's counts agree with it. Reads files, so it runs at the tool boundary, never in the fold.
 pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String> {
+    if agent == AgentName::Initializer {
+        return check_inventory_submit(input);
+    }
     let Some(kind) = DocKind::for_agent(agent) else {
         return Ok(());
     };

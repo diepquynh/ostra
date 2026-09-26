@@ -73,6 +73,7 @@ impl Fx {
             permissions: PermissionRules::default(),
             protected_paths: vec![self.bin.clone(), self.config.clone()],
             memory_db: self.repo.join(".ostra/memory/knowledge.sqlite3"),
+            sandbox_mode: None,
         }
     }
 

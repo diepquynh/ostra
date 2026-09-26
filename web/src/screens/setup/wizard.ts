@@ -27,15 +27,6 @@ export const ALL_STEPS: WizardStep[] = [
 export const stepsFor = (skipWelcome: boolean): WizardStep[] =>
   skipWelcome ? ALL_STEPS.filter((s) => s.id !== "welcome") : ALL_STEPS;
 
-/**
- * Stack choices: detection first, then the stacks the server has a seed reference for
- * (`EnvironmentStatus.stacks` or `WorkspaceDetail.stacks`). A `current` value the list does not name stays selectable.
- */
-export function stackOptions(stacks: string[], current = ""): { value: string; label: string }[] {
-  const names = current && !stacks.includes(current) ? [...stacks, current] : stacks;
-  return [{ value: "", label: "Detect from the code" }, ...names.map((s) => ({ value: s, label: s }))];
-}
-
 export type DraftProject = {
   key: string;
   /** Absolute, with "~" expanded when the home folder is known. */

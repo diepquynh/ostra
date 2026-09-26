@@ -13,7 +13,6 @@ import {
   projectIndex,
   projectStart,
   repoName,
-  stackOptions,
   stepForIssue,
   stepsFor,
   suggestKey,
@@ -65,11 +64,6 @@ describe("project keys", () => {
       fields: {},
       general: "The server is not reachable.",
     });
-  });
-
-  it("offers detection first, then the server's stacks, keeping an unlisted current value", () => {
-    expect(stackOptions(["go", "python"]).map((o) => o.value)).toEqual(["", "go", "python"]);
-    expect(stackOptions(["go"], "rust-axum").map((o) => o.label)).toEqual(["Detect from the code", "go", "rust-axum"]);
   });
 });
 

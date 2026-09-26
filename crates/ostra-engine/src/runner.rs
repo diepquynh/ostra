@@ -789,6 +789,7 @@ impl Engine {
             ]),
             protected_paths: self.inner.services.protected_paths(),
             memory_db: paths::project_memory_db(&repo_root),
+            sandbox_mode: settings.sandbox_mode,
         };
         self.inner.db.insert_execution(&NewExecution {
             id: new.clone(),
@@ -1498,13 +1499,7 @@ impl Inner {
                 stack: p.stack.clone().or_else(|| {
                     let profile: ProjectProfile =
                         load_toml(&paths::project_profile(&p.path)).ok()?;
-                    profile.stack.language.map(|l| {
-                        if profile.stack.frameworks.is_empty() {
-                            l
-                        } else {
-                            format!("{l}/{}", profile.stack.frameworks.join(","))
-                        }
-                    })
+                    profile.stack
                 }),
             })
             .collect()
@@ -1762,6 +1757,7 @@ impl Inner {
                         &["-c".into(), cmd.clone()],
                         &root,
                         &[&root],
+                        self.services.workspace().sandbox_mode,
                     ) {
                         Ok(hc) => run_host(&root, &hc, 600).await,
                         Err(e) => (None, e),
@@ -2044,6 +2040,7 @@ impl Inner {
             ]),
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(&repo_root),
+            sandbox_mode: settings.sandbox_mode,
         };
         self.append(
             session,
@@ -2204,6 +2201,7 @@ impl Inner {
             ]),
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(repo_root),
+            sandbox_mode: settings.sandbox_mode,
         };
         self.db.insert_execution(&NewExecution {
             id: id.clone(),

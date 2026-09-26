@@ -4,7 +4,10 @@ import type { Conventions } from "./Conventions";
 import type { ModuleRow } from "./ModuleRow";
 import type { ReviewRule } from "./ReviewRule";
 import type { SkillEntry } from "./SkillEntry";
-import type { Stack } from "./Stack";
 import type { TestType } from "./TestType";
 
-export type ProjectProfile = { schema_version: number, generated_at: string | null, stack: Stack, commands: Commands, test_framework: string | null, test_types: { [key in string]: TestType }, module_map: Array<ModuleRow>, skills: Array<SkillEntry>, conventions: Conventions, review_rules: Array<ReviewRule>, };
+export type ProjectProfile = { schema_version: number, generated_at: string | null, 
+/**
+ * The model's own name for the stack (`rust`, `python-django`, `elixir-phoenix`).
+ */
+stack: string | null, build_tool: string | null, commands: Commands, test_framework: string | null, test_types: { [key in string]: TestType }, module_map: Array<ModuleRow>, skills: Array<SkillEntry>, conventions: Conventions, review_rules: Array<ReviewRule>, };

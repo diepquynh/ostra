@@ -316,7 +316,10 @@ describe("Add project dialog", () => {
   it("places the server's 422 issues on the key and stack fields", async () => {
     const issues = [
       { path: "key", message: "A project named `admin` already exists in this workspace. Choose another key." },
-      { path: "stack", message: "`Go Lang` is not a stack name." },
+      {
+        path: "stack",
+        message: "Remove the control character from the stack, because the stack is one line of plain text.",
+      },
     ];
     vi.spyOn(api, "importProject").mockRejectedValueOnce(
       new HttpError(422, "Fix these problems and import the project again.", issues),
@@ -333,7 +336,11 @@ describe("Add project dialog", () => {
     await act(async () => click("Import project"));
     await screen.findByText(/already exists in this workspace/);
     expect(screen.getByRole("textbox", { name: /^Project key/ }).getAttribute("aria-invalid")).toBe("true");
-    expect(screen.getByText("`Go Lang` is not a stack name.").getAttribute("role")).toBe("alert");
+    expect(
+      screen
+        .getByText("Remove the control character from the stack, because the stack is one line of plain text.")
+        .getAttribute("role"),
+    ).toBe("alert");
     expect(screen.queryByText("Fix these problems and import the project again.")).toBeNull();
   });
 

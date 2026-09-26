@@ -1,9 +1,9 @@
 import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import type { AgentInfo, Complexity, HarnessStatus, PermissionRules, ValidationIssue } from "../../api/types";
-import { COMPLEXITY_AGENTS, NATIVE_ONLY, PERMISSION_MODES, ROUTE_KEYS } from "../../content/agents";
+import { COMPLEXITY_AGENTS, NATIVE_ONLY, PERMISSION_MODES, ROUTE_KEYS, SANDBOX_MODES } from "../../content/agents";
 import { Button, Checkbox, Input, Panel, Select, type SelectOption, Switch, Table } from "../../design";
 import { currentSubscription, disablePush, enablePush, pushSupported } from "../../lib/push";
-import { stackOptions } from "../setup/wizard";
+import { StackInput } from "../setup/StackInput";
 import {
   COMPLEXITIES,
   EFFORTS,
@@ -172,12 +172,12 @@ export function ProjectsSection({
               label: "Stack",
               width: 190,
               render: ({ i }) => (
-                <Select
+                <StackInput
                   size="sm"
+                  stacks={stacks}
                   aria-label={`Stack of ${form.projects[i].key}`}
                   value={form.projects[i].stack}
                   onChange={(e) => update((f) => void (f.projects[i].stack = e.target.value))}
-                  options={stackOptions(stacks, form.projects[i].stack)}
                 />
               ),
             },
@@ -567,6 +567,24 @@ export function PermissionsSection({ form, update, issues, global }: SectionProp
                 />
               ))}
               <FieldIssues issues={issues("permissions.mode")} />
+            </div>
+          </Panel>
+        </Anchor>
+        <Anchor id="sandbox_mode">
+          <Panel title="Sandbox" subtitle="for this workspace, in place of the global mode">
+            <div className="wp-stack" style={{ gap: 10 }}>
+              {SANDBOX_MODES.map((m) => (
+                <Checkbox
+                  key={m.mode || "global"}
+                  radio
+                  name="sandbox-mode"
+                  checked={form.sandbox === m.mode}
+                  onChange={() => update((f) => void (f.sandbox = m.mode))}
+                  label={m.label}
+                  description={m.help}
+                />
+              ))}
+              <FieldIssues issues={issues("sandbox_mode")} />
             </div>
           </Panel>
         </Anchor>

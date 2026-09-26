@@ -330,6 +330,8 @@ struct Access {
     /// Absent in records saved before limits moved here; those use the defaults.
     #[serde(default)]
     limits: Option<ostra_core::config::Limits>,
+    #[serde(default)]
+    sandbox_mode: Option<ostra_core::config::SandboxMode>,
 }
 
 fn access(registry: &RegistryDb, root: &Path) -> Access {
@@ -346,6 +348,7 @@ fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) {
         mode: s.permissions.mode,
         yolo: s.yolo.default,
         limits: Some(s.limits.clone()),
+        sandbox_mode: s.sandbox_mode,
     })
     .unwrap_or_default();
     if let Err(e) = registry.kv_set(&access_key(root), &body) {
@@ -353,13 +356,19 @@ fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) {
     }
 }
 
-// Rule A2: the permission mode, YOLO, and spend limits come from the registry, never from a
-// folder file, because a repository could otherwise lift its own budget.
+// Rule A2: the permission mode, YOLO, spend limits, and sandbox mode come from the registry,
+// never from a folder file, because a repository could otherwise lift its own budget or sandbox.
 pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
     let a = access(registry, root);
     s.permissions.mode = a.mode;
     s.yolo.default = a.yolo;
     s.limits = a.limits.unwrap_or_default();
+    s.sandbox_mode = a.sandbox_mode;
+}
+
+/// The workspace's own sandbox mode, from the registry (Rule A2). `None` follows the global one.
+pub fn sandbox_mode(registry: &RegistryDb, root: &Path) -> Option<ostra_core::config::SandboxMode> {
+    access(registry, root).sandbox_mode
 }
 
 /// The settings programs run with: [`overlay`], and while the file waits for approval, no MCP
@@ -415,6 +424,7 @@ fn write_file(root: &Path, s: &WorkspaceSettings) -> Result<(), ConfigError> {
     if let Some(t) = value.as_table_mut() {
         t.remove("yolo");
         t.remove("limits");
+        t.remove("sandbox_mode");
         if let Some(p) = t.get_mut("permissions").and_then(|p| p.as_table_mut()) {
             p.remove("mode");
         }
@@ -688,7 +698,7 @@ pub fn approve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ostra_core::config::ProjectEntry;
+    use ostra_core::config::{ProjectEntry, SandboxMode};
 
     fn registry() -> (tempfile::TempDir, RegistryDb) {
         let dir = tempfile::tempdir().unwrap();
@@ -898,6 +908,29 @@ mod tests {
         approve(&r, &root, &file, None, &p[0].hash).ok().unwrap();
         assert!(workspace_file_approved(&r, &root));
         assert!(effective(&r, &root, file).mcp_servers[0].enabled);
+    }
+
+    #[test]
+    fn the_sandbox_mode_lives_in_the_registry_and_a_folder_file_cannot_set_it() {
+        let (d, r) = registry();
+        let root = d.path().join("ws");
+        std::fs::create_dir_all(paths::workspace_runtime(&root)).unwrap();
+        let mut s = WorkspaceSettings::seeded("w");
+        s.sandbox_mode = Some(SandboxMode::Off);
+        save_toml(&paths::workspace_toml(&root), &s).unwrap();
+        let file = raw(&root).unwrap();
+        assert_eq!(effective(&r, &root, file.clone()).sandbox_mode, None);
+        assert_eq!(sandbox_mode(&r, &root), None);
+
+        s.sandbox_mode = Some(SandboxMode::Auto);
+        save_workspace(&r, &root, &s).unwrap();
+        let text = std::fs::read_to_string(paths::workspace_toml(&root)).unwrap();
+        assert!(!text.contains("sandbox_mode"), "{text}");
+        assert_eq!(sandbox_mode(&r, &root), Some(SandboxMode::Auto));
+        assert_eq!(
+            effective(&r, &root, raw(&root).unwrap()).sandbox_mode,
+            Some(SandboxMode::Auto)
+        );
     }
 
     #[test]

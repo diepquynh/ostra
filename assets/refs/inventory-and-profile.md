@@ -92,12 +92,9 @@ it into its project profile type, so an unknown key is ignored and a misspelled 
 ```toml
 schema_version = 1
 generated_at = "{YYYY-MM-DD}"
-test_framework = "junit5+mockito"
-
-[stack]
-language = "java"
-frameworks = ["spring-boot"]
+stack = "java-spring"
 build_tool = "maven-wrapper"
+test_framework = "junit5+mockito"
 
 [commands]
 build = "./mvnw -q -T1C compile"
@@ -149,8 +146,17 @@ auto_fixable = true
 ```
 
 **Rules:**
-- `[commands]` values are exact shell strings. Omit a command the repo does not have: TOML has no null, and an
-  empty string reads as a command that runs nothing. Use the SAME placeholder names (`{MODULE}`, `{TEST}`) as
+- TOML has no null. Omit any key whose value would be null (`reference`, `component_type`, a command), and
+  never write `null`, because Ostra cannot parse a file that contains it and the init fails.
+- `schema_version` is the number `1`, never a string.
+- `stack` is one string that names the stack in your own words: the language, then the main framework, in
+  kebab-case (`java-spring`, `rust-axum`, `elixir-phoenix`, `go`). It is never a `[stack]` table and never
+  `generic`, because a reader takes it as the repo's actual stack. `build_tool` and `test_framework` are
+  top-level strings next to it.
+- `conventions` is one table (`[conventions]`), never `[[conventions]]`, because Ostra reads one set of
+  conventions per repo.
+- `[commands]` values are exact shell strings. Omit a command the repo does not have, because an empty string
+  reads as a command that runs nothing. Use the SAME placeholder names (`{MODULE}`, `{TEST}`) as
   in INVENTORY. The keys are `build`, `test`, `test_one`, `format`, `lint`, `typecheck`, and `run`.
 - `[[skills]]` mirrors the INVENTORY Skills Inventory table 1:1.
 - Each `[[skills]]` entry carries `source`: `"generated"` (written this run) or `"reused"` (an existing skill

@@ -231,9 +231,9 @@ pub enum Decision {
 }
 
 #[cfg(target_os = "macos")]
-pub const UNAVAILABLE: &str = "Run Ostra outside any other sandbox, because macOS cannot nest them, and agent commands otherwise run with the full rights of your user. Set `[sandbox] mode = \"off\"` in config.toml to run without it on purpose.";
+pub const UNAVAILABLE: &str = "Run Ostra outside any other sandbox, because macOS cannot nest them, and agent commands otherwise run with the full rights of your user. Choose sandbox mode off in the workspace settings, or set `[sandbox] mode = \"off\"` in config.toml, to run without it on purpose.";
 #[cfg(not(target_os = "macos"))]
-pub const UNAVAILABLE: &str = "Install bubblewrap (the `bwrap` command) on the Linux machine that runs Ostra, or allow unprivileged user namespaces, because agent commands otherwise run with the full rights of your user. Set `[sandbox] mode = \"off\"` in config.toml to run without it on purpose.";
+pub const UNAVAILABLE: &str = "Install bubblewrap (the `bwrap` command) on the Linux machine that runs Ostra, or allow unprivileged user namespaces, because agent commands otherwise run with the full rights of your user. Choose sandbox mode off in the workspace settings, or set `[sandbox] mode = \"off\"` in config.toml, to run without it on purpose.";
 
 /// What the sandbox on this machine cannot enforce, for the setup check.
 pub fn known_gaps(backend: &Backend) -> Option<&'static str> {
@@ -260,7 +260,7 @@ pub fn decide(cfg: &SandboxConfig) -> Result<Decision, String> {
         (_, Some(b)) => Ok(Decision::Sandboxed(b.clone())),
         (SandboxMode::Auto, None) => Ok(Decision::Unsandboxed(Some(unavailable_message()))),
         (SandboxMode::Required, None) => Err(format!(
-            "The sandbox is required by `[sandbox] mode = \"required\"` but is not available. {}",
+            "The sandbox is required by the workspace settings or by `[sandbox] mode` in config.toml, but it is not available. {}",
             unavailable_message()
         )),
     }
@@ -280,15 +280,18 @@ pub struct HostCommand {
 }
 
 /// [`HostCommand`] for `program args` started in `cwd`, writing only under `roots`. The global
-/// config is read fresh. `Err` when `[sandbox] mode = "required"` and no sandbox is available.
+/// config is read fresh, and `mode` is the workspace's own sandbox mode, when it sets one. `Err`
+/// when the mode is `required` and no sandbox is available.
 pub fn host_command(
     program: &str,
     args: &[String],
     cwd: &Path,
     roots: &[&Path],
+    mode: Option<SandboxMode>,
 ) -> Result<HostCommand, String> {
-    let global: crate::config::GlobalConfig =
+    let mut global: crate::config::GlobalConfig =
         crate::config::load_toml(&paths::global_config_path()).unwrap_or_default();
+    global.sandbox = global.sandbox.for_workspace(mode);
     let mut env_remove: Vec<String> = crate::config::credential_env_names(&global, &[])
         .into_iter()
         .collect();
@@ -1509,6 +1512,7 @@ mod tests {
             permissions: Default::default(),
             protected_paths: vec![],
             memory_db: PathBuf::new(),
+            sandbox_mode: None,
         }
     }
 

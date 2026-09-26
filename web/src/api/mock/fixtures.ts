@@ -79,6 +79,7 @@ export const settings: WorkspaceSettings = {
   },
   notifications: { push: true },
   limits: { max_parallel_executions: 3, session_budget_usd: 25 },
+  sandbox_mode: null,
   mcp_servers: [
     {
       name: "github",
