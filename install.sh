@@ -4,8 +4,8 @@
 #
 # Usage:
 #   ./install.sh [install] [ostra flags...]   build, install, and (re)start; for example --port 8080
-#                                             The service listens on every interface unless a --bind
-#                                             flag says otherwise, for example --bind 127.0.0.1
+#                                             The service listens on 127.0.0.1 unless a --bind flag says
+#                                             otherwise; --bind 0.0.0.0 serves plain HTTP to the network
 #   ./install.sh restart                      restart the service with the installed binary
 #   ./install.sh status                       show whether the service runs
 #   ./install.sh url                          print a fresh sign-in URL
@@ -73,7 +73,7 @@ EOF
     local a
     case " $* " in
       *" --bind "* | *" --bind="*) ;;
-      *) printf ' --bind 0.0.0.0' ;;
+      *) printf ' --bind 127.0.0.1' ;;
     esac
     for a in "$@"; do printf ' %q' "$a"; done
     echo
@@ -186,7 +186,7 @@ wait_and_print_url() {
 
 restart() {
   [[ -x "$launcher" ]] || { echo "Ostra is not installed. Run ./install.sh first." >&2; exit 1; }
-  mkdir -p "$data_dir"
+  mkdir -p -m 700 "$data_dir"
   local marker
   marker="$(mktemp)"
   # File times may have one-second resolution, so the new server.json must land a second later.
@@ -201,7 +201,8 @@ install() {
   fi
   [[ -x target/release/ostra ]] || { echo "target/release/ostra is missing. Build it first." >&2; exit 1; }
   echo "==> Installing $bin"
-  mkdir -p "$bin_dir" "$data_dir"
+  mkdir -p "$bin_dir"
+  mkdir -p -m 700 "$data_dir"
   # Replace by rename, so a running server keeps its binary and macOS does not kill it for a changed image.
   cp target/release/ostra "$bin.tmp"
   chmod 755 "$bin.tmp"

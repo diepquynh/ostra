@@ -52,8 +52,16 @@ pub fn spawn_process(command: &[String], root: &Path) -> std::io::Result<Transpo
     let (program, args) = command
         .split_first()
         .ok_or_else(|| std::io::Error::other("The command is empty."))?;
-    let mut child = tokio::process::Command::new(program)
-        .args(args)
+    // The server runs the project's build scripts and macros, so it runs under the sandbox.
+    let hc = ostra_core::sandbox::host_command(program, args, root, &[root])
+        .map_err(std::io::Error::other)?;
+    let mut cmd = tokio::process::Command::new(&hc.program);
+    for k in &hc.env_remove {
+        cmd.env_remove(k);
+    }
+    let mut child = cmd
+        .args(&hc.args)
+        .envs(hc.env.iter().map(|(k, v)| (k, v)))
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

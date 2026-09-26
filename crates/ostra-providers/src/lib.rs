@@ -462,6 +462,29 @@ pub fn lookup_key(name: &str, cfg: &ProviderConfig, saved: &SavedCredentials) ->
     })
 }
 
+/// A base URL safe to show in the browser: no user, password, query, or fragment, since any of
+/// them can carry a credential.
+pub fn display_url(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(u)
+            if u.username().is_empty()
+                && u.password().is_none()
+                && u.query().is_none()
+                && u.fragment().is_none() =>
+        {
+            url.to_string()
+        }
+        Ok(mut u) => {
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+            u.set_query(None);
+            u.set_fragment(None);
+            u.to_string()
+        }
+        Err(_) => "(not a valid URL)".into(),
+    }
+}
+
 /// The base URL and where it came from: `config.toml`, then the environment, then what was saved.
 pub fn resolve_base_url(
     cfg: &ProviderConfig,
@@ -532,10 +555,10 @@ impl Providers {
                     .as_ref()
                     .map(|k| k.source.clone())
                     .unwrap_or_else(|| "none".into()),
-                base_url: base_url.clone(),
+                base_url: base_url.as_deref().map(display_url),
                 base_url_source,
                 saved: SavedProviderView {
-                    base_url: s.base_url.clone(),
+                    base_url: s.base_url.as_deref().map(display_url),
                     has_api_key: s.api_key.is_some(),
                     has_auth_token: s.auth_token.is_some(),
                 },
@@ -730,6 +753,16 @@ pub const CLEARED_MARKER: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn displayed_base_urls_drop_credentials() {
+        assert_eq!(display_url("https://api.example"), "https://api.example");
+        assert_eq!(
+            display_url("https://u:p@api.example/v1?key=s#f"),
+            "https://api.example/v1"
+        );
+        assert_eq!(display_url("nope"), "(not a valid URL)");
+    }
 
     #[test]
     fn key_never_prints() {

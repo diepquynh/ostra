@@ -65,6 +65,7 @@ pub fn access(
         bind: bind_addr(opts, global)?,
         extra_hosts,
         dev: opts.dev,
+        private_host: !global.server.use_ip_host,
     })
 }
 
@@ -89,6 +90,16 @@ impl Shared {
     /// good copy.
     pub fn global(&self) -> GlobalConfig {
         match load_toml::<GlobalConfig>(&self.global_path) {
+            Ok(g) if !ostra_core::config::validate_sandbox(&g.sandbox).is_empty() => {
+                for i in ostra_core::config::validate_sandbox(&g.sandbox) {
+                    tracing::warn!(
+                        "{}: {}; using the last good global config",
+                        i.path,
+                        i.message
+                    );
+                }
+                self.global_cache.read().clone()
+            }
             Ok(g) => {
                 *self.global_cache.write() = g.clone();
                 g
@@ -154,6 +165,27 @@ impl From<ostra_store::StoreError> for DeleteError {
     }
 }
 
+/// Opens the registry with owner-only modes on the database and its SQLite side files, because it
+/// holds provider keys, git credentials, and the push signing key.
+pub fn open_registry() -> anyhow::Result<RegistryDb> {
+    paths::ensure_data_dir()?;
+    let db = paths::registry_db_path();
+    let registry = RegistryDb::open(&db)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut p = db.clone().into_os_string();
+            p.push(suffix);
+            match std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600)) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                r => r?,
+            }
+        }
+    }
+    Ok(registry)
+}
+
 /// `ostra stop`: end a session while no server holds it.
 pub fn stop_offline(session: &str) -> anyhow::Result<usize> {
     if crate::auth::server_running() {
@@ -161,16 +193,7 @@ pub fn stop_offline(session: &str) -> anyhow::Result<usize> {
             "The Ostra server is running. Stop the session from its board (or POST /api/sessions/{session}/stop), or stop the server first."
         );
     }
-    let registry = RegistryDb::open(&paths::registry_db_path())?;
-    // The registry holds provider keys saved from the browser.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            paths::registry_db_path(),
-            std::fs::Permissions::from_mode(0o600),
-        )?;
-    }
+    let registry = open_registry()?;
     let id = ostra_core::ids::SessionId::from(session);
     for w in registry.list_workspaces()? {
         let db_path = paths::workspace_db(&w.root);
@@ -196,13 +219,13 @@ pub fn ensure_global_config() -> anyhow::Result<PathBuf> {
 }
 
 fn vapid_keys(registry: &RegistryDb) -> anyhow::Result<VapidKeys> {
-    if let Some(bytes) = registry.kv_get("vapid_private")?
+    if let Some(bytes) = registry.secret_get("vapid_private")?
         && let Ok(keys) = VapidKeys::from_private_bytes(&bytes)
     {
         return Ok(keys);
     }
     let keys = VapidKeys::generate();
-    registry.kv_set("vapid_private", &keys.private_bytes())?;
+    registry.secret_set("vapid_private", &keys.private_bytes())?;
     Ok(keys)
 }
 
@@ -247,6 +270,7 @@ impl App {
             }
         }
         self.shared.registry.remove_workspace(id)?;
+        crate::trust::forget(&self.shared.registry, &record.root);
         self.nav.forget(id);
         self.shared.mcp.forget(&record.root);
         let _ = self.push.send(Pushed {
@@ -318,18 +342,27 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     let global_path = ensure_global_config()?;
     let global: GlobalConfig =
         load_toml(&global_path).with_context(|| format!("reading {}", global_path.display()))?;
-    std::fs::create_dir_all(paths::data_dir())?;
-    crate::prices::start(&paths::data_dir());
-    let registry = RegistryDb::open(&paths::registry_db_path())?;
-    // The registry holds provider keys saved from the browser.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            paths::registry_db_path(),
-            std::fs::Permissions::from_mode(0o600),
-        )?;
+    if let Some(i) = ostra_core::config::validate_sandbox(&global.sandbox).first() {
+        anyhow::bail!("{}: {} ({})", i.path, i.message, global_path.display());
     }
+    let sandbox = ostra_core::api::SandboxStatus::check(&global.sandbox);
+    match &sandbox.message {
+        None if sandbox.active => tracing::info!("agent commands run in the bubblewrap sandbox"),
+        Some(m) => {
+            tracing::warn!("{m}");
+            // On stderr as well, because under `mode = "auto"` Ostra still starts and the log is
+            // easy to miss.
+            eprintln!(
+                "\nWARNING: agent commands run WITHOUT a sandbox, with your user's full rights.\n{m}\n"
+            );
+        }
+        None => tracing::warn!(
+            "the sandbox is off (`[sandbox] mode = \"off\"`), so agent commands run with your user's full rights"
+        ),
+    }
+    paths::ensure_data_dir()?;
+    crate::prices::start(&paths::data_dir());
+    let registry = crate::master_key::unlock(open_registry()?)?;
     let assets = paths::data_dir().join("assets");
     ostra_agents::set_assets_dir(assets.clone());
     ostra_agents::materialize_assets(&assets)

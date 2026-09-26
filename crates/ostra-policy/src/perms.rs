@@ -231,16 +231,11 @@ fn bash_spec_matches(spec: &str, text: &str) -> bool {
         .is_some_and(|bare| text == bare.trim())
 }
 
+/// The host reqwest would connect to, from the same parser, so a rule cannot match a different
+/// host than the request reaches (`https://evil.example\\@docs.rs/` is `evil.example`).
 pub fn url_host(url: &str) -> Option<String> {
-    let rest = url.split_once("://").map(|(_, r)| r).unwrap_or(url);
-    let authority = rest.split(['/', '?', '#']).next()?;
-    let host = authority.rsplit('@').next()?;
-    let host = if host.starts_with('[') {
-        host.split(']').next().map(|h| format!("{h}]"))?
-    } else {
-        host.split(':').next()?.to_string()
-    };
-    let host = host.to_ascii_lowercase();
+    let parsed = url::Url::parse(url.trim()).ok()?;
+    let host = parsed.host_str()?.to_ascii_lowercase();
     (!host.is_empty()).then_some(host)
 }
 

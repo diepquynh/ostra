@@ -24,8 +24,9 @@ const MAX_TERM_INPUT: usize = 64 * 1024;
 const MAX_CHANNELS: usize = 256;
 /// Binary frames queued for one socket; a slow socket makes its PTY streams lag and resync.
 const TERM_QUEUE: usize = 64;
-/// How often an open socket re-checks its sign-in, so a revoked or expired cookie disconnects.
-const RECHECK: Duration = Duration::from_secs(30);
+/// How often an open socket re-checks its sign-in, so an expired cookie or a revoke from the CLI
+/// disconnects it. A revoke from this server closes it at once.
+const RECHECK: Duration = crate::auth::RECHECK;
 
 pub async fn handler(
     State(app): State<Arc<App>>,
@@ -221,12 +222,26 @@ async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
     let (hint_tx, mut hint_rx) = mpsc::channel::<ServerMsg>(HINT_QUEUE);
     let mut recheck = tokio::time::interval(RECHECK);
     recheck.tick().await;
+    let mut revoked = app.auth.subscribe_revoked();
+    let mine = crate::auth::cookie_hash(&cookie);
+    let signed_out = CloseFrame { code: 4401, reason: "Signed out".into() };
     loop {
         tokio::select! {
             _ = recheck.tick() => {
                 if !app.auth.check_cookie(&cookie) {
-                    let close = CloseFrame { code: 4401, reason: "Signed out".into() };
-                    let _ = socket.send(Message::Close(Some(close))).await;
+                    let _ = socket.send(Message::Close(Some(signed_out.clone()))).await;
+                    break;
+                }
+            }
+            r = revoked.recv() => {
+                let hit = match r {
+                    Ok(h) => h == mine,
+                    // Missed revokes: ask the registry instead.
+                    Err(broadcast::error::RecvError::Lagged(_)) => !app.auth.check_cookie(&cookie),
+                    Err(broadcast::error::RecvError::Closed) => false,
+                };
+                if hit {
+                    let _ = socket.send(Message::Close(Some(signed_out.clone()))).await;
                     break;
                 }
             }

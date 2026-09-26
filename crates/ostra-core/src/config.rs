@@ -25,6 +25,7 @@ pub struct GlobalConfig {
     pub harness: BTreeMap<String, HarnessConfig>,
     pub permissions: PermissionRules,
     pub server: ServerConfig,
+    pub sandbox: SandboxConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
@@ -123,6 +124,82 @@ pub struct ServerConfig {
     /// interface address and the machine's host name are allowed automatically when listening on
     /// all interfaces.
     pub allowed_hosts: Vec<String>,
+    /// Sign in at `127.0.0.1` itself rather than at a private `ostra-….localhost` name, for a
+    /// browser that does not resolve `*.localhost`. The session cookie then reaches every other
+    /// port on this machine too, because cookies are not scoped to a port.
+    pub use_ip_host: bool,
+}
+
+/// Whether agent commands run inside a bubblewrap sandbox.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum SandboxMode {
+    /// Sandbox when bubblewrap works on this machine, and run unsandboxed with a warning otherwise.
+    #[default]
+    Auto,
+    /// Refuse to start an execution that cannot be sandboxed.
+    Required,
+    Off,
+}
+
+impl SandboxMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SandboxMode::Auto => "auto",
+            SandboxMode::Required => "required",
+            SandboxMode::Off => "off",
+        }
+    }
+}
+
+/// `[sandbox]` in `config.toml`: the bubblewrap profile for agent commands (the native Bash tool
+/// and harness CLIs).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(default)]
+#[ts(export)]
+pub struct SandboxConfig {
+    pub mode: SandboxMode,
+    /// Share the host network. `false` gives agent commands no network at all.
+    pub network: bool,
+    /// More paths agent commands may write, absolute or `~/...`.
+    pub extra_writable: Vec<String>,
+    /// More paths agent commands must not see, absolute or `~/...`.
+    pub extra_hidden: Vec<String>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        SandboxConfig {
+            mode: SandboxMode::Auto,
+            network: true,
+            extra_writable: vec![],
+            extra_hidden: vec![],
+        }
+    }
+}
+
+/// Every `[sandbox]` path must be absolute or start with `~/`, because a relative path would
+/// resolve against whatever directory an execution happens to start in.
+pub fn validate_sandbox(cfg: &SandboxConfig) -> Vec<ValidationIssue> {
+    let mut issues = vec![];
+    for (key, list) in [
+        ("extra_writable", &cfg.extra_writable),
+        ("extra_hidden", &cfg.extra_hidden),
+    ] {
+        for (i, p) in list.iter().enumerate() {
+            let p = p.trim();
+            if !(p.starts_with('/') || p.starts_with("~/")) || p.contains('\0') {
+                issues.push(ValidationIssue {
+                    path: format!("sandbox.{key}[{i}]"),
+                    message: format!(
+                        "Write `{p}` as an absolute path or one starting with `~/`, because a relative path would depend on where an execution starts."
+                    ),
+                });
+            }
+        }
+    }
+    issues
 }
 
 impl Default for GlobalConfig {
@@ -195,8 +272,51 @@ impl Default for GlobalConfig {
                 ..Default::default()
             },
             server: ServerConfig::default(),
+            sandbox: SandboxConfig::default(),
         }
     }
+}
+
+/// Provider credential variables the default providers read.
+pub const DEFAULT_CREDENTIAL_ENV: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+];
+
+/// Variables through which Ostra hands a harness or MCP child its own execution identity. A child
+/// inherits them from Ostra's environment only by accident, so they are dropped and set afresh.
+pub const BRIDGE_ENV: &[&str] = &["OSTRA_TOKEN", "OSTRA_EXECUTION", "OSTRA_URL", "OSTRA_HARNESS"];
+
+/// Every variable that holds a credential Ostra must not pass to agent processes or MCP servers:
+/// the provider variables (defaults and each `providers.*` name), the bridge variables, and each
+/// MCP server's `oauth.client_secret_env`.
+pub fn credential_env_names(
+    global: &GlobalConfig,
+    mcp_servers: &[McpServerConfig],
+) -> std::collections::BTreeSet<String> {
+    let mut names: std::collections::BTreeSet<String> = DEFAULT_CREDENTIAL_ENV
+        .iter()
+        .chain(BRIDGE_ENV)
+        .map(|s| s.to_string())
+        .collect();
+    for p in global.providers.values() {
+        names.extend(
+            [&p.api_key_env, &p.auth_token_env, &p.base_url_env]
+                .into_iter()
+                .flatten()
+                .filter(|n| !n.is_empty())
+                .cloned(),
+        );
+    }
+    for s in mcp_servers {
+        if let Some(n) = s.oauth.as_ref().and_then(|o| o.client_secret_env.as_ref()) {
+            names.insert(n.clone());
+        }
+    }
+    names
 }
 
 impl GlobalConfig {

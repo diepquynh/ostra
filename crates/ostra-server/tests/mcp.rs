@@ -150,6 +150,8 @@ async fn boot(root: &Path) -> (Arc<ostra_server::app::App>, String, reqwest::Cli
     unsafe {
         std::env::set_var("OSTRA_CONFIG", root.join("config.toml"));
         std::env::set_var("OSTRA_DATA_DIR", root.join("data"));
+        std::env::set_var("OSTRA_MASTER_KEY_FILE", root.join("master.key"));
+        std::env::set_var("OSTRA_SANDBOX_CACHE", root.join("sandbox-cache"));
         std::env::set_var("OSTRA_MODELS_DEV_URL", "");
         std::env::set_var(TOKEN_VAR, "static-secret");
     }
@@ -164,6 +166,7 @@ async fn boot(root: &Path) -> (Arc<ostra_server::app::App>, String, reqwest::Cli
             frontier: m,
         },
     );
+    global.server.use_ip_host = true;
     save_toml(&root.join("config.toml"), &global).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

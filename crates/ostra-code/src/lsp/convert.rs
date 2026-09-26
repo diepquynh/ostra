@@ -569,8 +569,10 @@ mod tests {
 
     #[test]
     fn hierarchy_items_prefer_the_name_range() {
-        let whole = json!({"start": {"line": 1, "character": 0}, "end": {"line": 9, "character": 1}});
-        let name = json!({"start": {"line": 1, "character": 6}, "end": {"line": 1, "character": 12}});
+        let whole =
+            json!({"start": {"line": 1, "character": 0}, "end": {"line": 9, "character": 1}});
+        let name =
+            json!({"start": {"line": 1, "character": 6}, "end": {"line": 1, "character": 12}});
         let got = hierarchy_items(&json!([
             {"name": "Animal", "kind": 5, "uri": "file:///a", "range": whole, "selectionRange": name},
             {"name": "broken"}

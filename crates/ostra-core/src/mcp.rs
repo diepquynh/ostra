@@ -178,10 +178,51 @@ pub fn validate(servers: &[McpServerConfig], issues: &mut Vec<ValidationIssue>) 
     }
 }
 
-/// Replace each `${VAR}` in `value` with the server's environment. `Err` names the first unset
-/// variable.
-pub fn expand_env(value: &str) -> Result<String, String> {
-    expand_with(value, |k| std::env::var(k).ok())
+/// What `workspace.toml` holds in place of a literal header or env value, which Ostra keeps
+/// encrypted in its registry, so the value never reaches the browser or a folder file.
+pub const SAVED_SECRET: &str = "${ostra_secret}";
+
+/// A header or env value typed as plain text rather than read from the server's environment.
+pub fn is_literal_value(value: &str) -> bool {
+    !value.trim().is_empty() && value != SAVED_SECRET && !value.contains("${")
+}
+
+/// Why a `${VAR}` in an MCP server's settings could not be filled in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpandError {
+    Unset(String),
+    /// The variable holds a credential Ostra keeps from MCP servers (a provider key, a bridge
+    /// token, an OAuth client secret).
+    Refused(String),
+}
+
+/// Replace each `${VAR}` in `value` with the server's environment, refusing every name in
+/// `refused`.
+pub fn expand_env(
+    value: &str,
+    refused: &std::collections::BTreeSet<String>,
+) -> Result<String, ExpandError> {
+    expand_refusing(value, refused, |k| std::env::var(k).ok())
+}
+
+pub fn expand_refusing(
+    value: &str,
+    refused: &std::collections::BTreeSet<String>,
+    get: impl Fn(&str) -> Option<String>,
+) -> Result<String, ExpandError> {
+    let hit = std::cell::RefCell::new(None);
+    let out = expand_with(value, |k| {
+        if refused.contains(k) {
+            *hit.borrow_mut() = Some(k.to_string());
+            return None;
+        }
+        get(k)
+    });
+    match (hit.into_inner(), out) {
+        (Some(k), _) => Err(ExpandError::Refused(k)),
+        (None, Ok(v)) => Ok(v),
+        (None, Err(k)) => Err(ExpandError::Unset(k)),
+    }
 }
 
 pub fn expand_with(value: &str, get: impl Fn(&str) -> Option<String>) -> Result<String, String> {
@@ -229,6 +270,20 @@ mod tests {
         assert_eq!(expand_with("Bearer ${T}", get).unwrap(), "Bearer tok");
         assert_eq!(expand_with("${MISSING}x", get).unwrap_err(), "MISSING");
         assert_eq!(expand_with("plain $T", get).unwrap(), "plain $T");
+        let refused = ["ANTHROPIC_API_KEY".to_string()].into_iter().collect();
+        let get = |k: &str| Some(format!("v-{k}"));
+        assert_eq!(
+            expand_refusing("Bearer ${GH}", &refused, get).unwrap(),
+            "Bearer v-GH"
+        );
+        assert_eq!(
+            expand_refusing("x ${ANTHROPIC_API_KEY}", &refused, get),
+            Err(ExpandError::Refused("ANTHROPIC_API_KEY".into()))
+        );
+        assert_eq!(
+            expand_refusing("${NOPE}", &refused, |_| None),
+            Err(ExpandError::Unset("NOPE".into()))
+        );
     }
 
     #[test]

@@ -439,7 +439,8 @@ export type SettingsTab =
   | "mcp"
   | "permissions"
   | "instructions"
-  | "notifications";
+  | "notifications"
+  | "signin";
 
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "general", label: "General" },
@@ -450,6 +451,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "permissions", label: "Permissions" },
   { id: "instructions", label: "Instructions" },
   { id: "notifications", label: "Notifications" },
+  { id: "signin", label: "Sign-in" },
 ];
 
 /** The tab that holds a settings path or key. */
@@ -533,6 +535,7 @@ export function mapIssues(issues: ValidationIssue[], fields: string[]): IssueMap
     permissions: 0,
     instructions: 0,
     notifications: 0,
+    signin: 0,
   };
   for (const i of issues) {
     byTab[tabOf(i.path)] += 1;

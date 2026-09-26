@@ -173,6 +173,7 @@ export const workspaceDetail: WorkspaceDetail = {
   agents,
   stacks,
   global_permissions: { allow: [], ask: [], deny: ["Bash(rm -rf /*)"] },
+  pending_commands: [],
 };
 
 export const phases: PhaseInfo[] = [

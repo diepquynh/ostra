@@ -22,6 +22,7 @@ pub(crate) struct Stdio {
     pending: Pending,
     shared: Arc<Shared>,
     stderr: Arc<Mutex<String>>,
+    stderr_eof: tokio::sync::watch::Receiver<bool>,
     _child: Mutex<Child>,
 }
 
@@ -30,10 +31,14 @@ impl Stdio {
         program: &str,
         args: &[String],
         env: &[(String, String)],
+        env_remove: &[String],
         cwd: &Path,
         shared: Arc<Shared>,
     ) -> Result<Stdio, McpError> {
         let mut cmd = Command::new(program);
+        for k in env_remove {
+            cmd.env_remove(k);
+        }
         cmd.args(args)
             .envs(env.iter().map(|(k, v)| (k, v)))
             .current_dir(cwd)
@@ -53,6 +58,7 @@ impl Stdio {
         let stderr = Arc::new(Mutex::new(String::new()));
 
         let tail = stderr.clone();
+        let (stderr_done, stderr_eof) = tokio::sync::watch::channel(false);
         tokio::spawn(async move {
             let mut buf = [0u8; 2048];
             while let Ok(n) = stderr_pipe.read(&mut buf).await {
@@ -69,6 +75,7 @@ impl Stdio {
                     t.drain(..cut);
                 }
             }
+            let _ = stderr_done.send(true);
         });
 
         let (p, s, w) = (pending.clone(), shared.clone(), stdin.clone());
@@ -110,11 +117,20 @@ impl Stdio {
             pending,
             shared,
             stderr,
+            stderr_eof,
             _child: Mutex::new(child),
         })
     }
 
-    fn closed(&self) -> McpError {
+    /// Why the server is gone. A crashing server's last stderr lines explain the exit, so they are
+    /// read to the end first, for a short while.
+    async fn closed(&self) -> McpError {
+        let mut eof = self.stderr_eof.clone();
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            eof.wait_for(|done| *done),
+        )
+        .await;
         let tail = self.stderr.lock().trim().to_string();
         let last: Vec<&str> = tail.lines().rev().take(5).collect();
         let last: Vec<&str> = last.into_iter().rev().collect();
@@ -127,12 +143,13 @@ impl Stdio {
 
     async fn write(&self, message: &Value) -> Result<(), McpError> {
         if !self.shared.alive.load(Ordering::SeqCst) {
-            return Err(self.closed());
+            return Err(self.closed().await);
         }
         let mut w = self.stdin.lock().await;
         let line = format!("{message}\n");
         if w.write_all(line.as_bytes()).await.is_err() || w.flush().await.is_err() {
-            return Err(self.closed());
+            drop(w);
+            return Err(self.closed().await);
         }
         Ok(())
     }
@@ -158,7 +175,10 @@ impl Transport for Stdio {
             self.pending.lock().remove(&id);
             return Err(e);
         }
-        rx.await.map_err(|_| self.closed())
+        match rx.await {
+            Ok(v) => Ok(v),
+            Err(_) => Err(self.closed().await),
+        }
     }
 
     async fn notify(&self, message: Value) -> Result<(), McpError> {

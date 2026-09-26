@@ -36,6 +36,82 @@ pub fn data_dir() -> PathBuf {
         .join("ostra")
 }
 
+/// A credential file or store under `$HOME`. `harness` names the CLI that signs in with it, which
+/// is the one program allowed to see it.
+pub struct HomeCredential {
+    pub path: &'static str,
+    pub harness: Option<crate::HarnessKind>,
+}
+
+const fn cred(path: &'static str) -> HomeCredential {
+    HomeCredential {
+        path,
+        harness: None,
+    }
+}
+
+const fn cli_cred(path: &'static str, harness: crate::HarnessKind) -> HomeCredential {
+    HomeCredential {
+        path,
+        harness: Some(harness),
+    }
+}
+
+/// Credential stores and personal data under `$HOME` that no agent reads. The policy refuses tool
+/// calls that name them, the sandbox hides them, and Grep and Glob skip them.
+pub const HOME_CREDENTIALS: &[HomeCredential] = &[
+    cred(".ssh"),
+    cred(".gnupg"),
+    cred(".aws"),
+    cred(".azure"),
+    cred(".config/gcloud"),
+    cred(".kube"),
+    cred(".docker"),
+    cred(".netrc"),
+    cred(".git-credentials"),
+    cred(".config/gh/hosts.yml"),
+    cred(".config/hub"),
+    cred(".cargo/credentials"),
+    cred(".cargo/credentials.toml"),
+    cred(".pypirc"),
+    cred(".vault-token"),
+    cred(".terraform.d/credentials.tfrc.json"),
+    cred(".local/share/keyrings"),
+    cred(".password-store"),
+    cred(".Xauthority"),
+    cred(".mozilla"),
+    cred(".config/google-chrome"),
+    cred(".config/chromium"),
+    cred(".config/BraveSoftware"),
+    cli_cred(".claude/.credentials.json", crate::HarnessKind::Claude),
+    cli_cred(".codex/auth.json", crate::HarnessKind::Codex),
+    cli_cred(".grok/auth.json", crate::HarnessKind::Grok),
+    cli_cred(".gemini/oauth_creds.json", crate::HarnessKind::Agy),
+    cli_cred(".gemini/google_accounts.json", crate::HarnessKind::Agy),
+];
+
+/// Every path no agent may read: the data dir (registry, master key file, server log), a master
+/// key file named by `OSTRA_MASTER_KEY_FILE`, and every [`HOME_CREDENTIALS`] entry.
+pub fn secret_paths(home: &Path) -> Vec<PathBuf> {
+    let mut out = vec![data_dir()];
+    out.extend(std::env::var_os("OSTRA_MASTER_KEY_FILE").map(PathBuf::from));
+    out.extend(HOME_CREDENTIALS.iter().map(|c| home.join(c.path)));
+    out
+}
+
+/// Creates the data dir, or tightens an existing one, so only the owner can enter it: it holds the
+/// registry with saved credentials, and SQLite creates its `-wal` and `-shm` files world-readable.
+pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
+    let dir = data_dir();
+    std::fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(dir)
+}
+
 pub fn registry_db_path() -> PathBuf {
     data_dir().join("registry.db")
 }
@@ -212,39 +288,80 @@ pub fn normalize(path: &Path) -> PathBuf {
     out
 }
 
-/// Resolve `target` against `cwd` and normalize. Follows symlinks of the longest existing prefix
-/// so a link cannot escape a root.
+/// Resolve `target` against `cwd` the way the kernel would: one component at a time, following
+/// each symlink (dangling ones included) before a later `..` applies, so a link cannot make a
+/// path look inside a root when the write lands outside it.
 pub fn resolve(cwd: &Path, target: &Path) -> PathBuf {
+    use std::collections::VecDeque;
+    use std::ffi::OsString;
+    use std::path::Component;
     let joined = if target.is_absolute() {
         target.to_path_buf()
     } else {
         cwd.join(target)
     };
-    let joined = normalize(&joined);
-    let mut existing = joined.clone();
-    let mut rest = vec![];
-    while !existing.exists() {
-        match (
-            existing.file_name().map(|n| n.to_os_string()),
-            existing.parent(),
-        ) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                existing = parent.to_path_buf();
-            }
-            _ => return joined,
+    if !cfg!(unix) || !joined.is_absolute() {
+        return normalize(&joined);
+    }
+    let parts = |p: &Path| -> Vec<OsString> {
+        p.components()
+            .filter_map(|c| match c {
+                Component::Normal(n) => Some(n.to_os_string()),
+                Component::ParentDir => Some(OsString::from("..")),
+                _ => None,
+            })
+            .collect()
+    };
+    let mut queue: VecDeque<OsString> = parts(&joined).into();
+    let mut out = PathBuf::from("/");
+    let mut links = 0;
+    while let Some(name) = queue.pop_front() {
+        if name == ".." {
+            out.pop();
+            continue;
+        }
+        out.push(&name);
+        let is_link = std::fs::symlink_metadata(&out).is_ok_and(|m| m.file_type().is_symlink());
+        if !is_link || links >= 40 {
+            continue;
+        }
+        links += 1;
+        let Ok(link) = std::fs::read_link(&out) else {
+            continue;
+        };
+        out.pop();
+        if link.is_absolute() {
+            out = PathBuf::from("/");
+        }
+        for p in parts(&link).into_iter().rev() {
+            queue.push_front(p);
         }
     }
-    let mut base = std::fs::canonicalize(&existing).unwrap_or(existing);
-    for name in rest.into_iter().rev() {
-        base.push(name);
-    }
-    base
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_follows_links_before_dot_dot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let repo = root.join("repo");
+        let outside = root.join("outside/deep");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, repo.join("link")).unwrap();
+        assert_eq!(
+            resolve(&repo, Path::new("link/../x")),
+            root.join("outside/x")
+        );
+        std::os::unix::fs::symlink(root.join("outside/new"), repo.join("dangling")).unwrap();
+        assert_eq!(resolve(&repo, Path::new("dangling")), root.join("outside/new"));
+        assert_eq!(resolve(&repo, Path::new("a/../b/c")), repo.join("b/c"));
+    }
 
     #[test]
     fn ledger_names() {

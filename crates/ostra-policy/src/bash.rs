@@ -126,6 +126,10 @@ pub struct Parsed {
     pub commands: Vec<SimpleCommand>,
     /// False when the parser hit a syntax error, so the split may be wrong.
     pub complete: bool,
+    /// False when the source holds a statement the command list does not model (a standalone
+    /// assignment, `export`, `[[ ]]`, a loop header, a function), whose effect on later commands
+    /// or whose own evaluation is not checked.
+    pub modelled: bool,
 }
 
 pub const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "fish", "ash", "mksh"];
@@ -266,9 +270,10 @@ fn unescape_word(text: &str) -> String {
     out
 }
 
+/// A glob or a brace expansion (`{a,b}`, `{1..3}`): the word names paths only the shell knows.
 fn has_unquoted_glob(text: &str) -> bool {
     let mut escaped = false;
-    for c in text.chars() {
+    for (i, c) in text.char_indices() {
         if escaped {
             escaped = false;
             continue;
@@ -276,6 +281,12 @@ fn has_unquoted_glob(text: &str) -> bool {
         match c {
             '\\' => escaped = true,
             '*' | '?' | '[' => return true,
+            '{' => {
+                let inner = text[i + 1..].split('}').next().unwrap_or_default();
+                if text[i + 1..].contains('}') && (inner.contains(',') || inner.contains("..")) {
+                    return true;
+                }
+            }
             _ => {}
         }
     }
@@ -286,8 +297,23 @@ struct Walker<'s> {
     src: &'s str,
     out: Vec<SimpleCommand>,
     complete: bool,
+    modelled: bool,
     depth: usize,
 }
+
+/// Statement nodes that only sequence or group the commands they contain.
+const STRUCTURAL: &[&str] = &[
+    "program",
+    "list",
+    "subshell",
+    "compound_statement",
+    "if_statement",
+    "elif_clause",
+    "else_clause",
+    "while_statement",
+    "do_group",
+    "negated_command",
+];
 
 impl<'s> Walker<'s> {
     fn text(&self, node: Node) -> &'s str {
@@ -300,8 +326,17 @@ impl<'s> Walker<'s> {
         let glob = node.kind() == "word" && has_unquoted_glob(&raw)
             || node.kind() == "concatenation" && {
                 let mut c = node.walk();
-                node.named_children(&mut c)
-                    .any(|n| n.kind() == "word" && has_unquoted_glob(self.text(n)))
+                let parts: Vec<Node> = node.named_children(&mut c).collect();
+                // A brace expansion splits into several words (`{a`, `,`, `b}`), so the
+                // unquoted parts are joined before looking for one.
+                let unquoted: String = parts
+                    .iter()
+                    .map(|n| if n.kind() == "word" { self.text(*n) } else { "\u{0}" })
+                    .collect();
+                parts
+                    .iter()
+                    .any(|n| n.kind() == "word" && has_unquoted_glob(self.text(*n)))
+                    || has_unquoted_glob(&unquoted)
             };
         Word { raw, value, glob }
     }
@@ -459,6 +494,7 @@ impl<'s> Walker<'s> {
         }
         let inner = parse_depth(code, self.depth + 1);
         self.complete &= inner.complete;
+        self.modelled &= inner.modelled;
         self.out.extend(inner.commands);
     }
 
@@ -596,7 +632,15 @@ impl<'s> Walker<'s> {
                 self.heredoc(node, node, n, n);
             }
             "comment" => {}
-            _ => self.visit_children(node),
+            // `[ -f x ]` and `[[ -d src ]]` over plain words only: an expansion or a subscript
+            // in a test is evaluated, and can run a command.
+            "test_command" if !self.text(node).trim_matches(['[', ']', ' ']).contains(['$', '`', '[', ']', '(']) => {}
+            kind => {
+                if node.is_named() && !STRUCTURAL.contains(&kind) {
+                    self.modelled = false;
+                }
+                self.visit_children(node)
+            }
         }
     }
 }
@@ -610,12 +654,14 @@ fn parse_depth(src: &str, depth: usize) -> Parsed {
         return Parsed {
             commands: vec![],
             complete: false,
+            modelled: false,
         };
     }
     let Some(tree) = parser.parse(src, None) else {
         return Parsed {
             commands: vec![],
             complete: false,
+            modelled: false,
         };
     };
     let root = tree.root_node();
@@ -623,6 +669,7 @@ fn parse_depth(src: &str, depth: usize) -> Parsed {
         src,
         out: vec![],
         complete: !root.has_error(),
+        modelled: true,
         depth,
     };
     w.visit(root);
@@ -634,6 +681,7 @@ fn parse_depth(src: &str, depth: usize) -> Parsed {
     Parsed {
         commands: w.out,
         complete: w.complete,
+        modelled: w.modelled,
     }
 }
 
@@ -671,10 +719,26 @@ pub struct WriteTarget {
     pub via: String,
 }
 
+enum Cand {
+    Skip,
+    Path(String),
+    /// A variable, substitution, or glob: the path is only known when the shell runs.
+    Unresolved,
+}
+
 fn candidate(word: &Word) -> Option<String> {
-    let value = word.value.as_ref()?;
+    match classify(word) {
+        Cand::Path(p) => Some(p),
+        _ => None,
+    }
+}
+
+fn classify(word: &Word) -> Cand {
+    let Some(value) = word.value.as_ref() else {
+        return Cand::Unresolved;
+    };
     if word.glob {
-        return None;
+        return Cand::Unresolved;
     }
     let v = value.trim();
     if v.is_empty()
@@ -683,13 +747,17 @@ fn candidate(word: &Word) -> Option<String> {
             "/dev/null" | "/dev/stdout" | "/dev/stderr" | "/dev/tty" | "-" | "&1" | "&2"
         )
     {
-        return None;
+        return Cand::Skip;
     }
     // A dot-only token is prose (`--> ...`), not a path.
     if v.chars().all(|c| c == '.') {
-        return None;
+        return Cand::Skip;
     }
-    Some(v.to_string())
+    // `~user/...` expands to another account's home, which the resolver does not model.
+    if v.starts_with('~') && !(v == "~" || v.starts_with("~/")) {
+        return Cand::Unresolved;
+    }
+    Cand::Path(v.to_string())
 }
 
 const GIT_WRITE_SUBCOMMANDS: &[&str] = &[
@@ -739,18 +807,41 @@ pub fn git_subcommand(args: &[Word]) -> (Option<String>, Option<String>) {
     (None, dir)
 }
 
+/// A `-C`, `--git-dir`, or `--work-tree` value that is only known when the shell runs.
+pub fn git_dir_dynamic(args: &[Word]) -> bool {
+    let mut i = 0;
+    while i < args.len() {
+        let t = args[i].text();
+        if git_value_opt(t) {
+            if t != "-c" && args.get(i + 1).is_some_and(|w| !w.is_static()) {
+                return true;
+            }
+            i += 2;
+            continue;
+        }
+        if !t.starts_with('-') {
+            return false;
+        }
+        i += 1;
+    }
+    false
+}
+
 fn non_flag(args: &[Word]) -> impl Iterator<Item = &Word> {
     args.iter()
         .filter(|w| !w.text().starts_with('-') || w.text() == "-")
 }
 
-fn targets_of(cmd: &SimpleCommand) -> Vec<(TargetSpec, String)> {
+fn targets_of(cmd: &SimpleCommand, unresolved: &mut bool) -> Vec<(TargetSpec, String)> {
     let mut out = vec![];
     for r in &cmd.redirects {
-        if r.writes()
-            && let Some(t) = r.target.as_ref().and_then(candidate)
-        {
-            out.push((TargetSpec::Path(t), r.op.clone()));
+        if !r.writes() {
+            continue;
+        }
+        match r.target.as_ref().map(classify) {
+            Some(Cand::Path(t)) => out.push((TargetSpec::Path(t), r.op.clone())),
+            Some(Cand::Unresolved) | None => *unresolved = true,
+            Some(Cand::Skip) => {}
         }
     }
     let Some(name) = cmd.effective_name() else {
@@ -758,30 +849,49 @@ fn targets_of(cmd: &SimpleCommand) -> Vec<(TargetSpec, String)> {
     };
     let args = cmd.args();
     let via = name.clone();
-    let push_all = |out: &mut Vec<(TargetSpec, String)>, words: &mut dyn Iterator<Item = &Word>| {
+    let push_all = |out: &mut Vec<(TargetSpec, String)>,
+                    unresolved: &mut bool,
+                    words: &mut dyn Iterator<Item = &Word>| {
         for w in words {
-            if let Some(t) = candidate(w) {
-                out.push((TargetSpec::Path(t), via.clone()));
+            match classify(w) {
+                Cand::Path(t) => out.push((TargetSpec::Path(t), via.clone())),
+                Cand::Unresolved => *unresolved = true,
+                Cand::Skip => {}
             }
         }
     };
     match name.as_str() {
-        "tee" | "rm" | "rmdir" | "shred" | "truncate" | "touch" | "mkdir" | "mv" | "unlink" => {
-            push_all(&mut out, &mut non_flag(args));
+        "tee" | "rm" | "rmdir" | "shred" | "truncate" | "touch" | "mkdir" | "unlink" => {
+            push_all(&mut out, unresolved, &mut non_flag(args));
         }
-        "cp" | "install" | "ln" => {
+        "cp" | "install" | "ln" | "mv" => {
             let mut target_dir = None;
             let mut rest = vec![];
             let mut i = 0;
             while i < args.len() {
                 let t = args[i].text();
-                if t == "-t" {
+                // Every spelling of the target directory: `-t D`, `-tD`, `--target-directory D`,
+                // `--target-directory=D`, and its unique abbreviations.
+                let long = t.split_once('=').map_or(t, |(n, _)| n);
+                let is_long = long.len() > 3 && "--target-directory".starts_with(long);
+                if t == "-t" || (is_long && !t.contains('=')) {
                     target_dir = args.get(i + 1).cloned();
                     i += 2;
                     continue;
                 }
-                if let Some(d) = t.strip_prefix("--target-directory=") {
-                    target_dir = Some(Word::literal(d));
+                if is_long {
+                    let d = t.split_once('=').map(|(_, v)| v).unwrap_or_default();
+                    target_dir = Some(if args[i].is_static() {
+                        Word::literal(d)
+                    } else {
+                        args[i].clone()
+                    });
+                } else if let Some(d) = t.strip_prefix("-t").filter(|d| !d.is_empty() && !t.starts_with("--")) {
+                    target_dir = Some(if args[i].is_static() {
+                        Word::literal(d)
+                    } else {
+                        args[i].clone()
+                    });
                 } else if !t.starts_with('-') {
                     rest.push(&args[i]);
                 }
@@ -794,6 +904,13 @@ fn targets_of(cmd: &SimpleCommand) -> Vec<(TargetSpec, String)> {
                     None => (None, vec![]),
                 },
             };
+            if dest.is_some_and(|d| matches!(classify(d), Cand::Unresolved)) {
+                *unresolved = true;
+            }
+            // A move also removes each source.
+            if name == "mv" {
+                push_all(&mut out, unresolved, &mut sources.iter().copied());
+            }
             if let Some(dest) = dest.and_then(candidate) {
                 if sources.is_empty() {
                     out.push((TargetSpec::Path(dest.clone()), via.clone()));
@@ -853,11 +970,14 @@ fn targets_of(cmd: &SimpleCommand) -> Vec<(TargetSpec, String)> {
                     i += 1;
                 }
                 let skip = usize::from(!script_given && name == "sed");
-                push_all(&mut out, &mut files.into_iter().skip(skip));
+                push_all(&mut out, unresolved, &mut files.into_iter().skip(skip));
             }
         }
         "dd" => {
             for w in args {
+                if w.value.is_none() && w.raw.contains("of=") {
+                    *unresolved = true;
+                }
                 if let Some(of) = w.value.as_deref().and_then(|v| v.strip_prefix("of=")) {
                     let w = Word::literal(of);
                     if let Some(t) = candidate(&w) {
@@ -868,6 +988,9 @@ fn targets_of(cmd: &SimpleCommand) -> Vec<(TargetSpec, String)> {
         }
         "git" => {
             let (sub, dir) = git_subcommand(args);
+            if git_dir_dynamic(args) {
+                *unresolved = true;
+            }
             if sub
                 .as_deref()
                 .is_some_and(|s| GIT_WRITE_SUBCOMMANDS.contains(&s))
@@ -888,13 +1011,55 @@ pub fn write_targets(parsed: &Parsed) -> Vec<WriteTarget> {
     let cwds = command_cwds(parsed);
     let mut out = vec![];
     for (i, cmd) in parsed.commands.iter().enumerate() {
-        for (spec, via) in targets_of(cmd) {
+        for (spec, via) in targets_of(cmd, &mut false) {
             out.push(WriteTarget {
                 spec,
                 cwd: cwds[i].clone(),
                 command: i,
                 via,
             });
+        }
+    }
+    out
+}
+
+/// Indexes of commands that write somewhere the parser cannot name: a variable, substitution, or
+/// glob in a write position, or a relative write after a `cd` whose target is only known at run
+/// time. Such a write is never auto-allowed, because its real target was not checked.
+pub fn unresolved_writes(parsed: &Parsed) -> Vec<usize> {
+    let unknown = cwd_unknown(parsed);
+    let mut out = vec![];
+    for (i, cmd) in parsed.commands.iter().enumerate() {
+        let mut unresolved = false;
+        let targets = targets_of(cmd, &mut unresolved);
+        let relative = targets.iter().any(|(spec, _)| match spec {
+            TargetSpec::Path(p) | TargetSpec::CopyInto { dest: p, .. } => {
+                !p.starts_with('/') && !p.starts_with('~')
+            }
+            TargetSpec::GitTree(d) => d.as_deref().is_none_or(|d| !d.starts_with('/')),
+        });
+        if unresolved || (unknown[i] && relative) {
+            out.push(i);
+        }
+    }
+    out
+}
+
+/// True for each command that runs after a `cd` or `pushd` whose target is dynamic, or after
+/// `popd`, whose target the parser does not track.
+pub fn cwd_unknown(parsed: &Parsed) -> Vec<bool> {
+    let mut out = Vec::with_capacity(parsed.commands.len());
+    let mut unknown = false;
+    for cmd in &parsed.commands {
+        out.push(unknown);
+        match cmd.effective_name().as_deref() {
+            Some("cd") | Some("pushd") => match non_flag(cmd.args()).next() {
+                Some(w) if !w.is_static() => unknown = true,
+                Some(w) if w.text().starts_with('/') => unknown = false,
+                _ => {}
+            },
+            Some("popd") => unknown = true,
+            _ => {}
         }
     }
     out

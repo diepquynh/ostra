@@ -156,7 +156,7 @@ pub async fn status(w: &WorkspaceRt, key: &str, root: &Path) -> GitRepoStatus {
         "--branch",
         "-z",
         "--untracked-files=normal",
-        "--ignore-submodules=dirty",
+        "--ignore-submodules=all",
         "--",
         ".",
     ];
@@ -424,7 +424,7 @@ impl<'a> Op<'a> {
             if merge.is_none() {
                 args.push("--set-upstream");
             }
-            args.extend([remote.as_str(), refspec.as_str()]);
+            args.extend(["--", remote.as_str(), refspec.as_str()]);
             run_git(Some(self.root), &auth, &args, REMOTE_TIMEOUT, |_| {})
                 .await
                 .map_err(GitError::Git)

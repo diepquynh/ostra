@@ -2,6 +2,7 @@ import { type ComponentProps, type ReactNode, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Heading } from "../../api/gen/Heading";
+import { MarkdownImage, markdownUrl } from "../../components/Markdown";
 import { CodeView } from "../../design";
 import { ColumnResizer } from "./ColumnResizer";
 import { headingText, rehypeHeadingIds } from "./outline";
@@ -30,6 +31,7 @@ export function ArtifactMarkdown({ text, headings, onAnchor }: ArtifactMarkdownP
   const rehype = useMemo(() => [rehypeHeadingIds(headings)], [headings]);
   const components = useMemo<Components>(
     () => ({
+      img: MarkdownImage,
       a: ({ href, children, node: _node, ...rest }: ComponentProps<"a"> & { node?: unknown }) => {
         if (href?.startsWith("#")) {
           return (
@@ -83,7 +85,12 @@ export function ArtifactMarkdown({ text, headings, onAnchor }: ArtifactMarkdownP
   );
   return (
     <div className="art-md">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={rehype} components={components}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={rehype}
+        components={components}
+        urlTransform={markdownUrl}
+      >
         {text}
       </ReactMarkdown>
     </div>

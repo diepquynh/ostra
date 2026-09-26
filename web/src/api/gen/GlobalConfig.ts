@@ -2,6 +2,7 @@
 import type { HarnessConfig } from "./HarnessConfig";
 import type { PermissionRules } from "./PermissionRules";
 import type { ProviderConfig } from "./ProviderConfig";
+import type { SandboxConfig } from "./SandboxConfig";
 import type { ServerConfig } from "./ServerConfig";
 import type { TierTable } from "./TierTable";
 
@@ -9,4 +10,4 @@ export type GlobalConfig = { providers: { [key in string]: ProviderConfig },
 /**
  * Tier to model, per executor table (`native`, `claude`, `codex`, `grok`, `agy`).
  */
-tiers: { [key in string]: TierTable }, harness: { [key in string]: HarnessConfig }, permissions: PermissionRules, server: ServerConfig, };
+tiers: { [key in string]: TierTable }, harness: { [key in string]: HarnessConfig }, permissions: PermissionRules, server: ServerConfig, sandbox: SandboxConfig, };

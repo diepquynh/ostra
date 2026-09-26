@@ -38,9 +38,11 @@ impl Adapter for Codex {
                 "Bash" | "exec_command" | "shell" | "local_shell" => {
                     let command = match input.get("command").or_else(|| input.get("cmd")) {
                         Some(Value::String(s)) => s.clone(),
+                        // Quoted, so the policy sees the words Codex runs, not a re-split line.
                         Some(Value::Array(parts)) => parts
                             .iter()
                             .filter_map(Value::as_str)
+                            .map(crate::launch::shell_quote)
                             .collect::<Vec<_>>()
                             .join(" "),
                         _ => String::new(),
@@ -133,6 +135,14 @@ mod tests {
             call,
             ToolCall::new("Bash", json!({"command": "ls -la", "cwd": "/repo"}))
         );
+
+        let PreParse::Call { call, .. } = Codex.parse_pre(&payload(
+            "exec_command",
+            json!({"cmd": ["bash", "-lc", "echo a; rm -rf ~/x"]}),
+        )) else {
+            panic!()
+        };
+        assert_eq!(call.str_field("command"), Some("bash -lc 'echo a; rm -rf ~/x'"));
 
         let patch = "*** Begin Patch\n*** Add File: src/a.rs\n+x\n*** End Patch\n";
         let PreParse::Call { call, .. } =

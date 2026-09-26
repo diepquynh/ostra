@@ -41,6 +41,7 @@ impl Http {
         let client = reqwest::Client::builder()
             .user_agent(concat!("ostra/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(std::time::Duration::from_secs(15))
+            .redirect(crate::same_origin_redirects())
             .build()
             .map_err(|e| McpError::Transport(e.to_string()))?;
         Ok(Http {

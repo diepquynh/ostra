@@ -83,6 +83,9 @@ impl Services for Fake {
     fn protected_paths(&self) -> Vec<PathBuf> {
         vec![]
     }
+    fn command_approved(&self, _: &std::path::Path, _: &str) -> bool {
+        true
+    }
     fn add_allow_rule(&self, _: &str) {}
 }
 

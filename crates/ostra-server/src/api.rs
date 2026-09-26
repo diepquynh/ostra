@@ -132,13 +132,54 @@ impl From<ostra_store::StoreError> for ApiErr {
 type Res<T> = Result<Json<T>, ApiErr>;
 
 async fn guard(State(app): AppState, req: Request, next: Next) -> Response {
-    let headers = req.headers();
-    let host = headers.get(header::HOST).and_then(|h| h.to_str().ok());
-    if !app.auth.allowed_host(host) {
-        return ApiErr::new(StatusCode::MISDIRECTED_REQUEST, "This host is not allowed.")
-            .into_response();
-    }
     let path = req.uri().path().to_string();
+    let api = path.starts_with("/api/") || path == "/ws";
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .filter(|h| app.auth.allowed_host(Some(h)))
+        .map(String::from);
+    let private = app.auth.private_redirect(host.as_deref()).map(String::from);
+    let mut res = match host {
+        None => ApiErr::new(StatusCode::MISDIRECTED_REQUEST, "This host is not allowed.")
+            .into_response(),
+        // A cookie set on 127.0.0.1 would reach every other port on this machine, so the app
+        // lives at its private name. A page load moves there, keeping the `#token=` fragment,
+        // and the API is refused here.
+        Some(_) if private.is_some() && !path.starts_with("/internal/") => {
+            let target = private.unwrap_or_default();
+            if api {
+                ApiErr::new(
+                    StatusCode::MISDIRECTED_REQUEST,
+                    format!("Open Ostra at http://{target}/, because a sign-in on 127.0.0.1 would share its cookie with every other local port."),
+                )
+                .into_response()
+            } else {
+                let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+                match HeaderValue::from_str(&format!("http://{target}{path}{query}")) {
+                    Ok(loc) => {
+                        let mut r = StatusCode::TEMPORARY_REDIRECT.into_response();
+                        r.headers_mut().insert(header::LOCATION, loc);
+                        r
+                    }
+                    Err(_) => StatusCode::BAD_REQUEST.into_response(),
+                }
+            }
+        }
+        Some(_) => match refusal(&app, &req, &path, api) {
+            Some(r) => r,
+            None => next.run(req).await,
+        },
+    };
+    // Refusals get these headers too, so a page elsewhere cannot frame or sniff them.
+    secure_headers(res.headers_mut(), host.as_deref(), api);
+    res
+}
+
+/// Why a request that reached an allowed host is refused, if it is.
+fn refusal(app: &App, req: &Request, path: &str, api: bool) -> Option<Response> {
+    let headers = req.headers();
     // Harnesses always run on this machine, so the hook bridge and MCP shim refuse other peers
     // even when the server listens on every interface.
     if path.starts_with("/internal/")
@@ -147,18 +188,44 @@ async fn guard(State(app): AppState, req: Request, next: Next) -> Response {
             .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         && !crate::auth::is_local_address(peer.ip())
     {
-        return ApiErr::new(
-            StatusCode::FORBIDDEN,
-            "This endpoint accepts local connections only.",
-        )
-        .into_response();
+        return Some(
+            ApiErr::new(
+                StatusCode::FORBIDDEN,
+                "This endpoint accepts local connections only.",
+            )
+            .into_response(),
+        );
     }
-    let api = path.starts_with("/api/") || path == "/ws";
+    // Only Ostra's own hook and MCP clients call these. A browser page on this machine is a local
+    // peer too, but it always sends `Origin` or `Sec-Fetch-Site`, so refuse either.
+    if path.starts_with("/internal/")
+        && (headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site"))
+    {
+        return Some(
+            ApiErr::new(
+                StatusCode::FORBIDDEN,
+                "This endpoint is for Ostra's harness bridge, not for web pages.",
+            )
+            .into_response(),
+        );
+    }
     if api {
         let origin = headers.get(header::ORIGIN).and_then(|h| h.to_str().ok());
-        if !app.auth.allowed_origin(origin) {
-            return ApiErr::new(StatusCode::FORBIDDEN, "This origin is not allowed.")
-                .into_response();
+        // A request without `Origin` still carries `Sec-Fetch-Site`, which tells a page on another
+        // localhost port (same-site, so the SameSite cookie rides along) from this app's own page.
+        let fetch_site = headers.get("sec-fetch-site").and_then(|h| h.to_str().ok());
+        // The app calls the API with fetch (`empty`), the socket (`websocket`), and download
+        // links (`document`). An image, script, or frame request is page content reaching the
+        // API, such as a Markdown image an agent wrote, so it is refused.
+        let fetch_dest = headers.get("sec-fetch-dest").and_then(|h| h.to_str().ok());
+        let dest_ok = fetch_dest.is_none_or(|d| matches!(d, "empty" | "websocket" | "document"));
+        if !app.auth.allowed_origin(origin)
+            || matches!(fetch_site, Some("cross-site" | "same-site"))
+            || !dest_ok
+        {
+            return Some(
+                ApiErr::new(StatusCode::FORBIDDEN, "This origin is not allowed.").into_response(),
+            );
         }
         if path != "/api/auth/exchange" {
             let cookie = cookie_value(headers.get(header::COOKIE).and_then(|h| h.to_str().ok()));
@@ -182,23 +249,43 @@ async fn guard(State(app): AppState, req: Request, next: Next) -> Response {
                     },
                     request_facts(headers, peer)
                 );
-                return ApiErr::new(
-                    StatusCode::UNAUTHORIZED,
-                    "Sign in with the URL the ostra command printed.",
-                )
-                .into_response();
+                return Some(
+                    ApiErr::new(
+                        StatusCode::UNAUTHORIZED,
+                        "Sign in with the URL the ostra command printed.",
+                    )
+                    .into_response(),
+                );
             }
         }
     }
-    let mut res = next.run(req).await;
-    let h = res.headers_mut();
+    None
+}
+
+/// `host` is named in the policy only once it passed the allowlist.
+fn secure_headers(h: &mut axum::http::HeaderMap, host: Option<&str>, api: bool) {
+    let sockets = host
+        .map(|x| format!(" ws://{x} wss://{x}"))
+        .unwrap_or_default();
+    // Scripts only from this origin, and no remote images, because an injected agent could
+    // otherwise send data out through a Markdown image URL.
+    if let Ok(csp) = HeaderValue::from_str(&format!(
+        "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data:; font-src 'self' data:; connect-src 'self'{sockets}; \
+         object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; frame-src 'none'; \
+         manifest-src 'self'"
+    )) {
+        h.insert("content-security-policy", csp);
+    }
+    if api {
+        h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    }
     h.insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
     );
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    res
 }
 
 pub fn router(app: Arc<App>) -> axum::Router {
@@ -206,6 +293,13 @@ pub fn router(app: Arc<App>) -> axum::Router {
     axum::Router::new()
         .route("/api/info", get(info))
         .route("/api/auth/exchange", post(exchange))
+        .route("/api/auth/sessions", get(list_sign_ins))
+        .route("/api/auth/sessions/{id}", delete(revoke_sign_in))
+        .route(
+            "/api/auth/sessions/revoke-others",
+            post(revoke_other_sign_ins),
+        )
+        .route("/api/auth/signout", post(sign_out))
         .route(
             "/api/workspaces",
             get(list_workspaces).post(create_workspace),
@@ -217,6 +311,7 @@ pub fn router(app: Arc<App>) -> axum::Router {
                 .delete(delete_workspace),
         )
         .route("/api/workspaces/{ws}/validate", post(validate_workspace))
+        .route("/api/workspaces/{ws}/approve", post(approve_commands))
         .route("/api/workspaces/{ws}/projects", post(import_project))
         .route("/api/workspaces/{ws}/clone", post(clone_project))
         .route(
@@ -486,6 +581,25 @@ async fn exchange(State(app): AppState, req: Request) -> Response {
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|c| c.0);
     let facts = request_facts(req.headers(), peer);
+    let ip = peer.map(|p| p.ip());
+    if let Some(wait) = app.auth.exchange_wait(ip) {
+        tracing::info!("sign-in: rate limited; {facts}");
+        return ApiErr::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "Wait {wait} s before trying another sign-in link, because several failed from this address in the last minute. Then run `ostra url` for a fresh one."
+            ),
+        )
+        .into_response();
+    }
+    let meta = crate::auth::SignInMeta {
+        user_agent: req
+            .headers()
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .map(String::from),
+        ip: ip.map(|i| i.to_string()),
+    };
     // The guard already accepted this Origin, so https here means a TLS proxy in front of Ostra.
     let secure = req
         .headers()
@@ -499,7 +613,9 @@ async fn exchange(State(app): AppState, req: Request) -> Response {
         tracing::info!("sign-in: unreadable body; {facts}");
         return ApiErr::bad("Send {\"token\": \"...\"}.").into_response();
     };
-    match app.auth.exchange(&body.token) {
+    let result = app.auth.exchange(&body.token, &meta);
+    app.auth.note_exchange(ip, result.is_ok());
+    match result {
         Ok(cookie) => {
             tracing::info!("sign-in: token exchanged for a session cookie; {facts}");
             let mut res = StatusCode::NO_CONTENT.into_response();
@@ -513,6 +629,65 @@ async fn exchange(State(app): AppState, req: Request) -> Response {
             ApiErr::new(StatusCode::UNAUTHORIZED, e.message()).into_response()
         }
     }
+}
+
+fn caller_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
+    cookie_value(headers.get(header::COOKIE).and_then(|h| h.to_str().ok()))
+}
+
+fn auth_err(e: anyhow::Error) -> ApiErr {
+    ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+async fn list_sign_ins(
+    State(app): AppState,
+    headers: axum::http::HeaderMap,
+) -> Res<Vec<SignInSession>> {
+    let mine = caller_cookie(&headers);
+    Ok(Json(app.auth.sessions(mine.as_deref()).map_err(auth_err)?))
+}
+
+async fn revoke_sign_in(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiErr> {
+    if app.auth.revoke(&id).map_err(auth_err)? {
+        tracing::info!("sign-in {id} revoked from the browser");
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiErr::not_found(format!(
+            "No sign-in {id}. It may have expired or been revoked already."
+        )))
+    }
+}
+
+async fn revoke_other_sign_ins(
+    State(app): AppState,
+    headers: axum::http::HeaderMap,
+) -> Res<RevokedSignIns> {
+    // The guard let this request through, so the caller has a valid cookie.
+    let mine = caller_cookie(&headers).unwrap_or_default();
+    let n = app.auth.revoke_others(&mine).map_err(auth_err)?;
+    tracing::info!("{n} other sign-ins revoked from the browser");
+    Ok(Json(RevokedSignIns { revoked: n as u32 }))
+}
+
+async fn sign_out(
+    State(app): AppState,
+    headers: axum::http::HeaderMap,
+) -> Result<Response, ApiErr> {
+    if let Some(mine) = caller_cookie(&headers) {
+        app.auth.sign_out(&mine).map_err(auth_err)?;
+    }
+    let secure = headers
+        .get(header::ORIGIN)
+        .and_then(|o| o.to_str().ok())
+        .is_some_and(|o| o.to_ascii_lowercase().starts_with("https://"));
+    let mut res = StatusCode::NO_CONTENT.into_response();
+    if let Ok(v) = HeaderValue::from_str(&Auth::clear_cookie_header(secure)) {
+        res.headers_mut().insert(header::SET_COOKIE, v);
+    }
+    Ok(res)
 }
 
 async fn list_workspaces(State(app): AppState) -> Res<Vec<WorkspaceSummary>> {
@@ -686,6 +861,34 @@ async fn delete_workspace(
             DeleteError::Store(e) => e.into(),
         })?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Approve the commands of one folder file, as `pending_commands` showed them.
+async fn approve_commands(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<ApproveCommands>,
+) -> Res<WorkspaceDetail> {
+    let w = ws(&app, &id)?;
+    crate::trust::approve(
+        &app.shared.registry,
+        &w.root,
+        &w.settings(),
+        body.project.as_deref(),
+        &body.hash,
+    )
+    .map_err(|e| match e {
+        crate::trust::ApproveError::NoProject(k) => {
+            ApiErr::not_found(format!("No project `{k}` in this workspace."))
+        }
+        crate::trust::ApproveError::Changed => ApiErr::new(
+            StatusCode::CONFLICT,
+            "Review the commands again, because the file changed after they were shown.",
+        ),
+    })?;
+    app.shared.mcp.forget(&w.root);
+    crate::git::workspace_updated(&app, &w);
+    Ok(Json(w.detail()))
 }
 
 async fn validate_workspace(
@@ -1193,10 +1396,13 @@ struct DiffQuery {
 }
 
 async fn git_show(root: &std::path::Path, rev_path: &str) -> String {
+    let filters = crate::files::git::filter_overrides(root).await;
     let out = tokio::process::Command::new("git")
+        .args(ostra_core::git::AUTOMATIC)
+        .args(&filters)
         .arg("-C")
         .arg(root)
-        .arg("show")
+        .args(["show", "--no-textconv", "--end-of-options"])
         .arg(rev_path)
         .output()
         .await;
@@ -1229,8 +1435,9 @@ async fn diff(
     }
     let mut out = vec![];
     for f in files.into_iter().take(200) {
-        let full = paths::normalize(&root.join(&f));
-        if !paths::is_inside(&root, &full) {
+        // Resolved, because an agent can leave a symlink in the project that points outside it.
+        let full = paths::resolve(&root, std::path::Path::new(&f));
+        if !paths::is_inside(&paths::resolve(&root, &root), &full) {
             continue;
         }
         out.push(DiffFile {

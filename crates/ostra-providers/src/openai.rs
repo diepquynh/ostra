@@ -40,6 +40,8 @@ impl OpenAi {
                 .to_string(),
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(20))
+                // The API key header would follow a redirect to another host.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_default(),
             retry: RetryPolicy::default(),

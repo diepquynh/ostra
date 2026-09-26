@@ -200,13 +200,35 @@ pub const TOOL_OUTPUT_LIMIT: usize = 8 * 1024;
 pub(crate) fn open_connection(path: &Path, migrations: &[&str]) -> Result<Connection, StoreError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
+        restrict(parent, 0o700)?;
     }
     let conn = Connection::open(path)?;
     conn.busy_timeout(Duration::from_millis(5000))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     migrate(&conn, migrations)?;
+    // The event log holds tool output and the registry holds credentials, and SQLite creates its
+    // side files with the process umask.
+    for suffix in ["", "-wal", "-shm"] {
+        let mut p = path.as_os_str().to_owned();
+        p.push(suffix);
+        restrict(Path::new(&p), 0o600)?;
+    }
     Ok(conn)
+}
+
+fn restrict(path: &Path, mode: u32) -> Result<(), StoreError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            r => r?,
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+    Ok(())
 }
 
 fn migrate(conn: &Connection, migrations: &[&str]) -> Result<(), StoreError> {
@@ -326,6 +348,18 @@ const DECISION_COLS: &str =
 impl WorkspaceDb {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let conn = open_connection(path, MIGRATIONS)?;
+        // The event log keeps every tool output, so a `git add -A` in the workspace root must
+        // not publish it.
+        if let Some(dir) = path.parent() {
+            let ignore = dir.join(".gitignore");
+            if !ignore.exists() {
+                std::fs::write(
+                    &ignore,
+                    "# Ostra's local state: the event log with every tool output, sessions, and uploads.\n\
+                     workspace.db*\nsessions/\nuploads/\n",
+                )?;
+            }
+        }
         Ok(WorkspaceDb {
             conn: Arc::new(Mutex::new(conn)),
         })

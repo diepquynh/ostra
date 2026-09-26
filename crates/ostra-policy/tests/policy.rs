@@ -1263,3 +1263,288 @@ fn workspace_mcp_tools() {
     assert!(deny_reason(&p.check(&search)).is_some());
     allowed(&p, &other_server);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Hardening against prompt-injected agents
+// ---------------------------------------------------------------------------------------------
+
+fn not_auto_allowed(p: &ExecutionPolicy, cmd: &str) {
+    let d = p.check(&bash(cmd));
+    assert!(!d.is_allow(), "`{cmd}` must not run unasked, got {d:?}");
+}
+
+#[test]
+fn only_fully_understood_commands_are_read_only() {
+    let f = fx();
+    for mode in [PermissionMode::Default, PermissionMode::Plan] {
+        let p = with_perms(&f, AgentName::Implementer, mode, &[], &[], &[]);
+        for cmd in [
+            "env --unset cat bash -c id",
+            "env -S 'bash -c id' cat",
+            "exec -a cat bash -c id",
+            "strace -o cat bash -c id",
+            "nice cat x",
+            "LD_PRELOAD=./x.so cat x",
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=id git status",
+            "GIT_EXTERNAL_DIFF=id git diff",
+            "git -c core.fsmonitor=id status",
+            "git --config-env=core.pager=X log",
+            "git --exec-path=/tmp status",
+            "git --git-dir=/tmp/x status",
+            "git -p log",
+            "git diff --ext-diff",
+            "git log --out=/tmp/x",
+            "rg --pre sh foo",
+            "rg --pre=sh foo",
+            "sort --compress-program=sh x",
+            "sort --compress-prog=sh x",
+            "sort -uo out.txt x",
+            "sort --out=out.txt x",
+            "tree -ao out.txt",
+            "file -C -m x",
+            "./cat x",
+            "/tmp/cat x",
+            "rg $PAT src",
+            "rg foo *",
+        ] {
+            not_auto_allowed(&p, cmd);
+        }
+        for cmd in [
+            "git status",
+            "git log --oneline -5",
+            "git diff --stat",
+            "git --no-pager log -1",
+            "rg foo src",
+            "cat README.md",
+            "ls -la",
+            "sort -u x",
+            "echo $HOME",
+        ] {
+            allowed(&p, &bash(cmd));
+        }
+    }
+}
+
+#[test]
+fn unresolved_write_targets_are_never_auto_allowed() {
+    let f = fx();
+    for mode in [PermissionMode::Default, PermissionMode::AcceptEdits, PermissionMode::Plan] {
+        let p = with_perms(&f, AgentName::Implementer, mode, &[], &[], &[]);
+        for cmd in [
+            "echo pwn >> \"$HOME/.bashrc\"",
+            "echo pwn >> ~/.bashr?",
+            "echo pwn > $(echo ~/.bashrc)",
+            "cd \"$D\" && echo x > a",
+            "tee \"$X\" < /dev/null",
+            "cp a \"$DEST\"",
+            "dd if=/dev/zero of=\"$T\"",
+            "echo x > ~root/.bashrc",
+        ] {
+            not_auto_allowed(&p, cmd);
+        }
+    }
+    let p = with_perms(&f, AgentName::Implementer, PermissionMode::Default, &[], &[], &[]);
+    allowed(
+        &p,
+        &bash(format!("echo x > {}", f.session_dir.join("n.md").display())),
+    );
+}
+
+#[test]
+fn git_runs_unasked_only_inside_the_project() {
+    let f = fx();
+    let p = with_perms(&f, AgentName::Implementer, PermissionMode::Default, &[], &[], &[]);
+    allowed(&p, &bash("git status"));
+    allowed(&p, &bash("git -C src log -1"));
+    not_auto_allowed(&p, &format!("git -C {} status", f.session_dir.display()));
+    not_auto_allowed(&p, "cd /tmp && git status");
+    not_auto_allowed(&p, "git -C \"$R\" status");
+}
+
+#[test]
+fn git_metadata_is_written_only_by_git() {
+    let f = fx();
+    let yolo = {
+        let mut ctx = f.ctx(AgentName::Implementer);
+        ctx.yolo = true;
+        ExecutionPolicy::new(ctx, PolicyInputs::default())
+    };
+    for call in [
+        write(f.repo.join(".git/config")),
+        write(f.repo.join(".git/hooks/pre-commit")),
+        write(f.repo.join(".git")),
+        write(f.session_dir.join("r/.git/config")),
+        bash("echo '[core] fsmonitor = id' >> .git/config"),
+        bash(format!("cp hook {}", f.repo.join(".git/hooks/post-merge").display())),
+    ] {
+        assert_eq!(guard_of(&yolo, &call), "git-metadata", "{}", call.input);
+    }
+    allowed(&yolo, &write(f.repo.join(".gitignore")));
+}
+
+#[test]
+fn files_that_run_code_later_always_ask() {
+    let f = fx();
+    let p = with_perms(&f, AgentName::Implementer, PermissionMode::AcceptEdits, &[], &[], &[]);
+    for rel in [
+        ".claude/settings.json",
+        ".claude/settings.local.json",
+        ".mcp.json",
+        ".codex/config.toml",
+        ".vscode/tasks.json",
+        ".envrc",
+        ".github/workflows/ci.yml",
+        ".husky/pre-commit",
+    ] {
+        assert!(is_ask(&p.check(&write(f.repo.join(rel)))), "{rel}");
+        assert!(
+            is_ask(&p.check(&bash(format!("echo x > {rel}")))),
+            "shell write to {rel}"
+        );
+    }
+    allowed(&p, &write(f.repo.join("src/a.ts")));
+    let plan = with_perms(&f, AgentName::Implementer, PermissionMode::Plan, &[], &[], &[]);
+    assert!(deny_reason(&plan.check(&write(f.repo.join(".mcp.json")))).is_some());
+}
+
+#[test]
+fn credentials_and_process_memory_are_never_read() {
+    let f = fx();
+    let data = ostra_core::paths::data_dir();
+    let yolo = {
+        let mut ctx = f.ctx(AgentName::Implementer);
+        ctx.yolo = true;
+        ExecutionPolicy::new(ctx, PolicyInputs::default())
+    };
+    let read = |p: &str| ToolCall::new("Read", json!({"file_path": p}));
+    for call in [
+        read(&data.join("registry.db").to_string_lossy()),
+        read(&data.join("master.key").to_string_lossy()),
+        read("/proc/self/environ"),
+        read("/proc/1/environ"),
+        ToolCall::new("Grep", json!({"pattern": "sk-", "path": data.to_string_lossy()})),
+        ToolCall::new("Skill", json!({"path": data.join("registry.db").to_string_lossy()})),
+        read(&ostra_core::paths::workspace_db(&f.ws).to_string_lossy()),
+        bash(format!("cat {}", data.join("registry.db").display())),
+        bash("xargs -0 -n1 < /proc/$PPID/environ"),
+        bash("strings /proc/1/environ"),
+    ] {
+        assert_eq!(guard_of(&yolo, &call), "secret-read", "{}", call.input);
+    }
+    let home = std::env::var("HOME").unwrap();
+    for rel in [".ssh/id_ed25519", ".aws/credentials", ".claude/.credentials.json"] {
+        let call = read(&format!("{home}/{rel}"));
+        assert_eq!(guard_of(&yolo, &call), "secret-read", "{rel}");
+    }
+    allowed(&yolo, &read(&data.join("assets/agents/x.md").to_string_lossy()));
+    allowed(&yolo, &read("/proc/cpuinfo"));
+}
+
+#[test]
+fn skill_paths_follow_read_rules() {
+    let f = fx();
+    let p = with_perms(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Default,
+        &[],
+        &[],
+        &["Read(~/.ssh/**)"],
+    );
+    let home = std::env::var("HOME").unwrap();
+    let d = p.check(&ToolCall::new(
+        "Skill",
+        json!({"path": format!("{home}/.ssh/id_ed25519")}),
+    ));
+    assert!(deny_reason(&d).is_some(), "{d:?}");
+}
+
+#[test]
+fn webfetch_rules_match_the_host_reqwest_connects_to() {
+    let f = fx();
+    let p = with_perms(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Default,
+        &["WebFetch(domain:docs.rs)"],
+        &[],
+        &[],
+    );
+    allowed(&p, &ToolCall::new("WebFetch", json!({"url": "https://docs.rs/x"})));
+    let d = p.check(&ToolCall::new(
+        "WebFetch",
+        json!({"url": "https://evil.example\\@docs.rs/x"}),
+    ));
+    assert!(!d.is_allow(), "{d:?}");
+}
+
+#[test]
+fn statements_outside_the_command_model_are_not_read_only() {
+    let f = fx();
+    for mode in [PermissionMode::Default, PermissionMode::AcceptEdits, PermissionMode::Plan] {
+        let p = with_perms(&f, AgentName::Implementer, mode, &[], &[], &[]);
+        for cmd in [
+            "export GIT_CONFIG_VALUE_0=x; git status",
+            "FOO=bar; git status",
+            "declare -x PATH=/tmp; ls",
+            "unset HOME; ls",
+            "printf -v PATH '%s' /tmp; ls",
+            "[[ -v 'a[$(id)]' ]]",
+            "test -v 'a[$(id)]'",
+            "for f in a b; do cat $f; done",
+            "f() { cat x; }; f",
+        ] {
+            not_auto_allowed(&p, cmd);
+        }
+        for cmd in ["test -f README.md", "[ -d src ]", "if test -f x; then cat x; fi"] {
+            allowed(&p, &bash(cmd));
+        }
+    }
+}
+
+#[test]
+fn every_spelling_of_a_copy_target_is_checked() {
+    let f = fx();
+    let p = with_perms(&f, AgentName::Implementer, PermissionMode::AcceptEdits, &[], &[], &[]);
+    let outside = f.session_root.parent().unwrap().parent().unwrap().join("elsewhere");
+    let o = outside.display();
+    for cmd in [
+        format!("cp --target-directory {o} x"),
+        format!("cp --target-directory={o} x"),
+        format!("cp --target-dir={o} x"),
+        format!("cp -t{o} x"),
+        format!("mv --target-directory={o} x"),
+        "cp x {src/a.ts,/tmp/../etc/cron.d/x}".to_string(),
+    ] {
+        not_auto_allowed(&p, &cmd);
+    }
+    allowed(&p, &bash("cp src/a.ts src/b.ts"));
+    allowed(&p, &bash("mv src/a.ts src/b.ts"));
+}
+
+#[test]
+fn listing_forms_of_git_stay_read_only() {
+    let f = fx();
+    let p = with_perms(&f, AgentName::Implementer, PermissionMode::Plan, &[], &[], &[]);
+    for cmd in [
+        "git branch",
+        "git branch -a",
+        "git remote -v",
+        "git tag",
+        "git describe --tags",
+        "git config --get user.name",
+    ] {
+        allowed(&p, &bash(cmd));
+    }
+    for cmd in [
+        "git branch evil",
+        "git tag v9",
+        "git remote add x y",
+        "git config core.fsmonitor id",
+        "rg --hostname-bin=sh x",
+        "tree -R",
+    ] {
+        not_auto_allowed(&p, cmd);
+    }
+    allowed(&p, &bash("echo see ~/.ssh/config"));
+}

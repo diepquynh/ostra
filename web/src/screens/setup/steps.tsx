@@ -317,6 +317,20 @@ function StepCheck({ w }: { w: Wizard }) {
               ))}
             </div>
           </div>
+          <div>
+            <div className="os-section-label" style={{ marginBottom: 6 }}>
+              Sandbox
+            </div>
+            <div className="os-panel">
+              <CheckRow
+                delay={d()}
+                label="Agent command sandbox"
+                sub={e.sandbox.message ?? `bubblewrap, mode ${e.sandbox.mode}`}
+                result={e.sandbox.active ? "On" : "Off"}
+                tone={e.sandbox.active ? "ok" : "warn"}
+              />
+            </div>
+          </div>
           <SetupTerminalPanel run={setup.run} error={setup.error} onClose={setup.close} onCheck={w.env.reload} />
         </>
       )}

@@ -6,8 +6,10 @@ import { Banner, Button, Panel, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
 import { GitCredentials } from "./setup/GitCredentials";
 import { ProviderCredentials } from "./setup/ProviderCredentials";
+import { SignInSessions } from "./setup/SignInSessions";
 import { McpSection } from "./workspace/McpSection";
 import { flash, Loading, Page, useAfterPaint, useAnchor } from "./workspace/Page";
+import { PendingCommandsBanner } from "./workspace/PendingCommands";
 import {
   GeneralSection,
   InstructionsSection,
@@ -219,6 +221,7 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
         </div>
       }
     >
+      <PendingCommandsBanner ws={ws} pending={detail.pending_commands} onApproved={onSaved} />
       {external && dirty && (
         <Banner
           tone="info"
@@ -276,6 +279,7 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
       {tab === "permissions" && <PermissionsSection {...props} global={detail.global_permissions} />}
       {tab === "instructions" && <InstructionsSection {...props} />}
       {tab === "notifications" && <NotificationsSection {...props} />}
+      {tab === "signin" && <SignInSessions />}
     </Page>
   );
 }

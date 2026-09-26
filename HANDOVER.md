@@ -364,6 +364,26 @@ Routing rules, carried from `UC/hooks/model-router.js` and `UC/docs/model-routin
 - The initializer runs generate-skill on `advanced` and its other modes on `balanced`, as init-kit does today.
   The `initializer` route above sets the other modes.
 
+### 7.3 Commands from folder files
+
+`.ostra/workspace.toml` and `.ostra/project.toml` can arrive with a repository, a `git pull`, or an agent's
+edit, so Ostra does not run what they name until the user approved that exact content.
+
+- Rule A1: the command-bearing parts of a folder file start only while the registry holds the user's approval
+  of their hash. For `workspace.toml` these are `mcp_servers` (command, env, url, headers, oauth, enabled),
+  each project's `code_provider` and `language_servers`, and `permissions.allow`. For `project.toml` it is
+  `commands.format`, the one project command Ostra runs itself. A file with none of them needs no approval.
+  While a file waits, no MCP server, language server, or code provider starts, its allow rules do not apply,
+  and a format step is recorded as skipped with no exit code. Settings shows the exact commands, env and
+  header names (never values), and the server variables they read, with Approve; the approval carries the
+  hash the browser showed and is refused when the file changed since.
+- A save made in Ostra keeps an approved file approved with its new content, so the user's own edits never
+  ask. A save of a file that waits keeps it waiting, so a save cannot approve commands the user was not shown.
+  A new workspace's file is approved; a file already in the folder when the workspace is created is not.
+  Workspaces registered before approvals existed have their files approved once, at the first start.
+- Rule A2: the permission mode and YOLO live in the registry per workspace, never in a folder file. A folder
+  file's `permissions.mode` and `yolo` are ignored, and Ostra no longer writes them there.
+
 ## 8. The engine
 
 ### 8.1 Model
@@ -1063,8 +1083,9 @@ The server runs shell commands for its caller, so these ship in the first build:
 - Bind to `127.0.0.1` only.
 - `ostra` prints and opens a URL carrying a one-time token in the fragment. The page exchanges it once for an
   `HttpOnly`, `SameSite=Strict` session cookie, marked `Secure` when the page was reached over HTTPS. A sign-in
-  lasts 30 days, checked on the server. `ostra signins` lists sign-ins and `ostra signout` revokes all of them;
-  a running server and its open sockets notice within 30 seconds.
+  lasts 30 days, checked on the server. Settings > Sign-in and `ostra sessions` list sign-ins (browser, address,
+  first and last seen); either revokes one or all of them. A revoke from the server takes effect at once, closing
+  the browser's open sockets; one from the CLI within 5 seconds. Failed token exchanges are limited per address.
 - Reject a `Host` header other than `127.0.0.1:<port>` or `localhost:<port>`, which blocks DNS rebinding.
   Reject a foreign `Origin` on REST and on the WebSocket upgrade. Send no CORS headers.
 - `/internal/policy` and the MCP shim accept only per-execution tokens, which expire when the execution ends.

@@ -4,7 +4,9 @@
 //! allowlist cover every executor.
 
 use ostra_core::api::{McpConnState, McpServerStatus, McpToolInfo};
-use ostra_core::config::{McpServerConfig, WorkspaceSettings, load_toml_required};
+use ostra_core::config::{
+    GlobalConfig, McpServerConfig, WorkspaceSettings, load_toml, load_toml_required,
+};
 use ostra_core::exec::ExecutionSpec;
 use ostra_core::mcp;
 use ostra_core::paths;
@@ -15,7 +17,7 @@ use ostra_tools::{McpConnector, McpOpened, McpTools, ToolDefinition};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -108,11 +110,23 @@ fn fingerprint(s: &McpServerConfig) -> String {
     serde_json::json!([s.command, s.env, s.url, s.headers, s.oauth]).to_string()
 }
 
-fn expand(field: &str, value: &str) -> Result<String, ConnError> {
-    mcp::expand_env(value).map_err(|var| {
-        ConnError::Other(format!(
-            "set `{var}` in the Ostra server's environment, because `{field}` names it, then restart the server"
-        ))
+/// Variables an MCP server's `env` and `headers` may not name, and its process may not inherit:
+/// provider credentials, bridge tokens, and OAuth client secrets. Read fresh, like all settings.
+fn credential_env(root: &Path) -> BTreeSet<String> {
+    let global: GlobalConfig = load_toml(&paths::global_config_path()).unwrap_or_default();
+    ostra_core::config::credential_env_names(&global, &settings(root).mcp_servers)
+}
+
+fn expand(field: &str, value: &str, refused: &BTreeSet<String>) -> Result<String, ConnError> {
+    mcp::expand_env(value, refused).map_err(|e| {
+        ConnError::Other(match e {
+            mcp::ExpandError::Unset(var) => format!(
+                "set `{var}` in the Ostra server's environment, because `{field}` names it, then restart the server"
+            ),
+            mcp::ExpandError::Refused(var) => format!(
+                "name a variable of this server's own in `{field}` instead of `{var}`, because Ostra does not pass provider keys, bridge tokens, or OAuth client secrets to MCP servers"
+            ),
+        })
     })
 }
 
@@ -123,6 +137,7 @@ impl McpGateway {
             http: reqwest::Client::builder()
                 .user_agent(concat!("ostra/", env!("CARGO_PKG_VERSION")))
                 .timeout(Duration::from_secs(30))
+                .redirect(ostra_mcp::same_origin_redirects())
                 .build()
                 .unwrap_or_default(),
             conns: Mutex::default(),
@@ -152,23 +167,25 @@ impl McpGateway {
     }
 
     fn load_record(&self, key: &Key) -> Option<OAuthRecord> {
-        let bytes = self.registry.kv_get(&oauth_key(key)).ok()??;
+        let bytes = self.registry.secret_get(&oauth_key(key)).ok()??;
         serde_json::from_slice(&bytes).ok()
     }
 
     fn save_record(&self, key: &Key, record: &OAuthRecord) {
         if let Ok(bytes) = serde_json::to_vec(record)
-            && let Err(e) = self.registry.kv_set(&oauth_key(key), &bytes)
+            && let Err(e) = self.registry.secret_set(&oauth_key(key), &bytes)
         {
             tracing::warn!("could not save MCP sign-in for {}: {e}", key.1);
         }
     }
 
     fn endpoint(self: &Arc<Self>, key: &Key, cfg: &McpServerConfig) -> Result<Endpoint, ConnError> {
+        let refused = credential_env(&key.0);
         if let Some(url) = &cfg.url {
             let mut headers = vec![];
             for (k, v) in &cfg.headers {
-                headers.push((k.clone(), expand(&format!("headers.{k}"), v)?));
+                let field = format!("headers.{k}");
+                headers.push((k.clone(), self.value(key, cfg, &field, v, &refused)?));
             }
             let auth: Arc<dyn TokenSource> = Arc::new(Stored {
                 gateway: self.clone(),
@@ -182,15 +199,46 @@ impl McpGateway {
                 auth: Some(auth),
             });
         }
-        let mut env = vec![];
+        // The server is the workspace's own program, so it runs under the agent sandbox.
+        let hc = ostra_core::sandbox::host_command(
+            &cfg.command[0],
+            &cfg.command[1..],
+            &key.0,
+            &[&key.0],
+        )
+        .map_err(ConnError::Other)?;
+        let mut env = hc.env;
         for (k, v) in &cfg.env {
-            env.push((k.clone(), expand(&format!("env.{k}"), v)?));
+            let field = format!("env.{k}");
+            env.push((k.clone(), self.value(key, cfg, &field, v, &refused)?));
         }
+        let mut env_remove: Vec<String> = refused.into_iter().collect();
+        env_remove.extend(hc.env_remove);
         Ok(Endpoint::Stdio {
-            program: cfg.command[0].clone(),
-            args: cfg.command[1..].to_vec(),
+            program: hc.program,
+            args: hc.args,
             env,
+            env_remove,
             cwd: key.0.clone(),
+        })
+    }
+
+    /// A header or env value: a saved one from the encrypted registry, else `${VAR}` expanded.
+    fn value(
+        &self,
+        key: &Key,
+        cfg: &McpServerConfig,
+        field: &str,
+        v: &str,
+        refused: &BTreeSet<String>,
+    ) -> Result<String, ConnError> {
+        if v != mcp::SAVED_SECRET {
+            return expand(field, v, refused);
+        }
+        crate::trust::mcp_secret(&self.registry, &key.0, cfg, field).ok_or_else(|| {
+            ConnError::Other(format!(
+                "enter `{field}` again in settings, because Ostra could not read its saved value"
+            ))
         })
     }
 
@@ -230,7 +278,16 @@ impl McpGateway {
             return Err(e.clone());
         }
         let result: Result<(Arc<Client>, Vec<ToolInfo>), ConnError> = async {
-            let endpoint = self.endpoint(&key, cfg)?;
+            // Rule A1: no server starts from a workspace file that waits for approval, and it
+            // starts from the approved copy.
+            let approved = crate::trust::approved_workspace_file(&self.registry, root)
+                .ok_or_else(|| ConnError::Other(crate::trust::PENDING_MESSAGE.into()))?;
+            let cfg = approved
+                .mcp_servers
+                .into_iter()
+                .find(|c| c == cfg)
+                .ok_or_else(|| ConnError::Other(crate::trust::PENDING_MESSAGE.into()))?;
+            let endpoint = self.endpoint(&key, &cfg)?;
             let client = Client::connect(endpoint, CONNECT_TIMEOUT)
                 .await
                 .map_err(conn_error)?;
@@ -349,7 +406,10 @@ impl McpGateway {
         name: &str,
         origin: &str,
     ) -> Result<String, String> {
-        let s = settings(root);
+        // Rule A1: signing in sends `oauth.client_secret_env` to the server's endpoints, so it
+        // uses the approved copy of the file.
+        let s = crate::trust::approved_workspace_file(&self.registry, root)
+            .ok_or(crate::trust::PENDING_MESSAGE)?;
         let cfg = s
             .mcp_servers
             .iter()
@@ -378,6 +438,13 @@ impl McpGateway {
                     .client_secret_env
                     .as_deref()
                     .map(|v| {
+                        // Provider keys and bridge tokens only; the MCP servers' own secret
+                        // variables are in the shared list too, and this one is among them.
+                        let global: GlobalConfig =
+                            load_toml(&paths::global_config_path()).unwrap_or_default();
+                        if ostra_core::config::credential_env_names(&global, &[]).contains(v) {
+                            return Err(format!("Name a variable of this server's own in `oauth.client_secret_env` instead of `{v}`, because Ostra does not send provider keys or bridge tokens to MCP servers."));
+                        }
                         std::env::var(v).map_err(|_| {
                             format!("Set `{v}` in the Ostra server's environment, because `oauth.client_secret_env` names it.")
                         })

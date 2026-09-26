@@ -5,7 +5,7 @@ use crate::workspace::{WorkspaceRt, validate_settings};
 use ostra_core::api::{CreateWorkspace, EnvironmentStatus, OnboardingState, RoutingPreset};
 use ostra_core::config::{
     Environment, GlobalConfig, PermissionMode, ProjectEntry, ValidationIssue, WorkspaceSettings,
-    load_toml_required, save_toml,
+    load_toml_required,
 };
 use ostra_core::ids::WorkspaceId;
 use ostra_core::paths;
@@ -18,6 +18,7 @@ pub async fn environment(app: &App) -> EnvironmentStatus {
         providers: app.shared.providers.status(),
         harnesses: app.shared.env.read().harnesses.clone(),
         stacks: ostra_agents::stack_names(),
+        sandbox: ostra_core::api::SandboxStatus::check(&app.shared.global().sandbox),
     }
 }
 
@@ -42,6 +43,8 @@ pub struct Draft {
     pub root: PathBuf,
     pub settings: WorkspaceSettings,
     pub issues: Vec<ValidationIssue>,
+    /// The folder already held a `workspace.toml`, which these settings build on.
+    pub adopted: bool,
 }
 
 fn issue(path: impl Into<String>, message: impl Into<String>) -> ValidationIssue {
@@ -96,11 +99,20 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
         .filter(|_| reusable)
         .map(paths::workspace_toml)
         .filter(|p| p.is_file());
+    let mut adopted = false;
     let mut settings = match existing
         .as_deref()
         .map(load_toml_required::<WorkspaceSettings>)
     {
-        Some(Ok(s)) => s,
+        // Rule A2: a folder file's mode, YOLO, and spend limits are ignored; only the request
+        // sets them.
+        Some(Ok(mut s)) => {
+            adopted = true;
+            s.permissions.mode = PermissionMode::default();
+            s.yolo.default = false;
+            s.limits = Default::default();
+            s
+        }
         Some(Err(e)) => {
             issues.push(issue("root", format!("The folder's .ostra/workspace.toml cannot be read, so Ostra cannot reuse it: {e}")));
             WorkspaceSettings::seeded(&name)
@@ -178,6 +190,7 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
         root: root.unwrap_or_default(),
         settings,
         issues,
+        adopted,
     }
 }
 
@@ -251,7 +264,7 @@ pub fn create(app: &Arc<App>, body: &CreateWorkspace) -> Result<Arc<WorkspaceRt>
             "That folder is already a registered workspace.",
         )]));
     }
-    save_toml(&paths::workspace_toml(&root), &d.settings)
+    crate::trust::create_workspace(registry, &root, &d.settings, d.adopted)
         .map_err(|e| CreateError::Failed(e.to_string()))?;
     let id = WorkspaceId::new();
     registry.add_workspace(&id, &d.settings.name, &root)?;
@@ -266,6 +279,7 @@ pub fn create(app: &Arc<App>, body: &CreateWorkspace) -> Result<Arc<WorkspaceRt>
 mod tests {
     use super::*;
     use ostra_core::api::{CreateNotifications, CreatePermissions, CreateYolo, ImportProject};
+    use ostra_core::config::save_toml;
     use ostra_core::executor::{ExecutorKind, HarnessKind};
 
     fn env() -> Environment {
@@ -464,6 +478,8 @@ mod tests {
             language_servers: vec![],
         });
         old.instructions.all = Some("Keep it short.".into());
+        old.permissions.mode = PermissionMode::Bypass;
+        old.yolo.default = true;
         save_toml(&paths::workspace_toml(&root), &old).unwrap();
         let mut req = body(&root);
         req.projects = Some(vec![project(&a, "gone")]);
@@ -474,6 +490,12 @@ mod tests {
             Some("Keep it short.")
         );
         assert_eq!(paths_of(&d), ["projects[0].key", "root"]);
+        assert!(d.adopted);
+        assert_eq!(d.settings.permissions.mode, PermissionMode::Default);
+        assert!(
+            !d.settings.yolo.default,
+            "a folder file never turns YOLO on"
+        );
 
         std::fs::write(paths::workspace_toml(&root), "name = [").unwrap();
         assert_eq!(paths_of(&run(&body(&root))), ["root"]);

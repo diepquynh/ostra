@@ -104,6 +104,9 @@ impl Drop for Slot {
     }
 }
 
+/// The output of a format step skipped because its command waits for approval.
+pub const FORMAT_NOT_APPROVED: &str = "The format command in project.toml changed outside Ostra, so format was skipped. Approve it in the project's settings to run it next time.";
+
 #[derive(Clone)]
 pub struct Engine {
     inner: Arc<Inner>,
@@ -1747,10 +1750,22 @@ impl Inner {
                     None,
                     "No format command in project.toml, so format was skipped.".to_string(),
                 ),
+                // Rule A1: a format command runs only once the user approved it.
+                Some(cmd) if !self.services.command_approved(&root, &cmd) => {
+                    (cmd, None, FORMAT_NOT_APPROVED.to_string())
+                }
                 Some(cmd) => {
                     self.append_command_started(session, purpose, project, &cmd)?;
-                    let (code, out) =
-                        run_shell(&root, "bash", &["-c".into(), cmd.clone()], 600).await;
+                    // The project's own program, so it runs under the agent sandbox.
+                    let (code, out) = match ostra_core::sandbox::host_command(
+                        "bash",
+                        &["-c".into(), cmd.clone()],
+                        &root,
+                        &[&root],
+                    ) {
+                        Ok(hc) => run_host(&root, &hc, 600).await,
+                        Err(e) => (None, e),
+                    };
                     (cmd, code, out)
                 }
             },
@@ -1759,13 +1774,29 @@ impl Inner {
                     (String::new(), Some(0), "No files to stage.".to_string())
                 } else {
                     // Staging keeps each review focused on the unstaged diff (Step 2).
-                    let mut args: Vec<String> = vec![
+                    let mut args: Vec<String> = ostra_core::git::AUTOMATIC
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    let listed = tokio::process::Command::new("git")
+                        .args(ostra_core::git::AUTOMATIC)
+                        .arg("-C")
+                        .arg(&root)
+                        .args(ostra_core::git::FILTER_QUERY)
+                        .stdin(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .output()
+                        .await
+                        .map(|o| o.stdout)
+                        .unwrap_or_default();
+                    args.extend(ostra_core::git::blank_filters(&listed));
+                    args.extend([
                         "-C".into(),
                         root.display().to_string(),
                         "add".into(),
                         "-A".into(),
                         "--".into(),
-                    ];
+                    ]);
                     args.extend(files.iter().cloned());
                     let text = format!("git {}", args.join(" "));
                     self.append_command_started(session, purpose, project, &text)?;
@@ -2225,7 +2256,32 @@ async fn run_shell(
     timeout_secs: u64,
 ) -> (Option<i32>, String) {
     let mut cmd = tokio::process::Command::new(program);
-    cmd.args(args).current_dir(cwd).kill_on_drop(true);
+    cmd.args(args);
+    run_command(cmd, cwd, program, timeout_secs).await
+}
+
+async fn run_host(
+    cwd: &Path,
+    hc: &ostra_core::sandbox::HostCommand,
+    timeout_secs: u64,
+) -> (Option<i32>, String) {
+    let mut cmd = tokio::process::Command::new(&hc.program);
+    for k in &hc.env_remove {
+        cmd.env_remove(k);
+    }
+    cmd.args(&hc.args).envs(hc.env.iter().map(|(k, v)| (k, v)));
+    run_command(cmd, cwd, &hc.program, timeout_secs).await
+}
+
+async fn run_command(
+    mut cmd: tokio::process::Command,
+    cwd: &Path,
+    program: &str,
+    timeout_secs: u64,
+) -> (Option<i32>, String) {
+    cmd.current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
     let fut = cmd.output();
     match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fut).await {
         Ok(Ok(out)) => {

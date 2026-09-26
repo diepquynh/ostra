@@ -65,14 +65,15 @@ pub const FATAL_MARKERS: &[&str] = &[
     "model not found",
 ];
 
-/// Folder-trust prompts that must be answered before the session starts. The user imported the
-/// project into Ostra, and Ostra's guards govern every call, so the default "yes" is accepted.
+/// Folder-trust prompts that must be answered before the session starts. See [`trust_answer`]
+/// for which ones Ostra accepts.
 pub const TRUST_MARKERS: &[&str] = &[
     "do you trust the files in this folder",
     "do you trust the contents of this directory",
     "trust this folder",
     "trust this project",
     "i trust this folder",
+    "open restricted",
 ];
 
 /// A new-model offer at startup (Codex 0.157 "Meet GPT-6 Luna"). Ostra keeps the routed model,
@@ -109,11 +110,48 @@ fn screen_session_id(screen: &str) -> Option<String> {
 enum TrustKey {
     Confirm,
     Down,
+    /// End the run with this reason instead of answering.
+    Refuse(String),
 }
 
 /// Which key answers "yes" to a trust prompt: Enter when the highlighted option trusts the
 /// folder, else Down to move to it. Prompt defaults differ between versions ("No, exit" is first
 /// on Claude Code 2.1.280).
+/// How to answer a harness's folder-trust prompt.
+/// - Claude Code: yes. It loads only user settings (`--setting-sources user`) and only Ostra's MCP
+///   config (`--strict-mcp-config`), so trust adds nothing from the repository.
+/// - Codex: "Open restricted" only, which the restricted profile offers. Its "Trust and continue"
+///   would save trust and load the repository's `.codex/` config and hooks, so it is refused.
+/// - Grok Build: never. Trust makes it run the folder's own hooks and MCP servers, so the user
+///   decides it in Grok.
+fn trust_answer(harness: HarnessKind, repo: &std::path::Path, screen: &str) -> Option<TrustKey> {
+    match harness {
+        HarnessKind::Codex if screen.to_lowercase().contains("open restricted") => {
+            restricted_key(screen)
+        }
+        HarnessKind::Codex => Some(TrustKey::Refuse(
+            "remove `-p`/`--profile` from `[harness.codex].args` so Ostra can open the folder restricted, because Codex asked to trust it, and a trusted folder's own Codex config and hooks run outside Ostra's guards".into(),
+        )),
+        HarnessKind::Grok => Some(TrustKey::Refuse(format!(
+            "trust `{}` in Grok yourself (run `grok` in that folder and answer yes), then run this again, because Ostra does not trust folders for you: Grok runs a trusted folder's own hooks and MCP servers outside Ostra's guards",
+            repo.display()
+        ))),
+        HarnessKind::Claude | HarnessKind::Agy => trust_key(screen),
+    }
+}
+
+/// Enter on "Open restricted", else Down toward it.
+fn restricted_key(screen: &str) -> Option<TrustKey> {
+    let selected = screen.lines().map(str::trim_start).find(|t| {
+        t.starts_with('❯') || t.starts_with('›') || t.starts_with('▸') || t.starts_with("> ")
+    })?;
+    Some(if selected.to_lowercase().contains("open restricted") {
+        TrustKey::Confirm
+    } else {
+        TrustKey::Down
+    })
+}
+
 fn trust_key(screen: &str) -> Option<TrustKey> {
     let option_like = |l: &str| {
         let l = l.to_lowercase();
@@ -128,11 +166,8 @@ fn trust_key(screen: &str) -> Option<TrustKey> {
             && option_like(t)
     })?;
     let l = selected.to_lowercase();
-    // Codex 0.157 words the yes option "Trust and continue".
-    let positive = (l.contains("yes") || l.contains("trust and continue"))
-        && !l.contains("no,")
-        && !l.contains("quit")
-        && !l.contains("exit");
+    let positive =
+        l.contains("yes") && !l.contains("no,") && !l.contains("quit") && !l.contains("exit");
     Some(if positive {
         TrustKey::Confirm
     } else {
@@ -253,10 +288,29 @@ impl HarnessExecutor {
                 .as_ref()
                 .and_then(|r| r.native_session_id.clone()),
             home: cfg.home.clone(),
+            credential_env: {
+                let ws: ostra_core::config::WorkspaceSettings = ostra_core::config::load_toml(
+                    &ostra_core::paths::workspace_toml(&spec.ctx.workspace_root),
+                )
+                .unwrap_or_default();
+                ostra_core::config::credential_env_names(&cfg.global, &ws.mcp_servers)
+                    .into_iter()
+                    .collect()
+            },
         };
         let plan = launch::plan(&input);
         launch::materialize(&plan)
             .map_err(|e| launch_error(format!("writing the harness config: {e}")))?;
+        let (plan, unsandboxed) =
+            crate::sandbox::wrap(plan, &input, &cfg.global.sandbox).map_err(launch_error)?;
+        if let Some(w) = unsandboxed {
+            if ostra_core::sandbox::first_warning() {
+                tracing::warn!("agent commands run without a sandbox: {w}");
+            }
+            host.emit(ExecutionDelta::Status {
+                message: format!("{} runs without a sandbox. {w}", harness.display_name()),
+            });
+        }
         if let Some(sid) = &plan.session_id {
             live.note_session(Some(sid.clone()), None);
         }
@@ -337,12 +391,17 @@ impl HarnessExecutor {
                 let text = pty.screen_text().to_lowercase();
                 if trust_steps < 6 && TRUST_MARKERS.iter().any(|m| text.contains(m)) {
                     trust_steps += 1;
-                    match trust_key(&pty.screen_text()) {
+                    match trust_answer(harness, &spec.ctx.repo_root, &pty.screen_text()) {
                         None => {}
+                        Some(TrustKey::Refuse(why)) => return End::Fatal(why),
                         Some(TrustKey::Confirm) => {
                             let _ = pty.write(b"\r");
                             host.emit(ExecutionDelta::Status {
-                                message: "Accepted the harness's folder-trust prompt for this imported project.".into(),
+                                message: if harness == HarnessKind::Codex {
+                                    "Opened the project restricted in Codex, so the repository's own Codex config and hooks stay off.".into()
+                                } else {
+                                    "Accepted the harness's folder-trust prompt for this imported project.".into()
+                                },
                             });
                         }
                         Some(TrustKey::Down) => {
@@ -353,7 +412,7 @@ impl HarnessExecutor {
                 }
                 if MODEL_OFFER_MARKERS.iter().any(|m| text.contains(m)) {
                     match keep_model_key(&pty.screen_text()) {
-                        None => {}
+                        None | Some(TrustKey::Refuse(_)) => {}
                         Some(TrustKey::Confirm) => {
                             let _ = pty.write(b"\r");
                             host.emit(ExecutionDelta::Status {
@@ -435,6 +494,16 @@ impl Executor for HarnessExecutor {
                 let screen = pty.screen_text();
                 pty.terminate(Duration::from_secs(3)).await;
                 self.ptys.remove(&spec.id);
+                crate::sandbox::cleanup(&harness_execution_dir(
+                    &spec.ctx.session_root,
+                    spec.id.as_str(),
+                ));
+                if harness == HarnessKind::Codex {
+                    let _ = std::fs::remove_file(crate::launch::codex_profile_path(
+                        &home,
+                        spec.id.as_str(),
+                    ));
+                }
                 let inspect = spec.resume.as_ref().is_some_and(|r| r.inspect);
                 if inspect && matches!(end, End::Exited(..) | End::Timeout(_)) {
                     let mut r = ExecutionResult::with_status(ExecutionStatus::Ok);
@@ -464,11 +533,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codex_0_157_trust_prompt_is_accepted() {
-        let prompt = "  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Quit\n";
-        assert!(matches!(trust_key(prompt), Some(TrustKey::Confirm)));
-        let on_quit = "  1. Trust and continue\n› 2. Quit\n";
-        assert!(matches!(trust_key(on_quit), Some(TrustKey::Down)));
+    fn codex_opens_restricted_and_never_saves_trust() {
+        let repo = std::path::Path::new("/r");
+        let restricted = "  Folder access  /r\n  Config, hooks, and exec policies from untrusted folders stay disabled.\n› 1. Open restricted\n  2. Quit\n";
+        assert_eq!(
+            trust_answer(HarnessKind::Codex, repo, restricted),
+            Some(TrustKey::Confirm)
+        );
+        let on_quit = "  Folder access\n  1. Open restricted\n› 2. Quit\n";
+        assert_eq!(
+            trust_answer(HarnessKind::Codex, repo, on_quit),
+            Some(TrustKey::Down)
+        );
+        let trust = "  Trust this folder? Codex can read, edit, and run files here.\n› 1. Trust and continue\n  2. Quit\n";
+        assert!(matches!(
+            trust_answer(HarnessKind::Codex, repo, trust),
+            Some(TrustKey::Refuse(why)) if why.contains("--profile")
+        ));
+    }
+
+    #[test]
+    fn grok_trust_is_left_to_the_user() {
+        let prompt = "Do you trust the contents of this directory?\n  /r\n❯ Yes, proceed   y\n  No, quit   n\n";
+        assert!(matches!(
+            trust_answer(HarnessKind::Grok, std::path::Path::new("/r"), prompt),
+            Some(TrustKey::Refuse(why)) if why.contains("trust `/r` in Grok")
+        ));
+        let claude = "   No, exit\n ❯ Yes, I trust this folder\n";
+        assert_eq!(
+            trust_answer(HarnessKind::Claude, std::path::Path::new("/r"), claude),
+            Some(TrustKey::Confirm)
+        );
     }
 
     #[test]

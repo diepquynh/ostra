@@ -162,6 +162,13 @@ pub fn frontmatter_description(text: &str) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// `rel` under the project, with symlinks resolved, or `None` when it leaves the project: skill
+/// paths come from `project.toml`, which the repository itself can supply.
+fn in_project(root: &Path, rel: &str) -> Option<PathBuf> {
+    let root = std::fs::canonicalize(root).ok()?;
+    crate::files::tree::contain(&root, rel).ok().map(|c| c.real)
+}
+
 fn describe(path: &Path) -> Option<String> {
     frontmatter_description(&std::fs::read_to_string(path).ok()?)
 }
@@ -185,14 +192,14 @@ pub fn scan(root: &Path) -> Vec<SkillView> {
         .skills
         .iter()
         .map(|e| {
-            let file = root.join(&e.path);
+            let file = in_project(root, &e.path);
             SkillView {
                 name: e.name.clone(),
-                description: describe(&file),
+                description: file.as_deref().and_then(describe),
                 path: e.path.clone(),
                 origin: SkillOrigin::Ostra,
                 entry: Some(e.clone()),
-                exists: file.is_file(),
+                exists: file.is_some_and(|f| f.is_file()),
             }
         })
         .collect();
@@ -239,7 +246,9 @@ pub fn get(w: &WorkspaceRt, key: &str, name: &str) -> Result<SkillDoc, ApiErr> {
     let skill =
         view(&root, name).ok_or_else(|| not_found(format!("No skill `{name}` in {key}.")))?;
     let content = if skill.exists {
-        std::fs::read_to_string(root.join(&skill.path)).map_err(io)?
+        let file = in_project(&root, &skill.path)
+            .ok_or_else(|| conflict(format!("Move skill `{name}` inside the project: its path leaves it.")))?;
+        std::fs::read_to_string(file).map_err(io)?
     } else {
         String::new()
     };
@@ -253,7 +262,9 @@ pub fn get_harness(w: &WorkspaceRt, key: &str, rel: &str) -> Result<SkillDoc, Ap
         .into_iter()
         .find(|s| s.origin == SkillOrigin::Harness && s.path == rel)
         .ok_or_else(|| not_found(format!("No harness skill at `{rel}` in {key}.")))?;
-    let content = std::fs::read_to_string(root.join(&skill.path)).map_err(io)?;
+    let file = in_project(&root, &skill.path)
+        .ok_or_else(|| not_found(format!("No harness skill at `{rel}` in {key}.")))?;
+    let content = std::fs::read_to_string(file).map_err(io)?;
     Ok(SkillDoc { skill, content })
 }
 
@@ -307,17 +318,19 @@ pub fn save(w: &WorkspaceRt, key: &str, name: &str, body: &SkillSave) -> Result<
         .find(|e| e.name == name && !e.path.is_empty())
         .map(|e| e.path)
         .unwrap_or_else(|| located_rel(&root, name));
-    let file = paths::normalize(&root.join(&rel));
+    // Resolved, so a symlinked `.agents` or `.ostra` cannot carry the write out of the project.
+    let file = in_project(&root, &rel);
     let writable = [
         paths::project_runtime(&root),
         paths::project_skills_dir(&root),
-    ];
-    if !writable.iter().any(|d| file.starts_with(d)) {
+    ]
+    .map(|d| paths::resolve(&d, &d));
+    let Some(file) = file.filter(|f| writable.iter().any(|d| f.starts_with(d))) else {
         return Err(conflict(format!(
             "Edit `{rel}` in the Files tab: Ostra writes skills only under `{}/` and `.ostra/`.",
             paths::SKILLS_DIR
         )));
-    }
+    };
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir).map_err(io)?;
     }

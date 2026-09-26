@@ -23,7 +23,8 @@ fn walker(
         .git_global(true)
         .parents(true)
         .require_git(false);
-    b.filter_entry(|e| e.file_name() != ".git");
+    let secret = SecretFilter::new();
+    b.filter_entry(move |e| e.file_name() != ".git" && !secret.hides(e.path()));
     if let Some(glob) = glob.filter(|g| !g.trim().is_empty()) {
         let mut ob = ignore::overrides::OverrideBuilder::new(root);
         for g in split_globs(glob) {
@@ -44,6 +45,41 @@ fn walker(
         b.types(types);
     }
     Ok(b.build())
+}
+
+/// Credential stores and Ostra's data dir (except its agent assets), which a search from a
+/// parent dir must not walk into.
+struct SecretFilter {
+    roots: Vec<PathBuf>,
+    assets: Vec<PathBuf>,
+}
+
+impl SecretFilter {
+    fn new() -> Self {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        let both = |p: PathBuf| {
+            [std::fs::canonicalize(&p).ok(), Some(p)]
+                .into_iter()
+                .flatten()
+        };
+        SecretFilter {
+            roots: ostra_core::paths::secret_paths(&home)
+                .into_iter()
+                .flat_map(both)
+                .collect(),
+            assets: both(ostra_core::paths::data_dir().join("assets")).collect(),
+        }
+    }
+
+    fn hides(&self, p: &Path) -> bool {
+        self.roots.iter().any(|r| p.starts_with(r))
+            && !self
+                .assets
+                .iter()
+                .any(|a| p.starts_with(a) || a.starts_with(p))
+    }
 }
 
 fn type_alias(t: &str) -> &str {
@@ -516,6 +552,19 @@ mod tests {
         }
         let out = run(&env, "Glob", json!({"pattern": "*.txt"})).await;
         assert!(out.text.contains("showing 100 of 120"));
+    }
+
+    #[test]
+    fn search_skips_credential_stores() {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return;
+        };
+        let f = super::SecretFilter::new();
+        assert!(f.hides(&home.join(".ssh/id_ed25519")));
+        assert!(f.hides(&home.join(".aws")));
+        assert!(!f.hides(&home.join("code/app/main.rs")));
+        assert!(!f.hides(&ostra_core::paths::data_dir().join("assets/skills/x.md")));
+        assert!(f.hides(&ostra_core::paths::data_dir().join("registry.db")));
     }
 
     #[test]

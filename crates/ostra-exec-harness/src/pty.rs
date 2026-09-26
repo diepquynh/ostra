@@ -103,6 +103,9 @@ impl PtySession {
         for k in PARENT_SESSION_ENV {
             cmd.env_remove(k);
         }
+        for k in &plan.env_remove {
+            cmd.env_remove(k);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         for (k, v) in &plan.env {
@@ -563,6 +566,7 @@ mod tests {
             files: vec![],
             links: vec![],
             session_id: None,
+            env_remove: vec![],
         }
     }
 
@@ -662,6 +666,7 @@ mod tests {
             files: vec![],
             links: vec![],
             session_id: None,
+            env_remove: vec![],
         };
         let seen = Arc::new(Mutex::new(Vec::<u8>::new()));
         let sink = seen.clone();
@@ -699,6 +704,7 @@ mod tests {
             files: vec![],
             links: vec![],
             session_id: None,
+            env_remove: vec![],
         };
         let pty = PtySession::spawn(&plan, 80, 24, Box::new(|_| {})).unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;

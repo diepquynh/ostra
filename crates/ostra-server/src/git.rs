@@ -69,7 +69,7 @@ impl SavedGitCredential {
 
 pub fn load_all(registry: &RegistryDb) -> Result<Vec<(String, SavedGitCredential)>, StoreError> {
     let mut out = vec![];
-    for (key, bytes) in registry.kv_scan(PREFIX)? {
+    for (key, bytes) in registry.secret_scan(PREFIX)? {
         match serde_json::from_slice(&bytes) {
             Ok(saved) => out.push((key[PREFIX.len()..].to_string(), saved)),
             Err(e) => tracing::warn!("ignoring unreadable git credential under {key}: {e}"),
@@ -93,7 +93,7 @@ fn load(registry: &RegistryDb, id: &str) -> Result<Option<SavedGitCredential>, S
 }
 
 fn store(registry: &RegistryDb, id: &str, saved: &SavedGitCredential) -> Result<(), StoreError> {
-    registry.kv_set(
+    registry.secret_set(
         &format!("{PREFIX}{id}"),
         &serde_json::to_vec(saved).expect("credential serializes"),
     )
@@ -269,6 +269,8 @@ fn apply(
 #[derive(Debug, Clone, PartialEq)]
 pub struct Remote {
     pub ssh: bool,
+    /// `http://`, where a saved token would cross the network unencrypted.
+    pub plain_http: bool,
     /// Host, `:port` when one is given, and the repository path without `.git`.
     pub key: String,
 }
@@ -309,6 +311,9 @@ pub fn parse_remote(raw: &str) -> Result<Remote, String> {
         };
         return Ok(Remote {
             ssh,
+            // Loopback traffic never crosses the network.
+            plain_http: url.scheme() == "http"
+                && !matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")),
             key: tidy(&host, url.path()),
         });
     }
@@ -326,6 +331,7 @@ pub fn parse_remote(raw: &str) -> Result<Remote, String> {
         {
             return Ok(Remote {
                 ssh: true,
+                plain_http: false,
                 key: tidy(host, path),
             });
         }
@@ -341,7 +347,8 @@ fn matches(remote: &Remote, c: &SavedGitCredential) -> bool {
         Some((name, _)) if !c_name.contains(':') => format!("{name}/{path}"),
         _ => remote.key.clone(),
     };
-    (remote.ssh == (c.kind == GitCredentialKind::Ssh))
+    !remote.plain_http
+        && (remote.ssh == (c.kind == GitCredentialKind::Ssh))
         && (key == c.host || key.starts_with(&format!("{}/", c.host)))
 }
 
@@ -387,9 +394,21 @@ impl GitAuth {
                 args.push("-c".into());
                 args.push("credential.helper=".into());
                 args.push("-c".into());
+                // Answers only for the credential's own host, so a remote rewritten by the
+                // repository's config (`url.*.insteadOf`) is never handed the token.
                 args.push(
-                    r#"credential.helper=!f() { test "$1" = get || exit 0; echo "username=$OSTRA_GIT_USERNAME"; echo "password=$OSTRA_GIT_PASSWORD"; }; f"#.into(),
+                    r#"credential.helper=!f() { test "$1" = get || exit 0; h=; while IFS= read -r l; do case "$l" in host=*) h="${l#host=}";; esac; done; test "$h" = "$OSTRA_GIT_HOST" || test "${h%%:*}" = "$OSTRA_GIT_HOST" || exit 0; echo "username=$OSTRA_GIT_USERNAME"; echo "password=$OSTRA_GIT_PASSWORD"; }; f"#.into(),
                 );
+                // The token goes straight to the remote over verified TLS, whatever proxy or
+                // certificate settings the repository's config names.
+                for pin in ["http.proxy=", "http.sslVerify=true"] {
+                    args.push("-c".into());
+                    args.push(pin.into());
+                }
+                envs.push((
+                    "OSTRA_GIT_HOST".into(),
+                    c.host.split('/').next().unwrap_or_default().to_ascii_lowercase(),
+                ));
                 envs.push((
                     "OSTRA_GIT_USERNAME".into(),
                     c.username
@@ -399,7 +418,10 @@ impl GitAuth {
                 envs.push(("OSTRA_GIT_PASSWORD".into(), c.secret.clone()));
             }
             Some(c) => {
-                let tmp = tempfile::Builder::new().prefix("ostra-git-").tempdir()?;
+                // In the owner-only data dir, which the sandbox hides, not in the shared temp dir.
+                let private = ostra_core::paths::ensure_data_dir()?.join("tmp");
+                std::fs::create_dir_all(&private)?;
+                let tmp = tempfile::Builder::new().prefix("ostra-git-").tempdir_in(&private)?;
                 let key = tmp.path().join("id");
                 write_private(&key, &format!("{}\n", c.secret.trim_end()))?;
                 envs.push((
@@ -503,6 +525,7 @@ pub async fn run_git(
     mut on_line: impl FnMut(&str),
 ) -> Result<String, String> {
     let mut cmd = tokio::process::Command::new("git");
+    cmd.args(ostra_core::git::NO_EXEC);
     if let Some(dir) = cwd {
         cmd.arg("-C").arg(dir);
     }
@@ -916,6 +939,7 @@ mod tests {
             r,
             Remote {
                 ssh: false,
+                plain_http: false,
                 key: "github.com/acme/shop".into()
             }
         );
@@ -924,9 +948,22 @@ mod tests {
             r,
             Remote {
                 ssh: true,
+                plain_http: false,
                 key: "github.com/acme/shop".into()
             }
         );
+        let plain = parse_remote("http://github.com/acme/shop").unwrap();
+        assert!(plain.plain_http);
+        let https = parse_remote("https://github.com/acme/shop").unwrap();
+        let cred = SavedGitCredential {
+            label: "gh".into(),
+            host: "github.com".into(),
+            kind: GitCredentialKind::Https,
+            username: None,
+            secret: "t".into(),
+        };
+        assert!(matches(&https, &cred));
+        assert!(!matches(&plain, &cred), "a token never goes over plain http");
         let r = parse_remote("ssh://git@git.example:2222/team/app").unwrap();
         assert_eq!(r.key, "git.example:2222/team/app");
         assert!(r.ssh);
@@ -1106,6 +1143,40 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&ok.stderr)
         );
+    }
+
+    #[test]
+    fn the_credential_helper_answers_only_its_own_host() {
+        let cred = SavedGitCredential {
+            label: "gh".into(),
+            host: "github.com/acme".into(),
+            kind: GitCredentialKind::Https,
+            username: Some("u".into()),
+            secret: "tok".into(),
+        };
+        let auth = GitAuth::new(Some(&cred)).unwrap();
+        let helper = auth
+            .args
+            .iter()
+            .find_map(|a| a.strip_prefix("credential.helper=!"))
+            .unwrap()
+            .to_string();
+        let ask = |input: &str| {
+            use std::io::Write;
+            let mut child = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("{helper} get"))
+                .envs(auth.envs.iter().map(|(k, v)| (k, v)))
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+            String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
+        };
+        assert!(ask("protocol=https\nhost=github.com\n\n").contains("password=tok"));
+        assert!(ask("protocol=https\nhost=github.com:443\n\n").contains("password=tok"));
+        assert_eq!(ask("protocol=https\nhost=evil.example\n\n"), "");
     }
 
     #[tokio::test]

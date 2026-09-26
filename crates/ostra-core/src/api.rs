@@ -89,6 +89,65 @@ pub struct WorkspaceDetail {
     pub stacks: Vec<String>,
     /// Permission rules from `[permissions]` in the global config, merged under the workspace's.
     pub global_permissions: PermissionRules,
+    /// Folder files whose commands changed outside Ostra and wait for approval. Ostra starts
+    /// none of their programs until the user approves.
+    pub pending_commands: Vec<PendingCommands>,
+}
+
+/// The command-bearing settings of one folder file, as the user approves them together.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PendingCommands {
+    /// The project whose `.ostra/project.toml` this is; null for the workspace's
+    /// `.ostra/workspace.toml`.
+    pub project: Option<String>,
+    #[ts(type = "string")]
+    pub file: PathBuf,
+    /// Sent back with the approval, so a file that changed again is not approved unseen.
+    pub hash: String,
+    pub items: Vec<PendingCommand>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum PendingKind {
+    McpServer,
+    LanguageServer,
+    CodeProvider,
+    FormatCommand,
+    AllowRule,
+    /// A project folder outside the workspace folder, which agents may then write.
+    ProjectOutside,
+}
+
+/// One program or rule a folder file asks for. Values of `env` and `headers` are never sent,
+/// because they can hold secrets; `variables` names the server environment they read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PendingCommand {
+    pub kind: PendingKind,
+    /// The MCP server name, the project key, or the rule.
+    pub name: String,
+    pub enabled: bool,
+    /// The command line, shell-quoted.
+    pub command: Option<String>,
+    pub url: Option<String>,
+    pub env: Vec<String>,
+    pub headers: Vec<String>,
+    pub variables: Vec<String>,
+    /// The folder a `projectOutside` entry points at.
+    pub path: Option<PathBuf>,
+}
+
+/// Approve the commands of one folder file as the browser showed them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ApproveCommands {
+    #[serde(default)]
+    #[ts(optional)]
+    pub project: Option<String>,
+    pub hash: String,
 }
 
 /// One agent's definition and where it runs under the current settings.
@@ -440,6 +499,39 @@ pub struct EnvironmentStatus {
     pub harnesses: Vec<HarnessStatus>,
     /// Stacks with a seed reference, the values a project's `stack` offers besides detection.
     pub stacks: Vec<String>,
+    pub sandbox: SandboxStatus,
+}
+
+/// Whether agent commands run inside the bubblewrap sandbox on this machine.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SandboxStatus {
+    pub mode: crate::config::SandboxMode,
+    /// `bwrap` works here.
+    pub available: bool,
+    /// Executions start sandboxed under the current mode.
+    pub active: bool,
+    /// What to do when the sandbox is wanted but missing, or required but unavailable.
+    #[ts(optional)]
+    pub message: Option<String>,
+}
+
+impl SandboxStatus {
+    pub fn check(cfg: &crate::config::SandboxConfig) -> Self {
+        use crate::sandbox::{Decision, bwrap, decide};
+        let available = bwrap().is_some();
+        let (active, message) = match decide(cfg) {
+            Ok(Decision::Sandboxed(_)) => (true, None),
+            Ok(Decision::Unsandboxed(w)) => (false, w),
+            Err(e) => (false, Some(e)),
+        };
+        SandboxStatus {
+            mode: cfg.mode,
+            available,
+            active,
+            message,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
@@ -1227,6 +1319,30 @@ pub struct DiffFile {
 #[ts(export)]
 pub struct AuthExchange {
     pub token: String,
+}
+
+/// A browser signed in to this server, from `GET /api/auth/sessions`. The id names the sign-in
+/// for revoking; it is not the cookie.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SignInSession {
+    pub id: String,
+    pub created: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+    pub expires: DateTime<Utc>,
+    /// The browser's `User-Agent` at sign-in, when known.
+    pub user_agent: Option<String>,
+    /// The address the sign-in came from, when known.
+    pub ip: Option<String>,
+    /// The sign-in of the browser making this request.
+    pub current: bool,
+}
+
+/// How many sign-ins a revoke request removed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RevokedSignIns {
+    pub revoked: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

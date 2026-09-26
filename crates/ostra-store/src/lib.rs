@@ -3,6 +3,7 @@
 
 pub mod memory;
 pub mod registry;
+pub mod secrets;
 mod util;
 pub mod workspace;
 
@@ -25,4 +26,6 @@ pub enum StoreError {
     NotFound(String),
     #[error("{0}")]
     Invalid(String),
+    #[error("the registry has no encryption key, so credentials cannot be read or saved")]
+    Locked,
 }

@@ -23,6 +23,9 @@ pub enum Endpoint {
         program: String,
         args: Vec<String>,
         env: Vec<(String, String)>,
+        /// Variables of Ostra's own environment the server must not inherit, such as provider
+        /// credentials.
+        env_remove: Vec<String>,
         cwd: PathBuf,
     },
     Http {
@@ -30,6 +33,27 @@ pub enum Endpoint {
         headers: Vec<(String, String)>,
         auth: Option<Arc<dyn TokenSource>>,
     },
+}
+
+/// Redirects are followed only within the origin of the first request, so a header that carries a
+/// secret (an API key header, a bearer token, a client secret in a form) never reaches another host
+/// and never drops from https to http.
+pub fn same_origin_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let same = attempt.previous().first().is_some_and(|first| {
+            let next = attempt.url();
+            first.scheme() == next.scheme()
+                && first.host_str() == next.host_str()
+                && first.port_or_known_default() == next.port_or_known_default()
+        });
+        if attempt.previous().len() > 5 {
+            attempt.error("too many redirects")
+        } else if same {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
 }
 
 /// Bearer tokens for a remote server.
@@ -103,11 +127,13 @@ impl Client {
                 program,
                 args,
                 env,
+                env_remove,
                 cwd,
             } => Arc::new(stdio::Stdio::spawn(
                 &program,
                 &args,
                 &env,
+                &env_remove,
                 &cwd,
                 shared.clone(),
             )?),

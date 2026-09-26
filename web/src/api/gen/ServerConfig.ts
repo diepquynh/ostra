@@ -15,4 +15,10 @@ bind: string | null,
  * interface address and the machine's host name are allowed automatically when listening on
  * all interfaces.
  */
-allowed_hosts: Array<string>, };
+allowed_hosts: Array<string>, 
+/**
+ * Sign in at `127.0.0.1` itself rather than at a private `ostra-….localhost` name, for a
+ * browser that does not resolve `*.localhost`. The session cookie then reaches every other
+ * port on this machine too, because cookies are not scoped to a port.
+ */
+use_ip_host: boolean, };

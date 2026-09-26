@@ -34,6 +34,10 @@ pub struct LaunchInput<'a> {
     pub resume_session: Option<String>,
     /// Home dirs, overridable for tests.
     pub home: PathBuf,
+    /// Credential variables of Ostra's environment (see
+    /// [`ostra_core::config::credential_env_names`]). The harness inherits none of them except
+    /// those its own CLI reads to sign in.
+    pub credential_env: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +52,8 @@ pub struct LaunchPlan {
     pub links: Vec<(PathBuf, PathBuf)>,
     /// The session id Ostra chose up front (Claude Code, Grok Build).
     pub session_id: Option<String>,
+    /// Variables of Ostra's environment the harness must not inherit.
+    pub env_remove: Vec<String>,
 }
 
 /// POSIX single-quote a word for a hook command line, which harnesses run through a shell.
@@ -169,11 +175,34 @@ fn claude_tools(caps: &[Capability]) -> String {
 }
 
 pub fn plan(inp: &LaunchInput<'_>) -> LaunchPlan {
-    match inp.harness {
+    let mut p = match inp.harness {
         HarnessKind::Claude => plan_claude(inp),
         HarnessKind::Codex => plan_codex(inp),
         HarnessKind::Grok => plan_grok(inp),
         HarnessKind::Agy => plan_agy(inp),
+    };
+    let keep = sign_in_env(inp.harness);
+    p.env_remove = inp
+        .credential_env
+        .iter()
+        .filter(|k| !keep.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    p.env.extend(ostra_core::git::agent_env());
+    p
+}
+
+/// Provider variables a harness CLI reads to sign in, so it keeps them. The agent's own shell
+/// commands inside that CLI can still read them.
+fn sign_in_env(harness: HarnessKind) -> &'static [&'static str] {
+    match harness {
+        HarnessKind::Claude => &[
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+        ],
+        HarnessKind::Codex => &["OPENAI_API_KEY", "OPENAI_BASE_URL"],
+        HarnessKind::Grok | HarnessKind::Agy => &[],
     }
 }
 
@@ -187,7 +216,9 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
     let mut files = vec![];
     let hook = |event: HookEvent| json!([{"hooks": [{"type": "command", "command": hook_command(inp, event, true), "timeout": HOOK_TIMEOUT_SECS}]}]);
     let tool_hook = |event: HookEvent| json!([{"matcher": "*", "hooks": [{"type": "command", "command": hook_command(inp, event, true), "timeout": HOOK_TIMEOUT_SECS}]}]);
+    // A user settings file cannot switch off Ostra's hooks, because flag settings win over it.
     let settings = json!({
+        "disableAllHooks": false,
         "hooks": {
             "PreToolUse": tool_hook(HookEvent::PreToolUse),
             "PostToolUse": tool_hook(HookEvent::PostToolUse),
@@ -236,7 +267,11 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
     } else {
         claude_tools(&spec.capabilities)
     };
+    // Project and local settings are the repository's own files, so their hooks, env, and
+    // permissions would run outside Ostra's guards. Only the user's settings and Ostra's load.
     args.extend([
+        "--setting-sources".into(),
+        "user".into(),
         "--settings".into(),
         settings_path.to_string_lossy().into(),
         "--strict-mcp-config".into(),
@@ -269,6 +304,7 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
         files,
         links: vec![],
         session_id,
+        env_remove: vec![],
     }
 }
 
@@ -330,14 +366,6 @@ fn plan_codex(inp: &LaunchInput<'_>) -> LaunchPlan {
         "mcp_servers.ostra.tool_timeout_sec",
         HOOK_TIMEOUT_SECS.to_string(),
     );
-    // Trust for this invocation only, so Codex neither asks nor records a trust decision.
-    config(
-        &format!(
-            "projects.{}.trust_level",
-            toml_str(&spec.ctx.repo_root.to_string_lossy())
-        ),
-        toml_str("trusted"),
-    );
     // Codex updates itself on startup and then exits, which ends the run before it starts.
     config("check_for_update_on_startup", "false".into());
     config("developer_instructions", toml_str(&spec.system_prompt));
@@ -345,10 +373,24 @@ fn plan_codex(inp: &LaunchInput<'_>) -> LaunchPlan {
         "model_reasoning_effort",
         toml_str(effort_word(spec.effort, Effort::Xhigh)),
     );
+    // Codex reads folder trust only from config files, not from `-c`. A profile that marks the
+    // repository untrusted opens it restricted: its `.codex/` config, hooks, and exec policies
+    // stay off, and the user's saved trust is untouched.
+    let has_profile = inp
+        .extra_args
+        .iter()
+        .any(|a| a == "-p" || a == "--profile" || a.starts_with("--profile="));
+    if !has_profile {
+        let (name, path, body) = codex_restricted_profile(inp);
+        files.push((path, body));
+        args.extend(["-p".into(), name]);
+    }
     args.extend([
         "--disable".into(),
         "multi_agent".into(),
         "--dangerously-bypass-approvals-and-sandbox".into(),
+        // Ostra's hooks change with every execution, so they can never hold persisted hook trust.
+        // Project hooks stay off anyway, because the folder opens restricted.
         "--dangerously-bypass-hook-trust".into(),
         "-C".into(),
         spec.ctx.repo_root.to_string_lossy().into(),
@@ -364,7 +406,58 @@ fn plan_codex(inp: &LaunchInput<'_>) -> LaunchPlan {
         files,
         links: vec![],
         session_id: None,
+        env_remove: vec![],
     }
+}
+
+pub fn codex_home_real(home: &Path) -> PathBuf {
+    std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex"))
+}
+
+/// The repository and each parent up to its git root, since Codex applies project config from
+/// every folder between the two.
+fn codex_project_dirs(repo_root: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![];
+    for dir in repo_root.ancestors().take(32) {
+        dirs.push(dir.to_path_buf());
+        if dir.join(".git").exists() {
+            return dirs;
+        }
+    }
+    vec![repo_root.to_path_buf()]
+}
+
+/// The Codex profile name of one execution. Each execution has its own, so removing it at the
+/// end never affects another run.
+fn codex_profile_name(execution: &str) -> String {
+    let id: String = execution
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    format!("ostra-restricted-{id}")
+}
+
+/// The Codex profile file [`plan`] writes for `execution`, removed when the execution ends.
+pub fn codex_profile_path(home: &Path, execution: &str) -> PathBuf {
+    codex_home_real(home).join(format!("{}.config.toml", codex_profile_name(execution)))
+}
+
+/// `(profile name, file, contents)` of the Codex profile that marks this repository untrusted.
+fn codex_restricted_profile(inp: &LaunchInput<'_>) -> (String, PathBuf, String) {
+    let repo = &inp.spec.ctx.repo_root;
+    let name = codex_profile_name(inp.spec.id.as_str());
+    let path = codex_profile_path(&inp.home, inp.spec.id.as_str());
+    let mut body =
+        String::from("# Written by Ostra: Codex runs for Ostra open these folders restricted.\n");
+    for dir in codex_project_dirs(repo) {
+        body.push_str(&format!(
+            "\n[projects.{}]\ntrust_level = \"untrusted\"\n",
+            toml_str(&dir.to_string_lossy())
+        ));
+    }
+    (name, path, body)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -432,15 +525,15 @@ fn plan_grok(inp: &LaunchInput<'_>) -> LaunchPlan {
     config.push_str(&format!("env = {{ {} }}\n", env_table.join(", ")));
     files.push((farm.join("config.toml"), config));
 
+    // The repository is trusted only if the user trusted it in Grok, because Grok runs a trusted
+    // folder's own hooks and MCP servers. The session dir is Ostra's own.
     let user_trust = std::fs::read_to_string(real.join("trusted_folders.toml")).unwrap_or_default();
     let mut trust = user_trust.clone();
-    for dir in [&spec.ctx.repo_root, &spec.ctx.session_dir] {
-        let key = toml_str(&dir.to_string_lossy());
-        if !user_trust.contains(&key) {
-            trust.push_str(&format!(
-                "\n[folders.{key}]\ntrusted = true\ndecided_at = 0\n"
-            ));
-        }
+    let key = toml_str(&spec.ctx.session_dir.to_string_lossy());
+    if !user_trust.contains(&key) {
+        trust.push_str(&format!(
+            "\n[folders.{key}]\ntrusted = true\ndecided_at = 0\n"
+        ));
     }
     files.push((farm.join("trusted_folders.toml"), trust));
 
@@ -486,6 +579,7 @@ fn plan_grok(inp: &LaunchInput<'_>) -> LaunchPlan {
         files,
         links,
         session_id,
+        env_remove: vec![],
     }
 }
 
@@ -548,6 +642,7 @@ fn plan_agy(inp: &LaunchInput<'_>) -> LaunchPlan {
         files,
         links: vec![],
         session_id: None,
+        env_remove: vec![],
     }
 }
 
@@ -561,13 +656,23 @@ pub fn agy_hook_command(ostra_binary: &Path, event: HookEvent) -> String {
     )
 }
 
-/// Write `plan.files` and create `plan.links`.
+/// Write `plan.files` (owner-only, because Grok's config holds the bridge token) and create
+/// `plan.links`.
 pub fn materialize(plan: &LaunchPlan) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     for (path, content) in &plan.files {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(path, content)?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        f.write_all(content.as_bytes())?;
     }
     for (link, target) in &plan.links {
         if let Some(parent) = link.parent() {
@@ -650,6 +755,12 @@ pub(crate) mod tests {
             config_dir: root.join("cfg"),
             resume_session: None,
             home: root.join("home"),
+            credential_env: vec![
+                "ANTHROPIC_AUTH_TOKEN".into(),
+                "OPENAI_API_KEY".into(),
+                "MY_SERVICE_KEY".into(),
+                "OSTRA_TOKEN".into(),
+            ],
         }
     }
 
@@ -798,6 +909,98 @@ pub(crate) mod tests {
         assert!(parsed["ui"]["yolo"].as_bool() == Some(false));
         materialize(&p).unwrap();
         assert!(tmp.path().join("cfg/grok-home/auth.json").exists());
+    }
+
+    #[test]
+    fn claude_loads_only_user_settings_and_keeps_its_sign_in_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = spec(HarnessKind::Claude, "haiku", tmp.path());
+        let p = plan(&input(&s, HarnessKind::Claude, tmp.path()));
+        let i = p
+            .args
+            .iter()
+            .position(|a| a == "--setting-sources")
+            .unwrap();
+        assert_eq!(p.args[i + 1], "user");
+        let settings: serde_json::Value = serde_json::from_str(&p.files[0].1).unwrap();
+        assert_eq!(settings["disableAllHooks"], false);
+        assert!(!p.env_remove.contains(&"ANTHROPIC_AUTH_TOKEN".to_string()));
+        for k in ["OPENAI_API_KEY", "MY_SERVICE_KEY", "OSTRA_TOKEN"] {
+            assert!(p.env_remove.contains(&k.to_string()), "{k}");
+        }
+        assert!(p.env.iter().any(|(k, _)| k == "GIT_CONFIG_COUNT"));
+        assert!(p.env.iter().any(|(k, v)| k == ENV_TOKEN && v == "tok"));
+    }
+
+    #[test]
+    fn codex_opens_the_repository_restricted() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("repo")).unwrap();
+        let s = spec(HarnessKind::Codex, "gpt-5.6-luna", tmp.path());
+        let p = plan(&input(&s, HarnessKind::Codex, tmp.path()));
+        let i = p.args.iter().position(|a| a == "-p").unwrap();
+        let name = &p.args[i + 1];
+        assert!(name.starts_with("ostra-restricted-"), "{name}");
+        let (path, body) = p
+            .files
+            .iter()
+            .find(|(f, _)| f.ends_with(format!("{name}.config.toml")))
+            .unwrap();
+        assert_eq!(
+            path.parent().unwrap(),
+            codex_home_real(&tmp.path().join("home"))
+        );
+        let parsed: toml::Table = toml::from_str(body).unwrap();
+        let repo = tmp.path().join("repo");
+        assert_eq!(
+            parsed["projects"][&*repo.to_string_lossy()]["trust_level"].as_str(),
+            Some("untrusted")
+        );
+        assert!(!p.args.iter().any(|a| a.contains("trust_level")));
+        assert!(!p.env_remove.contains(&"OPENAI_API_KEY".to_string()));
+        assert!(p.env_remove.contains(&"ANTHROPIC_AUTH_TOKEN".to_string()));
+
+        let mut inp = input(&s, HarnessKind::Codex, tmp.path());
+        inp.extra_args = vec!["--profile".into(), "mine".into()];
+        let p = plan(&inp);
+        assert!(!p.args.contains(&"-p".to_string()));
+    }
+
+    #[test]
+    fn codex_marks_every_folder_up_to_the_git_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("mono/services/api");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::create_dir_all(tmp.path().join("mono/.git")).unwrap();
+        let dirs = codex_project_dirs(&sub);
+        assert_eq!(dirs.first().unwrap(), &sub);
+        assert_eq!(dirs.last().unwrap(), &tmp.path().join("mono"));
+        assert_eq!(dirs.len(), 3);
+    }
+
+    #[test]
+    fn grok_does_not_trust_the_repository_and_files_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("home/.grok")).unwrap();
+        let s = spec(HarnessKind::Grok, "grok-4.5", tmp.path());
+        let _guard = EnvGuard::unset("GROK_HOME");
+        let p = plan(&input(&s, HarnessKind::Grok, tmp.path()));
+        let trust = &p
+            .files
+            .iter()
+            .find(|(f, _)| f.ends_with("trusted_folders.toml"))
+            .unwrap()
+            .1;
+        assert!(
+            !trust.contains(&*s.ctx.repo_root.to_string_lossy()),
+            "{trust}"
+        );
+        assert!(trust.contains(&*s.ctx.session_dir.to_string_lossy()));
+        materialize(&p).unwrap();
+        let config = tmp.path().join("cfg/grok-home/config.toml");
+        let mode = std::fs::metadata(config).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     pub(crate) struct EnvGuard(&'static str, Option<std::ffi::OsString>);

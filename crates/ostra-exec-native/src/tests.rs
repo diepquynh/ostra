@@ -58,6 +58,14 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    static CACHE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: set once, before any test here starts a sandboxed program that reads it.
+    CACHE.call_once(|| unsafe {
+        std::env::set_var(
+            "OSTRA_SANDBOX_CACHE",
+            std::env::temp_dir().join("ostra-test-sandbox-cache"),
+        );
+    });
     // Outside OS temp, because the policy never asks for writes there.
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let root = std::fs::canonicalize(dir.path()).unwrap();
@@ -597,4 +605,60 @@ fn coalescer_chunks() {
     let d = host.deltas.lock();
     assert_eq!(d.len(), 2);
     assert!(matches!(&d[0], ExecutionDelta::Text { text } if text.len() == 30));
+}
+
+#[tokio::test]
+async fn relative_paths_are_checked_against_the_shell_cwd() {
+    let f = fixture();
+    let mut s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Default,
+        impl_caps(),
+    );
+    s.ctx.report_file = None;
+    s.ctx.protected_paths = vec![f.outside.clone()];
+    let victim = f.outside.join("victim.toml");
+    std::fs::write(&victim, "orig").unwrap();
+    let root = f.repo.parent().unwrap();
+    let p = ScriptedProvider::new();
+    p.push_tool_use("Bash", json!({"command": format!("cd {}", root.display())}));
+    p.push_tool_use("Bash", json!({"command": "cd elsewhere"}));
+    p.push_tool_use(
+        "Write",
+        json!({"file_path": "victim.toml", "content": "PWNED"}),
+    );
+    // A model-supplied `cwd` is replaced by the shell's own.
+    p.push_tool_use(
+        "Bash",
+        json!({"command": "echo PWNED > victim.toml", "cwd": f.repo.display().to_string()}),
+    );
+    p.push_tool_use(
+        "submit_implementer",
+        json!({"status": "ok", "report_path": "", "changed_files": [], "summary": "s"}),
+    );
+    let (exec, p) = executor(p);
+    let host = Arc::new(FakeHost {
+        yolo: true,
+        ..Default::default()
+    });
+    let r = exec.run(s, host.clone(), CancellationToken::new()).await;
+    assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
+    let reqs = p.requests();
+    for req in &reqs[3..5] {
+        let (text, is_err) = &tool_results(req)[0];
+        assert!(*is_err && text.starts_with("Denied by guard"), "{text}");
+    }
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "orig");
+    assert!(!f.repo.join("victim.toml").exists());
+}
+
+#[test]
+fn webfetch_hosts_takes_exact_domain_rules() {
+    let rules = vec![
+        "WebFetch(domain:localhost)".to_string(),
+        "Read(./src/**)".to_string(),
+        " WebFetch(domain:10.0.0.5) ".to_string(),
+    ];
+    assert_eq!(ostra_tools::webfetch_hosts(&rules), vec!["localhost", "10.0.0.5"]);
 }

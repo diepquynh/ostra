@@ -27,6 +27,7 @@ pub use defs::{
     ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search,
 };
 pub use mcp::{McpConnector, McpOpened, McpTools};
+pub use web::webfetch_hosts;
 
 /// Resolves an embedded skill name (for example `meta-author`) to its path and content.
 pub type SkillResolver = Arc<dyn Fn(&str) -> Option<(PathBuf, String)> + Send + Sync>;
@@ -57,6 +58,13 @@ pub struct ToolEnv {
     cwd: Mutex<PathBuf>,
     read_files: Mutex<HashSet<PathBuf>>,
     http: reqwest::Client,
+    /// Hosts a `WebFetch(domain:...)` allow rule names exactly, which may resolve to private
+    /// addresses.
+    private_hosts: Arc<Vec<String>>,
+    /// Variables removed from every child process: provider credentials and Ostra's own.
+    scrub_env: Vec<String>,
+    /// The bubblewrap binary and profile Bash runs under; `None` runs it unsandboxed.
+    sandbox: Option<(PathBuf, ostra_core::sandbox::Profile)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -89,18 +97,78 @@ impl ToolOutput {
 impl ToolEnv {
     pub fn new(config: ToolEnvConfig) -> Self {
         let cwd = config.repo_root.clone();
-        let http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .timeout(std::time::Duration::from_secs(20))
-            .user_agent(concat!("ostra/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .unwrap_or_default();
+        let private_hosts = Arc::new(Vec::new());
         ToolEnv {
             config,
             cwd: Mutex::new(cwd),
             read_files: Mutex::new(HashSet::new()),
-            http,
+            http: web::client(private_hosts.clone()),
+            private_hosts,
+            scrub_env: bash::configured_secret_vars(),
+            sandbox: None,
         }
+    }
+
+    /// Adds variables removed from every child process, such as the workspace's MCP secrets.
+    pub fn with_scrub_env(mut self, names: impl IntoIterator<Item = String>) -> Self {
+        self.scrub_env.extend(names);
+        self.scrub_env.sort();
+        self.scrub_env.dedup();
+        self
+    }
+
+    /// Runs every Bash command under `bwrap` with this profile.
+    pub fn with_sandbox(mut self, bwrap: PathBuf, profile: ostra_core::sandbox::Profile) -> Self {
+        self.sandbox = Some((bwrap, profile));
+        self
+    }
+
+    /// Lets WebFetch reach private and loopback addresses for these exact hosts, taken from
+    /// `WebFetch(domain:<host>)` allow rules.
+    pub fn with_private_hosts(mut self, hosts: Vec<String>) -> Self {
+        let hosts: Vec<String> = hosts.into_iter().map(|h| h.to_ascii_lowercase()).collect();
+        self.private_hosts = Arc::new(hosts);
+        self.http = web::client(self.private_hosts.clone());
+        self
+    }
+
+    /// The call as the tool will run it: relative paths made absolute against the shell's working
+    /// directory, Bash's `cwd` set to that directory, and a WebFetch URL in its parsed form. Check
+    /// the policy on this call and run this call, so both see the same target.
+    pub fn canonical_call(&self, call: &ToolCall) -> ToolCall {
+        let Some(map) = call.input.as_object() else {
+            return call.clone();
+        };
+        let mut map = map.clone();
+        let mut absolute = |key: &str| {
+            if let Some(raw) = map.get(key).and_then(|v| v.as_str())
+                && !raw.trim().is_empty()
+            {
+                let abs = self.resolve(raw).display().to_string();
+                map.insert(key.into(), serde_json::Value::String(abs));
+            }
+        };
+        match call.tool.as_str() {
+            "Read" | "Write" | "Edit" => absolute("file_path"),
+            "Grep" | "Glob" | "Skill" | "Document" => absolute("path"),
+            "Bash" => {
+                map.insert(
+                    "cwd".into(),
+                    serde_json::Value::String(self.cwd().display().to_string()),
+                );
+            }
+            "WebFetch" => {
+                if let Some(url) = map
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .and_then(|u| reqwest::Url::parse(u.trim()).ok())
+                {
+                    map.insert("url".into(), serde_json::Value::String(url.to_string()));
+                }
+            }
+            _ => return call.clone(),
+        }
+        ToolCall::new(call.tool.clone(), serde_json::Value::Object(map))
     }
 
     pub fn config(&self) -> &ToolEnvConfig {
@@ -117,9 +185,15 @@ impl ToolEnv {
     }
 
     /// Resolve a model-supplied path against the shell's working directory.
+    /// Under the sandbox, `/tmp` is the execution's scratch dir, so in-process tools map it the
+    /// same way.
     pub fn resolve(&self, path: &str) -> PathBuf {
         let expanded = expand_home(path);
-        ostra_core::paths::resolve(&self.cwd(), &expanded)
+        let abs = ostra_core::paths::resolve(&self.cwd(), &expanded);
+        match &self.sandbox {
+            Some((_, profile)) => profile.to_host(&abs),
+            None => abs,
+        }
     }
 
     pub fn has_read(&self, path: &Path) -> bool {
@@ -249,5 +323,50 @@ pub(crate) mod testutil {
             CancellationToken::new(),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use testutil::env_in;
+
+    #[test]
+    fn canonical_call_uses_the_shell_cwd() {
+        let d = tempfile::tempdir().unwrap();
+        let env = env_in(d.path());
+        let outside = std::fs::canonicalize(d.path()).unwrap().join("session");
+        env.set_cwd(outside.clone());
+        let write = env.canonical_call(&ToolCall::new(
+            "Write",
+            serde_json::json!({"file_path": "victim.toml", "content": "x"}),
+        ));
+        assert_eq!(
+            write.input["file_path"],
+            outside.join("victim.toml").display().to_string()
+        );
+        let bash = env.canonical_call(&ToolCall::new(
+            "Bash",
+            serde_json::json!({"command": "ls", "cwd": "/"}),
+        ));
+        assert_eq!(bash.input["cwd"], outside.display().to_string());
+        let grep = env.canonical_call(&ToolCall::new("Grep", serde_json::json!({"pattern": "x"})));
+        assert!(grep.input.get("path").is_none());
+    }
+
+    #[test]
+    fn canonical_webfetch_url_is_the_parsed_form() {
+        let d = tempfile::tempdir().unwrap();
+        let env = env_in(d.path());
+        let call = env.canonical_call(&ToolCall::new(
+            "WebFetch",
+            serde_json::json!({"url": "https://evil.example\\@docs.rs/x"}),
+        ));
+        let url = call.input["url"].as_str().unwrap();
+        assert_eq!(
+            reqwest::Url::parse(url).unwrap().host_str(),
+            Some("evil.example")
+        );
+        assert!(url.starts_with("https://evil.example/"), "{url}");
     }
 }

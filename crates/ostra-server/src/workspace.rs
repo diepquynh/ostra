@@ -8,9 +8,9 @@ use ostra_core::api::{
     WorkspaceDetail,
 };
 use ostra_core::config::{
-    Environment, GlobalConfig, ProjectEntry, ProjectProfile, RouteQuery, ValidationIssue,
-    WorkspaceSettings, load_toml, load_toml_required, resolve_executor, resolve_route, save_toml,
-    validate_workspace,
+    ConfigError, Environment, GlobalConfig, ProjectEntry, ProjectProfile, RouteQuery,
+    ValidationIssue, WorkspaceSettings, load_toml, load_toml_required, resolve_executor,
+    resolve_route, validate_workspace,
 };
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Tier;
@@ -243,6 +243,8 @@ fn ultracode_bootstrap(path: &Path) -> bool {
 
 impl WorkspaceRt {
     pub fn open(shared: Arc<Shared>, id: WorkspaceId, root: &Path) -> anyhow::Result<Self> {
+        crate::trust::migrate(&shared.registry, root);
+        crate::trust::seal_file_secrets(&shared.registry, root);
         let db = WorkspaceDb::open(&paths::workspace_db(root))?;
         db.set_workspace_id(&id)?;
         let services = Arc::new(ServerServices {
@@ -263,11 +265,27 @@ impl WorkspaceRt {
         Ok(rt)
     }
 
+    /// The settings as the user edits them: the file, with the mode and YOLO from the registry.
     pub fn settings(&self) -> WorkspaceSettings {
+        let mut s = self.file_settings();
+        crate::trust::overlay(&self.shared.registry, &self.root, &mut s);
+        s
+    }
+
+    fn file_settings(&self) -> WorkspaceSettings {
         load_toml_required(&paths::workspace_toml(&self.root)).unwrap_or_else(|e| {
             tracing::warn!("{e}");
             WorkspaceSettings::seeded("workspace")
         })
+    }
+
+    /// The settings programs start from, without commands that wait for approval.
+    pub fn effective_settings(&self) -> WorkspaceSettings {
+        crate::trust::effective(&self.shared.registry, &self.root, self.file_settings())
+    }
+
+    fn write_settings(&self, settings: &WorkspaceSettings) -> Result<(), ConfigError> {
+        crate::trust::save_workspace(&self.shared.registry, &self.root, settings)
     }
 
     pub fn environment(&self) -> Environment {
@@ -283,7 +301,7 @@ impl WorkspaceRt {
         if !issues.is_empty() {
             return Err(issues);
         }
-        save_toml(&paths::workspace_toml(&self.root), settings).map_err(|e| {
+        self.write_settings(settings).map_err(|e| {
             vec![ValidationIssue {
                 path: String::new(),
                 message: e.to_string(),
@@ -377,7 +395,7 @@ impl WorkspaceRt {
         let entry =
             import_entry(&settings, &self.root, req).map_err(crate::setup::CreateError::Invalid)?;
         settings.projects.push(entry);
-        save_toml(&paths::workspace_toml(&self.root), &settings)
+        self.write_settings(&settings)
             .map_err(|e| crate::setup::CreateError::Failed(e.to_string()))?;
         self.sync_projects();
         Ok(())
@@ -391,7 +409,7 @@ impl WorkspaceRt {
         if settings.projects.len() == before {
             return Err(format!("No project `{key}`."));
         }
-        save_toml(&paths::workspace_toml(&self.root), &settings).map_err(|e| e.to_string())?;
+        self.write_settings(&settings).map_err(|e| e.to_string())?;
         self.sync_projects();
         Ok(())
     }
@@ -442,15 +460,42 @@ impl WorkspaceRt {
             agents: agent_infos(&global, &settings),
             stacks: ostra_agents::stack_names(),
             global_permissions: global.permissions.clone(),
-            settings,
+            pending_commands: crate::trust::pending(&self.shared.registry, &self.root, &settings),
+            settings: browser_view(settings),
         }
     }
+}
+
+/// The settings as the browser may see them: a literal MCP header or env value that reached
+/// the file since the last save (a `git pull`, a hand edit) shows as the saved-value marker,
+/// because only the connection may read it.
+fn browser_view(mut s: WorkspaceSettings) -> WorkspaceSettings {
+    for m in &mut s.mcp_servers {
+        for v in m.headers.values_mut().chain(m.env.values_mut()) {
+            if ostra_core::mcp::is_literal_value(v) {
+                *v = ostra_core::mcp::SAVED_SECRET.to_string();
+            }
+        }
+    }
+    s
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use ostra_core::executor::{ExecutorKind, HarnessKind};
+
+    #[test]
+    fn the_browser_never_sees_a_literal_mcp_value() {
+        let mut s = WorkspaceSettings::seeded("w");
+        let mut m = ostra_core::config::McpServerConfig::local("gh", &["gh-mcp"]);
+        m.env.insert("TOKEN".into(), "ghp_pulled".into());
+        m.env.insert("FROM_ENV".into(), "${GH_TOKEN}".into());
+        s.mcp_servers.push(m);
+        let v = browser_view(s);
+        assert_eq!(v.mcp_servers[0].env["TOKEN"], ostra_core::mcp::SAVED_SECRET);
+        assert_eq!(v.mcp_servers[0].env["FROM_ENV"], "${GH_TOKEN}");
+    }
 
     fn request(path: &Path, key: &str, stack: Option<&str>) -> ImportProject {
         ImportProject {

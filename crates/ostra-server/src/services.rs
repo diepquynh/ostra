@@ -1,9 +1,7 @@
 //! The engine's view of the server: settings, executors, judges, push, protected paths.
 
 use crate::app::Shared;
-use ostra_core::config::{
-    GlobalConfig, ResolvedRoute, WorkspaceSettings, load_toml_required, save_toml,
-};
+use ostra_core::config::{GlobalConfig, ResolvedRoute, WorkspaceSettings, load_toml_required};
 use ostra_core::exec::{Executor, Usage};
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
@@ -23,9 +21,13 @@ pub struct ServerServices {
 }
 
 impl ServerServices {
-    fn settings(&self) -> WorkspaceSettings {
+    fn file_settings(&self) -> WorkspaceSettings {
         load_toml_required(&paths::workspace_toml(&self.root))
             .unwrap_or_else(|_| WorkspaceSettings::seeded("workspace"))
+    }
+
+    fn settings(&self) -> WorkspaceSettings {
+        crate::trust::effective(&self.shared.registry, &self.root, self.file_settings())
     }
 }
 
@@ -113,11 +115,16 @@ impl Services for ServerServices {
         v
     }
 
+    fn command_approved(&self, project: &std::path::Path, command: &str) -> bool {
+        crate::trust::format_approved(&self.shared.registry, project, command)
+    }
+
     fn add_allow_rule(&self, rule: &str) {
-        let mut s = self.settings();
+        let mut s = self.file_settings();
+        crate::trust::overlay(&self.shared.registry, &self.root, &mut s);
         if !s.permissions.allow.iter().any(|r| r == rule) {
             s.permissions.allow.push(rule.to_string());
-            if let Err(e) = save_toml(&paths::workspace_toml(&self.root), &s) {
+            if let Err(e) = crate::trust::save_workspace(&self.shared.registry, &self.root, &s) {
                 tracing::warn!("could not save the allow rule: {e}");
             }
         }

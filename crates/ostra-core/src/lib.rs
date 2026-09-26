@@ -10,6 +10,7 @@ pub mod doc;
 pub mod event;
 pub mod exec;
 pub mod executor;
+pub mod git;
 pub mod ids;
 pub mod mcp;
 pub mod model;
@@ -18,6 +19,7 @@ pub mod paths;
 pub mod pipeline;
 pub mod policy;
 pub mod pricing;
+pub mod sandbox;
 pub mod slug;
 pub mod submit;
 

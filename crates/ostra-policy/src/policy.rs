@@ -82,19 +82,94 @@ const GIT_READ: &[&str] = &[
     "blame",
 ];
 
-/// Commands safe to run without asking, in every mode.
+/// Leading git options a read-only git command may carry. The rest (`-c`, `--config-env`,
+/// `--exec-path`, `--git-dir`, `--work-tree`, `-p`) choose programs, repositories, or a pager.
+const GIT_SAFE_GLOBAL: &[&str] = &[
+    "--no-pager",
+    "-P",
+    "--no-optional-locks",
+    "--literal-pathspecs",
+    "--no-replace-objects",
+];
+
+/// Commands whose flags can start a program or write a file, so their words must all be known.
+const EXEC_CAPABLE: &[&str] = &["git", "rg", "sort", "find", "tree", "file", "uniq"];
+
+/// A long option that GNU getopt or git would read as `full`, including unique abbreviations.
+fn long_opt_is(word: &str, full: &str) -> bool {
+    let name = word.split_once('=').map_or(word, |(n, _)| n);
+    name.len() > 3 && name.starts_with("--") && full.starts_with(name)
+}
+
+/// A short-option cluster (`-uo`) that contains `flag`.
+fn short_cluster_has(args: &[bash::Word], flag: char) -> bool {
+    args.iter().any(|w| {
+        let t = w.text();
+        t.len() > 1 && t.starts_with('-') && !t.starts_with("--") && t[1..].contains(flag)
+    })
+}
+
+fn git_read_only(args: &[bash::Word]) -> bool {
+    let mut i = 0;
+    while let Some(w) = args.get(i) {
+        let t = w.text();
+        if t == "-C" {
+            i += 2;
+        } else if GIT_SAFE_GLOBAL.contains(&t) {
+            i += 1;
+        } else if t.starts_with('-') {
+            return false;
+        } else {
+            break;
+        }
+    }
+    let Some(sub) = args.get(i).map(|w| w.text()) else {
+        return false;
+    };
+    let rest = &args[i + 1..];
+    let only_flags = |allowed: &[&str]| rest.iter().all(|w| allowed.contains(&w.text()));
+    // Listing forms only: with a name these create, rename, or delete.
+    let listing = match sub {
+        "branch" => only_flags(&["-a", "-r", "-v", "-vv", "--list", "--show-current", "--all", "--remotes"]),
+        "tag" => only_flags(&["-l", "--list"]),
+        "remote" => only_flags(&["-v", "--verbose"]),
+        "describe" => rest.iter().all(|w| w.text().starts_with("--") || !w.text().starts_with('-')),
+        "config" => matches!(
+            rest.first().map(|w| w.text()),
+            Some("--get" | "--get-all" | "--list" | "-l" | "--get-regexp")
+        ),
+        _ => false,
+    };
+    (GIT_READ.contains(&sub) || listing)
+        && !rest.iter().any(|w| {
+            ["--output", "--ext-diff", "--textconv", "--open-files-in-pager"]
+                .iter()
+                .any(|f| long_opt_is(w.text(), f))
+        })
+}
+
+/// Commands safe to run without asking, in every mode. Hardening: only a command Ostra fully
+/// understands qualifies. An assignment or a wrapper can change what runs (`LD_PRELOAD`,
+/// `GIT_CONFIG_*`, `env -S`), a path-named command can be a script the agent wrote, and a
+/// dynamic word or glob can expand to an option that starts a program.
 fn is_read_only(cmd: &SimpleCommand) -> bool {
+    if !cmd.assignments.is_empty() || cmd.effective_index() != Some(0) || cmd.is_dynamic_name() {
+        return false;
+    }
+    if cmd.words[0].text().contains('/') {
+        return false;
+    }
     let Some(name) = cmd.effective_name() else {
         return false;
     };
-    if !READ_ONLY.contains(&name.as_str()) || cmd.is_dynamic_name() {
+    if !READ_ONLY.contains(&name.as_str()) {
         return false;
     }
     let args = cmd.args();
-    let has = |f: &str| {
-        args.iter()
-            .any(|w| w.text() == f || w.text().starts_with(&format!("{f}=")))
-    };
+    if EXEC_CAPABLE.contains(&name.as_str()) && args.iter().any(|w| !w.is_static() || w.glob) {
+        return false;
+    }
+    let has = |f: &str| args.iter().any(|w| w.text() == f || long_opt_is(w.text(), f));
     match name.as_str() {
         "find" => ![
             "-exec", "-execdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls", "-ok",
@@ -102,15 +177,62 @@ fn is_read_only(cmd: &SimpleCommand) -> bool {
         ]
         .iter()
         .any(|f| has(f)),
-        "git" => {
-            let (sub, _) = bash::git_subcommand(args);
-            sub.is_some_and(|s| GIT_READ.contains(&s.as_str())) && !has("--output")
-        }
-        "sort" => !has("-o") && !has("--output"),
+        "git" => git_read_only(args),
+        "rg" => !has("--pre") && !has("--pre-glob") && !has("--hostname-bin"),
+        "sort" => !has("--output") && !has("--compress-program") && !short_cluster_has(args, 'o'),
         "uniq" => args.iter().filter(|w| !w.text().starts_with('-')).count() <= 1,
-        "tree" => !has("-o"),
+        "tree" => !short_cluster_has(args, 'o') && !short_cluster_has(args, 'R'),
+        "file" => !has("--compile") && !short_cluster_has(args, 'C'),
+        // `printf -v` assigns a variable, and `test -v 'a[$(...)]'` evaluates its subscript.
+        "printf" => !args.iter().any(|w| w.text().starts_with("-v")),
+        "test" | "[" => !args
+            .iter()
+            .any(|w| w.raw.contains(['[', '$', '`']) && w.text() != "[" && w.text() != "]"),
         _ => true,
     }
+}
+
+/// Files that make a tool run a program the next time someone opens the project: harness
+/// settings and hooks, editor tasks, direnv, commit hooks, package-manager and CI config.
+/// Hardening: outside YOLO and bypass, a write to one always asks, because it outlives the
+/// session and runs outside the policy.
+fn runs_code_later(p: &Path) -> bool {
+    let s = p.to_string_lossy();
+    let name = p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    matches!(
+        name.as_ref(),
+        ".mcp.json"
+            | ".envrc"
+            | ".pre-commit-config.yaml"
+            | ".lefthook.yml"
+            | "lefthook.yml"
+            | ".gitlab-ci.yml"
+            | ".npmrc"
+            | ".yarnrc.yml"
+            | ".pnpmfile.cjs"
+    ) || [
+        "/.claude/settings.json",
+        "/.claude/settings.local.json",
+        "/.codex/config.toml",
+        "/.gemini/settings.json",
+        "/.vscode/tasks.json",
+        "/.vscode/settings.json",
+        "/.vscode/launch.json",
+        "/.cargo/config.toml",
+        "/.cargo/config",
+    ]
+    .iter()
+    .any(|t| s.ends_with(t))
+        || [
+            "/.github/workflows/",
+            "/.github/actions/",
+            "/.devcontainer/",
+            "/.husky/",
+            "/.claude/hooks/",
+            "/.grok/",
+        ]
+            .iter()
+            .any(|d| s.contains(d))
 }
 
 impl ExecutionPolicy {
@@ -189,7 +311,18 @@ impl ExecutionPolicy {
         let raw = call
             .str_field("file_path")
             .or_else(|| call.str_field("path"))?;
-        Some((self.roots.resolve(&self.roots.repo, raw), raw.to_string()))
+        // C3: relative to the directory the tool runs in, which a harness reports as `cwd`.
+        Some((self.roots.resolve(&self.start_cwd(call), raw), raw.to_string()))
+    }
+
+    /// The path a reading tool opens: file tools, and a Skill loaded from a path.
+    fn read_path(&self, call: &ToolCall) -> Option<(PathBuf, String)> {
+        match perms::family(&call.tool) {
+            Family::Read => self.file_path(call),
+            Family::Edit => self.file_path(call),
+            _ if call.tool == "Skill" || call.tool == "Document" => self.file_path(call),
+            _ => None,
+        }
     }
 
     fn write_paths(&self, call: &ToolCall) -> Vec<(PathBuf, String)> {
@@ -256,7 +389,7 @@ impl ExecutionPolicy {
         }
         if tool == "Document" {
             let raw = call.str_field("path").unwrap_or_default();
-            let target = self.roots.resolve(&self.roots.repo, raw);
+            let target = self.roots.resolve(&self.start_cwd(call), raw);
             return guards::check_document(&self.ctx, &self.roots, &target, raw);
         }
         if tool.starts_with("submit_") {
@@ -275,9 +408,17 @@ impl ExecutionPolicy {
                 return Some(d);
             }
         }
+        if let Some((path, raw)) = self.read_path(call)
+            && let Some(d) = guards::check_read(&self.roots, &path, &raw)
+        {
+            return Some(d);
+        }
         if let Some(parsed) = parsed {
             let start = self.start_cwd(call);
             if let Some(d) = guards::check_shell(&self.roots, parsed, &start) {
+                return Some(d);
+            }
+            if let Some(d) = guards::check_shell_reads(&self.roots, parsed, &start) {
                 return Some(d);
             }
             for t in guards::shell_targets(&self.roots, parsed, &start) {
@@ -388,6 +529,7 @@ impl ExecutionPolicy {
                     let subject = Subject::Path { tool, path };
                     let d = match self.rule_decision(&subject, &session_allow) {
                         Some(d @ (PolicyDecision::Deny { .. } | PolicyDecision::Ask { .. })) => d,
+                        _ if runs_code_later(path) => self.mode_default(&subject, mode),
                         _ if self.roots.in_session(path) || self.roots.in_temp(path) => continue,
                         Some(d) => d,
                         None if mode == PermissionMode::AcceptEdits && self.roots.in_repo(path) => {
@@ -438,6 +580,20 @@ impl ExecutionPolicy {
                             capitalize(&describe(&subject)),
                         ),
                     })
+            }
+            Family::Other if tool == "Skill" && self.file_path(call).is_some() => {
+                // L1: a Skill loaded from a path reads that file, so Read rules apply to it.
+                let (path, _) = self.file_path(call).expect("checked above");
+                match self.rule_decision(
+                    &Subject::Path {
+                        tool: "Read",
+                        path: &path,
+                    },
+                    &session_allow,
+                ) {
+                    Some(d @ (PolicyDecision::Deny { .. } | PolicyDecision::Ask { .. })) => d,
+                    _ => PolicyDecision::allow(),
+                }
             }
             Family::Other => {
                 let subject = Subject::Tool { tool };
@@ -515,6 +671,28 @@ impl ExecutionPolicy {
                 );
             }
         }
+        if !parsed.modelled && parsed.complete {
+            // Hardening: a standalone assignment, `export`, `[[ ]]`, or a loop header can change
+            // what a later command runs (PATH, GIT_CONFIG_*) or run code while it is evaluated.
+            let command = call.str_field("command").unwrap_or_default();
+            let subject = Subject::Tool { tool: "Bash" };
+            return match mode {
+                PermissionMode::Bypass => self.mode_default(&subject, mode),
+                PermissionMode::Plan => PolicyDecision::deny(
+                    RuleRef::permission("mode:plan"),
+                    "Run each command on its own without shell assignments, `export`, `[[ ]]`, or loops: this session \
+                     is in plan mode, and Ostra cannot confirm such a script only reads."
+                        .to_string(),
+                ),
+                _ => PolicyDecision::ask(
+                    RuleRef::permission("unmodelled"),
+                    format!(
+                        "Run `{}` (it sets variables or uses shell syntax Ostra does not check)",
+                        truncate(command, 200)
+                    ),
+                ),
+            };
+        }
         if !parsed.complete {
             let command = call.str_field("command").unwrap_or_default();
             let subject = Subject::Tool { tool: "Bash" };
@@ -533,6 +711,9 @@ impl ExecutionPolicy {
             };
         }
 
+        let unresolved = bash::unresolved_writes(parsed);
+        let cwds = bash::command_cwds(parsed);
+        let cwd_unknown = bash::cwd_unknown(parsed);
         let mut last_allow = None;
         for (i, cmd) in parsed.commands.iter().enumerate() {
             let cmd_targets: Vec<&PathBuf> = targets
@@ -540,9 +721,26 @@ impl ExecutionPolicy {
                 .filter(|t| t.command == i)
                 .map(|t| &t.path)
                 .collect();
-            let writes_ok = cmd_targets
-                .iter()
-                .all(|p| self.roots.in_session(p) || self.roots.in_temp(p));
+            // An unresolved or code-running target was not checked, so nothing about it is known
+            // to be in scope.
+            let targets_known =
+                !unresolved.contains(&i) && !cmd_targets.iter().any(|p| runs_code_later(p));
+            let writes_ok = targets_known
+                && cmd_targets
+                    .iter()
+                    .all(|p| self.roots.in_session(p) || self.roots.in_temp(p));
+            // Hardening: git reads a repository's own config, which can name programs, so a git
+            // command runs unasked only inside the project, whose .git the git-metadata guard
+            // protects.
+            let git_in_repo = cmd.effective_name().as_deref() != Some("git")
+                || (!cwd_unknown[i] && {
+                    let base = guards::cwd_for(&self.roots, &start, cwds[i].as_deref());
+                    let dir = match bash::git_subcommand(cmd.args()).1 {
+                        Some(d) => self.roots.resolve(&base, &d),
+                        None => base,
+                    };
+                    self.roots.in_repo(&dir)
+                });
             let subject = Subject::Bash(cmd);
             let allowed_by_rule = if cmd.is_dynamic_name() {
                 None
@@ -557,17 +755,22 @@ impl ExecutionPolicy {
                 last_allow = Some(RuleRef::permission(&rule));
                 continue;
             }
-            if is_read_only(cmd) && writes_ok {
+            let read_only = is_read_only(cmd) && git_in_repo;
+            if read_only && writes_ok {
                 continue;
             }
             if mode == PermissionMode::AcceptEdits {
-                let fs = cmd
-                    .effective_name()
-                    .is_some_and(|n| matches!(n.as_str(), "mkdir" | "touch" | "cp" | "mv"));
-                let in_scope = cmd_targets.iter().all(|p| {
-                    self.roots.in_repo(p) || self.roots.in_session(p) || self.roots.in_temp(p)
-                });
-                if (fs || is_read_only(cmd)) && in_scope {
+                let fs = cmd.assignments.is_empty()
+                    && cmd.effective_index() == Some(0)
+                    && !cmd.words[0].text().contains('/')
+                    && cmd
+                        .effective_name()
+                        .is_some_and(|n| matches!(n.as_str(), "mkdir" | "touch" | "cp" | "mv"));
+                let in_scope = targets_known
+                    && cmd_targets.iter().all(|p| {
+                        self.roots.in_repo(p) || self.roots.in_session(p) || self.roots.in_temp(p)
+                    });
+                if (fs || read_only) && in_scope {
                     continue;
                 }
             }

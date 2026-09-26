@@ -159,7 +159,7 @@ impl Code {
             },
         };
         let list = files.index(w, key).await?;
-        let project = w.settings().projects.into_iter().find(|p| p.key == key);
+        let project = w.effective_settings().projects.into_iter().find(|p| p.key == key);
         let id: ProjectId = (w.id.clone(), key.to_string());
         let native: Arc<dyn CodeProvider> = Arc::new(NativeProvider {
             indexes: self.indexes.clone(),
@@ -262,7 +262,7 @@ impl Code {
             root: root.clone(),
             list: list.clone(),
         });
-        let project = w.settings().projects.into_iter().find(|p| p.key == key);
+        let project = w.effective_settings().projects.into_iter().find(|p| p.key == key);
         let servers = project
             .map(|p| p.language_servers)
             .unwrap_or_default()
@@ -422,7 +422,7 @@ impl Code {
                 "Ostra does not know this dependency file, because no language server of this project has pointed at it since the Ostra server started. Open it again from the code that uses it.",
             )
         })?;
-        let project = w.settings().projects.into_iter().find(|p| p.key == key);
+        let project = w.effective_settings().projects.into_iter().find(|p| p.key == key);
         let config = project
             .into_iter()
             .flat_map(|p| p.language_servers)
@@ -657,7 +657,7 @@ fn project_holding(app: &App, dir: &Path) -> Option<(Arc<WorkspaceRt>, String, P
     let workspaces: Vec<Arc<WorkspaceRt>> = app.workspaces.read().values().cloned().collect();
     let mut best: Option<(Arc<WorkspaceRt>, String, PathBuf)> = None;
     for w in workspaces {
-        for p in w.settings().projects {
+        for p in w.effective_settings().projects {
             let Ok(root) = std::fs::canonicalize(&p.path) else {
                 continue;
             };

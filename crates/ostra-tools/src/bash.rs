@@ -24,6 +24,26 @@ trap 'pwd -P > "$__ostra_pwd" 2>/dev/null' EXIT
 eval "$__ostra_cmd"
 "#;
 
+/// The credential variables `config.toml` names, read fresh, plus the defaults and the bridge
+/// variables. The executor adds the workspace's MCP secrets.
+pub(crate) fn configured_secret_vars() -> Vec<String> {
+    let global: ostra_core::config::GlobalConfig =
+        ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
+    ostra_core::config::credential_env_names(&global, &[])
+        .into_iter()
+        .collect()
+}
+
+/// Inherited variables a child must not see: the configured secrets and every `OSTRA_*`.
+fn scrubbed_vars(
+    inherited: impl Iterator<Item = std::ffi::OsString>,
+    secrets: &[String],
+) -> Vec<std::ffi::OsString> {
+    let mut out: Vec<std::ffi::OsString> = secrets.iter().map(Into::into).collect();
+    out.extend(inherited.filter(|k| k.to_string_lossy().starts_with("OSTRA_")));
+    out
+}
+
 /// Output capture bounded in memory: everything up to `2 * CAPTURE_HALF`, then head and tail.
 struct Capture {
     head: Vec<u8>,
@@ -157,7 +177,28 @@ pub async fn run(
     let pwd_file =
         std::env::temp_dir().join(format!("ostra-pwd-{}", uuid::Uuid::new_v4().simple()));
 
-    let mut cmd = tokio::process::Command::new("bash");
+    let mut cmd = match &env.sandbox {
+        Some((bwrap, profile)) => {
+            // The EXIT trap writes here from inside the sandbox, so the file must exist and be
+            // bound in even when `/tmp` is private there.
+            if let Err(e) = std::fs::write(&pwd_file, "") {
+                return ToolOutput::err(format!("Cannot prepare the sandbox: {e}"));
+            }
+            let mut c = tokio::process::Command::new(bwrap);
+            c.args(profile.args(&cwd))
+                .arg("--bind")
+                .arg(&pwd_file)
+                .arg(&pwd_file)
+                .args(["--", "bash"]);
+            c
+        }
+        None => tokio::process::Command::new("bash"),
+    };
+    for name in scrubbed_vars(std::env::vars_os().map(|(k, _)| k), &env.scrub_env) {
+        cmd.env_remove(name);
+    }
+    cmd.env_remove("GIT_EXTERNAL_DIFF")
+        .envs(ostra_core::git::agent_env());
     cmd.arg("-c")
         .arg(SCRIPT)
         .env("OSTRA_CMD", command)
@@ -228,6 +269,10 @@ pub async fn run(
 
     if let Ok(dir) = std::fs::read_to_string(&pwd_file) {
         let dir = std::path::PathBuf::from(dir.trim_end_matches('\n'));
+        let dir = match &env.sandbox {
+            Some((_, profile)) => profile.to_host(&dir),
+            None => dir,
+        };
         if dir.is_dir() {
             env.set_cwd(dir);
         }
@@ -388,5 +433,255 @@ mod tests {
         let bytes = "é".as_bytes();
         assert_eq!(s.push(&bytes[..1]), "");
         assert_eq!(s.push(&bytes[1..]), "é");
+    }
+
+    #[test]
+    fn scrubs_configured_secrets_and_ostra_vars() {
+        let inherited =
+            ["PATH", "OSTRA_TOKEN", "OSTRA_DATA_DIR", "HOME"].map(std::ffi::OsString::from);
+        let out = scrubbed_vars(inherited.into_iter(), &["MY_KEY".into()]);
+        let out: Vec<String> = out
+            .iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(out, ["MY_KEY", "OSTRA_TOKEN", "OSTRA_DATA_DIR"]);
+        assert!(configured_secret_vars().contains(&"ANTHROPIC_API_KEY".to_string()));
+    }
+
+    #[tokio::test]
+    async fn child_does_not_see_scrubbed_vars() {
+        let d = tempfile::tempdir().unwrap();
+        let mut env = env_in(d.path());
+        // HOME is always set in the test process, so it stands in for a provider key here.
+        env.scrub_env.push("HOME".into());
+        let out = run_tool(&env, "Bash", json!({"command": "echo \"${HOME-unset}\""})).await;
+        assert_eq!(out.text, "unset");
+    }
+
+    #[tokio::test]
+    async fn repo_git_config_cannot_run_fsmonitor() {
+        let d = tempfile::tempdir().unwrap();
+        let env = env_in(d.path());
+        let marker = d.path().join("fsmonitor-ran");
+        let cmd = format!(
+            "git init -q && git config core.fsmonitor 'touch {} #' && echo a > f && git status --short",
+            marker.display()
+        );
+        let out = run_tool(&env, "Bash", json!({"command": cmd})).await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(!marker.exists(), "fsmonitor hook ran");
+    }
+
+    /// A tool env whose Bash runs sandboxed with `home` as the home folder, or `None` where
+    /// bubblewrap does not work.
+    fn sandboxed(dir: &std::path::Path, home: &std::path::Path) -> Option<ToolEnv> {
+        let bwrap = ostra_core::sandbox::bwrap()?.to_path_buf();
+        let env = env_in(dir);
+        let root = std::fs::canonicalize(dir).unwrap();
+        let ctx = ostra_core::exec::ExecContext {
+            execution_id: "x_sb".into(),
+            session_id: None,
+            agent: ostra_core::AgentName::Implementer,
+            initializer_mode: None,
+            executor: ostra_core::ExecutorKind::Native,
+            workspace_root: env.config().repo_root.clone(),
+            repo_root: env.config().repo_root.clone(),
+            project_key: "p".into(),
+            session_dir: env.config().session_dir.clone(),
+            session_root: env.config().session_dir.clone(),
+            report_file: None,
+            phase: None,
+            yolo: false,
+            permission_mode: ostra_core::config::PermissionMode::Default,
+            permissions: Default::default(),
+            protected_paths: vec![],
+            memory_db: root.join("session/memory/knowledge.sqlite3"),
+        };
+        let profile = ostra_core::sandbox::Profile::for_execution(
+            &ctx,
+            &ostra_core::config::SandboxConfig::default(),
+            home,
+        )
+        .scratch(&root.join("scratch"))
+        .unwrap();
+        Some(env.with_sandbox(bwrap, profile))
+    }
+
+    #[tokio::test]
+    async fn sandbox_confines_writes_and_hides_secrets() {
+        let d = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/id_ed25519"), "SECRET").unwrap();
+        std::fs::write(home.join(".bashrc"), "").unwrap();
+        let Some(env) = sandboxed(d.path(), &home) else {
+            eprintln!("bwrap unavailable; skipping");
+            return;
+        };
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": "echo ok > made.txt && cat made.txt"}),
+        )
+        .await;
+        assert_eq!(out.text, "ok", "{}", out.text);
+        assert!(env.config().repo_root.join("made.txt").exists());
+
+        let key = home.join(".ssh/id_ed25519");
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": format!("cat {}", key.display())}),
+        )
+        .await;
+        assert!(out.is_error && !out.text.contains("SECRET"), "{}", out.text);
+
+        let rc = home.join(".bashrc");
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": format!("echo evil >> {}", rc.display())}),
+        )
+        .await;
+        assert!(out.is_error, "{}", out.text);
+        assert_eq!(std::fs::read_to_string(&rc).unwrap(), "");
+        if let Some(real_home) = std::env::var_os("HOME") {
+            let probe = std::path::Path::new(&real_home).join(format!(
+                ".ostra-sandbox-probe-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            let out = run_tool(
+                &env,
+                "Bash",
+                json!({"command": format!("touch {}", probe.display())}),
+            )
+            .await;
+            let made = probe.exists();
+            let _ = std::fs::remove_file(&probe);
+            assert!(out.is_error && !made, "{}", out.text);
+        }
+
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": "ls /proc | grep -cE '^[0-9]+$'"}),
+        )
+        .await;
+        let n: u32 = out.text.trim().parse().unwrap_or(99);
+        assert!(n < 10, "sandbox sees {n} processes");
+
+        let data = ostra_core::paths::data_dir();
+        if data.is_dir() {
+            let out = run_tool(
+                &env,
+                "Bash",
+                json!({"command": format!("ls -A {}", data.display())}),
+            )
+            .await;
+            assert!(!out.text.contains("registry.db"), "{}", out.text);
+        }
+        if let Some(rt) = std::env::var_os("XDG_RUNTIME_DIR") {
+            let bus = std::path::Path::new(&rt).join("bus");
+            if bus.exists() {
+                let out = run_tool(&env, "Bash", json!({"command": format!("test -e {} && echo visible || echo hidden", bus.display())})).await;
+                assert_eq!(out.text, "hidden");
+            }
+        }
+        let out = run_tool(&env, "Bash", json!({"command": "echo \"${SSH_AUTH_SOCK-unset}\" \"${DBUS_SESSION_BUS_ADDRESS-unset}\""})).await;
+        assert_eq!(out.text, "unset unset");
+    }
+
+    #[tokio::test]
+    async fn sandbox_keeps_git_config_read_only_and_cwd_persistent() {
+        let d = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let repo = env_in(d.path()).config().repo_root.clone();
+        let ok = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        std::fs::create_dir_all(repo.join("sub")).unwrap();
+        let Some(env) = sandboxed(d.path(), &home) else {
+            eprintln!("bwrap unavailable; skipping");
+            return;
+        };
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": "git config core.fsmonitor 'touch x #'"}),
+        )
+        .await;
+        assert!(out.is_error, "{}", out.text);
+        assert!(
+            !std::fs::read_to_string(repo.join(".git/config"))
+                .unwrap()
+                .contains("fsmonitor")
+        );
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": "echo a > f && git add f && git status --short"}),
+        )
+        .await;
+        assert!(out.text.contains("A  f"), "{}", out.text);
+
+        run_tool(&env, "Bash", json!({"command": "cd sub"})).await;
+        assert!(env.cwd().ends_with("sub"));
+        let out = run_tool(&env, "Bash", json!({"command": "pwd"})).await;
+        assert!(out.text.trim().ends_with("/sub"), "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn sandbox_tmp_is_private_and_persists_across_calls() {
+        let d = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let marker =
+            std::env::temp_dir().join(format!("ostra-host-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::write(&marker, "").unwrap();
+        let Some(env) = sandboxed(d.path(), &home) else {
+            eprintln!("bwrap unavailable; skipping");
+            let _ = std::fs::remove_file(&marker);
+            return;
+        };
+        let out = run_tool(&env, "Bash", json!({"command": format!("test -e {} && echo shared || echo private", marker.display())})).await;
+        let _ = std::fs::remove_file(&marker);
+        assert_eq!(out.text, "private");
+        run_tool(
+            &env,
+            "Bash",
+            json!({"command": "mkdir -p /tmp/w && echo kept > /tmp/w/f && cd /tmp/w"}),
+        )
+        .await;
+        let out = run_tool(&env, "Bash", json!({"command": "cat f && pwd"})).await;
+        assert!(out.text.starts_with("kept"), "{}", out.text);
+        let out = run_tool(&env, "Read", json!({"file_path": "/tmp/w/f"})).await;
+        assert!(out.text.contains("kept"), "{}", out.text);
+    }
+
+    #[tokio::test]
+    async fn sandbox_timeout_stops_background_children() {
+        let d = tempfile::tempdir().unwrap();
+        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let Some(env) = sandboxed(d.path(), &home) else {
+            eprintln!("bwrap unavailable; skipping");
+            return;
+        };
+        let marker = env.config().repo_root.join("survived");
+        let cmd = format!("(sleep 2; touch {}) & sleep 30", marker.display());
+        let started = std::time::Instant::now();
+        let out = run_tool(&env, "Bash", json!({"command": cmd, "timeout": 300})).await;
+        assert!(
+            out.is_error && out.text.contains("timed out"),
+            "{}",
+            out.text
+        );
+        assert!(started.elapsed() < Duration::from_secs(5));
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+        assert!(!marker.exists(), "background child outlived the timeout");
     }
 }

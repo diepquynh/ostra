@@ -1,3 +1,4 @@
+import type { ApproveCommands } from "./gen/ApproveCommands";
 import type { CodeDeps } from "./gen/CodeDeps";
 import type { CodeExternalFile } from "./gen/CodeExternalFile";
 import type { CodeFile } from "./gen/CodeFile";
@@ -19,7 +20,9 @@ import type { ProjectFile } from "./gen/ProjectFile";
 import type { ProjectTree } from "./gen/ProjectTree";
 import type { ProviderCredentialsEdit } from "./gen/ProviderCredentialsEdit";
 import type { ProviderStatus } from "./gen/ProviderStatus";
+import type { RevokedSignIns } from "./gen/RevokedSignIns";
 import type { SaveProjectFile } from "./gen/SaveProjectFile";
+import type { SignInSession } from "./gen/SignInSession";
 import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
 import type { ArtifactWithHeadings, SearchResults, WorkspaceActivity, WorkspaceTree } from "./nav";
 import type {
@@ -125,6 +128,10 @@ const enc = encodeURIComponent;
 export const httpApi = {
   info: () => request<ServerInfo>("GET", "/api/info"),
   exchange: (token: string) => request<void>("POST", "/api/auth/exchange", { token }),
+  signIns: () => request<SignInSession[]>("GET", "/api/auth/sessions"),
+  revokeSignIn: (id: string) => request<void>("DELETE", `/api/auth/sessions/${enc(id)}`),
+  revokeOtherSignIns: () => request<RevokedSignIns>("POST", "/api/auth/sessions/revoke-others"),
+  signOut: () => request<void>("POST", "/api/auth/signout"),
 
   workspaces: () => request<WorkspaceSummary[]>("GET", "/api/workspaces"),
   createWorkspace: (body: CreateWorkspace) => request<WorkspaceDetail>("POST", "/api/workspaces", body),
@@ -134,6 +141,9 @@ export const httpApi = {
   deleteWorkspace: (ws: string) => request<void>("DELETE", `/api/workspaces/${enc(ws)}`),
   validateSettings: (ws: string, settings: WorkspaceSettings) =>
     request<ValidationIssue[]>("POST", `/api/workspaces/${enc(ws)}/validate`, settings),
+  /** Approves the commands of one folder file, as `pending_commands` showed them. */
+  approveCommands: (ws: string, body: ApproveCommands) =>
+    request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/approve`, body),
   /** Connects to each saved MCP server, so it can take as long as the slowest one starts. */
   mcpStatus: (ws: string) => request<McpServerStatus[]>("GET", `/api/workspaces/${enc(ws)}/mcp`),
   mcpRefresh: (ws: string, name: string) =>

@@ -10,6 +10,7 @@ pub mod live;
 pub mod outcome;
 pub mod protocol;
 pub mod pty;
+pub mod sandbox;
 pub mod services;
 pub mod setup;
 pub mod term_log;

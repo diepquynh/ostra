@@ -11,7 +11,7 @@ const PREFIX: &str = "provider_credentials:";
 
 pub fn load_all(registry: &RegistryDb) -> Result<BTreeMap<String, SavedCredentials>, StoreError> {
     let mut out = BTreeMap::new();
-    for (key, bytes) in registry.kv_scan(PREFIX)? {
+    for (key, bytes) in registry.secret_scan(PREFIX)? {
         match serde_json::from_slice(&bytes) {
             Ok(saved) => {
                 out.insert(key[PREFIX.len()..].to_string(), saved);
@@ -35,7 +35,7 @@ pub fn save(
     if saved.is_empty() {
         registry.kv_delete(&key)?;
     } else {
-        registry.kv_set(
+        registry.secret_set(
             &key,
             &serde_json::to_vec(saved).expect("credentials serialize"),
         )?;
@@ -69,6 +69,9 @@ pub fn apply(
     let mut issues = vec![];
     if let Some(url) = &saved.base_url {
         match url::Url::parse(url) {
+            Ok(u) if !u.username().is_empty() || u.password().is_some() || u.query().is_some() => {
+                issues.push(issue("base_url", "Enter the base URL without a user name, password, or query, and put the key in the API key field, because the base URL is shown in settings."))
+            }
             Ok(u) if matches!(u.scheme(), "http" | "https") && u.host().is_some() => {}
             _ => issues.push(issue("base_url", "Enter the base URL as http:// or https:// followed by a host, for example https://api.anthropic.com.")),
         }
@@ -132,6 +135,18 @@ mod tests {
         let issues = apply(SavedCredentials::default(), &edit).unwrap_err();
         let paths: Vec<_> = issues.iter().map(|i| i.path.as_str()).collect();
         assert_eq!(paths, ["base_url", "api_key"]);
+    }
+
+    #[test]
+    fn base_urls_with_credentials_are_refused() {
+        for url in ["https://u:p@api.example", "https://api.example/?key=s"] {
+            let edit = ProviderCredentialsEdit {
+                base_url: Some(url.into()),
+                ..Default::default()
+            };
+            let issues = apply(SavedCredentials::default(), &edit).unwrap_err();
+            assert_eq!(issues[0].path, "base_url", "{url}");
+        }
     }
 
     #[test]

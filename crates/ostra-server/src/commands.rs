@@ -74,9 +74,16 @@ pub fn save(w: &WorkspaceRt, key: &str, body: Commands) -> Result<Commands, ApiE
             issues,
         ));
     }
+    let before = profile.commands.format.take();
     profile.commands = commands;
     save_toml(&path, &profile)
         .map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::trust::saved_format(
+        &w.shared.registry,
+        &root,
+        before.as_deref(),
+        profile.commands.format.as_deref(),
+    );
     Ok(profile.commands)
 }
 

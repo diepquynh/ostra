@@ -185,8 +185,14 @@ pub struct CommandProvider {
 impl CommandProvider {
     async fn run(&self, input: Vec<u8>) -> Result<Vec<u8>, String> {
         let (program, args) = self.command.split_first().ok_or("The command is empty.")?;
-        let mut child = tokio::process::Command::new(program)
-            .args(args)
+        let hc = ostra_core::sandbox::host_command(program, args, &self.root, &[&self.root])?;
+        let mut cmd = tokio::process::Command::new(&hc.program);
+        for k in &hc.env_remove {
+            cmd.env_remove(k);
+        }
+        let mut child = cmd
+            .args(&hc.args)
+            .envs(hc.env.iter().map(|(k, v)| (k, v)))
             .current_dir(&self.root)
             .env(
                 "OSTRA_CODE_PROTOCOL",

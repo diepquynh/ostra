@@ -2461,6 +2461,7 @@ dependencies = [
  "tracing",
  "tree-sitter",
  "tree-sitter-bash",
+ "url",
 ]
 
 [[package]]
@@ -2499,6 +2500,7 @@ dependencies = [
  "http",
  "if-addrs",
  "ignore",
+ "keyring",
  "libc",
  "mime_guess",
  "notify",
@@ -2540,8 +2542,11 @@ dependencies = [
 name = "ostra-store"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
+ "base64 0.23.1",
  "chrono",
  "ostra-core",
+ "rand 0.10.3",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2574,6 +2579,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "url",
  "uuid",
 ]
 

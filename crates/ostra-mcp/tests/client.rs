@@ -123,6 +123,7 @@ fn stdio_endpoint() -> Endpoint {
             "--test-threads=1".into(),
         ],
         env: vec![(CHILD.into(), "1".into())],
+        env_remove: vec![],
         cwd: std::env::temp_dir(),
     }
 }
@@ -151,6 +152,7 @@ async fn stdio_crash_is_reported() {
             program: "sh".into(),
             args: vec!["-c".into(), "echo 'bad token' >&2; exit 3".into()],
             env: vec![],
+            env_remove: vec![],
             cwd: std::env::temp_dir(),
         },
         T,
@@ -159,6 +161,29 @@ async fn stdio_crash_is_reported() {
     .err()
     .unwrap();
     assert!(e.to_string().contains("bad token"), "{e}");
+}
+
+#[tokio::test]
+async fn stdio_server_does_not_inherit_removed_variables() {
+    // SAFETY: no other test reads this variable.
+    unsafe { std::env::set_var("OSTRA_MCP_TEST_SECRET", "leaked") };
+    let e = Client::connect(
+        Endpoint::Stdio {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                "echo \"secret=[${OSTRA_MCP_TEST_SECRET-unset}] keep=[$KEEP]\" >&2; exit 3".into(),
+            ],
+            env: vec![("KEEP".into(), "yes".into())],
+            env_remove: vec!["OSTRA_MCP_TEST_SECRET".into()],
+            cwd: std::env::temp_dir(),
+        },
+        T,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(e.to_string().contains("secret=[unset] keep=[yes]"), "{e}");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -404,4 +429,90 @@ async fn oauth_sign_in_and_refresh() {
     held.tokens.lock().access_token = "stale".into();
     mcp.list_tools(T).await.unwrap();
     assert_eq!(held.tokens.lock().access_token, "access-2");
+}
+
+/// A server that publishes only authorization server metadata, built from its own base URL.
+async fn serve_metadata(meta: fn(&str) -> Value) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let body = meta(&base);
+    let app = axum::Router::new().route(
+        "/.well-known/oauth-authorization-server",
+        get(move || async move { axum::Json(body) }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    base
+}
+
+#[tokio::test]
+async fn oauth_discovery_refuses_a_script_endpoint() {
+    let base = serve_metadata(|base| {
+        json!({
+            "issuer": base,
+            "authorization_endpoint": "javascript:fetch('/api/x')//",
+            "token_endpoint": format!("{base}/token"),
+        })
+    })
+    .await;
+    let e = oauth::discover(&reqwest::Client::new(), &format!("{base}/mcp"), None)
+        .await
+        .unwrap_err();
+    assert!(e.contains("authorization endpoint") && e.contains("https"), "{e}");
+}
+
+#[tokio::test]
+async fn oauth_discovery_refuses_another_issuer() {
+    let base = serve_metadata(|base| {
+        json!({
+            "issuer": "https://evil.example",
+            "authorization_endpoint": format!("{base}/authorize"),
+            "token_endpoint": format!("{base}/token"),
+        })
+    })
+    .await;
+    let e = oauth::discover(&reqwest::Client::new(), &format!("{base}/mcp"), None)
+        .await
+        .unwrap_err();
+    assert!(e.contains("issuer `https://evil.example`"), "{e}");
+}
+
+#[test]
+fn oauth_endpoint_schemes() {
+    let origin = Some("http://10.0.0.5:8080");
+    assert!(oauth::check_endpoint("x", "https://auth.example/authorize", None).is_ok());
+    assert!(oauth::check_endpoint("x", "http://127.0.0.1:9/authorize", None).is_ok());
+    assert!(oauth::check_endpoint("x", "http://localhost:9/authorize", None).is_ok());
+    assert!(oauth::check_endpoint("x", "http://10.0.0.5:8080/authorize", origin).is_ok());
+    assert!(oauth::check_endpoint("x", "http://evil.example/authorize", origin).is_err());
+    assert!(oauth::check_endpoint("x", "javascript:alert(1)", origin).is_err());
+    assert!(oauth::check_endpoint("x", "data:text/html,hi", None).is_err());
+    assert!(oauth::check_endpoint("x", "file:///etc/passwd", None).is_err());
+}
+
+#[tokio::test]
+async fn redirects_stay_on_the_first_origin() {
+    let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other_base = format!("http://{}", other.local_addr().unwrap());
+    tokio::spawn(async move {
+        let app = axum::Router::new().route("/leak", get(|| async { "reached the other host" }));
+        axum::serve(other, app).await.unwrap()
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let target = format!("{other_base}/leak");
+    tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route("/away", get(move || async move { axum::response::Redirect::temporary(&target) }))
+            .route("/here", get(|| async { axum::response::Redirect::temporary("/ok") }))
+            .route("/ok", get(|| async { "same origin" }));
+        axum::serve(listener, app).await.unwrap()
+    });
+    let rq = reqwest::Client::builder()
+        .redirect(ostra_mcp::same_origin_redirects())
+        .build()
+        .unwrap();
+    let away = rq.get(format!("{base}/away")).header("x-api-key", "secret").send().await.unwrap();
+    assert_eq!(away.status(), StatusCode::TEMPORARY_REDIRECT);
+    let here = rq.get(format!("{base}/here")).send().await.unwrap();
+    assert_eq!(here.text().await.unwrap(), "same origin");
 }

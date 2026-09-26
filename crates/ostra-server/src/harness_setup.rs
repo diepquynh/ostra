@@ -83,6 +83,7 @@ pub fn start(
         files: vec![],
         links: vec![],
         session_id: None,
+        env_remove: vec![],
     };
     let pty = PtySession::spawn(&plan, 100, 30, Box::new(|_| {}))
         .map_err(|e| format!("Could not start `{}`: {e}", out.command))?;

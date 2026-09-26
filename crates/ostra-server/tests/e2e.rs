@@ -223,10 +223,17 @@ struct Server {
 /// Start a signed-in server whose config and data live under `root`, with every tier on the
 /// scripted `mock` provider. Call it while holding [`SERIAL`].
 async fn boot(root: &Path) -> Server {
+    boot_with(root, |g| g.server.use_ip_host = true).await
+}
+
+/// [`boot`] with a change to the global config before the server starts.
+async fn boot_with(root: &Path, change: impl FnOnce(&mut GlobalConfig)) -> Server {
     // SAFETY: the caller holds SERIAL, so no other test thread reads the environment meanwhile.
     unsafe {
         std::env::set_var("OSTRA_CONFIG", root.join("config.toml"));
         std::env::set_var("OSTRA_DATA_DIR", root.join("data"));
+        std::env::set_var("OSTRA_MASTER_KEY_FILE", root.join("master.key"));
+        std::env::set_var("OSTRA_SANDBOX_CACHE", root.join("sandbox-cache"));
         std::env::set_var("OSTRA_MODELS_DEV_URL", "");
     }
     let mut global = GlobalConfig::default();
@@ -239,6 +246,7 @@ async fn boot(root: &Path) -> Server {
             frontier: Some("mock:m".into()),
         },
     );
+    change(&mut global);
     save_toml(&root.join("config.toml"), &global).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -256,7 +264,8 @@ async fn boot(root: &Path) -> Server {
         "mock",
         Arc::new(ScriptedProvider::named("mock").with_responder(respond)),
     );
-    let router = ostra_server::api::router(app.clone());
+    let router = ostra_server::api::router(app.clone())
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
     let base = format!("http://127.0.0.1:{port}");
@@ -947,12 +956,20 @@ async fn yolo_implement_session_end_to_end() {
             (Some("code_navigation"), Some(4))
         );
         assert_eq!(
-            (&n["result"]["symbol"], &n["result"]["locations"], &n["result"]["provider"]),
+            (
+                &n["result"]["symbol"],
+                &n["result"]["locations"],
+                &n["result"]["provider"]
+            ),
             (&json!("hello"), &json!([]), &json!("native")),
             "{n}"
         );
         let none = ask(jump(5, 3, 5, "supertypes")).await;
-        assert_eq!((&none["result"], &none["error"]), (&Value::Null, &Value::Null), "{none}");
+        assert_eq!(
+            (&none["result"], &none["error"]),
+            (&Value::Null, &Value::Null),
+            "{none}"
+        );
         let bad = ask(hint("code_complete", 3, "../outside.rs")).await;
         assert!(bad["result"].is_null() && bad["error"].is_string(), "{bad}");
     }
@@ -980,7 +997,11 @@ async fn yolo_implement_session_end_to_end() {
     assert_eq!(
         get(
             "code/usages",
-            &[("symbol", "x"), ("uri", "file:///etc/passwd"), ("line", "1")]
+            &[
+                ("symbol", "x"),
+                ("uri", "file:///etc/passwd"),
+                ("line", "1")
+            ]
         )
         .await
         .unwrap()
@@ -2054,6 +2075,7 @@ async fn terminal_streams_over_the_socket() {
         files: vec![],
         links: vec![],
         session_id: None,
+        env_remove: vec![],
     };
     let pty = ostra_exec_harness::PtySession::spawn(&plan, 80, 24, Box::new(|_| {})).unwrap();
     let ptys = server.app.shared.harness.ptys();
@@ -2707,4 +2729,591 @@ async fn uploads_are_kept_in_the_session_and_downloadable() {
         .post(format!("{base}/api/sessions/{}/stop", s.id))
         .send()
         .await;
+}
+
+/// Wait up to `secs` for `path` to exist.
+async fn appears(path: &Path, secs: u64) -> bool {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+    while tokio::time::Instant::now() < deadline {
+        if path.exists() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    path.exists()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn folder_commands_run_only_after_approval() {
+    use ostra_core::api::PendingKind;
+    use ostra_core::config::{
+        LanguageServerConfig, McpServerConfig, ProjectEntry, WorkspaceSettings,
+    };
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, .. } = boot(root).await;
+    // Inside the folders each program may write, because both run sandboxed.
+    let (mcp_marker, lsp_marker) = (root.join("evil/mcp-ran"), root.join("app/lsp-ran"));
+    let touch = |m: &Path| {
+        vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("touch {}", m.display()),
+        ]
+    };
+
+    // A repository that ships its own workspace file, as a clone or a pull would bring it.
+    let app_dir = root.join("app");
+    std::fs::create_dir_all(app_dir.join("src")).unwrap();
+    std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::create_dir_all(app_dir.join(".ostra")).unwrap();
+    std::fs::write(
+        app_dir.join(".ostra/project.toml"),
+        format!(
+            "[commands]\nformat = \"touch {}\"\n",
+            root.join("fmt-ran").display()
+        ),
+    )
+    .unwrap();
+    let evil = root.join("evil");
+    let mut s = WorkspaceSettings::seeded("evil");
+    let mut server = McpServerConfig::local("evil", &[]);
+    server.command = touch(&mcp_marker);
+    s.mcp_servers.push(server);
+    s.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app_dir.clone(),
+        stack: None,
+        code_provider: None,
+        language_servers: vec![LanguageServerConfig {
+            command: touch(&lsp_marker),
+            languages: vec!["rust".into()],
+            timeout_secs: 2,
+            initialization_options: None,
+        }],
+    });
+    s.permissions.mode = PermissionMode::Bypass;
+    s.permissions.allow.push("Bash(*)".into());
+    s.yolo.default = true;
+    save_toml(&ostra_core::paths::workspace_toml(&evil), &s).unwrap();
+
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "evil", "root": evil}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(ws.settings.permissions.mode, PermissionMode::Default);
+    assert!(
+        !ws.settings.yolo.default,
+        "a folder file never turns YOLO on"
+    );
+    let wsp = format!("{base}/api/workspaces/{}", ws.id);
+    let kinds: Vec<(Option<String>, Vec<PendingKind>)> = ws
+        .pending_commands
+        .iter()
+        .map(|p| (p.project.clone(), p.items.iter().map(|i| i.kind).collect()))
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            (
+                None,
+                vec![
+                    // `app` lives outside the workspace folder, so agents could write there.
+                    PendingKind::ProjectOutside,
+                    PendingKind::McpServer,
+                    PendingKind::LanguageServer,
+                    PendingKind::AllowRule
+                ]
+            ),
+            (Some("app".into()), vec![PendingKind::FormatCommand]),
+        ]
+    );
+    let shown = serde_json::to_string(&ws.pending_commands).unwrap();
+    assert!(
+        shown.contains(&format!("touch {}", mcp_marker.display())),
+        "{shown}"
+    );
+
+    let mcp: Value = client
+        .get(format!("{wsp}/mcp"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        mcp[0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Approve"),
+        "{mcp}"
+    );
+    let r = client
+        .get(format!("{wsp}/projects/app/code/file?path=src/main.rs"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!mcp_marker.exists() && !lsp_marker.exists());
+
+    // A save made in Ostra does not approve what waits for approval.
+    let mut edited = ws.settings.clone();
+    edited.instructions.all = Some("Keep it short.".into());
+    let saved: WorkspaceDetail = client
+        .patch(&wsp)
+        .json(&edited)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(saved.pending_commands.len(), 2);
+
+    let stale = client
+        .post(format!("{wsp}/approve"))
+        .json(&json!({"hash": "0000"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stale.status(), 409);
+    let hash = saved.pending_commands[0].hash.clone();
+    let approved: WorkspaceDetail = client
+        .post(format!("{wsp}/approve"))
+        .json(&json!({"hash": hash}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        approved.pending_commands.len(),
+        1,
+        "the format command still waits"
+    );
+
+    let _ = client.get(format!("{wsp}/mcp")).send().await.unwrap();
+    assert!(
+        appears(&mcp_marker, 10).await,
+        "the approved MCP server starts"
+    );
+    let _ = client
+        .get(format!("{wsp}/projects/app/code/file?path=src/main.rs"))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        appears(&lsp_marker, 10).await,
+        "the approved language server starts"
+    );
+
+    // Once approved, the user's own edits stay approved, and the mode saves outside the file.
+    let mut more = approved.settings.clone();
+    let mut second = McpServerConfig::local("second", &[]);
+    second.command = vec!["true".into()];
+    more.mcp_servers.push(second);
+    more.permissions.mode = PermissionMode::AcceptEdits;
+    let saved: WorkspaceDetail = client
+        .patch(&wsp)
+        .json(&more)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        saved.pending_commands.len(),
+        1,
+        "{:?}",
+        saved.pending_commands
+    );
+    assert_eq!(saved.settings.permissions.mode, PermissionMode::AcceptEdits);
+    let text = std::fs::read_to_string(ostra_core::paths::workspace_toml(&evil)).unwrap();
+    assert!(
+        !text.contains("acceptEdits") && !text.contains("yolo"),
+        "{text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_new_workspace_needs_no_approval_for_its_own_commands() {
+    use ostra_core::config::McpServerConfig;
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { base, client, .. } = boot(dir.path()).await;
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "mine", "root": dir.path().join("ws"), "permissions": {"mode": "plan"}}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(ws.pending_commands.is_empty());
+    assert_eq!(ws.settings.permissions.mode, PermissionMode::Plan);
+    let mut s = ws.settings.clone();
+    s.mcp_servers
+        .push(McpServerConfig::local("tool", &["true"]));
+    s.permissions.allow.push("Bash(cargo test)".into());
+    let saved: WorkspaceDetail = client
+        .patch(format!("{base}/api/workspaces/{}", ws.id))
+        .json(&s)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        saved.pending_commands.is_empty(),
+        "{:?}",
+        saved.pending_commands
+    );
+    assert_eq!(saved.settings.permissions.mode, PermissionMode::Plan);
+}
+
+/// Sign in with a fresh token, as a separate browser, and return its `Cookie` header value.
+async fn sign_in_cookie(server: &Server) -> String {
+    let url = server.app.auth.sign_in_url().unwrap();
+    let token = url.split("#token=").nth(1).unwrap();
+    let r = reqwest::Client::new()
+        .post(format!("{}/api/auth/exchange", server.base))
+        .header("user-agent", "SecondBrowser/2")
+        .json(&json!({"token": token}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    let set = r.headers()["set-cookie"].to_str().unwrap();
+    set.split(';').next().unwrap().to_string()
+}
+
+async fn socket_with(
+    server: &Server,
+    cookie: &str,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    let mut req = format!("{}/ws", server.base.replace("http://", "ws://"))
+        .into_client_request()
+        .unwrap();
+    req.headers_mut().insert("cookie", cookie.parse().unwrap());
+    req.headers_mut()
+        .insert("origin", server.base.parse().unwrap());
+    tokio_tungstenite::connect_async(req).await.unwrap().0
+}
+
+async fn status_with(server: &Server, cookie: &str) -> u16 {
+    reqwest::Client::new()
+        .get(format!("{}/api/auth/sessions", server.base))
+        .header("cookie", cookie)
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+#[track_caller]
+fn signed_out(
+    msg: Option<
+        Result<tokio_tungstenite::tungstenite::Message, tokio_tungstenite::tungstenite::Error>,
+    >,
+) {
+    use tokio_tungstenite::tungstenite::Message;
+    match msg {
+        Some(Ok(Message::Close(Some(frame)))) => assert_eq!(u16::from(frame.code), 4401),
+        other => panic!("expected a sign-out close frame, got {other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sign_in_sessions_are_listed_and_revoked() {
+    use futures::StreamExt;
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let server = boot(dir.path()).await;
+    let base = server.base.clone();
+    let list = async || -> Vec<ostra_core::api::SignInSession> {
+        server
+            .client
+            .get(format!("{base}/api/auth/sessions"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    };
+
+    let second = sign_in_cookie(&server).await;
+    let sessions = list().await;
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions.iter().filter(|s| s.current).count(), 1);
+    let other = sessions.iter().find(|s| !s.current).unwrap();
+    assert_eq!(other.user_agent.as_deref(), Some("SecondBrowser/2"));
+    assert_eq!(other.ip.as_deref(), Some("127.0.0.1"));
+    assert!(
+        !second.contains(&other.id),
+        "the listed id is not the cookie"
+    );
+
+    // Revoked from the browser: the next request is refused and the open socket closes at once.
+    let mut ws = socket_with(&server, &second).await;
+    assert_eq!(status_with(&server, &second).await, 200);
+    let r = server
+        .client
+        .delete(format!("{base}/api/auth/sessions/{}", other.id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    signed_out(
+        tokio::time::timeout(Duration::from_secs(1), ws.next())
+            .await
+            .expect("the socket closes within a second"),
+    );
+    assert_eq!(status_with(&server, &second).await, 401);
+
+    // Revoked from the CLI, another process: refused within the recheck window.
+    let third = sign_in_cookie(&server).await;
+    let mut ws = socket_with(&server, &third).await;
+    let id = list().await.into_iter().find(|s| !s.current).unwrap().id;
+    assert!(ostra_server::auth::revoke_sign_in(&server.app.shared.registry, &id).unwrap());
+    signed_out(
+        tokio::time::timeout(
+            ostra_server::auth::RECHECK + Duration::from_secs(2),
+            ws.next(),
+        )
+        .await
+        .expect("the socket closes within the recheck window"),
+    );
+    assert_eq!(status_with(&server, &third).await, 401);
+
+    // Everyone else signed out; this browser stays.
+    let fourth = sign_in_cookie(&server).await;
+    let r: ostra_core::api::RevokedSignIns = server
+        .client
+        .post(format!("{base}/api/auth/sessions/revoke-others"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(r.revoked, 1);
+    assert_eq!(status_with(&server, &fourth).await, 401);
+    assert_eq!(list().await.len(), 1);
+
+    // A guessing loop is cut off after a few failures from one address.
+    let bad = async || {
+        reqwest::Client::new()
+            .post(format!("{base}/api/auth/exchange"))
+            .json(&json!({"token": "0000"}))
+            .send()
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    // Loopback is never rate limited, so a local process cannot lock the user out.
+    for _ in 0..6 {
+        assert_eq!(bad().await, 401);
+    }
+
+    // Signing out clears the cookie and revokes this sign-in.
+    let r = server
+        .client
+        .post(format!("{base}/api/auth/signout"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    assert!(
+        r.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    let r = server
+        .client
+        .get(format!("{base}/api/auth/sessions"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 401);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_browser_boundary_refuses_page_content_and_other_sites() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { base, client, .. } = boot(dir.path()).await;
+    let url = format!("{base}/api/environment");
+    let get = |headers: &[(&str, &str)]| {
+        let mut r = client.get(&url);
+        for (k, v) in headers {
+            r = r.header(*k, *v);
+        }
+        r.send()
+    };
+
+    let ok = get(&[("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "empty")])
+        .await
+        .unwrap();
+    assert_eq!(ok.status(), 200);
+    let csp = ok.headers()["content-security-policy"].to_str().unwrap();
+    for part in ["script-src 'self'", "img-src 'self' data:", "frame-ancestors 'none'", "object-src 'none'"] {
+        assert!(csp.contains(part), "{csp}");
+    }
+    assert_eq!(ok.headers()["cache-control"], "no-store");
+
+    for headers in [
+        vec![("sec-fetch-site", "cross-site")],
+        vec![("sec-fetch-site", "same-site")],
+        vec![("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "image")],
+        vec![("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "script")],
+        vec![("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "iframe")],
+        vec![("origin", "http://evil.example")],
+        vec![("origin", "null")],
+    ] {
+        let r = get(&headers).await.unwrap();
+        assert_eq!(r.status(), 403, "{headers:?}");
+        // A refusal is framed or sniffed no more than an answer is.
+        assert_eq!(r.headers()["x-frame-options"], "DENY", "{headers:?}");
+        assert_eq!(r.headers()["x-content-type-options"], "nosniff");
+    }
+    let misdirected = client
+        .get(&url)
+        .header("host", "evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(misdirected.status(), 421);
+    assert_eq!(misdirected.headers()["x-frame-options"], "DENY");
+    let csp = misdirected.headers()["content-security-policy"]
+        .to_str()
+        .unwrap();
+    assert!(
+        csp.contains("connect-src 'self';"),
+        "a refused host is not named: {csp}"
+    );
+    let unsigned = reqwest::Client::new().get(&url).send().await.unwrap();
+    assert_eq!(unsigned.status(), 401);
+    assert_eq!(unsigned.headers()["x-frame-options"], "DENY");
+    assert_eq!(unsigned.headers()["cache-control"], "no-store");
+
+    // The harness bridge refuses browser requests before reading the body or the bearer token.
+    for path in ["/internal/policy", "/internal/mcp"] {
+        for headers in [
+            vec![("origin", "http://127.0.0.1:9")],
+            vec![("sec-fetch-site", "same-site")],
+            vec![("sec-fetch-site", "same-origin")],
+        ] {
+            let mut r = client
+                .post(format!("{base}{path}"))
+                .header("content-type", "application/json")
+                .body("{}");
+            for (k, v) in &headers {
+                r = r.header(*k, *v);
+            }
+            let r = r.send().await.unwrap();
+            assert_eq!(r.status(), 403, "{path} {headers:?}");
+        }
+        let r = client
+            .post(format!("{base}{path}"))
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_ne!(r.status(), 403, "{path} without browser headers reaches the bridge");
+    }
+
+    let page = client.get(format!("{base}/")).send().await.unwrap();
+    assert!(page.headers().contains_key("content-security-policy"));
+    assert_eq!(page.headers()["x-frame-options"], "DENY");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_loopback_server_lives_at_its_private_name() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    // Boots at 127.0.0.1 with the private name on; the helper's own sign-in on 127.0.0.1 is
+    // refused, so this test signs in again at the private name.
+    let url = {
+        unsafe {
+            std::env::set_var("OSTRA_CONFIG", root.join("config.toml"));
+            std::env::set_var("OSTRA_DATA_DIR", root.join("data"));
+            std::env::set_var("OSTRA_MASTER_KEY_FILE", root.join("master.key"));
+            std::env::set_var("OSTRA_SANDBOX_CACHE", root.join("sandbox-cache"));
+            std::env::set_var("OSTRA_MODELS_DEV_URL", "");
+        }
+        save_toml(&root.join("config.toml"), &GlobalConfig::default()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let opts = ostra_server::app::ServeOptions {
+            port: Some(port),
+            open_browser: false,
+            dev: false,
+            exe: PathBuf::from("/nonexistent/ostra"),
+            bind: None,
+            allow_hosts: vec![],
+        };
+        let app = ostra_server::app::build(&opts, port).await.unwrap();
+        let router = ostra_server::api::router(app.clone())
+            .into_make_service_with_connect_info::<std::net::SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        app.auth.sign_in_url().unwrap()
+    };
+    let (origin, token) = url.split_once("/#token=").unwrap();
+    let host = origin.trim_start_matches("http://");
+    let (name, port) = host.split_once(':').unwrap();
+    assert!(name.starts_with("ostra-") && name.ends_with(".localhost"), "{host}");
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+
+    let plain = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let page = plain
+        .get(format!("http://127.0.0.1:{port}/w/x?y=1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), 307);
+    assert_eq!(page.headers()["location"], format!("{origin}/w/x?y=1"));
+    let exchange = plain
+        .post(format!("http://127.0.0.1:{port}/api/auth/exchange"))
+        .json(&json!({"token": token}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(exchange.status(), 421, "no cookie is ever set on 127.0.0.1");
+
+    let private = reqwest::Client::builder()
+        .cookie_store(true)
+        .resolve(name, addr)
+        .build()
+        .unwrap();
+    let r = private
+        .post(format!("{origin}/api/auth/exchange"))
+        .json(&json!({"token": token}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 204);
+    let env = private.get(format!("{origin}/api/environment")).send().await.unwrap();
+    assert_eq!(env.status(), 200);
 }

@@ -173,7 +173,14 @@ describe("settings screen", () => {
     fireEvent.click(within(linear()).getByRole("button", { name: "Sign in" }));
     await waitFor(() => expect(login).toHaveBeenCalledWith(WS, "linear"));
     expect(open).toHaveBeenCalled();
-    await waitFor(() => expect(assign).toHaveBeenCalledWith("about:blank"));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("https://auth.example.test/authorize"));
+
+    // A sign-in link that is not http or https never reaches the window.
+    login.mockResolvedValueOnce({ authorization_url: "javascript:alert(1)" });
+    assign.mockClear();
+    fireEvent.click(within(linear()).getByRole("button", { name: "Sign in" }));
+    await waitFor(() => expect(linear().textContent).toContain("Ostra refused the sign-in link"));
+    expect(assign).not.toHaveBeenCalled();
 
     fireEvent.click(within(github()).getByLabelText("Offer create_issue to agents"));
     expect(github().textContent).toContain("Unsaved");
@@ -318,5 +325,41 @@ describe("workspace screen", () => {
 
     fireEvent.click(main().querySelectorAll("tbody tr")[1]);
     await waitFor(() => expect(router.state.location.pathname).toBe(`/w/${WS}/s/s_refund`));
+  });
+});
+
+describe("pending commands notice", () => {
+  it("shows on workspace screens, links to Settings, and gives way to the full banner there", async () => {
+    const real = api.workspace.bind(api);
+    vi.spyOn(api, "workspace").mockImplementation(async (id) => ({
+      ...(await real(id)),
+      pending_commands: [
+        {
+          project: "web",
+          file: "web/.ostra/project.toml",
+          hash: "h1",
+          items: [
+            {
+              kind: "formatCommand",
+              name: "web",
+              enabled: true,
+              command: "npm run fmt",
+              url: null,
+              env: [],
+              headers: [],
+              variables: [],
+              path: null,
+            },
+          ],
+        },
+      ],
+    }));
+    await mount(`/w/${WS}`);
+    const notice = await screen.findByText(/1 command waits for approval in web\/\.ostra\/project\.toml/);
+    expect(notice).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review in Settings" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/w/${WS}/settings`));
+    expect(await screen.findByText("Commands in web/.ostra/project.toml wait for approval")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Review in Settings" })).toBeNull();
   });
 });

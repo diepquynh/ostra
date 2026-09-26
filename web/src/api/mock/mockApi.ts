@@ -9,6 +9,7 @@ import type {
   ProjectSkills,
   SessionDetail,
   SessionSummary,
+  SignInSession,
   SkillDoc,
   WorkspaceUiState,
 } from "../types";
@@ -234,10 +235,42 @@ function search(query: string, limit: number): SearchHit[] {
   return hits.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
+let mockSignIns: SignInSession[] = [
+  {
+    id: "si_3f2a9c1d7e5b6a40",
+    created: "2026-09-20T08:00:00Z",
+    last_seen: "2026-09-25T09:30:00Z",
+    expires: "2026-10-20T08:00:00Z",
+    user_agent: "Mozilla/5.0 (X11; Linux x86_64) Chrome/140.0",
+    ip: "127.0.0.1",
+    current: true,
+  },
+  {
+    id: "si_91be07c4d2a38f15",
+    created: "2026-09-22T19:12:00Z",
+    last_seen: "2026-09-24T21:40:00Z",
+    expires: "2026-10-22T19:12:00Z",
+    user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_2) Safari/19.0",
+    ip: "192.168.0.2",
+    current: false,
+  },
+];
+
 /** In-memory stand-in for the server, used with `VITE_MOCK=1`. */
 export const mockApi: Api = {
   info: () => delay({ version: "0.1.0-mock", vapid_public_key: "" }),
   exchange: () => delay(undefined),
+  signIns: () => delay(mockSignIns),
+  revokeSignIn: (id) => {
+    mockSignIns = mockSignIns.filter((s) => s.id !== id);
+    return delay(undefined);
+  },
+  revokeOtherSignIns: () => {
+    const revoked = mockSignIns.filter((s) => !s.current).length;
+    mockSignIns = mockSignIns.filter((s) => s.current);
+    return delay({ revoked });
+  },
+  signOut: () => delay(undefined),
   workspaces: () => delay(firstRun() ? [] : f.workspaces),
   createWorkspace: (body) => {
     const issues = mockValidateCreate(body, firstRun() ? [] : f.workspaces.map((w) => w.root));
@@ -259,6 +292,7 @@ export const mockApi: Api = {
     return delay({ ...f.workspaceDetail, settings });
   },
   validateSettings: (_ws, next) => delay(wf.validate(next)),
+  approveCommands: () => delay({ ...f.workspaceDetail, settings }),
   mcpStatus: () =>
     delay(
       settings.mcp_servers.map((m) => wf.mockMcpStatus(m, mcpSignedIn)),
@@ -269,7 +303,7 @@ export const mockApi: Api = {
     mcpServer(name);
     // The mock authorization server signs in at once.
     setTimeout(() => mcpSignedIn.add(name), 1500);
-    return delay({ authorization_url: "about:blank" });
+    return delay({ authorization_url: "https://auth.example.test/authorize" });
   },
   mcpLogout: (_ws, name) => {
     mcpSignedIn.delete(name);
@@ -546,6 +580,7 @@ export const mockApi: Api = {
       providers: f.workspaceDetail.providers,
       harnesses: f.workspaceDetail.harnesses,
       stacks: f.workspaceDetail.stacks,
+      sandbox: { mode: "auto", available: true, active: true },
     }),
   saveProvider: (name, edit) => {
     const p = f.workspaceDetail.providers.find((x) => x.name === name);

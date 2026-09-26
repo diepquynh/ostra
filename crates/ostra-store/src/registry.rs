@@ -2,6 +2,7 @@
 //! secrets such as the VAPID private key.
 
 use crate::StoreError;
+use crate::secrets::{OpenError, Sealer, is_sealed, is_secret_key};
 use crate::util::{now, parse_time};
 use crate::workspace::open_connection;
 use chrono::{DateTime, Utc};
@@ -43,9 +44,14 @@ pub struct StoredPushSubscription {
     pub created_at: DateTime<Utc>,
 }
 
+/// Set once a rewrite after sealing finished, so plaintext left by an interrupted one is removed
+/// at the next start.
+const SECRETS_VACUUMED: &str = "secrets_vacuumed";
+
 #[derive(Debug, Clone)]
 pub struct RegistryDb {
     conn: Arc<Mutex<Connection>>,
+    sealer: Option<Arc<Sealer>>,
 }
 
 fn workspace_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, String, String)> {
@@ -63,19 +69,48 @@ fn to_record(
     })
 }
 
+fn open_logged(sealer: &Sealer, key: &str, stored: &[u8]) -> Option<Vec<u8>> {
+    match sealer.open(key, stored) {
+        Ok(v) => Some(v),
+        Err(OpenError::Undecryptable) => {
+            tracing::warn!(
+                "the saved credential under {key} cannot be decrypted, because the encryption key changed or the value was altered; enter it again in settings"
+            );
+            None
+        }
+    }
+}
+
 impl RegistryDb {
+    /// Opens without an encryption key: credentials cannot be read or saved until
+    /// [`RegistryDb::with_sealer`] gives it one.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
+        let conn = open_connection(path, MIGRATIONS)?;
+        // Freed pages are zeroed, so a replaced plaintext credential does not linger in the file.
+        conn.pragma_update(None, "secure_delete", "ON")?;
         Ok(RegistryDb {
-            conn: Arc::new(Mutex::new(open_connection(path, MIGRATIONS)?)),
+            conn: Arc::new(Mutex::new(conn)),
+            sealer: None,
         })
     }
 
+    /// An in-memory registry with a key that lives as long as the process.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch(MIGRATIONS[0])?;
         Ok(RegistryDb {
             conn: Arc::new(Mutex::new(conn)),
+            sealer: Some(Arc::new(Sealer::ephemeral())),
         })
+    }
+
+    pub fn with_sealer(mut self, sealer: Arc<Sealer>) -> Self {
+        self.sealer = Some(sealer);
+        self
+    }
+
+    fn sealer(&self) -> Result<&Sealer, StoreError> {
+        self.sealer.as_deref().ok_or(StoreError::Locked)
     }
 
     fn lock(&self) -> MutexGuard<'_, Connection> {
@@ -243,11 +278,71 @@ impl RegistryDb {
         Ok(())
     }
 
+    /// Sets `key` to `new` only while it still holds `expected`, so two callers cannot both win.
+    pub fn kv_replace(&self, key: &str, expected: &[u8], new: &[u8]) -> Result<bool, StoreError> {
+        Ok(self.lock().execute(
+            "UPDATE kv SET value = ?3 WHERE key = ?1 AND value = ?2",
+            params![key, expected, new],
+        )? > 0)
+    }
+
     pub fn kv_delete(&self, key: &str) -> Result<bool, StoreError> {
         Ok(self
             .lock()
             .execute("DELETE FROM kv WHERE key = ?1", params![key])?
             > 0)
+    }
+
+    /// A credential, decrypted. A value sealed under another key reads as absent, with a log line
+    /// asking the user to enter it again.
+    pub fn secret_get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        debug_assert!(is_secret_key(key), "{key} is not listed in SECRET_KEYS");
+        let sealer = self.sealer()?;
+        Ok(self
+            .kv_get(key)?
+            .and_then(|stored| open_logged(sealer, key, &stored)))
+    }
+
+    pub fn secret_set(&self, key: &str, value: &[u8]) -> Result<(), StoreError> {
+        debug_assert!(is_secret_key(key), "{key} is not listed in SECRET_KEYS");
+        let sealed = self.sealer()?.seal(key, value);
+        self.kv_set(key, &sealed)
+    }
+
+    /// Every credential under `prefix`, decrypted, skipping values that do not open.
+    pub fn secret_scan(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+        let sealer = self.sealer()?;
+        Ok(self
+            .kv_scan(prefix)?
+            .into_iter()
+            .filter_map(|(k, v)| open_logged(sealer, &k, &v).map(|p| (k, p)))
+            .collect())
+    }
+
+    /// Seals every credential still stored as plaintext, then rewrites the file and empties the
+    /// write-ahead log so the plaintext is gone from disk. The rewrite also runs when an earlier
+    /// run sealed rows but stopped before finishing it. Returns how many rows were sealed.
+    pub fn seal_plaintext_secrets(&self) -> Result<usize, StoreError> {
+        let sealer = self.sealer()?;
+        let rows = self.kv_scan("")?;
+        let mut sealed = 0;
+        for (key, value) in rows {
+            if is_secret_key(&key) && !is_sealed(&value) {
+                let new = sealer.seal(&key, &value);
+                if self.kv_replace(&key, &value, &new)? {
+                    sealed += 1;
+                }
+            }
+        }
+        if sealed > 0 || self.kv_get(SECRETS_VACUUMED)?.is_none() {
+            {
+                let conn = self.lock();
+                conn.execute_batch("VACUUM;")?;
+                conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+            }
+            self.kv_set(SECRETS_VACUUMED, b"1")?;
+        }
+        Ok(sealed)
     }
 
     /// Every entry whose key starts with `prefix`, in key order.
@@ -283,3 +378,18 @@ impl RegistryDb {
 }
 
 const ONBOARDED_AT: &str = "onboarded_at";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kv_replace_lets_only_one_caller_claim_a_value() {
+        let r = RegistryDb::open_in_memory().unwrap();
+        r.kv_set("auth:token:t", b"100").unwrap();
+        assert!(r.kv_replace("auth:token:t", b"100", b"used:1").unwrap());
+        assert!(!r.kv_replace("auth:token:t", b"100", b"used:2").unwrap());
+        assert_eq!(r.kv_get("auth:token:t").unwrap().unwrap(), b"used:1");
+        assert!(!r.kv_replace("missing", b"x", b"y").unwrap());
+    }
+}

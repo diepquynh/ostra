@@ -78,6 +78,8 @@ pub trait Services: Send + Sync {
     fn notify(&self, notice: Notice);
     /// Paths no agent may touch: Ostra's binary, config, and databases.
     fn protected_paths(&self) -> Vec<PathBuf>;
+    /// The user approved `command` as the format command of the project at `project`.
+    fn command_approved(&self, project: &Path, command: &str) -> bool;
     /// Add a rule to the workspace allow list ("always in this workspace").
     fn add_allow_rule(&self, rule: &str);
 }

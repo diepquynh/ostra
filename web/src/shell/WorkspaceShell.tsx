@@ -20,6 +20,7 @@ import { parseResource, resourceFromPath, resourcePath } from "../lib/resource";
 import { type CloseScope, emptyTabs, normalizeTabs, type TabsState, tabsReducer } from "../lib/tabs";
 import { applyTheme, resolveTheme } from "../lib/theme";
 import { AddProjectDialog, NewWorkspaceDialog, Onboarding, selfScrolling } from "../screens";
+import { PendingCommandsNotice } from "../screens/workspace/PendingCommands";
 import { resourceMeta } from "./meta";
 import { Palette } from "./Palette";
 import { QuickDock } from "./QuickDock";
@@ -421,6 +422,9 @@ function Shell({ ws }: { ws: string }) {
                   style={tabMenu ? { position: "fixed", left: tabMenu.x, top: tabMenu.y } : undefined}
                 />
               </div>
+            )}
+            {active !== "ws:settings" && detail.data && (
+              <PendingCommandsNotice pending={detail.data.pending_commands} onReview={() => open("ws:settings")} />
             )}
             <div
               onDoubleClick={pinActive}

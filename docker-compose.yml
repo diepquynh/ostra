@@ -15,7 +15,9 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "7878:7878"
+      # Loopback only, because Ostra serves plain HTTP: reach it from another machine through an
+      # SSH tunnel or a TLS reverse proxy, never by publishing the port on every interface.
+      - "127.0.0.1:7878:7878"
     stop_signal: SIGINT
     volumes:
       - ostra-data:/data

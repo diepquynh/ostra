@@ -12,6 +12,16 @@ import { Banner, Button, Checkbox, Chip, Input, Panel, Select, Spinner, Switch, 
 import { Anchor, FieldIssues, type SectionProps } from "./SettingsSections";
 import { type McpRow, mcpFromRow, mcpRow, stableJson } from "./settingsForm";
 
+/** A URL safe to hand to the browser: a script or data URL would run on Ostra's origin. */
+function isWebUrl(u: string): boolean {
+  try {
+    const p = new URL(u).protocol;
+    return p === "https:" || p === "http:";
+  } catch {
+    return false;
+  }
+}
+
 const STATE: Record<McpConnState, { label: string; tone: Tone }> = {
   connected: { label: "Connected", tone: "ok" },
   needs_auth: { label: "Needs sign-in", tone: "warn" },
@@ -155,6 +165,11 @@ function ServerPanel({ ws, i, row, saved, status, loading, agents, update, issue
       const tab = window.open("", "_blank");
       try {
         const { authorization_url } = await api.mcpLogin(ws, name);
+        if (!isWebUrl(authorization_url)) {
+          throw new Error(
+            "Ostra refused the sign-in link, because it is not an http or https address. Check the server's OAuth settings.",
+          );
+        }
         if (tab) {
           tab.opener = null;
           tab.location.href = authorization_url;
@@ -255,7 +270,7 @@ function ServerPanel({ ws, i, row, saved, status, loading, agents, update, issue
                   multiline
                   rows={2}
                   placeholder="Authorization: Bearer ${GITHUB_TOKEN}"
-                  hint="Optional. One per line. ${VAR} reads the Ostra server's environment, so the token stays out of workspace.toml."
+                  hint="Optional. One per line. ${VAR} reads the Ostra server's environment. A value typed here is saved encrypted on this machine and shows as ${ostra_secret}; keep that line to keep the value."
                   value={row.headers}
                   error={errorText(issues(`${at}.headers`))}
                   onChange={(e) => edit((r) => void (r.headers = e.target.value))}
@@ -282,7 +297,7 @@ function ServerPanel({ ws, i, row, saved, status, loading, agents, update, issue
                   multiline
                   rows={2}
                   placeholder="API_KEY=${CONTEXT7_KEY}"
-                  hint="Optional. KEY=value, one per line. ${VAR} reads the Ostra server's environment."
+                  hint="Optional. KEY=value, one per line. ${VAR} reads the Ostra server's environment. A value typed here is saved encrypted on this machine and shows as ${ostra_secret}; keep that line to keep the value."
                   value={row.env}
                   error={errorText(issues(`${at}.env`))}
                   onChange={(e) => edit((r) => void (r.env = e.target.value))}

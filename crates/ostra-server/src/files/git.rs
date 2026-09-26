@@ -21,8 +21,26 @@ pub struct GitOutput {
 
 /// Run git in `root`, reading at most `cap` bytes of stdout. `None` when git cannot start or
 /// times out.
+/// `-c key=` overrides for the filter drivers `root`'s config names.
+pub async fn filter_overrides(root: &Path) -> Vec<String> {
+    let out = tokio::process::Command::new("git")
+        .args(ostra_core::git::AUTOMATIC)
+        .arg("-C")
+        .arg(root)
+        .args(ostra_core::git::FILTER_QUERY)
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+    out.map(|o| ostra_core::git::blank_filters(&o.stdout))
+        .unwrap_or_default()
+}
+
 pub async fn run(root: &Path, args: &[&str], cap: usize) -> Option<GitOutput> {
+    let filters = filter_overrides(root).await;
     let mut child = tokio::process::Command::new("git")
+        .args(ostra_core::git::AUTOMATIC)
+        .args(&filters)
         .arg("--no-optional-locks")
         .arg("--literal-pathspecs")
         .arg("-C")
@@ -140,7 +158,7 @@ pub async fn status(root: &Path) -> GitStatus {
         "--porcelain=v2",
         "-z",
         "--untracked-files=normal",
-        "--ignore-submodules=dirty",
+        "--ignore-submodules=all",
         "--",
         ".",
     ];
@@ -272,6 +290,7 @@ pub async fn diff_file(
                 "diff",
                 "--no-color",
                 "--no-ext-diff",
+                "--no-textconv",
                 "--no-index",
                 "--",
                 "/dev/null",
@@ -287,6 +306,7 @@ pub async fn diff_file(
                 "diff",
                 "--no-color",
                 "--no-ext-diff",
+                "--no-textconv",
                 "--no-renames",
                 "-U3",
                 base,
@@ -321,6 +341,7 @@ pub async fn numstat(
         "-z",
         "--no-renames",
         "--no-ext-diff",
+        "--no-textconv",
         base,
         "--",
     ];
@@ -560,6 +581,37 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         assert_eq!(m.get("new.rs"), Some(&(2, 0)));
         assert!(!m.contains_key("old.rs"));
         assert!(!m.contains_key("other.rs"));
+    }
+
+    #[tokio::test]
+    async fn listing_and_diffing_start_no_filter_driver() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(dir.path()).unwrap();
+        let marker = repo.join("ran");
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("a.txt"), "one\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-qm", "init"]);
+        std::fs::write(repo.join(".gitattributes"), "*.txt filter=x\n").unwrap();
+        let driver = format!("touch {}; cat", marker.display());
+        git(&["config", "filter.x.clean", &driver]);
+        git(&["config", "filter.x.smudge", &driver]);
+        std::fs::write(repo.join("a.txt"), "two\n").unwrap();
+
+        let st = status(&repo).await;
+        assert!(st.repo);
+        let head = resolve_base(&repo, "HEAD").await.unwrap();
+        let _ = diff_file(&repo, "a.txt", &head, false, 1 << 20).await;
+        let _ = numstat(&repo, &head, &["a.txt".into()], "").await;
+        assert!(!marker.exists(), "a filter driver ran");
     }
 
     #[tokio::test]

@@ -92,6 +92,9 @@ impl Services for Fake {
     fn protected_paths(&self) -> Vec<PathBuf> {
         vec![]
     }
+    fn command_approved(&self, _: &std::path::Path, _: &str) -> bool {
+        true
+    }
     fn add_allow_rule(&self, _rule: &str) {}
 }
 
@@ -174,6 +177,14 @@ impl Executor for Scripted {
 }
 
 fn project(dir: &Path) -> PathBuf {
+    static CACHE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: set once, before any test here starts a sandboxed program that reads it.
+    CACHE.call_once(|| unsafe {
+        std::env::set_var(
+            "OSTRA_SANDBOX_CACHE",
+            std::env::temp_dir().join("ostra-test-sandbox-cache"),
+        );
+    });
     let p = dir.join("app");
     std::fs::create_dir_all(p.join(".ostra")).unwrap();
     std::fs::write(p.join(".ostra/INVENTORY.md"), "# Inventory").unwrap();

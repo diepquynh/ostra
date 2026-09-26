@@ -19,6 +19,8 @@ pub const DOCUMENT_TOOL: &str = "document-tool";
 pub const LESSON_GATE: &str = "lesson-gate";
 pub const BUILD_STREAK: &str = "build-streak";
 pub const SELF_PROTECTION: &str = "self-protection";
+pub const GIT_METADATA: &str = "git-metadata";
+pub const SECRET_READ: &str = "secret-read";
 
 /// A refusal: which guard, and the message for the model (correction first).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,10 @@ pub struct Roots {
     /// Files protected together with their `-wal`, `-shm`, and `-journal` siblings.
     pub protected_db_files: Vec<PathBuf>,
     pub temps: Vec<PathBuf>,
+    /// Never read by an agent: the data dir (registry, master key, server log) and the key file.
+    pub secret: Vec<PathBuf>,
+    /// Agent assets inside the data dir, which agents do read.
+    pub assets: PathBuf,
     pub home: PathBuf,
     pub report_file: Option<PathBuf>,
 }
@@ -90,6 +96,11 @@ impl Roots {
             protected,
             protected_db_files,
             temps,
+            secret: paths::secret_paths(&home)
+                .iter()
+                .map(|p| canon(p))
+                .collect(),
+            assets: canon(&paths::data_dir().join("assets")),
             home,
             report_file: ctx.report_file.as_ref().map(|p| canon(p)),
         }
@@ -145,6 +156,29 @@ impl Roots {
                 .protected_db_files
                 .iter()
                 .any(|f| Self::db_file_match(f, p))
+    }
+
+    /// Holds credentials or another process's memory: Ostra's data dir, a workspace database
+    /// (every tool output of every session), or `/proc/<pid>/...`, whose `environ` and `fd`
+    /// entries expose the server's environment and open files to in-process tools.
+    pub fn is_secret(&self, p: &Path) -> bool {
+        (self.secret.iter().any(|r| inside(r, p)) && !inside(&self.assets, p))
+            || self
+                .protected_db_files
+                .iter()
+                .any(|f| Self::db_file_match(f, p))
+            || proc_of_process(p)
+            || self.is_harness_state(p)
+    }
+
+    /// Any execution's harness dir, which holds that execution's bridge token.
+    fn is_harness_state(&self, p: &Path) -> bool {
+        !self.sessions_root.as_os_str().is_empty()
+            && p.strip_prefix(&self.sessions_root).is_ok_and(|rel| {
+                let mut c = rel.components().skip(1);
+                c.next().is_some_and(|c| c.as_os_str() == ".state")
+                    && c.next().is_some_and(|c| c.as_os_str() == "harness")
+            })
     }
 
     pub fn is_memory_db(&self, p: &Path) -> bool {
@@ -276,6 +310,66 @@ pub fn is_test_path(rel: &str) -> bool {
 // Write checks
 // ---------------------------------------------------------------------------------------------
 
+fn proc_of_process(p: &Path) -> bool {
+    let mut parts = p.components().skip(1);
+    parts.next().is_some_and(|c| c.as_os_str() == "proc")
+        && parts.next().is_some_and(|c| {
+            let s = c.as_os_str().to_string_lossy();
+            s == "self" || s == "thread-self" || s.chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// Hardening: reads of credentials and process memory are refused for every tool and mode.
+pub fn check_read(roots: &Roots, target: &Path, raw: &str) -> Option<Denial> {
+    roots.is_secret(target).then(|| {
+        deny(
+            SECRET_READ,
+            format!(
+                "Do not read \"{raw}\": it holds Ostra's credentials, session records, or another process's memory, \
+                 which agents never see. If the task needs a credential, ask for it in your report."
+            ),
+        )
+    })
+}
+
+/// Hardening: every path-like word of a shell command, checked with [`check_read`].
+pub fn check_shell_reads(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denial> {
+    let cwds = bash::command_cwds(parsed);
+    for (i, cmd) in parsed.commands.iter().enumerate() {
+        let base = cwd_for(roots, start, cwds[i].as_deref());
+        // Printing a path names it without opening it.
+        if matches!(cmd.effective_name().as_deref(), Some("echo" | "printf")) {
+            continue;
+        }
+        let words = cmd
+            .words
+            .iter()
+            .chain(cmd.redirects.iter().filter_map(|r| r.target.as_ref()));
+        for w in words {
+            let text = w.text();
+            let pathlike = text.contains('/') || text.starts_with('~');
+            let names_proc = text.contains("/proc/");
+            if !(pathlike || names_proc) {
+                continue;
+            }
+            // `/proc/$pid/environ` is dynamic, so its source text is matched as well.
+            if names_proc && PROC_SECRET.is_match(text) {
+                return check_read(roots, Path::new("/proc/self"), text);
+            }
+            let value = text
+                .split_once('=')
+                .map_or(text, |(k, v)| if k.starts_with('-') { v } else { text });
+            if let Some(d) = check_read(roots, &roots.resolve(&base, value), value) {
+                return Some(d);
+            }
+        }
+    }
+    None
+}
+
+static PROC_SECRET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/proc/[^/\s]+/(environ|mem|fd)\b").unwrap());
+
 /// Checks every guard that applies to one write target. `pending_lesson` is the first
 /// unrecorded recovery, if any.
 pub fn check_write(
@@ -299,6 +393,18 @@ pub fn check_write(
                 "Leave \"{raw}\" alone: it is part of Ostra itself (its binary, configuration, or databases). Agents may read \
                  these files but never write, move, or delete them, because they are what enforces the pipeline. If Ostra \
                  is behaving wrongly, say so in your report."
+            ),
+        ));
+    }
+
+    // Hardening: git metadata names programs git runs later (hooks, fsmonitor, a gitfile
+    // pointing at another git dir), so it changes only through git commands.
+    if target.components().any(|c| c.as_os_str() == ".git") {
+        return Some(deny(
+            GIT_METADATA,
+            format!(
+                "Use git commands instead of writing \"{raw}\" directly: files under .git decide which programs git \
+                 runs, so Ostra refuses direct writes there in every mode."
             ),
         ));
     }

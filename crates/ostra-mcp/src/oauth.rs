@@ -93,6 +93,49 @@ fn origin(u: &Url) -> String {
     s
 }
 
+fn is_loopback(u: &Url) -> bool {
+    match u.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+/// An OAuth URL Ostra fetches or sends the browser to must be `https`, or plain `http` on a
+/// loopback host or on the MCP server's own origin (which the user chose). Anything else, such
+/// as a `javascript:` URL from a hostile server's metadata, is refused, because the browser would
+/// run it on Ostra's origin.
+pub fn check_endpoint(what: &str, url: &str, server_origin: Option<&str>) -> Result<(), String> {
+    let u = Url::parse(url).map_err(|e| format!("the {what} `{url}` is not a URL: {e}"))?;
+    let ok = match u.scheme() {
+        "https" => u.host().is_some(),
+        "http" => is_loopback(&u) || server_origin.is_some_and(|o| o == origin(&u)),
+        _ => false,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "refused the {what} `{url}`: OAuth endpoints must use https, because the sign-in link opens in the browser and carries codes and secrets"
+        ))
+    }
+}
+
+fn check_server(server: &AuthServer, server_origin: &str) -> Result<(), String> {
+    let o = Some(server_origin);
+    check_endpoint("authorization endpoint", &server.authorization_endpoint, o)?;
+    check_endpoint("token endpoint", &server.token_endpoint, o)?;
+    if let Some(r) = &server.registration_endpoint {
+        check_endpoint("registration endpoint", r, o)?;
+    }
+    Ok(())
+}
+
+fn same_issuer(a: &str, b: &str) -> bool {
+    a.trim_end_matches('/') == b.trim_end_matches('/')
+}
+
 fn path_of(u: &Url) -> String {
     let p = u.path().trim_end_matches('/');
     if p.is_empty() {
@@ -123,11 +166,12 @@ pub async fn discover(
 ) -> Result<Discovery, String> {
     let url = Url::parse(server_url).map_err(|e| format!("`{server_url}` is not a URL: {e}"))?;
     let (metadata_url, challenge_scope) = challenge.map(parse_challenge).unwrap_or((None, None));
+    let base = origin(&url);
     let mut candidates = vec![];
     if let Some(m) = metadata_url {
+        check_endpoint("resource metadata URL", &m, Some(&base))?;
         candidates.push(m);
     }
-    let base = origin(&url);
     let path = path_of(&url);
     if !path.is_empty() {
         candidates.push(format!("{base}/.well-known/oauth-protected-resource{path}"));
@@ -168,7 +212,8 @@ pub async fn discover(
         // Servers from before RFC 9728 support host their own authorization server.
         None => base.clone(),
     };
-    let found = authorization_server(http, &issuer).await;
+    check_endpoint("authorization server", &issuer, Some(&base))?;
+    let found = authorization_server(http, &issuer).await?;
     let guessed = found.is_none();
     let server = match found {
         Some(s) => s,
@@ -186,6 +231,7 @@ pub async fn discover(
             ));
         }
     };
+    check_server(&server, &base)?;
     if scopes.is_empty() {
         scopes = server.scopes_supported.clone();
     }
@@ -197,8 +243,16 @@ pub async fn discover(
     })
 }
 
-async fn authorization_server(http: &reqwest::Client, issuer: &str) -> Option<AuthServer> {
-    let url = Url::parse(issuer).ok()?;
+/// The authorization server's metadata. `Err` when metadata names a different issuer, because
+/// RFC 8414 section 3.3 makes the client refuse it: another server could otherwise hand out
+/// endpoints for this one.
+async fn authorization_server(
+    http: &reqwest::Client,
+    issuer: &str,
+) -> Result<Option<AuthServer>, String> {
+    let Ok(url) = Url::parse(issuer) else {
+        return Ok(None);
+    };
     let base = origin(&url);
     let path = path_of(&url);
     let candidates = if path.is_empty() {
@@ -217,10 +271,16 @@ async fn authorization_server(http: &reqwest::Client, issuer: &str) -> Option<Au
         if let Some(v) = get_json(http, &c).await
             && let Ok(s) = serde_json::from_value::<AuthServer>(v)
         {
-            return Some(s);
+            if !same_issuer(&s.issuer, issuer) {
+                return Err(format!(
+                    "refused the metadata at {c}: it names issuer `{}` instead of `{issuer}`",
+                    s.issuer
+                ));
+            }
+            return Ok(Some(s));
         }
     }
-    None
+    Ok(None)
 }
 
 fn strings(v: Option<&Value>) -> Vec<String> {
@@ -241,6 +301,7 @@ pub async fn register(
     let endpoint = server.registration_endpoint.as_deref().ok_or(
         "the authorization server does not let clients register; set `oauth.client_id` for this server",
     )?;
+    check_endpoint("registration endpoint", endpoint, Some(&issuer_origin(server)))?;
     let body = serde_json::json!({
         "client_name": "Ostra",
         "redirect_uris": [redirect_uri],
@@ -306,8 +367,21 @@ pub struct AuthRequest<'a> {
     pub challenge: &'a str,
 }
 
+fn issuer_origin(server: &AuthServer) -> String {
+    Url::parse(&server.issuer)
+        .map(|u| origin(&u))
+        .unwrap_or_default()
+}
+
 pub fn authorization_url(r: &AuthRequest<'_>) -> Result<String, String> {
-    let mut u = Url::parse(&r.discovery.server.authorization_endpoint)
+    // Discovery records saved before endpoints were checked are checked again here.
+    let server = &r.discovery.server;
+    check_endpoint(
+        "authorization endpoint",
+        &server.authorization_endpoint,
+        Some(&issuer_origin(server)),
+    )?;
+    let mut u = Url::parse(&server.authorization_endpoint)
         .map_err(|e| format!("the authorization endpoint is not a URL: {e}"))?;
     {
         let mut q = u.query_pairs_mut();

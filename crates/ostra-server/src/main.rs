@@ -35,6 +35,18 @@ struct ServeArgs {
 }
 
 #[derive(Subcommand)]
+enum SessionsAction {
+    /// Revoke one sign-in by the id `ostra sessions` lists, or every one with --all.
+    Revoke {
+        /// Sign-in id, for example si_3f2a9c1d7e5b6a40.
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Start the server (the default).
     Serve(ServeArgs),
@@ -53,9 +65,13 @@ enum Command {
     Config,
     /// Print a fresh sign-in URL for a running server.
     Url,
-    /// List the browsers signed in to Ostra.
-    Signins,
-    /// Sign out every browser. Open pages disconnect within 30 seconds.
+    /// List the browsers signed in to Ostra, or revoke their sign-ins. Works whether or not the
+    /// server runs; a running server refuses a revoked browser within 5 seconds.
+    Sessions {
+        #[command(subcommand)]
+        action: Option<SessionsAction>,
+    },
+    /// Sign out every browser, the same as `ostra sessions revoke --all`.
     Signout,
     /// Stop a session while the server is not running, so the next start does not recover and
     /// re-run its executions. With the server running, stop it from its session board instead.
@@ -91,29 +107,43 @@ fn main() -> anyhow::Result<()> {
             println!("Stopped {session}; {n} running executions were cancelled.");
             Ok(())
         }
-        Some(Command::Signins) => {
-            let registry = ostra_store::RegistryDb::open(&ostra_core::paths::registry_db_path())?;
+        Some(Command::Sessions { action: None }) => {
+            let registry = ostra_server::app::open_registry()?;
             let list = ostra_server::auth::list_sign_ins(&registry)?;
             if list.is_empty() {
                 println!("No browser is signed in.");
             }
-            let date = |s: u64| {
-                chrono::DateTime::from_timestamp(s as i64, 0)
-                    .map(|d| d.format("%Y-%m-%d %H:%M UTC").to_string())
-                    .unwrap_or_default()
-            };
+            let date = |d: chrono::DateTime<chrono::Utc>| d.format("%Y-%m-%d %H:%M UTC").to_string();
             for s in list {
                 println!(
-                    "{}  signed in {}  expires {}",
+                    "{}  signed in {}  last seen {}  from {}  {}",
                     s.id,
                     date(s.created),
-                    date(s.expires)
+                    date(s.last_seen),
+                    s.ip.as_deref().unwrap_or("unknown address"),
+                    s.user_agent.as_deref().unwrap_or("unknown browser"),
                 );
             }
             Ok(())
         }
+        Some(Command::Sessions {
+            action: Some(SessionsAction::Revoke { id, all }),
+        }) => {
+            let registry = ostra_server::app::open_registry()?;
+            if all {
+                let n = ostra_server::auth::revoke_sign_ins(&registry)?;
+                println!("Signed out {n} browsers. Run `ostra url` to sign in again.");
+            } else {
+                let id = id.unwrap_or_default();
+                if !ostra_server::auth::revoke_sign_in(&registry, &id)? {
+                    anyhow::bail!("No sign-in {id}. Run `ostra sessions` to list the current ones.");
+                }
+                println!("Revoked {id}. That browser is signed out within 5 seconds.");
+            }
+            Ok(())
+        }
         Some(Command::Signout) => {
-            let registry = ostra_store::RegistryDb::open(&ostra_core::paths::registry_db_path())?;
+            let registry = ostra_server::app::open_registry()?;
             let n = ostra_server::auth::revoke_sign_ins(&registry)?;
             println!("Signed out {n} browsers. Run `ostra url` to sign in again.");
             Ok(())
@@ -133,8 +163,7 @@ async fn serve(args: ServeArgs) -> anyhow::Result<()> {
     let filter = || {
         tracing_subscriber::EnvFilter::try_from_env("OSTRA_LOG").unwrap_or_else(|_| "info".into())
     };
-    let dir = ostra_core::paths::data_dir();
-    let _ = std::fs::create_dir_all(&dir);
+    let dir = ostra_core::paths::ensure_data_dir()?;
     // Also keep a log file, so problems in a browser elsewhere can be read back later.
     match std::fs::OpenOptions::new()
         .create(true)

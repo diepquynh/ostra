@@ -151,6 +151,7 @@ fn policy_inputs(ctx: &ExecContext) -> PolicyInputs {
     }
 }
 
+/// Hosts named exactly by `WebFetch(domain:<host>)` allow rules.
 fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
         return s.to_string();
@@ -345,7 +346,28 @@ impl Run {
             skill_resolver: self.skill_resolver.clone(),
             code: self.code.clone(),
             mcp: mcp.clone(),
-        });
+        })
+        .with_private_hosts(ostra_tools::webfetch_hosts(&ctx.permissions.allow))
+        .with_scrub_env(mcp_secret_vars(ctx));
+        let mut _scratch = None;
+        let env = match sandbox_for(ctx) {
+            Ok(Sandbox::On(bwrap, profile)) => {
+                _scratch = profile.scratch_dir().map(|d| Scratch(d.to_path_buf()));
+                env.with_sandbox(bwrap, profile)
+            }
+            Ok(Sandbox::Off(warning)) => {
+                if let Some(w) = warning {
+                    if ostra_core::sandbox::first_warning() {
+                        tracing::warn!("agent commands run without a sandbox: {w}");
+                    }
+                    self.host.emit(ExecutionDelta::Status {
+                        message: format!("Bash runs without a sandbox. {w}"),
+                    });
+                }
+                env
+            }
+            Err(e) => return self.fail(e),
+        };
 
         let offered = provider.server_tools(&model);
         let caps = &spec.capabilities;
@@ -695,7 +717,9 @@ impl Run {
         policy: &ExecutionPolicy,
         env: &ToolEnv,
     ) -> Block {
-        let call = ToolCall::new(name, input.clone());
+        // The policy checks, the user approves, and the tool runs this one call, so relative
+        // paths and the Bash working directory mean the same target in all three.
+        let call = env.canonical_call(&ToolCall::new(name, input.clone()));
         self.host.emit(ExecutionDelta::ToolCall {
             call_id: id.into(),
             call: call.clone(),
@@ -717,17 +741,7 @@ impl Run {
             ));
         }
         policy.set_yolo(self.host.yolo());
-        // The Bash tool keeps its own working directory, so the guards resolve relative write
-        // targets against it rather than against the repo root.
-        let checked = match (name, input) {
-            ("Bash", Value::Object(map)) if !map.contains_key("cwd") => {
-                let mut map = map.clone();
-                map.insert("cwd".into(), Value::String(env.cwd().display().to_string()));
-                ToolCall::new(name, Value::Object(map))
-            }
-            _ => call.clone(),
-        };
-        let decision = policy.check(&checked);
+        let decision = policy.check(&call);
         self.host.emit(ExecutionDelta::Policy {
             call_id: id.into(),
             decision: decision.clone(),
@@ -823,6 +837,55 @@ impl Run {
         });
         Block::tool_result(id, text, out.is_error)
     }
+}
+
+enum Sandbox {
+    On(std::path::PathBuf, ostra_core::sandbox::Profile),
+    Off(Option<String>),
+}
+
+/// The execution's scratch `/tmp`, removed when the execution's future ends or is dropped.
+struct Scratch(std::path::PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The workspace's MCP `oauth.client_secret_env` names, which agent commands must not inherit.
+fn mcp_secret_vars(ctx: &ostra_core::exec::ExecContext) -> Vec<String> {
+    if ctx.workspace_root.as_os_str().is_empty() {
+        return vec![];
+    }
+    let ws: ostra_core::config::WorkspaceSettings =
+        ostra_core::config::load_toml(&ostra_core::paths::workspace_toml(&ctx.workspace_root))
+            .unwrap_or_default();
+    let global: ostra_core::config::GlobalConfig =
+        ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
+    ostra_core::config::credential_env_names(&global, &ws.mcp_servers)
+        .into_iter()
+        .collect()
+}
+
+/// The `[sandbox]` table is read fresh, so a change applies to the next execution.
+fn sandbox_for(ctx: &ostra_core::exec::ExecContext) -> Result<Sandbox, String> {
+    let global: ostra_core::config::GlobalConfig =
+        ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/".into());
+    Ok(match ostra_core::sandbox::decide(&global.sandbox)? {
+        ostra_core::sandbox::Decision::Sandboxed(bwrap) => {
+            let scratch = ostra_core::sandbox::new_scratch()
+                .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
+            let profile = ostra_core::sandbox::Profile::for_execution(ctx, &global.sandbox, &home)
+                .scratch(&scratch)
+                .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
+            Sandbox::On(bwrap, profile)
+        }
+        ostra_core::sandbox::Decision::Unsandboxed(w) => Sandbox::Off(w),
+    })
 }
 
 #[cfg(test)]

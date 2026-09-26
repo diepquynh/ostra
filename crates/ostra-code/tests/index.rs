@@ -48,6 +48,14 @@ const FILES: &[(&str, &str)] = &[
 ];
 
 fn project() -> tempfile::TempDir {
+    static CACHE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: set once, before any test here starts a sandboxed program that reads it.
+    CACHE.call_once(|| unsafe {
+        std::env::set_var(
+            "OSTRA_SANDBOX_CACHE",
+            std::env::temp_dir().join("ostra-test-sandbox-cache"),
+        );
+    });
     let dir = tempfile::tempdir().unwrap();
     for (p, text) in FILES {
         write(dir.path(), p, text);
@@ -249,9 +257,11 @@ fn script(dir: &Path, body: &str) -> Vec<String> {
 async fn command_provider_answers_defers_and_falls_back() {
     let dir = project();
     let root = dir.path().to_path_buf();
-    let bin = tempfile::tempdir().unwrap();
+    // Inside the project, because the provider runs sandboxed with a private /tmp.
+    let bin = root.join("tools");
+    std::fs::create_dir_all(&bin).unwrap();
     let command = script(
-        bin.path(),
+        &bin,
         r#"read line
 case "$line" in
   *'"op":"symbols"'*) echo '{"items":[{"name":"Remote","path":"src/r.rs","line":2,"col":0,"len":6,"preview":"struct Remote;"}]}' ;;

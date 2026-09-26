@@ -194,7 +194,8 @@ impl Executor for Wrapped {
                 skill_resolver: crate::app::skill_resolver(),
                 code: self.registry.code.get().cloned(),
                 mcp,
-            }),
+            })
+            .with_private_hosts(ostra_tools::webfetch_hosts(&ctx.permissions.allow)),
             host: host.clone(),
             memory_db: ctx.memory_db.clone(),
             repo: ctx.repo_root.clone(),
@@ -370,7 +371,7 @@ impl BridgeServices for ServerBridge {
             None if ostra_core::mcp::is_gateway_bare(tool) => ostra_core::mcp::canonical(tool),
             None => return Err(format!("unknown tool {tool}")),
         };
-        let call = ToolCall::new(native, args);
+        let call = r.env.canonical_call(&ToolCall::new(native, args));
         let id = self.call_id();
         match self.check(&r, &call, &id, true) {
             PolicyDecision::Deny { reason, rule } => {

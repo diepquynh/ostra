@@ -190,6 +190,7 @@ describe("request body and workspace.toml preview", () => {
         { harness: "codex", command: "codex", installed: codexInstalled, version: null, logged_in: true },
       ],
       stacks: [],
+      sandbox: { mode: "auto", available: true, active: true },
     });
     expect(presetsFor(null)).toEqual(["native"]);
     expect(presetsFor(env(true, true))).toEqual(["native", "codex", "claude"]);

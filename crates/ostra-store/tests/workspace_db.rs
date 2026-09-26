@@ -676,3 +676,23 @@ fn spend_since_sums_executions_started_in_the_window() {
     assert_eq!(db.spend_since(chrono::Utc::now() - hour).unwrap(), 1.25);
     assert_eq!(db.spend_since(chrono::Utc::now() + hour).unwrap(), 0.0);
 }
+
+#[cfg(unix)]
+#[test]
+fn database_and_its_dir_are_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = dir.path().join(".ostra");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = runtime.join("workspace.db");
+    let db = WorkspaceDb::open(&path).unwrap();
+    new_session(&db);
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode(&runtime), 0o700);
+    assert_eq!(mode(&path), 0o600);
+    assert_eq!(mode(&runtime.join("workspace.db-wal")), 0o600);
+    assert_eq!(mode(&runtime.join("workspace.db-shm")), 0o600);
+    let ignore = std::fs::read_to_string(runtime.join(".gitignore")).unwrap();
+    assert!(ignore.contains("workspace.db*"));
+}

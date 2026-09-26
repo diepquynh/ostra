@@ -5,4 +5,7 @@ web/dist
 .ostra/
 *.log
 .design-import/
+/config/
+/SECURITY_HANDOVER.md
+/MACOS_SANDBOX_HANDOVER.md
 /.design-sync/
