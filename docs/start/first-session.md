@@ -20,8 +20,8 @@ On a machine with no workspace, `/` opens the setup guide:
 3. **Projects.** Add existing folders, or clone a git URL. A clone goes into `<workspace>/<key>` or a folder
    you choose. You can skip this and add projects later from the workspace menu.
 4. **Defaults.** The permission mode (ask before edits and unlisted commands, the default; accept edits
-   inside the project; read-only; or never ask), which executor and model each agent uses, and whether new
-   sessions start in YOLO mode. Leave YOLO off for a first session, so you see every gate.
+   inside the project; or read-only), which executor and model each agent uses, and whether new sessions
+   start in YOLO mode. The mode that never asks is set later, under Settings, Permissions. Leave YOLO off for a first session, so you see every gate.
 5. **Review.** Ostra validates the whole request before it creates anything, so a route that names a model
    no provider serves is caught here and not in the middle of a session.
    [Settings and routing](../internals/settings-and-routing.md) explains the routing table.

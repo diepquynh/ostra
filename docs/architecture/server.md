@@ -57,7 +57,8 @@ call in the native loop.
    runs recovery. Recovery marks any execution that was running as `Interrupted` (keeping what it already
    spent), denies any open permission question because the execution that asked it has ended, and restarts
    the planner for every session that has not finished. A
-   workspace whose folder is missing is skipped with a warning, not deleted.
+   workspace whose `.ostra/workspace.toml` is missing is skipped with a warning, not deleted
+   ([Workspaces](../internals/workspaces.md#opening-a-workspace)).
 7. **Write `server.json`** and print the sign-in link.
 8. **Serve** until Ctrl-C, then remove `server.json`.
 

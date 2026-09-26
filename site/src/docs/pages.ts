@@ -40,6 +40,7 @@ export const NAV: NavGroup[] = [
   {
     label: "How Ostra works",
     pages: [
+      { id: "workspaces", title: "Workspaces", file: "docs/internals/workspaces.md" },
       { id: "pipeline", title: "The pipeline", file: "docs/internals/pipeline.md" },
       { id: "gates-and-judges", title: "Gates, YOLO, and judges", file: "docs/internals/gates-and-judges.md" },
       { id: "agents", title: "Agents", file: "docs/internals/agents.md" },

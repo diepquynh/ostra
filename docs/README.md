@@ -3,8 +3,8 @@
 - Get started: [quick start](start/quick-start.md), [install and run](start/install.md),
   [your first session](start/first-session.md), [OS compatibility](platforms/os-compatibility.md), and
   [troubleshooting](start/troubleshooting.md).
-- How Ostra works: [the pipeline](internals/pipeline.md), [gates, YOLO, and judges](internals/gates-and-judges.md),
-  [agents](internals/agents.md), [executors](internals/executors.md), [tools](internals/tools.md),
+- How Ostra works: [workspaces](internals/workspaces.md), [the pipeline](internals/pipeline.md),
+  [gates, YOLO, and judges](internals/gates-and-judges.md), [agents](internals/agents.md), [executors](internals/executors.md), [tools](internals/tools.md),
   [code index](internals/code-index.md), [MCP servers](internals/mcp.md), [project memory](internals/project-memory.md),
   [settings and routing](internals/settings-and-routing.md), and [spend and limits](internals/spend-and-limits.md).
 - Architecture: [overview](architecture/overview.md), [the event log](internals/event-log.md),
