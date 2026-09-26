@@ -1425,7 +1425,8 @@ fn credentials_and_process_memory_are_never_read() {
         ToolCall::new("Grep", json!({"pattern": "sk-", "path": data.to_string_lossy()})),
         ToolCall::new("Skill", json!({"path": data.join("registry.db").to_string_lossy()})),
         read(&ostra_core::paths::workspace_db(&f.ws).to_string_lossy()),
-        bash(format!("cat {}", data.join("registry.db").display())),
+        // Quoted, because the macOS data dir is under `Application Support`.
+        bash(format!("cat '{}'", data.join("registry.db").display())),
         bash("xargs -0 -n1 < /proc/$PPID/environ"),
         bash("strings /proc/1/environ"),
     ] {

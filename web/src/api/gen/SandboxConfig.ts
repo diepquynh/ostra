@@ -2,8 +2,8 @@
 import type { SandboxMode } from "./SandboxMode";
 
 /**
- * `[sandbox]` in `config.toml`: the bubblewrap profile for agent commands (the native Bash tool
- * and harness CLIs).
+ * `[sandbox]` in `config.toml`: the sandbox profile for agent commands (the native Bash tool,
+ * harness CLIs, and programs Ostra starts for a project).
  */
 export type SandboxConfig = { mode: SandboxMode, 
 /**

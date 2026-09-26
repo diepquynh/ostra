@@ -162,6 +162,7 @@ fn rig() -> Rig {
             write: Box::new(w),
             stderr: None,
             child: None,
+            sandbox: None,
         })
     });
     Rig {

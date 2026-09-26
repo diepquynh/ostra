@@ -1,11 +1,14 @@
-//! Runs a harness CLI under the execution's bubblewrap profile. The CLI's own Bash tool, and
-//! everything it starts, inherit the sandbox. The home folder is overlaid so the CLI can write its
-//! state dirs but cannot leave files that the user's later shells or CLI sessions would run.
+//! Runs a harness CLI under the execution's sandbox profile. The CLI's own Bash tool, and
+//! everything it starts, inherit the sandbox. Under bubblewrap the home folder is overlaid so the
+//! CLI can write its state dirs but cannot leave files that the user's later shells or CLI
+//! sessions would run. Seatbelt has no overlay, so there the rest of the home stays read-only and
+//! a CLI's writes at the top of it (Claude Code's `~/.claude.json`) fail, which the CLIs survive.
 
 use crate::launch::{LaunchInput, LaunchPlan, grok_home_real};
 use ostra_core::HarnessKind;
 use ostra_core::config::SandboxConfig;
-use ostra_core::sandbox::{self, Decision, Profile};
+use ostra_core::sandbox::{self, Backend, Decision, Members, Profile};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 /// The per-execution copy of `~/.claude.json`, which Claude Code rewrites through a temp file and
@@ -73,26 +76,46 @@ fn harness_dirs(inp: &LaunchInput<'_>) -> (Vec<PathBuf>, PathBuf, &'static [&'st
     }
 }
 
-/// `plan` wrapped in `bwrap`, or unchanged with a warning when the config allows running without
-/// a sandbox. `Err` when the config requires one this machine cannot provide.
+/// A launch plan after [`wrap`].
+#[derive(Debug)]
+pub struct Wrapped {
+    pub plan: LaunchPlan,
+    /// Kills what the CLI leaves running once dropped. Hold it until the CLI has exited.
+    pub members: Option<Members>,
+    /// Why the CLI runs unsandboxed, when the config asked for a sandbox.
+    pub warning: Option<String>,
+}
+
+/// `plan` wrapped in the sandbox, or unchanged with a warning when the config allows running
+/// without one. `Err` when the config requires one this machine cannot provide.
 pub fn wrap(
     plan: LaunchPlan,
     inp: &LaunchInput<'_>,
     cfg: &SandboxConfig,
-) -> Result<(LaunchPlan, Option<String>), String> {
-    let bwrap = match sandbox::decide(cfg)? {
+) -> Result<Wrapped, String> {
+    let backend = match sandbox::decide(cfg)? {
         Decision::Sandboxed(b) => b,
-        Decision::Unsandboxed(warning) => return Ok((plan, warning)),
+        Decision::Unsandboxed(warning) => {
+            return Ok(Wrapped {
+                plan,
+                members: None,
+                warning,
+            });
+        }
     };
+    let seatbelt = backend == Backend::Seatbelt;
     // The CLI needs the network for its model API and for Ostra's hook bridge on loopback, and
     // its PTY as controlling terminal.
     let mut profile = Profile::for_execution(&inp.spec.ctx, cfg, &inp.home)
         .network(true)
         .new_session(false)
-        .home_overlay(&inp.home)
+        .tty(seatbelt)
         .writable(&inp.config_dir)
         .scratch(&inp.config_dir.join(SCRATCH))
         .map_err(|e| format!("creating the sandbox's /tmp: {e}"))?;
+    if !seatbelt {
+        profile = profile.home_overlay(&inp.home);
+    }
     let (rw, settings_dir, ro) = harness_dirs(inp);
     for d in &rw {
         profile = profile.writable(d);
@@ -100,7 +123,7 @@ pub fn wrap(
     for rel in ro {
         profile = profile.protect(&settings_dir, rel);
     }
-    if inp.harness == HarnessKind::Claude {
+    if inp.harness == HarnessKind::Claude && !seatbelt {
         let real = inp.home.join(".claude.json");
         let copy = inp.config_dir.join(CLAUDE_JSON_COPY);
         if real.is_file() {
@@ -109,23 +132,53 @@ pub fn wrap(
             profile = profile.link(&real, &copy);
         }
     }
-    let mut args: Vec<String> = profile
-        .args(&plan.cwd)
-        .into_iter()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
-    args.push("--".into());
-    args.push(plan.program.clone());
-    args.extend(plan.args.iter().cloned());
-    Ok((
-        LaunchPlan {
-            program: bwrap.to_string_lossy().into_owned(),
-            args,
+    let sc = profile.command(
+        &backend,
+        &plan.cwd,
+        OsStr::new(&plan.program),
+        plan.args.iter(),
+    )?;
+    let text = |s: &OsStr| s.to_string_lossy().into_owned();
+    let mut env = plan.env.clone();
+    env.extend(sc.env.iter().cloned());
+    if seatbelt {
+        env.extend(seatbelt_env(&sc.env));
+    }
+    let mut env_remove = plan.env_remove.clone();
+    env_remove.extend(sc.env_remove.iter().cloned());
+    Ok(Wrapped {
+        plan: LaunchPlan {
+            program: text(sc.program.as_os_str()),
+            args: sc.args.iter().map(|a| text(a)).collect(),
+            env,
+            env_remove,
+            tty_param: seatbelt.then(|| sandbox::TTY_PARAM.to_string()),
             ..plan
         },
-        None,
-    ))
+        members: sc.members,
+        warning: None,
+    })
 }
+
+/// Variables the CLIs need under Seatbelt, which denies `/tmp` and the keychain: Claude Code
+/// makes its own dir under `/tmp` unless told otherwise, and CLIs built on `rustls-native-certs`
+/// (Codex) read the trusted roots from the keychain unless given a bundle.
+fn seatbelt_env(sandbox_env: &[(String, String)]) -> Vec<(String, String)> {
+    let mut out = vec![];
+    if let Some((_, tmp)) = sandbox_env.iter().find(|(k, _)| k == "TMPDIR") {
+        out.push((
+            "CLAUDE_CODE_TMPDIR".into(),
+            tmp.trim_end_matches('/').to_string(),
+        ));
+    }
+    if std::env::var_os("SSL_CERT_FILE").is_none() && Path::new(MACOS_CERTS).is_file() {
+        out.push(("SSL_CERT_FILE".into(), MACOS_CERTS.into()));
+    }
+    out
+}
+
+/// The system's trusted roots as a PEM bundle, shipped with macOS.
+const MACOS_CERTS: &str = "/etc/ssl/cert.pem";
 
 fn copy_private(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::io::Write;
@@ -155,11 +208,19 @@ mod tests {
 
     #[test]
     fn harness_home_is_overlaid_and_settings_stay_read_only() {
-        if sandbox::bwrap().is_none() {
-            eprintln!("bwrap unavailable; skipping");
+        let Some(backend) = sandbox::backend() else {
+            eprintln!(
+                "no sandbox here ({}); skipping",
+                sandbox::unavailable_message()
+            );
             return;
-        }
-        let tmp = tempfile::tempdir().unwrap();
+        };
+        let seatbelt = *backend == Backend::Seatbelt;
+        // Seatbelt denies the OS temp dir, so the fake home, which must stay readable, lives
+        // under `target/`.
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+        std::fs::create_dir_all(&base).unwrap();
+        let tmp = tempfile::tempdir_in(&base).unwrap();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         for d in [
             "repo",
@@ -187,7 +248,8 @@ mod tests {
             touch ~/.claude/projects/t && echo wrote-projects
             cat ~/.ssh/id 2>/dev/null || echo key-hidden
             test -e /tmp/ostra-host-marker || echo tmp-private
-            echo s > /tmp/scratch-file && echo tmp-writable
+            echo s > "${TMPDIR:-/tmp}/scratch-file" && echo tmp-writable
+            echo "$CLAUDE_CODE_TMPDIR" | grep -q . && echo claude-tmp-set
             echo '{}' > ~/.claude/settings.local.json 2>/dev/null || echo local-settings-refused
         "#;
         let plan = LaunchPlan {
@@ -199,22 +261,40 @@ mod tests {
             links: vec![],
             session_id: None,
             env_remove: vec![],
+            tty_param: None,
         };
         let marker = std::env::temp_dir().join("ostra-host-marker");
         std::fs::write(&marker, "").unwrap();
-        let (plan, warning) = wrap(plan, &inp, &SandboxConfig::default()).unwrap();
-        assert!(warning.is_none());
-        assert!(plan.program.ends_with("bwrap"));
-        let out = std::process::Command::new(&plan.program)
+        let wrapped = wrap(plan, &inp, &SandboxConfig::default()).unwrap();
+        assert!(wrapped.warning.is_none());
+        let plan = wrapped.plan;
+        let mut cmd = std::process::Command::new(&plan.program);
+        if seatbelt {
+            assert_eq!(plan.program, sandbox::SANDBOX_EXEC);
+            assert_eq!(plan.tty_param.as_deref(), Some(sandbox::TTY_PARAM));
+            // No PTY in this test, so the parameter names a terminal it does not use.
+            cmd.args(["-D", "TTY=/dev/null"]);
+        } else {
+            assert!(plan.program.ends_with("bwrap"));
+        }
+        for k in &plan.env_remove {
+            cmd.env_remove(k);
+        }
+        let out = cmd
             .args(&plan.args)
+            .envs(plan.env.iter().map(|(k, v)| (k, v)))
             .env("HOME", &home)
             .output()
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
-        for want in [
+        // Only bubblewrap overlays the home: under Seatbelt the CLI's top-level writes fail.
+        let overlay: &[&str] = if seatbelt {
+            &["claude-tmp-set"]
+        } else {
+            &["saved-config", "made-alias"]
+        };
+        for want in overlay.iter().copied().chain([
             "read-config",
-            "saved-config",
-            "made-alias",
             "rc-refused",
             "settings-refused",
             "wrote-projects",
@@ -222,7 +302,7 @@ mod tests {
             "tmp-private",
             "tmp-writable",
             "local-settings-refused",
-        ] {
+        ]) {
             assert!(
                 text.contains(want),
                 "missing {want}: {text}\n{}",
@@ -237,10 +317,15 @@ mod tests {
         assert!(!home.join(".bash_aliases").exists());
         assert_eq!(std::fs::read_to_string(home.join(".bashrc")).unwrap(), "");
         assert!(home.join(".claude/projects/t").exists());
-        assert_eq!(
-            std::fs::read_to_string(home.join(".claude/settings.local.json")).unwrap(),
-            "{}"
-        );
+        // Bubblewrap mounts a placeholder; Seatbelt's literal rule refuses the missing path.
+        if seatbelt {
+            assert!(!home.join(".claude/settings.local.json").exists());
+        } else {
+            assert_eq!(
+                std::fs::read_to_string(home.join(".claude/settings.local.json")).unwrap(),
+                "{}"
+            );
+        }
         assert!(inp.config_dir.join("tmp/scratch-file").exists());
         let _ = std::fs::remove_file(&marker);
         std::fs::create_dir_all(inp.config_dir.join("grok-home")).unwrap();

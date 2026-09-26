@@ -347,7 +347,15 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     }
     let sandbox = ostra_core::api::SandboxStatus::check(&global.sandbox);
     match &sandbox.message {
-        None if sandbox.active => tracing::info!("agent commands run in the bubblewrap sandbox"),
+        None if sandbox.active => {
+            tracing::info!(
+                "agent commands run in the {} sandbox",
+                sandbox.backend.as_deref().unwrap_or("agent")
+            );
+            if let Some(g) = &sandbox.gaps {
+                tracing::warn!("{g}");
+            }
+        }
         Some(m) => {
             tracing::warn!("{m}");
             // On stderr as well, because under `mode = "auto"` Ostra still starts and the log is
@@ -464,6 +472,14 @@ pub async fn run(opts: ServeOptions) -> anyhow::Result<()> {
     let ip = bind_addr(&opts, &global)?;
     let listener = bind(ip, opts.port.or(global.server.port)).await?;
     let port = listener.local_addr()?.port();
+    // Processes an earlier server's sandboxes left running (macOS, where nothing ends them with
+    // their parent), before recovery starts executions again.
+    if !crate::auth::server_running() {
+        let n = ostra_core::sandbox::kill_leftovers();
+        if n > 0 {
+            tracing::info!("stopped {n} processes left running in earlier sandboxes");
+        }
+    }
     let app = build(&opts, port).await?;
     crate::auth::write_server_file(&app.auth)?;
     let url = app.auth.sign_in_url()?;

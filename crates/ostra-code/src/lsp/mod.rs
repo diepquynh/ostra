@@ -73,6 +73,7 @@ pub fn spawn_process(command: &[String], root: &Path) -> std::io::Result<Transpo
         write: Box::new(child.stdin.take().expect("piped")),
         stderr: Some(Box::new(child.stderr.take().expect("piped"))),
         child: Some(child),
+        sandbox: hc.members,
     })
 }
 

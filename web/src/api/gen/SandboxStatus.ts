@@ -2,13 +2,17 @@
 import type { SandboxMode } from "./SandboxMode";
 
 /**
- * Whether agent commands run inside the bubblewrap sandbox on this machine.
+ * Whether agent commands run inside the sandbox on this machine.
  */
 export type SandboxStatus = { mode: SandboxMode, 
 /**
- * `bwrap` works here.
+ * A sandbox backend works here.
  */
 available: boolean, 
+/**
+ * `bubblewrap` on Linux or `seatbelt` on macOS, when available.
+ */
+backend?: string, 
 /**
  * Executions start sandboxed under the current mode.
  */
@@ -16,4 +20,8 @@ active: boolean,
 /**
  * What to do when the sandbox is wanted but missing, or required but unavailable.
  */
-message?: string, };
+message?: string, 
+/**
+ * What the working sandbox cannot enforce on this OS.
+ */
+gaps?: string, };

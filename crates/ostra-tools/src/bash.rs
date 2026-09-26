@@ -177,19 +177,30 @@ pub async fn run(
     let pwd_file =
         std::env::temp_dir().join(format!("ostra-pwd-{}", uuid::Uuid::new_v4().simple()));
 
+    // Kills what the command leaves running when the call ends, as bubblewrap's pid namespace
+    // does.
+    let mut _members = None;
     let mut cmd = match &env.sandbox {
-        Some((bwrap, profile)) => {
+        Some((backend, profile)) => {
             // The EXIT trap writes here from inside the sandbox, so the file must exist and be
-            // bound in even when `/tmp` is private there.
+            // writable there even when `/tmp` is private or denied.
             if let Err(e) = std::fs::write(&pwd_file, "") {
                 return ToolOutput::err(format!("Cannot prepare the sandbox: {e}"));
             }
-            let mut c = tokio::process::Command::new(bwrap);
-            c.args(profile.args(&cwd))
-                .arg("--bind")
-                .arg(&pwd_file)
-                .arg(&pwd_file)
-                .args(["--", "bash"]);
+            let sc = match profile.clone().writable_file(&pwd_file).command(
+                backend,
+                &cwd,
+                std::ffi::OsStr::new("bash"),
+                std::iter::empty::<std::ffi::OsString>(),
+            ) {
+                Ok(sc) => sc,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&pwd_file);
+                    return ToolOutput::err(format!("Cannot prepare the sandbox: {e}"));
+                }
+            };
+            let c = tokio::process::Command::from(sc.std_command());
+            _members = sc.members;
             c
         }
         None => tokio::process::Command::new("bash"),
@@ -267,12 +278,9 @@ pub async fn run(
         }
     }
 
+    drop(_members);
     if let Ok(dir) = std::fs::read_to_string(&pwd_file) {
-        let dir = std::path::PathBuf::from(dir.trim_end_matches('\n'));
-        let dir = match &env.sandbox {
-            Some((_, profile)) => profile.to_host(&dir),
-            None => dir,
-        };
+        let dir = env.sandbox_to_host(&std::path::PathBuf::from(dir.trim_end_matches('\n')));
         if dir.is_dir() {
             env.set_cwd(dir);
         }
@@ -472,10 +480,16 @@ mod tests {
         assert!(!marker.exists(), "fsmonitor hook ran");
     }
 
-    /// A tool env whose Bash runs sandboxed with `home` as the home folder, or `None` where
-    /// bubblewrap does not work.
+    /// A tool env whose Bash runs sandboxed with `home` as the home folder, or `None` where no
+    /// sandbox works.
     fn sandboxed(dir: &std::path::Path, home: &std::path::Path) -> Option<ToolEnv> {
-        let bwrap = ostra_core::sandbox::bwrap()?.to_path_buf();
+        let Some(backend) = ostra_core::sandbox::backend() else {
+            eprintln!(
+                "no sandbox here ({}); skipping",
+                ostra_core::sandbox::unavailable_message()
+            );
+            return None;
+        };
         let env = env_in(dir);
         let root = std::fs::canonicalize(dir).unwrap();
         let ctx = ostra_core::exec::ExecContext {
@@ -504,7 +518,7 @@ mod tests {
         )
         .scratch(&root.join("scratch"))
         .unwrap();
-        Some(env.with_sandbox(bwrap, profile))
+        Some(env.with_sandbox(backend.clone(), profile))
     }
 
     #[tokio::test]
@@ -515,7 +529,6 @@ mod tests {
         std::fs::write(home.join(".ssh/id_ed25519"), "SECRET").unwrap();
         std::fs::write(home.join(".bashrc"), "").unwrap();
         let Some(env) = sandboxed(d.path(), &home) else {
-            eprintln!("bwrap unavailable; skipping");
             return;
         };
         let out = run_tool(
@@ -561,14 +574,16 @@ mod tests {
             assert!(out.is_error && !made, "{}", out.text);
         }
 
-        let out = run_tool(
-            &env,
-            "Bash",
-            json!({"command": "ls /proc | grep -cE '^[0-9]+$'"}),
-        )
-        .await;
-        let n: u32 = out.text.trim().parse().unwrap_or(99);
-        assert!(n < 10, "sandbox sees {n} processes");
+        if cfg!(target_os = "linux") {
+            let out = run_tool(
+                &env,
+                "Bash",
+                json!({"command": "ls /proc | grep -cE '^[0-9]+$'"}),
+            )
+            .await;
+            let n: u32 = out.text.trim().parse().unwrap_or(99);
+            assert!(n < 10, "sandbox sees {n} processes");
+        }
 
         let data = ostra_core::paths::data_dir();
         if data.is_dir() {
@@ -605,7 +620,6 @@ mod tests {
         assert!(ok.success());
         std::fs::create_dir_all(repo.join("sub")).unwrap();
         let Some(env) = sandboxed(d.path(), &home) else {
-            eprintln!("bwrap unavailable; skipping");
             return;
         };
         let out = run_tool(
@@ -643,22 +657,23 @@ mod tests {
             std::env::temp_dir().join(format!("ostra-host-{}", uuid::Uuid::new_v4().simple()));
         std::fs::write(&marker, "").unwrap();
         let Some(env) = sandboxed(d.path(), &home) else {
-            eprintln!("bwrap unavailable; skipping");
             let _ = std::fs::remove_file(&marker);
             return;
         };
         let out = run_tool(&env, "Bash", json!({"command": format!("test -e {} && echo shared || echo private", marker.display())})).await;
         let _ = std::fs::remove_file(&marker);
         assert_eq!(out.text, "private");
-        run_tool(
+        // `/tmp` under bubblewrap; under Seatbelt, which denies `/tmp`, the scratch dir.
+        let out = run_tool(
             &env,
             "Bash",
-            json!({"command": "mkdir -p /tmp/w && echo kept > /tmp/w/f && cd /tmp/w"}),
+            json!({"command": "d=\"${TMPDIR%/}/w\" && mkdir -p \"$d\" && echo kept > \"$d/f\" && cd \"$d\" && pwd"}),
         )
         .await;
+        let dir = out.text.trim().to_string();
         let out = run_tool(&env, "Bash", json!({"command": "cat f && pwd"})).await;
         assert!(out.text.starts_with("kept"), "{}", out.text);
-        let out = run_tool(&env, "Read", json!({"file_path": "/tmp/w/f"})).await;
+        let out = run_tool(&env, "Read", json!({"file_path": format!("{dir}/f")})).await;
         assert!(out.text.contains("kept"), "{}", out.text);
     }
 
@@ -668,7 +683,6 @@ mod tests {
         let home = std::fs::canonicalize(d.path()).unwrap().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let Some(env) = sandboxed(d.path(), &home) else {
-            eprintln!("bwrap unavailable; skipping");
             return;
         };
         let marker = env.config().repo_root.join("survived");

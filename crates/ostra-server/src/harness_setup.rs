@@ -84,6 +84,7 @@ pub fn start(
         links: vec![],
         session_id: None,
         env_remove: vec![],
+        tty_param: None,
     };
     let pty = PtySession::spawn(&plan, 100, 30, Box::new(|_| {}))
         .map_err(|e| format!("Could not start `{}`: {e}", out.command))?;

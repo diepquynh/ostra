@@ -130,12 +130,13 @@ pub struct ServerConfig {
     pub use_ip_host: bool,
 }
 
-/// Whether agent commands run inside a bubblewrap sandbox.
+/// Whether agent commands run inside the sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
 pub enum SandboxMode {
-    /// Sandbox when bubblewrap works on this machine, and run unsandboxed with a warning otherwise.
+    /// Sandbox when this machine can (bubblewrap on Linux, Seatbelt on macOS), and run unsandboxed
+    /// with a warning otherwise.
     #[default]
     Auto,
     /// Refuse to start an execution that cannot be sandboxed.
@@ -153,8 +154,8 @@ impl SandboxMode {
     }
 }
 
-/// `[sandbox]` in `config.toml`: the bubblewrap profile for agent commands (the native Bash tool
-/// and harness CLIs).
+/// `[sandbox]` in `config.toml`: the sandbox profile for agent commands (the native Bash tool,
+/// harness CLIs, and programs Ostra starts for a project).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(default)]
 #[ts(export)]

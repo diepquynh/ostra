@@ -2076,6 +2076,7 @@ async fn terminal_streams_over_the_socket() {
         links: vec![],
         session_id: None,
         env_remove: vec![],
+        tty_param: None,
     };
     let pty = ostra_exec_harness::PtySession::spawn(&plan, 80, 24, Box::new(|_| {})).unwrap();
     let ptys = server.app.shared.harness.ptys();

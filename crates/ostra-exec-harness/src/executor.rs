@@ -288,6 +288,10 @@ impl HarnessExecutor {
                 .as_ref()
                 .and_then(|r| r.native_session_id.clone()),
             home: cfg.home.clone(),
+            sandboxed: matches!(
+                ostra_core::sandbox::decide(&cfg.global.sandbox),
+                Ok(ostra_core::sandbox::Decision::Sandboxed(_))
+            ),
             credential_env: {
                 let ws: ostra_core::config::WorkspaceSettings = ostra_core::config::load_toml(
                     &ostra_core::paths::workspace_toml(&spec.ctx.workspace_root),
@@ -301,8 +305,11 @@ impl HarnessExecutor {
         let plan = launch::plan(&input);
         launch::materialize(&plan)
             .map_err(|e| launch_error(format!("writing the harness config: {e}")))?;
-        let (plan, unsandboxed) =
-            crate::sandbox::wrap(plan, &input, &cfg.global.sandbox).map_err(launch_error)?;
+        let crate::sandbox::Wrapped {
+            plan,
+            members,
+            warning: unsandboxed,
+        } = crate::sandbox::wrap(plan, &input, &cfg.global.sandbox).map_err(launch_error)?;
         if let Some(w) = unsandboxed {
             if ostra_core::sandbox::first_warning() {
                 tracing::warn!("agent commands run without a sandbox: {w}");
@@ -330,6 +337,7 @@ impl HarnessExecutor {
             }),
         )
         .map_err(|e| launch_error(format!("starting `{}`: {e}", plan.program)))?;
+        pty.hold(members);
         host.emit(ExecutionDelta::Status {
             message: format!(
                 "{} is running in the terminal on `{}`. Every tool call it makes goes through Ostra's guards.",

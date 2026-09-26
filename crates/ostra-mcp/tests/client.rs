@@ -125,6 +125,7 @@ fn stdio_endpoint() -> Endpoint {
         env: vec![(CHILD.into(), "1".into())],
         env_remove: vec![],
         cwd: std::env::temp_dir(),
+        guard: None,
     }
 }
 
@@ -154,6 +155,7 @@ async fn stdio_crash_is_reported() {
             env: vec![],
             env_remove: vec![],
             cwd: std::env::temp_dir(),
+            guard: None,
         },
         T,
     )
@@ -177,6 +179,7 @@ async fn stdio_server_does_not_inherit_removed_variables() {
             env: vec![("KEEP".into(), "yes".into())],
             env_remove: vec!["OSTRA_MCP_TEST_SECRET".into()],
             cwd: std::env::temp_dir(),
+            guard: None,
         },
         T,
     )

@@ -25,6 +25,8 @@ pub struct Transport {
     pub write: Box<dyn AsyncWrite + Send + Unpin>,
     pub stderr: Option<Box<dyn AsyncRead + Send + Unpin>>,
     pub child: Option<tokio::process::Child>,
+    /// Kills what the server leaves running in its sandbox once the connection is gone.
+    pub sandbox: Option<ostra_core::sandbox::Members>,
 }
 
 type Reply = Result<Value, String>;
@@ -64,6 +66,7 @@ pub struct Client {
     out: mpsc::UnboundedSender<Vec<u8>>,
     shared: Arc<Shared>,
     child: Mutex<Option<tokio::process::Child>>,
+    sandbox: Mutex<Option<ostra_core::sandbox::Members>>,
     closed: AtomicBool,
 }
 
@@ -141,6 +144,7 @@ impl Client {
             out,
             shared,
             child: Mutex::new(t.child),
+            sandbox: Mutex::new(t.sandbox),
             closed: AtomicBool::new(false),
         })
     }
@@ -213,6 +217,7 @@ impl Client {
         {
             let _ = c.kill().await;
         }
+        drop(self.sandbox.lock().take());
         self.shared.die("The language server was stopped.".into());
     }
 }

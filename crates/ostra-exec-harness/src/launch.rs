@@ -38,6 +38,9 @@ pub struct LaunchInput<'a> {
     /// [`ostra_core::config::credential_env_names`]). The harness inherits none of them except
     /// those its own CLI reads to sign in.
     pub credential_env: Vec<String>,
+    /// Ostra runs the CLI in its sandbox, so the CLI must not start one of its own: macOS cannot
+    /// nest Seatbelt sandboxes.
+    pub sandboxed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,6 +57,9 @@ pub struct LaunchPlan {
     pub session_id: Option<String>,
     /// Variables of Ostra's environment the harness must not inherit.
     pub env_remove: Vec<String>,
+    /// A `sandbox-exec -D` parameter the PTY launcher sets to the PTY's device path, which is
+    /// only known once the PTY is open. Set by the Seatbelt wrap.
+    pub tty_param: Option<String>,
 }
 
 /// POSIX single-quote a word for a hook command line, which harnesses run through a shell.
@@ -202,7 +208,9 @@ fn sign_in_env(harness: HarnessKind) -> &'static [&'static str] {
             "ANTHROPIC_BASE_URL",
         ],
         HarnessKind::Codex => &["OPENAI_API_KEY", "OPENAI_BASE_URL"],
-        HarnessKind::Grok | HarnessKind::Agy => &[],
+        // Antigravity keeps its sign-in in the OS keychain, which the macOS sandbox denies.
+        HarnessKind::Agy => &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        HarnessKind::Grok => &[],
     }
 }
 
@@ -217,7 +225,7 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
     let hook = |event: HookEvent| json!([{"hooks": [{"type": "command", "command": hook_command(inp, event, true), "timeout": HOOK_TIMEOUT_SECS}]}]);
     let tool_hook = |event: HookEvent| json!([{"matcher": "*", "hooks": [{"type": "command", "command": hook_command(inp, event, true), "timeout": HOOK_TIMEOUT_SECS}]}]);
     // A user settings file cannot switch off Ostra's hooks, because flag settings win over it.
-    let settings = json!({
+    let mut settings = json!({
         "disableAllHooks": false,
         "hooks": {
             "PreToolUse": tool_hook(HookEvent::PreToolUse),
@@ -227,6 +235,9 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
             "SessionStart": hook(HookEvent::SessionStart),
         }
     });
+    if inp.sandboxed {
+        settings["sandbox"] = json!({"enabled": false});
+    }
     let settings_path = dir.join("claude-settings.json");
     files.push((
         settings_path.clone(),
@@ -305,6 +316,7 @@ fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan {
         links: vec![],
         session_id,
         env_remove: vec![],
+        tty_param: None,
     }
 }
 
@@ -407,6 +419,7 @@ fn plan_codex(inp: &LaunchInput<'_>) -> LaunchPlan {
         links: vec![],
         session_id: None,
         env_remove: vec![],
+        tty_param: None,
     }
 }
 
@@ -580,6 +593,7 @@ fn plan_grok(inp: &LaunchInput<'_>) -> LaunchPlan {
         links,
         session_id,
         env_remove: vec![],
+        tty_param: None,
     }
 }
 
@@ -643,6 +657,7 @@ fn plan_agy(inp: &LaunchInput<'_>) -> LaunchPlan {
         links: vec![],
         session_id: None,
         env_remove: vec![],
+        tty_param: None,
     }
 }
 
@@ -761,6 +776,7 @@ pub(crate) mod tests {
                 "MY_SERVICE_KEY".into(),
                 "OSTRA_TOKEN".into(),
             ],
+            sandboxed: false,
         }
     }
 

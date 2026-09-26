@@ -34,6 +34,16 @@ pub fn status_of(submit: &serde_json::Value) -> ExecutionStatus {
     }
 }
 
+/// Harness executions run under Seatbelt with the current config, which keeps the keychain closed.
+fn seatbelt() -> bool {
+    let global: ostra_core::config::GlobalConfig =
+        ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
+    ostra_core::sandbox::decide(&global.sandbox)
+        == Ok(ostra_core::sandbox::Decision::Sandboxed(
+            ostra_core::sandbox::Backend::Seatbelt,
+        ))
+}
+
 fn tail(screen: &str, lines: usize) -> String {
     let kept: Vec<&str> = screen
         .lines()
@@ -78,6 +88,12 @@ pub fn result(
             };
         }
         End::Cancelled => (ExecutionStatus::Cancelled, None),
+        End::Auth if harness == HarnessKind::Agy && seatbelt() => (
+            ExecutionStatus::Error,
+            Some(format!(
+                "{AUTH_PREFIX} {name} cannot read its sign-in: set `GEMINI_API_KEY` or `GOOGLE_API_KEY` in Ostra's environment, then retry, because on macOS it keeps its login in the keychain, which the sandbox closes to agents."
+            )),
+        ),
         End::Auth => (
             ExecutionStatus::Error,
             Some(format!(

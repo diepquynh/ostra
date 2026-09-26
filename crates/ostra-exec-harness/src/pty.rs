@@ -61,6 +61,9 @@ pub struct PtySession {
     out: broadcast::Sender<Arc<[u8]>>,
     last_output: Mutex<Instant>,
     exit: watch::Receiver<Option<ExitInfo>>,
+    /// The CLI's sandbox members, killed with the session because a child that left the process
+    /// group would otherwise outlive it.
+    members: Mutex<Option<ostra_core::sandbox::Members>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +98,14 @@ impl PtySession {
             })
             .map_err(|e| io(e.into()))?;
         let mut cmd = CommandBuilder::new(&plan.program);
+        if let Some(param) = &plan.tty_param {
+            let tty = pair
+                .master
+                .tty_name()
+                .ok_or_else(|| std::io::Error::other("the PTY has no device name"))?;
+            cmd.arg("-D");
+            cmd.arg(format!("{param}={}", tty.display()));
+        }
         cmd.args(&plan.args);
         cmd.cwd(&plan.cwd);
         for (k, v) in std::env::vars_os() {
@@ -140,6 +151,7 @@ impl PtySession {
             out: broadcast::channel(STREAM_BUFFER).0,
             last_output: Mutex::new(Instant::now()),
             exit: exit_rx,
+            members: Mutex::new(None),
         });
         let reading = session.clone();
         std::thread::Builder::new()
@@ -262,16 +274,22 @@ impl PtySession {
         }
     }
 
-    /// Signal the process group, then kill it if it is still alive after `grace`.
+    /// Kills the session's sandbox members when it terminates or drops.
+    pub fn hold(&self, members: Option<ostra_core::sandbox::Members>) {
+        *self.members.lock() = members;
+    }
+
+    /// Signal the process group, then kill it if it is still alive after `grace`. Then kill what
+    /// is left in the CLI's sandbox, even when the CLI itself has already exited.
     pub async fn terminate(&self, grace: Duration) {
-        if self.exit_info().is_some() {
-            return;
+        if self.exit_info().is_none() {
+            self.signal(libc::SIGTERM);
+            if tokio::time::timeout(grace, self.wait_exit()).await.is_err() {
+                self.signal(libc::SIGKILL);
+                let _ = tokio::time::timeout(Duration::from_secs(2), self.wait_exit()).await;
+            }
         }
-        self.signal(libc::SIGTERM);
-        if tokio::time::timeout(grace, self.wait_exit()).await.is_err() {
-            self.signal(libc::SIGKILL);
-            let _ = tokio::time::timeout(Duration::from_secs(2), self.wait_exit()).await;
-        }
+        drop(self.members.lock().take());
     }
 
     fn signal(&self, sig: i32) {
@@ -567,6 +585,7 @@ mod tests {
             links: vec![],
             session_id: None,
             env_remove: vec![],
+            tty_param: None,
         }
     }
 
@@ -667,6 +686,7 @@ mod tests {
             links: vec![],
             session_id: None,
             env_remove: vec![],
+            tty_param: None,
         };
         let seen = Arc::new(Mutex::new(Vec::<u8>::new()));
         let sink = seen.clone();
@@ -705,6 +725,7 @@ mod tests {
             links: vec![],
             session_id: None,
             env_remove: vec![],
+            tty_param: None,
         };
         let pty = PtySession::spawn(&plan, 80, 24, Box::new(|_| {})).unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;

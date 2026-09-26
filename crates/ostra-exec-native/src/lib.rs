@@ -351,9 +351,9 @@ impl Run {
         .with_scrub_env(mcp_secret_vars(ctx));
         let mut _scratch = None;
         let env = match sandbox_for(ctx) {
-            Ok(Sandbox::On(bwrap, profile)) => {
+            Ok(Sandbox::On(backend, profile)) => {
                 _scratch = profile.scratch_dir().map(|d| Scratch(d.to_path_buf()));
-                env.with_sandbox(bwrap, profile)
+                env.with_sandbox(backend, profile)
             }
             Ok(Sandbox::Off(warning)) => {
                 if let Some(w) = warning {
@@ -840,11 +840,11 @@ impl Run {
 }
 
 enum Sandbox {
-    On(std::path::PathBuf, ostra_core::sandbox::Profile),
+    On(ostra_core::sandbox::Backend, ostra_core::sandbox::Profile),
     Off(Option<String>),
 }
 
-/// The execution's scratch `/tmp`, removed when the execution's future ends or is dropped.
+/// The execution's scratch dir (its `/tmp` under bubblewrap, its `TMPDIR` under Seatbelt), removed when the execution's future ends or is dropped.
 struct Scratch(std::path::PathBuf);
 
 impl Drop for Scratch {
@@ -876,13 +876,13 @@ fn sandbox_for(ctx: &ostra_core::exec::ExecContext) -> Result<Sandbox, String> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "/".into());
     Ok(match ostra_core::sandbox::decide(&global.sandbox)? {
-        ostra_core::sandbox::Decision::Sandboxed(bwrap) => {
+        ostra_core::sandbox::Decision::Sandboxed(backend) => {
             let scratch = ostra_core::sandbox::new_scratch()
                 .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
             let profile = ostra_core::sandbox::Profile::for_execution(ctx, &global.sandbox, &home)
                 .scratch(&scratch)
                 .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
-            Sandbox::On(bwrap, profile)
+            Sandbox::On(backend, profile)
         }
         ostra_core::sandbox::Decision::Unsandboxed(w) => Sandbox::Off(w),
     })

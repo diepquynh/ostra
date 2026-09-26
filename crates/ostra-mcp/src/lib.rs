@@ -27,6 +27,9 @@ pub enum Endpoint {
         /// credentials.
         env_remove: Vec<String>,
         cwd: PathBuf,
+        /// Held as long as the server runs, and dropped with it: the caller's handle on what the
+        /// server leaves running, such as its sandbox's processes.
+        guard: Option<Arc<dyn std::any::Any + Send + Sync>>,
     },
     Http {
         url: String,
@@ -129,6 +132,7 @@ impl Client {
                 env,
                 env_remove,
                 cwd,
+                guard,
             } => Arc::new(stdio::Stdio::spawn(
                 &program,
                 &args,
@@ -136,6 +140,7 @@ impl Client {
                 &env_remove,
                 &cwd,
                 shared.clone(),
+                guard,
             )?),
             Endpoint::Http { url, headers, auth } => {
                 Arc::new(http::Http::new(url, headers, auth, shared.clone())?)

@@ -502,24 +502,29 @@ pub struct EnvironmentStatus {
     pub sandbox: SandboxStatus,
 }
 
-/// Whether agent commands run inside the bubblewrap sandbox on this machine.
+/// Whether agent commands run inside the sandbox on this machine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SandboxStatus {
     pub mode: crate::config::SandboxMode,
-    /// `bwrap` works here.
+    /// A sandbox backend works here.
     pub available: bool,
+    /// `bubblewrap` on Linux or `seatbelt` on macOS, when available.
+    #[ts(optional)]
+    pub backend: Option<String>,
     /// Executions start sandboxed under the current mode.
     pub active: bool,
     /// What to do when the sandbox is wanted but missing, or required but unavailable.
     #[ts(optional)]
     pub message: Option<String>,
+    /// What the working sandbox cannot enforce on this OS.
+    #[ts(optional)]
+    pub gaps: Option<String>,
 }
 
 impl SandboxStatus {
     pub fn check(cfg: &crate::config::SandboxConfig) -> Self {
-        use crate::sandbox::{Decision, bwrap, decide};
-        let available = bwrap().is_some();
+        use crate::sandbox::{Decision, backend, decide, known_gaps};
         let (active, message) = match decide(cfg) {
             Ok(Decision::Sandboxed(_)) => (true, None),
             Ok(Decision::Unsandboxed(w)) => (false, w),
@@ -527,9 +532,14 @@ impl SandboxStatus {
         };
         SandboxStatus {
             mode: cfg.mode,
-            available,
+            available: backend().is_some(),
+            backend: backend().map(|b| b.name().to_string()),
             active,
             message,
+            gaps: backend()
+                .filter(|_| active)
+                .and_then(known_gaps)
+                .map(str::to_string),
         }
     }
 }

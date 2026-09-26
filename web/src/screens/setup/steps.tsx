@@ -325,7 +325,12 @@ function StepCheck({ w }: { w: Wizard }) {
               <CheckRow
                 delay={d()}
                 label="Agent command sandbox"
-                sub={e.sandbox.message ?? `bubblewrap, mode ${e.sandbox.mode}`}
+                sub={
+                  e.sandbox.message ??
+                  [`${e.sandbox.backend ?? "sandbox"}, mode ${e.sandbox.mode}`, e.sandbox.gaps]
+                    .filter(Boolean)
+                    .join(". ")
+                }
                 result={e.sandbox.active ? "On" : "Off"}
                 tone={e.sandbox.active ? "ok" : "warn"}
               />

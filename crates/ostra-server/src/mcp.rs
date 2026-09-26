@@ -220,6 +220,9 @@ impl McpGateway {
             env,
             env_remove,
             cwd: key.0.clone(),
+            guard: hc
+                .members
+                .map(|m| Arc::new(m) as Arc<dyn std::any::Any + Send + Sync>),
         })
     }
 

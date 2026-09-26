@@ -18,6 +18,7 @@ async-trait.workspace = true
 tokio-util.workspace = true
 regex.workspace = true
 dirs.workspace = true
+libc.workspace = true
 
 [features]
 # Exposes `pricing::install_test_prices` to other crates' tests.

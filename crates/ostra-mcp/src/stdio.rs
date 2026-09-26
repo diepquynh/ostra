@@ -24,6 +24,8 @@ pub(crate) struct Stdio {
     stderr: Arc<Mutex<String>>,
     stderr_eof: tokio::sync::watch::Receiver<bool>,
     _child: Mutex<Child>,
+    /// Dropped after [`Drop`] signals the group, see [`crate::Endpoint::Stdio`].
+    _guard: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
 
 impl Stdio {
@@ -34,6 +36,7 @@ impl Stdio {
         env_remove: &[String],
         cwd: &Path,
         shared: Arc<Shared>,
+        guard: Option<Arc<dyn std::any::Any + Send + Sync>>,
     ) -> Result<Stdio, McpError> {
         let mut cmd = Command::new(program);
         for k in env_remove {
@@ -119,6 +122,7 @@ impl Stdio {
             stderr,
             stderr_eof,
             _child: Mutex::new(child),
+            _guard: guard,
         })
     }
 

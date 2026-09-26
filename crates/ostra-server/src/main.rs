@@ -82,6 +82,8 @@ enum Command {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Before anything reads the environment or starts a thread.
+    ostra_core::sandbox::scrub_startup_env();
     let cli = Cli::parse();
     // SAFETY: no other thread exists yet; the runtime starts below.
     unsafe { ostra_server::env::extend_path() };

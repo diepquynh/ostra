@@ -63,8 +63,8 @@ pub struct ToolEnv {
     private_hosts: Arc<Vec<String>>,
     /// Variables removed from every child process: provider credentials and Ostra's own.
     scrub_env: Vec<String>,
-    /// The bubblewrap binary and profile Bash runs under; `None` runs it unsandboxed.
-    sandbox: Option<(PathBuf, ostra_core::sandbox::Profile)>,
+    /// The backend and profile Bash runs under; `None` runs it unsandboxed.
+    sandbox: Option<(ostra_core::sandbox::Backend, ostra_core::sandbox::Profile)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -117,10 +117,23 @@ impl ToolEnv {
         self
     }
 
-    /// Runs every Bash command under `bwrap` with this profile.
-    pub fn with_sandbox(mut self, bwrap: PathBuf, profile: ostra_core::sandbox::Profile) -> Self {
-        self.sandbox = Some((bwrap, profile));
+    /// Runs every Bash command under `backend` with this profile.
+    pub fn with_sandbox(
+        mut self,
+        backend: ostra_core::sandbox::Backend,
+        profile: ostra_core::sandbox::Profile,
+    ) -> Self {
+        self.sandbox = Some((backend, profile));
         self
+    }
+
+    /// A path as the sandboxed shell names it, as the host names the same file. Bubblewrap binds
+    /// the scratch dir at `/tmp`; Seatbelt remaps nothing.
+    pub fn sandbox_to_host(&self, inside: &Path) -> PathBuf {
+        match &self.sandbox {
+            Some((ostra_core::sandbox::Backend::Bubblewrap(_), profile)) => profile.to_host(inside),
+            _ => inside.to_path_buf(),
+        }
     }
 
     /// Lets WebFetch reach private and loopback addresses for these exact hosts, taken from
@@ -185,15 +198,11 @@ impl ToolEnv {
     }
 
     /// Resolve a model-supplied path against the shell's working directory.
-    /// Under the sandbox, `/tmp` is the execution's scratch dir, so in-process tools map it the
+    /// Under bubblewrap, `/tmp` is the execution's scratch dir, so in-process tools map it the
     /// same way.
     pub fn resolve(&self, path: &str) -> PathBuf {
         let expanded = expand_home(path);
-        let abs = ostra_core::paths::resolve(&self.cwd(), &expanded);
-        match &self.sandbox {
-            Some((_, profile)) => profile.to_host(&abs),
-            None => abs,
-        }
+        self.sandbox_to_host(&ostra_core::paths::resolve(&self.cwd(), &expanded))
     }
 
     pub fn has_read(&self, path: &Path) -> bool {
