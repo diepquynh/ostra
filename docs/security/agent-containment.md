@@ -357,20 +357,10 @@ Workspace MCP tools take one path in a harness. The harness reaches them only th
 the hook passes those calls through, and the MCP handler checks, asks, runs, and logs each call once (Rule M2).
 Checking at both points would ask the user twice for one call.
 
-The policy is not the only layer around a harness. Where the machine supports it (bubblewrap on Linux, Seatbelt on
-macOS), Ostra also runs agent commands and each harness CLI inside an OS sandbox profile set by `[sandbox]` in
-`config.toml`. The sandbox limits what the CLI and its children can reach on disk, including actions no hook
-reports.
-
-Without the sandbox, some protections hold only for what the policy can read in a tool call. The file tools still
-refuse the data dir, the credential stores, and hidden workspace artifacts, and Grep and Glob skip them when they
-walk. A shell command that walks the disk without naming them, such as `find ~`, reads them all the same, a program
-a command starts can write anywhere your user can, and `[sandbox] network = false` does not apply. This happens
-when the sandbox mode is `off`, or `auto` on a machine without a sandbox; `required` refuses to start the execution
-instead. The console says so: the Sandbox panel in Settings lists these effects while the chosen mode runs commands
-unsandboxed, and the Artifacts tab warns that shell commands can read hidden artifacts. The workspace detail
-carries the workspace's own `sandbox` status (the global `[sandbox]` config with the workspace's mode in its place)
-for both.
+The policy is not the only layer around a harness. Ostra also runs agent commands and each harness CLI inside an
+OS sandbox (bubblewrap on Linux, Seatbelt on macOS), which limits what the CLI and its children can reach on disk,
+including actions no hook reports. The default mode, `required`, refuses to start an execution the machine cannot
+sandbox. [Sandboxing](sandboxing.md) covers the profile, the modes, and what is lost without it.
 
 ## Why a denial leads with the correction
 

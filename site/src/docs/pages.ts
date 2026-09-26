@@ -68,6 +68,7 @@ export const NAV: NavGroup[] = [
     pages: [
       { id: "threat-model", title: "Threat model", file: "docs/security/threat-model.md" },
       { id: "agent-containment", title: "Agent containment", file: "docs/security/agent-containment.md" },
+      { id: "sandboxing", title: "Sandboxing", file: "docs/security/sandboxing.md" },
       { id: "server-and-browser", title: "Server and browser", file: "docs/security/server-and-browser.md" },
       { id: "secrets-and-data", title: "Secrets and data", file: "docs/security/secrets-and-data.md" },
       { id: "browser-security-suite", title: "Browser security suite", file: "tests/browser/README.md" },

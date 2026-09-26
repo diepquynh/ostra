@@ -10,6 +10,7 @@
 - Architecture: [overview](architecture/overview.md), [the event log](internals/event-log.md),
   [the planner](internals/planner.md), [storage](architecture/storage.md), and [the server](architecture/server.md).
 - Security: [threat model](security/threat-model.md), [agent containment](security/agent-containment.md),
-  [server and browser](security/server-and-browser.md), and [secrets and data](security/secrets-and-data.md).
+  [sandboxing](security/sandboxing.md), [server and browser](security/server-and-browser.md), and
+  [secrets and data](security/secrets-and-data.md).
 - [Provider usage](providers/README.md): how Ostra reaches Anthropic, OpenAI, xAI, and Google models, which
   credentials each path accepts, and the provider terms each path follows.

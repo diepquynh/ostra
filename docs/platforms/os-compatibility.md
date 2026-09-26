@@ -140,11 +140,12 @@ The `[sandbox] mode` setting in `config.toml`, or the workspace's own sandbox se
 | Mode | With a working backend | Without one |
 | --- | --- | --- |
 | `required` (default) | Sandboxed | Every execution is refused, with the reason |
-| `auto` | Sandboxed | Runs unsandboxed and logs a warning once |
+| `auto` | Sandboxed | Runs unsandboxed, with a warning at startup and in each execution |
 | `off` | Unsandboxed | Unsandboxed |
 
 Unsandboxed agent commands run with the full rights of your user. Choose `off` only on purpose, for example in a
-throwaway VM. The policy layer still checks every tool call either way.
+throwaway VM. The policy layer still checks every tool call either way. [Sandboxing](../security/sandboxing.md) explains the profile
+each backend renders.
 
 ## Processes and signals
 
