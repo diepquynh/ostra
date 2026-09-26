@@ -44,7 +44,7 @@ test("docs render a page of test strings as text", async ({ page, state, guard }
   const foreign = foreignRequests(page, state.site);
   await page.goto(`${state.site}/docs/#test-doc`);
   await audit(page, guard, "PW-MARKER-docs", "docs test page", state.site);
-  // Images render as links to the file, so none of the payload's images loads.
+  // Only images bundled from docs/images load, so none of the payload's images does.
   expect(await page.locator("article img").count()).toBe(0);
   expect(foreign).toEqual([]);
 });
@@ -63,6 +63,20 @@ test("every docs page renders with a clean DOM and nothing from another origin",
     await expect(page.locator(".docs-h1")).toHaveText(title);
     expect(await domProblems(page), `docs page ${title}`).toEqual([]);
   }
+  expect(foreign).toEqual([]);
+});
+
+test("docs screenshots load from the site's own bundle", async ({ page, state, guard }) => {
+  onSite(guard, state.site);
+  const foreign = foreignRequests(page, state.site);
+  await page.goto(`${state.site}/docs/#pipeline`);
+  const imgs = page.locator("article img");
+  await expect(imgs.first()).toBeVisible();
+  await expect.poll(() => imgs.first().evaluate((e) => (e as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  const srcs = await imgs.evaluateAll((els) => els.map((e) => (e as HTMLImageElement).src));
+  expect(srcs.length).toBeGreaterThan(1);
+  for (const src of srcs) expect(src.startsWith(`${state.site}/`) || src.startsWith("data:image/"), src).toBe(true);
+  expect(await domProblems(page)).toEqual([]);
   expect(foreign).toEqual([]);
 });
 

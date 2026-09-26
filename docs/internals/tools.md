@@ -96,6 +96,11 @@ The permission layer sorts tools into families, and the family decides which rul
 The guards (write scope, state ownership, the report path, the lesson gate, the build streak, self-protection)
 run before this, on every family. They are on [Agent containment](../security/agent-containment.md).
 
+The Permissions tab of Settings sets the mode, the sandbox, and the allow, ask, and deny rules, and shows the
+global rules read-only:
+
+![The Permissions settings tab with mode, sandbox, rules, and global rules](../images/console/settings-permissions.png)
+
 ## One call, start to finish
 
 Before the policy sees a call, `ToolEnv::canonical_call` rewrites it into the form the tool will run:
@@ -111,6 +116,11 @@ be checked against one directory and written in another after a `cd`, or a URL s
 `execute` then coerces any field the model sent as a JSON string back into the type its schema says, runs the
 tool, and times it. Every tool except `Bash` stops at once on cancel. `Bash` handles cancel itself, because it has
 a process group to kill.
+
+Expanding a call in the Activity tab shows the policy decision and the change. This Edit was allowed by the
+`acceptEdits` permission mode:
+
+![An expanded Edit call showing the permission rule that allowed it and its diff](../images/console/tool-edit.png)
 
 ## File tools
 
@@ -136,6 +146,10 @@ If the file already exists, it must have been read in this execution, or the cal
 then write it, so you do not overwrite content you have not seen." Parent directories are created. The result
 carries a unified diff for the Activity view (capped at 50,000 bytes), so you see what changed without opening
 the file.
+
+A Write the policy refused shows the guard rule and what to do instead:
+
+![An implementer run with a denied Write that names its guard rule](../images/console/execution.png)
 
 ### Edit
 
@@ -184,6 +198,11 @@ backend each platform uses.
 
 Commands that match the project's configured build and test commands also add their wall time to the
 execution's `build_ms`, and their failures count toward the build-streak guard.
+
+A Bash command that no rule allows waits for the user. The same run shows a Write refused by the `write-scope`
+guard:
+
+![A code reviewer run with a Bash call asking for permission and a denied Write](../images/console/reviewer-ask.png)
 
 ## Search tools
 
@@ -240,6 +259,8 @@ fetches the page itself:
   redirect would skip that check.
 - HTML becomes markdown, text types come back as they are, and binary content is refused. The body is capped at
   5 MB and the text at 100,000 characters.
+
+![A running fact-check with Read, Grep, and WebFetch calls](../images/console/factcheck-run.png)
 
 ## Skill
 
@@ -303,6 +324,10 @@ module and its sub-scopes, and `limit` (default 8, at most 50).
 The database is engine-owned: agents reach it only through these two tools, and no file tool may write it. The build
 streak also uses it: after the second failed build in a row, recalled lessons for that failure are appended to the
 tool result without the agent asking. [Project memory](project-memory.md) covers how lessons are stored and ranked.
+
+A Memory call expanded in the Activity tab, after a failed check and its fix:
+
+![An expanded Memory call recording a build lesson](../images/console/memory-call.png)
 
 ### Code navigation
 

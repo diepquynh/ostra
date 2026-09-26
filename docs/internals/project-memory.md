@@ -58,6 +58,10 @@ ownership guard, so a `Write`, an `Edit`, or a shell command that names it is re
 treats it as read-only for the same reason. The Memory tool is the one path in, which keeps every lesson in the
 schema and deduplicated.
 
+A Memory call in an implementer run, recorded after a failed check and its fix:
+
+![An expanded Memory call recording a build lesson](../images/console/memory-call.png)
+
 ## Recalling lessons
 
 `MemoryRecall` takes an optional `area`, an optional `query`, and a `limit` (8 by default, 50 at most). It fills
@@ -97,6 +101,10 @@ At two failures the agent does not have to think of recalling: the engine search
 the result in front of it, as "Lessons recorded for failures like this one". This is where a lesson from last
 week's session pays for itself.
 
+At five failures the guard refuses the build. This Codex run then returned STUCK with its diagnostic:
+
+![An ended Codex run with the build-streak denial and a STUCK diagnostic](../images/console/stuck-run.png)
+
 ### The lesson gate
 
 The other half is making sure the fix gets recorded. A build that passes after 3 or more consecutive failures is
@@ -134,6 +142,12 @@ a refactor, because agents only record and recall.
 | `GET /api/workspaces/:ws/projects/:key/memory` | Lists lessons, optionally filtered by a search query |
 | `PATCH /api/workspaces/:ws/projects/:key/memory` | Edits one lesson's area and text |
 | `DELETE /api/workspaces/:ws/projects/:key/memory` | Deletes one lesson |
+
+![The Memory screen listing backend lessons with their area and the agent that recorded them](../images/console/memory.png)
+
+Add a lesson opens a form for the area and the lesson text:
+
+![The Add a lesson form with Area and Lesson fields](../images/console/memory-add.png)
 
 ## What carries over between sessions
 

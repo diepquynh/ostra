@@ -757,6 +757,9 @@ No compaction checkpoint is needed: the pipeline state is in the engine, not in 
 
 Each workspace opens as one console, laid out like a code editor:
 
+![The workspace overview: the Sessions tree on the left, the New task form, and the session list](docs/images/console/workspace.png)
+
+
 - **Title bar.** The workspace menu (switch workspace; Overview, Cost with this week's spend, Settings, Memory;
   New workspace; Add project; Run the setup guide again), breadcrumbs for the open resource, a search field that
   opens ⌘K, and toggles for the left dock and the quick-question dock.
@@ -789,6 +792,19 @@ Each workspace opens as one console, laid out like a code editor:
   machine check (`/api/environment`), name and folder, projects, defaults, and a review that validates the whole
   request (`POST /api/workspaces/validate`) before one `POST /api/workspaces` creates it.
 
+The Git tab of the left dock shows the project's branch, staged changes, and unstaged changes beside the open
+session:
+
+![The Git tab with a branch menu, a commit box, staged changes, and unstaged changes](docs/images/console/git.png)
+
+The Files tab shows one project's tree with git marks, and Changed by sessions lists the files executions changed:
+
+![The Files tab with a folder tree, git marks, and the Changed by sessions list, beside a file's diff](docs/images/console/files-dock.png)
+
+⌘K searches every kind of resource at once and groups the hits:
+
+![The search palette open over a session board, listing sessions, artifacts, and files that match "cancel"](docs/images/console/search.png)
+
 | Screen | Content |
 | --- | --- |
 | Home | Workspace list, or the setup guide on first run (section 6.1). |
@@ -803,6 +819,20 @@ Each workspace opens as one console, laid out like a code editor:
 | Memory | Lessons per project, searchable. The user may edit or delete any lesson. |
 | Cost | Per session, stage, agent, and executor over this week (the status bar's week) or all time: tokens, cache reads, cache writes by TTL (5 minutes, 1 hour), cost, cache reads per tool call, build-loop time (the metrics from `UC/bench/README.md`). |
 
+The session board of a build in review. The lanes show the finished stages, and the Overview tab lists the two
+gates waiting for the user: a permission ask for a shell command and the closing gate.
+
+![The session board with SDLC lanes, a permission gate with Allow once and Deny, and a closing gate](docs/images/console/session-board.png)
+
+The Routing tab of Settings. Each row names an agent, what it does, and the executor, model, and effort it runs
+with:
+
+![The Routing settings table with an executor, model, and effort menu per agent](docs/images/console/settings-routing.png)
+
+The Cost screen for this week, with the totals first and then the same metrics per session and per stage:
+
+![The Cost screen with weekly totals and tables by session and by stage](docs/images/console/cost.png)
+
 ### 12.2 Explaining the process
 
 Beginners are the audience, so the UI teaches as it runs:
@@ -811,6 +841,15 @@ Beginners are the audience, so the UI teaches as it runs:
 - Each judge decision shows its reason and an override.
 - Each denial shows the rule that fired and what to do instead.
 - Spec and plan views explain EARS and Given/When/Then in a collapsible note the first time they appear.
+
+An execution's Activity tab lists each tool call. The denied `Write` below names the guard rule that fired and what
+to do instead:
+
+![The Activity tab of an implementer run, with a denied Write that names its guard rule](docs/images/console/execution.png)
+
+A spec opens on its overview, with the EARS note above it and the Outlines menu on the left:
+
+![A spec artifact with the Outlines menu, the EARS explanation, and the overview counts](docs/images/console/spec.png)
 
 ### 12.3 Quick-questions side panel
 
@@ -829,6 +868,8 @@ harness needs login. Every notification deep-links to the screen that needs the 
 
 The Files view reads display tokens, outlines, usages, and dependencies from a code provider, so a project can
 bring its own analysis without Ostra carrying editor plugins. Every answer names the provider that gave it.
+
+![A Rust file colored by the code provider, with the Outline tab of the code pane and the provider named below it](docs/images/console/file.png)
 
 - **Built-in provider.** A table-driven tokenizer covers Rust, TypeScript, JavaScript, Python, Go, Java,
   Kotlin, Scala, C#, Swift, PHP, C, C++, Ruby, Lua, and shell for navigation, and SQL, TOML, YAML, JSON, CSS,

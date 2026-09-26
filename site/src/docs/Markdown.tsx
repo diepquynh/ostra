@@ -1,12 +1,14 @@
 import type { PhrasingContent, RootContent } from "mdast";
 import type { ReactNode } from "react";
-import type { Docs, Page, Target } from "./model";
+import { type Docs, type Page, resolvePath, type Target } from "./model";
+import { IMAGES } from "./sources";
 
 type Ctx = { docs: Docs; page: Page; go: (t: Target) => void };
 
 /**
- * The page's blocks as React elements. Raw HTML is never rendered, except `<br>`, and images render as links to the
- * file, because the site loads no image from another origin (the same rule as the console's CSP).
+ * The page's blocks as React elements. Raw HTML is never rendered, except `<br>`. Only images bundled from docs/images
+ * render; any other image is a link to the file, because the site loads no image from another origin (the same rule
+ * as the console's CSP).
  */
 export function Markdown({ docs, page, go }: Ctx) {
   const ctx = { docs, page, go };
@@ -153,6 +155,13 @@ function inline(nodes: PhrasingContent[], key: string, ctx: Ctx): ReactNode[] {
       case "image":
       case "imageReference": {
         const url = n.type === "image" ? n.url : ctx.page.definitions.get(n.identifier)?.url;
+        const src = url && !/^[a-z][a-z0-9+.-]*:/i.test(url) ? IMAGES[resolvePath(ctx.page.file, url)] : undefined;
+        if (src)
+          return (
+            <a key={k} href={src} target="_blank" rel="noreferrer" className="md-img-link">
+              <img src={src} alt={n.alt ?? ""} className="md-img" loading="lazy" />
+            </a>
+          );
         const text = `Image: ${n.alt || url || ""}`;
         return url ? anchor(url, text, k, ctx) : text;
       }

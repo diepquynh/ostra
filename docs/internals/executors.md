@@ -101,6 +101,10 @@ The native executor lives in `crates/ostra-exec-native/src/lib.rs`. It is a stre
 `Provider` trait, with Anthropic (Messages API) and OpenAI (Responses API) implementations in
 `ostra-providers`.
 
+A native run's Activity tab streams each tool call as the loop dispatches it, with its timing:
+
+![The Activity tab of a native implementer run](../images/console/execution.png)
+
 ### Setup
 
 Before the first model call, a run does the following, in order:
@@ -332,6 +336,11 @@ If the agent stops before it has submitted, the bridge blocks the stop and tells
 does that twice. On the third stop the run ends as an error ("The agent ended its turn three times without
 calling submit").
 
+A harness run's Tool calls tab lists every call the hook bridge saw, with the policy decision and the rule behind
+it:
+
+![The Tool calls tab of a Claude Code run with allowed, denied, and asking calls](../images/console/harness-toolcalls.png)
+
 ### Adapters
 
 Each CLI names its tools differently and expects a different answer shape. `adapters/` has one adapter per CLI.
@@ -397,6 +406,11 @@ middle of a run is sent the current screen and its scrollback. Ostra alone answe
 whether zero or five tabs are watching. The raw bytes are also written to an owner-only file capped in size, so
 the Terminal tab can replay an ended run.
 
+A harness run's Terminal tab shows the CLI on its PTY. This Claude Code run is paused on a permission ask that the
+hook bridge holds:
+
+![The Terminal tab of a Claude Code harness run with a paused permission ask](../images/console/terminal.png)
+
 ### Failures that are not the agent's fault
 
 A CLI that is not installed, is not signed in, or exits within 20 seconds without a single tool call has not
@@ -405,6 +419,11 @@ planner opens a `HarnessFailure` gate for them instead of the generic "execution
 to log in and retry, or to run this one execution on the native executor. Under YOLO the engine re-routes to
 native and records that it did ([Gates and judges](gates-and-judges.md)). Settings validation already refuses a route to a harness that is not installed,
 so this gate mostly catches expired sign-ins.
+
+A harness that fails to start opens a harness failure gate with its exit message, and an error in the run itself
+opens an execution failed gate:
+
+![A harness failure gate for Claude Code and an execution failed gate](../images/console/gate-harness-failure.png)
 
 ### Usage and cost
 
@@ -432,6 +451,10 @@ On an ended run, "Open the session" starts a read-only copy: the CLI reopens tha
 you can scroll through the work and ask about it. It has no first prompt, so nothing is spent until you type.
 Every tool call is refused (guard `read-only-session`), no Ostra MCP tool is served, the Stop hook never asks it
 to submit, and there are no idle nudges. It ends when you leave the CLI, cancel it, or after 4 hours.
+
+An ended harness run replays its stored transcript with input off. Resume reopens the CLI's own session:
+
+![An ended Codex run replaying its transcript with a Resume button](../images/console/codex-transcript.png)
 
 ## Timeouts and cancellation
 

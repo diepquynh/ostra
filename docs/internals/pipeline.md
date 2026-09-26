@@ -58,6 +58,11 @@ The route table is the `match category` block at the top of `Planner::run`. When
 categories it is told to pick the one that runs more of the pipeline, because a skipped stage that was needed
 costs a wrong result while an unneeded stage costs one round.
 
+On the session board, the lanes follow the same path. This session has finished research through build and waits
+for the user in review:
+
+![A session board with lanes from Research to Done and two gates waiting for the user](../images/console/session-board.png)
+
 ## Classify: choosing the route
 
 The first step of every session is a judge call. The Classify judge reads the request, the New task toggles
@@ -77,6 +82,10 @@ falls back to the first project, and a research-bearing category with no tasks g
 scope with the full request as its text (Rule D1: the spec always has research to stand on). You can override
 the classification from the session board until the first research task or phase starts.
 
+The Decisions tab of the session board shows the Classify decision with its reason and what it was based on:
+
+![The Decisions tab with a Classify decision and a Stakes decision](../images/console/decisions.png)
+
 ## Explore: research in parallel
 
 Each research task spawns one `explore` agent. Explore is read-only, so every ready task spawns at once (Rule
@@ -88,10 +97,20 @@ but could not investigate. Explore tasks can also appear later. When a user adds
 a new task researches the new part (Rule D2), and the Rescue judge can start a targeted explore in the middle
 of a build.
 
+The Add context box on the session board. Queue for the next step waits for the running agents to finish; Send now
+restarts running work (Rule C2):
+
+![The Add context box with Send now and Queue for the next step](../images/console/add-context.png)
+
 When a task fails, the engine retries it once automatically (`ERROR_RETRIES = 1` in
 [`state.rs`](../../crates/ostra-engine/src/state.rs)), then opens an execution-failed gate. If every task fails or
 is abandoned, the session fails with "there is no research document to write a spec from", because Rule D1
 forbids a spec without research.
+
+A research document renders as chapters. Its overview counts the files, patterns, sources, open questions, and the
+Not covered items the Sufficiency judge reads next:
+
+![A research document with its Outlines menu and overview counts](../images/console/research.png)
 
 ## Sufficiency: is the research enough?
 
@@ -115,12 +134,21 @@ The spec is a typed document. The Document tool checks its structure, and the su
 file has a check error or its counts disagree with the submit (Hard rule 4). The engine never edits the spec
 itself; every change goes back through the agent.
 
+The spec renders from its typed document. Each requirement shows its EARS type, the deliverable and criterion it
+covers, and its Given/When/Then acceptance criteria:
+
+![The Requirements chapter of a spec with EARS requirements and acceptance criteria](../images/console/spec-requirements.png)
+
 ### Open questions before any fact-check
 
 If the spec has open questions, they are asked before the fact-check runs (Rule D3), because checking a spec
 that is about to change is wasted work. Each answer re-runs generate-spec. On a revision the agent receives
 only the answers, change requests, and research documents its spec does not reflect yet, together with the
 path of the current spec, so it edits the file in place instead of rewriting it.
+
+The open questions gate shows each question with its options, the recommended option first:
+
+![The open questions gate with a single-choice and a multiple-choice question](../images/console/gate-open-questions.png)
 
 ### Fact-check: the spec against the code
 
@@ -133,14 +161,31 @@ behavior:
   or `no findings on the previous pass` when that pass was clean, so a revision after a clean pass is still
   treated as a re-pass (Rule D3a).
 
+A fact-check on a spec's first pass runs with `Source check: refetch`, so it fetches the External Evidence source
+again:
+
+![A running fact-check with Read, Grep, and WebFetch calls](../images/console/factcheck-run.png)
+
 A FAIL sends the findings back to generate-spec, and the loop repeats. After three FAILs in a row
 (`FACTCHECK_RECURRING_LIMIT`) the engine stops and opens a fact-check-recurring gate instead of spending more.
+
+The gate shows the findings that keep coming back:
+
+![The fact-check-recurring gate with a HIGH and a MEDIUM finding](../images/console/gate-factcheck-recurring.png)
 
 ### Spec approval
 
 A spec that passed its fact-check goes to the user for approval, with any LOW findings from the passing check
 shown on the card. Approving records the version that was approved. A change request becomes a spec change and
 the whole spec loop runs again. For the `SPEC` category the flow ends at the PASS and skips approval.
+
+The approval card shows the passing check and its LOW findings:
+
+![The spec approval gate with a Fact-check PASS badge, two LOW findings, and a change request field](../images/console/gate-spec-approval.png)
+
+In the spec itself, the Fact-check chapter shows each finding on the element it names:
+
+![The Fact-check chapter of a spec with a LOW finding on R3](../images/console/spec-factcheck.png)
 
 ## Stakes: is a plan worth it?
 
@@ -168,6 +213,19 @@ because the implementer loads only the skills its phase file lists.
 The plan then goes through the same loop as the spec: clarifying questions, a fact-check that always uses
 `citations` and receives the approved spec (Rule D5), the recurring-FAIL limit, and approval.
 
+The master plan opens on its overview, with the phase count, the stakes, and the success criteria:
+
+![A master plan overview with its counts, summary, and success criteria](../images/console/plan.png)
+
+Each phase is its own chapter, with its deliverable, complexity, test policy, dependencies, and the requirements it
+delivers:
+
+![The Phase 1 chapter of a plan with its deliverable, complexity, test policy, and requirements](../images/console/plan-phase.png)
+
+The plan approval gate lists the phases with their project, complexity, test policy, and dependencies:
+
+![The plan approval gate with four phases and one LOW finding](../images/console/gate-plan-approval.png)
+
 ### Changes after the plan exists
 
 A requirement-level answer at any point after the spec exists goes into the spec first (Rule D10). The
@@ -189,6 +247,11 @@ Once the plan is approved, its Phase Index becomes the build queue. The schedule
 When a phase ends blocked, every phase that depends on it, directly or through other phases, is removed from
 the queue, and independent phases keep going (Rule D9). The removal is computed fresh on every planner pass by
 `removed_phases`.
+
+The Phase graph on the session board shows each phase by step, with its project, complexity, test policy, and
+state:
+
+![The Phase graph with a passed phase, a phase in review, and a queued phase](../images/console/phase-graph.png)
 
 ### The implement and review loop
 
@@ -216,6 +279,14 @@ open after the third, the next step is a review-cap gate asking the user for ano
 blocked. Under YOLO the budget is ten passes (`YOLO_REVIEW_BUDGET`), after which the Resolve judge takes over;
 see [Gates and judges](gates-and-judges.md#review-cap).
 
+The implementer's report lists its changes, the verification it ran, and the tests to write later:
+
+![An implementer report with Changes, Verification, and Tests to write](../images/console/report.png)
+
+The review ledger lists each finding with its pass and severity, and marks the lines it points at on the diff:
+
+![A review ledger with three findings and the diff they point at](../images/console/ledger.png)
+
 ### Staging
 
 When a phase's review passes, the engine runs `git -C <project> add` on the files the implementer reported
@@ -242,6 +313,16 @@ refused. At five, further build and test commands are denied and the agent is to
 build passes after a streak of three or more, the lesson gate refuses the agent's submit until it records what
 fixed the problem in project memory, so the next session does not have to work it out again.
 
+This Codex run hit the build streak limit. After five failed builds the guard refused the next one, and the agent
+returned STUCK with its diagnostic:
+
+![An ended Codex run with the build-streak denial and a STUCK diagnostic](../images/console/stuck-run.png)
+
+The stuck gate on the board asks for the missing fact. Above it, a phase blocked gate for another phase offers a
+retry:
+
+![A phase blocked gate with Retry the phase and a stuck gate for phase 2](../images/console/gate-stuck.png)
+
 ## Format
 
 After a project's last phase is done, the project's format command runs once (Rule D8). It is a plain command,
@@ -255,6 +336,10 @@ least one passed, the engine asks one question per project: write tests, update 
 neither. Projects that reach this point together are asked in one batched gate (Rule T6). If the request
 already said whether it wants tests or docs, that choice replaces the question (Rule T3). Neither answer
 changes the requirements (Rule T5).
+
+The closing gate for one project, with both optional stages unchecked by default:
+
+![The closing gate with Write tests and Update the module documentation checkboxes](../images/console/closing-gate.png)
 
 ## Tests: analyze in parallel, write in order
 
@@ -282,6 +367,10 @@ When nothing is running and no gate other than a pending permission ask is open,
 the report. It lists what was built, each phase and its outcome, what the fact-checks and reviews established,
 every stage that did not run and how to run it later (Rule T7), every blocked phase with its findings and
 ledger path, and under YOLO a "Decided for you" list. The engine then marks the session complete.
+
+A completion report names the stages that did not run and how to run them, and lists what YOLO decided:
+
+![A completion report with Stages not run and Decided for you](../images/console/completion.png)
 
 ## Fan-out caps and limits
 
@@ -346,3 +435,8 @@ Detect looks at existing skills, instruction files, and any earlier `project.tom
 component types an existing skill already covers are only counted (Rule I1). Each scout studies one slice of the
 codebase. The proposal defaults to generating at most eight skills and dropping the rest, which the user can
 change at the approval gate. Every generated skill goes to `.agents/skills/` (Rule I2).
+
+The skill approval gate of an init session lists each proposed skill with the exemplar files it was grounded in and
+a decision per skill:
+
+![The skill approval gate with Generate, Regenerate, and Reuse decisions per skill](../images/console/init-skills.png)

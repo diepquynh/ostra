@@ -207,9 +207,10 @@ are all text that someone other than you may have written. The console treats al
   sessionStorage, IndexedDB, or Cache Storage.
 
 The docs you are reading use their own renderer ([`site/src/docs/Markdown.tsx`](../../site/src/docs/Markdown.tsx)),
-which walks the Markdown syntax tree and builds each element itself. Raw HTML is dropped except for `<br>`,
-images render as a link labelled with their alt text rather than loading, and a link with a scheme other than
-`http`, `https`, or `mailto` renders as plain text.
+which walks the Markdown syntax tree and builds each element itself. Raw HTML is dropped except for `<br>`, and a
+link with a scheme other than `http`, `https`, or `mailto` renders as plain text. An image loads only when its
+path resolves to a file in `docs/images`, which the build bundles into the site, so every image comes from the
+site's own origin. Any other image renders as a link labelled with its alt text.
 
 ## The browser security suite
 

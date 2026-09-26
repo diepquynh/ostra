@@ -22,6 +22,10 @@ Both values are kept in the registry, not in `workspace.toml` (Rule A2). A `[lim
 ignored and removed at the next save, because a repository you cloned could otherwise raise its own budget.
 [Settings and routing](settings-and-routing.md#why-some-settings-stay-out-of-the-folder) explains the rule.
 
+Both limits are on the General tab of Settings:
+
+![The General settings tab with the Executions at once and Session budget fields](../images/console/settings-general.png)
+
 ## Parallel executions: the slot limiter
 
 Every agent execution needs a slot before it starts. The limiter is a counter and a notifier on the
@@ -62,6 +66,10 @@ What holds a slot and what does not:
 After a spawn gets its slot it reads the session's state again. If the session was paused or ended while the
 spawn waited, it gives the slot back and starts nothing.
 
+The status bar counts the running executions, and clicking the count lists them:
+
+![The running executions menu open from the status bar](../images/console/running-menu.png)
+
 ## How cost is counted
 
 Every execution records its token usage as it runs: input tokens, output tokens, cache reads, cache writes
@@ -77,6 +85,11 @@ pub fn cost(model: &str, usage: &Usage, web_searches: u64) -> f64 {
     ...
 }
 ```
+
+The Cost screen shows the totals and the same metrics per session, stage, agent, and executor, for this week or all
+time:
+
+![The Cost screen for all time with tables by session, stage, agent, and executor](../images/console/cost-alltime.png)
 
 ### Where prices come from
 
@@ -173,6 +186,8 @@ It has two answers.
 
 The raise is recorded in the session's event log as the gate answer, so it survives restarts and applies only
 to that session. Other sessions keep the workspace's budget.
+
+![The budget gate with the amount spent, the budget, and Raise the budget and Stop the session buttons](../images/console/gate-budget.png)
 
 ### YOLO never answers it
 

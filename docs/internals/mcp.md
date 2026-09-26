@@ -63,6 +63,11 @@ and version, a sign-in button for remote servers, a reconnect button, and a swit
 Server names are lowercase letters, digits, and dashes, at most 24 characters, and never `ostra`. The name is
 part of every tool name, so it has to split cleanly from the tool.
 
+The MCP servers tab of Settings edits each server entry. Each server shows its live state, its version, and a
+switch per tool; `docs` is offered to two agents, and `linear` waits for sign-in:
+
+![The MCP servers settings tab with a remote server, a local server, and a server that needs sign-in](../images/console/settings-mcp.png)
+
 ### Secrets stay out of the file
 
 `workspace.toml` can travel with a repository, so it should never hold a secret. Two mechanisms keep it clean:

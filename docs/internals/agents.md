@@ -37,6 +37,10 @@ Eight smaller prompts in `assets/judges/` are not agents. They answer named judg
 such as how risky a request is or whether a review finding should be fixed. See [the engine](../../HANDOVER.md#8-the-engine)
 for how judges fit in.
 
+The Routing tab of Settings lists the same agents, each with a one-line role and its route:
+
+![The Routing settings tab with every agent, its role, executor, model, and effort](../images/console/settings-routing.png)
+
 ## What `agent.toml` says
 
 Here is the reviewer's definition, in full:
@@ -128,6 +132,11 @@ Review ledger: /ws/.ostra/sessions/s1/backend/ostra-review-ledger-phase-2.md
 Each prompt lists its required labels and tells the agent to stop with `ERROR: missing required parameter` if
 one is absent. That instruction is a backstop. The real guarantee is in the type system.
 
+An execution's Spawn parameters panel shows the exact block the agent received and the report path the engine
+chose:
+
+![The Spawn parameters panel of an implementer run](../images/console/spawn.png)
+
 ### Required parameters are checked by the compiler
 
 Every agent, and every initializer mode, has its own spawn struct in `crates/ostra-agents/src/spawn.rs`.
@@ -216,6 +225,10 @@ All of them live in the session directory for that project. There are three reas
 The native executor also refuses an `ok` submit while the declared report file does not exist, and tells the
 agent to write it first.
 
+The report at the path the engine named, opened as an artifact of the session:
+
+![An implementer report with Changes, Verification, and Tests to write](../images/console/report.png)
+
 ## The repo brief
 
 Below the spawn block, separated by a `---` line, every execution gets a repo brief
@@ -254,6 +267,10 @@ A few rules keep the brief small and correct:
   add noise to its context.
 - **It is added once.** If a message already contains a brief heading, adding the brief again returns the
   message unchanged, so a re-render or a resume never stacks two briefs.
+
+The Instructions tab of Settings holds the custom instructions for all agents and for each agent:
+
+![The Instructions settings tab with text for all agents and per agent](../images/console/settings-instructions.png)
 
 ## Structured returns
 

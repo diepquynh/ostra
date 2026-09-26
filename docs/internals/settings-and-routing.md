@@ -66,6 +66,11 @@ approved with its new content, so your own edits never ask again. A save of a fi
 keeps it waiting, so saving cannot approve commands you were not shown. See
 [the threat model](../security/threat-model.md) for the wider picture.
 
+The General tab edits two of the controls Rule A2 keeps in the registry, YOLO and the limits. The Permissions tab
+below holds the other two, the mode and the sandbox:
+
+![The General settings tab with the workspace name, YOLO, limits, and Delete workspace](../images/console/settings-general.png)
+
 ## The global config
 
 A fresh machine runs with built-in defaults, so the file is optional. The defaults, from
@@ -112,6 +117,34 @@ typo therefore never switches your machine back to defaults halfway through a se
   `disabled_tools`, an `agents` list, and a per-call `timeout_secs` from 1 to 600. Header and environment
   values may name a variable as `${VAR}` so that secrets stay out of the file.
 
+The Settings screen has a tab for each part. Projects lists each project's key, path, and stack:
+
+![The Projects settings tab with two projects](../images/console/settings-projects.png)
+
+Instructions holds the text for all agents and for each agent:
+
+![The Instructions settings tab with text for all agents and per agent](../images/console/settings-instructions.png)
+
+Permissions holds the mode, the sandbox, and the rules, with the global rules shown read-only:
+
+![The Permissions settings tab with mode, sandbox, rules, and global rules](../images/console/settings-permissions.png)
+
+Notifications turns Web Push on and subscribes this browser:
+
+![The Notifications settings tab](../images/console/settings-notifications.png)
+
+MCP servers edits `[[mcp_servers]]`, with each server's live state and a switch per tool ([MCP servers](mcp.md)):
+
+![The MCP servers settings tab with three servers](../images/console/settings-mcp.png)
+
+Two tabs hold state for the whole machine rather than `workspace.toml`. Git saves credentials for clones and pulls:
+
+![The Git settings tab with the saved credentials table and the Add a git credential form](../images/console/settings-git.png)
+
+Sign-in lists every browser signed in to this server:
+
+![The Sign-in settings tab with two browser sessions](../images/console/settings-signin.png)
+
 ## The project profile
 
 `project.toml` is written by the init flow's inventory step and describes one repository: its stack, its
@@ -136,10 +169,18 @@ Line 9: `conventions` is one table. Write `[conventions]`, not `[[conventions]]`
 The fixes come first because some harnesses clip a long tool error, and the parser's own message is the
 least useful part.
 
+The project screen shows the profile: its commands, skills, modules, and review rules:
+
+![The backend project screen with commands, skills, modules, and review rules](../images/console/project.png)
+
 ## Routing: from agent to model
 
 A route is looked up by **route key**: the agent's name (`explore`, `plan`, `implementer`, and so on) or
 `judge` for the small structured calls the engine makes itself. Ostra resolves three things per key.
+
+The Routing tab of Settings has one row per agent, the phase complexity table, and the native provider keys:
+
+![The Routing settings tab with the per-agent table, the phase complexity table, and native providers](../images/console/settings-routing.png)
 
 ### Tiers are the indirection
 
@@ -275,6 +316,11 @@ What is checked:
 
 If any issue remains, nothing is written. The file is saved atomically, through a temporary file and a
 rename, so a crash during a save never leaves half a file.
+
+The Settings screen runs the same checks as you edit. Here the implementer routes to a harness that is not
+installed, so the row shows the issue and the header counts the problems left before saving:
+
+![The Routing tab with an issue on the implementer row and 1 problem to fix before saving](../images/console/settings-validation.png)
 
 ### What save-time validation cannot see
 

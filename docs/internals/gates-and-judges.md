@@ -32,6 +32,11 @@ Two properties follow from gates being events.
 A paused session starts nothing, but its gates can still be answered; the answers take effect on continue
 (Rule P1).
 
+A gate appears on the session board under Waiting for you. This spec approval gate shows the fact-check result and
+the LOW findings, and takes an optional change request:
+
+![The spec approval gate with a Fact-check PASS badge, two LOW findings, and a change request field](../images/console/gate-spec-approval.png)
+
 ## Every gate kind
 
 | Gate | Opens when | The user answers |
@@ -57,11 +62,15 @@ input, and generate-spec runs again to write the answers into the spec. The plan
 handled differently: the answers are treated as a requirement change and go into the spec first (Rule D10),
 because the plan agent reads only the spec.
 
+![The open questions gate with a single-choice and a multiple-choice question](../images/console/gate-open-questions.png)
+
 ### Spec and plan approval
 
 Approving records the approved version. For the plan, approving also turns the Phase Index into the build queue.
 Rejecting with feedback adds the feedback to the spec as a change. For a plan, that is a requirement change:
 both approvals are revoked, the spec is revised and re-approved, and the plan is revised in place.
+
+![The plan approval gate with four phases and one LOW finding](../images/console/gate-plan-approval.png)
 
 ### Fact-check recurring
 
@@ -69,6 +78,8 @@ The fact-check loop between an author and its checker can fail to converge. Afte
 (`FACTCHECK_RECURRING_LIMIT`) the engine asks instead of spending another round. `another-round` allows three
 more FAILs before the next ask, and any guidance text goes to the author as a change. `stop` stops the stage and
 the session fails.
+
+![The fact-check-recurring gate with a HIGH and a MEDIUM finding and a guidance field](../images/console/gate-factcheck-recurring.png)
 
 ### Review cap
 
@@ -79,10 +90,19 @@ the user wrote. Anything else marks the phase blocked, with the finding count an
 BLOCKER findings never reach this gate. They loop without a cap until removed (Hard rule 21), and no answer can
 waive them.
 
+A review cap gate lists the findings still open after the last pass. Above it, a BLOCKER from the reviewer shows
+its Guidance text and has no dismiss button:
+
+![A security BLOCKER notice above the review cap gate of phase 1](../images/console/gate-review-cap.png)
+
 ### Stuck
 
 A stuck agent's diagnostic and need are shown. A `fact` answer goes to the Route-answer judge first, because a
 stated fact might be a requirement change rather than a detail. Any other answer blocks the phase.
+
+A stuck gate names the execution and asks for the missing fact. Above it is a phase blocked gate for another phase:
+
+![A phase blocked gate with Retry the phase and a stuck gate for phase 2](../images/console/gate-stuck.png)
 
 ### Phase blocked
 
@@ -96,6 +116,8 @@ One gate per batch of projects that finished together (Rule T6). A project the r
 of is not asked about that stage (Rule T3). The answers decide which of the test and docs stages run; they never
 change requirements (Rule T5).
 
+![The closing gate with Write tests and Update the module documentation checkboxes](../images/console/closing-gate.png)
+
 ### Permission
 
 A permission gate comes from the policy's layer 2, Claude Code's permission model, not from the planner. It holds
@@ -103,11 +125,19 @@ a live execution's tool call. The card shows the canonical tool call, the reason
 rule "always in this workspace" would add (for example `Bash(cargo test *)` or `Edit(src/api/**)`, built by
 `runner::suggest_rule`). Layer 1 guards never produce a gate: they deny, and no answer can override them.
 
+![A permission gate for a Bash command with Allow once, Always in this workspace, and Deny](../images/console/permission-gate.png)
+
+The execution shows the same ask above its activity while the call waits:
+
+![A code reviewer run paused on a permission ask](../images/console/reviewer-ask.png)
+
 ### Harness failure and execution failed
 
 Both hold a failed execution. `retry` re-runs it from its spawn block. For a harness failure, `native` re-runs it
 on the native executor and keeps that agent on native for the rest of the session. Abandoning marks the step
 abandoned so the pipeline can continue where that is possible.
+
+![A harness failure gate for Claude Code and an execution failed gate](../images/console/gate-harness-failure.png)
 
 ### Budget reached
 
@@ -115,6 +145,8 @@ Every spawn passes a budget check in `Planner::push`. Once spent money reaches t
 planner opens this gate instead of the spawn. Running executions finish; nothing new starts. `raise` adds the
 dollars written in the answer (a leading `$` is accepted), or the original budget again when the text is empty or
 not a positive number. `stop` fails the session with the amount spent.
+
+![The budget gate with the amount spent, the budget, and Raise the budget and Stop the session buttons](../images/console/gate-budget.png)
 
 ## YOLO: the engine answers
 
@@ -156,6 +188,14 @@ YOLO changes who answers, never what must be true:
 
 Every YOLO answer is an event with its reason. The completion report ends with a "Decided for you" section listing
 each one, and a push notification fires at completion and when a phase is blocked.
+
+A session with YOLO on shows a banner that names what still applies:
+
+![A running session with the YOLO is on banner](../images/console/yolo.png)
+
+At the end, the completion report lists each decision YOLO made:
+
+![A completion report with Stages not run and Decided for you](../images/console/completion.png)
 
 ### The YOLO review loop
 
@@ -237,6 +277,10 @@ is ignored even if a client sent it.
 
 Overriding Stakes clears the inline phases a `low` decision created. Overriding Sufficiency removes the research
 tasks the earlier decision added that have not started.
+
+The Decisions tab of a session lists each judge decision with its reason and the input it was based on:
+
+![The Decisions tab with a Classify decision and a Stakes decision](../images/console/decisions.png)
 
 ## Where to look in the code
 

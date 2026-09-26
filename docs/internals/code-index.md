@@ -116,6 +116,11 @@ nothing the index can tell apart, the answer falls back to matching by name.
 This is a heuristic, not type checking. Members that code generation adds, such as Lombok getters, are not seen.
 A project that needs exact answers can add a language server (below).
 
+Clicking a name in the Files view asks for its usages at that position. The code pane lists the one definition and
+the mentions that can mean it:
+
+![The Usages tab of the code pane for the cancel method](../images/console/usages.png)
+
 ## The dependency graph
 
 On top of the per-file data the index builds a graph of the project (`crates/ostra-code/src/graph.rs`), without
@@ -140,6 +145,11 @@ Some care goes into keeping the graph honest:
 Ostra checks this graph against its own source tree in `crates/ostra-code/tests/graph_ostra.rs`. One test
 asserts that `ostra-engine` depends on none of the server, executor, provider, or tool crates, which is the
 dependency rule in the contributor notes. If the index got the graph wrong, that test would fail.
+
+The Dependencies tab of a project draws this graph. Double-clicking a package opens its files and the imports
+between them:
+
+![The dependency graph of the crates package with one import link](../images/console/project-deps.png)
 
 ## The code tools agents use
 
@@ -222,6 +232,11 @@ names the provider that gave it.
 ```text
 code_provider program  ->  language servers  ->  built-in index
 ```
+
+The code pane's footer names the provider that answered. This screenshot comes from the console's demo data, so the
+provider is `mock`:
+
+![A Rust file with its outline in the code pane and the provider named in the footer](../images/console/file.png)
 
 ### A project's own program
 

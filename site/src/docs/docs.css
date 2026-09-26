@@ -332,6 +332,17 @@ body {
 .md-a {
   color: var(--text-link);
 }
+.md-img-link {
+  display: block;
+  cursor: zoom-in;
+}
+.md-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
 .md-table-wrap {
   margin: 0 0 20px;
   border: 1px solid var(--border-default);
