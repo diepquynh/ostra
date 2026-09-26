@@ -1,5 +1,26 @@
 # Sandboxing
 
+Sandboxing is a very powerful feature of Ostra. It makes it safe to let agents run real commands on your machine:
+builds, tests, package installs, and whole harness CLIs such as Claude Code and Codex. Every one of those processes
+starts inside an OS sandbox (bubblewrap on Linux, Seatbelt on macOS). The kernel enforces it, not the agent or the
+CLI, so these guarantees hold whatever a command turns out to do:
+
+- **Your secrets stay out of reach.** SSH and GPG keys, cloud and registry credentials, browser profiles, the
+  keychain, other CLIs' sign-ins, and Ostra's own data dir are hidden. A command that walks the disk with `find ~`
+  does not see them.
+- **Nothing is left behind to run later.** Shell startup files, login and autostart entries, and `.git/config` and
+  hooks are read-only, so an agent cannot plant a program that runs the next time you open a terminal or run git.
+- **Writes stay in the workspace.** The repo, the session, a private `/tmp`, and per-workspace tool caches are
+  writable; the rest of the machine is read-only, your own `~/.cargo` and `~/.npm` included.
+- **Your session stays closed.** The desktop bus, the SSH agent, the display, and Docker and Podman sockets are
+  hidden or unset, and a command cannot signal a process outside its sandbox.
+- **It is on by default and fails closed.** The default mode, `required`, refuses to start an execution the
+  machine cannot sandbox, and a repository cannot turn its own sandbox off.
+- **It needs no container or VM.** macOS ships Seatbelt, and Linux needs only the `bubblewrap` package. There is
+  no image to maintain, and the toolchain you build with on the host builds inside it.
+
+## Why a sandbox as well as the policy
+
 The policy engine reads every tool call before it runs (see [agent containment](agent-containment.md)), but a
 tool call is only what an agent asked for. A `Bash` call named `npm test` can run a postinstall script, a build
 macro, or a test that opens `~/.ssh/id_ed25519`, and none of that appears in the call the policy approved. A
