@@ -7,27 +7,132 @@ work inside each stage. `HANDOVER.md` is the design brief this implementation fo
 
 ## Build and run
 
-`./run.sh` does all of this in one step: it builds the UI only when it changed, builds the release binary,
-applies the `export` lines of `$OSTRA_ENV_FILE` when it is set, and starts `ostra` with any
-flags you pass, for example `./run.sh --bind 0.0.0.0`. `SKIP_BUILD=1 ./run.sh` starts the existing binary.
+### Quick start
 
-To run Ostra as a service that starts at login, run `./install.sh` (flags pass through, for example
-`./install.sh --port 8080`). The service listens on every interface; pass `--bind 127.0.0.1` to keep it
-local, and read the remote access notes below. It builds, installs `ostra` into `~/.local/bin` (or `$OSTRA_PREFIX/bin`),
-and registers a launchd agent on macOS or a systemd user unit on Linux. The service applies the `export`
-lines of the credentials file at every start, so after changing a key run `./install.sh restart`. The
-other commands are `status`, `url`, and `uninstall`, which keeps your config and data.
-
-By hand:
+With Rust (rustup), Node.js, and on Linux bubblewrap installed:
 
 ```bash
-(cd web && npm ci && npm run build)   # the browser UI, embedded into the binary
-cargo build --release
-./target/release/ostra                # prints a sign-in URL and opens it
+git clone https://github.com/diepquynh/ostra && cd ostra
+export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY, or add a key later in the setup screen
+./run.sh                              # builds the UI and the binary, then starts Ostra
 ```
 
-The server binds to `127.0.0.1` by default, on port 7878 or the next free one. The printed URL carries a
-one-time token in its fragment. If you lose the tab, run `ostra url` for a fresh one.
+Ostra prints a sign-in URL and opens it in your browser. The setup screen that follows creates the first
+workspace. To keep Ostra running as a login service instead, run `./install.sh`.
+
+### Step by step
+
+**1. Install the prerequisites.**
+
+| Tool | Why |
+| --- | --- |
+| [rustup](https://rustup.rs) | `rust-toolchain.toml` pins the toolchain, and rustup installs it on the first build. |
+| Node.js 24 with npm | Builds the browser UI, which the binary embeds at compile time. |
+| A C compiler (`build-essential` on Debian and Ubuntu, Xcode command line tools on macOS) | Some crates compile C code. |
+| `git` | Ostra clones, branches, and commits in your projects. |
+| bubblewrap (`bwrap`), Linux only | Sandboxes agent commands. macOS uses the built-in Seatbelt. |
+
+The sandbox mode defaults to `required`, so on Linux without bubblewrap every execution is refused. Install
+it (`sudo apt install bubblewrap`, `sudo dnf install bubblewrap`), or set `[sandbox] mode = "off"` in
+`config.toml` to run agent commands with your full user rights on purpose.
+
+**2. Give Ostra model access.** Use one or more of these:
+
+- Export `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in the shell that starts Ostra. [Model access](#model-access)
+  lists the other variables.
+- Put `export NAME=value` lines in a file and point `OSTRA_ENV_FILE` at it. `run.sh` and the service apply
+  only those lines, so nothing else in the file runs.
+- Start without a key and save one in the setup screen. Ostra seals it in its registry database, never in
+  `config.toml`.
+- Sign in to a harness CLI (Claude Code, Codex, Grok Build, Antigravity) with its own login.
+
+**3. Build.**
+
+```bash
+./build.sh
+```
+
+It runs `npm ci` the first time, rebuilds the UI only when `web/` changed, and then runs
+`cargo build --release -p ostra-server`. The first build takes several minutes. By hand, the same steps are:
+
+```bash
+(cd web && npm ci && npm run build)   # build the UI first, because the binary embeds web/dist
+cargo build --release -p ostra-server
+```
+
+The binary is `target/release/ostra`.
+
+**4. Start the server.**
+
+```bash
+./target/release/ostra                # or ./run.sh, which also applies $OSTRA_ENV_FILE
+```
+
+It binds to `127.0.0.1` on port 7878, or the next free port, prints a sign-in URL, and opens it. Useful flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--port 8080` | Listen on another port. |
+| `--no-open` | Print the URL without opening a browser. |
+| `--bind 0.0.0.0` | Listen on every interface. Read [Remote access](#remote-access) first. |
+| `--allow-host ostra.example.com` | Accept a reverse proxy's domain as `Host`. Repeatable. |
+
+`SKIP_BUILD=1 ./run.sh` starts the existing binary without building.
+
+**5. Sign in and create a workspace.** The URL carries a one-time token in its fragment, so it works once. If
+you lose the tab, run `ostra url` for a fresh one. The setup screen then checks this machine for keys and
+harnesses, asks for a workspace name and folder, adds the projects to work on, and sets the default
+permissions and model routing.
+
+**6. Stop and restart.** Press Ctrl-C in the terminal that runs the server. Before starting it again, stop any
+session you do not want resumed with `ostra stop <session-id>`, because the next start re-runs every
+interrupted execution. The log is `server.log` in the data directory (`~/.local/share/ostra` on Linux,
+`~/Library/Application Support/ostra` on macOS).
+
+Other commands:
+
+| Command | Does |
+| --- | --- |
+| `ostra url` | Print a fresh sign-in URL for the running server. |
+| `ostra config` | Print the config path, writing the default config if none exists. |
+| `ostra sessions` | List signed-in browsers; `ostra sessions revoke <id>` signs one out. |
+| `ostra signout` | Sign out every browser. |
+| `ostra stop <session-id>` | Stop a session while the server is not running. |
+
+### Run as a service
+
+`./install.sh` builds Ostra, installs `ostra` into `~/.local/bin` (or `$OSTRA_PREFIX/bin`), and registers a
+launchd agent on macOS or a systemd user unit on Linux, so it starts at login and restarts when it fails.
+Flags pass through to `ostra`, for example `./install.sh --port 8080`. The service listens on `127.0.0.1`
+unless you pass `--bind`.
+
+```bash
+OSTRA_ENV_FILE=~/ostra.env ./install.sh   # install and start, applying the file's export lines
+./install.sh restart                      # restart, for example after changing a key
+./install.sh status
+./install.sh url                          # print a fresh sign-in URL
+./install.sh uninstall                    # remove the service; config and data are kept
+```
+
+The service applies the `export` lines of the credentials file at every start, and keeps the `PATH` of the
+shell that installed it so it finds harness CLIs. On Linux it runs while you are logged in; run
+`loginctl enable-linger $USER` to keep it running after logout. Service logs are in
+`journalctl --user -u ostra` on Linux and `service.err.log` in the data directory on macOS.
+
+### Run in Docker
+
+`docker-compose.yml` builds the image and publishes Ostra on `127.0.0.1:7878`. Before the first start:
+
+1. Create the config folder and give it to UID 1000, because Ostra runs as 1000:1000 inside the container:
+   `mkdir -p config && sudo chown 1000:1000 config`.
+2. Replace `/srv/ostra/projects` on both sides of the projects mount with one absolute host folder that holds
+   your projects and workspaces, writable by UID 1000. Both sides must match, because Ostra stores project
+   paths literally.
+3. Run `docker compose up -d`, then `docker compose exec ostra ostra url`. Open the printed link with its
+   address replaced by `localhost:7878`, because the container prints its own network address.
+
+Pass keys with an `environment:` or `env_file:` entry on the service. Harness CLIs and their logins persist in
+the `ostra-home` volume.
 
 ### Remote access
 
