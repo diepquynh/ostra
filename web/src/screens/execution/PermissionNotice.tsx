@@ -1,7 +1,7 @@
+import { Banner, Button } from "@ostra/design";
 import { useState } from "react";
 import { api } from "../../api";
 import type { ExecStream, PendingGate, PermissionAnswer, ToolCall } from "../../api/types";
-import { Banner, Button } from "../../design";
 import type { ToolEntry } from "../../lib/events";
 import { inlineCode } from "./inline";
 

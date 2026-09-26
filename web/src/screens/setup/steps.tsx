@@ -1,5 +1,3 @@
-import { type ReactNode, useEffect, useState } from "react";
-import type { CloneProject, ValidationIssue, WorkspaceDetail } from "../../api/types";
 import {
   Banner,
   Button,
@@ -19,7 +17,9 @@ import {
   StatusChip,
   Switch,
   Tabs,
-} from "../../design";
+} from "@ostra/design";
+import { type ReactNode, useEffect, useState } from "react";
+import type { CloneProject, ValidationIssue, WorkspaceDetail } from "../../api/types";
 import { useChannel } from "../../lib/hooks";
 import { CloneForm } from "./CloneForm";
 import { listFolders, makeFolder, useFolderInfo } from "./folders";

@@ -1,11 +1,10 @@
+import { Breadcrumbs, Icon, IconButton, Kbd, LiveMark, type MarkState, Menu, type MenuItem } from "@ostra/design";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import { Breadcrumbs, Icon, IconButton, Kbd, Menu, type MenuItem } from "../design";
 import { formatCost } from "../lib/format";
 import { modKeys } from "../lib/keys";
 import { useActivity, useWorkspaces } from "../lib/live";
 import { resourcePath } from "../lib/resource";
-import { LiveMark, type MarkState } from "./LiveMark";
 import type { ResourceCrumb } from "./meta";
 import { lastActive } from "./uiState";
 

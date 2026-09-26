@@ -1,6 +1,6 @@
+import { filterPaletteItems, type IconName, type PaletteItem } from "@ostra/design";
 import type { SearchHit, SearchHitKind, TreeSession } from "../api/nav";
 import type { ProjectView } from "../api/types";
-import { filterPaletteItems, type IconName, type PaletteItem } from "../design";
 import { humanize } from "./format";
 import { modHint } from "./keys";
 

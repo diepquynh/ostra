@@ -1,3 +1,4 @@
+import { FolderPicker } from "@ostra/design";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router";
@@ -6,7 +7,6 @@ import { api, HttpError } from "../../api";
 import { httpApi } from "../../api/client";
 import { workspaceDetail } from "../../api/mock/fixtures";
 import type { FsBrowse } from "../../api/types";
-import { FolderPicker } from "../../design";
 import { ConsoleContext, type ConsoleContextValue } from "../../lib/nav";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { makeLister } from "./folders";

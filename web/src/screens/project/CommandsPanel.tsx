@@ -1,7 +1,7 @@
+import { Banner, Button, Input, Panel } from "@ostra/design";
 import { Fragment, useState } from "react";
 import { api, HttpError } from "../../api";
 import type { Commands } from "../../api/gen/Commands";
-import { Banner, Button, Input, Panel } from "../../design";
 
 export const COMMANDS: [keyof Commands, string, string][] = [
   ["build", "Build", "cargo build"],

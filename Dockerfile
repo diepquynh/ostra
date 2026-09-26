@@ -9,13 +9,18 @@ RUN apt-get update \
     && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
-WORKDIR /src/web
-COPY web/package.json web/package-lock.json ./
+# web/ builds against the shared design/ package; both are workspaces of the root package.json.
+WORKDIR /src
+COPY package.json package-lock.json ./
+COPY design/package.json design/
+COPY web/package.json web/
+COPY site/package.json site/
 RUN --mount=type=cache,target=/root/.npm \
     node --version \
     && npm ci --no-audit --no-fund
-COPY web/ ./
-RUN npm run -s build
+COPY design/ design/
+COPY web/ web/
+RUN cd web && npm run -s build
 
 FROM ubuntu:26.04 AS rust
 ARG DEBIAN_FRONTEND=noninteractive

@@ -39,9 +39,10 @@ const PAYLOAD_LINKS = /^(js link|data link|vbscript link|ref link|entity link|ra
 
 /**
  * Wait for `marker`, assert the DOM is clean, then click every payload link in view. A click on a
- * sanitized link (an empty href) may open the app itself in a new tab, which is closed again.
+ * sanitized link (an empty href) may open the app itself in a new tab, which is closed again. `origin` is the app
+ * the page belongs to: the console by default, or the site.
  */
-export async function audit(page: Page, guard: Guard, marker: string, where: string) {
+export async function audit(page: Page, guard: Guard, marker: string, where: string, origin = guard.state.app) {
   await expect(page.getByText(marker, { exact: false }).first(), `${where}: ${marker} rendered`).toBeVisible();
   expect(await domProblems(page), `${where}: DOM`).toEqual([]);
   const links = page.locator("a").filter({ hasText: PAYLOAD_LINKS });
@@ -58,11 +59,11 @@ export async function audit(page: Page, guard: Guard, marker: string, where: str
   for (const p of guard.popups.splice(0)) {
     const url = p.url();
     expect(
-      url === "about:blank" || url.startsWith(`${guard.state.app}/`),
+      url === "about:blank" || url.startsWith(`${origin}/`),
       `${where}: a link opened ${url}`,
     ).toBe(true);
     await p.close();
   }
   guard.allowPopups = false;
-  expect(new URL(page.url()).origin, `${where}: still on the app`).toBe(guard.state.app);
+  expect(new URL(page.url()).origin, `${where}: still on the app`).toBe(origin);
 }

@@ -1,5 +1,5 @@
+import type { DiffLine, PolicyInfo, SelectOption } from "@ostra/design";
 import type { ExecutionStatus, ExecutionView, PolicyDecision, SessionDetail, ToolCall } from "../../api/types";
-import type { DiffLine, PolicyInfo, SelectOption } from "../../design";
 import { type ActivityEntry, denialAdvice, type ToolEntry } from "../../lib/events";
 
 /**

@@ -1,6 +1,6 @@
+import { Icon, Menu, type MenuItem, Spinner, StatusDot } from "@ostra/design";
 import { useState } from "react";
 import { isMock } from "../api";
-import { Icon, Menu, type MenuItem, Spinner, StatusDot } from "../design";
 import { formatCost, humanize, truncate } from "../lib/format";
 import { useActivity, useSessionSummaries, useSocketState } from "../lib/live";
 import type { OpenOptions, Theme } from "../lib/nav";

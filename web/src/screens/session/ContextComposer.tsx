@@ -1,7 +1,7 @@
+import { Button, Dialog, Panel } from "@ostra/design";
 import { type KeyboardEvent, useState } from "react";
 import { api } from "../../api";
 import type { ContextDelivery, ContextFile, SessionSummary } from "../../api/types";
-import { Button, Dialog, Panel } from "../../design";
 import { FileTagInput } from "../../features/context/FileTagInput";
 import { useUploads } from "../../features/context/uploads";
 import { isMac, modHint } from "../../lib/keys";

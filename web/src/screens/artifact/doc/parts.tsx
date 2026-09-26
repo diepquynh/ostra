@@ -1,7 +1,7 @@
+import { Chip, cx, Icon, SectionLabel, type Tone } from "@ostra/design";
 import { createContext, Fragment, type ReactNode, useContext } from "react";
 import type { Evidence, FactCheckView, Question, Source } from "../../../api/types";
 import { Markdown } from "../../../components/Markdown";
-import { Chip, cx, Icon, SectionLabel, type Tone } from "../../../design";
 import { ColumnResizer } from "../ColumnResizer";
 import { ScrollTable } from "../ScrollTable";
 import { findingElement, type Mark, type MarkTone, normId, severityTone } from "./model";

@@ -1,8 +1,8 @@
+import { Button, Chip, Dialog, IconButton, StatusChip, Switch } from "@ostra/design";
 import { useState } from "react";
 import { api } from "../../api";
 import type { ContextAddition, ContextFile, SessionSummary, UploadedFile } from "../../api/types";
 import { LANES } from "../../content/stages";
-import { Button, Chip, Dialog, IconButton, StatusChip, Switch } from "../../design";
 import { TaggedText, UntaggedFiles } from "../../features/context/TaggedText";
 import { UploadChip } from "../../features/context/uploads";
 import { formatCost, humanize } from "../../lib/format";

@@ -1,5 +1,5 @@
+import { Button, FolderPicker, Input } from "@ostra/design";
 import { useEffect, useState } from "react";
-import { Button, FolderPicker, Input } from "../../design";
 import { listFolders, makeFolder, useFolderInfo } from "./folders";
 import { StackInput } from "./StackInput";
 import { basename, type DraftProject, type ImportErrors, isChosen, keyError, suggestKey } from "./wizard";

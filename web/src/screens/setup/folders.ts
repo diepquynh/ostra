@@ -1,7 +1,7 @@
+import type { FolderLister } from "@ostra/design";
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import type { Api } from "../../api/client";
-import type { FolderLister } from "../../design";
 import { isChosen } from "./wizard";
 
 /** The FolderPicker's `list` over `GET /api/fs`. The picker debounces and aborts; the signal cancels the request. */

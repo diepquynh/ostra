@@ -1,8 +1,7 @@
+import { Banner, Button, Input, LiveMark, Panel, REST } from "@ostra/design";
 import { type FormEvent, useEffect, useState } from "react";
 import { exchangeToken, tokenFromInput } from "../auth";
-import { Banner, Button, Input, Panel } from "../design";
 import { applyTheme, lastTheme, resolveTheme } from "../lib/theme";
-import { LiveMark, REST } from "./LiveMark";
 import "./shell.css";
 
 /** Shown when the server answers 401: this browser has no session cookie. */

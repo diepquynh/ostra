@@ -1,6 +1,6 @@
+import { FolderPicker, Input, Select } from "@ostra/design";
 import { useState } from "react";
 import type { CloneProject, GitCredentialView } from "../../api/types";
-import { FolderPicker, Input, Select } from "../../design";
 import { listFolders, makeFolder } from "./folders";
 import { StackInput } from "./StackInput";
 import { keyError, repoName, suggestKey } from "./wizard";

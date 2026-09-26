@@ -1,8 +1,8 @@
+import { Banner, Button, Panel, Tabs } from "@ostra/design";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { api, HttpError } from "../api";
 import type { ValidationIssue, WorkspaceDetail } from "../api/types";
-import { Banner, Button, Panel, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
 import { GitCredentials } from "./setup/GitCredentials";
 import { ProviderCredentials } from "./setup/ProviderCredentials";

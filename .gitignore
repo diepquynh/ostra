@@ -1,6 +1,7 @@
 /target
 /target-*
-web/node_modules
+node_modules/
+.vitest/
 web/dist
 .ostra/
 *.log

@@ -1,7 +1,7 @@
+import { Chip, Panel, Spinner, Table, type Tone } from "@ostra/design";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { DiffFile } from "../../api/types";
-import { Chip, Panel, Spinner, Table, type Tone } from "../../design";
 import { type LedgerFinding, ledgerLoop, parseLedger } from "../../lib/ledger";
 import type { Theme } from "../../lib/nav";
 import { inlineCode } from "../execution/inline";

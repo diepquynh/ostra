@@ -1,0 +1,13 @@
+{
+  "name": "ostra",
+  "private": true,
+  "license": "MIT",
+  "workspaces": [
+    "design",
+    "web",
+    "site"
+  ],
+  "overrides": {
+    "dompurify": "^3.4.15"
+  }
+}

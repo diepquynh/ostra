@@ -1,7 +1,7 @@
+import { Banner, Button, TreeItem } from "@ostra/design";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import type { Document, DocumentView as DocView, FactCheckView } from "../../../api/types";
-import { Banner, Button, TreeItem } from "../../../design";
 import { useNav } from "../../../lib/nav";
 import { buildMarks, type Chapter, type MarkTone, normId, type Outline, parseAnchor, worst } from "./model";
 import { DocContext, type DocCtx, FactCheckChapter, Ref } from "./parts";

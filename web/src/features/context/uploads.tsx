@@ -1,7 +1,7 @@
+import { Icon, Spinner } from "@ostra/design";
 import { useRef, useState } from "react";
 import { api, downloadUrl } from "../../api";
 import type { UploadedFile } from "../../api/types";
-import { Icon, Spinner } from "../../design";
 import { formatBytes } from "./tags";
 import "./context.css";
 

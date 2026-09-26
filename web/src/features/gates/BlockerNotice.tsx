@@ -1,5 +1,5 @@
+import { Banner } from "@ostra/design";
 import type { SessionEvent } from "../../api/types";
-import { Banner } from "../../design";
 import { ReviewFindings } from "./Findings";
 
 type Block = Extract<SessionEvent, { type: "security_block" }>;

@@ -1,7 +1,8 @@
 # Browser security suite
 
 Proves the browser-facing defenses hold in a real Chromium: render paths for agent and repo text,
-the terminal, the cross-origin boundary, the sign-in token, uploads, and browser storage.
+the terminal, the cross-origin boundary, the sign-in token, uploads, and browser storage, in the console
+and in the site (homepage and docs).
 
 ```bash
 cd tests/browser && npm test
@@ -9,10 +10,13 @@ cd tests/browser && npm test
 
 `npm test` builds the web UI and `target-browser/debug/ostra`, starts a scratch server under
 `/tmp/pw-browser` (its own config, data dir, master key, and `HOME`), and stops it by pid at the
-end. Nothing leaves the machine: the model API is a local fake (`lib/fake-model.ts`) that plays a
-whole YOLO session, the harness is a stub script, and the MCP server is a stub.
+end. It also builds the site into `/tmp/pw-browser/site`, with an extra docs page of test strings
+(`VITE_TEST_DOC`), and serves it as plain files on `ostra-site.localhost`, the way a static host does.
+Nothing leaves the machine: the model API is a local fake (`lib/fake-model.ts`) that plays a whole
+YOLO session, the harness is a stub script, and the MCP server is a stub.
 
-- `npm run test:fast` skips the build, for reruns after a spec change.
+- `npm run test:fast` skips the build, for reruns after a spec change. The site's pages still rebuild,
+  because the test page names the fake's port; the console shot inside them does not.
 - `PW_KEEP_SERVER=1` leaves the scratch server running after the run (`/tmp/pw-browser/server.pid`).
 - `PW_CHROME=/path/to/chrome` overrides the Chromium binary (default: the cached `chromium-1217`).
 
@@ -29,3 +33,4 @@ dialog, popup, or navigation away from the app.
 | `signin` | The token leaves the URL, no request carries it, and what the profile keeps is spent |
 | `uploads` | SVG and HTML uploads never render inline, through chips, the artifact view, or raw links |
 | `storage` | localStorage, sessionStorage, IndexedDB, and Cache Storage hold no transcripts, tokens, or keys |
+| `site` | Docs Markdown with test strings, every docs page, search and hostile addresses, the homepage and its console shot loading only same-origin files under their meta CSP, messages from another origin ignored by the shot, and storage |

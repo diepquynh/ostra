@@ -1,7 +1,7 @@
+import { DiffView, StatusDot, ToolCall } from "@ostra/design";
 import { useLayoutEffect, useRef } from "react";
 import type { ToolCall as Call } from "../../api/types";
 import { Markdown } from "../../components/Markdown";
-import { DiffView, StatusDot, ToolCall } from "../../design";
 import { type ActivityEntry, type ToolEntry, toolSummary } from "../../lib/events";
 import { formatDuration, truncate } from "../../lib/format";
 import { diffStat, policyInfo, toolDiff } from "./model";

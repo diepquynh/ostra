@@ -1,0 +1,13 @@
+@keyframes live-mark-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+.live-mark-pulse {
+  animation: live-mark-pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-mark-pulse {
+    animation: none;
+  }
+}

@@ -1,9 +1,9 @@
 // Pure helpers for the session board: lane states, gate order, the phase graph, and the
 // event log. The screen renders what these return.
 
+import type { LaneState, PhaseNodeProps } from "@ostra/design";
 import type { ExecutionView, GateView, Lane, PhaseView, SessionDetail, StageCard, StoredEvent } from "../../api/types";
 import { LANES } from "../../content/stages";
-import type { LaneState, PhaseNodeProps } from "../../design";
 import { currentGate, describeEvent, LANE_ORDER, phaseLayers, stagesByLane } from "../../lib/events";
 import { humanize } from "../../lib/format";
 

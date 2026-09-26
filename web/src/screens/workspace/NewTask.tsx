@@ -1,7 +1,7 @@
+import { Banner, Button, Checkbox, Panel } from "@ostra/design";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { ContextFile, ProjectView, SessionSummary } from "../../api/types";
-import { Banner, Button, Checkbox, Panel } from "../../design";
 import { FileTagInput } from "../../features/context/FileTagInput";
 import { useUploads } from "../../features/context/uploads";
 import { isMac, modHint } from "../../lib/keys";

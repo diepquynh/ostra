@@ -1,6 +1,6 @@
+import { colorLine } from "@ostra/design";
 import { type MouseEvent, memo, useEffect, useMemo, useRef } from "react";
 import type { CodeFile } from "../../../api/types";
-import { colorLine } from "../../../design";
 import "./code.css";
 import { decodeTokens, isSymbolClass, type Span, segments, splitLines, TOKEN_CSS } from "./tokens";
 

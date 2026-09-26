@@ -1,0 +1,39 @@
+{
+  "name": "@ostra/site",
+  "private": true,
+  "license": "MIT",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "The Ostra homepage and docs. Docs pages render the repository's own Markdown at build time.",
+  "scripts": {
+    "dev": "vite",
+    "build": "npm run -s build:console && vite build",
+    "build:console": "cd ../web && VITE_MOCK=1 VITE_SHOT=1 vite build --base ./ --outDir ../site/public/console --emptyOutDir",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "biome lint",
+    "check": "biome check",
+    "check:fix": "biome check --write"
+  },
+  "dependencies": {
+    "@ostra/design": "*",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "mdast-util-to-string": "^4.0.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/mdast": "^4.0.4",
+    "@types/node": "^26.6.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1"
+  }
+}

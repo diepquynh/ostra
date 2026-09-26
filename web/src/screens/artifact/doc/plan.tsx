@@ -1,5 +1,5 @@
+import { Chip, CodeView, PhaseDag, type Tone } from "@ostra/design";
 import type { Phase, PhaseDoc, PlanDoc, PlanStep } from "../../../api/types";
-import { Chip, CodeView, PhaseDag, type Tone } from "../../../design";
 import { layers, type Outline, OutlineBuilder } from "./model";
 import {
   Bullets,

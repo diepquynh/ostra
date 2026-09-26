@@ -1,12 +1,11 @@
+import { Button, Chip, Icon, LiveMark, REST, Spinner } from "@ostra/design";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api";
-import { Button, Chip, Icon, Spinner } from "../design";
 import { useAsync } from "../lib/hooks";
 import { useWorkspaces } from "../lib/live";
 import { applyTheme, lastTheme, resolveTheme } from "../lib/theme";
 import { NewWorkspaceDialog, Onboarding } from "../screens";
-import { LiveMark, REST } from "./LiveMark";
 import { workspaceEntry } from "./TitleBar";
 import "./shell.css";
 

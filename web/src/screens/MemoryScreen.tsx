@@ -1,8 +1,8 @@
+import { Banner, Button, Dialog, IconButton, Input, Panel, Select, Table, type TableColumn, Tabs } from "@ostra/design";
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
 import type { Lesson } from "../api/types";
-import { Banner, Button, Dialog, IconButton, Input, Panel, Select, Table, type TableColumn, Tabs } from "../design";
 import { formatTime } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { useShell, useWorkspace } from "../lib/nav";

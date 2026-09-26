@@ -1,6 +1,6 @@
+import { Button, Chip, Select, Table } from "@ostra/design";
 import { useState } from "react";
 import type { SkillProposal } from "../../api/types";
-import { Button, Chip, Select, Table } from "../../design";
 import { humanize } from "../../lib/format";
 import { DISPOSITIONS, skillsAnswer } from "../../lib/gateAnswers";
 import { type GateFormProps, muted, OpenGate } from "./kit";

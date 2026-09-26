@@ -1,9 +1,9 @@
 // Supertype and implementation jumps and Ctrl/Cmd+click for the file editor, kept free of Monaco so they test
 // without it.
 
+import type { MenuItem } from "@ostra/design";
 import { socket } from "../../../api/socket";
 import type { CodeLocation, CodeNavigation, CodeUsages, NavigateTarget } from "../../../api/types";
-import type { MenuItem } from "../../../design";
 
 export type JumpWhere = { workspace: string; key: string; path: string };
 export type JumpReply = { result: CodeNavigation | null; error: string | null };

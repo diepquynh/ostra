@@ -1,5 +1,5 @@
+import { Icon } from "@ostra/design";
 import type { ContextFile } from "../../api/types";
-import { Icon } from "../../design";
 import { useNav, useShell } from "../../lib/nav";
 import { baseName, fileKey, isFolder, splitTags, tagOf } from "./tags";
 import "./context.css";

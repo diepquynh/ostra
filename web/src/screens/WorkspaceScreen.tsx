@@ -1,4 +1,4 @@
-import { Banner, Button } from "../design";
+import { Banner, Button } from "@ostra/design";
 import { useSessionSummaries } from "../lib/live";
 import { useNav, useShell, useWorkspace } from "../lib/nav";
 import { NewTask } from "./workspace/NewTask";

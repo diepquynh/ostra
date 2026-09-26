@@ -1,7 +1,7 @@
+import { Banner, Button, Panel, Table } from "@ostra/design";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 import type { SignInSession } from "../../api/types";
-import { Banner, Button, Panel, Table } from "../../design";
 
 const when = (iso: string) => new Date(iso).toLocaleString();
 

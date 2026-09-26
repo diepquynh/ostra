@@ -1,7 +1,7 @@
+import { Banner, Button, Dialog, Spinner, Tabs } from "@ostra/design";
 import { useState } from "react";
 import { api, HttpError } from "../../api";
 import type { CloneProject, ValidationIssue, WorkspaceDetail } from "../../api/types";
-import { Banner, Button, Dialog, Spinner, Tabs } from "../../design";
 import { useChannel } from "../../lib/hooks";
 import { useWorkspace } from "../../lib/nav";
 import { type CloneErrors, CloneForm } from "./CloneForm";

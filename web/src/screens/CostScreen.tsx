@@ -1,6 +1,6 @@
+import { Button, Panel, Table, type TableColumn, Tabs } from "@ostra/design";
 import { useMemo, useState } from "react";
 import { api } from "../api";
-import { Button, Panel, Table, type TableColumn, Tabs } from "../design";
 import { formatCost } from "../lib/format";
 import { useAsync, useChannel, useThrottled } from "../lib/hooks";
 import { useActivity, useSessionSummaries } from "../lib/live";

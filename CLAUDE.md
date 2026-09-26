@@ -10,9 +10,10 @@ stage and answer a small set of named judgment questions.
 - Priority: the Rust backend. The React UI in `web/` will be redesigned later with Claude Design, so do not
   polish it. Keep it compiling against API changes and nothing more.
 - Sync every frontend UI change to the Claude Design project, because the redesign starts from that project
-  and drifts otherwise. When a change touches `web/`, finish by asking the user to run `/design-sync` for it
-  and list the screens that changed. The target and the method (targeted edits to `ui_kits/console/*`, never
-  the converter) are in `.design-sync/NOTES.md`; add a dated line there for each sync.
+  and drifts otherwise. When a change touches `web/`, `design/`, or `site/`, finish by asking the user to run
+  `/design-sync` for it and list the screens that changed. The target and the method (targeted edits to
+  `ui_kits/console/*` and `templates/homepage/*`, never the converter) are in `.design-sync/NOTES.md`; add a
+  dated line there for each sync.
 
 ## Crates and the direction of dependencies
 
@@ -32,6 +33,10 @@ ostra-mcp         MCP client for workspace MCP servers: stdio and streamable HTT
 ostra-code        tokenizer, per-project code index (usages, imports, symbols), LSP client, code providers
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
 ```
+
+The browser code is one npm workspace, installed at the root (`npm ci`): `design/` (`@ostra/design`, tokens and
+React components), `web/` (the console, embedded in the binary), and `site/` (the homepage and docs). `web/` and
+`site/` import the design system from `@ostra/design`, never from each other.
 
 `ostra-core` depends on nothing internal. `ostra-engine` knows no executor, provider, or server: it reaches
 them through the `Services`, `SpawnFactory`, and `Executor` traits, and `ostra-server` wires the real ones in.
@@ -104,6 +109,10 @@ a test in `crates/ostra-policy/tests/`. Guards deny with the correction first, b
 **Add an endpoint.** Handler in `ostra-server/src/api.rs`; everything under `/api` gets the Host, Origin, and
 cookie checks from `guard`. `/internal/*` is for harness callbacks and accepts local peers only.
 
+**Add a docs page.** Put the Markdown in `docs/` and add an entry to `NAV` in `site/src/docs/pages.ts`; a
+section of README or HANDOVER is an entry with `section`. `site/src/docs/model.test.ts` fails when an entry
+finds no content, so a renamed heading breaks the test instead of the page.
+
 **Change an API type.** Types in `ostra-core` carry `#[ts(export)]`. Run `cargo test -p ostra-core` to
 regenerate `web/src/api/gen/`, then `cd web && npm run typecheck` and fix only what breaks.
 
@@ -125,9 +134,15 @@ regenerate `web/src/api/gen/`, then `cd web && npm run typecheck` and fix only w
 cargo test --workspace                      # unit, conformance, runner, recovery, server end to end
 cargo clippy --workspace --all-targets -- -D warnings
 cd web && npm run check && npm run typecheck && npx vitest run   # biome lint + format check
+cd design && npm run check && npm run typecheck && npx vitest run
+cd site && npm run check && npm run typecheck && npx vitest run
+cd tests/browser && npm test                # browser security suite: the console and the site
 ```
 
 - `tests/conformance/main.rs`: planner fixtures, one per rule. The fastest way to test engine behavior.
+- `tests/browser/specs/site.spec.ts`: the site as a static host serves it. Its pages carry their CSP as a meta
+  tag (`site/vite.config.ts`, and `web/vite.config.ts` for the console shot), which must stay equal to the
+  server's in `crates/ostra-server/src/api.rs`.
 - `crates/ostra-engine/tests/runner.rs` and `recover.rs`: a real `Engine` with fake services.
 - `crates/ostra-server/tests/e2e.rs`: the whole stack with a `ScriptedProvider` playing each agent.
 - Provider live tests are `#[ignore]`d and run with `cargo test -p ostra-providers -- --ignored`.
@@ -147,7 +162,9 @@ Running Ostra against a real repo, and especially against this repo, starts many
 - The `rtk` hook rewrites `curl` and mangles JSON bodies. Use `rtk proxy curl ...` when parsing output.
 - `pkill -f "<pattern>"` matches the shell running it. Find the pid with `pgrep` and `kill` it.
 - The release binary embeds `web/dist` at compile time: run `npm run build` in `web/` before
-  `cargo build --release` when the UI changed.
+  `cargo build --release` when the UI or `design/` changed.
+- The homepage's console shot is `web/` built with `VITE_MOCK=1 VITE_SHOT=1` into `site/public/console`
+  (`npm run build:console` in `site/`). `npm run dev` in `site/` shows it only after one such build.
 - One-time sign-in tokens: `ostra url` mints a new one; clipboard managers that preview links spend them.
   Server log: `~/.local/share/ostra/server.log`.
 - `server.json` in the data dir records the running server; `ostra stop` refuses while it is alive.

@@ -1,7 +1,7 @@
+import { Button, Panel, StageRow, StatusChip } from "@ostra/design";
 import { useState } from "react";
 import type { ExecutionView, Lane, SessionDetail } from "../../api/types";
 import { LANES, STAGES } from "../../content/stages";
-import { Button, Panel, StageRow, StatusChip } from "../../design";
 import { humanize } from "../../lib/format";
 import { useNav } from "../../lib/nav";
 import { stageKey, stageMeta } from "./board";

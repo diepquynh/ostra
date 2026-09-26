@@ -1,4 +1,4 @@
-import { Chip, Panel, Table, type Tone } from "../../design";
+import { Chip, Panel, Table, type Tone } from "@ostra/design";
 import { formatDuration } from "../../lib/format";
 import { inlineCode } from "./inline";
 import type { HookRow } from "./model";

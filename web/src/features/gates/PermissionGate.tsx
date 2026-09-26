@@ -1,4 +1,4 @@
-import { Button, Chip } from "../../design";
+import { Button, Chip } from "@ostra/design";
 import { humanize } from "../../lib/format";
 import { permission } from "../../lib/gateAnswers";
 import { ExecutionLink, type GateFormProps, muted, OpenGate, row } from "./kit";

@@ -4,11 +4,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # The binary embeds web/dist at compile time, so the UI is built first.
-if [[ ! -d web/node_modules ]]; then
+# web/, design/, and site/ are one npm workspace, installed at the repository root.
+if [[ ! -d node_modules ]]; then
   echo "==> Installing web dependencies"
-  (cd web && npm ci --no-audit --no-fund)
+  npm ci --no-audit --no-fund
 fi
-if [[ ! -f web/dist/index.html ]] || [[ -n "$(find web/src web/public web/index.html web/package.json -newer web/dist/index.html -print -quit 2>/dev/null)" ]]; then
+if [[ ! -f web/dist/index.html ]] || [[ -n "$(find web/src web/public web/index.html web/package.json design/src design/package.json -newer web/dist/index.html -print -quit 2>/dev/null)" ]]; then
   echo "==> Building the web UI"
   (cd web && npm run -s build)
 else

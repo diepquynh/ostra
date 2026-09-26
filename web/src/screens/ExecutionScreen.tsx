@@ -1,8 +1,8 @@
+import { Banner, Button, Chip, Icon, Select, Spinner, StatusChip, StatusDot, type TabItem, Tabs } from "@ostra/design";
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import type { ExecutionView, ToolCall, Usage } from "../api/types";
 import { STAGES } from "../content/stages";
-import { Banner, Button, Chip, Icon, Select, Spinner, StatusChip, StatusDot, type TabItem, Tabs } from "../design";
 import { toolSummary } from "../lib/events";
 import { formatCost, formatDuration, formatTokens, humanize } from "../lib/format";
 import { useNav } from "../lib/nav";

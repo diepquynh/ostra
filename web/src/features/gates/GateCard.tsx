@@ -1,7 +1,7 @@
+import { GateCard as DesignGateCard } from "@ostra/design";
 import { useState } from "react";
 import { api } from "../../api";
 import type { GateAnswer, GateView } from "../../api/types";
-import { GateCard as DesignGateCard } from "../../design";
 import { answerSummary, type ChoiceGateKind, isChoiceKind } from "../../lib/gateAnswers";
 import { ApprovalGate } from "./ApprovalGate";
 import { ChoiceGate } from "./ChoiceGate";

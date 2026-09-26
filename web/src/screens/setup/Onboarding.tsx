@@ -1,5 +1,4 @@
-import { Stepper } from "../../design";
-import { LiveMark, REST } from "../../shell/LiveMark";
+import { LiveMark, REST, Stepper } from "@ostra/design";
 import { useInitAfterCreate } from "./finish";
 import { WizardBody, WizardNav } from "./steps";
 import { useWizard } from "./useWizard";

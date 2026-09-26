@@ -1,11 +1,19 @@
+import { Spinner } from "@ostra/design";
 import { useEffect, useState } from "react";
-import { createBrowserRouter, Navigate, type RouteObject, RouterProvider, useParams } from "react-router";
+import {
+  createBrowserRouter,
+  createMemoryRouter,
+  Navigate,
+  type RouteObject,
+  RouterProvider,
+  useParams,
+} from "react-router";
 import { api, onUnauthorized } from "./api";
-import { Spinner } from "./design";
 import { useAsync } from "./lib/hooks";
 import { Home } from "./shell/Home";
 import { ProjectsRedirect, RouteScreen } from "./shell/RouteScreen";
 import { SignIn } from "./shell/SignIn";
+import { isShot, shotEntry } from "./shell/shot";
 import { WorkspaceShell } from "./shell/WorkspaceShell";
 
 function Loading() {
@@ -62,7 +70,7 @@ const screen = { element: <RouteScreen /> };
 
 export const routes: RouteObject[] = [
   ...(import.meta.env.DEV
-    ? [{ path: "/_design", lazy: async () => ({ Component: (await import("./design/Gallery")).default }) }]
+    ? [{ path: "/_design", lazy: async () => ({ Component: (await import("@ostra/design/gallery")).default }) }]
     : []),
   { path: "/", element: <Home /> },
   {
@@ -94,6 +102,7 @@ export function App({ exchangeError }: { exchangeError: string | null }) {
   const [unauthorized, setUnauthorized] = useState(false);
   useEffect(() => onUnauthorized(() => setUnauthorized(true)), []);
   if (unauthorized) return <SignIn error={exchangeError} />;
-  router ??= createBrowserRouter(routes);
+  // The homepage shot lives at a static path inside the site, so its routes stay out of the address bar.
+  router ??= isShot ? createMemoryRouter(routes, { initialEntries: [shotEntry()] }) : createBrowserRouter(routes);
   return <RouterProvider router={router} />;
 }

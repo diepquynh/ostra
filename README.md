@@ -52,11 +52,11 @@ it (`sudo apt install bubblewrap`, `sudo dnf install bubblewrap`), or set `[sand
 ./build.sh
 ```
 
-It runs `npm ci` the first time, rebuilds the UI only when `web/` changed, and then runs
+It runs `npm ci` the first time, rebuilds the UI only when `web/` or `design/` changed, and then runs
 `cargo build --release -p ostra-server`. The first build takes several minutes. By hand, the same steps are:
 
 ```bash
-(cd web && npm ci && npm run build)   # build the UI first, because the binary embeds web/dist
+npm ci && (cd web && npm run build)  # build the UI first, because the binary embeds web/dist
 cargo build --release -p ostra-server
 ```
 
@@ -194,9 +194,16 @@ scratch setup.
 | `crates/ostra-code` | Code navigation for the Files view: tokenizer, per-project code index, LSP client, code providers |
 | `crates/ostra-server` | The `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI |
 | `assets/` | Agent prompts and definitions, judge prompts, stack references, the meta-author skill |
-| `web/` | React, Vite, TypeScript |
+| `web/` | The console: React, Vite, TypeScript |
+| `design/` | The design system `web/` and `site/` share: tokens and React components |
+| `site/` | The homepage and docs. Docs pages render this repository's Markdown |
 | `.design-sync/` | Notes and config for syncing UI changes to the Claude Design project |
 | `tests/conformance/` | Engine fixtures, one per rule ID of HANDOVER section 8.2 |
+
+`cd site && npm run build` writes the homepage and docs to `site/dist`, a folder any static host can serve. It
+builds the console with mock data first, for the homepage's product shot. Each page carries its own
+Content-Security-Policy, because a static host sends none. To add a docs page, put the Markdown in `docs/` and
+list it in `site/src/docs/pages.ts`.
 
 ## Tests
 
@@ -204,6 +211,9 @@ scratch setup.
 cargo test --workspace                 # unit, conformance, and the server end-to-end test
 cargo clippy --workspace --all-targets -- -D warnings
 (cd web && npm run typecheck && npx vitest run)
+(cd design && npm run typecheck && npx vitest run)
+(cd site && npm run typecheck && npx vitest run)
+(cd tests/browser && npm test)         # the browser security suite, for the console and the site
 ```
 
 The server end-to-end test (`crates/ostra-server/tests/e2e.rs`) drives a whole YOLO IMPLEMENT session through

@@ -1,5 +1,5 @@
+import type { Tone } from "@ostra/design";
 import type { SessionDetail } from "../../api/types";
-import type { Tone } from "../../design";
 import { basename } from "../../lib/format";
 
 export type ArtifactKind = "research" | "spec" | "plan" | "phase" | "report" | "ledger" | "completion" | "upload";

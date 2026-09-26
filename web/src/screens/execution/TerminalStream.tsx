@@ -1,5 +1,5 @@
+import { Banner, Button, IconButton, Spinner, Terminal } from "@ostra/design";
 import { lazy, type ReactNode, Suspense, useEffect, useState } from "react";
-import { Banner, Button, IconButton, Spinner, Terminal } from "../../design";
 import type { TerminalMode } from "./model";
 
 const XtermScreen = lazy(() => import("./XtermScreen"));

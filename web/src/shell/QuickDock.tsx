@@ -1,8 +1,8 @@
+import { Banner, Button, Icon, IconButton, Input, Kbd, Spinner } from "@ostra/design";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { api, socket } from "../api";
 import type { ExecutionStatus } from "../api/types";
 import { Markdown } from "../components/Markdown";
-import { Banner, Button, Icon, IconButton, Input, Kbd, Spinner } from "../design";
 import { type ActivityState, applyDelta, emptyActivity, foldActivity } from "../lib/events";
 import { modKeys } from "../lib/keys";
 

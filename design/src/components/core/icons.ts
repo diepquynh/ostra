@@ -55,6 +55,7 @@ import {
   Hand,
   Info,
   Kanban,
+  KeyRound,
   LayoutDashboard,
   LifeBuoy,
   List,
@@ -62,6 +63,8 @@ import {
   ListFilter,
   ListTree,
   LocateFixed,
+  Lock,
+  LogIn,
   type LucideIcon,
   Maximize2,
   MessageCircleQuestionMark,
@@ -88,6 +91,7 @@ import {
   RotateCcw,
   Scale,
   Scan,
+  ScanSearch,
   Search,
   Settings,
   Shapes,
@@ -115,6 +119,10 @@ import {
  * these glyphs; add an entry here before using a new name.
  */
 export const ICONS = {
+  "scan-search": ScanSearch,
+  "log-in": LogIn,
+  lock: Lock,
+  "key-round": KeyRound,
   scan: Scan,
   shapes: Shapes,
   "square-function": SquareFunction,

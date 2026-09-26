@@ -1,7 +1,7 @@
+import { Banner, Button, Icon, type IconName, Input, Spinner, type TabItem, Tabs } from "@ostra/design";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { api } from "../../../api";
 import type { CodeFile, CodeLocation, CodeSymbol, SymbolKind } from "../../../api/types";
-import { Banner, Button, Icon, type IconName, Input, Spinner, type TabItem, Tabs } from "../../../design";
 import { useAsync } from "../../../lib/hooks";
 import { useNav, useShell } from "../../../lib/nav";
 import { depId, fileId } from "../../../lib/resource";

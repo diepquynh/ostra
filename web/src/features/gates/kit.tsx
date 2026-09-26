@@ -1,6 +1,6 @@
+import { Button, GateCard as DesignGateCard, type IconName } from "@ostra/design";
 import type { CSSProperties, ReactNode } from "react";
 import type { GateAnswer, GatePayload, GateView } from "../../api/types";
-import { Button, GateCard as DesignGateCard, type IconName } from "../../design";
 import { useNav } from "../../lib/nav";
 
 export type Submit = (answer: GateAnswer) => void;

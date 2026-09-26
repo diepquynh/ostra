@@ -1,9 +1,9 @@
+import { Banner, Button, Chip, Dialog, Panel, Stepper, Table } from "@ostra/design";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../../api";
 import type { Commands } from "../../api/gen/Commands";
 import type { ProjectView } from "../../api/types";
-import { Banner, Button, Chip, Dialog, Panel, Stepper, Table } from "../../design";
 import { useAsync } from "../../lib/hooks";
 import { useWorkspaceTree } from "../../lib/live";
 import { useNav, useWorkspace } from "../../lib/nav";

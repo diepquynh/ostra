@@ -1,5 +1,5 @@
+import { Button, Checkbox, Chip } from "@ostra/design";
 import { useState } from "react";
-import { Button, Checkbox, Chip } from "../../design";
 import { closingAnswer } from "../../lib/gateAnswers";
 import { type GateFormProps, muted, OpenGate, row } from "./kit";
 

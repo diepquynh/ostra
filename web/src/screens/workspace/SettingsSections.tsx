@@ -1,7 +1,7 @@
+import { Button, Checkbox, Input, Panel, Select, type SelectOption, Switch, Table } from "@ostra/design";
 import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import type { AgentInfo, Complexity, HarnessStatus, PermissionRules, ValidationIssue } from "../../api/types";
 import { COMPLEXITY_AGENTS, NATIVE_ONLY, PERMISSION_MODES, ROUTE_KEYS, SANDBOX_MODES } from "../../content/agents";
-import { Button, Checkbox, Input, Panel, Select, type SelectOption, Switch, Table } from "../../design";
 import { currentSubscription, disablePush, enablePush, pushSupported } from "../../lib/push";
 import { StackInput } from "../setup/StackInput";
 import {

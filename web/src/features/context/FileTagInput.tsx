@@ -1,9 +1,8 @@
+import { cx, Icon } from "@ostra/design";
 import { type KeyboardEvent, type Ref, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api } from "../../api";
 import type { ContextFile } from "../../api/types";
-import { Icon } from "../../design";
-import { cx } from "../../design/cx";
 import {
   baseName,
   CONTEXT_DRAG_TYPE,

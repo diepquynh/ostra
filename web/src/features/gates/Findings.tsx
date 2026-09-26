@@ -1,6 +1,6 @@
+import { Chip, Table, type Tone } from "@ostra/design";
 import type { Severity } from "../../api/gen/Severity";
 import type { FactCheckFinding, ReviewFinding } from "../../api/types";
-import { Chip, Table, type Tone } from "../../design";
 
 const tone = (s: Severity): Tone => (s === "BLOCKER" || s === "HIGH" ? "bad" : s === "MEDIUM" ? "warn" : "neutral");
 

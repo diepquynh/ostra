@@ -1,7 +1,7 @@
+import { Chip, IconButton, Input, Spinner, StatusDot, Tabs, type Tone, TreeItem, TreeSection } from "@ostra/design";
 import { Fragment, type MouseEvent, type ReactNode, useState } from "react";
 import type { TreeGroup, TreeSession } from "../api/nav";
 import type { ExecutionStatus, ProjectView, SessionStatus } from "../api/types";
-import { Chip, IconButton, Input, Spinner, StatusDot, Tabs, type Tone, TreeItem, TreeSection } from "../design";
 import { formatCost, humanize } from "../lib/format";
 import type { OpenOptions } from "../lib/nav";
 import { parseResource } from "../lib/resource";

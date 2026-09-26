@@ -1,9 +1,9 @@
+import { Banner, Breadcrumbs, Button, Icon, IconButton, Spinner, type TabItem, Tabs } from "@ostra/design";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
 import type { ChangedBy } from "../api/types";
 import { Markdown } from "../components/Markdown";
-import { Banner, Breadcrumbs, Button, Icon, IconButton, Spinner, type TabItem, Tabs } from "../design";
 import { humanize } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges, useWorkspaceTree } from "../lib/live";

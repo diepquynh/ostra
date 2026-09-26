@@ -1,7 +1,7 @@
+import { CommandPalette, type PaletteItem } from "@ostra/design";
 import { useMemo, useState } from "react";
 import type { TreeSession } from "../api/nav";
 import type { ProjectView } from "../api/types";
-import { CommandPalette, type PaletteItem } from "../design";
 import { useFileIndex, useSearch } from "../lib/live";
 import { localItems, mergePalette, paletteCommands } from "../lib/palette";
 

@@ -1,6 +1,6 @@
+import { Button, Chip, Input } from "@ostra/design";
 import { type ReactNode, useState } from "react";
 import type { GatePayload } from "../../api/types";
-import { Button, Chip, Input } from "../../design";
 import { formatCost, humanize } from "../../lib/format";
 import { CHOICES, type ChoiceGateKind, choiceAnswer } from "../../lib/gateAnswers";
 import { FactFindings, ReviewFindings } from "./Findings";

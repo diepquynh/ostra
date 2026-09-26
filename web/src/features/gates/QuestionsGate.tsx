@@ -1,5 +1,5 @@
+import { Button, Checkbox, Chip, Input } from "@ostra/design";
 import { useState } from "react";
-import { Button, Checkbox, Chip, Input } from "../../design";
 import {
   defaultSelections,
   OTHER,

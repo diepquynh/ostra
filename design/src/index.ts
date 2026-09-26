@@ -1,6 +1,16 @@
 // Importing the design system loads its tokens, component classes and bundled fonts.
 import "./index.css";
 
+export {
+  IDLE,
+  LiveMark,
+  MARK_ARCS,
+  type MarkArc,
+  type MarkPearl,
+  type MarkState,
+  markSvg,
+  REST,
+} from "./components/brand/LiveMark";
 export { Button, type ButtonProps } from "./components/core/Button";
 export { Icon, type IconProps } from "./components/core/Icon";
 export { IconButton, type IconButtonProps } from "./components/core/IconButton";

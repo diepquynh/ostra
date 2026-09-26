@@ -47,6 +47,8 @@ export interface SuiteState {
   /** The Ostra server at its private name, `http://ostra-<hex>.localhost:<port>`. */
   app: string;
   appPort: number;
+  /** The homepage and docs (site/), served as static files the way a static host does. */
+  site: string;
   pid: number;
   /** The fake model API, which also counts canary hits. */
   fake: string;

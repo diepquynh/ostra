@@ -1,7 +1,7 @@
+import { Banner, Breadcrumbs, Button, Chip, IconButton, Spinner } from "@ostra/design";
 import { lazy, Suspense, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
-import { Banner, Breadcrumbs, Button, Chip, IconButton, Spinner } from "../design";
 import { useAsync } from "../lib/hooks";
 import { useNav, useShell } from "../lib/nav";
 import { locationId } from "../lib/resource";

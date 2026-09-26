@@ -1,3 +1,4 @@
+import { Button, Kbd, LiveMark, Menu, type MenuItem, REST, StatusDot, Tabs, type Tone } from "@ostra/design";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -11,7 +12,6 @@ import {
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
 import type { SessionStatus } from "../api/types";
-import { Button, Kbd, Menu, type MenuItem, StatusDot, Tabs, type Tone } from "../design";
 import { useAsync, useChannel } from "../lib/hooks";
 import { isMac, modKeys, shortcutOf } from "../lib/keys";
 import { useSessionSummaries, useWorkspaceTree } from "../lib/live";
@@ -22,13 +22,14 @@ import { type CloseScope, emptyTabs, normalizeTabs, type TabsState, tabsReducer 
 import { applyTheme, resolveTheme } from "../lib/theme";
 import { AddProjectDialog, NewWorkspaceDialog, Onboarding, selfScrolling } from "../screens";
 import { PendingCommandsNotice } from "../screens/workspace/PendingCommands";
-import { LiveMark, markState, REST, useLiveFavicon } from "./LiveMark";
+import { markState, useLiveFavicon } from "./markState";
 import { resourceMeta } from "./meta";
 import { Palette } from "./Palette";
 import { QuickDock } from "./QuickDock";
 import { ResizeHandle, usePanelWidths } from "./ResizeHandle";
 import { Sidebar } from "./Sidebar";
 import { StatusBar } from "./StatusBar";
+import { isShot, useShotBridge } from "./shot";
 import { TitleBar } from "./TitleBar";
 import { DEFAULT_PREFS, fromServerUi, loadLocalUi, saveLocalUi, toServerUi, type UiPrefs } from "./uiState";
 import "./shell.css";
@@ -62,7 +63,8 @@ function Shell({ ws }: { ws: string }) {
     [location.pathname, location.search],
   );
 
-  const [local] = useState(() => loadLocalUi(ws));
+  // The homepage shot starts from a clean strip; its page opens the tabs.
+  const [local] = useState(() => (isShot ? null : loadLocalUi(ws)));
   const [tabs, dispatch] = useReducer(tabsReducer, null, () => initialTabs(local?.tabs ?? null, routeId));
   const [prefs, setPrefs] = useState<UiPrefs>(() => local?.prefs ?? DEFAULT_PREFS);
   const [widths, setWidth] = usePanelWidths();
@@ -73,6 +75,7 @@ function Shell({ ws }: { ws: string }) {
   // Server copy of the layout: restores it in a browser that has no local copy, then receives every change.
   const serverReady = useRef(false);
   useEffect(() => {
+    if (isShot) return;
     let alive = true;
     api.uiState(ws).then(
       (s) => {
@@ -178,6 +181,7 @@ function Shell({ ws }: { ws: string }) {
     },
     [ws, navigate, setPref, tabs.active],
   );
+  useShotBridge(tabs.active, open, theme, (t) => setPref("theme", t));
   const pinActive = useCallback(() => tabs.active && dispatch({ type: "keep", id: tabs.active }), [tabs.active]);
   const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
 

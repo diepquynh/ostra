@@ -1,6 +1,6 @@
+import { Dialog, Stepper } from "@ostra/design";
 import { useNavigate } from "react-router";
 import type { WorkspaceDetail } from "../../api/types";
-import { Dialog, Stepper } from "../../design";
 import { useInitAfterCreate } from "./finish";
 import { WizardBody, WizardNav } from "./steps";
 import { useWizard } from "./useWizard";

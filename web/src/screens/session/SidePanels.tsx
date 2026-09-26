@@ -1,7 +1,7 @@
+import { Button, Decision, Dialog, Input, Panel } from "@ostra/design";
 import { useState } from "react";
 import { api } from "../../api";
 import type { DecisionView } from "../../api/types";
-import { Button, Decision, Dialog, Input, Panel } from "../../design";
 import { decisionChoice } from "../../lib/events";
 import { humanize } from "../../lib/format";
 

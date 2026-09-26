@@ -1,5 +1,5 @@
+import { Input, type InputProps } from "@ostra/design";
 import { useId } from "react";
-import { Input, type InputProps } from "../../design";
 
 /** Free-text stack, suggesting the stacks the server has a seed reference for. Empty means detect from the code. */
 export function StackInput({ stacks, ...rest }: InputProps & { stacks: string[] }) {

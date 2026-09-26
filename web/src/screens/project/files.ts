@@ -1,5 +1,5 @@
+import type { IconName } from "@ostra/design";
 import type { GitMark, ProjectTreeEntry } from "../../api/types";
-import type { IconName } from "../../design";
 
 const FILE_ICON: Record<string, IconName> = {
   rs: "file-code-2",

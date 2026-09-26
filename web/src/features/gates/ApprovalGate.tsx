@@ -1,6 +1,6 @@
+import { Button, Chip, Input, Table } from "@ostra/design";
 import { useState } from "react";
 import type { PhaseInfo } from "../../api/types";
-import { Button, Chip, Input, Table } from "../../design";
 import { approval, changeRequest } from "../../lib/gateAnswers";
 import { FactFindings } from "./Findings";
 import { ArtifactLink, type GateFormProps, muted, OpenGate, para, row } from "./kit";

@@ -1,9 +1,9 @@
+import { Banner, Button, IconButton, Spinner, Terminal } from "@ostra/design";
 import { type KeyboardEvent, lazy, Suspense, useEffect, useRef, useState } from "react";
 import { api, socket } from "../../api";
 import type { HarnessSetupAction } from "../../api/gen/HarnessSetupAction";
 import type { HarnessSetupTerminal } from "../../api/gen/HarnessSetupTerminal";
 import type { HarnessKind, HarnessStatus } from "../../api/types";
-import { Banner, Button, IconButton, Spinner, Terminal } from "../../design";
 import "../execution/execution.css";
 import { HARNESS_LABEL } from "./wizard";
 

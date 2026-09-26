@@ -1,9 +1,9 @@
+import { Banner, Button, LaneStepper, Panel, PhaseDag, SectionLabel, Spinner, Tabs } from "@ostra/design";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
 import type { GateView, Lane, SessionDetail, StoredEvent } from "../api/types";
 import { Markdown } from "../components/Markdown";
-import { Banner, Button, LaneStepper, Panel, PhaseDag, SectionLabel, Spinner, Tabs } from "../design";
 import { BlockerNotice } from "../features/gates/BlockerNotice";
 import { GateCard } from "../features/gates/GateCard";
 import { activeSecurityBlocks, splitDecidedForYou } from "../lib/events";

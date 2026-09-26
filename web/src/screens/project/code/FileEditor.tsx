@@ -1,4 +1,5 @@
 import { Editor, type OnMount } from "@monaco-editor/react";
+import { Menu } from "@ostra/design";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../../api";
 import type { CodeLocation, NavigateTarget } from "../../../api/types";
@@ -10,7 +11,6 @@ import {
   monaco,
   themeName,
 } from "../../../components/monaco";
-import { Menu } from "../../../design";
 import type { Theme } from "../../../lib/nav";
 import type { ChangeBlock } from "../diff";
 import { bindModel, navigate, registerHints } from "./hints";

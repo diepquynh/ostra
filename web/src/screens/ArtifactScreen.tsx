@@ -1,9 +1,9 @@
+import { Banner, Button, Chip, Icon, IconButton, Spinner, TreeItem } from "@ostra/design";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router";
 import { api, downloadUrl } from "../api";
 import { Markdown } from "../components/Markdown";
 import { EARS_NOTE } from "../content/stages";
-import { Banner, Button, Chip, Icon, IconButton, Spinner, TreeItem } from "../design";
 import { basename } from "../lib/format";
 import { useAsync, useStoredFlag } from "../lib/hooks";
 import { useWorkspaceTree } from "../lib/live";

@@ -12,6 +12,7 @@ import { OSTRA_BIN, ostraEnv, REPO_ROOT, ROOT, STATE_FILE, type SuiteState } fro
 import { startFakeModel } from "./lib/fake-model";
 import { htmlFile, inline, markdown, svgFile } from "./lib/payloads";
 import { BRANCH, makeRepo, makeStubHarness, makeStubMcp, REPO, writeConfig } from "./lib/scenario";
+import { buildSite, startSite } from "./lib/site";
 
 const freePort = () =>
   new Promise<number>((resolve) => {
@@ -68,6 +69,9 @@ export default async function globalSetup() {
   const fake = await startFakeModel();
   const attacker = await startAttacker();
   process.env.PW_FAKE_ANTHROPIC_URL = fake.origin;
+  // The site's test page carries canary URLs on the fake's port, so the site builds once the fake is up.
+  buildSite(fake.origin);
+  const site = await startSite();
 
   makeRepo(fake.origin);
   const harness = makeStubHarness(fake.origin);
@@ -175,6 +179,7 @@ export default async function globalSetup() {
   const state: SuiteState = {
     app,
     appPort: port,
+    site: site.origin,
     pid: child.pid ?? 0,
     fake: fake.origin,
     fakePort: fake.port,
@@ -200,6 +205,7 @@ export default async function globalSetup() {
     }
     await fake.close();
     await attacker.close();
+    await site.close();
   };
 }
 

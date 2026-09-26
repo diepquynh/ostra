@@ -1,4 +1,17 @@
 import {
+  Banner,
+  Button,
+  Chip,
+  Combobox,
+  type ComboItem,
+  ICONS,
+  Icon,
+  IconButton,
+  type IconName,
+  Spinner,
+  Tabs,
+} from "@ostra/design";
+import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
@@ -22,19 +35,6 @@ import type {
   ProjectFile,
   SymbolKind,
 } from "../../api/types";
-import {
-  Banner,
-  Button,
-  Chip,
-  Combobox,
-  type ComboItem,
-  ICONS,
-  Icon,
-  IconButton,
-  type IconName,
-  Spinner,
-  Tabs,
-} from "../../design";
 import { useAsync } from "../../lib/hooks";
 import { useFileIndex } from "../../lib/live";
 import { useNav } from "../../lib/nav";

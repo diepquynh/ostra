@@ -1,14 +1,16 @@
 # Keeps host build outputs and local state out of the Docker build context, because the Dockerfile builds web/dist and the binary itself.
 target/
 target-*/
-web/node_modules/
+**/node_modules/
 web/dist/
+site/dist/
+site/public/console/
 .git/
 .ostra/
 .design-import/
 .claude/
 .design-sync/
-web/.vitest/
+**/.vitest/
 web/.shots/
 *.log
 **/*.log

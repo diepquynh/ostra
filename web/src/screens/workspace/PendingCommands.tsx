@@ -1,7 +1,7 @@
+import { Banner, Button } from "@ostra/design";
 import { useState } from "react";
 import { api } from "../../api";
 import type { PendingCommand, PendingCommands, PendingKind } from "../../api/types";
-import { Banner, Button } from "../../design";
 
 const KIND: Record<PendingKind, string> = {
   mcpServer: "MCP server",

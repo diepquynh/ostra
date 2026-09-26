@@ -1,7 +1,7 @@
+import { Button, Chip, Input, Panel, Select, StatusChip, Table, type TableColumn, Tabs } from "@ostra/design";
 import { useMemo, useState } from "react";
 import type { SessionSummary } from "../../api/types";
 import { LANES } from "../../content/stages";
-import { Button, Chip, Input, Panel, Select, StatusChip, Table, type TableColumn, Tabs } from "../../design";
 import { formatCost, humanize, relativeTime, truncate } from "../../lib/format";
 import { useNav } from "../../lib/nav";
 import { SessionDot } from "../../shell/Sidebar";

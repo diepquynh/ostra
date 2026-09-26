@@ -1,8 +1,8 @@
+import { Banner, Button, Chip, Dialog, Input, Panel, Select } from "@ostra/design";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "react-router";
 import { api } from "../api";
 import type { ProjectSkills, SkillDoc, SkillView } from "../api/types";
-import { Banner, Button, Chip, Dialog, Input, Panel, Select } from "../design";
 import { useAsync } from "../lib/hooks";
 import { useShell, useWorkspace } from "../lib/nav";
 import { LoadError, Loading, Page } from "./workspace/Page";

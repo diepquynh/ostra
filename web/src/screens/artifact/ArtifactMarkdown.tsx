@@ -1,9 +1,9 @@
+import { CodeView } from "@ostra/design";
 import { type ComponentProps, type ReactNode, useMemo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Heading } from "../../api/gen/Heading";
 import { MarkdownImage, markdownUrl } from "../../components/Markdown";
-import { CodeView } from "../../design";
 import { ColumnResizer } from "./ColumnResizer";
 import { headingText, rehypeHeadingIds } from "./outline";
 import { ScrollTable } from "./ScrollTable";

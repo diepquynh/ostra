@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { isMock } from "./api";
 import { exchangeTokenFromUrl, watchForTokens } from "./auth";
-import "./design/index.css";
+import "@ostra/design/index.css";
 import { registerServiceWorker } from "./lib/push";
 
 async function boot() {

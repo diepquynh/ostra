@@ -1,7 +1,7 @@
+import { Button, Icon, IconButton, type IconName, Input, Select, Spinner, TreeItem } from "@ostra/design";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
 import type { GitMark, ProjectTreeEntry, ProjectView } from "../api/types";
-import { Button, Icon, IconButton, type IconName, Input, Select, Spinner, TreeItem } from "../design";
 import { setContextDrag } from "../features/context/tags";
 import { humanize } from "../lib/format";
 import { useFileIndex, useProjectChanges, useProjectFsChanges } from "../lib/live";

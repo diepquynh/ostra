@@ -1,3 +1,4 @@
+import { Banner, Button, Checkbox, Chip, Input, Panel, Select, Spinner, Switch, Table, type Tone } from "@ostra/design";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type {
@@ -8,7 +9,6 @@ import type {
   McpToolInfo,
   ValidationIssue,
 } from "../../api/types";
-import { Banner, Button, Checkbox, Chip, Input, Panel, Select, Spinner, Switch, Table, type Tone } from "../../design";
 import { Anchor, FieldIssues, type SectionProps } from "./SettingsSections";
 import { type McpRow, mcpFromRow, mcpRow, stableJson } from "./settingsForm";
 

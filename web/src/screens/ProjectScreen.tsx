@@ -1,7 +1,7 @@
+import { Banner, Button, Chip, Icon, Spinner, StatusChip, Tabs } from "@ostra/design";
 import { useState } from "react";
 import { api } from "../api";
 import type { GitPullResult, ProjectView } from "../api/types";
-import { Banner, Button, Chip, Icon, Spinner, StatusChip, Tabs } from "../design";
 import { useShell, useWorkspace } from "../lib/nav";
 import { DependencyGraph } from "./project/DependencyGraph";
 import { ProjectOverview } from "./project/ProjectOverview";

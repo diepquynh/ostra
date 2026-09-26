@@ -1,6 +1,6 @@
+import type { Crumb, IconName } from "@ostra/design";
 import type { TreeSession } from "../api/nav";
 import type { SessionStatus } from "../api/types";
-import type { Crumb, IconName } from "../design";
 import { basename, humanize, truncate } from "../lib/format";
 import { depName, parseResource } from "../lib/resource";
 

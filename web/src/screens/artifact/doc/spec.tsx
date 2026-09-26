@@ -1,5 +1,5 @@
+import { Chip } from "@ostra/design";
 import type { Requirement, SpecDoc } from "../../../api/types";
-import { Chip } from "../../../design";
 import { type Outline, OutlineBuilder } from "./model";
 import {
   Bullets,

@@ -1,7 +1,7 @@
+import { Banner, Button, Input, Panel, Select, Table } from "@ostra/design";
 import { useEffect, useRef, useState } from "react";
 import { api, HttpError } from "../../api";
 import type { GitCredentialEdit, GitCredentialKind, GitCredentialView, ValidationIssue } from "../../api/types";
-import { Banner, Button, Input, Panel, Select, Table } from "../../design";
 
 /** A private key file is a few kilobytes; anything much larger is the wrong file. */
 const MAX_KEY_BYTES = 64 * 1024;

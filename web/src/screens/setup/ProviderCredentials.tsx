@@ -1,7 +1,7 @@
+import { Banner, Button, Input, Panel, Select } from "@ostra/design";
 import { useState } from "react";
 import { api, HttpError } from "../../api";
 import type { ProviderCredentialsEdit, ProviderStatus, ValidationIssue } from "../../api/types";
-import { Banner, Button, Input, Panel, Select } from "../../design";
 import { keySource, PROVIDER_LABEL } from "./wizard";
 
 type KeyKind = "api_key" | "auth_token";

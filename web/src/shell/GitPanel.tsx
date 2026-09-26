@@ -1,7 +1,7 @@
+import { Banner, Button, Icon, IconButton, Input, Menu, type MenuItem, Select, Spinner, TreeItem } from "@ostra/design";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import type { GitBranch, GitChange, GitOpResult, GitRepoStatus, ProjectView } from "../api/types";
-import { Banner, Button, Icon, IconButton, Input, Menu, type MenuItem, Select, Spinner, TreeItem } from "../design";
 import { useAsync } from "../lib/hooks";
 import { useProjectFsChanges } from "../lib/live";
 import { throttle } from "../lib/store";

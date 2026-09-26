@@ -1,6 +1,6 @@
+import { Banner, Button, Spinner } from "@ostra/design";
 import { type ReactNode, useEffect, useRef } from "react";
 import { useLocation } from "react-router";
-import { Banner, Button, Spinner } from "../../design";
 import "./workspace.css";
 
 /** The column every workspace page uses: title, optional subtitle and actions, then the content. */

@@ -1,5 +1,5 @@
+import { Chip, CodeView, cx } from "@ostra/design";
 import type { ResearchDoc } from "../../../api/types";
-import { Chip, CodeView, cx } from "../../../design";
 import { type Outline, OutlineBuilder } from "./model";
 import {
   Bullets,

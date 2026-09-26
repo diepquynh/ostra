@@ -1,5 +1,6 @@
+import { IDLE } from "@ostra/design";
 import { describe, expect, it } from "vitest";
-import { IDLE, markState } from "./LiveMark";
+import { markState } from "./markState";
 
 describe("markState", () => {
   it("lights the lanes before the current one and colors the current one by status", () => {
