@@ -70,9 +70,10 @@ test("search results and addresses show test strings as text", async ({ page, st
   onSite(guard, state.site);
   await page.goto(`${state.site}/docs/`);
   await page.getByLabel("Search the docs").fill("onerror");
-  await expect(page.locator(".docs-hit").first()).toBeVisible();
+  const testHit = page.locator(".docs-hit").filter({ hasText: "Test document" });
+  await expect(testHit).toBeVisible();
   expect(await domProblems(page)).toEqual([]);
-  await page.locator(".docs-hit").first().click();
+  await testHit.click();
   await expect(page.getByText("PW-MARKER-docs").first()).toBeVisible();
   const evil = encodeURIComponent(`<img src=x onerror="${js("docs-hash")}">`);
   for (const hash of [evil, `engine/${evil}`, `test-doc/${evil}`, "%E0%A4%A", `javascript:${js("docs-hashjs")}`]) {

@@ -84,6 +84,13 @@ in `runner.rs`), and `limits.session_budget_usd` turns spawns into a `BudgetReac
 a budget gate. Fan-out stages keep caps (`init::MAX_SCOUTS`, `init::MAX_DEFAULT_GENERATE`). Any new fan-out
 needs a cap and must go through the slot limiter.
 
+**9. Every implementation updates the docs.** A change that adds or alters behavior updates the pages in
+`docs/` in the same change, so users and agents can understand Ostra's internals from the docs alone. Write
+them as a deep dive into how Ostra works and why, not as code documentation; cite a file or excerpt code only
+where it shows a behavior. Describe only what the code does now, and fix a page the change makes wrong. Edit
+an existing page in `docs/` only. A new page also needs a `NAV` entry in `site/src/docs/pages.ts` (recipe
+below).
+
 ## Recipes
 
 **Add a gate kind.** Add the variant to `GatePayload` (`ostra-core/src/event.rs`) with `stage()` and
@@ -109,8 +116,9 @@ a test in `crates/ostra-policy/tests/`. Guards deny with the correction first, b
 **Add an endpoint.** Handler in `ostra-server/src/api.rs`; everything under `/api` gets the Host, Origin, and
 cookie checks from `guard`. `/internal/*` is for harness callbacks and accepts local peers only.
 
-**Add a docs page.** Put the Markdown in `docs/` and add an entry to `NAV` in `site/src/docs/pages.ts`; a
-section of README or HANDOVER is an entry with `section`. `site/src/docs/model.test.ts` fails when an entry
+**Add a docs page.** Put the Markdown in the matching folder of `docs/` (`start/`, `platforms/`,
+`internals/`, `architecture/`, `security/`, `providers/`), add an entry to `NAV` in `site/src/docs/pages.ts`,
+and list it in `docs/README.md`; a section of README or HANDOVER is an entry with `section`. `site/src/docs/model.test.ts` fails when an entry
 finds no content, so a renamed heading breaks the test instead of the page.
 
 **Change an API type.** Types in `ostra-core` carry `#[ts(export)]`. Run `cargo test -p ostra-core` to
