@@ -58,6 +58,9 @@ Ostra reads provider credentials from the environment, then the OS keychain. Key
 Harness CLIs (Claude Code, Codex, Grok Build, Antigravity) run with their own logins. Settings show which are
 installed and logged in.
 
+Ostra never uses a consumer subscription through a proxy. [docs/providers](docs/providers/README.md) lists
+the credentials each provider allows on each path and the terms that apply.
+
 ## Configuration
 
 | File | Holds |
