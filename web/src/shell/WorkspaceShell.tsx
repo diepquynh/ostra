@@ -10,10 +10,11 @@ import {
 } from "react";
 import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
+import type { SessionStatus } from "../api/types";
 import { Button, Kbd, Menu, type MenuItem, StatusDot, Tabs, type Tone } from "../design";
 import { useAsync, useChannel } from "../lib/hooks";
 import { isMac, modKeys, shortcutOf } from "../lib/keys";
-import { useWorkspaceTree } from "../lib/live";
+import { useSessionSummaries, useWorkspaceTree } from "../lib/live";
 import { ConsoleContext, type ConsoleContextValue, type OpenOptions, type Theme } from "../lib/nav";
 import { paletteTarget } from "../lib/palette";
 import { parseResource, resourceFromPath, resourcePath } from "../lib/resource";
@@ -21,6 +22,7 @@ import { type CloseScope, emptyTabs, normalizeTabs, type TabsState, tabsReducer 
 import { applyTheme, resolveTheme } from "../lib/theme";
 import { AddProjectDialog, NewWorkspaceDialog, Onboarding, selfScrolling } from "../screens";
 import { PendingCommandsNotice } from "../screens/workspace/PendingCommands";
+import { LiveMark, markState, REST, useLiveFavicon } from "./LiveMark";
 import { resourceMeta } from "./meta";
 import { Palette } from "./Palette";
 import { QuickDock } from "./QuickDock";
@@ -255,6 +257,12 @@ function Shell({ ws }: { ws: string }) {
     return null;
   }, [active, tree.sessions]);
 
+  const { sessions: summaries } = useSessionSummaries(ws);
+  const markSession = activeSession ? (summaries.find((s) => s.id === activeSession) ?? null) : null;
+  const mark = markState(markSession);
+  const markLabel = markSession ? MARK_LABEL[markSession.status] : "No session open";
+  useLiveFavicon(mark, theme);
+
   const runCommand = (command: string) => {
     if (command === "new-workspace") setDialog("new-workspace");
     else if (command === "add-project") setDialog("add-project");
@@ -343,6 +351,8 @@ function Shell({ ws }: { ws: string }) {
           ws={ws}
           wsName={wsName}
           activeId={active}
+          mark={mark}
+          markLabel={markLabel}
           go={(id) => open(id)}
           crumbs={activeMeta.crumbs}
           onPalette={() => setPalette(true)}
@@ -498,11 +508,22 @@ function Shell({ ws }: { ws: string }) {
   );
 }
 
+const MARK_LABEL: Record<SessionStatus, string> = {
+  running: "Running",
+  waiting: "Waiting for you",
+  paused: "Paused",
+  failed: "Failed",
+  stalled: "Stalled",
+  completed: "Completed",
+};
+
 function NothingOpen() {
   return (
     <div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--text-muted)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
-        <img src="/favicon.svg" width={36} height={36} style={{ opacity: 0.5 }} alt="" />
+        <span style={{ opacity: 0.5 }}>
+          <LiveMark state={REST} size={36} />
+        </span>
         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
           Nothing open. Press <Kbd keys={modKeys("K")} /> to go to a session, execution or artifact.
         </span>

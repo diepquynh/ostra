@@ -5,6 +5,7 @@ import { formatCost } from "../lib/format";
 import { modKeys } from "../lib/keys";
 import { useActivity, useWorkspaces } from "../lib/live";
 import { resourcePath } from "../lib/resource";
+import { LiveMark, type MarkState } from "./LiveMark";
 import type { ResourceCrumb } from "./meta";
 import { lastActive } from "./uiState";
 
@@ -102,9 +103,21 @@ export type TitleBarProps = SwitcherProps & {
   toggleSidebar: () => void;
   dock: boolean;
   toggleDock: () => void;
+  mark: MarkState;
+  markLabel: string;
 };
 
-export function TitleBar({ crumbs, onPalette, sidebar, toggleSidebar, dock, toggleDock, ...switcher }: TitleBarProps) {
+export function TitleBar({
+  crumbs,
+  onPalette,
+  sidebar,
+  toggleSidebar,
+  dock,
+  toggleDock,
+  mark,
+  markLabel,
+  ...switcher
+}: TitleBarProps) {
   return (
     <header
       style={{
@@ -118,8 +131,8 @@ export function TitleBar({ crumbs, onPalette, sidebar, toggleSidebar, dock, togg
         flex: "none",
       }}
     >
-      <Link to="/" title="All workspaces" style={{ display: "inline-flex" }}>
-        <img src="/favicon.svg" width={16} height={16} alt="Ostra" />
+      <Link to="/" title={`All workspaces. ${markLabel}`} style={{ display: "inline-flex" }}>
+        <LiveMark state={mark} label={`Ostra: ${markLabel}`} />
       </Link>
       <WorkspaceSwitcher {...switcher} />
       <span style={{ width: 1, height: 16, background: "var(--border-default)" }} />

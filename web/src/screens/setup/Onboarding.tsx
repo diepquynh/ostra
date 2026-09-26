@@ -1,4 +1,5 @@
 import { Stepper } from "../../design";
+import { LiveMark, REST } from "../../shell/LiveMark";
 import { useInitAfterCreate } from "./finish";
 import { WizardBody, WizardNav } from "./steps";
 import { useWizard } from "./useWizard";
@@ -63,7 +64,7 @@ export function Onboarding({ onFinish }: OnboardingProps) {
               letterSpacing: "0.02em",
             }}
           >
-            <img src="/favicon.svg" width={20} height={20} alt="" />
+            <LiveMark state={REST} size={20} />
             Ostra
           </div>
           <Stepper

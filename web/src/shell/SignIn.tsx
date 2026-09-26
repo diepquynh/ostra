@@ -2,6 +2,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import { exchangeToken, tokenFromInput } from "../auth";
 import { Banner, Button, Input, Panel } from "../design";
 import { applyTheme, lastTheme, resolveTheme } from "../lib/theme";
+import { LiveMark, REST } from "./LiveMark";
 import "./shell.css";
 
 /** Shown when the server answers 401: this browser has no session cookie. */
@@ -46,7 +47,7 @@ export function SignIn({ error }: { error: string | null }) {
             letterSpacing: "0.02em",
           }}
         >
-          <img src="/favicon.svg" width={20} height={20} alt="" />
+          <LiveMark state={REST} size={20} />
           Ostra
         </div>
         <Panel title="Sign in to Ostra" icon="shield-check">

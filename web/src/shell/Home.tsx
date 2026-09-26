@@ -6,6 +6,7 @@ import { useAsync } from "../lib/hooks";
 import { useWorkspaces } from "../lib/live";
 import { applyTheme, lastTheme, resolveTheme } from "../lib/theme";
 import { NewWorkspaceDialog, Onboarding } from "../screens";
+import { LiveMark, REST } from "./LiveMark";
 import { workspaceEntry } from "./TitleBar";
 import "./shell.css";
 
@@ -56,7 +57,7 @@ export function Home() {
             letterSpacing: "0.02em",
           }}
         >
-          <img src="/favicon.svg" width={20} height={20} alt="" />
+          <LiveMark state={REST} size={20} />
           Ostra
         </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
