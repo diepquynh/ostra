@@ -183,6 +183,20 @@ impl SandboxNetwork {
     }
 }
 
+/// Which ports of the host's loopback a sandboxed command on macOS may connect to, where every
+/// sandbox shares it. On Linux each sandbox has a loopback of its own, so this changes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum LoopbackAccess {
+    /// Every port but the blocked ones and Ostra's own server, so tests reach the servers they
+    /// start. Under `allowlist` and `public` only.
+    #[default]
+    Open,
+    /// Only the loopback ports in `allowed_hosts`.
+    Listed,
+}
+
 /// `[sandbox]` in `config.toml`: the sandbox profile for agent commands (the native Bash tool,
 /// harness CLIs, and programs Ostra starts for a project).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -201,6 +215,13 @@ pub struct SandboxConfig {
     pub extra_writable: Vec<String>,
     /// More paths agent commands must not see, absolute or `~/...`.
     pub extra_hidden: Vec<String>,
+    /// The workspace's loopback choice ([`SandboxConfig::for_workspace`]); never read from
+    /// `config.toml`, because it is a workspace setting only.
+    #[serde(skip)]
+    pub loopback: LoopbackAccess,
+    /// The workspace's blocked loopback ports, likewise.
+    #[serde(skip)]
+    pub blocked_ports: Vec<u16>,
 }
 
 impl Default for SandboxConfig {
@@ -212,6 +233,8 @@ impl Default for SandboxConfig {
             upstream_proxy: None,
             extra_writable: vec![],
             extra_hidden: vec![],
+            loopback: LoopbackAccess::Open,
+            blocked_ports: vec![],
         }
     }
 }
@@ -225,12 +248,16 @@ pub struct WorkspaceSandbox {
     pub network: Option<SandboxNetwork>,
     /// Added to the global `[sandbox] allowed_hosts`.
     pub allowed_hosts: Vec<String>,
+    /// Which loopback ports commands on macOS may connect to.
+    pub loopback: LoopbackAccess,
+    /// Loopback ports commands on macOS never connect to, even when listed.
+    pub blocked_ports: Vec<u16>,
 }
 
 impl SandboxConfig {
     /// This config with a workspace's own mode and network choice in place of the global ones,
-    /// when it sets them, and its hosts added to the global ones. A workspace never removes a
-    /// global or built-in host.
+    /// when it sets them, its hosts added to the global ones, and its loopback choice. A
+    /// workspace never removes a global or built-in host.
     pub fn for_workspace(&self, ws: &WorkspaceSandbox) -> SandboxConfig {
         let mut allowed_hosts = self.allowed_hosts.clone();
         allowed_hosts.extend(
@@ -243,6 +270,8 @@ impl SandboxConfig {
             mode: ws.mode.unwrap_or(self.mode),
             network: ws.network.unwrap_or(self.network),
             allowed_hosts,
+            loopback: ws.loopback,
+            blocked_ports: ws.blocked_ports.clone(),
             ..self.clone()
         }
     }
@@ -269,6 +298,31 @@ fn validate_hosts(path: &str, hosts: &[String]) -> Vec<ValidationIssue> {
             })
         })
         .collect()
+}
+
+/// Blocked loopback ports a workspace may list, because each is a rule in every sandbox policy.
+pub const MAX_BLOCKED_PORTS: usize = 64;
+
+/// A `sandbox_blocked_ports` list: real ports, at most [`MAX_BLOCKED_PORTS`].
+fn validate_blocked_ports(ports: &[u16]) -> Vec<ValidationIssue> {
+    let mut issues: Vec<ValidationIssue> = ports
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| **p == 0)
+        .map(|(i, _)| ValidationIssue {
+            path: format!("sandbox_blocked_ports[{i}]"),
+            message: "Write a port from 1 to 65535, because port 0 names no service.".into(),
+        })
+        .collect();
+    if ports.len() > MAX_BLOCKED_PORTS {
+        issues.push(ValidationIssue {
+            path: "sandbox_blocked_ports".into(),
+            message: format!(
+                "List at most {MAX_BLOCKED_PORTS} ports, because each one is a rule in every sandbox policy."
+            ),
+        });
+    }
+    issues
 }
 
 /// A `sandbox_decoys` list: `~/` file paths, no harness sign-in file, at most
@@ -551,6 +605,12 @@ pub struct WorkspaceSettings {
     /// More decoy credential files (`~/...`) in this workspace's agent sandboxes, added to the
     /// built-in ones, which cannot be removed. Kept in the registry, never in `workspace.toml`.
     pub sandbox_decoys: Vec<String>,
+    /// Which loopback ports sandboxed commands on macOS may connect to. Kept in the registry,
+    /// never in `workspace.toml`.
+    pub sandbox_loopback: LoopbackAccess,
+    /// Loopback ports sandboxed commands on macOS never connect to. Kept in the registry, never
+    /// in `workspace.toml`.
+    pub sandbox_blocked_ports: Vec<u16>,
     /// External MCP servers whose tools every executor can call (HANDOVER 10.6).
     pub mcp_servers: Vec<McpServerConfig>,
 }
@@ -924,6 +984,14 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "More decoy credential files in agent sandboxes, added to the built-in ones",
     ),
     (
+        "sandbox_loopback",
+        "Which loopback ports sandboxed commands on macOS may connect to",
+    ),
+    (
+        "sandbox_blocked_ports",
+        "Loopback ports sandboxed commands on macOS never connect to",
+    ),
+    (
         "mcp_servers",
         "External MCP servers whose tools agents can use",
     ),
@@ -978,6 +1046,8 @@ impl WorkspaceSettings {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_loopback: LoopbackAccess::Open,
+            sandbox_blocked_ports: vec![],
             mcp_servers: vec![],
         }
     }
@@ -988,6 +1058,8 @@ impl WorkspaceSettings {
             mode: self.sandbox_mode,
             network: self.sandbox_network,
             allowed_hosts: self.sandbox_allowed_hosts.clone(),
+            loopback: self.sandbox_loopback,
+            blocked_ports: self.sandbox_blocked_ports.clone(),
         }
     }
 
@@ -1229,6 +1301,7 @@ pub fn validate_workspace(
 ) -> Vec<ValidationIssue> {
     let mut issues = validate_hosts("sandbox_allowed_hosts", &ws.sandbox_allowed_hosts);
     issues.extend(validate_decoys(&ws.sandbox_decoys));
+    issues.extend(validate_blocked_ports(&ws.sandbox_blocked_ports));
     let issue = |path: String, message: String| ValidationIssue { path, message };
 
     if ws.name.trim().is_empty() {
@@ -1815,8 +1888,12 @@ mod tests {
             mode: None,
             network: Some(SandboxNetwork::Public),
             allowed_hosts: vec!["a.dev".into(), "mirror.lan:8080".into()],
+            loopback: LoopbackAccess::Listed,
+            blocked_ports: vec![5432],
         };
         let merged = listed.for_workspace(&ws);
+        assert_eq!(merged.loopback, LoopbackAccess::Listed);
+        assert_eq!(merged.blocked_ports, vec![5432]);
         assert_eq!(
             merged.allowed_hosts,
             vec!["a.dev".to_string(), "mirror.lan:8080".to_string()]

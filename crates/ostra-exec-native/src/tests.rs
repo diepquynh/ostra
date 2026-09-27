@@ -139,6 +139,8 @@ fn spec(
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_loopback: Default::default(),
+            sandbox_blocked_ports: vec![],
         },
         resume: None,
         harness_session_id: None,

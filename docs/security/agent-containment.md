@@ -451,11 +451,13 @@ A containment signal is one of:
 - a Layer 1 denial by the `secret-read`, `self-protection`, or `git-metadata` guard,
 - an egress proxy refusal of a loopback, private, or link-local destination (`10.0.0.1`, the cloud metadata
   address `169.254.169.254`, a local-only name such as `printer.local`, or a name that resolves to such an
-  address). Only requests through the proxy count, so this half exists on Linux only. A connection to
-  `127.0.0.1` stays on the sandbox's own loopback and never reaches the proxy, or
+  address). Only requests through the proxy count. On Linux a connection to `127.0.0.1` stays on the sandbox's
+  own loopback and never reaches the proxy; on macOS a direct connection to the Mac's own services is allowed
+  or refused by the workspace's loopback setting, without a signal, or
 - a process in the sandbox opening one of the decoy credential files Ostra plants in hidden paths, such as
   `~/.ssh/id_rsa` (see [sandboxing](sandboxing.md#decoy-credential-files)). This covers what the
-  `secret-read` guard cannot see: a `cat` in Bash, a script, or a child process. Linux only.
+  `secret-read` guard cannot see: a `cat` in Bash, a script, or a child process. On macOS only on an admin
+  account and for decoy paths where a file exists, because the report comes from the system log.
 
 A refused public host is not a signal, because builds and CLIs call telemetry hosts on their own. It is still
 recorded with the execution's activity, with the setting that would allow it.
@@ -507,7 +509,7 @@ YOLO can be turned on or off during a session. The policy reads the session's cu
 | Build signal and streak thresholds | [`crates/ostra-policy/src/build.rs`](../../crates/ostra-policy/src/build.rs) |
 | Permission rule syntax and matching | [`crates/ostra-policy/src/perms.rs`](../../crates/ostra-policy/src/perms.rs) |
 | Containment signals and the classifier | [`crates/ostra-core/src/containment.rs`](../../crates/ostra-core/src/containment.rs) |
-| Decoy credential files and their inotify watch | [`crates/ostra-core/src/decoy.rs`](../../crates/ostra-core/src/decoy.rs) |
+| Decoy credential files, their inotify watch, and the macOS log reader | [`crates/ostra-core/src/decoy.rs`](../../crates/ostra-core/src/decoy.rs) |
 | Recording signals and the auto-pause | `EngineHost::record_signal` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs), the fold in [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
 | Guard and permission fixtures | [`crates/ostra-policy/tests/policy.rs`](../../crates/ostra-policy/tests/policy.rs) |
 | Harness payload adapters | [`crates/ostra-exec-harness/src/adapters/`](../../crates/ostra-exec-harness/src/adapters/mod.rs) |

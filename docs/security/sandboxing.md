@@ -12,9 +12,11 @@ CLI, so these guarantees hold whatever a command turns out to do:
   hooks are read-only, so an agent cannot plant a program that runs the next time you open a terminal or run git.
 - **Writes stay in the workspace.** The repo, the session, a private `/tmp`, and the session's own tool caches
   are writable; the rest of the machine is read-only, your own `~/.cargo` and `~/.npm` included.
-- **Network access is limited to hosts you allow.** On Linux a sandboxed command has a network of its own and
-  reaches the outside only through a proxy that lets through package registries, source hosts, model APIs, and
-  the hosts you list. Local services, the LAN, and the cloud metadata address stay out of reach.
+- **Network access is limited to hosts you allow.** A sandboxed command reaches the outside only through its
+  own proxy, which lets through package registries, source hosts, model APIs, and the hosts you list. On Linux
+  the command has a network of its own, and local services, the LAN, and the cloud metadata address stay out of
+  reach. On macOS the LAN and the metadata address stay out of reach too, while the services on the Mac itself
+  are open by default, with ports you can block or a setting that closes them.
 - **Your session stays closed.** The desktop bus, the SSH agent, the display, and Docker and Podman sockets are
   hidden or unset, and a command cannot signal a process outside its sandbox.
 - **It is on by default and fails closed.** The default mode, `required`, refuses to start an execution the
@@ -279,12 +281,13 @@ sign-in key, and gets fresh bridge variables for its own execution (see [secrets
 
 #### Decoy credential files
 
-On Linux, an agent execution also finds decoy files inside some hidden paths: fake credentials that
-authenticate nowhere, planted where an agent has no reason to look. Opening one is a containment signal (Rule
-P3), because the `secret-read` guard sees only reads made through a tool, and a `cat ~/.ssh/id_rsa` in Bash or
-in a script would otherwise find an empty dir and leave no trace.
+An agent execution also finds decoy files at some hidden paths: credential files an agent has no reason to
+open. Opening one is a containment signal (Rule P3), because the `secret-read` guard sees only reads made
+through a tool, and a `cat ~/.ssh/id_rsa` in Bash or in a script would otherwise be refused and leave no trace.
+On Linux a decoy is a fake file; on macOS it is the real file, refused and reported
+([below](#decoys-on-macos)).
 
-| Decoy | Planted when |
+| Decoy | Planted on Linux when |
 | --- | --- |
 | `~/.ssh/id_rsa`, `~/.ssh/id_ed25519` | `~/.ssh` exists, or the execution is a harness CLI's, and no SSH port is reachable: the network choice is `none` or `allowlist` and no allowed host names port 22 |
 | `~/.git-credentials` | the file exists, or the execution is a harness CLI's |
@@ -304,8 +307,8 @@ session. A workspace decoy whose file name starts with `id_` under `~/.ssh/` is 
 same port 22 condition applies.
 
 The Settings screen shows the list on the Permissions tab under "Decoy files", with the built-in decoys listed
-above it as fixed entries. On a server that cannot plant decoys (macOS, or no bubblewrap), the field is
-disabled and links to this section. `GET /api/workspaces/<id>` reports that as `sandbox.decoys`, and the
+above it as fixed entries. On a server that cannot plant decoys (no sandbox, or macOS on an account that is not
+an admin), the field is disabled and links to this section. `GET /api/workspaces/<id>` reports that as `sandbox.decoys`, and the
 built-in list as `sandbox.builtin_decoys`.
 
 Each execution gets its own decoys with fresh random contents, written to `<data dir>/decoys/<16 hex>/`, which
@@ -322,7 +325,34 @@ one set of decoys across its Bash calls; a harness execution keeps its set for t
 are removed when the execution ends, and at server start any a crashed server left behind.
 
 Project programs (formatters, language servers, code providers, MCP servers) get no decoys, because their
-signals have no session to pause. Seatbelt has no bind mounts, so macOS plants none.
+signals have no session to pause.
+
+##### Decoys on macOS
+
+Seatbelt has no bind mounts, so it cannot put a fake file in place. A decoy there is a file that already exists
+at one of the decoy paths, such as your real `~/.ssh/id_rsa`, which the sandbox hides anyway. The policy refuses
+reading its contents with a rule that carries a message of its own, a random `dev.ostra.decoy.<16 hex>` per file
+and execution:
+
+```
+(deny file-read-data (literal "/Users/you/.ssh/id_rsa") (with message "dev.ostra.decoy.5f0c2a9e81d34b7a"))
+```
+
+The kernel's Sandbox extension logs each refusal to the system log with that message. One `log stream` process
+per server ([`decoy.rs`](../../crates/ostra-core/src/decoy.rs)) reads only records from the kernel (process 0,
+sender `Sandbox`) that carry a decoy message, because any process may log text of its own, and reports the
+file's first refusal. The rule covers `file-read-data` alone, so `stat` and `ls ~/.ssh` raise nothing. The same
+port 22 condition applies to SSH keys. The server starts the reader at startup, and it waits until `log stream`
+is attached before the first decoy counts, so a command that starts right after is seen; measured, a report
+arrives within milliseconds, and a thousand other refusals in front of it did not suppress it.
+
+This has two limits that macOS sets:
+
+- **An admin account only.** macOS lets only admin accounts run `log stream` ("Must be admin to run 'stream'
+  command"). On another account `sandbox.decoys` is false, the Settings field is disabled, and no decoy counts.
+- **Existing files only.** Opening a file that does not exist fails with `ENOENT` before Seatbelt checks it, and
+  nothing is logged, so a missing decoy path gets no rule. Where the Linux sandbox plants `~/.git-credentials` in
+  a hidden dir, macOS covers it only when you have one.
 
 ### A deeper rule overrides a shallower one
 
@@ -510,7 +540,9 @@ plain HTTP in absolute form (`GET http://host/path`), which it sends on in origi
 and without `Proxy-*` headers. For each request it:
 
 1. Checks the host by name against the policy. An unlisted name is never looked up, so the proxy leaks no DNS
-   query for it.
+   query for it. Neither is a local-only name you did not list (`localhost`, `.local`, `.internal`, `.lan`,
+   `.home.arpa`, a single label), which is refused at once, because it can only point at this machine or the LAN
+   and its lookup goes out on the LAN.
 2. Resolves the name itself and connects to the address it checked, never a second lookup, so a DNS answer that
    changes between the check and the connection cannot move it to another address.
 3. For a `CONNECT` to a host name, reads the TLS ClientHello and compares its server name (SNI) with the host.
@@ -541,8 +573,8 @@ and 80. A host you list may resolve to any address, including a private one, bec
 model gateway on your LAN.
 
 A loopback entry needs a port (`127.0.0.1:8317`, `localhost:8317`), and saving one without is a validation error.
-Programs connect to loopback directly instead of through the proxy (`NO_PROXY`), so Ostra forwards each listed
-loopback port from the sandbox's loopback to the host's.
+Programs connect to loopback directly instead of through the proxy (`NO_PROXY`), so on Linux Ostra forwards each
+listed loopback port from the sandbox's loopback to the host's, and on macOS the policy allows that port.
 
 The global list is `[sandbox] allowed_hosts` in `config.toml`. Each workspace can add its own
 (`sandbox_allowed_hosts`), which is kept in the registry, never in `.ostra/workspace.toml`, and adds to the global
@@ -552,8 +584,8 @@ the next execution, replaces a running language server on its next use, and reco
 The Settings screen sets both on the Permissions tab, in the Network panel: the four choices plus "Use the global
 setting", which names the global choice, then the workspace's hosts, one per line. Under the field the panel
 lists the global hosts and, folded, the built-in ones. Under `none` or `host` the field stays editable, and its
-hint says the choice ignores the hosts. On macOS the panel says to choose `none` unless it is chosen, because
-Ostra has no egress proxy there (Seatbelt on macOS, below). The server checks every host as you edit and again at
+hint says the choice ignores the hosts. On macOS the panel also has the loopback choice and the blocked ports
+([how a command gets out on macOS](#how-a-command-gets-out-on-macos)). The server checks every host as you edit and again at
 save, and a host that does not parse shows its issue on the field. `GET /api/workspaces/<id>` carries what the panel shows:
 `global_sandbox` (the global `network` and `allowed_hosts`) and `sandbox.builtin_hosts`.
 
@@ -581,13 +613,80 @@ through unchanged.
   in the CLI's launch environment or in Ostra's own, of `env.*_BASE_URL` in Claude Code's `settings.json`, and of
   `model_providers.*.base_url` in Codex's `config.toml`. Those may resolve anywhere, like a host you listed.
 
-#### Seatbelt on macOS
+#### How a command gets out on macOS
 
-Seatbelt has no network namespace, and Ostra has no egress proxy on macOS. Under `none`, native Bash and
-project programs get no IP traffic or DNS. Under every other choice, and for a harness CLI under every choice
-because it needs its model API, a sandboxed command shares the host's network: outbound IP, localhost binds and
-inbound local connections, and DNS through mDNSResponder. The sandbox status reports this as a known gap. On Seatbelt, Unix sockets are allowed only
-inside writable dirs, whatever the setting, and denied everywhere else.
+macOS has no network namespaces, so every Seatbelt sandbox shares the host's loopback, where your local services
+listen. A Seatbelt rule filters a connection by its remote address and port only, `localhost:<port>` or
+`localhost:*`, and `localhost` there means every address of this Mac, its LAN address included (measured). So
+Ostra gives each execution ports of its own on `127.0.0.1`, and the workspace chooses what else on this Mac its
+commands may connect to:
+
+```
+Seatbelt sandbox (host loopback)                       Ostra server
+  curl https://registry.npmjs.org/...
+    │ HTTPS_PROXY=http://127.0.0.1:<proxy port>
+    ▼
+  127.0.0.1:<proxy port> ──────────────────────────> egress proxy ── policy ──> registry.npmjs.org:443
+  127.0.0.1:<bridge port> (OSTRA_URL) ─────────────> bridge-<id>.sock ──> hook bridge (/internal/* only)
+  127.0.0.1:<listed port> ─────────────────────────> the service you listed, directly
+```
+
+| Loopback setting | A command on macOS connects to |
+| --- | --- |
+| Every port but the blocked ones (`open`, default) | Every service on this Mac, so tests reach the servers they start; never a blocked port or Ostra's own server port |
+| Only listed ports (`listed`) | Its proxy, its bridge port, and loopback ports in `allowed_hosts`, minus blocked ones |
+
+The setting applies under `allowlist` and `public`. Under `none` a command connects to its proxy and bridge port
+only (a harness CLI's), because `none` reaches nothing. Other machines on the LAN stay out of reach either way:
+a command reaches them only through the proxy, which refuses private addresses you did not list. The policy for
+the default, with port 5432 blocked:
+
+```
+(allow network-inbound (local ip "localhost:*"))
+(allow network-bind (local ip "localhost:*"))
+(allow network-outbound (remote ip "localhost:*"))
+(allow network-outbound (remote ip "localhost:8317"))
+(deny network-outbound (remote ip "localhost:5432"))
+(deny network-outbound (remote ip "localhost:7878"))
+(allow network-outbound (remote ip "localhost:52114"))
+(allow network-outbound (remote ip "localhost:52117"))
+```
+
+Seatbelt applies the last matching rule, so the order matters: every port or the listed ones, then the blocked
+ports and Ostra's server port (7878 here, recorded when the server starts), then the execution's own ports, which
+nothing overrides. Blocked ports win over `allowed_hosts`, on Linux too, where a blocked port is not forwarded.
+
+Under every choice but `host`:
+
+- **The proxy is the same one, on a port instead of a socket.** Each execution's proxy listens on a free port of
+  `127.0.0.1` (`egress::loopback_proxy`), and the command gets the same proxy variables as on Linux
+  (`sandbox::proxy_env`). Where the loopback is open, a sandbox can connect to another execution's proxy port,
+  so each loopback proxy requires a credential of its own, carried in its URL
+  (`http://ostra:<32 hex>@127.0.0.1:<port>`), and answers `407 Proxy Authentication Required` without it. No
+  other sandbox can read the credential, because the policy refuses reading another process's environment
+  ([below](#seatbelt-on-macos)). Measured: curl, git, Node `fetch`, npm, Python `urllib`, pip, Go, cargo, Claude
+  Code, Codex, and Grok send it (git after the `407`).
+- **The hook bridge gets a port of its own** that splices to the server's bridge socket
+  (`egress::loopback_splice`), and `OSTRA_URL` names it, so the console's API is not reachable from the sandbox.
+- **A listed loopback host is reached directly,** because programs skip the proxy for loopback (`NO_PROXY`):
+  `127.0.0.1:8317` in `allowed_hosts` adds `localhost:8317` to the policy.
+- **Nothing resolves names but the proxy.** The policy does not allow the DNS resolver's socket
+  (`mDNSResponder`), because a lookup carries data out in the name itself. `localhost` still resolves, from
+  `/etc/hosts`.
+- **A command may always listen on loopback.** Under `listed`, a test that starts a server on a random port and
+  connects to it is refused, because the policy cannot tell that server from your other local services.
+- **Unix sockets** are allowed only inside writable dirs, whatever the setting, and denied everywhere else.
+
+Under `host` the policy allows all outbound IP and the DNS resolver, as before. Measured with real
+`harness_probe` runs (`PROBE_HARDEN=1`), Claude Code, Codex, and Grok work this way under `allowlist` in both
+loopback settings, a model gateway on the LAN included. Under `listed`, this Mac's services are unreachable;
+under `open` they are reachable on loopback and on its LAN address. In both, other LAN hosts, the metadata
+address, and DNS are unreachable, and the proxy's refusals match Linux.
+
+The workspace keeps both settings in the registry (Rule A2): `sandbox_loopback` (`open` or `listed`) and
+`sandbox_blocked_ports` (at most 64 ports). There is no global setting. On macOS the Settings screen shows them
+in the Network panel, on the Permissions tab. A change applies to the next execution, and restarts a language
+server or a stdio MCP server the next time it is used.
 
 ## Harness CLIs in the sandbox
 
@@ -622,12 +721,13 @@ to `Profile::for_execution`:
   because Ostra's hooks and sandbox take the place of its approvals; this flag is passed whether or not Ostra's
   sandbox is active, so a Codex execution in mode `off` has no sandbox at all.
 - **Its model API and the hook bridge stay reachable.** Under every network choice the CLI reaches its own
-  model and sign-in hosts and the model endpoints you configured for it (see [network](#network)). On bubblewrap
-  with a network of its own, the hook bridge's port is forwarded to the server's bridge socket, which answers
-  only `/internal/*`, so a command in the sandbox cannot reach Ostra's API even with a stolen cookie. When Ostra
-  listens on an address other than loopback, `OSTRA_URL` inside such a sandbox becomes
-  `http://127.0.0.1:<port>`, because loopback is where the helper forwards the port. Under `host` and on
-  Seatbelt the CLI calls the server's own address, as an unsandboxed one does.
+  model and sign-in hosts and the model endpoints you configured for it (see [network](#network)). Under every
+  choice but `host`, the hook bridge is reached through the server's bridge socket, which answers only
+  `/internal/*`, so a command in the sandbox cannot reach Ostra's API even with a stolen cookie. On bubblewrap
+  the helper forwards the bridge's own port inside the network namespace to that socket; on Seatbelt a fresh
+  port of `127.0.0.1` splices to it. `OSTRA_URL` becomes `http://127.0.0.1:<port>` for that port, and so does the
+  URL in any config file the launch wrote, because Grok's config passes it to the MCP server it starts. Under
+  `host` the CLI calls the server's own address, as an unsandboxed one does.
 - **Only its own sign-in is visible.** The CLI keeps its own sign-in file and its own API key variables (for
   example `ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex). Every other harness's sign-in and
   every other provider key is hidden or removed. The agent's own shell commands inside that CLI can read the
@@ -706,10 +806,10 @@ runs the program through `/usr/bin/sandbox-exec -p <policy>`. It calls that abso
 prefix on `PATH` is writable by the user, and it refuses a binary that is not owned by root or that group or
 others can write.
 
-The policy starts from `(deny default)` and allows process exec and fork, reading files, `sysctl` reads, POSIX
-semaphores and shared memory, preference reads, a short list of system mach services (directory lookup, the
-notification center, logging, `trustd`, `configd`, `cfprefsd`, and `dirhelper`), and signals and process info only
-for processes in the same sandbox. Everything else stays denied, including the keychain, the pasteboard, Apple
+The policy starts from `(deny default)` and allows process exec and fork, reading files, a measured list of
+`sysctl` reads, POSIX semaphores and shared memory, preference reads, a short list of system mach services
+(directory lookup, the notification center, logging, `trustd`, `configd`, `cfprefsd`, and `dirhelper`), and
+signals and process info only for processes in the same sandbox. Everything else stays denied, including the keychain, the pasteboard, Apple
 Events (so `osascript` cannot drive another app), LaunchServices (`open -a`), `launchctl submit`, the window
 server, TCC, and preference writes (`defaults write`). The ordered rules follow: `file-write*` allowed for
 writable paths, denied for read-only paths, and `file-read*` and `file-write*` both denied for hidden paths.
@@ -732,10 +832,25 @@ processes that called `setsid` or double-forked. At startup, when no other serve
 process that still carries the data dir's shared name, which cleans up after a server that crashed
 ([`kill_leftovers`](../../crates/ostra-server/src/app.rs)).
 
-**Known gap.** A Seatbelt sandbox can read the arguments and startup environment of any process the same user
-runs (`sysctl KERN_PROCARGS2`). Ostra clears its own startup environment first thing in `main`
-(`scrub_startup_env`), but other programs the user runs are exposed, so keep tokens out of shell-profile exports.
-Ostra reports this gap in the sandbox status, at startup, and on the setup screen.
+**Other processes' arguments and environment.** On macOS a program reads another process's arguments and
+startup environment with `sysctl(KERN_PROCARGS2)`, where tokens exported in a shell profile sit. The kernel
+allows it when either of two checks passes, `sysctl-read` of `kern.procargs2` or `process-info-pidinfo` on the
+process, and `(deny default)` does not cover the second (measured on macOS 26). So the policy closes both:
+
+- `sysctl-read` is a list of names instead of every name: the `hw.` and `machdep.cpu.` families, a few `kern.`
+  names (`osrelease`, `ostype`, `version`, `hostname`, `argmax`, and the like), the interface list that
+  `getifaddrs` reads (`net.routetable.0.0.3.0`), and `security.mac.lockdown_mode_state`. It is what git, cargo,
+  npm, node, go, python, clang through `xcrun`, and the four harness CLIs read when measured with Seatbelt's
+  reports.
+- `(deny process-info*)` comes before `(allow process-info* (target same-sandbox))`, so a command reads its own
+  children and nothing else. A narrower `(deny process-info-pidinfo)` also refuses a process its own, and dyld
+  aborts every program at start.
+
+`ps` does not start in the sandbox either, because it is setuid, and `pgrep` asks `sysmond`, which stays denied.
+Ostra still clears its own startup environment first thing in `main` (`scrub_startup_env`), because agent
+commands in mode `off` run unsandboxed and could read it. With both closed, Ostra reports no known gaps for
+Seatbelt (`known_gaps`); the limits under [what the sandbox does not cover](#what-the-sandbox-does-not-cover)
+still apply.
 
 Seatbelt cannot start inside another Seatbelt sandbox. If Ostra itself runs sandboxed (for example, from inside a
 sandboxed app's terminal), the probe detects `sandbox_apply: Operation not permitted` and says to start Ostra
@@ -841,7 +956,12 @@ These limits follow from the design, and the sections above give the reasons:
   decrypt the tunnel, so it cannot see an HTTP `Host` header inside it that names another site on the same CDN.
 - **Telemetry.** CLIs and build tools that report to hosts outside the list are refused. The four harness CLIs
   continued without it when measured; add the host for a tool that does not.
-- **macOS shares the host network** under every choice but `none`, and for a harness CLI under `none` too.
+- **This Mac's own services, by default.** With the loopback open, the default, a command on macOS reaches every
+  service on this Mac that you did not block: databases, SSH port forwards (which lead on to other machines),
+  IDE and container engine ports. Ostra's own server port and other executions' proxies stay closed. Choose
+  listed ports only where that matters, which breaks tests that connect to a server on a random port (see
+  [how a command gets out on macOS](#how-a-command-gets-out-on-macos)). A connection the policy refuses is not a
+  containment signal, because Ostra reads only decoy refusals from the log.
 - **Repositories past the walk's limits, and new ones.** Git's config is protected in every repo the walk finds when
   an execution starts. A repo below a skipped dir (`node_modules`, a cache), past the walk's 20,000 dirs or 128
   repos, or created by the agent during the execution has a writable `.git/config`. Ostra's own git does not run
@@ -851,7 +971,8 @@ These limits follow from the design, and the sections above give the reasons:
   key in `~/Documents`, is readable unless `extra_hidden` names it.
 - **What the agent is allowed to change.** The sandbox lets an agent write the whole workspace. Stage-level limits
   (a reviewer that must not edit code, a builder confined to its paths) are the policy's write scope.
-- **Seatbelt's process arguments gap**, described under [Seatbelt](#seatbelt-on-macos).
+- **Decoys on macOS** count only on an admin account and only for files that exist (see
+  [decoys on macOS](#decoys-on-macos)).
 - **Decoys are a tripwire, not a wall.** The decoy list is in this page, so an agent that has read it can avoid
   the files. A decoy catches a model probing for credentials, and the hidden list is what keeps the real ones
   out of reach.
@@ -865,7 +986,7 @@ These limits follow from the design, and the sections above give the reasons:
 | The egress proxy, host rules, built-in hosts, the SNI check, the upstream proxy | [`crates/ostra-core/src/egress.rs`](../../crates/ostra-core/src/egress.rs) |
 | The hook bridge socket | `serve_bridge_socket` in [`crates/ostra-server/src/bridge.rs`](../../crates/ostra-server/src/bridge.rs) |
 | The seccomp filter | [`crates/ostra-core/src/seccomp.rs`](../../crates/ostra-core/src/seccomp.rs) |
-| Decoy credential files and their inotify watch | [`crates/ostra-core/src/decoy.rs`](../../crates/ostra-core/src/decoy.rs) |
+| Decoy credential files, their inotify watch, and the macOS log reader | [`crates/ostra-core/src/decoy.rs`](../../crates/ostra-core/src/decoy.rs) |
 | `HOME_CREDENTIALS` and the data dir | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |
 | `SandboxConfig`, `SandboxMode`, `validate_sandbox` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
 | `SandboxStatus` | [`crates/ostra-core/src/api.rs`](../../crates/ostra-core/src/api.rs) |

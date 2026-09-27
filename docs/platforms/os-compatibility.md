@@ -126,12 +126,17 @@ absolute path and refuses it unless root owns it and no one else can write to it
 - macOS cannot start a sandbox inside another sandbox. When you start Ostra from a sandboxed terminal or from
   another agent, the probe reports `sandbox_apply: Operation not permitted` and tells you to start it outside.
 
-Seatbelt also has a gap that Ostra cannot close. On macOS, any program running as your user, a sandboxed one
-included, can read the arguments and startup environment of your other programs through
-`sysctl(KERN_PROCARGS2)`. Ostra protects its own copy: the first thing `main` does is move the environment off
-the stack and zero the original strings (`scrub_startup_env`). It cannot protect your other programs, so the setup
-check names this gap. Keep tokens in the keychain or in a file the sandbox hides, not in exports in your shell
-profile.
+- macOS has no network namespaces, so every sandbox shares the host's loopback. Each execution's egress proxy
+  and hook bridge get ports of their own on `127.0.0.1`. By default a command may also connect to every other
+  service on the Mac except blocked ports and Ostra's own; a workspace can block ports or allow listed ports
+  only, and then a test that connects to a server on a random port is refused.
+- Any unsandboxed program of your user can read another process's arguments and startup environment through
+  `sysctl(KERN_PROCARGS2)`. The Seatbelt policy refuses that to sandboxed commands, and Ostra also clears its own
+  startup environment first thing in `main` (`scrub_startup_env`) for commands that run in mode `off`.
+- Decoy credential files count only on an admin account, because macOS shows the sandbox's reports in the system
+  log to admins only, and only for decoy paths where a file exists.
+
+[Sandboxing](../security/sandboxing.md#how-a-command-gets-out-on-macos) has the details and the measurements.
 
 ### When no sandbox is available
 

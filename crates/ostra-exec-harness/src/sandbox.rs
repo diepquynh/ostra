@@ -7,7 +7,7 @@
 use crate::launch::{LaunchInput, LaunchPlan, grok_home_real};
 use crate::protocol::ENV_URL;
 use ostra_core::HarnessKind;
-use ostra_core::config::{SandboxConfig, SandboxNetwork};
+use ostra_core::config::SandboxConfig;
 use ostra_core::egress::HostRule;
 use ostra_core::sandbox::{self, Backend, Decision, Members, Profile};
 use std::ffi::OsStr;
@@ -122,10 +122,29 @@ pub fn wrap(
     // The server's bridge socket answers only `/internal/*`, so the sandbox cannot reach `/api`.
     let profile = match &inp.bridge_socket {
         Some(sock) => profile.forward_socket(&backend, bridge.port(), sock),
-        None => profile
-            .forward(&backend, bridge)
-            .map_err(|e| format!("forwarding the hook bridge into the sandbox: {e}"))?,
-    };
+        None => profile.forward(&backend, bridge),
+    }
+    .map_err(|e| format!("forwarding the hook bridge into the sandbox: {e}"))?;
+    // A forwarded bridge is reached on loopback: its own port inside a network namespace, where
+    // only loopback exists, and a fresh one under Seatbelt, whose policy names that port only.
+    let inside_url = profile
+        .forwarded_port(bridge.port())
+        .map(|p| format!("http://127.0.0.1:{p}"));
+    let mut plan = plan;
+    if let Some(url) = inside_url.as_ref().filter(|u| **u != inp.server_url) {
+        // Grok's config names the bridge for the MCP server it starts, so the file says it too.
+        let mut changed = false;
+        for (_, text) in plan.files.iter_mut() {
+            if let Some(t) = replace_url(text, &inp.server_url, url) {
+                *text = t;
+                changed = true;
+            }
+        }
+        if changed {
+            crate::launch::materialize(&plan)
+                .map_err(|e| format!("writing the harness config: {e}"))?;
+        }
+    }
     let mut profile = profile
         .new_session(false)
         .tty(seatbelt)
@@ -159,12 +178,10 @@ pub fn wrap(
     )?;
     let text = |s: &OsStr| s.to_string_lossy().into_owned();
     let mut env = plan.env.clone();
-    // Inside a network namespace only loopback exists, where the helper forwards the bridge's
-    // port, so a bridge on another local address is named by its loopback port.
-    if !seatbelt && cfg.network != SandboxNetwork::Host && !bridge.ip().is_loopback() {
+    if let Some(url) = &inside_url {
         for (k, v) in env.iter_mut() {
             if k == ENV_URL {
-                *v = format!("http://127.0.0.1:{}", bridge.port());
+                *v = url.clone();
             }
         }
     }
@@ -186,6 +203,27 @@ pub fn wrap(
         members: sc.members,
         warning: None,
     })
+}
+
+/// `text` with each `from` URL replaced by `to`, where the port does not go on with another
+/// digit. `None` when it holds none.
+fn replace_url(text: &str, from: &str, to: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    let mut found = false;
+    while let Some(i) = rest.find(from) {
+        let after = &rest[i + from.len()..];
+        out.push_str(&rest[..i]);
+        if after.starts_with(|c: char| c.is_ascii_digit()) {
+            out.push_str(from);
+        } else {
+            out.push_str(to);
+            found = true;
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    found.then_some(out)
 }
 
 /// The hook bridge's address from Ostra's callback URL, `http://<ip>:<port>`.
@@ -314,6 +352,21 @@ mod tests {
     use crate::launch::tests::{input, spec};
 
     #[test]
+    fn the_bridge_url_is_replaced_only_where_the_port_ends() {
+        let from = "http://127.0.0.1:4100";
+        assert_eq!(
+            replace_url(
+                "a = \"http://127.0.0.1:4100\", b = \"http://127.0.0.1:41000\", c = http://127.0.0.1:4100/x",
+                from,
+                "http://127.0.0.1:5"
+            )
+            .as_deref(),
+            Some("a = \"http://127.0.0.1:5\", b = \"http://127.0.0.1:41000\", c = http://127.0.0.1:5/x")
+        );
+        assert_eq!(replace_url("http://127.0.0.1:41000", from, "x"), None);
+    }
+
+    #[test]
     fn base_urls_and_the_bridge_address_parse() {
         let rule = |s: &str| HostRule::parse(s).unwrap();
         assert_eq!(
@@ -334,14 +387,14 @@ mod tests {
         assert!(bridge_addr("http://localhost:4100").is_err());
     }
 
-    /// The hook bridge and a loopback model gateway stay reachable from the CLI's private network
-    /// namespace, and nothing else on the host's loopback is.
+    /// The hook bridge (at `OSTRA_URL`) and a loopback model gateway stay reachable from the
+    /// CLI's sandbox, and nothing else on the host's loopback is.
     #[test]
     fn the_bridge_and_listed_loopback_hosts_reach_the_host() {
-        let Some(Backend::Bubblewrap(_)) = sandbox::backend() else {
-            eprintln!("bubblewrap unavailable; skipping");
+        if sandbox::backend().is_none() {
+            eprintln!("no sandbox here; skipping");
             return;
-        };
+        }
         let serve = |body: &'static str| {
             let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let port = l.local_addr().unwrap().port();
@@ -367,33 +420,48 @@ mod tests {
         let mut inp = input(&s, HarnessKind::Claude, &root);
         inp.server_url = format!("http://127.0.0.1:{bridge}");
         let script = format!(
-            "for p in {bridge} {gateway} {other}; do echo \"got:$(curl -s --max-time 3 http://127.0.0.1:$p/)\"; done"
+            "echo \"url:$(curl -s --max-time 3 $OSTRA_URL/)\"; echo \"file:$(curl -s --max-time 3 $(cat {conf})/)\"; for p in {gateway} {other} {bridge}; do echo \"got:$(curl -s --max-time 3 http://127.0.0.1:$p/)\"; done",
+            conf = root.join("cfg/bridge-url").display()
         );
         let run = |inp: &LaunchInput<'_>| {
             let plan = LaunchPlan {
                 program: "sh".into(),
                 args: vec!["-c".into(), script.clone()],
-                env: vec![(
-                    "ANTHROPIC_BASE_URL".into(),
-                    format!("http://127.0.0.1:{gateway}"),
-                )],
+                env: vec![
+                    (
+                        "ANTHROPIC_BASE_URL".into(),
+                        format!("http://127.0.0.1:{gateway}"),
+                    ),
+                    (ENV_URL.into(), inp.server_url.clone()),
+                ],
                 cwd: root.join("repo"),
-                files: vec![],
+                // As Grok's config names the bridge for its MCP server.
+                files: vec![(root.join("cfg/bridge-url"), inp.server_url.clone())],
                 links: vec![],
                 session_id: None,
                 env_remove: vec![],
                 tty_param: None,
             };
+            crate::launch::materialize(&plan).unwrap();
+            // Listed ports only, so the other listener must stay unreachable on macOS too.
+            let cfg = SandboxConfig {
+                loopback: ostra_core::config::LoopbackAccess::Listed,
+                ..Default::default()
+            };
             let wrapped = wrap(
                 plan,
                 inp,
-                &SandboxConfig::default(),
+                &cfg,
                 std::sync::Arc::new(|_| {}),
                 std::sync::Arc::new(|_| {}),
             )
             .unwrap();
             let plan = wrapped.plan;
-            let out = std::process::Command::new(&plan.program)
+            let mut cmd = std::process::Command::new(&plan.program);
+            if plan.tty_param.is_some() {
+                cmd.args(["-D", "TTY=/dev/null"]);
+            }
+            let out = cmd
                 .args(&plan.args)
                 .envs(plan.env.iter().map(|(k, v)| (k, v)))
                 .env("HOME", root.join("home"))
@@ -403,7 +471,8 @@ mod tests {
             String::from_utf8_lossy(&out.stdout).into_owned()
         };
         let text = run(&inp);
-        assert!(text.contains("got:bridge"), "{text}");
+        assert!(text.contains("url:bridge"), "{text}");
+        assert!(text.contains("file:bridge"), "{text}");
         assert!(text.contains("got:gateway"), "{text}");
         assert!(!text.contains("got:other"), "{text}");
 
@@ -422,8 +491,9 @@ mod tests {
         });
         inp.bridge_socket = Some(sock.clone());
         let text = run(&inp);
-        assert!(text.contains("got:socket"), "{text}");
-        assert!(!text.contains("got:bridge"), "{text}");
+        assert!(text.contains("url:socket"), "{text}");
+        assert!(text.contains("file:socket"), "{text}");
+        assert!(!text.contains("bridge"), "{text}");
         assert!(
             sock.exists(),
             "the sandbox leaves the server's socket in place"

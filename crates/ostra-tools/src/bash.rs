@@ -514,6 +514,8 @@ mod tests {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_loopback: Default::default(),
+            sandbox_blocked_ports: vec![],
         };
         let profile = ostra_core::sandbox::Profile::for_execution(
             &ctx,

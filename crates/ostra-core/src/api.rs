@@ -534,7 +534,8 @@ pub struct SandboxStatus {
     /// What the working sandbox cannot enforce on this OS.
     #[ts(optional)]
     pub gaps: Option<String>,
-    /// Decoy credential files work here: they need bubblewrap, so Linux only.
+    /// Decoy credential files work here: always under bubblewrap, and under Seatbelt on an
+    /// admin account, because macOS shows the system log's sandbox reports to admins only.
     pub decoys: bool,
     /// The decoys every agent sandbox gets, as `~/` paths. A workspace adds to them.
     pub builtin_decoys: Vec<String>,
@@ -560,7 +561,7 @@ impl SandboxStatus {
             gaps: backend()
                 .filter(|_| active)
                 .and_then(|b| known_gaps(b, cfg.network)),
-            decoys: matches!(backend(), Some(crate::sandbox::Backend::Bubblewrap(_))),
+            decoys: backend().is_some_and(crate::decoy::supported),
             builtin_decoys: crate::decoy::HOME_DECOYS
                 .iter()
                 .map(|(rel, _)| format!("~/{rel}"))

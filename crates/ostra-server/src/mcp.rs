@@ -107,7 +107,8 @@ fn now() -> i64 {
 }
 
 /// The parts of a server's settings that need a new connection when they change.
-/// A changed config, sandbox mode, network choice, or allowed host starts a new connection.
+/// A changed config, sandbox mode, network choice, allowed host, or loopback setting starts a new
+/// connection.
 fn fingerprint(s: &McpServerConfig, sandbox: &WorkspaceSandbox) -> String {
     serde_json::json!([
         s.command,
@@ -117,7 +118,9 @@ fn fingerprint(s: &McpServerConfig, sandbox: &WorkspaceSandbox) -> String {
         s.oauth,
         sandbox.mode,
         sandbox.network,
-        sandbox.allowed_hosts
+        sandbox.allowed_hosts,
+        sandbox.loopback,
+        sandbox.blocked_ports
     ])
     .to_string()
 }

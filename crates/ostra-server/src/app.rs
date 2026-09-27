@@ -344,6 +344,7 @@ impl App {
 }
 
 pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
+    ostra_core::sandbox::set_server_port(port);
     let global_path = ensure_global_config()?;
     let global: GlobalConfig =
         load_toml(&global_path).with_context(|| format!("reading {}", global_path.display()))?;
@@ -510,6 +511,8 @@ pub async fn run(opts: ServeOptions) -> anyhow::Result<()> {
         }
         ostra_core::decoy::remove_stale();
     }
+    // Waits for `log stream` to attach, which can take seconds.
+    tokio::task::spawn_blocking(ostra_core::decoy::watch_reports);
     let app = build(&opts, port).await?;
     crate::auth::write_server_file(&app.auth)?;
     let url = app.auth.sign_in_url()?;

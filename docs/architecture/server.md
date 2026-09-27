@@ -41,13 +41,16 @@ call in the native loop.
 `app::run` in `crates/ostra-server/src/app.rs` starts the server in this order:
 
 1. **Prepare the environment.** Before any thread starts, `scrub_startup_env` moves the process environment
-   off the stack and zeroes the original strings. On macOS any process of the same user, a sandboxed one
-   included, can read another process's startup environment, and that is where provider keys would sit.
+   off the stack and zeroes the original strings. On macOS any unsandboxed process of the same user, an agent
+   command in mode `off` included, can read another process's startup environment, and that is where provider
+   keys would sit. Ostra's Seatbelt policy refuses it to sandboxed commands.
    Then `extend_path` adds the usual install folders to `PATH`, so a harness CLI installed while the server
    runs is found without a restart.
 2. **Read the global config** and bind the listener.
 3. **Stop leftovers.** On macOS, processes that an earlier server started inside a sandbox are not ended with
-   their parent. If no other server is alive, Ostra ends them before recovery starts executions again.
+   their parent. If no other server is alive, Ostra ends them before recovery starts executions again. Then,
+   on a macOS admin account, it starts reading the sandbox's decoy reports from the system log, so the first
+   execution's decoys count from its first command.
 4. **Open the data dir.** It loads the cached model prices (refreshed from models.dev once a day in the
    background), opens the registry, and unlocks it with the master key, sealing any plaintext credential it
    finds. It writes the embedded prompts and skills to `assets/` in the data dir.

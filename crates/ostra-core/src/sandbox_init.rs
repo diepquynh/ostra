@@ -11,6 +11,7 @@ use std::path::PathBuf;
 /// Exit status for a helper that cannot start the command, as `env` and `timeout` use.
 const FAILED: i32 = 125;
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 struct Args {
     proxy: Option<PathBuf>,
     forwards: Vec<(u16, PathBuf)>,
@@ -79,16 +80,10 @@ fn run(args: Args) -> Result<i32, String> {
     cmd.args(&args.args);
     if let Some(sock) = args.proxy {
         let l = bind(Ipv4Addr::LOCALHOST.into(), 0)?;
-        let url = format!(
-            "http://127.0.0.1:{}",
-            l.local_addr().map_err(|e| e.to_string())?.port()
-        );
-        for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
-            cmd.env(k, &url).env(k.to_ascii_lowercase(), &url);
-        }
-        cmd.env("NO_PROXY", "localhost,127.0.0.1,::1")
-            .env("no_proxy", "localhost,127.0.0.1,::1")
-            .env("NODE_USE_ENV_PROXY", "1");
+        let port = l.local_addr().map_err(|e| e.to_string())?.port();
+        cmd.envs(crate::sandbox::proxy_env(&format!(
+            "http://127.0.0.1:{port}"
+        )));
         listeners.push((l, sock));
     }
     // While the helper still has one thread, so the filter covers every thread it starts.

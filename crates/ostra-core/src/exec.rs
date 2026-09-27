@@ -104,6 +104,12 @@ pub struct ExecContext {
     /// The workspace's own decoy paths, added to the built-in ones.
     #[serde(default)]
     pub sandbox_decoys: Vec<String>,
+    /// The workspace's loopback choice for macOS.
+    #[serde(default)]
+    pub sandbox_loopback: crate::config::LoopbackAccess,
+    /// The workspace's blocked loopback ports for macOS.
+    #[serde(default)]
+    pub sandbox_blocked_ports: Vec<u16>,
 }
 
 impl ExecContext {
@@ -113,6 +119,8 @@ impl ExecContext {
             mode: self.sandbox_mode,
             network: self.sandbox_network,
             allowed_hosts: self.sandbox_allowed_hosts.clone(),
+            loopback: self.sandbox_loopback,
+            blocked_ports: self.sandbox_blocked_ports.clone(),
         }
     }
 }

@@ -338,6 +338,10 @@ struct Access {
     sandbox_allowed_hosts: Vec<String>,
     #[serde(default)]
     sandbox_decoys: Vec<String>,
+    #[serde(default)]
+    sandbox_loopback: ostra_core::config::LoopbackAccess,
+    #[serde(default)]
+    sandbox_blocked_ports: Vec<u16>,
 }
 
 fn access(registry: &RegistryDb, root: &Path) -> Access {
@@ -358,6 +362,8 @@ fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) {
         sandbox_network: s.sandbox_network,
         sandbox_allowed_hosts: s.sandbox_allowed_hosts.clone(),
         sandbox_decoys: s.sandbox_decoys.clone(),
+        sandbox_loopback: s.sandbox_loopback,
+        sandbox_blocked_ports: s.sandbox_blocked_ports.clone(),
     })
     .unwrap_or_default();
     if let Err(e) = registry.kv_set(&access_key(root), &body) {
@@ -365,9 +371,9 @@ fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) {
     }
 }
 
-// Rule A2: the permission mode, YOLO, spend limits, and the sandbox mode, network, hosts, and decoys
-// come from the registry, never from a folder file, because a repository could otherwise lift its
-// own budget, open its own sandbox, or plant decoys that pause every session.
+// Rule A2: the permission mode, YOLO, spend limits, and the sandbox mode, network, hosts, decoys,
+// and loopback choice come from the registry, never from a folder file, because a repository could
+// otherwise lift its own budget, open its own sandbox, or plant decoys that pause every session.
 pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
     let a = access(registry, root);
     s.permissions.mode = a.mode;
@@ -377,6 +383,8 @@ pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
     s.sandbox_network = a.sandbox_network;
     s.sandbox_allowed_hosts = a.sandbox_allowed_hosts;
     s.sandbox_decoys = a.sandbox_decoys;
+    s.sandbox_loopback = a.sandbox_loopback;
+    s.sandbox_blocked_ports = a.sandbox_blocked_ports;
 }
 
 /// The workspace's own sandbox settings, from the registry (Rule A2).
@@ -386,6 +394,8 @@ pub fn sandbox(registry: &RegistryDb, root: &Path) -> ostra_core::config::Worksp
         mode: a.sandbox_mode,
         network: a.sandbox_network,
         allowed_hosts: a.sandbox_allowed_hosts,
+        loopback: a.sandbox_loopback,
+        blocked_ports: a.sandbox_blocked_ports,
     }
 }
 
@@ -446,6 +456,8 @@ fn write_file(root: &Path, s: &WorkspaceSettings) -> Result<(), ConfigError> {
         t.remove("sandbox_network");
         t.remove("sandbox_allowed_hosts");
         t.remove("sandbox_decoys");
+        t.remove("sandbox_loopback");
+        t.remove("sandbox_blocked_ports");
         if let Some(p) = t.get_mut("permissions").and_then(|p| p.as_table_mut()) {
             p.remove("mode");
         }
@@ -941,6 +953,8 @@ mod tests {
         s.sandbox_network = Some(ostra_core::config::SandboxNetwork::Host);
         s.sandbox_allowed_hosts = vec!["evil.example".into()];
         s.sandbox_decoys = vec!["~/.gitconfig".into()];
+        s.sandbox_loopback = ostra_core::config::LoopbackAccess::Listed;
+        s.sandbox_blocked_ports = vec![22];
         save_toml(&paths::workspace_toml(&root), &s).unwrap();
         let file = raw(&root).unwrap();
         let eff = effective(&r, &root, file.clone());
@@ -948,22 +962,28 @@ mod tests {
         assert_eq!(eff.sandbox_network, None);
         assert!(eff.sandbox_allowed_hosts.is_empty());
         assert!(eff.sandbox_decoys.is_empty());
+        assert!(eff.sandbox_blocked_ports.is_empty());
         assert_eq!(sandbox(&r, &root), Default::default());
 
         s.sandbox_mode = Some(SandboxMode::Auto);
         s.sandbox_network = Some(ostra_core::config::SandboxNetwork::None);
         s.sandbox_allowed_hosts = vec!["mirror.lan:8080".into()];
         s.sandbox_decoys = vec!["~/.aws/credentials".into()];
+        s.sandbox_blocked_ports = vec![5432];
         save_workspace(&r, &root, &s).unwrap();
         let text = std::fs::read_to_string(paths::workspace_toml(&root)).unwrap();
         assert!(!text.contains("sandbox_mode"), "{text}");
         assert!(!text.contains("sandbox_allowed_hosts"), "{text}");
         assert!(!text.contains("sandbox_network"), "{text}");
         assert!(!text.contains("sandbox_decoys"), "{text}");
+        assert!(!text.contains("sandbox_loopback"), "{text}");
+        assert!(!text.contains("sandbox_blocked_ports"), "{text}");
         let ws = sandbox(&r, &root);
         assert_eq!(ws.mode, Some(SandboxMode::Auto));
         assert_eq!(ws.network, Some(ostra_core::config::SandboxNetwork::None));
         assert_eq!(ws.allowed_hosts, vec!["mirror.lan:8080".to_string()]);
+        assert_eq!(ws.loopback, ostra_core::config::LoopbackAccess::Listed);
+        assert_eq!(ws.blocked_ports, vec![5432]);
         let eff = effective(&r, &root, raw(&root).unwrap());
         assert_eq!(eff.sandbox_mode, Some(SandboxMode::Auto));
         assert_eq!(

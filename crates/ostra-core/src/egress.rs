@@ -1,18 +1,19 @@
-//! The egress proxy: the one way out of a sandbox that has its own network namespace. Each
-//! execution gets its own Unix socket, bound only into its own sandbox, where a helper inside
-//! forwards the sandbox's loopback to it. The proxy sees the destination host and port of every
-//! connection, lets through only what the policy allows, and connects to the address it checked,
-//! never a second lookup.
+//! The egress proxy: the one way out of a sandbox. On Linux each execution gets its own Unix
+//! socket, bound only into its own sandbox, where a helper inside forwards the sandbox's loopback
+//! to it. On macOS, where every sandbox shares the host's loopback, it gets its own port on
+//! `127.0.0.1`, the one port its Seatbelt policy lets it connect to. The proxy sees the
+//! destination host and port of every connection, lets through only what the policy allows, and
+//! connects to the address it checked, never a second lookup.
 
 use crate::HarnessKind;
-use crate::config::{SandboxConfig, SandboxNetwork};
+use crate::config::{LoopbackAccess, SandboxConfig, SandboxNetwork};
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpStream, UnixListener, UnixStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
 /// Package registries and source hosts that builds fetch from under `allowlist`.
@@ -281,6 +282,10 @@ pub struct Policy {
     builtin: Vec<HostRule>,
     /// `[sandbox] upstream_proxy`, which public destinations are reached through.
     upstream: Option<(Host, u16)>,
+    /// The workspace's loopback choice, which Seatbelt policies apply.
+    loopback: LoopbackAccess,
+    /// Loopback ports no command connects to, even when listed.
+    blocked_ports: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -314,7 +319,24 @@ impl Policy {
             trusted,
             builtin,
             upstream: cfg.upstream_proxy.as_deref().and_then(upstream_authority),
+            loopback: cfg.loopback,
+            blocked_ports: cfg.blocked_ports.clone(),
         }
+    }
+
+    /// Whether a command on the host's shared loopback (Seatbelt) may connect to every port but
+    /// the blocked ones: the workspace's choice, under `allowlist` and `public` only, because
+    /// `none` reaches nothing.
+    pub fn shared_loopback(&self) -> bool {
+        self.loopback == LoopbackAccess::Open
+            && matches!(
+                self.network,
+                SandboxNetwork::Allowlist | SandboxNetwork::Public
+            )
+    }
+
+    pub fn blocked_ports(&self) -> &[u16] {
+        &self.blocked_ports
     }
 
     pub fn network(&self) -> SandboxNetwork {
@@ -337,6 +359,7 @@ impl Policy {
             .iter()
             .filter(|r| r.is_loopback())
             .filter_map(|r| r.port)
+            .filter(|p| !self.blocked_ports.contains(p))
             .collect();
         out.sort_unstable();
         out.dedup();
@@ -404,6 +427,15 @@ impl Policy {
                 unresolved: false,
             });
         }
+        // Not looked up: a local-only name points at this machine or the LAN, and its lookup
+        // goes out on the LAN (multicast DNS for `.local`, seconds before it fails on macOS).
+        if access == Access::PublicOnly && matches!(host, Host::Name(_)) && local {
+            return Err(Refusal {
+                reason: local_refusal(host, port, "a local-only name"),
+                local: true,
+                unresolved: false,
+            });
+        }
         let addrs: Vec<SocketAddr> = match host {
             Host::Ip(ip) => vec![SocketAddr::new(*ip, port)],
             Host::Name(n) => match tokio::net::lookup_host((n.as_str(), port)).await {
@@ -435,10 +467,7 @@ impl Policy {
                 .map(|a| a.ip().to_string())
                 .unwrap_or_default();
             return Err(Refusal {
-                reason: format!(
-                    "Add `{}` to `[sandbox] allowed_hosts` in config.toml if it is a service you run, because the sandbox refuses loopback, private, and link-local addresses ({shown}) for hosts you did not list.",
-                    rule_text(host, port)
-                ),
+                reason: local_refusal(host, port, &shown),
                 local: true,
                 unresolved: false,
             });
@@ -457,6 +486,34 @@ impl Policy {
             ),
         }
     }
+}
+
+/// Whether a request head carries `Proxy-Authorization: <want>`, compared in constant time.
+fn authorized(head: &[u8], want: &str) -> bool {
+    let Ok(text) = std::str::from_utf8(head) else {
+        return false;
+    };
+    text.split("\r\n").skip(1).any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+        let value = value.trim().as_bytes();
+        name.trim().eq_ignore_ascii_case("proxy-authorization")
+            && value.len() == want.len()
+            && value
+                .iter()
+                .zip(want.as_bytes())
+                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+                == 0
+    })
+}
+
+/// The refusal of a local destination the user did not list; `what` names the address or name.
+fn local_refusal(host: &Host, port: u16, what: &str) -> String {
+    format!(
+        "Add `{}` to `[sandbox] allowed_hosts` in config.toml if it is a service you run, because the sandbox refuses loopback, private, and link-local addresses ({what}) for hosts you did not list.",
+        rule_text(host, port)
+    )
 }
 
 /// The `allowed_hosts` entry that would allow `host:port`.
@@ -595,24 +652,44 @@ pub struct Decision {
 /// loop reports once. Called on the proxy's runtime, so it must not block.
 pub type OnDecision = Arc<dyn Fn(Decision) + Send + Sync>;
 
-/// A Unix socket listener on the egress runtime. Dropping it stops the listener, ends its open
-/// connections, and removes the socket.
+/// A listener on the egress runtime: a Unix socket, or a port on `127.0.0.1`. Dropping it stops
+/// the listener, ends its open connections, and removes the socket.
 #[derive(Debug)]
 pub struct Listener {
+    /// Empty for a loopback port.
     socket: PathBuf,
+    port: Option<u16>,
+    /// The proxy URL with its credential, for a loopback proxy.
+    url: Option<String>,
     /// `None` for a socket another part of Ostra serves and removes.
     stop: Option<CancellationToken>,
 }
 
 impl Listener {
+    /// The Unix socket, empty for a loopback port.
     pub fn socket(&self) -> &Path {
         &self.socket
+    }
+
+    /// The port on `127.0.0.1`, for a loopback listener.
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+
+    /// `http://ostra:<credential>@127.0.0.1:<port>`, for a loopback proxy.
+    pub fn proxy_url(&self) -> Option<&str> {
+        self.url.as_deref()
     }
 
     /// A socket that something else serves, such as the server's hook bridge socket, to bind
     /// into a sandbox. Dropping it leaves the socket alone.
     pub fn served_elsewhere(socket: PathBuf) -> Listener {
-        Listener { socket, stop: None }
+        Listener {
+            socket,
+            port: None,
+            url: None,
+            stop: None,
+        }
     }
 }
 
@@ -620,9 +697,38 @@ impl Drop for Listener {
     fn drop(&mut self) {
         if let Some(stop) = &self.stop {
             stop.cancel();
-            let _ = std::fs::remove_file(&self.socket);
+            if self.port.is_none() {
+                let _ = std::fs::remove_file(&self.socket);
+            }
         }
     }
+}
+
+/// A connection a listener accepted, from a Unix socket or a loopback port.
+trait Stream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
+type Client = Box<dyn Stream>;
+
+enum Incoming {
+    Unix(UnixListener),
+    Tcp(TcpListener),
+}
+
+impl Incoming {
+    async fn accept(&self) -> std::io::Result<Client> {
+        match self {
+            Incoming::Unix(l) => l.accept().await.map(|(c, _)| Box::new(c) as Client),
+            Incoming::Tcp(l) => l.accept().await.map(|(c, _)| Box::new(c) as Client),
+        }
+    }
+}
+
+/// Where a splice leads.
+#[derive(Debug, Clone)]
+pub enum Target {
+    Tcp(SocketAddr),
+    /// A Unix socket another part of Ostra serves, such as the hook bridge socket.
+    Socket(PathBuf),
 }
 
 /// A fresh owner-only socket path in `dir`, which is created 0700.
@@ -668,50 +774,119 @@ fn bind(dir: &Path) -> std::io::Result<(PathBuf, UnixListener)> {
     Ok((socket, UnixListener::from_std(std_listener)?))
 }
 
-/// Starts the egress proxy for one execution on a new socket in `dir`.
-pub fn proxy(policy: Policy, dir: &Path, on: OnDecision) -> std::io::Result<Listener> {
-    let (socket, listener) = bind(dir)?;
+/// A fresh port on `127.0.0.1`, bound on the egress runtime. Only IPv4, because clients are
+/// handed `http://127.0.0.1:<port>` and the Seatbelt rule names the port.
+fn bind_loopback() -> std::io::Result<(u16, TcpListener)> {
+    let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    std_listener.set_nonblocking(true)?;
+    let port = std_listener.local_addr()?.port();
+    let _guard = runtime().enter();
+    Ok((port, TcpListener::from_std(std_listener)?))
+}
+
+fn serve_proxy(
+    incoming: Incoming,
+    policy: Policy,
+    on: OnDecision,
+    auth: Option<String>,
+) -> CancellationToken {
     let stop = CancellationToken::new();
     let shared = Arc::new(Shared {
         policy,
         on,
         seen: Mutex::new(HashSet::new()),
+        auth,
     });
-    runtime().spawn(accept_loop(listener, stop.clone(), move |client| {
+    runtime().spawn(accept_loop(incoming, stop.clone(), move |client| {
         let shared = shared.clone();
         async move { handle(client, &shared).await }
     }));
+    stop
+}
+
+/// Starts the egress proxy for one execution on a new socket in `dir`.
+pub fn proxy(policy: Policy, dir: &Path, on: OnDecision) -> std::io::Result<Listener> {
+    let (socket, listener) = bind(dir)?;
     Ok(Listener {
         socket,
-        stop: Some(stop),
+        port: None,
+        url: None,
+        stop: Some(serve_proxy(Incoming::Unix(listener), policy, on, None)),
     })
+}
+
+/// The user name in a loopback proxy's URL; the password is the execution's own credential.
+const PROXY_USER: &str = "ostra";
+
+/// Starts the egress proxy for one execution on a new port of `127.0.0.1`, for a sandbox that
+/// shares the host's loopback. Every request must carry the credential in [`Listener::proxy_url`],
+/// because a sandbox whose workspace opens the loopback reaches other executions' proxy ports too.
+pub fn loopback_proxy(policy: Policy, on: OnDecision) -> std::io::Result<Listener> {
+    use base64::Engine;
+    let (port, listener) = bind_loopback()?;
+    let secret = uuid::Uuid::new_v4().simple().to_string();
+    let auth = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(format!("{PROXY_USER}:{secret}"))
+    );
+    Ok(Listener {
+        socket: PathBuf::new(),
+        port: Some(port),
+        url: Some(format!("http://{PROXY_USER}:{secret}@127.0.0.1:{port}")),
+        stop: Some(serve_proxy(Incoming::Tcp(listener), policy, on, Some(auth))),
+    })
+}
+
+fn serve_splice(incoming: Incoming, target: Target) -> CancellationToken {
+    let stop = CancellationToken::new();
+    runtime().spawn(accept_loop(incoming, stop.clone(), move |mut client| {
+        let target = target.clone();
+        async move {
+            let mut up: Client = match target {
+                Target::Tcp(a) => {
+                    match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(a)).await {
+                        Ok(Ok(s)) => Box::new(s),
+                        _ => return,
+                    }
+                }
+                Target::Socket(p) => match UnixStream::connect(p).await {
+                    Ok(s) => Box::new(s),
+                    Err(_) => return,
+                },
+            };
+            let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+        }
+    }));
+    stop
 }
 
 /// A socket in `dir` whose every connection is spliced to `target`, such as Ostra's own
 /// listener for a harness's hook bridge.
 pub fn splice(dir: &Path, target: SocketAddr) -> std::io::Result<Listener> {
     let (socket, listener) = bind(dir)?;
-    let stop = CancellationToken::new();
-    runtime().spawn(accept_loop(
-        listener,
-        stop.clone(),
-        move |mut client| async move {
-            if let Ok(Ok(mut up)) =
-                tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(target)).await
-            {
-                let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
-            }
-        },
-    ));
     Ok(Listener {
         socket,
-        stop: Some(stop),
+        port: None,
+        url: None,
+        stop: Some(serve_splice(Incoming::Unix(listener), Target::Tcp(target))),
     })
 }
 
-async fn accept_loop<F, Fut>(listener: UnixListener, stop: CancellationToken, serve: F)
+/// A new port on `127.0.0.1` whose every connection is spliced to `target`, so a sandbox that
+/// shares the host's loopback reaches the hook bridge through a port its policy names.
+pub fn loopback_splice(target: Target) -> std::io::Result<Listener> {
+    let (port, listener) = bind_loopback()?;
+    Ok(Listener {
+        socket: PathBuf::new(),
+        port: Some(port),
+        url: None,
+        stop: Some(serve_splice(Incoming::Tcp(listener), target)),
+    })
+}
+
+async fn accept_loop<F, Fut>(listener: Incoming, stop: CancellationToken, serve: F)
 where
-    F: Fn(UnixStream) -> Fut + Send + 'static,
+    F: Fn(Client) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
 {
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONNECTIONS));
@@ -721,7 +896,7 @@ where
             a = listener.accept() => a,
         };
         let client = match accepted {
-            Ok((c, _)) => c,
+            Ok(c) => c,
             Err(_) => {
                 // Out of file descriptors, most likely; retrying at once would spin.
                 tokio::time::sleep(Duration::from_millis(50)).await;
@@ -747,6 +922,8 @@ struct Shared {
     policy: Policy,
     on: OnDecision,
     seen: Mutex<HashSet<(String, u16, bool)>>,
+    /// The `Proxy-Authorization` value every request must carry, for a loopback proxy.
+    auth: Option<String>,
 }
 
 impl Shared {
@@ -1026,7 +1203,7 @@ impl<'a> Reader<'a> {
 }
 
 /// Reads the tunnel's first bytes into `buf` until [`client_hello_name`] can decide.
-async fn read_hello(s: &mut UnixStream, buf: &mut Vec<u8>) -> Hello {
+async fn read_hello(s: &mut Client, buf: &mut Vec<u8>) -> Hello {
     let mut chunk = [0u8; 4096];
     loop {
         match client_hello_name(buf) {
@@ -1040,21 +1217,38 @@ async fn read_hello(s: &mut UnixStream, buf: &mut Vec<u8>) -> Hello {
     }
 }
 
-async fn reply(s: &mut UnixStream, status: &str, body: &str) {
+async fn reply(s: &mut Client, status: &str, body: &str) {
+    reply_with(s, status, "", body).await
+}
+
+/// [`reply`] with more header lines, each ending in CRLF.
+async fn reply_with(s: &mut Client, status: &str, headers: &str, body: &str) {
     let msg = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}\n",
+        "HTTP/1.1 {status}\r\n{headers}Content-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}\n",
         body.len() + 1
     );
     let _ = s.write_all(msg.as_bytes()).await;
     let _ = s.shutdown().await;
 }
 
-async fn handle(mut client: UnixStream, shared: &Shared) {
+async fn handle(mut client: Client, shared: &Shared) {
     let (head, rest) = match tokio::time::timeout(HEAD_TIMEOUT, read_head(&mut client)).await {
         Ok(Ok(h)) => h,
         Ok(Err(e)) => return reply(&mut client, "400 Bad Request", &e).await,
         Err(_) => return,
     };
+    if let Some(want) = &shared.auth
+        && !authorized(&head, want)
+    {
+        // git sends the credential only after this challenge.
+        return reply_with(
+            &mut client,
+            "407 Proxy Authentication Required",
+            "Proxy-Authenticate: Basic realm=\"ostra\"\r\n",
+            "Use the proxy URL in `HTTPS_PROXY` with its credential, because this proxy serves one execution's sandbox only.",
+        )
+        .await;
+    }
     let req = match parse_request(&head) {
         Ok(r) => r,
         Err(e) => return reply(&mut client, "400 Bad Request", &e).await,

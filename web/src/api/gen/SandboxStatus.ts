@@ -26,7 +26,8 @@ message?: string,
  */
 gaps?: string, 
 /**
- * Decoy credential files work here: they need bubblewrap, so Linux only.
+ * Decoy credential files work here: always under bubblewrap, and under Seatbelt on an
+ * admin account, because macOS shows the system log's sandbox reports to admins only.
  */
 decoys: boolean, 
 /**

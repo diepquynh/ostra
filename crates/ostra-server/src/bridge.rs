@@ -605,6 +605,8 @@ mod tests {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_loopback: Default::default(),
+            sandbox_blocked_ports: vec![],
         };
         Arc::new(Running {
             policy: ExecutionPolicy::new(ctx.clone(), Default::default()),

@@ -755,6 +755,8 @@ impl Engine {
             sandbox_network: settings.sandbox_network,
             sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
             sandbox_decoys: settings.sandbox_decoys.clone(),
+            sandbox_loopback: settings.sandbox_loopback,
+            sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
         };
         self.inner.db.insert_execution(&NewExecution {
             id: new.clone(),
@@ -2104,6 +2106,8 @@ impl Inner {
             sandbox_network: settings.sandbox_network,
             sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
             sandbox_decoys: settings.sandbox_decoys.clone(),
+            sandbox_loopback: settings.sandbox_loopback,
+            sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
         };
         self.append(
             session,
@@ -2268,6 +2272,8 @@ impl Inner {
             sandbox_network: settings.sandbox_network,
             sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
             sandbox_decoys: settings.sandbox_decoys.clone(),
+            sandbox_loopback: settings.sandbox_loopback,
+            sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
         };
         self.db.insert_execution(&NewExecution {
             id: id.clone(),

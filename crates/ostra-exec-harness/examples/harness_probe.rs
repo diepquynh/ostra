@@ -347,6 +347,13 @@ async fn main() {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            // `PROBE_LOOPBACK=listed` closes the host's loopback on macOS, as a workspace can.
+            sandbox_loopback: if std::env::var("PROBE_LOOPBACK").as_deref() == Ok("listed") {
+                ostra_core::config::LoopbackAccess::Listed
+            } else {
+                Default::default()
+            },
+            sandbox_blocked_ports: vec![],
         },
         resume: resume_sid.map(|sid| ResumeInfo {
             from: ExecutionId::new(),
@@ -379,7 +386,6 @@ async fn main() {
 
 /// Host services the sandbox must not reach, the check script, and a git repo to plant files in.
 fn harden_setup(repo: &std::path::Path, log: Arc<Log>) {
-    use std::os::linux::net::SocketAddrExt;
     let status = std::process::Command::new("git")
         .args(["init", "-q"])
         .current_dir(repo)
@@ -397,46 +403,27 @@ fn harden_setup(repo: &std::path::Path, log: Arc<Log>) {
         .unwrap_or_else(|_| "127.0.0.1".into());
     let l = log.clone();
     std::thread::spawn(move || {
-        for s in tcp.incoming().flatten() {
+        for mut s in tcp.incoming().flatten() {
             l.line(json!({"CANARY_TCP_REACHED": s.peer_addr().ok().map(|a| a.to_string())}));
+            // An answer, so the script's curl reports a connection that got through.
+            let _ = std::io::Write::write_all(
+                &mut s,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
         }
     });
-    let name = format!("ostra-probe-{}", std::process::id());
-    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
-    let abs = std::os::unix::net::UnixListener::bind_addr(&addr).unwrap();
-    std::thread::spawn(move || {
-        for _ in abs.incoming().flatten() {
-            log.line(json!({"CANARY_ABSTRACT_REACHED": true}));
-        }
-    });
+    let process = process_checks(log);
 
     let script = format!(
         r#"echo "== process"
-grep -E '^(Seccomp|NoNewPrivs):' /proc/self/status
-unshare -U true 2>&1 && echo "userns: ALLOWED" || echo "userns: refused"
-python3 -c 'import fcntl,termios,os,glob
-fd=None
-for p in glob.glob("/proc/[0-9]*/fd/[012]"):
-    try:
-        f=os.open(p,os.O_RDWR|os.O_NOCTTY)
-        if os.isatty(f): fd=f; break
-        os.close(f)
-    except OSError: pass
-if fd is None: print("tiocsti: no terminal found")
-else:
-    try: fcntl.ioctl(fd, termios.TIOCSTI, b" "); print("tiocsti: ALLOWED")
-    except OSError as e: print("tiocsti: refused", e)'
+{process}
 echo "== proxy env"
 env | grep -iE '^(https?|all|no)_proxy=' | sort
 echo "== host services"
 curl -s -m 3 --noproxy '*' -o /dev/null http://127.0.0.1:{port}/ && echo "host loopback: REACHED" || echo "host loopback: unreachable"
 curl -s -m 3 --noproxy '*' -o /dev/null http://{lan}:{port}/ && echo "host lan: REACHED" || echo "host lan: unreachable"
 curl -s -m 3 --noproxy '*' -o /dev/null http://169.254.169.254/ && echo "metadata direct: REACHED" || echo "metadata direct: unreachable"
-python3 -c 'import socket
-s=socket.socket(socket.AF_UNIX)
-try:
-    s.connect("\0{name}"); print("abstract socket: REACHED")
-except OSError as e: print("abstract socket: unreachable", e)'
+python3 -c 'import socket; print("dns example.com:", socket.gethostbyname("example.com"))' 2>/dev/null || echo "dns example.com: refused"
 echo "== egress"
 curl -s -m 10 --noproxy '*' -o /dev/null https://crates.io/ && echo "direct crates.io: REACHED" || echo "direct crates.io: blocked"
 echo "allowed index.crates.io: $(curl -s -m 15 -o /dev/null -w '%{{http_code}}' https://index.crates.io/config.json)"
@@ -457,6 +444,65 @@ echo "== done"
 "#
     );
     std::fs::write(repo.join("checks.sh"), script).unwrap();
+}
+
+/// Kernel checks for the script, with the host canary they need: an abstract socket on Linux,
+/// a process whose startup environment holds a secret on macOS.
+#[cfg(target_os = "linux")]
+fn process_checks(log: Arc<Log>) -> String {
+    use std::os::linux::net::SocketAddrExt;
+    let name = format!("ostra-probe-{}", std::process::id());
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+    let abs = std::os::unix::net::UnixListener::bind_addr(&addr).unwrap();
+    std::thread::spawn(move || {
+        for _ in abs.incoming().flatten() {
+            log.line(json!({"CANARY_ABSTRACT_REACHED": true}));
+        }
+    });
+    format!(
+        r#"grep -E '^(Seccomp|NoNewPrivs):' /proc/self/status
+unshare -U true 2>&1 && echo "userns: ALLOWED" || echo "userns: refused"
+python3 -c 'import fcntl,termios,os,glob
+fd=None
+for p in glob.glob("/proc/[0-9]*/fd/[012]"):
+    try:
+        f=os.open(p,os.O_RDWR|os.O_NOCTTY)
+        if os.isatty(f): fd=f; break
+        os.close(f)
+    except OSError: pass
+if fd is None: print("tiocsti: no terminal found")
+else:
+    try: fcntl.ioctl(fd, termios.TIOCSTI, b" "); print("tiocsti: ALLOWED")
+    except OSError as e: print("tiocsti: refused", e)'
+python3 -c 'import socket
+s=socket.socket(socket.AF_UNIX)
+try:
+    s.connect("\0{name}"); print("abstract socket: REACHED")
+except OSError as e: print("abstract socket: unreachable", e)'"#
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn process_checks(_log: Arc<Log>) -> String {
+    let secret = format!("probe-secret-{}", rand_id());
+    let canary = std::process::Command::new("/bin/sleep")
+        .arg("600")
+        .env("OSTRA_PROBE_SECRET", &secret)
+        .spawn()
+        .unwrap();
+    let pid = canary.id();
+    std::mem::forget(canary);
+    format!(
+        r#"python3 -c 'import ctypes
+libc=ctypes.CDLL(None, use_errno=True)
+mib=(ctypes.c_int*3)(1,49,{pid}); n=ctypes.c_size_t(0)
+if libc.sysctl(mib,3,None,ctypes.byref(n),None,0): print("other process env: refused errno", ctypes.get_errno())
+else:
+    b=ctypes.create_string_buffer(n.value); libc.sysctl(mib,3,b,ctypes.byref(n),None,0)
+    print("other process env: READ" if b"{secret}" in b.raw else "other process env: read without the secret")'
+kill {pid} 2>/dev/null && echo "kill outside: ALLOWED" || echo "kill outside: refused"
+launchctl submit -l dev.ostra.probe.{pid} -- /usr/bin/true 2>/dev/null && echo "launchd submit: ALLOWED" || echo "launchd submit: refused""#
+    )
 }
 
 /// Pause and continue, as `Engine::pause_session` and `resume_session` drive an execution.
@@ -551,6 +597,8 @@ async fn pause_probe(args: &[String]) {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_loopback: Default::default(),
+            sandbox_blocked_ports: vec![],
         },
         resume,
         harness_session_id: sid,
@@ -707,6 +755,8 @@ async fn inspect_probe(args: &[String]) {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_loopback: Default::default(),
+            sandbox_blocked_ports: vec![],
         },
         resume: Some(ResumeInfo {
             from: ExecutionId::new(),

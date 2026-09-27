@@ -108,10 +108,20 @@ describe("network panel", () => {
     expect(screen.getByText(/Add the port to `localhost`/)).toBeTruthy();
   });
 
-  it("tells a macOS server to choose None, because Seatbelt has no egress proxy", () => {
-    mount({ sandbox: { ...workspaceDetail.sandbox, backend: "seatbelt", decoys: false } });
-    expect(screen.getByText(/macOS has no egress proxy yet/)).toBeTruthy();
-    fireEvent.click(screen.getByLabelText(/^None/));
-    expect(screen.queryByText(/macOS has no egress proxy yet/)).toBeNull();
+  it("sets a macOS server's loopback choice and blocked ports, open by default", () => {
+    const out = mount({ sandbox: { ...workspaceDetail.sandbox, backend: "seatbelt", decoys: false } });
+    expect((screen.getByLabelText(/^Every loopback port but the blocked ones/) as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByLabelText(/^Only loopback ports listed/));
+    fireEvent.change(screen.getByLabelText(/^Blocked loopback ports/), {
+      target: { value: "5432, 6379 57365 x 70000" },
+    });
+    const saved = fromForm(out.form as SettingsForm, settings).settings;
+    expect(saved.sandbox_loopback).toBe("listed");
+    expect(saved.sandbox_blocked_ports).toEqual([5432, 6379, 57365]);
+  });
+
+  it("shows no loopback choice where each sandbox has a loopback of its own", () => {
+    mount();
+    expect(screen.queryByLabelText(/^Blocked loopback ports/)).toBeNull();
   });
 });

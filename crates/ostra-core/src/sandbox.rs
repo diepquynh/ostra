@@ -315,23 +315,13 @@ pub const UNAVAILABLE: &str = "Run Ostra outside any other sandbox, because macO
 pub const UNAVAILABLE: &str = "Install bubblewrap (the `bwrap` command) on the Linux machine that runs Ostra, or allow unprivileged user namespaces, because agent commands otherwise run with the full rights of your user. Choose sandbox mode off in the workspace settings, or set `[sandbox] mode = \"off\"` in config.toml, to run without it on purpose.";
 
 /// What the sandbox on this machine cannot enforce under `network`, for the setup check.
-pub fn known_gaps(backend: &Backend, network: SandboxNetwork) -> Option<String> {
+pub fn known_gaps(backend: &Backend, _network: SandboxNetwork) -> Option<String> {
     match backend {
         #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         Backend::Bubblewrap(_) => None,
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         Backend::Bubblewrap(_) => Some("Run Ostra on x86_64 or aarch64 where agent commands must not create user namespaces, because the seccomp filter that refuses them is built for those two only.".into()),
-        Backend::Seatbelt => {
-            let mut gaps = String::from(
-                "Keep tokens out of the environment of long-running programs, such as exports in your shell profile, and keep them in the keychain or a file the sandbox hides, because on macOS agent commands can read the arguments and startup environment of every program running as your user, and Seatbelt cannot block that.",
-            );
-            if matches!(network, SandboxNetwork::Allowlist | SandboxNetwork::Public) {
-                gaps.push_str(" Set `[sandbox] network = \"none\"` in config.toml where agent commands need no network, because on macOS the egress proxy is not in place yet, so they share the host network, local services and the LAN included.");
-            } else if network == SandboxNetwork::None {
-                gaps.push_str(" Use the native executor where agent commands must have no network, because on macOS a harness CLI keeps the host network under `none` to reach its model API, local services and the LAN included.");
-            }
-            Some(gaps)
-        }
+        Backend::Seatbelt => None,
     }
 }
 
@@ -478,7 +468,7 @@ pub struct Members {
     own: String,
     group: String,
     /// The egress proxy and forwarded sockets, held so they live as long as the invocation.
-    #[allow(dead_code)]
+    /// Under Seatbelt their ports are the loopback ports its policy allows.
     listeners: Vec<Arc<egress::Listener>>,
     /// Held so the decoys stay watched while a process of the invocation runs.
     #[allow(dead_code)]
@@ -618,9 +608,9 @@ fn marked(_marker: &str) -> Vec<libc::pid_t> {
 }
 
 /// Moves this process's environment off the stack and zeroes the original strings. On macOS any
-/// program of the same user, a sandboxed one included, reads another process's startup
-/// environment with `sysctl(KERN_PROCARGS2)`, which reads those stack strings. Call first thing
-/// in `main`, before any thread starts.
+/// unsandboxed program of the same user, agent commands under mode `off` included, reads another
+/// process's startup environment with `sysctl(KERN_PROCARGS2)`, which reads those stack strings;
+/// Ostra's Seatbelt policies refuse it. Call first thing in `main`, before any thread starts.
 pub fn scrub_startup_env() {
     #[cfg(target_os = "macos")]
     {
@@ -1112,28 +1102,25 @@ impl Profile {
         self
     }
 
-    /// Starts this profile's egress proxy, shared by every command it wraps, when `backend`
-    /// gives the sandbox its own network namespace and the policy lets anything out. A command
-    /// wrapped without one starts its own, which reports decisions to the log only.
+    /// Starts this profile's egress proxy, shared by every command it wraps, when the policy
+    /// lets anything out of a private network: a socket bound into each bubblewrap sandbox, or a
+    /// port of `127.0.0.1` that each Seatbelt policy names. A command wrapped without one starts
+    /// its own, which reports decisions to the log only.
     pub fn start_egress(
         mut self,
         backend: &Backend,
         on: egress::OnDecision,
     ) -> std::io::Result<Self> {
-        if matches!(backend, Backend::Bubblewrap(_)) && self.policy.needs_proxy() {
-            self.egress = Some(Arc::new(egress::proxy(
-                self.policy.clone(),
-                &egress_dir(),
-                on,
-            )?));
+        if self.policy.needs_proxy() {
+            self.egress = Some(Arc::new(new_proxy(backend, self.policy.clone(), on)?));
         }
         Ok(self)
     }
 
     /// Rule P3: plants the built-in decoys and the workspace's own (`extra`, `~/` paths), and
-    /// reports each one's first open to `on`. A decoy goes where a hidden dir's tmpfs can hold a
-    /// new file, or over an existing file, so the host is never written. Bubblewrap only, because
-    /// the decoys are bind mounts watched with inotify.
+    /// reports each one's first open to `on`. Under bubblewrap a decoy goes where a hidden dir's
+    /// tmpfs can hold a new file, or over an existing file, so the host is never written. Under
+    /// Seatbelt only an existing file can be one, refused and reported through the system log.
     pub fn watch_decoys(
         mut self,
         backend: &Backend,
@@ -1141,7 +1128,27 @@ impl Profile {
         extra: &[String],
         on: crate::decoy::OnOpen,
     ) -> std::io::Result<Self> {
-        if !matches!(backend, Backend::Bubblewrap(_)) {
+        let ssh_reachable = self.policy.reaches_port(22);
+        let wanted = crate::decoy::wanted(extra)
+            .into_iter()
+            .filter(|(_, kind)| !(*kind == crate::decoy::Kind::SshKey && ssh_reachable));
+        if *backend == Backend::Seatbelt {
+            // Seatbelt reports no refusal for a missing file, so only existing ones qualify.
+            let mut at: Vec<PathBuf> = vec![];
+            for (rel, _) in wanted {
+                if let Some(p) = real(&home.join(&rel)).filter(|p| p.is_file())
+                    && !at.contains(&p)
+                {
+                    at.push(p);
+                }
+            }
+            if !at.is_empty() && crate::decoy::supported(backend) {
+                // The system log is outside Ostra's control, so the execution runs on without decoys.
+                match crate::decoy::Decoys::refuse(&at, on) {
+                    Ok(d) => self.decoys = Some(Arc::new(d)),
+                    Err(e) => tracing::warn!("decoy files are not watched: {e}"),
+                }
+            }
             return Ok(self);
         }
         let mounts = self.ordered();
@@ -1152,12 +1159,8 @@ impl Profile {
                 .max_by_key(|m| m.dest().components().count())
                 .is_some_and(|m| matches!(m, Mount::Hidden(_) | Mount::HomeTmpfs(_)))
         };
-        let ssh_reachable = self.policy.reaches_port(22);
         let mut at: Vec<(PathBuf, crate::decoy::Kind)> = vec![];
-        for (rel, kind) in crate::decoy::wanted(extra) {
-            if kind == crate::decoy::Kind::SshKey && ssh_reachable {
-                continue;
-            }
+        for (rel, kind) in wanted {
             let Some(dest) = real_or_missing(&home.join(&rel)) else {
                 continue;
             };
@@ -1179,29 +1182,55 @@ impl Profile {
         Ok(self)
     }
 
-    /// Makes `127.0.0.1:<target port>` inside the sandbox's network namespace reach `target` on
-    /// the host, through a socket of its own and the helper. Under `host`, and under Seatbelt,
-    /// the port is reachable as it is, so nothing is forwarded.
+    /// Makes a loopback port inside the sandbox reach `target` on the host: under bubblewrap
+    /// `127.0.0.1:<target port>` in its network namespace, through a socket of its own and the
+    /// helper; under Seatbelt a fresh port of `127.0.0.1` that its policy names
+    /// ([`Profile::forwarded_port`]). Under `host` the target is reachable as it is, so nothing
+    /// is forwarded.
     pub fn forward(
         mut self,
         backend: &Backend,
         target: std::net::SocketAddr,
     ) -> std::io::Result<Self> {
-        if matches!(backend, Backend::Bubblewrap(_)) && self.private_network() {
-            let l = egress::splice(&egress_dir(), target)?;
+        if self.private_network() {
+            let l = match backend {
+                Backend::Bubblewrap(_) => egress::splice(&egress_dir(), target)?,
+                Backend::Seatbelt => egress::loopback_splice(egress::Target::Tcp(target))?,
+            };
             self.forwards.push((target.port(), Arc::new(l)));
         }
         Ok(self)
     }
 
     /// Like [`Profile::forward`], to a Unix socket that Ostra serves itself, such as the hook
-    /// bridge socket, which answers only the harness callbacks.
-    pub fn forward_socket(mut self, backend: &Backend, port: u16, socket: &Path) -> Self {
-        if matches!(backend, Backend::Bubblewrap(_)) && self.private_network() {
-            let l = egress::Listener::served_elsewhere(socket.to_path_buf());
+    /// bridge socket, which answers only the harness callbacks. `port` is the loopback port the
+    /// sandbox knows it by under bubblewrap.
+    pub fn forward_socket(
+        mut self,
+        backend: &Backend,
+        port: u16,
+        socket: &Path,
+    ) -> std::io::Result<Self> {
+        if self.private_network() {
+            let l = match backend {
+                Backend::Bubblewrap(_) => egress::Listener::served_elsewhere(socket.to_path_buf()),
+                Backend::Seatbelt => {
+                    egress::loopback_splice(egress::Target::Socket(socket.to_path_buf()))?
+                }
+            };
             self.forwards.push((port, Arc::new(l)));
         }
-        self
+        Ok(self)
+    }
+
+    /// The loopback port inside the sandbox that reaches the port [`Profile::forward`] or
+    /// [`Profile::forward_socket`] was given: the same one under bubblewrap, a fresh one under
+    /// Seatbelt, whose sandboxes share the host's loopback. `None` when it is not forwarded.
+    pub fn forwarded_port(&self, port: u16) -> Option<u16> {
+        self.forwards
+            .iter()
+            .find(|(p, _)| *p == port)
+            .map(|(p, l)| l.port().unwrap_or(*p))
     }
 
     fn private_network(&self) -> bool {
@@ -1484,7 +1513,21 @@ impl Profile {
                 })
             }
             Backend::Seatbelt => {
-                let members = Members::new(vec![], None);
+                let egress = match &self.egress {
+                    Some(l) => Some(l.clone()),
+                    None if self.policy.needs_proxy() => Some(Arc::new(
+                        new_proxy(backend, self.policy.clone(), Arc::new(log_decision))
+                            .map_err(|e| format!("Cannot start the sandbox's egress proxy: {e}"))?,
+                    )),
+                    None => None,
+                };
+                let proxy_url = egress
+                    .as_ref()
+                    .and_then(|l| l.proxy_url().map(str::to_string));
+                let mut listeners: Vec<Arc<egress::Listener>> =
+                    self.forwards.iter().map(|(_, l)| l.clone()).collect();
+                listeners.extend(egress);
+                let members = Members::new(listeners, self.decoys.clone());
                 let mut a: Vec<OsString> = vec!["-p".into(), self.seatbelt(&members)?.into()];
                 a.push(program.to_os_string());
                 a.extend(args.into_iter().map(Into::into));
@@ -1498,6 +1541,9 @@ impl Profile {
                     env.push(("TMPDIR".into(), format!("{}/", t.display())));
                     // zsh writes heredocs under `$TMPPREFIX`, which defaults to `/tmp/zsh`.
                     env.push(("TMPPREFIX".into(), format!("{}/zsh", t.display())));
+                }
+                if let Some(url) = &proxy_url {
+                    env.extend(proxy_env(url));
                 }
                 Ok(SandboxedCommand {
                     program: SANDBOX_EXEC.into(),
@@ -1617,10 +1663,47 @@ impl Profile {
                 sbpl_str(TTY_PARAM)?
             ));
         }
-        // The egress proxy is not in place on macOS yet: any network choice but `none` (or a
-        // harness's own hosts under `none`) shares the host network, a gap `known_gaps` reports.
-        if self.policy.network() != SandboxNetwork::None || self.policy.needs_proxy() {
-            out.push_str(SEATBELT_NETWORK);
+        if self.private_network() {
+            // The host's loopback is every sandbox's. Each may listen on it; it connects to every
+            // port when the workspace opens the loopback, else to listed ports, and never to a
+            // blocked port or Ostra's server. Its own proxy and forwards come last, so they win.
+            out.push_str(SEATBELT_LOOPBACK_LISTEN);
+            let allow = |out: &mut String, p: &str| {
+                out.push_str(&format!(
+                    "(allow network-outbound (remote ip \"localhost:{p}\"))\n"
+                ))
+            };
+            if self.policy.shared_loopback() {
+                allow(&mut out, "*");
+            }
+            for p in self.policy.loopback_ports() {
+                allow(&mut out, &p.to_string());
+            }
+            let mut blocked: Vec<u16> = self.policy.blocked_ports().to_vec();
+            blocked.extend(SERVER_PORT.get());
+            blocked.sort_unstable();
+            blocked.dedup();
+            for p in blocked {
+                out.push_str(&format!(
+                    "(deny network-outbound (remote ip \"localhost:{p}\"))\n"
+                ));
+            }
+            let mut own: Vec<u16> = members.listeners.iter().filter_map(|l| l.port()).collect();
+            own.sort_unstable();
+            for p in own {
+                allow(&mut out, &p.to_string());
+            }
+        } else {
+            out.push_str(SEATBELT_HOST_NETWORK);
+        }
+        // Rule P3: a decoy's read is refused with a message the system log reports; `stat` stays
+        // silent, because only `file-read-data` carries it.
+        for (tag, path) in self.decoys.iter().flat_map(|d| d.tags()) {
+            out.push_str(&format!(
+                "(deny file-read-data (literal {}) (with message {}))\n",
+                sbpl_str(path)?,
+                sbpl_str(tag)?
+            ));
         }
         // A mount point cannot be renamed; here every writable dir above a protected path is
         // pinned instead, so `mv .git .g` cannot carry `.git/config` out from under its rule.
@@ -1646,17 +1729,24 @@ impl Profile {
 pub const TTY_PARAM: &str = "TTY";
 
 /// What every Seatbelt policy allows before the profile's own rules, measured with git, cargo,
-/// npm, go, pip, and clang through xcrun. The mach services are the ones those tools need; the
-/// keychain, pasteboard, LaunchServices, Apple Events, the window server, and TCC stay denied,
-/// because each reaches something outside the sandbox. `(deny default)` also denies
-/// `lsopen`, `appleevent-send`, and `user-preference-write`. Terminals are denied, so nothing
-/// reads keystrokes from, writes to, or injects input into another terminal of the user.
+/// npm, go, pip, and clang through xcrun, and the four harness CLIs. The mach services are the
+/// ones those tools need; the keychain, pasteboard, LaunchServices, Apple Events, the window
+/// server, and TCC stay denied, because each reaches something outside the sandbox.
+/// `(deny default)` also denies `lsopen`, `appleevent-send`, and `user-preference-write`.
+/// Terminals are denied, so nothing reads keystrokes from, writes to, or injects input into
+/// another terminal of the user.
+///
+/// Another process's arguments and startup environment (`KERN_PROCARGS2`) are readable when
+/// either `sysctl-read` covers `kern.procargs2` or `process-info-pidinfo` allows it, and
+/// `(deny default)` does not cover the second, so both are closed: the sysctls are a measured
+/// list, and `process-info*` is denied before the same-sandbox allow (measured on macOS 26).
 const SEATBELT_BASE: &str = r##"(version 1)
 (deny default)
 (allow process-exec process-fork)
 (allow signal (target same-sandbox))
+(deny process-info*)
 (allow process-info* (target same-sandbox))
-(allow sysctl-read)
+(allow sysctl-read (sysctl-name-prefix "hw.") (sysctl-name-prefix "machdep.cpu.") (sysctl-name "kern.argmax" "kern.bootargs" "kern.hostname" "kern.iossupportversion" "kern.maxfilesperproc" "kern.ngroups" "kern.osproductversion" "kern.osrelease" "kern.ostype" "kern.osvariant_status" "kern.osversion" "kern.version" "kern.willshutdown" "net.routetable.0.0.3.0" "security.mac.lockdown_mode_state"))
 (allow file-read*)
 (deny file-read* file-write* file-ioctl (regex #"^/dev/tty"))
 (allow file-write-data (literal "/dev/stdout") (literal "/dev/stderr") (regex #"^/dev/fd/[0-9]+$"))
@@ -1666,13 +1756,56 @@ const SEATBELT_BASE: &str = r##"(version 1)
 (allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo" "com.apple.system.opendirectoryd.membership" "com.apple.system.notification_center" "com.apple.system.logger" "com.apple.logd" "com.apple.diagnosticd" "com.apple.trustd.agent" "com.apple.SystemConfiguration.configd" "com.apple.cfprefsd.agent" "com.apple.bsd.dirhelper"))
 "##;
 
-/// Outbound IP, a listener on loopback for dev servers and tests, and the DNS resolver's socket.
-/// Other Unix sockets (the SSH agent, Docker, password managers, IDEs) stay denied.
-const SEATBELT_NETWORK: &str = r##"(allow network-outbound (remote ip))
+/// Under `host`: outbound IP, a listener on loopback for dev servers and tests, and the DNS
+/// resolver's socket. Other Unix sockets (the SSH agent, Docker, password managers, IDEs) stay
+/// denied.
+const SEATBELT_HOST_NETWORK: &str = r##"(allow network-outbound (remote ip))
 (allow network-inbound (local ip "localhost:*"))
 (allow network-bind (local ip "localhost:*"))
 (allow network-outbound (literal "/private/var/run/mDNSResponder"))
 "##;
+
+/// Under every other choice: a listener on loopback, and no DNS resolver, because the proxy
+/// resolves names and a lookup would carry data out in the name itself. `localhost` still
+/// resolves, from `/etc/hosts`.
+const SEATBELT_LOOPBACK_LISTEN: &str = r##"(allow network-inbound (local ip "localhost:*"))
+(allow network-bind (local ip "localhost:*"))
+"##;
+
+/// Starts one execution's egress proxy where `backend`'s sandbox reaches it.
+fn new_proxy(
+    backend: &Backend,
+    policy: egress::Policy,
+    on: egress::OnDecision,
+) -> std::io::Result<egress::Listener> {
+    match backend {
+        Backend::Bubblewrap(_) => egress::proxy(policy, &egress_dir(), on),
+        Backend::Seatbelt => egress::loopback_proxy(policy, on),
+    }
+}
+
+static SERVER_PORT: OnceLock<u16> = OnceLock::new();
+
+/// Names Ostra's own TCP port, which no Seatbelt sandbox connects to even where its workspace
+/// opens the loopback, because the port serves the console's API.
+pub fn set_server_port(port: u16) {
+    let _ = SERVER_PORT.set(port);
+}
+
+/// What points a command's HTTP clients at the egress proxy at `url`. Loopback goes direct.
+pub fn proxy_env(url: &str) -> Vec<(String, String)> {
+    let url = url.to_string();
+    let mut out = vec![];
+    for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+        out.push((k.to_string(), url.clone()));
+        out.push((k.to_ascii_lowercase(), url.clone()));
+    }
+    for k in ["NO_PROXY", "no_proxy"] {
+        out.push((k.to_string(), "localhost,127.0.0.1,::1".to_string()));
+    }
+    out.push(("NODE_USE_ENV_PROXY".into(), "1".into()));
+    out
+}
 
 /// `path` as an SBPL string. `Err` for a path that is not UTF-8 or holds a control character,
 /// because a path that ends its string early would rewrite the policy.
@@ -2005,6 +2138,8 @@ mod tests {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_loopback: Default::default(),
+            sandbox_blocked_ports: vec![],
         }
     }
 
@@ -2513,6 +2648,7 @@ mod tests {
             && w[2] == home.join(".claude/.credentials.json").display().to_string()));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_private_network_leads_out_only_through_its_own_proxy() {
         let Some(b @ Backend::Bubblewrap(_)) = backend() else {
@@ -2717,16 +2853,58 @@ mod tests {
             );
         }
         assert!(!pins.contains(&format!("(literal \"{}\")", s(home.clone()))));
-        assert!(text.contains("(allow network-outbound (remote ip))"));
         assert!(text.contains("dev.ostra.sandbox.test"));
         assert!(!text.contains("(param"));
+        // Under `allowlist` the loopback is open by default, the rest goes through the proxy, and
+        // names do not resolve.
+        assert!(!text.contains("(remote ip)"), "{text}");
+        assert!(!text.contains("mDNSResponder"), "{text}");
+        assert!(text.contains("(allow network-bind (local ip \"localhost:*\"))"));
+        assert!(text.contains("(allow network-outbound (remote ip \"localhost:*\"))"));
+        let blocked = SandboxConfig {
+            blocked_ports: vec![5432],
+            ..Default::default()
+        };
+        let text = policy(&Profile::for_execution(&ctx(&root), &blocked, &home));
+        let open = text
+            .find("(allow network-outbound (remote ip \"localhost:*\"))")
+            .unwrap();
+        let deny = text
+            .find("(deny network-outbound (remote ip \"localhost:5432\"))")
+            .unwrap();
+        assert!(open < deny, "{text}");
+        let listed = SandboxConfig {
+            allowed_hosts: vec![
+                "127.0.0.1:8317".into(),
+                "127.0.0.1:5432".into(),
+                "pkg.example".into(),
+            ],
+            loopback: crate::config::LoopbackAccess::Listed,
+            blocked_ports: vec![5432],
+            ..Default::default()
+        };
+        let text = policy(&Profile::for_execution(&ctx(&root), &listed, &home));
+        assert!(text.contains("(allow network-outbound (remote ip \"localhost:8317\"))"));
+        assert!(!text.contains("(allow network-outbound (remote ip \"localhost:5432\"))"));
+        assert_eq!(
+            text.matches("(allow network-outbound (remote ip").count(),
+            1,
+            "{text}"
+        );
         let off = SandboxConfig {
             network: SandboxNetwork::None,
             ..Default::default()
         };
         let text = policy(&Profile::for_execution(&ctx(&root), &off, &home).tty(true));
-        assert!(!text.contains("(remote ip)"));
+        assert!(!text.contains("(remote ip"));
         assert!(text.contains("(literal (param \"TTY\"))"));
+        let host = SandboxConfig {
+            network: SandboxNetwork::Host,
+            ..Default::default()
+        };
+        let text = policy(&Profile::for_execution(&ctx(&root), &host, &home));
+        assert!(text.contains("(allow network-outbound (remote ip))"));
+        assert!(text.contains("mDNSResponder"));
     }
 
     #[test]
@@ -2905,6 +3083,237 @@ mod tests {
             assert!(!out.contains(bad), "{bad}:\n{out}");
         }
         assert!(out.contains("unset") && out.contains("own-tmp"), "{out}");
+    }
+
+    /// A tiny HTTP server on loopback that answers every request with `body`.
+    fn serve(body: &'static str) -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for mut s in l.incoming().flatten() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        port
+    }
+
+    /// macOS shares one loopback, so each Seatbelt policy names the ports it may connect to: its
+    /// own proxy, its forwards, and listed loopback hosts. Nothing resolves names but the proxy.
+    #[test]
+    fn seatbelt_leads_out_only_through_its_own_proxy_and_ports() {
+        if !seatbelt() {
+            eprintln!("seatbelt unavailable; skipping");
+            return;
+        }
+        let (_d, root, home) = layout();
+        let listed = serve("listed");
+        let unlisted = serve("unlisted");
+        let bridge = serve("bridge");
+        let cfg = SandboxConfig {
+            allowed_hosts: vec![format!("127.0.0.1:{listed}")],
+            loopback: crate::config::LoopbackAccess::Listed,
+            ..Default::default()
+        };
+        let seen: Arc<std::sync::Mutex<Vec<egress::Decision>>> = Arc::default();
+        let s2 = seen.clone();
+        let b = backend().unwrap();
+        let other = Profile::for_execution(&ctx(&root), &cfg, &home)
+            .start_egress(b, Arc::new(|_| {}))
+            .unwrap();
+        let other_port = other.egress.as_ref().unwrap().port().unwrap();
+        let bridge_addr: std::net::SocketAddr = ([127, 0, 0, 1], bridge).into();
+        let p = Profile::for_execution(&ctx(&root), &cfg, &home)
+            .start_egress(b, Arc::new(move |d| s2.lock().unwrap().push(d)))
+            .unwrap()
+            .forward(b, bridge_addr)
+            .unwrap();
+        let inside = p.forwarded_port(bridge).unwrap();
+        assert_ne!(inside, bridge);
+        let script = format!(
+            r#"
+            get() {{ curl -s --max-time 5 "$@"; }}
+            echo "listed:$(get http://127.0.0.1:{listed}/)"
+            get http://127.0.0.1:{unlisted}/ && echo direct-unlisted
+            get http://127.0.0.1:{bridge}/ && echo direct-bridge
+            echo "forwarded:$(get http://127.0.0.1:{inside}/)"
+            echo "via-proxy:$(get --noproxy '' -x "$HTTP_PROXY" http://127.0.0.1:{listed}/)"
+            echo "refused:$(get -o /dev/null -w '%{{http_code}}' --noproxy '' -x "$HTTP_PROXY" http://127.0.0.1:1/)"
+            get --noproxy '' -x http://127.0.0.1:{other_port} http://127.0.0.1:{listed}/ && echo other-proxy
+            get --noproxy '*' http://1.1.1.1/ >/dev/null && echo direct-public
+            python3 -c 'import socket; socket.gethostbyname("example.com"); print("resolved")' 2>/dev/null
+            python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(); print("listen-ok")'
+            echo "$HTTPS_PROXY"
+            "#
+        );
+        let out = run_in(&p, &root, &script).unwrap();
+        for bad in [
+            "direct-unlisted",
+            "direct-bridge",
+            "other-proxy",
+            "direct-public",
+            "resolved",
+        ] {
+            assert!(!out.contains(bad), "{bad}:\n{out}");
+        }
+        for want in [
+            "listed:listed",
+            "forwarded:bridge",
+            "via-proxy:listed",
+            "refused:403",
+            "listen-ok",
+        ] {
+            assert!(out.contains(want), "missing {want}:\n{out}");
+        }
+        let own = p.egress.as_ref().unwrap().proxy_url().unwrap().to_string();
+        assert!(out.contains(&own), "{out}");
+        let seen = seen.lock().unwrap().clone();
+        assert!(
+            seen.iter().any(|d| !d.allowed && d.local && d.port == 1),
+            "{seen:?}"
+        );
+
+        // The default opens the loopback: the command reaches its own server and unlisted
+        // ports, but not a blocked port, and another execution's proxy wants its credential.
+        let blocked = serve("blocked");
+        let open = SandboxConfig {
+            blocked_ports: vec![blocked],
+            ..Default::default()
+        };
+        let p = Profile::for_execution(&ctx(&root), &open, &home)
+            .start_egress(b, Arc::new(|_| {}))
+            .unwrap();
+        let script = format!(
+            r#"
+            get() {{ curl -s --max-time 5 "$@"; }}
+            echo "unlisted:$(get http://127.0.0.1:{unlisted}/)"
+            get http://127.0.0.1:{blocked}/ && echo direct-blocked
+            echo "other-proxy:$(get -o /dev/null -w '%{{http_code}}' --noproxy '' -x http://127.0.0.1:{other_port} http://127.0.0.1:{listed}/)"
+            echo "own-proxy:$(get -o /dev/null -w '%{{http_code}}' https://index.crates.io/config.json)"
+            python3 -c 'import socket, threading
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen()
+threading.Thread(target=lambda: s.accept()[0].sendall(b"mine"), daemon=True).start()
+c = socket.create_connection(s.getsockname()); print("own-server:" + c.recv(4).decode())'
+            "#
+        );
+        let out = run_in(&p, &root, &script).unwrap();
+        assert!(!out.contains("direct-blocked"), "{out}");
+        for want in [
+            "unlisted:unlisted",
+            "other-proxy:407",
+            "own-proxy:200",
+            "own-server:mine",
+        ] {
+            assert!(out.contains(want), "missing {want}:\n{out}");
+        }
+
+        let host = SandboxConfig {
+            network: SandboxNetwork::Host,
+            ..Default::default()
+        };
+        let p = Profile::for_execution(&ctx(&root), &host, &home);
+        let out = run_in(
+            &p,
+            &root,
+            &format!("curl -s --max-time 5 http://127.0.0.1:{unlisted}/"),
+        )
+        .unwrap();
+        assert!(out.contains("unlisted"), "{out}");
+    }
+
+    /// Another process's arguments and startup environment are not readable, and the
+    /// sandbox's own are.
+    #[test]
+    fn seatbelt_hides_other_processes_startup_environment() {
+        if !seatbelt() {
+            eprintln!("seatbelt unavailable; skipping");
+            return;
+        }
+        let (_d, root, home) = layout();
+        let secret = format!("s{}", uuid::Uuid::new_v4().simple());
+        let mut victim = std::process::Command::new("sleep")
+            .arg("30")
+            .env("OSTRA_TEST_SECRET", &secret)
+            .spawn()
+            .unwrap();
+        let read = |pid: &str| {
+            format!(
+                r#"python3 -c 'import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+mib = (ctypes.c_int * 3)(1, 49, {pid}); n = ctypes.c_size_t(0)
+if libc.sysctl(mib, 3, None, ctypes.byref(n), None, 0): print("refused")
+else:
+    b = ctypes.create_string_buffer(n.value); libc.sysctl(mib, 3, b, ctypes.byref(n), None, 0)
+    print("read:" + ("secret" if b"{secret}" in b.raw else "other"))'"#
+            )
+        };
+        let script = format!(
+            "echo \"outside:$({})\"\nOSTRA_TEST_SECRET={secret} sleep 5 & C=$!\necho \"own:$({})\"; kill $C",
+            read(&victim.id().to_string()),
+            read("'\"$C\"'"),
+        );
+        let p = Profile::for_execution(&ctx(&root), &SandboxConfig::default(), &home);
+        let out = run_in(&p, &root.join("repo"), &script).unwrap();
+        let _ = victim.kill();
+        let _ = victim.wait();
+        assert!(out.contains("outside:refused"), "{out}");
+        assert!(out.contains("own:read:secret"), "{out}");
+    }
+
+    /// Rule P3 under Seatbelt: an existing credential file is refused and its read reported
+    /// through the system log; `stat` and a listing are not reports, and a missing file is none.
+    #[test]
+    fn seatbelt_reports_reads_of_existing_decoys() {
+        if !seatbelt() {
+            eprintln!("seatbelt unavailable; skipping");
+            return;
+        }
+        if !crate::decoy::supported(&Backend::Seatbelt) {
+            eprintln!("the system log is not readable by this user; skipping");
+            return;
+        }
+        let (_d, root, home) = layout();
+        std::fs::write(home.join(".ssh/id_rsa"), "REAL KEY").unwrap();
+        std::fs::write(home.join(".vault-token"), "REAL TOKEN").unwrap();
+        let seen: Arc<std::sync::Mutex<Vec<PathBuf>>> = Arc::default();
+        let s2 = seen.clone();
+        let p = Profile::for_execution(&ctx(&root), &SandboxConfig::default(), &home)
+            .watch_decoys(
+                &Backend::Seatbelt,
+                &home,
+                &["~/.aws/credentials".into()],
+                Arc::new(move |p| s2.lock().unwrap().push(p)),
+            )
+            .unwrap();
+        let tags = p.decoys.as_ref().unwrap().tags().to_vec();
+        assert_eq!(tags.len(), 2, "existing files only: {tags:?}");
+        let script = format!(
+            "ls {h}/.ssh; stat {h}/.vault-token >/dev/null; cat {h}/.aws/credentials; cat {h}/.vault-token; cat {h}/.ssh/id_rsa; echo done",
+            h = home.display()
+        );
+        let out = run_in(&p, &root.join("repo"), &script).unwrap();
+        assert!(!out.contains("REAL"), "{out}");
+        assert!(out.contains("done"), "{out}");
+        let start = std::time::Instant::now();
+        while seen.lock().unwrap().len() < 2 && start.elapsed() < std::time::Duration::from_secs(10)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let mut got = seen.lock().unwrap().clone();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![home.join(".ssh/id_rsa"), home.join(".vault-token")],
+            "{out}"
+        );
     }
 
     /// System sandboxes that allow every mach name (Image Capture's `icdd`, for one) must not

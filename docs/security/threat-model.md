@@ -122,7 +122,7 @@ per minute per address. [Install](../start/install.md) covers binding and remote
 | Terminal escape sequences | Server-side answers to terminal queries, muted xterm.js replies | [Server and browser](server-and-browser.md) |
 | Credential theft from disk | AES-256-GCM sealing under a master key in the keychain or an owner-only file | [Secrets and data](secrets-and-data.md) |
 | Prompt injection turning into writes outside scope | Layer 1 guards, kernel sandbox | [Agent containment](agent-containment.md) |
-| An agent that keeps trying to get out | Containment signals, including opens of decoy credential files on Linux, pause the session after three from one execution | [Agent containment](agent-containment.md#containment-signals-pause-the-session) |
+| An agent that keeps trying to get out | Containment signals, including opens of decoy credential files (on macOS on admin accounts only), pause the session after three from one execution | [Agent containment](agent-containment.md#containment-signals-pause-the-session) |
 | Credential theft by an agent | Secret-path guard, sandbox, scrubbed environment for agent commands | [Agent containment](agent-containment.md), [Secrets and data](secrets-and-data.md) |
 | Credentials in logs | Redaction of git secrets, no bodies or keys in the server log | [Secrets and data](secrets-and-data.md) |
 | Harness sign-in abuse | The provider's own CLI signs in; Ostra never handles the consumer token | [Secrets and data](secrets-and-data.md), [Provider usage](../providers/README.md) |

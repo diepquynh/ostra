@@ -586,9 +586,10 @@ function DecoysPanel({ form, update, issues, sandbox }: SectionProps & { sandbox
           execution pause the session.
         </p>
         {!sandbox.decoys && (
-          <Banner tone="info" title="Decoy files need the Linux sandbox, so this server cannot plant them">
+          <Banner tone="info" title="This server cannot plant them">
             <p style={{ margin: "4px 0 0" }}>
-              They are bind mounts that bubblewrap provides. See{" "}
+              On Linux they need bubblewrap. On macOS they need an admin account, because macOS shows sandbox reports
+              only to admins. See{" "}
               <a href={DECOY_GUIDE} target="_blank" rel="noopener noreferrer">
                 decoy credential files in the sandboxing guide
               </a>
@@ -656,15 +657,42 @@ function NetworkPanel({
           />
         ))}
         <FieldIssues issues={issues("sandbox_network")} />
-        {sandbox.backend === "seatbelt" && effective !== "none" && (
-          <Banner
-            tone="info"
-            title="Choose None where agent commands need no network, because macOS has no egress proxy yet"
-          >
-            <p style={{ margin: "4px 0 0" }}>
-              On macOS every other choice shares the host network, local services and the LAN included.
-            </p>
-          </Banner>
+        {sandbox.backend === "seatbelt" && (
+          <Anchor id="sandbox_loopback">
+            <div className="wp-stack" style={{ gap: 8 }}>
+              <span className="wp-muted">
+                Every macOS sandbox shares this machine's loopback, where your local services listen. This applies under
+                Allowlist and Public.
+              </span>
+              <Checkbox
+                radio
+                name="sandbox-loopback"
+                checked={form.loopback === "open"}
+                onChange={() => update((f) => void (f.loopback = "open"))}
+                label="Every loopback port but the blocked ones"
+                description="Tests reach the servers they start. Ostra's own port is always blocked."
+              />
+              <Checkbox
+                radio
+                name="sandbox-loopback"
+                checked={form.loopback === "listed"}
+                onChange={() => update((f) => void (f.loopback = "listed"))}
+                label="Only loopback ports listed in the hosts below"
+                description="Your local services stay out of reach, and a test server on another port is refused."
+              />
+              <Anchor id="sandbox_blocked_ports">
+                <Input
+                  label="Blocked loopback ports"
+                  mono
+                  placeholder="5432, 6379"
+                  value={form.blockedPorts}
+                  error={errorText(issues("sandbox_blocked_ports"))}
+                  hint="Ports no command connects to, even when listed below, such as a database or an SSH forward."
+                  onChange={(e) => update((f) => void (f.blockedPorts = e.target.value))}
+                />
+              </Anchor>
+            </div>
+          </Anchor>
         )}
         <Anchor id="sandbox_allowed_hosts">
           <Input

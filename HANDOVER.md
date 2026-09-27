@@ -423,7 +423,9 @@ edit, so Ostra does not run what they name until the user approved that exact co
   spend limits, the sandbox mode, the sandbox network choice (`sandbox_network`, in place of the global
   `[sandbox] network`), the sandbox's extra allowed hosts (`sandbox_allowed_hosts`), which add to the
   global `[sandbox] allowed_hosts` and never remove a global or built-in host, and the workspace's own decoy
-  files (`sandbox_decoys`, `~/` paths, at most 32), which add to the built-in decoys and never remove one.
+  files (`sandbox_decoys`, `~/` paths, at most 32), which add to the built-in decoys and never remove one,
+  and, for macOS, the loopback choice (`sandbox_loopback`, `open` by default or `listed`) and blocked loopback
+  ports (`sandbox_blocked_ports`, at most 64), which exist per workspace only.
 
 ## 8. The engine
 
@@ -485,7 +487,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | C2 | Context added mid-session is queued or sent now. Queued context lets running executions finish on the old request, and the next step sees it. Context sent now first interrupts every running execution; each re-runs from its spawn block with the updated request, not from where it stopped. Either way it is an amendment, so Rules D2 and D10 apply. |
 | P1 | A paused session starts nothing: no spawn, judge, command, gate, or YOLO answer. Pausing interrupts every running execution and denies its waiting permission asks. Gates can still be answered and context added; both take effect on continue. |
 | P2 | Continuing a paused session resumes each execution the pause interrupted, where it stopped: a native execution from its stored transcript, a harness execution through its resume command with the stored session id and the prompt "Continue the workflow." A harness is sent Esc before it is stopped, so its session is saved whole. Context added while paused cancels the resume: those executions re-run from their spawn blocks, because a resumed conversation would not see it. |
-| P3 | Ostra pauses a session as in P1 on the third containment signal of one execution, YOLO included. A signal is a Layer 1 denial by the `secret-read`, `self-protection`, or `git-metadata` guard, an egress proxy refusal of a loopback, private, or link-local destination, or, on Linux, a process opening one of the decoy credential files the sandbox plants in hidden credential paths (`~/.ssh/id_rsa` and `id_ed25519` where no SSH port is reachable, `~/.git-credentials`, `~/.vault-token`, plus the workspace's `sandbox_decoys`). A refused public host is not a signal, because builds call telemetry hosts; it shows in the Activity view only. The engine records at most three signals per execution, so a retry loop cannot flood the log, and the board names the execution that paused the session. Continuing (P2) is the user's "this was fine": the resumed run is a new execution and starts at zero. |
+| P3 | Ostra pauses a session as in P1 on the third containment signal of one execution, YOLO included. A signal is a Layer 1 denial by the `secret-read`, `self-protection`, or `git-metadata` guard, an egress proxy refusal of a loopback, private, or link-local destination, or a process opening one of the decoy credential files the sandbox plants in hidden credential paths (`~/.ssh/id_rsa` and `id_ed25519` where no SSH port is reachable, `~/.git-credentials`, `~/.vault-token`, plus the workspace's `sandbox_decoys`): on Linux a fake file watched with inotify, on macOS an existing file the policy refuses to read, reported through the system log on an admin account. A refused public host is not a signal, because builds call telemetry hosts; it shows in the Activity view only. The engine records at most three signals per execution, so a retry loop cannot flood the log, and the board names the execution that paused the session. Continuing (P2) is the user's "this was fine": the resumed run is a new execution and starts at zero. |
 
 ### 8.3 Judge calls
 
