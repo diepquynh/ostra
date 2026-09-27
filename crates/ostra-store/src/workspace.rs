@@ -738,6 +738,20 @@ impl WorkspaceDb {
             .ok_or_else(|| StoreError::NotFound(id.to_string()))
     }
 
+    /// Rule P2: run a paused execution again under its id. Its usage, transcript, and Activity
+    /// stay, so the resumed run adds to them.
+    pub fn reopen_execution(&self, id: &ExecutionId) -> Result<ExecutionView, StoreError> {
+        let n = self.lock().execute(
+            "UPDATE executions SET status = ?1, error = NULL, ended_at = NULL WHERE id = ?2",
+            params![enum_str(&ExecutionStatus::Running)?, id.as_str()],
+        )?;
+        if n == 0 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        self.get_execution(id)?
+            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+    }
+
     /// Live usage while an execution runs.
     pub fn update_execution_usage(
         &self,

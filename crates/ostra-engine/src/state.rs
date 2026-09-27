@@ -1124,7 +1124,22 @@ impl SessionState {
                     // Started in the window before the pause reached the runner.
                     self.interrupting.insert(id.clone(), Interrupt::Pause);
                 }
-                self.on_started(id, purpose, loop_key);
+                self.on_started(id, purpose, loop_key, false);
+            }
+            SessionEvent::ExecutionResumed { id } => {
+                let Some(rec) = self.executions.get_mut(id) else {
+                    return;
+                };
+                rec.result = None;
+                rec.ended_at = None;
+                let (purpose, loop_key) = (rec.purpose.clone(), rec.loop_key);
+                self.resume_from.remove(&purpose_key(&purpose));
+                // Rule P3: continuing is the user's "this was fine", so the count starts again.
+                self.signals.remove(id);
+                if self.paused {
+                    self.interrupting.insert(id.clone(), Interrupt::Pause);
+                }
+                self.on_started(id, &purpose, loop_key, true);
             }
             SessionEvent::ExecutionFinished { id, result } => {
                 let Some(rec) = self.executions.get_mut(id) else {
@@ -1758,7 +1773,10 @@ impl SessionState {
         id: &ExecutionId,
         purpose: &ExecPurpose,
         loop_key: Option<(u32, bool)>,
+        resumed: bool,
     ) {
+        // A resumed run is the same run: it adds no run, pass, or work count, and keeps the
+        // inputs its conversation already saw.
         match purpose {
             ExecPurpose::Explore { task } => {
                 if let Some(t) = self.explore.get_mut(*task as usize) {
@@ -1771,17 +1789,21 @@ impl SessionState {
                 let docs = self.research_docs();
                 let t = &mut self.spec;
                 t.running = Some(id.clone());
-                t.runs.push(id.clone());
                 t.needs_run = false;
-                t.sent = InputMark {
-                    answers: t.answers.len(),
-                    changes: t.changes.len(),
-                    docs,
-                };
+                if !resumed {
+                    t.runs.push(id.clone());
+                    t.sent = InputMark {
+                        answers: t.answers.len(),
+                        changes: t.changes.len(),
+                        docs,
+                    };
+                }
             }
             ExecPurpose::Plan { .. } => {
                 self.plan.running = Some(id.clone());
-                self.plan.runs.push(id.clone());
+                if !resumed {
+                    self.plan.runs.push(id.clone());
+                }
                 self.plan.needs_run = false;
                 // Rule D10: the plan is revised in place against the changed spec, not replaced.
                 if self.plan.invalidated {
@@ -1808,7 +1830,7 @@ impl SessionState {
                 self.quick.running = true;
             }
             ExecPurpose::Init { mode, item } => self.init_started(id, *mode, item.clone()),
-            ExecPurpose::PromptGen { handoff_for: None } => self.prompt_gens += 1,
+            ExecPurpose::PromptGen { handoff_for: None } if !resumed => self.prompt_gens += 1,
             _ => {}
         }
         if let Some(key) = loop_key {
@@ -1818,13 +1840,14 @@ impl SessionState {
                     handoff_for: Some(_)
                 }
             );
-            if matches!(purpose, ExecPurpose::PromptGen { .. }) {
+            if matches!(purpose, ExecPurpose::PromptGen { .. }) && !resumed {
                 self.prompt_gens += u32::from(is_handoff);
             }
             if let Some(l) = self.loop_mut(key) {
                 l.running = Some(id.clone());
                 l.in_flight = Some(l.next.clone());
-                if matches!(
+                if !resumed
+                    && matches!(
                     purpose,
                     ExecPurpose::Implement { .. }
                         | ExecPurpose::WriteTest { .. }

@@ -246,53 +246,68 @@ fn role_str(role: Role) -> &'static str {
 /// Rebuild a message list from a stored transcript and add the resume turn: `note`, or the
 /// interruption notice.
 pub fn rebuild_transcript(transcript: &[(String, Value)], note: Option<&str>) -> Vec<Message> {
-    let mut messages: Vec<Message> = transcript
-        .iter()
-        .filter_map(|(role, content)| {
-            let role = match role.as_str() {
-                "assistant" => Role::Assistant,
-                "user" => Role::User,
-                _ => return None,
-            };
-            let content: Vec<Block> = serde_json::from_value(content.clone()).ok()?;
-            (!content.is_empty()).then_some(Message { role, content })
-        })
-        .collect();
-    let note = Block::text(
-        note.unwrap_or("The previous run was interrupted. Continue from where it stopped."),
-    );
-    match messages.last() {
-        Some(m) if m.role == Role::Assistant => {
-            let open: Vec<Block> = m
-                .content
-                .iter()
-                .filter_map(|b| match b {
-                    Block::ToolUse { id, .. } => Some(Block::tool_result(
-                        id.clone(),
-                        "Interrupted: this call did not finish.",
-                        true,
-                    )),
-                    _ => None,
-                })
-                .collect();
-            let mut content = open;
-            content.push(note);
-            messages.push(Message {
-                role: Role::User,
-                content,
-            });
-        }
-        Some(_) => {
-            if let Some(last) = messages.last_mut() {
-                last.content.push(note);
-            }
-        }
-        None => messages.push(Message {
-            role: Role::User,
-            content: vec![note],
-        }),
-    }
+    let mut messages = stored_messages(transcript);
+    let turn = resume_turn(&messages, note);
+    append_turn(&mut messages, turn);
     messages
+}
+
+/// The stored messages, with adjacent messages of one role merged, because a resume that stopped
+/// after a user turn stores its note as a message of its own.
+fn stored_messages(transcript: &[(String, Value)]) -> Vec<Message> {
+    let mut out: Vec<Message> = vec![];
+    for (role, content) in transcript {
+        let role = match role.as_str() {
+            "assistant" => Role::Assistant,
+            "user" => Role::User,
+            _ => continue,
+        };
+        let Ok(content) = serde_json::from_value::<Vec<Block>>(content.clone()) else {
+            continue;
+        };
+        if content.is_empty() {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.role == role => last.content.extend(content),
+            _ => out.push(Message { role, content }),
+        }
+    }
+    out
+}
+
+/// The user turn a resume adds: a result for each tool call the interruption left open, then
+/// the note.
+fn resume_turn(messages: &[Message], note: Option<&str>) -> Message {
+    let mut content: Vec<Block> = match messages.last() {
+        Some(m) if m.role == Role::Assistant => m
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                Block::ToolUse { id, .. } => Some(Block::tool_result(
+                    id.clone(),
+                    "Interrupted: this call did not finish.",
+                    true,
+                )),
+                _ => None,
+            })
+            .collect(),
+        _ => vec![],
+    };
+    content.push(Block::text(note.unwrap_or(
+        "The previous run was interrupted. Continue from where it stopped.",
+    )));
+    Message {
+        role: Role::User,
+        content,
+    }
+}
+
+fn append_turn(messages: &mut Vec<Message>, turn: Message) {
+    match messages.last_mut() {
+        Some(last) if last.role == Role::User => last.content.extend(turn.content),
+        _ => messages.push(turn),
+    }
 }
 
 impl Run {
@@ -424,18 +439,31 @@ impl Run {
 
         let mut messages = match &spec.resume {
             Some(resume) => {
-                let transcript = self.host.transcript(&resume.from);
-                let mut m = rebuild_transcript(&transcript, resume.note.as_deref());
-                if transcript.is_empty() {
-                    m.insert(0, Message::user_text(spec.first_message.clone()));
+                let mut m = stored_messages(&self.host.transcript(&resume.from));
+                let fresh = m.is_empty();
+                if fresh {
+                    m.push(Message::user_text(spec.first_message.clone()));
+                }
+                let turn = resume_turn(&m, resume.note.as_deref());
+                // Rule P2: resumed in place, the stored transcript is this run's, so only the
+                // new turn is added and the replayed prefix hits the prompt cache.
+                if resume.from == spec.id && !fresh {
+                    self.record(&turn);
+                    append_turn(&mut m, turn);
+                } else {
+                    append_turn(&mut m, turn);
+                    for msg in &m {
+                        self.record(msg);
+                    }
                 }
                 m
             }
-            None => vec![Message::user_text(spec.first_message.clone())],
+            None => {
+                let m = vec![Message::user_text(spec.first_message.clone())];
+                self.record(&m[0]);
+                m
+            }
         };
-        for m in &messages {
-            self.record(m);
-        }
 
         let coalescer = Arc::new(Coalescer {
             host: self.host.clone(),

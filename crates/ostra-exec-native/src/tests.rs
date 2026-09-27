@@ -469,6 +469,60 @@ async fn resumes_from_transcript() {
     assert!(matches!(&last.content[1], Block::Text { text } if text.contains("interrupted")));
 }
 
+#[tokio::test]
+async fn resuming_in_place_records_only_the_new_turn() {
+    let f = fixture();
+    let mut s = spec(
+        &f,
+        AgentName::QuickAnswer,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
+    s.ctx.report_file = None;
+    s.resume = Some(ostra_core::exec::ResumeInfo {
+        from: s.id.clone(),
+        native_session_id: None,
+        note: Some("Continue the workflow.".into()),
+        inspect: false,
+    });
+    let host = Arc::new(FakeHost::default());
+    host.transcripts.lock().insert(
+        s.id.clone(),
+        vec![
+            ("user".into(), json!([{"type": "text", "text": "Do the task."}])),
+            ("assistant".into(), json!([{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/x"}}])),
+            ("user".into(), json!([{"type": "tool_result", "tool_use_id": "t1", "content": "x", "is_error": false}])),
+        ],
+    );
+    let p = ScriptedProvider::new();
+    p.push_tool_use("submit_quick_answer", json!({"answer": "a"}));
+    let (exec, p) = executor(p);
+    let r = exec.run(s, host.clone(), CancellationToken::new()).await;
+    assert_eq!(r.status, ExecutionStatus::Ok);
+    let req = &p.requests()[0];
+    assert_eq!(req.messages.len(), 3, "the note joins the last user turn");
+    assert!(matches!(&req.messages[2].content[..], [Block::ToolResult { .. }, Block::Text { text }] if text == "Continue the workflow."));
+    let recorded = host.messages.lock().clone();
+    assert_eq!(
+        recorded[0],
+        ("user".to_string(), json!([{"type": "text", "text": "Continue the workflow."}])),
+        "the stored prefix is not recorded again"
+    );
+}
+
+#[test]
+fn rebuilding_merges_adjacent_turns_of_one_role() {
+    let transcript = vec![
+        ("user".to_string(), json!([{"type": "text", "text": "Task."}])),
+        ("assistant".to_string(), json!([{"type": "text", "text": "Working."}])),
+        ("user".to_string(), json!([{"type": "text", "text": "Continue the workflow."}])),
+        ("user".to_string(), json!([{"type": "text", "text": "Continue the workflow."}])),
+    ];
+    let m = rebuild_transcript(&transcript, None);
+    assert_eq!(m.len(), 3);
+    assert_eq!(m[2].content.len(), 3);
+}
+
 #[test]
 fn resume_note_replaces_the_interruption_notice() {
     let transcript = vec![(

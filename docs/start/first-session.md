@@ -151,8 +151,9 @@ each with the updated request. Either way the engine treats it as an amendment t
 requirement change re-runs the spec and the plan.
 
 **Pause** stops starting new work and interrupts what is running. Gates can still be answered while paused.
-**Continue** resumes each interrupted execution where it stopped. A paused session stays paused across a
-server restart.
+**Continue** resumes each interrupted execution where it stopped. The execution keeps its place on the
+board, and its Activity, cost, and conversation continue from before the pause. A paused session stays paused
+across a server restart.
 
 ## Stop it
 

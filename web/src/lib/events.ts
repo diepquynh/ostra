@@ -332,6 +332,8 @@ export function describeEvent(e: SessionEvent): string {
       return `Decision overridden: ${truncate(e.reason, 100)}`;
     case "execution_started":
       return `${humanize(e.agent)} started in ${e.project} on ${e.executor}`;
+    case "execution_resumed":
+      return "Execution resumed where it stopped";
     case "execution_finished":
       return `Execution finished: ${e.result.status}`;
     case "gate_opened":

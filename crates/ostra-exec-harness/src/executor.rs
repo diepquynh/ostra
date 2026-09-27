@@ -351,10 +351,10 @@ impl HarnessExecutor {
         if let Some(sid) = &plan.session_id {
             live.note_session(Some(sid.clone()), None);
         }
-        let log = TermLog::create(terminal_transcript(
-            &spec.ctx.session_root,
-            spec.id.as_str(),
-        ))
+        let log = TermLog::create(
+            terminal_transcript(&spec.ctx.session_root, spec.id.as_str()),
+            spec.resume.as_ref().is_some_and(|r| r.from == spec.id),
+        )
         .ok();
         let pty = PtySession::spawn(
             &plan,

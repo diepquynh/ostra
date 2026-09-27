@@ -49,7 +49,7 @@ There are about twenty event kinds. Grouped by what they record:
 | Session lifecycle | `SessionCreated`, `SessionCompleted`, `SessionFailed` | The request, options, projects, and folders at the start; the completion report or the reason it stopped. |
 | What you did | `RequestAmended`, `SessionPaused`, `SessionResumed`, `YoloSet` | Context added mid-session (queued or sent now), pause and continue (Rules P1 and P2), turning YOLO on or off. |
 | Judgment | `DecisionMade`, `DecisionOverridden` | A judge's output, its reason, and the input summary it saw; a user's override of it. |
-| Executions | `ExecutionStarted`, `ExecutionFinished` | Agent, purpose, stage, executor, model, the full spawn parameters and rendered spawn block, and later the result with its submit payload, token usage, and cost. |
+| Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished` | Agent, purpose, stage, executor, model, the full spawn parameters and rendered spawn block, and later the result with its submit payload, token usage, and cost. `ExecutionResumed` reopens an execution the pause interrupted (Rule P2), so one execution can have several results in the log; the last one counts, and it includes what the earlier parts spent. |
 | Gates | `GateOpened`, `GateAnswered` | A question the pipeline asks, and its answer with its source: `user`, `yolo`, or `engine`. |
 | Engine work | `CommandStarted`, `CommandRan`, `AutofixApplied` | Format and `git add` commands with their exit code and output tail; review findings the engine applied itself. |
 | Outcomes | `SecurityBlock`, `PhaseBlocked`, `Note` | A BLOCKER finding (Hard rule 21), a phase that cannot continue, and free-text notes such as "A step failed". |

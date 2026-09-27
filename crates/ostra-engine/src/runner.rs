@@ -22,7 +22,7 @@ use ostra_core::event::{
 };
 use ostra_core::exec::{
     CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
-    ExecutionStatus, ResumeInfo,
+    ExecutionStatus, ResumeInfo, Usage,
 };
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
@@ -780,6 +780,7 @@ impl Engine {
             session: None,
             execution: new.clone(),
             repo_root: Some(repo_root),
+            usage_base: Usage::default(),
         });
         let spec = ExecutionSpec {
             id: new.clone(),
@@ -880,6 +881,8 @@ const INSPECT_PROMPT: &str = "The user reopened this session to read what you di
 const INSPECT_TIMEOUT_SECS: u64 = 4 * 60 * 60;
 /// What a paused execution hears when the session continues (Rule P2).
 pub const PAUSE_RESUME_NOTE: &str = "Continue the workflow.";
+/// The Activity line where a resumed execution picks up (Rule P2).
+pub const RESUMED_STATUS: &str = "The session continued, so this run resumes where it stopped.";
 /// Files one request or addition may attach (Rule C1).
 pub const MAX_CONTEXT_FILES: usize = 50;
 
@@ -1149,7 +1152,9 @@ impl Inner {
             if was_terminal
                 && matches!(
                     event,
-                    SessionEvent::ExecutionStarted { .. } | SessionEvent::CommandStarted { .. }
+                    SessionEvent::ExecutionStarted { .. }
+                        | SessionEvent::ExecutionResumed { .. }
+                        | SessionEvent::CommandStarted { .. }
                 )
             {
                 return Err(EngineError::Ended);
@@ -1959,6 +1964,18 @@ impl Inner {
         if st.is_terminal() || st.paused {
             return Ok(());
         }
+        // Rule P2: a run the pause interrupted continues under its own id, where it stopped.
+        let paused = req
+            .resumes
+            .as_ref()
+            .and_then(|from| st.executions.get(from))
+            .filter(|rec| {
+                rec.agent == req.agent
+                    && rec
+                        .result
+                        .as_ref()
+                        .is_some_and(|r| r.status == ExecutionStatus::Interrupted)
+            });
         let global = self.services.global();
         let settings = self.services.workspace();
         let factory = self.services.factory();
@@ -1973,7 +1990,7 @@ impl Inner {
         )
         .then_some(Tier::Advanced);
         let executor_override = st.forced_executor(req.agent);
-        let route = match resolve_route(
+        let mut route = match resolve_route(
             &global,
             &settings,
             RouteQuery {
@@ -1995,6 +2012,12 @@ impl Inner {
                 );
             }
         };
+        // The conversation continues on the executor and model it started on, which also keeps
+        // the prompt cache.
+        if let Some(rec) = paused {
+            route.executor = rec.executor;
+            route.model = rec.model.clone();
+        }
         let Some(executor) = self.services.executor(route.executor) else {
             return self.record_denied(
                 session,
@@ -2059,24 +2082,22 @@ impl Inner {
                 serde_json::to_value(ids).unwrap_or_default(),
             );
         }
-        let id = ExecutionId::new();
         let hint = lock(&self.resume_hints).remove(&purpose_key(&req.purpose));
-        // Rule P2: a run the pause interrupted continues from where it stopped.
-        let resume = match req
-            .resumes
-            .as_ref()
-            .and_then(|from| st.executions.get(from))
-        {
-            Some(rec) => Some(ResumeInfo {
-                from: rec.id.clone(),
-                native_session_id: rec
-                    .result
-                    .as_ref()
-                    .and_then(|r| r.native_session_id.clone()),
-                note: Some(PAUSE_RESUME_NOTE.into()),
-                inspect: false,
-            }),
-            None => hint,
+        let (id, resume, report_file) = match paused {
+            Some(rec) => (
+                rec.id.clone(),
+                Some(ResumeInfo {
+                    from: rec.id.clone(),
+                    native_session_id: rec
+                        .result
+                        .as_ref()
+                        .and_then(|r| r.native_session_id.clone()),
+                    note: Some(PAUSE_RESUME_NOTE.into()),
+                    inspect: false,
+                }),
+                rec.report_path.clone(),
+            ),
+            None => (ExecutionId::new(), hint, built.report_file.clone()),
         };
         let ctx = ExecContext {
             execution_id: id.clone(),
@@ -2092,7 +2113,7 @@ impl Inner {
             project_key: req.project.clone(),
             session_dir: req.session_dir.clone(),
             session_root: st.session_root.clone(),
-            report_file: built.report_file.clone(),
+            report_file,
             phase: req.inputs.phase_value.clone(),
             yolo: st.yolo,
             permission_mode: settings.permissions.mode,
@@ -2109,36 +2130,42 @@ impl Inner {
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
         };
-        self.append(
-            session,
-            SessionEvent::ExecutionStarted {
+        let usage_base = if paused.is_some() {
+            self.append(session, SessionEvent::ExecutionResumed { id: id.clone() })?;
+            self.db.reopen_execution(&id)?.usage
+        } else {
+            self.append(
+                session,
+                SessionEvent::ExecutionStarted {
+                    id: id.clone(),
+                    agent: req.agent,
+                    purpose: req.purpose.clone(),
+                    stage: req.stage,
+                    project: req.project.clone(),
+                    executor: route.executor,
+                    model: route.model.clone(),
+                    params: params.clone(),
+                    spawn_block: built.spawn_block.clone(),
+                    report_path: built.report_file.clone(),
+                    resumes: resume.as_ref().map(|r| r.from.clone()),
+                },
+            )?;
+            self.db.insert_execution(&NewExecution {
                 id: id.clone(),
+                session: Some(session.clone()),
                 agent: req.agent,
-                purpose: req.purpose.clone(),
-                stage: req.stage,
+                purpose: Some(req.purpose.clone()),
+                stage: Some(req.stage),
                 project: req.project.clone(),
                 executor: route.executor,
                 model: route.model.clone(),
-                params: params.clone(),
+                params,
                 spawn_block: built.spawn_block.clone(),
                 report_path: built.report_file.clone(),
-                resumes: resume.as_ref().map(|r| r.from.clone()),
-            },
-        )?;
-        self.db.insert_execution(&NewExecution {
-            id: id.clone(),
-            session: Some(session.clone()),
-            agent: req.agent,
-            purpose: Some(req.purpose.clone()),
-            stage: Some(req.stage),
-            project: req.project.clone(),
-            executor: route.executor,
-            model: route.model.clone(),
-            params,
-            spawn_block: built.spawn_block.clone(),
-            report_path: built.report_file.clone(),
-            native_session_id: None,
-        })?;
+                native_session_id: None,
+            })?;
+            Usage::default()
+        };
         let _ = self.tx.send(EngineNotice::ExecutionStatus {
             execution: id.clone(),
             status: ExecutionStatus::Running,
@@ -2154,7 +2181,13 @@ impl Inner {
             session: Some(session.clone()),
             execution: id.clone(),
             repo_root: Some(repo_root.clone()),
+            usage_base,
         });
+        if paused.is_some() {
+            host.emit(ExecutionDelta::Status {
+                message: RESUMED_STATUS.into(),
+            });
+        }
         let harness_session_id = match route.executor {
             ExecutorKind::Harness(
                 ostra_core::HarnessKind::Claude | ostra_core::HarnessKind::Grok,
@@ -2180,13 +2213,19 @@ impl Inner {
             resume,
             harness_session_id,
         };
-        let mut result = executor.run(spec, host, token).await;
+        let mut result = executor.run(spec, host.clone(), token).await;
         lock(&self.execs).remove(&id);
+        let mut usage = usage_base;
+        usage.add(&result.usage);
+        result.usage = usage;
         if result.status == ExecutionStatus::Cancelled
             && let Some(why) = self.snapshot(session)?.interrupting.get(&id).copied()
         {
             result.status = ExecutionStatus::Interrupted;
             result.error = Some(why.message().into());
+            host.emit(ExecutionDelta::Status {
+                message: why.message().into(),
+            });
         }
         let _ = self.db.finish_execution(&id, &result);
         let _ = self.tx.send(EngineNotice::ExecutionStatus {
@@ -2296,6 +2335,7 @@ impl Inner {
             session: None,
             execution: id.clone(),
             repo_root: Some(repo_root.to_path_buf()),
+            usage_base: Usage::default(),
         });
         let spec = ExecutionSpec {
             id: id.clone(),
@@ -2382,6 +2422,8 @@ pub struct EngineHost {
     execution: ExecutionId,
     /// Tool call paths in the summary line are shown relative to it.
     repo_root: Option<PathBuf>,
+    /// What the execution spent before a resume (Rule P2); executors count from zero.
+    usage_base: Usage,
 }
 
 impl EngineHost {
@@ -2435,6 +2477,14 @@ impl ExecutionHost for EngineHost {
         if let ExecutionDelta::NativeSessionId { id } = &delta {
             let _ = self.inner.db.set_native_session_id(&self.execution, id);
         }
+        let delta = match delta {
+            ExecutionDelta::Usage { usage: run } => {
+                let mut usage = self.usage_base;
+                usage.add(&run);
+                ExecutionDelta::Usage { usage }
+            }
+            other => other,
+        };
         if let ExecutionDelta::Usage { usage } = &delta {
             let _ = self.inner.db.update_execution_usage(&self.execution, usage);
             // Keep the session list's cost current while executions run, not only when they end.

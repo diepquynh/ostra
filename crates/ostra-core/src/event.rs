@@ -581,6 +581,11 @@ pub enum SessionEvent {
         /// Execution this one resumes, if any.
         resumes: Option<ExecutionId>,
     },
+    /// Rule P2: an execution the pause interrupted runs again under its own id, continuing its
+    /// conversation, Activity, and usage.
+    ExecutionResumed {
+        id: ExecutionId,
+    },
     ExecutionFinished {
         id: ExecutionId,
         result: ExecutionResult,

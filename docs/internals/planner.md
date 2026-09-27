@@ -119,7 +119,7 @@ branches of the planner that reach the same conclusion produce one step.
   Running executions finish; nothing new starts. YOLO never answers this gate, because spending more is your
   decision.
 - **Resume after pause (Rule P2).** When the session has a paused run for the same purpose, the spawn is marked
-  to resume it, so the runner continues the old conversation instead of starting a new one.
+  to resume it, so the runner continues that execution instead of starting a new one.
 
 And at the top of `run`, before any stage logic:
 
@@ -241,7 +241,10 @@ limiter bounds concurrency, and the caps bound the total.
    `denied` execution with the reason, never a silent fallback.
 3. Builds the typed spawn parameters through the spawn factory, and records extra facts the fold will need
    later in `params` (the auto-fixable rule IDs for a review).
-4. Appends `ExecutionStarted` with the parameters and the rendered spawn block.
+4. Appends `ExecutionStarted` with the parameters and the rendered spawn block. A spawn that resumes a paused
+   run of the same agent appends `ExecutionResumed` with that run's id instead (Rule P2): the run keeps its
+   row, executor, model, report path, and parameters, and the fold reopens it without counting a new run, a new
+   fact-check round, or new work in its loop. What the run already spent is the base its new usage adds to.
 5. Runs the executor with a cancellation token. If a pause or "send now" context cancelled it, the result is
    recorded as `interrupted` rather than `cancelled`, so the fold knows to resume or re-run it.
 6. Appends `ExecutionFinished` with the result and its submit payload.

@@ -53,7 +53,7 @@ An `ExecutionSpec` carries everything the run needs, already resolved:
 | `submit_schema` | The JSON schema of `submit_<agent>`. |
 | `timeout_secs` | The hard time budget for this execution. |
 | `ctx` | What the policy needs: repo root, session dir, report path, permission mode and rules, protected paths, the memory database, the sandbox mode. |
-| `resume` | Set when this run continues an earlier one. |
+| `resume` | Set when this run continues an earlier one. After a pause, `resume.from` is the run's own id. |
 | `harness_session_id` | A session id chosen up front, for the CLIs that accept one. |
 
 The executor does not read settings to decide what model to use or which tools to offer. That decision was
@@ -216,12 +216,19 @@ fails ends the run with the provider's error.
 ### Transcript and resume
 
 Every message the loop sends or receives goes to `ExecutionHost::record_message`, which stores it. A resumed
-execution reads that transcript back with `rebuild_transcript`:
+execution reads that transcript back and adds one user turn:
 
 - If the last stored message is the assistant's, its open tool calls are answered "Interrupted: this call did
   not finish.", because the provider refuses a conversation with tool calls that have no results.
-- The resume note is then added: either the note the engine supplied (for example, context you added while the
-  run was going) or "The previous run was interrupted. Continue from where it stopped."
+- The resume note is then added: either the note the engine supplied ("Continue the workflow." after a pause)
+  or "The previous run was interrupted. Continue from where it stopped."
+- If the last stored message is already a user turn (the run stopped while waiting on the model), the note
+  joins it, because two user turns in a row are merged when the transcript is read.
+
+A run resumed after a pause is the same execution, so its transcript is already stored under its id. The loop
+records only the new turn, and the request it sends starts with the same messages the interrupted run sent, so
+the provider's prompt cache still covers that prefix while the cache lives. A run resumed from a different
+execution, such as a retry after a failure, copies the whole rebuilt transcript into its own.
 
 ### Cost
 
@@ -500,7 +507,8 @@ Cancellation is immediate. The runner holds a `CancellationToken` per execution,
   resumed. Then it signals the process group, waits 3 seconds, and kills what is left, including anything the
   CLI started inside its sandbox.
 
-In both cases the usage spent so far is kept in the result.
+In both cases the usage spent so far is kept in the result. A harness resumed after a pause adds to its
+terminal log instead of replacing it, so the Terminal tab replays both parts.
 
 The engine sometimes cancels a run on purpose, for example to deliver context you added mid-run. The runner
 records the reason, and the `cancelled` result becomes `interrupted` with that reason, which the planner reads as

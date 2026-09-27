@@ -75,7 +75,7 @@ export function useExecution(id: string) {
     if (m.type !== "session_event") return;
     const t = m.event.type;
     if (t === "gate_opened" || t === "gate_answered") reloadExec();
-    if (t === "execution_started" || t === "execution_finished") reloadSession();
+    if (t === "execution_started" || t === "execution_resumed" || t === "execution_finished") reloadSession();
   });
   useEffect(() => setStatus(null), [exec.data?.status]);
   return { exec, status: status ?? exec.data?.status ?? null, activity, activityError, session };

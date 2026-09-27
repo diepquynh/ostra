@@ -236,7 +236,7 @@ Choose by how quickly you need spending to stop and whether you want to continue
 
 | Action | How | What happens |
 | --- | --- | --- |
-| Pause | Pause on the session's board, or `POST /api/sessions/{id}/pause` | Running executions are interrupted and nothing new starts, not even a YOLO answer. Continue picks each paused execution up where it stopped. |
+| Pause | Pause on the session's board, or `POST /api/sessions/{id}/pause` | Running executions are interrupted and nothing new starts, not even a YOLO answer. Continue picks each paused execution up where it stopped, as the same execution, so its cost keeps adding up on one row. |
 | Stop | Stop on the session's board, or `POST /api/sessions/{id}/stop` | Every running execution is cancelled, waiting permission asks are denied, and the session ends. A spawn or command that was being set up when the stop arrived does not start, because the runner refuses to record a start once the session has ended. Its work so far stays. |
 | Cancel one execution | Cancel on the execution, or `POST /api/executions/{id}/cancel` | That execution ends and its failure gate opens, where you choose retry or abandon. |
 | Stop while the server is down | `ostra stop <session-id>` | Marks the session's running executions as cancelled and ends it, so the next server start does not recover and re-run them. |

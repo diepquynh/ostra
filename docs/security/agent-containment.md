@@ -534,9 +534,10 @@ user's Pause does (Rules P1 and P2): every running execution is interrupted, wai
 and nothing new starts. The board names the agent whose execution paused the session, and a push notification
 says why.
 
-Continuing the session is the user's "this was fine". The interrupted run resumes where it stopped, as a new
-execution whose count starts at zero. Stopping the session ends it. The fixtures
-`p3_three_containment_signals_pause_the_session`, `p3_decoy_opens_are_signals_like_the_others`, and
+Continuing the session is the user's "this was fine". The interrupted run resumes where it stopped, as the
+same execution, and its signal count starts again at zero. Stopping the session ends it. The fixtures
+`p3_three_containment_signals_pause_the_session`, `p3_decoy_opens_are_signals_like_the_others`,
+`p3_a_resumed_execution_counts_signals_from_zero`, and
 `p3_two_signals_or_signals_spread_over_executions_do_not_pause` pin the rule, and `containment_signals_pause_the_session` in
 [`crates/ostra-engine/tests/pause.rs`](../../crates/ostra-engine/tests/pause.rs) runs it on a real engine.
 

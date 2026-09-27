@@ -1135,6 +1135,56 @@ fn resumed_session_continues_the_paused_run() {
 }
 
 #[test]
+fn p2_a_resume_continues_the_same_execution() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    h.ev(SessionEvent::SessionPaused);
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    h.ev(SessionEvent::SessionResumed);
+    h.ev(SessionEvent::ExecutionResumed { id: spec.clone() });
+    let st = h.state();
+    let running: Vec<_> = st.running_executions().map(|r| r.id.clone()).collect();
+    assert_eq!(running, vec![spec.clone()]);
+    assert_eq!(st.spec.runs, vec![spec.clone()], "a resume is not a new run");
+    assert!(st.resume_from.is_empty());
+    assert!(h.summaries().is_empty(), "{:?}", h.summaries());
+    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 1)));
+    assert_eq!(h.summaries(), vec!["spawn fact-check fact-check-spec#1"]);
+}
+
+#[test]
+fn p2_a_resumed_work_run_is_not_counted_twice() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (id, _) = h.start("spawn implementer");
+    let work = |h: &H| h.state().phases[&1].impl_loop.work_count;
+    let before = work(&h);
+    h.ev(SessionEvent::SessionPaused);
+    h.finish(&id, ExecutionStatus::Interrupted, None);
+    h.ev(SessionEvent::SessionResumed);
+    assert_eq!(h.spawn_step("spawn implementer").resumes, Some(id.clone()));
+    h.ev(SessionEvent::ExecutionResumed { id: id.clone() });
+    assert_eq!(work(&h), before);
+    assert_eq!(h.state().phases[&1].impl_loop.running, Some(id));
+}
+
+#[test]
+fn p3_a_resumed_execution_counts_signals_from_zero() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    for n in 0..3 {
+        signal(&mut h, &spec, n);
+    }
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    h.ev(SessionEvent::SessionResumed);
+    h.ev(SessionEvent::ExecutionResumed { id: spec.clone() });
+    assert!(!h.state().signals.contains_key(&spec));
+    for n in 0..3 {
+        signal(&mut h, &spec, n);
+    }
+    assert!(h.state().paused, "three new signals pause it again");
+}
+
+#[test]
 fn context_added_while_paused_reruns_instead_of_resuming() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let (spec, _) = h.start("spawn generate-spec");
@@ -1203,7 +1253,7 @@ fn p3_three_containment_signals_pause_the_session() {
     );
     h.finish(&spec, ExecutionStatus::Interrupted, None);
     assert!(h.summaries().is_empty(), "{:?}", h.summaries());
-    // Continuing is the user's "this was fine": the run resumes as a new execution.
+    // Continuing is the user's "this was fine": the run resumes and its signal count restarts.
     h.ev(SessionEvent::SessionResumed);
     assert_eq!(h.state().contained, None);
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#2"]);

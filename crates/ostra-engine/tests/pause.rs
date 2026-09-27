@@ -9,10 +9,10 @@ use ostra_core::exec::{
     ExecutionStatus, Executor, ResumeInfo, Usage,
 };
 use ostra_core::executor::ExecutorKind;
-use ostra_core::ids::{SessionId, WorkspaceId};
+use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_core::model::Effort;
 use ostra_engine::factory::AgentsFactory;
-use ostra_engine::runner::PAUSE_RESUME_NOTE;
+use ostra_engine::runner::{PAUSE_RESUME_NOTE, RESUMED_STATUS};
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_store::WorkspaceDb;
 use serde_json::{Value, json};
@@ -20,10 +20,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Runs until cancelled, and records the resume and capabilities each run was given. The first
-/// run emits `deltas` before it waits.
+/// Runs until cancelled, spending one dollar, and records the id, resume, and capabilities each
+/// run was given. The first run emits `deltas` before it waits.
 #[derive(Default)]
 struct Hanging {
+    ids: Mutex<Vec<ExecutionId>>,
     resumes: Mutex<Vec<Option<ResumeInfo>>>,
     caps: Mutex<Vec<usize>>,
     deltas: Mutex<Vec<ExecutionDelta>>,
@@ -37,15 +38,22 @@ impl Executor for Hanging {
         host: Arc<dyn ExecutionHost>,
         cancel: CancellationToken,
     ) -> ExecutionResult {
+        self.ids.lock().unwrap().push(spec.id.clone());
         self.resumes.lock().unwrap().push(spec.resume.clone());
         self.caps.lock().unwrap().push(spec.capabilities.len());
         let deltas = std::mem::take(&mut *self.deltas.lock().unwrap());
         for d in deltas {
             host.emit(d);
         }
+        let spent = Usage {
+            cost_usd: 1.0,
+            ..Default::default()
+        };
+        host.emit(ExecutionDelta::Usage { usage: spent });
         cancel.cancelled().await;
         let mut r = ExecutionResult::with_status(ExecutionStatus::Cancelled);
         r.native_session_id = Some("sid-1".into());
+        r.usage = spent;
         r
     }
 }
@@ -247,7 +255,36 @@ async fn pause_interrupts_and_resume_continues_the_run() {
     assert_eq!(resume.native_session_id.as_deref(), Some("sid-1"));
     assert_eq!(resume.note.as_deref(), Some(PAUSE_RESUME_NOTE));
     assert!(e.resume_session(&s).is_err());
+
+    // Rule P2: the run continues under its own id, so the session keeps one row for it.
+    let ids = t.exec.ids.lock().unwrap().clone();
+    assert_eq!(ids, vec![paused.id.clone(), paused.id.clone()]);
+    let rows = e.db().list_executions(&s).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].status, ExecutionStatus::Running);
+    until("the resumed run reports its spend", || {
+        e.db().get_execution(&paused.id).unwrap().unwrap().usage.cost_usd == 2.0
+    })
+    .await;
     e.stop_session(&s).unwrap();
+    until("the resumed run ends", || {
+        e.state(&s).unwrap().running_executions().count() == 0
+    })
+    .await;
+    let st = e.state(&s).unwrap();
+    assert_eq!(st.executions.len(), 1);
+    assert_eq!(st.spent_usd(), 2.0, "the resumed run adds to what it spent");
+    let lines: Vec<String> = e
+        .db()
+        .activity_after(&paused.id, 0)
+        .unwrap()
+        .into_iter()
+        .filter_map(|i| match i.delta {
+            ExecutionDelta::Status { message } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, vec!["The session was paused.", RESUMED_STATUS]);
 }
 
 fn refused(host: &str, port: u16, local: bool) -> ExecutionDelta {

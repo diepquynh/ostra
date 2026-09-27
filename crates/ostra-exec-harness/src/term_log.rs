@@ -29,23 +29,30 @@ impl std::fmt::Debug for TermLog {
 }
 
 impl TermLog {
-    /// Start an empty transcript at `path`, replacing any earlier one.
-    pub fn create(path: PathBuf) -> std::io::Result<Self> {
-        Self::with_cap(path, TRANSCRIPT_CAP)
+    /// Start an empty transcript at `path`, replacing any earlier one, or with `keep` add to
+    /// it, for a run that resumes under the same execution.
+    pub fn create(path: PathBuf, keep: bool) -> std::io::Result<Self> {
+        Self::with_cap(path, TRANSCRIPT_CAP, keep)
     }
 
-    fn with_cap(path: PathBuf, cap: usize) -> std::io::Result<Self> {
+    fn with_cap(path: PathBuf, cap: usize, keep: bool) -> std::io::Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
             ostra_core::paths::restrict_to_owner(dir, true)?;
         }
-        let file = private(&path)?;
+        let (file, len) = match keep.then(|| std::fs::metadata(&path)).and_then(Result::ok) {
+            Some(meta) => (
+                OpenOptions::new().append(true).open(&path)?,
+                meta.len() as usize,
+            ),
+            None => (private(&path)?, 0),
+        };
         Ok(TermLog {
             path,
             cap,
             state: Mutex::new(State {
                 file: Some(file),
-                len: 0,
+                len,
             }),
         })
     }
@@ -105,7 +112,7 @@ mod tests {
     fn keeps_the_last_bytes_under_the_cap() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("x").join("terminal.log");
-        let log = TermLog::with_cap(path.clone(), 10).unwrap();
+        let log = TermLog::with_cap(path.clone(), 10, false).unwrap();
         assert_eq!(read_transcript(&path), None);
         log.append(b"hello ");
         assert_eq!(read_transcript(&path).unwrap(), b"hello ");
@@ -122,12 +129,19 @@ mod tests {
             assert_eq!(mode(&path), 0o600, "a trimmed transcript stays private");
             assert_eq!(mode(path.parent().unwrap()), 0o700);
         }
-        let log = TermLog::with_cap(path.clone(), 10).unwrap();
+        let log = TermLog::with_cap(path.clone(), 10, false).unwrap();
         log.append(b"new");
         assert_eq!(
             std::fs::read(&path).unwrap(),
             b"new",
             "a new run replaces the old transcript"
+        );
+        let log = TermLog::with_cap(path.clone(), 10, true).unwrap();
+        log.append(b" more");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"new more",
+            "a resumed run adds to its transcript"
         );
     }
 }
