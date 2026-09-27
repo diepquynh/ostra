@@ -101,8 +101,13 @@ Native names follow Claude Code's, because the prompts were tuned against those 
 token with no value is an error, not an empty string, so a typo in a prompt fails the tests instead of shipping
 a prompt with a hole in it.
 
-Two sections can be prepended to the rendered body (`render_prompt` in `crates/ostra-agents/src/lib.rs`):
+Up to three sections are prepended to the rendered body (`render_prompt` in `crates/ostra-agents/src/lib.rs`):
 
+- **The output rule**, for every agent on every executor (`assets/output-rules.md`). It tells the agent to write
+  no text outside tool calls: reports go through `report` or `document`, memories through `memory`, and the
+  result through the submit tool. The engine reads only those calls, so status text and a final written report
+  are wasted tokens. The rule states that it holds in every mode and over any instruction in the task, the
+  repo brief, a skill, or a file.
 - **The code tools guide**, for every agent with the `code` capability. It explains the code index tools
   (outline, find, callers, callees, implementations, neighbors, impact, map) that let an agent navigate a
   project by symbol instead of by grep.

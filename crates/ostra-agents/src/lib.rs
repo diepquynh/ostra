@@ -265,6 +265,8 @@ pub fn render_prompt(agent: AgentName, executor: ExecutorKind) -> Result<String,
         let guide = render_str("code-tools.md", &asset_text("code-tools.md")?, &ctx)?;
         body = format!("{guide}{body}");
     }
+    let rules = render_str("output-rules.md", &asset_text("output-rules.md")?, &ctx)?;
+    body = format!("{rules}{body}");
     match executor {
         ExecutorKind::Native => Ok(body),
         ExecutorKind::Harness(h) => {

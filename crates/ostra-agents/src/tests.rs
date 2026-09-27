@@ -108,6 +108,19 @@ fn every_prompt_renders_for_every_executor_with_no_unresolved_token() {
 }
 
 #[test]
+fn every_prompt_forbids_text_outside_ostra_tool_calls() {
+    for agent in AgentName::ALL {
+        for e in all_executors() {
+            let text = render_prompt(agent, e).unwrap();
+            assert!(
+                text.contains("Write no text outside tool calls"),
+                "{agent} on {e} lacks the output rule"
+            );
+        }
+    }
+}
+
+#[test]
 fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabulary() {
     let native = render_prompt(AgentName::Implementer, ExecutorKind::Native).unwrap();
     assert!(native.contains("submit_implementer"));
@@ -133,7 +146,7 @@ fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabula
 #[test]
 fn code_tools_are_named_per_executor() {
     let native = render_prompt(AgentName::Explore, ExecutorKind::Native).unwrap();
-    assert!(native.starts_with("## Code navigation"));
+    assert!(native.contains("## Code navigation"));
     for t in [
         "CodeMap",
         "CodeFind",
