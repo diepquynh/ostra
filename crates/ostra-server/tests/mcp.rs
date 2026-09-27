@@ -212,7 +212,8 @@ async fn boot(root: &Path) -> (Arc<ostra_server::app::App>, String, reqwest::Cli
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workspace_mcp_servers_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    // Not canonicalized: on macOS `/private` would push the bridge socket past the 104-byte limit.
+    let root = dir.path().to_path_buf();
     let (_app, base, client) = boot(&root).await;
     let plain = serve(Arc::new(Fake::default())).await;
     let oauth_fake = Arc::new(Fake {
