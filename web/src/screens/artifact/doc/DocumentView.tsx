@@ -3,14 +3,14 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useLocation } from "react-router";
 import type { Document, DocumentView as DocView, FactCheckView } from "../../../api/types";
 import { useNav } from "../../../lib/nav";
-import { buildMarks, type Chapter, type MarkTone, normId, type Outline, parseAnchor, worst } from "./model";
+import { buildMarks, type Chapter, type Mark, type MarkTone, normId, type Outline, parseAnchor, worst } from "./model";
 import { DocContext, type DocCtx, FactCheckChapter, Ref } from "./parts";
 import { phaseOutline, planOutline } from "./plan";
 import { researchOutline } from "./research";
 import { specOutline } from "./spec";
 import "./doc.css";
 
-function outlineOf(doc: Document): Outline {
+export function outlineOf(doc: Document): Outline {
   switch (doc.kind) {
     case "research":
       return researchOutline(doc.doc);
@@ -21,6 +21,38 @@ function outlineOf(doc: Document): Outline {
     case "phase":
       return phaseOutline(doc.doc);
   }
+}
+
+/** The chapters of a typed document, a Fact-check chapter when a pass ran, each marked with its worst tone. */
+export function docChapters(
+  doc: Document,
+  check: FactCheckView | null,
+  marks: Map<string, Mark[]>,
+): { chapters: Chapter[]; where: Map<string, string> } {
+  const o = outlineOf(doc);
+  const chapters: Chapter[] = [...o.chapters];
+  if (check) {
+    chapters.push({
+      id: "fact-check",
+      title: "Fact-check",
+      count: check.findings.length,
+      render: () => <FactCheckChapter check={check} />,
+    });
+  }
+  const tones = new Map<string, MarkTone[]>();
+  for (const [key, list] of marks) {
+    for (const m of list) {
+      const at = (key && o.where.get(key)) || (m.source === "fact-check" && check ? "fact-check" : "overview");
+      tones.set(at, [...(tones.get(at) ?? []), m.tone]);
+    }
+  }
+  let parent: Chapter | null = null;
+  for (const c of chapters) {
+    c.tone = worst(tones.get(c.id) ?? []);
+    if (!c.depth) parent = c;
+    else if (parent && c.tone) parent.tone = worst([parent.tone ?? c.tone, c.tone]);
+  }
+  return { chapters, where: o.where };
 }
 
 export interface DocumentViewProps {
@@ -43,32 +75,7 @@ export function DocumentView({ path, view, check, header }: DocumentViewProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const marks = useMemo(() => buildMarks(view.issues, check), [view.issues, check]);
 
-  const { chapters, where } = useMemo(() => {
-    const o = outlineOf(view.document);
-    const chapters: Chapter[] = [...o.chapters];
-    if (check) {
-      chapters.push({
-        id: "fact-check",
-        title: "Fact-check",
-        count: check.findings.length,
-        render: () => <FactCheckChapter check={check} />,
-      });
-    }
-    const tones = new Map<string, MarkTone[]>();
-    for (const [key, list] of marks) {
-      for (const m of list) {
-        const at = (key && o.where.get(key)) || (m.source === "fact-check" && check ? "fact-check" : "overview");
-        tones.set(at, [...(tones.get(at) ?? []), m.tone]);
-      }
-    }
-    let parent: Chapter | null = null;
-    for (const c of chapters) {
-      c.tone = worst(tones.get(c.id) ?? []);
-      if (!c.depth) parent = c;
-      else if (parent && c.tone) parent.tone = worst([parent.tone ?? c.tone, c.tone]);
-    }
-    return { chapters, where: o.where };
-  }, [view.document, marks, check]);
+  const { chapters, where } = useMemo(() => docChapters(view.document, check, marks), [view.document, marks, check]);
 
   const hash = decodeURIComponent(location.hash.replace(/^#/, ""));
   const [at, setAt] = useState(() => parseAnchor(hash));

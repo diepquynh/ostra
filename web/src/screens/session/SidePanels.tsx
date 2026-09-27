@@ -48,7 +48,7 @@ export function DecisionsPanel({ decisions, onChanged }: { decisions: DecisionVi
   );
 }
 
-function OverrideDialog({
+export function OverrideDialog({
   decision,
   onClose,
   onDone,

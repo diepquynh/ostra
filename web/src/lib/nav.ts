@@ -10,6 +10,8 @@ export type OpenOptions = {
   anchor?: string;
   /** Put a new tab right after the active one instead of at the end. */
   beside?: boolean;
+  /** Mobile: a new history entry even when the id stays the same, so Back closes a sub-page. Desktop ignores it. */
+  push?: boolean;
 };
 
 /** Tab navigation inside the workspace shell. Every screen opens resources through this. */

@@ -191,6 +191,34 @@ where it deletes a word. The status bar shows **Shortcuts locked** for as long a
 Escape, leaving fullscreen, clicking that item, or running **Release keyboard shortcuts** from the palette
 releases the lock. The code is `web/src/lib/keyboardLock.ts`; browsers without the API do not list the command.
 
+### On a phone
+
+When the viewport is 720 pixels wide or narrower, the console swaps its tabbed layout for a mobile shell
+(`web/src/mobile/`). It switches live, so rotating a tablet or narrowing a window changes the layout without a
+reload. The URLs stay the same: `/w/<workspace>/s/<session>` opens the same session on either layout, so a
+link from a push notification works on the phone that receives it.
+
+The mobile shell has no tabs. It shows one screen at a time and keeps the stack in the browser's history, so
+the header's Back button and the phone's own back gesture both return to the previous screen. The header
+holds Back (or the Ostra mark on the overview), the title of the open screen with a mono subtitle (the
+workspace root, a session's status, a file's path), and three buttons: **Search**, **Ask a quick question**,
+and **Menu**. Each opens a bottom sheet. Search runs the same server search and ranking as the desktop
+command palette. The question sheet runs the same read-only `quick-answer` agent as the desktop dock, with the
+open session's artifacts as context. The menu lists the workspaces and this workspace's pages and actions.
+New workspace, Add project, and the setup guide open as pushed screens rather than dialogs.
+
+The screens are built for touch but run the desktop code for every rule. The session board answers each gate
+with the desktop gate cards, so an answer has the same shape on a phone. Settings uses the desktop's
+validation and save code (`useSettingsEditor`), and the setup screens drive the same wizard steps. A project
+screen keeps its tab and open folder in the URL hash (`#files`, `#git`, `#dir=<folder>`), so Back steps out
+of one folder at a time. A file opens as its own screen. A skill opened from Skills gets its own history
+entry in the same way, so Back returns to the list.
+
+Under the header, a warning line appears while folder-file commands wait for approval, as the desktop banner
+does, and opens Settings. The footer shows the connection state, the number of running executions, the
+number of gates waiting (tapping it opens the oldest gate), and today's spend. The mobile shell does not
+write the desktop's saved layout, so tabs you left open on a laptop are still there when you return to it.
+
 ### Settings are read from disk each time
 
 Ostra keeps no copy of a workspace's settings in memory. It reads `workspace.toml` each time it needs it and

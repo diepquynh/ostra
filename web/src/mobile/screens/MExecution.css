@@ -1,0 +1,193 @@
+.mx-page {
+  /* Scrolls itself when the shell fills the stack, and grows inside it when the shell scrolls. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 0 28px;
+}
+.mx-pad {
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mx-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 16px;
+  background: var(--border-subtle);
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.mx-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  min-width: 0;
+  background: var(--surface-raised);
+}
+.mx-stat__value {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mx-chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.mx-link {
+  all: unset;
+  min-width: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-link);
+  cursor: pointer;
+}
+.mx-caption {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.mx-siblings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mx-chiprow {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 16px;
+  scrollbar-width: none;
+}
+.mx-run {
+  all: unset;
+  flex: none;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.mx-run[aria-current] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+}
+.mx-tabs {
+  display: flex;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.mx-tab {
+  all: unset;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.mx-tab[aria-selected="true"] {
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.mx-run:focus-visible,
+.mx-tab:focus-visible,
+.mx-link:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+.mx-mono-muted {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* The desktop stream pieces, sized for touch reading. */
+.mx-stream .ex-activity {
+  gap: 10px;
+}
+.mx-stream .ex-text {
+  font-size: 14px;
+  line-height: 1.6;
+}
+.mx-stream .ex-status {
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.mx-stream .ex-thinking > summary {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+.mx-stream .os-tool__body pre {
+  font-size: 11.5px;
+  overflow-x: auto;
+}
+.mx-stream .ex-hint {
+  font-size: 12px;
+}
+
+.mx-hooks {
+  display: flex;
+  flex-direction: column;
+}
+.mx-hook {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.mx-hook__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mx-hook__tool {
+  font-size: 13px;
+  font-weight: 500;
+}
+.mx-hook__summary {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+.mx-hook__note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.mx-actions {
+  padding-top: 4px;
+}
+.mx-actions .m-btn {
+  width: 100%;
+}
+.mx-danger {
+  border-color: color-mix(in oklab, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+.mx-page > * {
+  flex-shrink: 0;
+}

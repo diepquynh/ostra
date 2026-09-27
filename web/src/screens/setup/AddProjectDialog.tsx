@@ -1,10 +1,10 @@
 import { Banner, Button, Dialog, Spinner, Tabs } from "@ostra/design";
 import { useState } from "react";
 import { api, HttpError } from "../../api";
-import type { CloneProject, ValidationIssue, WorkspaceDetail } from "../../api/types";
+import type { CloneProject, WorkspaceDetail } from "../../api/types";
 import { useChannel } from "../../lib/hooks";
 import { useWorkspace } from "../../lib/nav";
-import { type CloneErrors, CloneForm } from "./CloneForm";
+import { type CloneErrors, CloneForm, cloneErrors } from "./CloneForm";
 import { useHome } from "./folders";
 import { useGitCredentials } from "./GitCredentials";
 import { ImportForm } from "./ImportForm";
@@ -18,19 +18,6 @@ export type AddProjectDialogProps = {
 };
 
 type Mode = "folder" | "git";
-
-const CLONE_FIELDS = ["url", "key", "path", "stack", "branch", "credential"] as const;
-
-function cloneErrors(issues: ValidationIssue[], message: string): { fields: CloneErrors; general: string | null } {
-  const fields: CloneErrors = {};
-  const rest: string[] = [];
-  for (const i of issues) {
-    const f = CLONE_FIELDS.find((x) => x === i.path);
-    if (f) fields[f] = fields[f] ? `${fields[f]} ${i.message}` : i.message;
-    else rest.push(i.message);
-  }
-  return { fields, general: rest.length ? rest.join(" ") : issues.length ? null : message };
-}
 
 /**
  * Add a project to the active workspace: import a folder like /add-dir, or clone a git repository into the

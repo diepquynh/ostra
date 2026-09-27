@@ -1,0 +1,373 @@
+/* Mobile settings: a sticky tab strip over the desktop sections, reflowed to one column. */
+
+.ms-root {
+  min-height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 0 28px;
+}
+
+.ms-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  overflow-x: auto;
+  padding: 0 8px;
+  scrollbar-width: none;
+  background: var(--surface-editor);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ms-tabs::-webkit-scrollbar {
+  display: none;
+}
+.ms-tab {
+  all: unset;
+  flex: none;
+  height: 44px;
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ms-tab[aria-selected="true"] {
+  color: var(--text-primary);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.ms-tab:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+.ms-tab-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--bad-soft);
+  color: var(--bad);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.ms-body {
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ms-savebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ms-status {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  text-wrap: pretty;
+}
+.ms-save {
+  flex: none;
+  height: 40px;
+}
+
+.ms-segment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+.ms-segment-item {
+  all: unset;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 3px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ms-segment-item[aria-checked="true"] {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.ms-segment-item:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+
+.ms-mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.ms-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+.ms-text code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.ms-error {
+  font-size: 12.5px;
+  color: var(--bad);
+  text-wrap: pretty;
+}
+.ms-row {
+  display: flex;
+  gap: 8px;
+}
+.ms-link {
+  all: unset;
+  color: var(--text-link);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.ms-btn-danger-outline {
+  border-color: color-mix(in oklab, var(--bad) 45%, transparent);
+  color: var(--bad);
+}
+.ms-btn-danger {
+  border-color: transparent;
+  background: var(--bad);
+  color: var(--text-on-accent);
+  font-weight: 500;
+}
+.ms-btn-danger:active {
+  background: var(--bad);
+  filter: brightness(0.94);
+}
+
+/* The desktop sections at phone width: one column, no side-by-side fields, tables scroll inside themselves. */
+.ms-body .wp-grid-2 {
+  grid-template-columns: minmax(0, 1fr);
+}
+.ms-body .wp-row {
+  min-width: 0;
+}
+.ms-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.ms-body input,
+.ms-body select,
+.ms-body textarea {
+  font-size: 15px;
+}
+.ms-body .wp-anchor {
+  scroll-margin: 60px;
+}
+
+/* Routing: each table row becomes a card, agent and role on top, then labelled executor, model and effort.
+   Both routing tables end with the columns Executor, Model, Effort, so the labels go by position. */
+.ms-routing .os-table-wrap {
+  overflow: visible;
+}
+.ms-routing .os-table,
+.ms-routing .os-table tbody {
+  display: block;
+  width: 100%;
+}
+.ms-routing .os-table thead {
+  display: none;
+}
+.ms-routing .os-table tr {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ms-routing .os-table tr:last-child {
+  border-bottom: 0;
+}
+.ms-routing .os-table td {
+  display: block;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.ms-routing .os-table td:nth-child(1) {
+  font-size: 14px;
+  font-weight: 500;
+}
+.ms-routing .os-table td:nth-child(2) {
+  margin-top: -4px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+.ms-routing .os-table td:nth-child(n + 3) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ms-routing .os-table td:nth-child(n + 3) > * {
+  flex: 1;
+  min-width: 0;
+}
+.ms-routing .os-table td:nth-child(n + 3)::before {
+  flex: none;
+  width: 64px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.ms-routing .os-table td:nth-child(3)::before {
+  content: "Executor";
+}
+.ms-routing .os-table td:nth-child(4)::before {
+  content: "Model";
+}
+.ms-routing .os-table td:nth-child(5)::before {
+  content: "Effort";
+}
+.ms-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* MCP tools: the tool, its description and read-only chip on the left, the Offer switch on the right. */
+.ms-mcp .os-table-wrap {
+  overflow: visible;
+}
+.ms-mcp .os-table,
+.ms-mcp .os-table tbody {
+  display: block;
+  width: 100%;
+}
+.ms-mcp .os-table thead {
+  display: none;
+}
+.ms-mcp .os-table tr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ms-mcp .os-table td {
+  display: block;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  width: auto !important;
+  overflow-wrap: anywhere;
+}
+.ms-mcp .os-table td:nth-child(1) {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: center;
+}
+.ms-mcp .os-table td:nth-child(2) {
+  grid-column: 1;
+  grid-row: 1;
+}
+.ms-mcp .os-table td:nth-child(3) {
+  grid-column: 1;
+  grid-row: 2;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ms-mcp .os-table td:nth-child(4) {
+  grid-column: 1;
+  grid-row: 3;
+}
+.ms-mcp .os-table td:nth-child(4):empty {
+  display: none;
+}
+
+/* Projects: key and remove on top, then the path, then the stack select at full width. */
+.ms-projects .os-table-wrap {
+  overflow: visible;
+}
+.ms-projects .os-table,
+.ms-projects .os-table tbody {
+  display: block;
+  width: 100%;
+}
+.ms-projects .os-table thead {
+  display: none;
+}
+.ms-projects .os-table tr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ms-projects .os-table td {
+  display: block;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ms-projects .os-table td:nth-child(1) {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  font-size: 14px;
+}
+.ms-projects .os-table td:nth-child(2) {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+.ms-projects .os-table td:nth-child(3) {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.ms-projects .os-table td:nth-child(4) {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+/* Instructions per agent: the agent name over its text box. */
+.ms-stacked .os-table-wrap {
+  overflow: visible;
+}
+.ms-stacked .os-table,
+.ms-stacked .os-table tbody {
+  display: block;
+  width: 100%;
+}
+.ms-stacked .os-table thead {
+  display: none;
+}
+.ms-stacked .os-table tr {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ms-stacked .os-table td {
+  display: block;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}

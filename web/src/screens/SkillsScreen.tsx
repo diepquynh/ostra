@@ -10,9 +10,9 @@ import "./skills.css";
 
 export type SkillsScreenProps = { ws: string };
 
-const KINDS = ["creation", "test", "convention", "module-hub", "other"];
+export const KINDS = ["creation", "test", "convention", "module-hub", "other"];
 
-const TEMPLATE = (name: string) => `---
+export const TEMPLATE = (name: string) => `---
 name: ${name}
 description: Use when a task ... Covers ...
 ---
@@ -26,7 +26,7 @@ type Selection = { project: string; origin: SkillView["origin"]; path: string } 
 
 const keyOf = (project: string, s: Pick<SkillView, "origin" | "path">) => `${project}\u0000${s.origin}\u0000${s.path}`;
 
-function state(s: SkillView): { label: string; tone: "ok" | "warn" | "bad" | "neutral" } {
+export function skillState(s: SkillView): { label: string; tone: "ok" | "warn" | "bad" | "neutral" } {
   if (s.origin === "harness") return { label: s.path.split("/").slice(0, 2).join("/"), tone: "neutral" };
   if (!s.exists) return { label: "File missing", tone: "bad" };
   if (!s.entry) return { label: "Not registered", tone: "warn" };
@@ -217,7 +217,7 @@ function SkillGroup({
           {group.skills.map((s) => {
             const k = keyOf(group.project, s);
             const active = !!selected && !("creating" in selected) && keyOf(selected.project, selected) === k;
-            const st = state(s);
+            const st = skillState(s);
             return (
               <li key={k}>
                 <button

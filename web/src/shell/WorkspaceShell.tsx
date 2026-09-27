@@ -35,6 +35,8 @@ import { TitleBar } from "./TitleBar";
 import { DEFAULT_PREFS, fromServerUi, loadLocalUi, saveLocalUi, toServerUi, type UiPrefs } from "./uiState";
 import "./shell.css";
 import { ARTIFACTS_ROOT } from "../features/context/tags";
+import { MobileShell } from "../mobile/MobileShell";
+import { useIsMobile } from "../mobile/useMobile";
 
 const TAB_TONE: Record<string, Tone> = {
   running: "accent",
@@ -48,8 +50,9 @@ const PATCH_DELAY_MS = 800;
 /** The console for one workspace: title bar, left dock, editor tabs, quick-question dock, status bar. */
 export function WorkspaceShell() {
   const { ws = "" } = useParams();
+  const mobile = useIsMobile();
   // Remount per workspace so tabs, stores and dialogs never leak across workspaces.
-  return <Shell key={ws} ws={ws} />;
+  return mobile ? <MobileShell key={ws} ws={ws} /> : <Shell key={ws} ws={ws} />;
 }
 
 function initialTabs(local: TabsState | null, routeId: string | null): TabsState {

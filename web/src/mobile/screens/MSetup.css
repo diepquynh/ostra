@@ -1,0 +1,195 @@
+/* Setup on a phone: the desktop step bodies reflowed into one column, with touch-sized buttons. */
+
+.ms-setup {
+  gap: 18px;
+  /* Design-system inputs, selects and buttons inside the step bodies get touch-sized. */
+  --control-h: 40px;
+  --control-h-sm: 34px;
+  --control-h-lg: 44px;
+}
+
+.ms-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ms-bars {
+  display: flex;
+  gap: 4px;
+}
+.ms-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+.ms-bar-on {
+  background: var(--accent);
+}
+.ms-step-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ms-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ms-head h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.ms-head span {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+
+.ms-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+.ms-seg button {
+  all: unset;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 3px;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ms-seg button[aria-checked="true"] {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.ms-seg button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+
+.ms-error {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--bad) 45%, transparent);
+  border-radius: 4px;
+  background: var(--bad-soft);
+  font-size: 13px;
+  line-height: 1.5;
+  text-wrap: pretty;
+}
+
+.ms-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.ms-progress span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ms-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+.ms-nav-col {
+  flex-direction: column;
+}
+.ms-nav .m-btn {
+  height: 48px;
+}
+.ms-nav .ms-back {
+  flex: none;
+}
+.ms-nav .ms-next {
+  flex: 1;
+  font-size: 14.5px;
+}
+
+.ms-welcome {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.ms-welcome h1 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.ms-welcome p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  text-wrap: pretty;
+}
+.ms-stages {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+.ms-stages > div {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 13.5px;
+}
+.ms-stages > div:last-child {
+  border-bottom: none;
+}
+
+/* The desktop step bodies: stack their rows and let wide content wrap at phone width. */
+.ms-setup input,
+.ms-setup select,
+.ms-setup textarea {
+  font-size: 15px;
+}
+.ms-setup [style*="grid-template-columns"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+.ms-setup pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+}
+.ms-setup code {
+  overflow-wrap: anywhere;
+}
+.ms-nav-col .ms-next {
+  flex: none;
+}
+.ms-setup .os-tabs--segmented {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  box-sizing: border-box;
+}
+.ms-setup .os-tabs--segmented .os-tab {
+  height: 40px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  text-align: left;
+}

@@ -23,7 +23,7 @@ export function answerText(state: ActivityState): string {
     .join("\n\n");
 }
 
-function Answer({
+export function Answer({
   execution,
   question,
   onTurnIntoTask,

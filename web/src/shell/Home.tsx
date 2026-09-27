@@ -1,13 +1,16 @@
 import { Button, Chip, Icon, LiveMark, REST, Spinner } from "@ostra/design";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { api } from "../api";
 import { useAsync } from "../lib/hooks";
 import { useWorkspaces } from "../lib/live";
 import { applyTheme, lastTheme, resolveTheme } from "../lib/theme";
+import { MWizard } from "../mobile/screens/MSetup";
+import { useIsMobile } from "../mobile/useMobile";
 import { NewWorkspaceDialog, Onboarding } from "../screens";
 import { workspaceEntry } from "./TitleBar";
 import "./shell.css";
+import "../mobile/mobile.css";
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -18,21 +21,37 @@ export function Home() {
   const [creating, setCreating] = useState(false);
   const [skipped, setSkipped] = useState(false);
   const navigate = useNavigate();
+  const mobile = useIsMobile();
   useEffect(() => applyTheme(resolveTheme(lastTheme()), false), []);
 
   const ob = onboarding.data;
+  const finishOnboarding = (created: string | null) => {
+    void api.completeOnboarding().catch(() => {});
+    if (created) navigate(`/w/${encodeURIComponent(created)}`);
+    else {
+      setSkipped(true);
+      reload();
+    }
+  };
   if (ob && !ob.onboarded_at && ob.workspaces === 0 && !skipped)
+    return mobile ? (
+      <MobileSetup>
+        <MWizard skipWelcome={false} onDone={finishOnboarding} />
+      </MobileSetup>
+    ) : (
+      <Onboarding onFinish={finishOnboarding} />
+    );
+  if (mobile && creating)
     return (
-      <Onboarding
-        onFinish={(created) => {
-          void api.completeOnboarding().catch(() => {});
-          if (created) navigate(`/w/${encodeURIComponent(created)}`);
-          else {
-            setSkipped(true);
-            reload();
-          }
-        }}
-      />
+      <MobileSetup>
+        <MWizard
+          skipWelcome
+          onDone={(created) => {
+            setCreating(false);
+            if (created) navigate(`/w/${encodeURIComponent(created)}`);
+          }}
+        />
+      </MobileSetup>
     );
 
   return (
@@ -41,7 +60,7 @@ export function Home() {
         style={{
           maxWidth: 760,
           margin: "0 auto",
-          padding: "48px 24px",
+          padding: mobile ? "20px 16px 28px" : "48px 24px",
           display: "flex",
           flexDirection: "column",
           gap: 20,
@@ -60,7 +79,7 @@ export function Home() {
           Ostra
         </div>
         <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
-          <div style={{ flex: "1 1 360px" }}>
+          <div style={{ flex: "1 1 280px" }}>
             <h1 style={{ margin: "0 0 6px", font: "var(--type-title)" }}>Workspaces</h1>
             <p style={{ margin: 0, color: "var(--text-secondary)", lineHeight: 1.55 }}>
               A workspace holds your projects and their settings: which executor and model each agent runs on,
@@ -91,9 +110,11 @@ export function Home() {
               onClick={() => navigate(workspaceEntry(w.id))}
               style={{
                 display: "flex",
+                flexWrap: mobile ? "wrap" : undefined,
                 alignItems: "center",
-                gap: 12,
-                padding: "12px 14px",
+                gap: mobile ? "8px 12px" : 12,
+                padding: mobile ? "12px" : "12px 14px",
+                minHeight: 52,
                 textAlign: "left",
                 font: "inherit",
                 color: "inherit",
@@ -101,7 +122,7 @@ export function Home() {
               }}
             >
               <Icon name={w.available ? "box" : "folder-x"} size={16} style={{ color: "var(--text-muted)" }} />
-              <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ flex: mobile ? "1 1 calc(100% - 40px)" : 1, minWidth: 0 }}>
                 <span style={{ display: "block", fontWeight: 600 }}>{w.name}</span>
                 <span
                   style={{
@@ -123,7 +144,16 @@ export function Home() {
           ))}
         </div>
       </div>
-      {creating && <NewWorkspaceDialog onClose={() => setCreating(false)} />}
+      {creating && !mobile && <NewWorkspaceDialog onClose={() => setCreating(false)} />}
+    </div>
+  );
+}
+
+/** A phone-width setup screen outside a workspace: the mobile shell's scroll area without its header. */
+function MobileSetup({ children }: { children: ReactNode }) {
+  return (
+    <div className="m-shell">
+      <div className="m-scroll">{children}</div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { FolderPicker, Input, Select } from "@ostra/design";
 import { useState } from "react";
-import type { CloneProject, GitCredentialView } from "../../api/types";
+import type { CloneProject, GitCredentialView, ValidationIssue } from "../../api/types";
 import { listFolders, makeFolder } from "./folders";
 import { StackInput } from "./StackInput";
 import { keyError, repoName, suggestKey } from "./wizard";
@@ -149,4 +149,21 @@ export function CloneForm({ takenKeys, stacks, root, credentials, serverErrors, 
       </div>
     </div>
   );
+}
+
+const CLONE_FIELDS = ["url", "key", "path", "stack", "branch", "credential"] as const;
+
+/** Server issues placed on the clone form's fields; the rest become one message. */
+export function cloneErrors(
+  issues: ValidationIssue[],
+  message: string,
+): { fields: CloneErrors; general: string | null } {
+  const fields: CloneErrors = {};
+  const rest: string[] = [];
+  for (const i of issues) {
+    const f = CLONE_FIELDS.find((x) => x === i.path);
+    if (f) fields[f] = fields[f] ? `${fields[f]} ${i.message}` : i.message;
+    else rest.push(i.message);
+  }
+  return { fields, general: rest.length ? rest.join(" ") : issues.length ? null : message };
 }

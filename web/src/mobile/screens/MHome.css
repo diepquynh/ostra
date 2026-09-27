@@ -1,0 +1,202 @@
+.mh-gate {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  min-height: 60px;
+  border: 1px solid color-mix(in oklab, var(--warn) 55%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warn) 16%, transparent);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  cursor: pointer;
+}
+
+.mh-inline-link {
+  all: unset;
+  color: var(--text-link);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.mh-compose {
+  all: unset;
+  box-sizing: border-box;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+/* Rows under the request field sit closer to it than the card's gap. */
+.mh-tight {
+  margin-top: -4px;
+}
+
+.mh-suggest {
+  display: flex;
+  flex-direction: column;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: -6px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-overlay);
+}
+.mh-suggest__row {
+  all: unset;
+  box-sizing: border-box;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.mh-suggest__row:active {
+  background: var(--surface-active);
+}
+.mh-suggest__label {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mh-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mh-tag,
+.mh-upload {
+  box-sizing: border-box;
+  min-height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.mh-upload {
+  all: unset;
+  box-sizing: border-box;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+.mh-tag--bad {
+  border-color: color-mix(in oklab, var(--bad) 45%, transparent);
+  background: var(--bad-soft);
+}
+
+.m-btn.mh-small {
+  height: 40px;
+  padding: 0 12px;
+  font-size: 13.5px;
+}
+
+.mh-pin {
+  all: unset;
+  box-sizing: border-box;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.mh-pin[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+}
+
+.mh-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+}
+
+.mh-seg {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+.mh-seg__item {
+  all: unset;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-radius: 3px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.mh-seg__item[aria-selected="true"] {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.mh-seg__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.mh-session {
+  all: unset;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 12px 2px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.mh-session:active {
+  background: var(--surface-hover);
+}
+
+.mh-gate:focus-visible,
+.mh-compose:focus-visible,
+.mh-session:focus-visible,
+.mh-seg__item:focus-visible,
+.mh-pin:focus-visible,
+.mh-upload:focus-visible,
+.mh-suggest__row:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}

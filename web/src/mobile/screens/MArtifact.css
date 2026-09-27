@@ -1,0 +1,237 @@
+.ma-page {
+  /* Scrolls itself when the shell fills the stack, and grows inside it when the shell scrolls. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 0 28px;
+  scroll-margin-top: 0;
+}
+.ma-pad {
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.ma-chips {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.ma-segment {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 2px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  background: var(--surface-sunken);
+}
+.ma-segment button {
+  all: unset;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 3px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.ma-segment button[aria-selected="true"] {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+.ma-chiprow {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 0 16px;
+  scrollbar-width: none;
+}
+.ma-chapter {
+  all: unset;
+  flex: none;
+  height: 36px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.ma-chapter[aria-current="true"] {
+  border-color: var(--accent);
+  background: var(--surface-selected);
+  color: var(--text-primary);
+}
+.ma-segment button:focus-visible,
+.ma-chapter:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
+.ma-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.ma-chapter-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.ma-pager {
+  flex-direction: row;
+  padding-top: 4px;
+}
+.ma-pager .m-btn {
+  flex: 1;
+}
+.ma-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  margin: 0 16px;
+  padding-left: 0;
+  padding-right: 0;
+}
+.ma-actions a.m-btn {
+  color: inherit;
+  text-decoration: none;
+}
+.ma-meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+.ma-muted-sm {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.ma-source {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.ma-image {
+  max-width: 100%;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+}
+
+/* The desktop document parts, reflowed to one column. */
+.ma-doc {
+  font-size: 14px;
+  line-height: 1.6;
+  gap: 12px;
+}
+.ma-doc .doc-chapter {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ma-doc .doc-consequence,
+.ma-doc .doc-stats {
+  grid-template-columns: 1fr;
+}
+.ma-doc table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.ma-doc pre {
+  overflow-x: auto;
+}
+.ma-md {
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.ma-md table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.ma-md pre {
+  overflow-x: auto;
+}
+.ma-md [id] {
+  scroll-margin-top: 12px;
+}
+
+.ma-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-raised);
+}
+.ma-card__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ma-card__body {
+  font-size: 14px;
+  line-height: 1.5;
+}
+.ma-card__sub {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.ma-diff {
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface-raised);
+}
+.ma-diff__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ma-diff__path {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-all;
+}
+.ma-diff__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.ma-diff__body {
+  overflow-x: auto;
+  font-size: 11.5px;
+}
+.ma-page > * {
+  flex-shrink: 0;
+}
