@@ -394,6 +394,26 @@ fn d2_not_covered_goes_to_sufficiency_and_spec_gets_every_doc() {
     assert!(spec.inputs.research_docs[0].ends_with("ostra-research-0.md"));
 }
 
+#[test]
+fn d2_sufficiency_spawns_a_repeated_task_once() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["p"]);
+    h.run(
+        "spawn explore explore#0",
+        explore_submit(0, &["statute a", "statute b", "the web client"]),
+    );
+    let law = json!({"project": "p", "task": "research the statutes"});
+    h.decide(JudgeKind::Sufficiency, Some("0"), json!({"items": [
+        {"item": "statute a", "needed": true, "reason": "r", "task": law},
+        {"item": "statute b", "needed": true, "reason": "r", "task": law},
+        {"item": "the web client", "needed": true, "reason": "r", "task": {"project": "p", "task": "research the web client"}}
+    ], "reason": "r"}));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn explore explore#1", "spawn explore explore#2"]
+    );
+}
+
 // ------------------------------------------------------------------------------------------
 // D3: open questions before any fact-check; every answer re-runs generate-spec.
 // ------------------------------------------------------------------------------------------

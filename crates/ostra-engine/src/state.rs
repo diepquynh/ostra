@@ -1540,6 +1540,12 @@ impl SessionState {
                             Some(t) if self.valid_project(&t.project) => (t.project, t.task),
                             _ => (self.primary(), item.item.clone()),
                         };
+                        // Rule D2: the judge often maps several items to one task; research it once.
+                        if self.explore.iter().any(|t| {
+                            !t.finished() && t.project == project && t.task == task
+                        }) {
+                            continue;
+                        }
                         self.push_explore(project, task, ExploreOrigin::Sufficiency);
                     }
                 }

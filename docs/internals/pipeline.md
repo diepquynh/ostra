@@ -117,7 +117,10 @@ Not covered items the Sufficiency judge reads next:
 The spec may start only when no research is running and no `Not covered` item the request depends on is left
 open (Rule D2). The planner collects every finished task with unjudged `Not covered` items and asks the
 Sufficiency judge about them in one call. For each item the judge answers needed or not needed, and a needed
-item comes with one more research task. Those tasks spawn, and the cycle repeats.
+item comes with one more research task. The judge often gives several related items the same task (six gaps
+about one country's law become one "research these statutes" task), so the engine keeps one task per project
+and task text and skips a copy of a task that is still queued or running. Those tasks spawn, and the cycle
+repeats.
 
 The engine allows three sufficiency rounds (`SUFFICIENCY_ROUNDS`). After that it proceeds to the spec with what
 it has, so a request that keeps opening new questions still moves forward. When the judge is unsure it is told
