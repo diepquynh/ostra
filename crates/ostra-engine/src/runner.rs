@@ -66,6 +66,9 @@ pub enum EngineError {
     NotFound(String),
     #[error("{0}")]
     Invalid(String),
+    /// The session ended before an execution or command it planned could start.
+    #[error("The session ended before this step started.")]
+    Ended,
     #[error("store: {0}")]
     Store(#[from] ostra_store::StoreError),
 }
@@ -552,7 +555,7 @@ impl Engine {
             },
         )?;
         if delivery == ContextDelivery::Now {
-            self.interrupt(session, Interrupt::Context)?;
+            self.inner.interrupt(session, Interrupt::Context)?;
         }
         self.summary_of(session)
     }
@@ -577,7 +580,7 @@ impl Engine {
             ));
         }
         self.inner.append(session, SessionEvent::SessionPaused)?;
-        self.interrupt(session, Interrupt::Pause)?;
+        self.inner.interrupt(session, Interrupt::Pause)?;
         self.summary_of(session)
     }
 
@@ -589,48 +592,6 @@ impl Engine {
         }
         self.inner.append(session, SessionEvent::SessionResumed)?;
         self.summary_of(session)
-    }
-
-    /// Cancel the executions the fold marked as interrupting, and deny their waiting permission
-    /// asks, because the run that asked is ending.
-    fn interrupt(&self, session: &SessionId, why: Interrupt) -> Result<(), EngineError> {
-        let st = self.state(session)?;
-        let ids: Vec<&ExecutionId> = st
-            .interrupting
-            .iter()
-            .filter(|(_, w)| **w == why)
-            .map(|(id, _)| id)
-            .collect();
-        for id in &ids {
-            if let Some((_, token)) = lock(&self.inner.execs).get(*id) {
-                token.cancel();
-            }
-        }
-        let asks: Vec<GateId> = st
-            .open_gates()
-            .filter(|g| matches!(&g.payload, GatePayload::Permission { execution, .. } if ids.contains(&execution)))
-            .map(|g| g.id.clone())
-            .collect();
-        for g in asks {
-            if let Some(tx) = lock(&self.inner.permission_waiters).remove(&g) {
-                let _ = tx.send(PermissionAnswer::Deny);
-            }
-            self.inner.append(
-                session,
-                SessionEvent::GateAnswered {
-                    id: g,
-                    source: AnswerSource::Engine,
-                    answer: GateAnswer::Permission {
-                        answer: PermissionAnswer::Deny,
-                    },
-                    reason: Some(format!(
-                        "The execution that asked ended: {}",
-                        why.message().to_lowercase()
-                    )),
-                },
-            )?;
-        }
-        Ok(())
     }
 
     fn summary_of(&self, session: &SessionId) -> Result<SessionSummary, EngineError> {
@@ -791,6 +752,9 @@ impl Engine {
             protected_paths: self.inner.services.protected_paths(),
             memory_db: paths::project_memory_db(&repo_root),
             sandbox_mode: settings.sandbox_mode,
+            sandbox_network: settings.sandbox_network,
+            sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
+            sandbox_decoys: settings.sandbox_decoys.clone(),
         };
         self.inner.db.insert_execution(&NewExecution {
             id: new.clone(),
@@ -1178,12 +1142,26 @@ impl Inner {
             // The state lock serializes appends per session, so seq order is fold order.
             let mut st = lock(&live.state);
             let was_terminal = st.is_terminal();
+            // A stop can land while a step is being set up; nothing may start after it, and this
+            // check sits under the state lock, so it cannot race the stop.
+            if was_terminal
+                && matches!(
+                    event,
+                    SessionEvent::ExecutionStarted { .. } | SessionEvent::CommandStarted { .. }
+                )
+            {
+                return Err(EngineError::Ended);
+            }
             let stored = self.db.append_event(session, &event)?;
             self.materialize(session, &event)?;
             st.apply(&stored);
+            let ended = !was_terminal && st.is_terminal();
+            if ended {
+                // An ended session runs no more tools, and a later one must not build from its downloads.
+                ostra_core::sandbox::remove_session_cache(session);
+            }
             let init_changed = matches!(st.kind, SessionKind::Init { .. })
-                && (matches!(event, SessionEvent::SessionCreated { .. })
-                    || (!was_terminal && st.is_terminal()));
+                && (matches!(event, SessionEvent::SessionCreated { .. }) || ended);
             let cost = lock(&self.judge_cost).get(session).copied().unwrap_or(0.0);
             let summary = view::summary(&st, &self.workspace_id, cost);
             let _ = self.db.update_session(
@@ -1304,6 +1282,26 @@ impl Inner {
                 url,
                 tag: format!("blocked-{session}-{phase}"),
             },
+            SessionEvent::ContainmentSignal { execution, signal } => {
+                let Ok(st) = self.snapshot(session) else {
+                    return;
+                };
+                if st.contained.as_ref() != Some(execution)
+                    || st.signals.get(execution).map_or(0, Vec::len)
+                        != ostra_core::containment::PAUSE_AFTER
+                {
+                    return;
+                }
+                Notice {
+                    title: "Session paused".into(),
+                    body: format!(
+                        "Ostra paused the session because {}. Read the execution's Activity, then continue or stop.",
+                        signal.describe()
+                    ),
+                    url,
+                    tag: format!("contained-{session}"),
+                }
+            }
             _ => return,
         };
         self.services.notify(notice);
@@ -1347,7 +1345,9 @@ impl Inner {
                 let sid = id.clone();
                 let l = live.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = inner.perform(&sid, step).await {
+                    if let Err(e) = inner.perform(&sid, step).await
+                        && !matches!(e, EngineError::Ended)
+                    {
                         tracing::error!(session = %sid, "step failed: {e}");
                         let _ = inner.append(
                             &sid,
@@ -1382,6 +1382,48 @@ impl Inner {
 
     fn snapshot(&self, session: &SessionId) -> Result<SessionState, EngineError> {
         Ok(lock(&self.load(session)?.state).clone())
+    }
+
+    /// Cancel the executions the fold marked as interrupting, and deny their waiting permission
+    /// asks, because the run that asked is ending.
+    fn interrupt(&self, session: &SessionId, why: Interrupt) -> Result<(), EngineError> {
+        let st = self.snapshot(session)?;
+        let ids: Vec<&ExecutionId> = st
+            .interrupting
+            .iter()
+            .filter(|(_, w)| **w == why)
+            .map(|(id, _)| id)
+            .collect();
+        for id in &ids {
+            if let Some((_, token)) = lock(&self.execs).get(*id) {
+                token.cancel();
+            }
+        }
+        let asks: Vec<GateId> = st
+            .open_gates()
+            .filter(|g| matches!(&g.payload, GatePayload::Permission { execution, .. } if ids.contains(&execution)))
+            .map(|g| g.id.clone())
+            .collect();
+        for g in asks {
+            if let Some(tx) = lock(&self.permission_waiters).remove(&g) {
+                let _ = tx.send(PermissionAnswer::Deny);
+            }
+            self.append(
+                session,
+                SessionEvent::GateAnswered {
+                    id: g,
+                    source: AnswerSource::Engine,
+                    answer: GateAnswer::Permission {
+                        answer: PermissionAnswer::Deny,
+                    },
+                    reason: Some(format!(
+                        "The execution that asked ended: {}",
+                        why.message().to_lowercase()
+                    )),
+                },
+            )?;
+        }
+        Ok(())
     }
 
     async fn perform(self: &Arc<Self>, session: &SessionId, step: Step) -> Result<(), EngineError> {
@@ -1761,70 +1803,65 @@ impl Inner {
             .snapshot(session)?
             .project_path(project)
             .unwrap_or_default();
-        let (cmd_text, exit, tail) = match purpose {
-            CommandPurpose::Format => match command {
-                None => (
-                    String::new(),
-                    None,
-                    "No format command in project.toml, so format was skipped.".to_string(),
-                ),
-                // Rule A1: a format command runs only once the user approved it.
-                Some(cmd) if !self.services.command_approved(&root, &cmd) => {
-                    (cmd, None, FORMAT_NOT_APPROVED.to_string())
+        let (cmd_text, exit, tail) =
+            match purpose {
+                CommandPurpose::Format => match command {
+                    None => (
+                        String::new(),
+                        None,
+                        "No format command in project.toml, so format was skipped.".to_string(),
+                    ),
+                    // Rule A1: a format command runs only once the user approved it.
+                    Some(cmd) if !self.services.command_approved(&root, &cmd) => {
+                        (cmd, None, FORMAT_NOT_APPROVED.to_string())
+                    }
+                    Some(cmd) => {
+                        self.append_command_started(session, purpose, project, &cmd)?;
+                        // The project's own program, so it runs under the agent sandbox.
+                        let (code, out) = match ostra_core::sandbox::host_command(
+                            "bash",
+                            &["-c".into(), cmd.clone()],
+                            &root,
+                            &[&root],
+                            &self.services.workspace().sandbox(),
+                        ) {
+                            Ok(hc) => run_host(&root, &hc, 600).await,
+                            Err(e) => (None, e),
+                        };
+                        (cmd, code, out)
+                    }
+                },
+                CommandPurpose::Stage => {
+                    if files.is_empty() {
+                        (String::new(), Some(0), "No files to stage.".to_string())
+                    } else {
+                        // Staging keeps each review focused on the unstaged diff (Step 2).
+                        for p in ostra_core::sandbox::repair_git_dirs(
+                            &ostra_core::sandbox::git_repos(&[&root]),
+                        ) {
+                            tracing::warn!("removed a planted {} before staging", p.display());
+                        }
+                        let mut args: Vec<String> = ostra_core::git::AUTOMATIC
+                            .iter()
+                            .map(|s| s.to_string())
+                            .collect();
+                        args.extend(ostra_core::git::filter_overrides(&root).await);
+                        args.extend([
+                            "-C".into(),
+                            root.display().to_string(),
+                            "add".into(),
+                            "-A".into(),
+                            "--".into(),
+                        ]);
+                        args.extend(files.iter().cloned());
+                        let text = format!("git {}", args.join(" "));
+                        self.append_command_started(session, purpose, project, &text)?;
+                        let (code, out) = run_shell(&root, "git", &args, 60).await;
+                        (text, code, out)
+                    }
                 }
-                Some(cmd) => {
-                    self.append_command_started(session, purpose, project, &cmd)?;
-                    // The project's own program, so it runs under the agent sandbox.
-                    let (code, out) = match ostra_core::sandbox::host_command(
-                        "bash",
-                        &["-c".into(), cmd.clone()],
-                        &root,
-                        &[&root],
-                        self.services.workspace().sandbox_mode,
-                    ) {
-                        Ok(hc) => run_host(&root, &hc, 600).await,
-                        Err(e) => (None, e),
-                    };
-                    (cmd, code, out)
-                }
-            },
-            CommandPurpose::Stage => {
-                if files.is_empty() {
-                    (String::new(), Some(0), "No files to stage.".to_string())
-                } else {
-                    // Staging keeps each review focused on the unstaged diff (Step 2).
-                    let mut args: Vec<String> = ostra_core::git::AUTOMATIC
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect();
-                    let listed = tokio::process::Command::new("git")
-                        .args(ostra_core::git::AUTOMATIC)
-                        .arg("-C")
-                        .arg(&root)
-                        .args(ostra_core::git::FILTER_QUERY)
-                        .stdin(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .output()
-                        .await
-                        .map(|o| o.stdout)
-                        .unwrap_or_default();
-                    args.extend(ostra_core::git::blank_filters(&listed));
-                    args.extend([
-                        "-C".into(),
-                        root.display().to_string(),
-                        "add".into(),
-                        "-A".into(),
-                        "--".into(),
-                    ]);
-                    args.extend(files.iter().cloned());
-                    let text = format!("git {}", args.join(" "));
-                    self.append_command_started(session, purpose, project, &text)?;
-                    let (code, out) = run_shell(&root, "git", &args, 60).await;
-                    (text, code, out)
-                }
-            }
-            CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
-        };
+                CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
+            };
         self.append(
             session,
             SessionEvent::CommandRan {
@@ -2064,6 +2101,9 @@ impl Inner {
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(&repo_root),
             sandbox_mode: settings.sandbox_mode,
+            sandbox_network: settings.sandbox_network,
+            sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
+            sandbox_decoys: settings.sandbox_decoys.clone(),
         };
         self.append(
             session,
@@ -2225,6 +2265,9 @@ impl Inner {
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(repo_root),
             sandbox_mode: settings.sandbox_mode,
+            sandbox_network: settings.sandbox_network,
+            sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
+            sandbox_decoys: settings.sandbox_decoys.clone(),
         };
         self.db.insert_execution(&NewExecution {
             id: id.clone(),
@@ -2335,6 +2378,40 @@ pub struct EngineHost {
     repo_root: Option<PathBuf>,
 }
 
+impl EngineHost {
+    /// Rule P3: record a containment signal, at most `PAUSE_AFTER` per execution so a retry loop
+    /// cannot flood the log, and interrupt the session when this one paused it.
+    fn record_signal(
+        &self,
+        session: &SessionId,
+        signal: ostra_core::containment::ContainmentSignal,
+    ) {
+        let seen = |st: &SessionState| st.signals.get(&self.execution).map_or(0, Vec::len);
+        let Ok(st) = self.inner.snapshot(session) else {
+            return;
+        };
+        if seen(&st) >= ostra_core::containment::PAUSE_AFTER {
+            return;
+        }
+        let event = SessionEvent::ContainmentSignal {
+            execution: self.execution.clone(),
+            signal,
+        };
+        if let Err(e) = self.inner.append(session, event) {
+            tracing::error!(session = %session, "could not record a containment signal: {e}");
+            return;
+        }
+        // Appends are serialized, so exactly one of them brings the count to `PAUSE_AFTER`.
+        if let Ok(st) = self.inner.snapshot(session)
+            && st.contained.as_ref() == Some(&self.execution)
+            && seen(&st) == ostra_core::containment::PAUSE_AFTER
+            && let Err(e) = self.inner.interrupt(session, Interrupt::Pause)
+        {
+            tracing::error!(session = %session, "could not pause after containment signals: {e}");
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl ExecutionHost for EngineHost {
     fn emit(&self, delta: ExecutionDelta) {
@@ -2379,6 +2456,11 @@ impl ExecutionHost for EngineHost {
                 execution: self.execution.clone(),
                 item,
             });
+        }
+        if let Some(session) = &self.session
+            && let Some(signal) = ostra_core::containment::classify(&delta)
+        {
+            self.record_signal(session, signal);
         }
     }
 

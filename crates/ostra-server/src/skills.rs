@@ -246,8 +246,11 @@ pub fn get(w: &WorkspaceRt, key: &str, name: &str) -> Result<SkillDoc, ApiErr> {
     let skill =
         view(&root, name).ok_or_else(|| not_found(format!("No skill `{name}` in {key}.")))?;
     let content = if skill.exists {
-        let file = in_project(&root, &skill.path)
-            .ok_or_else(|| conflict(format!("Move skill `{name}` inside the project: its path leaves it.")))?;
+        let file = in_project(&root, &skill.path).ok_or_else(|| {
+            conflict(format!(
+                "Move skill `{name}` inside the project: its path leaves it."
+            ))
+        })?;
         std::fs::read_to_string(file).map_err(io)?
     } else {
         String::new()

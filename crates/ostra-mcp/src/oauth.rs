@@ -301,7 +301,11 @@ pub async fn register(
     let endpoint = server.registration_endpoint.as_deref().ok_or(
         "the authorization server does not let clients register; set `oauth.client_id` for this server",
     )?;
-    check_endpoint("registration endpoint", endpoint, Some(&issuer_origin(server)))?;
+    check_endpoint(
+        "registration endpoint",
+        endpoint,
+        Some(&issuer_origin(server)),
+    )?;
     let body = serde_json::json!({
         "client_name": "Ostra",
         "redirect_uris": [redirect_uri],

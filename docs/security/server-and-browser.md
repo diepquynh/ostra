@@ -210,7 +210,11 @@ The docs you are reading use their own renderer ([`site/src/docs/Markdown.tsx`](
 which walks the Markdown syntax tree and builds each element itself. Raw HTML is dropped except for `<br>`, and a
 link with a scheme other than `http`, `https`, or `mailto` renders as plain text. An image loads only when its
 path resolves to a file in `docs/images`, which the build bundles into the site, so every image comes from the
-site's own origin. Any other image renders as a link labelled with its alt text.
+site's own origin. Any other image renders as a link labelled with its alt text. A fenced `mermaid` block is drawn as SVG
+([`site/src/docs/Diagram.tsx`](../../site/src/docs/Diagram.tsx)). Mermaid loads only on a page that has one and runs
+in strict mode, which ignores click callbacks. Labels are SVG text, never HTML, so a label cannot carry an image or
+markup, and the links a `click` line makes are unwrapped, so a diagram cannot leave the page. A diagram's own
+directives and frontmatter cannot turn either setting back on. A block that does not parse shows its source.
 
 ## The browser security suite
 

@@ -69,6 +69,17 @@ pub fn inferred_stage(s: &SessionState) -> (Lane, String) {
     if let Some(e) = &s.failed {
         return (Lane::Done, format!("Stopped: {}", first(e)));
     }
+    // Rule P3: say why Ostra paused it, because nothing else on the board does.
+    if let Some(rec) = s.contained.as_ref().and_then(|id| s.executions.get(id)) {
+        return (
+            rec.stage.lane(),
+            format!(
+                "Paused: read the {} execution's Activity, because it tripped {} containment signals",
+                rec.agent.as_str().replace('-', " "),
+                ostra_core::containment::PAUSE_AFTER
+            ),
+        );
+    }
     if let Some(g) = s.open_gates().last() {
         return (g.payload.stage().lane(), format!("Waiting: {}", g.title));
     }

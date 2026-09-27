@@ -7,7 +7,10 @@ pub mod args;
 pub mod artifacts;
 pub mod code;
 pub mod config;
+pub mod containment;
+pub mod decoy;
 pub mod doc;
+pub mod egress;
 pub mod event;
 pub mod exec;
 pub mod executor;
@@ -21,6 +24,12 @@ pub mod pipeline;
 pub mod policy;
 pub mod pricing;
 pub mod sandbox;
+pub mod sandbox_init;
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+pub mod seccomp;
 pub mod slug;
 pub mod submit;
 

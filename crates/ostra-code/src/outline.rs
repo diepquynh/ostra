@@ -56,6 +56,8 @@ pub struct RawImport {
     pub alts: Vec<String>,
     /// `export * from`: every name of the target passes through.
     pub star: bool,
+    /// Names a JS import or re-export brings in by name (`import { a, b as c }`: `a`, `b`).
+    pub names: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -1072,6 +1074,7 @@ impl<'a> A<'a> {
             style,
             alts,
             star: false,
+            names: vec![],
         });
     }
 
@@ -1148,8 +1151,10 @@ impl<'a> A<'a> {
                     self.push_import(k, s, ImportStyle::Module, vec![]);
                     let star =
                         text == "export" && (self.is_p(k + 1, b'*') || self.is_p(k + 2, b'*'));
-                    if star && let Some(i) = self.out.imports.last_mut() {
-                        i.star = true;
+                    let names = self.js_named(k);
+                    if let Some(i) = self.out.imports.last_mut() {
+                        i.star = star;
+                        i.names = names;
                     }
                 }
             }
@@ -1278,6 +1283,21 @@ impl<'a> A<'a> {
     }
 
     /// The string after `from` in one JS import or export statement.
+    /// The names inside the first `{ ... }` after `import` or `export` at `k`, each before its
+    /// `as`, skipping `type`.
+    fn js_named(&self, k: usize) -> Vec<String> {
+        let Some(open) = (k + 1..self.sig.len().min(k + 4)).find(|&j| self.is_p(j, b'{')) else {
+            return vec![];
+        };
+        let close = self.matching(open).unwrap_or(open);
+        (open + 1..close)
+            .filter(|&j| {
+                self.is_name(j) && !matches!(self.txt(j), "as" | "type") && self.txt(j - 1) != "as"
+            })
+            .map(|j| self.txt(j).to_string())
+            .collect()
+    }
+
     fn js_from(&self, k: usize) -> Option<String> {
         for j in k + 1..self.sig.len().min(k + 400) {
             if self.is_p(j, b';')

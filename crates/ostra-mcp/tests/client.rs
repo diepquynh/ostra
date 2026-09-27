@@ -460,7 +460,10 @@ async fn oauth_discovery_refuses_a_script_endpoint() {
     let e = oauth::discover(&reqwest::Client::new(), &format!("{base}/mcp"), None)
         .await
         .unwrap_err();
-    assert!(e.contains("authorization endpoint") && e.contains("https"), "{e}");
+    assert!(
+        e.contains("authorization endpoint") && e.contains("https"),
+        "{e}"
+    );
 }
 
 #[tokio::test]
@@ -505,8 +508,14 @@ async fn redirects_stay_on_the_first_origin() {
     let target = format!("{other_base}/leak");
     tokio::spawn(async move {
         let app = axum::Router::new()
-            .route("/away", get(move || async move { axum::response::Redirect::temporary(&target) }))
-            .route("/here", get(|| async { axum::response::Redirect::temporary("/ok") }))
+            .route(
+                "/away",
+                get(move || async move { axum::response::Redirect::temporary(&target) }),
+            )
+            .route(
+                "/here",
+                get(|| async { axum::response::Redirect::temporary("/ok") }),
+            )
             .route("/ok", get(|| async { "same origin" }));
         axum::serve(listener, app).await.unwrap()
     });
@@ -514,7 +523,12 @@ async fn redirects_stay_on_the_first_origin() {
         .redirect(ostra_mcp::same_origin_redirects())
         .build()
         .unwrap();
-    let away = rq.get(format!("{base}/away")).header("x-api-key", "secret").send().await.unwrap();
+    let away = rq
+        .get(format!("{base}/away"))
+        .header("x-api-key", "secret")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(away.status(), StatusCode::TEMPORARY_REDIRECT);
     let here = rq.get(format!("{base}/here")).send().await.unwrap();
     assert_eq!(here.text().await.unwrap(), "same origin");

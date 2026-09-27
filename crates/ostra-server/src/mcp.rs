@@ -5,7 +5,8 @@
 
 use ostra_core::api::{McpConnState, McpServerStatus, McpToolInfo};
 use ostra_core::config::{
-    GlobalConfig, McpServerConfig, SandboxMode, WorkspaceSettings, load_toml, load_toml_required,
+    GlobalConfig, McpServerConfig, WorkspaceSandbox, WorkspaceSettings, load_toml,
+    load_toml_required,
 };
 use ostra_core::exec::ExecutionSpec;
 use ostra_core::mcp;
@@ -106,9 +107,19 @@ fn now() -> i64 {
 }
 
 /// The parts of a server's settings that need a new connection when they change.
-/// A changed config or sandbox mode starts a new connection.
-fn fingerprint(s: &McpServerConfig, sandbox: Option<SandboxMode>) -> String {
-    serde_json::json!([s.command, s.env, s.url, s.headers, s.oauth, sandbox]).to_string()
+/// A changed config, sandbox mode, network choice, or allowed host starts a new connection.
+fn fingerprint(s: &McpServerConfig, sandbox: &WorkspaceSandbox) -> String {
+    serde_json::json!([
+        s.command,
+        s.env,
+        s.url,
+        s.headers,
+        s.oauth,
+        sandbox.mode,
+        sandbox.network,
+        sandbox.allowed_hosts
+    ])
+    .to_string()
 }
 
 /// Variables an MCP server's `env` and `headers` may not name, and its process may not inherit:
@@ -147,7 +158,7 @@ impl McpGateway {
     }
 
     fn conn(&self, key: &Key, cfg: &McpServerConfig) -> Arc<Conn> {
-        let fp = fingerprint(cfg, crate::trust::sandbox_mode(&self.registry, &key.0));
+        let fp = fingerprint(cfg, &crate::trust::sandbox(&self.registry, &key.0));
         let mut conns = self.conns.lock();
         match conns.get(key) {
             Some(c) if c.fingerprint == fp => c.clone(),
@@ -206,7 +217,7 @@ impl McpGateway {
             &cfg.command[1..],
             &key.0,
             &[&key.0],
-            crate::trust::sandbox_mode(&self.registry, &key.0),
+            &crate::trust::sandbox(&self.registry, &key.0),
         )
         .map_err(ConnError::Other)?;
         let mut env = hc.env;

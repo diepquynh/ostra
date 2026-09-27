@@ -87,9 +87,7 @@ impl Sealer {
         let Some(b64) = stored.strip_prefix(PREFIX) else {
             return Ok(stored.to_vec());
         };
-        let body = STANDARD
-            .decode(b64)
-            .map_err(|_| OpenError::Undecryptable)?;
+        let body = STANDARD.decode(b64).map_err(|_| OpenError::Undecryptable)?;
         if body.len() < NONCE_LEN {
             return Err(OpenError::Undecryptable);
         }

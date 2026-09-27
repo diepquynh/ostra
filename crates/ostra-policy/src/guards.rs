@@ -18,9 +18,9 @@ pub const REPORT_PATH: &str = "report-path";
 pub const DOCUMENT_TOOL: &str = "document-tool";
 pub const LESSON_GATE: &str = "lesson-gate";
 pub const BUILD_STREAK: &str = "build-streak";
-pub const SELF_PROTECTION: &str = "self-protection";
-pub const GIT_METADATA: &str = "git-metadata";
-pub const SECRET_READ: &str = "secret-read";
+pub const SELF_PROTECTION: &str = ostra_core::containment::SELF_PROTECTION;
+pub const GIT_METADATA: &str = ostra_core::containment::GIT_METADATA;
+pub const SECRET_READ: &str = ostra_core::containment::SECRET_READ;
 pub const WORKSPACE_ARTIFACTS: &str = "workspace-artifacts";
 
 /// A refusal: which guard, and the message for the model (correction first).

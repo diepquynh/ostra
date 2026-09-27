@@ -21,6 +21,8 @@ pub struct Resolver {
     rust_crates: HashMap<String, String>,
     /// Go module path to its folder.
     go_modules: Vec<(String, String)>,
+    /// npm package name to its folder and entry points (`.`, `./sub`), for workspace packages.
+    js_packages: HashMap<String, (String, HashMap<String, String>)>,
     /// Folders holding a package manifest.
     units: HashSet<String>,
 }
@@ -109,6 +111,40 @@ fn cargo_name(toml: &str) -> Option<String> {
     None
 }
 
+/// A `package.json`'s name and entry points: each `exports` subpath, else `module` or `main`
+/// for `.`. A conditional export takes its `types`, `import`, or `default` file.
+fn npm_package(text: &str) -> Option<(String, HashMap<String, String>)> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let name = v.get("name")?.as_str()?.to_string();
+    fn target(v: &serde_json::Value) -> Option<String> {
+        match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(m) => ["types", "import", "default", "module", "require"]
+                .iter()
+                .find_map(|k| m.get(*k).and_then(target)),
+            _ => None,
+        }
+    }
+    let mut entries = HashMap::new();
+    match v.get("exports") {
+        Some(serde_json::Value::Object(m)) if m.keys().all(|k| k.starts_with('.')) => {
+            for (k, t) in m {
+                entries.extend(target(t).map(|t| (k.clone(), t)));
+            }
+        }
+        Some(e) => entries.extend(target(e).map(|t| (".".to_string(), t))),
+        None => {}
+    }
+    if !entries.contains_key(".")
+        && let Some(main) = ["types", "module", "main"]
+            .iter()
+            .find_map(|k| v.get(*k)?.as_str())
+    {
+        entries.insert(".".into(), main.to_string());
+    }
+    Some((name, entries))
+}
+
 impl Resolver {
     /// `read` returns the text of a project file, for the manifests.
     pub fn new(paths: &[String], read: impl Fn(&str) -> Option<String>) -> Self {
@@ -136,6 +172,11 @@ impl Resolver {
                     if let Some(name) = read(p).as_deref().and_then(cargo_name) {
                         r.rust_crates
                             .insert(name.replace('-', "_"), parent(p).to_string());
+                    }
+                }
+                "package.json" if !p.split('/').any(|seg| seg == "node_modules") => {
+                    if let Some((name, entries)) = read(p).as_deref().and_then(npm_package) {
+                        r.js_packages.insert(name, (parent(p).to_string(), entries));
                     }
                 }
                 "go.mod" => {
@@ -381,6 +422,8 @@ impl Resolver {
                     bases.extend(join(d, rest));
                 }
             }
+        } else if let Some(base) = self.js_package(spec) {
+            bases.push(base);
         } else {
             bases.push(spec.strip_prefix('/')?.to_string());
         }
@@ -399,6 +442,25 @@ impl Resolver {
             }
         }
         None
+    }
+
+    /// A workspace package import, `@scope/pkg` or `@scope/pkg/sub`, as a path to resolve.
+    fn js_package(&self, spec: &str) -> Option<String> {
+        let (name, (dir, entries)) = self
+            .js_packages
+            .iter()
+            .filter(|(n, _)| {
+                spec == n.as_str()
+                    || spec
+                        .strip_prefix(n.as_str())
+                        .is_some_and(|r| r.starts_with('/'))
+            })
+            .max_by_key(|(n, _)| n.len())?;
+        let sub = format!(".{}", &spec[name.len()..]);
+        match entries.get(&sub) {
+            Some(t) => join(dir, t),
+            None => join(dir, &sub),
+        }
     }
 
     fn python(&self, from: &str, spec: &str) -> Option<Target> {

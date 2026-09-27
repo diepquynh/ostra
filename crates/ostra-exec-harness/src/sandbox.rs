@@ -5,10 +5,13 @@
 //! a CLI's writes at the top of it (Claude Code's `~/.claude.json`) fail, which the CLIs survive.
 
 use crate::launch::{LaunchInput, LaunchPlan, grok_home_real};
+use crate::protocol::ENV_URL;
 use ostra_core::HarnessKind;
-use ostra_core::config::SandboxConfig;
+use ostra_core::config::{SandboxConfig, SandboxNetwork};
+use ostra_core::egress::HostRule;
 use ostra_core::sandbox::{self, Backend, Decision, Members, Profile};
 use std::ffi::OsStr;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 /// The per-execution copy of `~/.claude.json`, which Claude Code rewrites through a temp file and
@@ -87,11 +90,14 @@ pub struct Wrapped {
 }
 
 /// `plan` wrapped in the sandbox, or unchanged with a warning when the config allows running
-/// without one. `Err` when the config requires one this machine cannot provide.
+/// without one. The egress proxy reports its decisions to `on`, and the decoys their opens to
+/// `on_decoy`. `Err` when the config requires one this machine cannot provide.
 pub fn wrap(
     plan: LaunchPlan,
     inp: &LaunchInput<'_>,
     cfg: &SandboxConfig,
+    on: ostra_core::egress::OnDecision,
+    on_decoy: ostra_core::decoy::OnOpen,
 ) -> Result<Wrapped, String> {
     let backend = match sandbox::decide(cfg)? {
         Decision::Sandboxed(b) => b,
@@ -104,10 +110,23 @@ pub fn wrap(
         }
     };
     let seatbelt = backend == Backend::Seatbelt;
-    // The CLI needs the network for its model API and for Ostra's hook bridge on loopback, and
-    // its PTY as controlling terminal.
-    let mut profile = Profile::for_execution(&inp.spec.ctx, cfg, &inp.home)
-        .network(true)
+    let bridge = bridge_addr(&inp.server_url)?;
+    // The CLI needs its PTY as controlling terminal, its model API under every network choice,
+    // and Ostra's hook bridge on the same loopback port inside its network namespace.
+    let profile = Profile::for_execution(&inp.spec.ctx, cfg, &inp.home)
+        .allow_hosts(model_hosts(inp.harness), base_url_hosts(&plan, inp))
+        .start_egress(&backend, on)
+        .map_err(|e| format!("starting the sandbox's egress proxy: {e}"))?
+        .watch_decoys(&backend, &inp.home, &inp.spec.ctx.sandbox_decoys, on_decoy)
+        .map_err(|e| format!("planting the sandbox's decoy files: {e}"))?;
+    // The server's bridge socket answers only `/internal/*`, so the sandbox cannot reach `/api`.
+    let profile = match &inp.bridge_socket {
+        Some(sock) => profile.forward_socket(&backend, bridge.port(), sock),
+        None => profile
+            .forward(&backend, bridge)
+            .map_err(|e| format!("forwarding the hook bridge into the sandbox: {e}"))?,
+    };
+    let mut profile = profile
         .new_session(false)
         .tty(seatbelt)
         .writable(&inp.config_dir)
@@ -140,6 +159,15 @@ pub fn wrap(
     )?;
     let text = |s: &OsStr| s.to_string_lossy().into_owned();
     let mut env = plan.env.clone();
+    // Inside a network namespace only loopback exists, where the helper forwards the bridge's
+    // port, so a bridge on another local address is named by its loopback port.
+    if !seatbelt && cfg.network != SandboxNetwork::Host && !bridge.ip().is_loopback() {
+        for (k, v) in env.iter_mut() {
+            if k == ENV_URL {
+                *v = format!("http://127.0.0.1:{}", bridge.port());
+            }
+        }
+    }
     env.extend(sc.env.iter().cloned());
     if seatbelt {
         env.extend(seatbelt_env(&sc.env));
@@ -158,6 +186,85 @@ pub fn wrap(
         members: sc.members,
         warning: None,
     })
+}
+
+/// The hook bridge's address from Ostra's callback URL, `http://<ip>:<port>`.
+fn bridge_addr(server_url: &str) -> Result<SocketAddr, String> {
+    server_url
+        .strip_prefix("http://")
+        .and_then(|a| a.trim_end_matches('/').parse().ok())
+        .ok_or_else(|| format!("The hook bridge URL `{server_url}` is not http://<ip>:<port>."))
+}
+
+/// The CLI's model API and sign-in hosts, which must resolve to public addresses.
+fn model_hosts(harness: HarnessKind) -> Vec<HostRule> {
+    ostra_core::egress::model_hosts(harness)
+        .iter()
+        .filter_map(|h| HostRule::parse(h))
+        .collect()
+}
+
+/// The hosts of the model endpoints the user chose for the CLI: `*_BASE_URL` variables from its
+/// launch plan, Ostra's own environment, or Claude Code's settings, and Codex's model providers.
+/// They often point at a gateway on this machine or the LAN, so they may resolve anywhere.
+fn base_url_hosts(plan: &LaunchPlan, inp: &LaunchInput<'_>) -> Vec<HostRule> {
+    let removed = |k: &str| plan.env_remove.iter().any(|r| r == k);
+    let inherited = std::env::vars().filter(|(k, _)| !removed(k));
+    let mut urls: Vec<String> = plan
+        .env
+        .iter()
+        .cloned()
+        .chain(inherited)
+        .filter(|(k, _)| k.ends_with("_BASE_URL"))
+        .map(|(_, v)| v)
+        .collect();
+    let (_, settings_dir, _) = harness_dirs(inp);
+    match inp.harness {
+        HarnessKind::Claude => {
+            let settings: serde_json::Value =
+                std::fs::read_to_string(settings_dir.join("settings.json"))
+                    .ok()
+                    .and_then(|t| serde_json::from_str(&t).ok())
+                    .unwrap_or_default();
+            if let Some(env) = settings.get("env").and_then(|e| e.as_object()) {
+                urls.extend(
+                    env.iter()
+                        .filter(|(k, _)| k.ends_with("_BASE_URL"))
+                        .filter_map(|(_, v)| v.as_str().map(str::to_string)),
+                );
+            }
+        }
+        HarnessKind::Codex => {
+            let config: toml::Table = std::fs::read_to_string(settings_dir.join("config.toml"))
+                .ok()
+                .and_then(|t| t.parse().ok())
+                .unwrap_or_default();
+            if let Some(providers) = config.get("model_providers").and_then(|p| p.as_table()) {
+                urls.extend(
+                    providers
+                        .values()
+                        .filter_map(|p| p.get("base_url")?.as_str().map(str::to_string)),
+                );
+            }
+        }
+        HarnessKind::Grok | HarnessKind::Agy => {}
+    }
+    urls.iter().filter_map(|u| url_host(u)).collect()
+}
+
+/// The host and port of an `http` or `https` URL as a rule.
+fn url_host(url: &str) -> Option<HostRule> {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let auth = rest.split(['/', '?', '#']).next()?;
+    let auth = auth.rsplit('@').next()?;
+    let has_port = auth.rsplit_once(':').is_some_and(|(_, p)| !p.contains(']'));
+    // A URL without a port uses its scheme's, which a forward into the sandbox needs spelled out.
+    if !has_port && url.starts_with("http://") {
+        return HostRule::parse(&format!("{auth}:80"));
+    }
+    HostRule::parse(auth)
 }
 
 /// Variables the CLIs need under Seatbelt, which denies `/tmp` and the keychain: Claude Code
@@ -205,6 +312,123 @@ pub fn cleanup(config_dir: &Path) {
 mod tests {
     use super::*;
     use crate::launch::tests::{input, spec};
+
+    #[test]
+    fn base_urls_and_the_bridge_address_parse() {
+        let rule = |s: &str| HostRule::parse(s).unwrap();
+        assert_eq!(
+            url_host("http://127.0.0.1:8317/v1"),
+            Some(rule("127.0.0.1:8317"))
+        );
+        assert_eq!(url_host("http://gw.lan/v1"), Some(rule("gw.lan:80")));
+        assert_eq!(
+            url_host("https://u:p@gw.example.com/x"),
+            Some(rule("gw.example.com"))
+        );
+        assert_eq!(url_host("https://[::1]/"), Some(rule("[::1]")));
+        assert_eq!(url_host("ftp://x"), None);
+        assert_eq!(
+            bridge_addr("http://127.0.0.1:4100").unwrap(),
+            "127.0.0.1:4100".parse().unwrap()
+        );
+        assert!(bridge_addr("http://localhost:4100").is_err());
+    }
+
+    /// The hook bridge and a loopback model gateway stay reachable from the CLI's private network
+    /// namespace, and nothing else on the host's loopback is.
+    #[test]
+    fn the_bridge_and_listed_loopback_hosts_reach_the_host() {
+        let Some(Backend::Bubblewrap(_)) = sandbox::backend() else {
+            eprintln!("bubblewrap unavailable; skipping");
+            return;
+        };
+        let serve = |body: &'static str| {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = l.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                use std::io::{Read, Write};
+                for mut s in l.incoming().flatten() {
+                    let mut buf = [0u8; 1024];
+                    let _ = s.read(&mut buf);
+                    let _ = s.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
+                }
+            });
+            port
+        };
+        let (bridge, gateway, other) = (serve("bridge"), serve("gateway"), serve("other"));
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
+        std::fs::create_dir_all(&base).unwrap();
+        let tmp = tempfile::tempdir_in(&base).unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        for d in ["repo", "ws/.ostra/sessions/s_1/backend", "cfg", "home"] {
+            std::fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let s = spec(HarnessKind::Claude, "haiku", &root);
+        let mut inp = input(&s, HarnessKind::Claude, &root);
+        inp.server_url = format!("http://127.0.0.1:{bridge}");
+        let script = format!(
+            "for p in {bridge} {gateway} {other}; do echo \"got:$(curl -s --max-time 3 http://127.0.0.1:$p/)\"; done"
+        );
+        let run = |inp: &LaunchInput<'_>| {
+            let plan = LaunchPlan {
+                program: "sh".into(),
+                args: vec!["-c".into(), script.clone()],
+                env: vec![(
+                    "ANTHROPIC_BASE_URL".into(),
+                    format!("http://127.0.0.1:{gateway}"),
+                )],
+                cwd: root.join("repo"),
+                files: vec![],
+                links: vec![],
+                session_id: None,
+                env_remove: vec![],
+                tty_param: None,
+            };
+            let wrapped = wrap(
+                plan,
+                inp,
+                &SandboxConfig::default(),
+                std::sync::Arc::new(|_| {}),
+                std::sync::Arc::new(|_| {}),
+            )
+            .unwrap();
+            let plan = wrapped.plan;
+            let out = std::process::Command::new(&plan.program)
+                .args(&plan.args)
+                .envs(plan.env.iter().map(|(k, v)| (k, v)))
+                .env("HOME", root.join("home"))
+                .output()
+                .unwrap();
+            drop(wrapped.members);
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let text = run(&inp);
+        assert!(text.contains("got:bridge"), "{text}");
+        assert!(text.contains("got:gateway"), "{text}");
+        assert!(!text.contains("got:other"), "{text}");
+
+        // With the server's bridge socket, the bridge port leads there and not to the listener.
+        let sock = root.join("bridge.sock");
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for mut s in l.incoming().flatten() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsocket",
+                );
+            }
+        });
+        inp.bridge_socket = Some(sock.clone());
+        let text = run(&inp);
+        assert!(text.contains("got:socket"), "{text}");
+        assert!(!text.contains("got:bridge"), "{text}");
+        assert!(
+            sock.exists(),
+            "the sandbox leaves the server's socket in place"
+        );
+    }
 
     #[test]
     fn harness_home_is_overlaid_and_settings_stay_read_only() {
@@ -265,7 +489,14 @@ mod tests {
         };
         let marker = std::env::temp_dir().join("ostra-host-marker");
         std::fs::write(&marker, "").unwrap();
-        let wrapped = wrap(plan, &inp, &SandboxConfig::default()).unwrap();
+        let wrapped = wrap(
+            plan,
+            &inp,
+            &SandboxConfig::default(),
+            std::sync::Arc::new(|_| {}),
+            std::sync::Arc::new(|_| {}),
+        )
+        .unwrap();
         assert!(wrapped.warning.is_none());
         let plan = wrapped.plan;
         let mut cmd = std::process::Command::new(&plan.program);

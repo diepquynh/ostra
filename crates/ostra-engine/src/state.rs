@@ -7,6 +7,7 @@ use crate::judge::{
 };
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
+use ostra_core::containment::{ContainmentSignal, PAUSE_AFTER};
 use ostra_core::event::{
     AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, FactTarget,
     GateAnswer, GatePayload, JudgeKind, ProjectRef, SessionEvent, SessionKind, SessionOptions,
@@ -599,7 +600,7 @@ pub enum Interrupt {
 impl Interrupt {
     pub fn message(self) -> &'static str {
         match self {
-            Interrupt::Pause => "Paused by the user.",
+            Interrupt::Pause => "The session was paused.",
             Interrupt::Context => "Interrupted to deliver the context the user added.",
         }
     }
@@ -684,6 +685,10 @@ pub struct SessionState {
     pub notes: Vec<String>,
     /// Rule P1: a paused session starts nothing.
     pub paused: bool,
+    /// Rule P3: containment signals per execution.
+    pub signals: BTreeMap<ExecutionId, Vec<ContainmentSignal>>,
+    /// Rule P3: the execution whose signals paused the session, until it is continued.
+    pub contained: Option<ExecutionId>,
     /// Executions the engine is interrupting, and why.
     pub interrupting: BTreeMap<ExecutionId, Interrupt>,
     /// Paused executions to resume, by [`purpose_key`] (Rule P2).
@@ -799,6 +804,8 @@ impl SessionState {
             failed: None,
             notes: vec![],
             paused: false,
+            signals: BTreeMap::new(),
+            contained: None,
             interrupting: BTreeMap::new(),
             resume_from: BTreeMap::new(),
             last_seq: 0,
@@ -1022,7 +1029,20 @@ impl SessionState {
                 self.paused = true;
                 self.interrupt_running(Interrupt::Pause);
             }
-            SessionEvent::SessionResumed => self.paused = false,
+            SessionEvent::SessionResumed => {
+                self.paused = false;
+                self.contained = None;
+            }
+            SessionEvent::ContainmentSignal { execution, signal } => {
+                let seen = self.signals.entry(execution.clone()).or_default();
+                seen.push(signal.clone());
+                // Rule P3: the third signal of one execution pauses the session as Rule P1 does.
+                if seen.len() == PAUSE_AFTER && !self.paused && !self.is_terminal() {
+                    self.paused = true;
+                    self.contained = Some(execution.clone());
+                    self.interrupt_running(Interrupt::Pause);
+                }
+            }
             SessionEvent::YoloSet { enabled } => self.yolo = *enabled,
             SessionEvent::DecisionMade {
                 id,

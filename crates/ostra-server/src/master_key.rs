@@ -64,7 +64,10 @@ fn load_key(
 ) -> anyhow::Result<[u8; 32]> {
     if let Some(path) = key_file {
         let key = file_key(&path)?;
-        tracing::info!("credentials are encrypted with the key in {}", path.display());
+        tracing::info!(
+            "credentials are encrypted with the key in {}",
+            path.display()
+        );
         return Ok(key);
     }
     let recorded = registry
@@ -174,7 +177,8 @@ fn keychain_get(account: &str) -> Result<[u8; 32], KeychainError> {
     with_timeout(move || {
         let entry = keyring::Entry::new(SERVICE, &account).map_err(map_err)?;
         let text = entry.get_password().map_err(map_err)?;
-        parse_key(&text).ok_or_else(|| KeychainError::Unavailable("the stored key is malformed".into()))
+        parse_key(&text)
+            .ok_or_else(|| KeychainError::Unavailable("the stored key is malformed".into()))
     })
 }
 
@@ -266,7 +270,14 @@ mod tests {
     fn falls_back_to_an_owner_only_key_file() {
         let dir = tempfile::tempdir().unwrap();
         let reg = registry(dir.path());
-        let key = load_key(&reg, None, dir.path(), unreachable_keychain, unreachable_set).unwrap();
+        let key = load_key(
+            &reg,
+            None,
+            dir.path(),
+            unreachable_keychain,
+            unreachable_set,
+        )
+        .unwrap();
         let path = dir.path().join("master.key");
         #[cfg(unix)]
         {
@@ -274,7 +285,14 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }
-        let again = load_key(&reg, None, dir.path(), unreachable_keychain, unreachable_set).unwrap();
+        let again = load_key(
+            &reg,
+            None,
+            dir.path(),
+            unreachable_keychain,
+            unreachable_set,
+        )
+        .unwrap();
         assert_eq!(key, again, "the file key is reused");
     }
 
@@ -299,11 +317,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let reg = registry(dir.path());
         record(&reg, Backend::Keychain).unwrap();
-        let err = load_key(&reg, None, dir.path(), unreachable_keychain, unreachable_set)
-            .unwrap_err()
-            .to_string();
+        let err = load_key(
+            &reg,
+            None,
+            dir.path(),
+            unreachable_keychain,
+            unreachable_set,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(err.starts_with("Unlock the system keychain"), "{err}");
-        assert!(!dir.path().join("master.key").exists(), "no new key replaces it");
+        assert!(
+            !dir.path().join("master.key").exists(),
+            "no new key replaces it"
+        );
     }
 
     #[test]
@@ -311,24 +338,39 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("registry.db");
         let reg = RegistryDb::open(&path).unwrap();
-        reg.kv_set("git_credential:a", b"{\"secret\":\"ghp_plain\"}").unwrap();
+        reg.kv_set("git_credential:a", b"{\"secret\":\"ghp_plain\"}")
+            .unwrap();
         reg.kv_set("auth:token:x", b"123").unwrap();
         let key_file = dir.path().join("k");
-        let key = load_key(&reg, Some(key_file.clone()), dir.path(), unreachable_keychain, unreachable_set).unwrap();
+        let key = load_key(
+            &reg,
+            Some(key_file.clone()),
+            dir.path(),
+            unreachable_keychain,
+            unreachable_set,
+        )
+        .unwrap();
         let sealer = Arc::new(Sealer::new(&key));
         check_key(&reg, &sealer).unwrap();
         let reg = reg.with_sealer(sealer);
         assert_eq!(reg.seal_plaintext_secrets().unwrap(), 1);
         let raw = reg.kv_get("git_credential:a").unwrap().unwrap();
         assert!(ostra_store::secrets::is_sealed(&raw));
-        assert_eq!(reg.kv_get("auth:token:x").unwrap().unwrap(), b"123", "non-secret rows stay");
+        assert_eq!(
+            reg.kv_get("auth:token:x").unwrap().unwrap(),
+            b"123",
+            "non-secret rows stay"
+        );
         assert_eq!(
             reg.secret_get("git_credential:a").unwrap().unwrap(),
             b"{\"secret\":\"ghp_plain\"}"
         );
         for f in ["registry.db", "registry.db-wal"] {
             let bytes = std::fs::read(dir.path().join(f)).unwrap_or_default();
-            assert!(!bytes.windows(9).any(|w| w == b"ghp_plain"), "{f} still holds plaintext");
+            assert!(
+                !bytes.windows(9).any(|w| w == b"ghp_plain"),
+                "{f} still holds plaintext"
+            );
         }
 
         let other = RegistryDb::open(&path)

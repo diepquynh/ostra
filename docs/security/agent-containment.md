@@ -437,6 +437,43 @@ What the agent sees along the way:
 The same fixture continues past the block. When a later compile passes, the streak resets and a lesson is
 pending, so the implementer's next `ok` submit is refused by the lesson gate until it records what fixed the build.
 
+## Containment signals pause the session
+
+A guard stops one tool call, and the agent reads the correction and moves on. Most refusals are ordinary
+mistakes, such as a write outside the phase's scope. A few look like an attempt to leave the sandbox: reading
+Ostra's secrets, changing Ostra's own files, writing into `.git/`, connecting to a local network address, or
+opening a decoy credential file.
+When one execution does those three times, Ostra pauses the session for the user, because a model that keeps
+trying has usually been told to by something it read (Rule P3).
+
+A containment signal is one of:
+
+- a Layer 1 denial by the `secret-read`, `self-protection`, or `git-metadata` guard,
+- an egress proxy refusal of a loopback, private, or link-local destination (`10.0.0.1`, the cloud metadata
+  address `169.254.169.254`, a local-only name such as `printer.local`, or a name that resolves to such an
+  address). Only requests through the proxy count, so this half exists on Linux only. A connection to
+  `127.0.0.1` stays on the sandbox's own loopback and never reaches the proxy, or
+- a process in the sandbox opening one of the decoy credential files Ostra plants in hidden paths, such as
+  `~/.ssh/id_rsa` (see [sandboxing](sandboxing.md#decoy-credential-files)). This covers what the
+  `secret-read` guard cannot see: a `cat` in Bash, a script, or a child process. Linux only.
+
+A refused public host is not a signal, because builds and CLIs call telemetry hosts on their own. It is still
+recorded with the execution's activity, with the setting that would allow it.
+
+[`containment::classify`](../../crates/ostra-core/src/containment.rs) turns each execution delta into a signal or
+nothing. The runner records each signal as a `ContainmentSignal` event, at most three per execution, so a retry
+loop cannot flood the session log. The proxy reports each host and port once, so three signals from the proxy are
+three different destinations. On the third signal of one execution, the fold pauses the session exactly as the
+user's Pause does (Rules P1 and P2): every running execution is interrupted, waiting permission asks are denied,
+and nothing new starts. The board names the agent whose execution paused the session, and a push notification
+says why.
+
+Continuing the session is the user's "this was fine". The interrupted run resumes where it stopped, as a new
+execution whose count starts at zero. Stopping the session ends it. The fixtures
+`p3_three_containment_signals_pause_the_session`, `p3_decoy_opens_are_signals_like_the_others`, and
+`p3_two_signals_or_signals_spread_over_executions_do_not_pause` pin the rule, and `containment_signals_pause_the_session` in
+[`crates/ostra-engine/tests/pause.rs`](../../crates/ostra-engine/tests/pause.rs) runs it on a real engine.
+
 ## What YOLO changes, and what it does not
 
 YOLO hands every decision to the orchestrator so that a session can run without a person at the screen. In the
@@ -454,6 +491,8 @@ YOLO does not change anything that is not a question:
   confirm.
 - **The pipeline's own requirements hold.** Approval still needs a fact-check PASS, BLOCKER security findings must
   still be fixed before completion, and a budget gate is never answered by YOLO.
+- **Containment signals still pause.** A session that trips three containment signals in one execution pauses
+  under YOLO too, and only the user can continue it.
 
 YOLO can be turned on or off during a session. The policy reads the session's current setting before every check
 (`policy.set_yolo(host.yolo())` in both executors), so the change applies from the next tool call.
@@ -467,6 +506,9 @@ YOLO can be turned on or off during a session. The policy reads the session's cu
 | Shell parsing and write targets | [`crates/ostra-policy/src/bash.rs`](../../crates/ostra-policy/src/bash.rs) |
 | Build signal and streak thresholds | [`crates/ostra-policy/src/build.rs`](../../crates/ostra-policy/src/build.rs) |
 | Permission rule syntax and matching | [`crates/ostra-policy/src/perms.rs`](../../crates/ostra-policy/src/perms.rs) |
+| Containment signals and the classifier | [`crates/ostra-core/src/containment.rs`](../../crates/ostra-core/src/containment.rs) |
+| Decoy credential files and their inotify watch | [`crates/ostra-core/src/decoy.rs`](../../crates/ostra-core/src/decoy.rs) |
+| Recording signals and the auto-pause | `EngineHost::record_signal` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs), the fold in [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |
 | Guard and permission fixtures | [`crates/ostra-policy/tests/policy.rs`](../../crates/ostra-policy/tests/policy.rs) |
 | Harness payload adapters | [`crates/ostra-exec-harness/src/adapters/`](../../crates/ostra-exec-harness/src/adapters/mod.rs) |
 | Hook bridge, fail-closed handling | [`crates/ostra-exec-harness/src/bridge.rs`](../../crates/ostra-exec-harness/src/bridge.rs) |

@@ -229,6 +229,7 @@ describe("issue paths", () => {
     expect(tabOf("projects[0].key")).toBe("projects");
     expect(tabOf("routing.effort")).toBe("routing");
     expect(tabOf("permissions.deny")).toBe("permissions");
+    expect(tabOf("sandbox_decoys[0]")).toBe("permissions");
     expect(tabOf("instructions.agents")).toBe("instructions");
     expect(tabOf("notifications.push")).toBe("notifications");
   });

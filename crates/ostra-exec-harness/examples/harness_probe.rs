@@ -239,6 +239,10 @@ async fn main() {
         }
     });
     let code_probe = code.is_some();
+    let harden = std::env::var("PROBE_HARDEN").is_ok();
+    if harden {
+        harden_setup(&repo, log.clone());
+    }
     let live = LiveRegistry::new();
     let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), code)), live.clone());
     let app = App {
@@ -251,7 +255,24 @@ async fn main() {
         .with_state(app);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let socket = harden.then(|| dir.join("bridge.sock"));
+    if let Some(sock) = &socket {
+        // The bridge answers only on the socket, as the server's does; the TCP port logs any hit.
+        let _ = std::fs::remove_file(sock);
+        let unix = tokio::net::UnixListener::bind(sock).unwrap();
+        tokio::spawn(async move { axum::serve(unix, router).await.unwrap() });
+        let trap_log = log.clone();
+        let trap = Router::new().fallback(move |uri: axum::http::Uri| {
+            let log = trap_log.clone();
+            async move {
+                log.line(json!({"tcp_bridge_hit": uri.to_string()}));
+                axum::http::StatusCode::IM_A_TEAPOT
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, trap).await.unwrap() });
+    } else {
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    }
 
     let mut cfg = HarnessExecutorConfig::new(
         GlobalConfig::default(),
@@ -259,6 +280,7 @@ async fn main() {
         url,
     );
     cfg.idle_nudge = std::time::Duration::from_secs(90);
+    cfg.bridge_socket = socket;
     let exec = HarnessExecutor::new(cfg, live, PtyRegistry::new());
     let id = ExecutionId::new();
     let agent = AgentName::QuickAnswer;
@@ -274,7 +296,13 @@ async fn main() {
         system_prompt:
             "You are an Ostra probe agent. Follow the user's steps exactly and do nothing else."
                 .into(),
-        first_message: if code_probe {
+        first_message: if harden {
+            format!(
+                "Do exactly these steps and nothing more:\n1. Run the shell command `cd {} && sh checks.sh > checks.txt 2>&1` and wait for it to finish (about 15 seconds).\n2. Call the `{}` tool with answer \"probe ok\" and sources [\"checks.txt\"].\nThen end your turn.",
+                repo.display(),
+                agent.submit_tool_name()
+            )
+        } else if code_probe {
             format!(
                 "Do exactly these steps and nothing more:\n1. Call the `code_implementations` tool with symbol \"Shape\".\n2. Call the `{}` tool with answer set to the names of the types the tool listed under \"implemented or extended by\", comma-separated, and sources [\"src/shape.rs\"].\nThen end your turn.",
                 agent.submit_tool_name()
@@ -316,6 +344,9 @@ async fn main() {
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
         },
         resume: resume_sid.map(|sid| ResumeInfo {
             from: ExecutionId::new(),
@@ -333,6 +364,99 @@ async fn main() {
         dir.join(format!("{harness}{suffix}-terminal.bin")),
     );
     println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    if harden {
+        let checks = dir.join("repo/checks.txt");
+        println!(
+            "---- checks.txt ----\n{}",
+            std::fs::read_to_string(checks).unwrap_or_else(|e| format!("missing: {e}"))
+        );
+        println!(
+            "commondir after the run: {}",
+            dir.join("repo/.git/commondir").exists()
+        );
+    }
+}
+
+/// Host services the sandbox must not reach, the check script, and a git repo to plant files in.
+fn harden_setup(repo: &std::path::Path, log: Arc<Log>) {
+    use std::os::linux::net::SocketAddrExt;
+    let status = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(repo)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let _ = std::fs::remove_file(repo.join(".git/commondir"));
+    let _ = std::fs::remove_file(repo.join("checks.txt"));
+
+    let tcp = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let port = tcp.local_addr().unwrap().port();
+    let lan = std::net::UdpSocket::bind("0.0.0.0:0")
+        .and_then(|s| s.connect("8.8.8.8:80").and_then(|_| s.local_addr()))
+        .map(|a| a.ip().to_string())
+        .unwrap_or_else(|_| "127.0.0.1".into());
+    let l = log.clone();
+    std::thread::spawn(move || {
+        for s in tcp.incoming().flatten() {
+            l.line(json!({"CANARY_TCP_REACHED": s.peer_addr().ok().map(|a| a.to_string())}));
+        }
+    });
+    let name = format!("ostra-probe-{}", std::process::id());
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(name.as_bytes()).unwrap();
+    let abs = std::os::unix::net::UnixListener::bind_addr(&addr).unwrap();
+    std::thread::spawn(move || {
+        for _ in abs.incoming().flatten() {
+            log.line(json!({"CANARY_ABSTRACT_REACHED": true}));
+        }
+    });
+
+    let script = format!(
+        r#"echo "== process"
+grep -E '^(Seccomp|NoNewPrivs):' /proc/self/status
+unshare -U true 2>&1 && echo "userns: ALLOWED" || echo "userns: refused"
+python3 -c 'import fcntl,termios,os,glob
+fd=None
+for p in glob.glob("/proc/[0-9]*/fd/[012]"):
+    try:
+        f=os.open(p,os.O_RDWR|os.O_NOCTTY)
+        if os.isatty(f): fd=f; break
+        os.close(f)
+    except OSError: pass
+if fd is None: print("tiocsti: no terminal found")
+else:
+    try: fcntl.ioctl(fd, termios.TIOCSTI, b" "); print("tiocsti: ALLOWED")
+    except OSError as e: print("tiocsti: refused", e)'
+echo "== proxy env"
+env | grep -iE '^(https?|all|no)_proxy=' | sort
+echo "== host services"
+curl -s -m 3 --noproxy '*' -o /dev/null http://127.0.0.1:{port}/ && echo "host loopback: REACHED" || echo "host loopback: unreachable"
+curl -s -m 3 --noproxy '*' -o /dev/null http://{lan}:{port}/ && echo "host lan: REACHED" || echo "host lan: unreachable"
+curl -s -m 3 --noproxy '*' -o /dev/null http://169.254.169.254/ && echo "metadata direct: REACHED" || echo "metadata direct: unreachable"
+python3 -c 'import socket
+s=socket.socket(socket.AF_UNIX)
+try:
+    s.connect("\0{name}"); print("abstract socket: REACHED")
+except OSError as e: print("abstract socket: unreachable", e)'
+echo "== egress"
+curl -s -m 10 --noproxy '*' -o /dev/null https://crates.io/ && echo "direct crates.io: REACHED" || echo "direct crates.io: blocked"
+echo "allowed index.crates.io: $(curl -s -m 15 -o /dev/null -w '%{{http_code}}' https://index.crates.io/config.json)"
+r=$(curl -s -m 15 -o /dev/null -w '%{{http_connect}}' https://example.com/); echo "unlisted example.com: connect=$r exit=$?"
+r=$(curl -s -m 5 -o /dev/null --noproxy '' -x "$HTTPS_PROXY" -w '%{{http_code}}' http://127.0.0.1:{port}/); echo "proxy to host loopback: connect=$r exit=$?"
+r=$(curl -s -m 5 -o /dev/null --noproxy '' -x "$HTTPS_PROXY" -w '%{{http_code}}' http://169.254.169.254/); echo "proxy to metadata: code=$r exit=$?"
+r=$(curl -s -m 15 -o /dev/null -w '%{{http_code}}' --connect-to crates.io:443:crates.io:443 https://crates.io/); echo "sni control crates.io: code=$r exit=$?"
+r=$(curl -s -m 15 -o /dev/null -k -w '%{{http_code}}' --connect-to example.com:443:crates.io:443 https://example.com/); echo "sni mismatch: code=$r exit=$?"
+echo "== git metadata"
+(echo x >> .git/config) 2>/dev/null && echo ".git/config: WRITABLE" || echo ".git/config: refused"
+(echo ../.. > .git/commondir) 2>/dev/null && echo "commondir planted" || echo "commondir: refused"
+sleep 5
+test -e .git/commondir && echo "commondir: STILL THERE" || echo "commondir: removed"
+echo "== decoys"
+head -c 36 ~/.ssh/id_rsa 2>&1; echo
+head -c 20 ~/.git-credentials 2>&1; echo
+echo "== done"
+"#
+    );
+    std::fs::write(repo.join("checks.sh"), script).unwrap();
 }
 
 /// Pause and continue, as `Engine::pause_session` and `resume_session` drive an execution.
@@ -424,6 +548,9 @@ async fn pause_probe(args: &[String]) {
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
         },
         resume,
         harness_session_id: sid,
@@ -577,6 +704,9 @@ async fn inspect_probe(args: &[String]) {
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
         },
         resume: Some(ResumeInfo {
             from: ExecutionId::new(),

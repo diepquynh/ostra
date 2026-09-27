@@ -552,8 +552,12 @@ impl WorkspaceRt {
             global_permissions: global.permissions.clone(),
             pending_commands: crate::trust::pending(&self.shared.registry, &self.root, &settings),
             sandbox: ostra_core::api::SandboxStatus::check(
-                &global.sandbox.for_workspace(settings.sandbox_mode),
+                &global.sandbox.for_workspace(&settings.sandbox()),
             ),
+            global_sandbox: ostra_core::api::GlobalSandbox {
+                network: global.sandbox.network,
+                allowed_hosts: global.sandbox.allowed_hosts.clone(),
+            },
             settings: browser_view(settings),
         }
     }
@@ -581,7 +585,10 @@ mod tests {
     #[test]
     fn an_unscoped_session_may_use_every_project_it_started_with() {
         let mut st = ostra_engine::SessionState::new("s_1".into());
-        assert!(may_use(&st, "app"), "a session with no log is assumed to use anything");
+        assert!(
+            may_use(&st, "app"),
+            "a session with no log is assumed to use anything"
+        );
         st.created = true;
         st.projects = ["app", "lib"]
             .map(|k| ostra_core::event::ProjectRef {

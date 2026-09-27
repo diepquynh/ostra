@@ -18,10 +18,10 @@ use ostra_core::api::{
     ChangedBy, FileDiff, FileIndex, GitMark, ProjectChange, ProjectFile, ProjectTree,
     ProjectTreeEntry, SaveProjectFile, ServerMsg,
 };
+use ostra_core::artifacts;
 use ostra_core::event::ExecPurpose;
 use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::{ExecutionId, WorkspaceId};
-use ostra_core::artifacts;
 use ostra_core::paths;
 use ostra_engine::EngineNotice;
 use parking_lot::Mutex;
@@ -160,7 +160,11 @@ fn view_roots(w: &WorkspaceRt, key: &str) -> Result<(PathBuf, Option<PathBuf>), 
 }
 
 /// A file under the view's roots: the visible one, else a hidden artifact at the same path.
-fn locate_view_file(root: &Path, hidden: Option<&PathBuf>, raw: &str) -> Result<tree::Contained, ApiErr> {
+fn locate_view_file(
+    root: &Path,
+    hidden: Option<&PathBuf>,
+    raw: &str,
+) -> Result<tree::Contained, ApiErr> {
     let file = contain(root, raw)?;
     if !file.real.exists()
         && let Some(h) = hidden

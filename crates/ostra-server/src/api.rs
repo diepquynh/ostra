@@ -118,6 +118,7 @@ impl From<EngineError> for ApiErr {
         match e {
             EngineError::NotFound(m) => ApiErr::not_found(m),
             EngineError::Invalid(m) => ApiErr::new(StatusCode::CONFLICT, m),
+            EngineError::Ended => ApiErr::new(StatusCode::CONFLICT, e.to_string()),
             EngineError::Store(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         }
     }
@@ -156,7 +157,11 @@ async fn guard(State(app): AppState, req: Request, next: Next) -> Response {
                 )
                 .into_response()
             } else {
-                let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+                let query = req
+                    .uri()
+                    .query()
+                    .map(|q| format!("?{q}"))
+                    .unwrap_or_default();
                 match HeaderValue::from_str(&format!("http://{target}{path}{query}")) {
                     Ok(loc) => {
                         let mut r = StatusCode::TEMPORARY_REDIRECT.into_response();
@@ -1510,7 +1515,7 @@ struct DiffQuery {
 }
 
 async fn git_show(root: &std::path::Path, rev_path: &str) -> String {
-    let filters = crate::files::git::filter_overrides(root).await;
+    let filters = ostra_core::git::filter_overrides(root).await;
     let out = tokio::process::Command::new("git")
         .args(ostra_core::git::AUTOMATIC)
         .args(&filters)

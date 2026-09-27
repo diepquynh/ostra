@@ -61,7 +61,11 @@ fn parse_record(stored: &[u8]) -> Option<(Record, bool)> {
     if let Ok(r) = serde_json::from_slice::<Record>(stored) {
         return Some((r, false));
     }
-    let created = std::str::from_utf8(stored).ok()?.trim().parse::<u64>().ok()?;
+    let created = std::str::from_utf8(stored)
+        .ok()?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
     Some((
         Record {
             id: new_id(),
@@ -432,7 +436,10 @@ impl Auth {
         list.retain(|t| t.elapsed() < FAILURE_WINDOW);
         (list.len() >= MAX_FAILURES).then(|| {
             let oldest = list.iter().min().copied().unwrap_or_else(Instant::now);
-            FAILURE_WINDOW.saturating_sub(oldest.elapsed()).as_secs().max(1)
+            FAILURE_WINDOW
+                .saturating_sub(oldest.elapsed())
+                .as_secs()
+                .max(1)
         })
     }
 
@@ -545,7 +552,10 @@ impl Auth {
             id: new_id(),
             created,
             last_seen: created,
-            user_agent: meta.user_agent.as_deref().map(|u| u.chars().take(300).collect()),
+            user_agent: meta
+                .user_agent
+                .as_deref()
+                .map(|u| u.chars().take(300).collect()),
             ip: meta.ip.clone(),
         };
         let _ = store_record(&self.registry, &h, &record);
@@ -760,13 +770,19 @@ mod tests {
         assert_eq!(list.len(), 2);
         assert_eq!(list.iter().filter(|s| s.current).count(), 1);
         assert_eq!(list[0].user_agent.as_deref(), Some("TestBrowser/1"));
-        assert!(!list[0].id.contains(&cookie_hash(&a)[..8]), "the id is not the cookie");
+        assert!(
+            !list[0].id.contains(&cookie_hash(&a)[..8]),
+            "the id is not the cookie"
+        );
 
         let mut revoked = auth.subscribe_revoked();
         let b_id = list.iter().find(|s| !s.current).unwrap().id.clone();
         assert!(auth.check_cookie(&b));
         assert!(auth.revoke(&b_id).unwrap());
-        assert!(!auth.check_cookie(&b), "a revoke on this server bypasses the cache");
+        assert!(
+            !auth.check_cookie(&b),
+            "a revoke on this server bypasses the cache"
+        );
         assert_eq!(revoked.try_recv().unwrap(), cookie_hash(&b));
         assert!(!auth.revoke(&b_id).unwrap());
 
@@ -786,12 +802,18 @@ mod tests {
         let id = list_sign_ins(&reg).unwrap()[0].id.clone();
         assert!(revoke_sign_in(&reg, &id).unwrap());
         assert!(!revoke_sign_in(&reg, &id).unwrap());
-        assert!(auth.check_cookie(&cookie), "the cache holds for a short while");
+        assert!(
+            auth.check_cookie(&cookie),
+            "the cache holds for a short while"
+        );
         auth.cookies
             .write()
             .values_mut()
             .for_each(|(_, checked)| *checked -= RECHECK);
-        assert!(!auth.check_cookie(&cookie), "then the registry is read again");
+        assert!(
+            !auth.check_cookie(&cookie),
+            "then the registry is read again"
+        );
     }
 
     #[test]
@@ -803,14 +825,23 @@ mod tests {
         reg.kv_set(&old, (now() - COOKIE_TTL_SECS - 1).to_string().as_bytes())
             .unwrap();
         let auth = Auth::new(reg.clone(), &Access::loopback(7878));
-        assert!(auth.check_cookie("legacy"), "an older server's sign-in still works");
-        assert!(!auth.check_cookie("old"), "a sign-in older than the TTL is refused");
+        assert!(
+            auth.check_cookie("legacy"),
+            "an older server's sign-in still works"
+        );
+        assert!(
+            !auth.check_cookie("old"),
+            "a sign-in older than the TTL is refused"
+        );
         assert_eq!(reg.kv_get(&old).unwrap(), None, "and removed");
         let list = list_sign_ins(&reg).unwrap();
         assert_eq!(list.len(), 1);
         assert!(list[0].id.starts_with("si_") && list[0].user_agent.is_none());
         let stored = reg.kv_get(&legacy).unwrap().unwrap();
-        assert!(parse_record(&stored).is_some_and(|(_, l)| !l), "migrated to a record");
+        assert!(
+            parse_record(&stored).is_some_and(|(_, l)| !l),
+            "migrated to a record"
+        );
         assert_eq!(revoke_sign_ins(&reg).unwrap(), 1);
     }
 
@@ -833,7 +864,11 @@ mod tests {
         for _ in 0..MAX_FAILURES * 2 {
             auth.note_exchange(local, false);
         }
-        assert_eq!(auth.exchange_wait(local), None, "loopback cannot lock the user out");
+        assert_eq!(
+            auth.exchange_wait(local),
+            None,
+            "loopback cannot lock the user out"
+        );
     }
 
     #[test]
@@ -885,14 +920,23 @@ mod tests {
         let auth = Auth::new(registry.clone(), &access);
         let url = auth.sign_in_url().unwrap();
         let host = url.trim_start_matches("http://").split('/').next().unwrap();
-        assert!(host.starts_with("ostra-") && host.ends_with(".localhost:7878"), "{host}");
+        assert!(
+            host.starts_with("ostra-") && host.ends_with(".localhost:7878"),
+            "{host}"
+        );
         assert!(auth.allowed_host(Some(host)));
         assert_eq!(auth.private_redirect(Some("127.0.0.1:7878")), Some(host));
         assert_eq!(auth.private_redirect(Some("localhost:7878")), Some(host));
         assert_eq!(auth.private_redirect(Some(host)), None);
         let again = Auth::new(registry, &access);
-        assert!(again.sign_in_url().unwrap().contains(host), "the name is stable");
-        let plain = Auth::new(RegistryDb::open_in_memory().unwrap(), &Access::loopback(7878));
+        assert!(
+            again.sign_in_url().unwrap().contains(host),
+            "the name is stable"
+        );
+        let plain = Auth::new(
+            RegistryDb::open_in_memory().unwrap(),
+            &Access::loopback(7878),
+        );
         assert_eq!(plain.private_redirect(Some("127.0.0.1:7878")), None);
     }
 

@@ -6,4 +6,12 @@ import type { Usage } from "./Usage";
 /**
  * Streamed to the Activity view and persisted.
  */
-export type ExecutionDelta = { "kind": "text", text: string, } | { "kind": "thinking", text: string, } | { "kind": "tool_call", call_id: string, call: ToolCall, } | { "kind": "policy", call_id: string, decision: PolicyDecision, } | { "kind": "tool_output", call_id: string, chunk: string, } | { "kind": "tool_result", call_id: string, output: string, is_error: boolean, duration_ms: number, } | { "kind": "usage", usage: Usage, } | { "kind": "status", message: string, } | { "kind": "native_session_id", id: string, };
+export type ExecutionDelta = { "kind": "text", text: string, } | { "kind": "thinking", text: string, } | { "kind": "tool_call", call_id: string, call: ToolCall, } | { "kind": "policy", call_id: string, decision: PolicyDecision, } | { "kind": "tool_output", call_id: string, chunk: string, } | { "kind": "tool_result", call_id: string, output: string, is_error: boolean, duration_ms: number, } | { "kind": "usage", usage: Usage, } | { "kind": "status", message: string, } | { "kind": "native_session_id", id: string, } | { "kind": "egress", host: string, port: number, allowed: boolean, 
+/**
+ * Why it was refused, with the setting that allows it first.
+ */
+reason: string | null, 
+/**
+ * The destination is loopback, private, or link-local.
+ */
+local: boolean, } | { "kind": "decoy", path: string, };

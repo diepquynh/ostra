@@ -1,6 +1,7 @@
 //! Engine conformance fixtures (HANDOVER 17): one per rule ID of section 8.2. Each builds an
 //! event history, folds it, and checks the planner's next steps.
 
+use ostra_core::containment::ContainmentSignal;
 use ostra_core::event::*;
 use ostra_core::exec::{ExecutionResult, ExecutionStatus, Usage};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
@@ -969,7 +970,7 @@ fn amendment_explores_the_new_part_first() {
 }
 
 // ------------------------------------------------------------------------------------------
-// Context files, context delivery, and pause (Rules C1, C2, P1, P2)
+// Context files, context delivery, pause, and containment (Rules C1, C2, P1, P2, P3)
 // ------------------------------------------------------------------------------------------
 
 fn file(project: &str, path: &str) -> ContextFile {
@@ -1148,6 +1149,73 @@ fn a_run_started_during_the_pause_is_interrupted_too() {
         h.state().interrupting.get(&id),
         Some(&ostra_engine::state::Interrupt::Pause)
     );
+}
+
+fn signal(h: &mut H, execution: &ExecutionId, n: u16) {
+    h.ev(SessionEvent::ContainmentSignal {
+        execution: execution.clone(),
+        signal: ContainmentSignal::Egress {
+            host: "127.0.0.1".into(),
+            port: 8000 + n,
+        },
+    });
+}
+
+#[test]
+fn p3_three_containment_signals_pause_the_session() {
+    let mut h = H::explored(
+        &["p"],
+        SessionOptions {
+            yolo: true,
+            ..Default::default()
+        },
+    );
+    let (spec, _) = h.start("spawn generate-spec");
+    for n in 0..3 {
+        signal(&mut h, &spec, n);
+    }
+    let st = h.state();
+    assert!(st.paused);
+    assert_eq!(st.contained, Some(spec.clone()));
+    assert_eq!(
+        st.interrupting.get(&spec),
+        Some(&ostra_engine::state::Interrupt::Pause)
+    );
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    assert!(h.summaries().is_empty(), "{:?}", h.summaries());
+    // Continuing is the user's "this was fine": the run resumes as a new execution.
+    h.ev(SessionEvent::SessionResumed);
+    assert_eq!(h.state().contained, None);
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#2"]);
+}
+
+#[test]
+fn p3_decoy_opens_are_signals_like_the_others() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    signal(&mut h, &spec, 0);
+    for path in ["/home/u/.ssh/id_rsa", "/home/u/.vault-token"] {
+        h.ev(SessionEvent::ContainmentSignal {
+            execution: spec.clone(),
+            signal: ContainmentSignal::Decoy { path: path.into() },
+        });
+    }
+    let st = h.state();
+    assert!(st.paused);
+    assert_eq!(st.contained, Some(spec));
+}
+
+#[test]
+fn p3_two_signals_or_signals_spread_over_executions_do_not_pause() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    signal(&mut h, &spec, 0);
+    signal(&mut h, &spec, 1);
+    signal(&mut h, &ExecutionId::new(), 2);
+    let st = h.state();
+    assert!(!st.paused);
+    assert!(st.interrupting.is_empty());
+    assert_eq!(st.contained, None);
 }
 
 // ------------------------------------------------------------------------------------------

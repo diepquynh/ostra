@@ -592,7 +592,7 @@ export const mockApi: Api = {
       providers: f.workspaceDetail.providers,
       harnesses: f.workspaceDetail.harnesses,
       stacks: f.workspaceDetail.stacks,
-      sandbox: { mode: "auto", available: true, active: true },
+      sandbox: { ...f.workspaceDetail.sandbox, mode: "auto" },
     }),
   saveProvider: (name, edit) => {
     const p = f.workspaceDetail.providers.find((x) => x.name === name);

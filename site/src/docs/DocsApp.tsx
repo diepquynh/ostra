@@ -202,7 +202,7 @@ export function DocsApp() {
               </a>
             </div>
             <h1 className="docs-h1">{page.title}</h1>
-            <Markdown docs={docs} page={page} go={go} />
+            <Markdown docs={docs} page={page} go={go} theme={theme} />
             <nav className="docs-pager">
               <div>
                 {prev && (

@@ -45,7 +45,9 @@ Ostra does not rely on the model refusing. Every tool call passes the execution 
 (write scope, state ownership, report path, secret paths, self-protection) cannot be switched off by a
 permission rule, a user, or YOLO mode. Underneath the policy, agent commands run in a kernel sandbox where the
 host is read-only, Ostra's data directory and your credential stores are not visible, and shell startup files
-stay read-only. The browser renders agent text under a CSP that allows no remote images and no inline scripts.
+stay read-only. When one execution keeps reaching for secrets, Ostra's own files, `.git/`, or local network
+addresses, Ostra pauses the session and asks you, YOLO included. The browser renders agent text under a CSP that
+allows no remote images and no inline scripts.
 See [Agent containment](agent-containment.md) for the policy and the sandbox,
 [Secrets and data](secrets-and-data.md) for what they keep out of reach, and
 [Server and browser](server-and-browser.md) for the rendering rules.
@@ -120,6 +122,7 @@ per minute per address. [Install](../start/install.md) covers binding and remote
 | Terminal escape sequences | Server-side answers to terminal queries, muted xterm.js replies | [Server and browser](server-and-browser.md) |
 | Credential theft from disk | AES-256-GCM sealing under a master key in the keychain or an owner-only file | [Secrets and data](secrets-and-data.md) |
 | Prompt injection turning into writes outside scope | Layer 1 guards, kernel sandbox | [Agent containment](agent-containment.md) |
+| An agent that keeps trying to get out | Containment signals, including opens of decoy credential files on Linux, pause the session after three from one execution | [Agent containment](agent-containment.md#containment-signals-pause-the-session) |
 | Credential theft by an agent | Secret-path guard, sandbox, scrubbed environment for agent commands | [Agent containment](agent-containment.md), [Secrets and data](secrets-and-data.md) |
 | Credentials in logs | Redaction of git secrets, no bodies or keys in the server log | [Secrets and data](secrets-and-data.md) |
 | Harness sign-in abuse | The provider's own CLI signs in; Ostra never handles the consumer token | [Secrets and data](secrets-and-data.md), [Provider usage](../providers/README.md) |
@@ -141,5 +144,12 @@ These are recorded in HANDOVER section 15 and repeated here so a reviewer does n
   the native executor's Bash tool get no provider keys at all.
 - **The execution token is in the harness's environment.** It can act only as that one execution, and only
   while the execution runs.
+- **Your own git reads what an agent's repository names.** The sandbox exists so an agent cannot go further than
+  it should; it does not guard the git you run yourself. An agent can create a repository in the workspace, give
+  its `.git/config` an fsmonitor command or a filter driver, and stage it as a submodule of your repo. Every git
+  command Ostra runs on the host passes config overrides that start neither (see
+  [Git stays usable and closed](sandboxing.md#git-stays-usable-and-closed)). A `git status` you run in a terminal
+  or a desktop app enters that submodule and reads its config, as git does for any repository you clone, so
+  review a submodule an agent added before you run git in its folder.
 - **Model providers see your code.** That is the service you are paying them for. Pick providers and data
   retention terms accordingly.

@@ -136,6 +136,9 @@ fn spec(
             protected_paths: vec![],
             memory_db: f.repo.join(".ostra/memory/knowledge.sqlite3"),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
         },
         resume: None,
         harness_session_id: None,
@@ -524,6 +527,41 @@ async fn build_streak_recalls_lessons() {
 }
 
 #[tokio::test]
+async fn a_planted_commondir_is_undone_and_reported() {
+    let f = fixture();
+    std::fs::create_dir_all(f.repo.join(".git")).unwrap();
+    std::fs::write(f.repo.join(".git/config"), "").unwrap();
+    // A script, because the guard refuses a command that names `.git/` itself.
+    std::fs::write(
+        f.repo.join("plant.sh"),
+        "#!/bin/sh\nprintf /tmp/evil > .git/commondir\n",
+    )
+    .unwrap();
+    let s = spec(
+        &f,
+        AgentName::Implementer,
+        PermissionMode::Bypass,
+        impl_caps(),
+    );
+    let report = s.ctx.report_file.clone().unwrap();
+    let p = ScriptedProvider::new();
+    p.push_tool_use("Bash", json!({"command": "sh plant.sh"}));
+    p.push_tool_use("submit_implementer", json!({"status": "stuck", "report_path": report.display().to_string(), "changed_files": [], "summary": "s", "stuck": {"diagnostic": "d", "need": "n"}}));
+    let (exec, p) = executor(p);
+    let host = Arc::new(FakeHost::default());
+    exec.run(s, host.clone(), CancellationToken::new()).await;
+    assert!(!f.repo.join(".git/commondir").exists());
+    let result = &tool_results(&p.requests()[1])[0].0;
+    assert!(result.contains("Ostra undid it"), "{result}");
+    let signal = host.deltas.lock().iter().any(|d| {
+        ostra_core::containment::classify(d).is_some_and(|s| {
+            matches!(s, ostra_core::containment::ContainmentSignal::Guard { rule, .. } if rule == "git-metadata")
+        })
+    });
+    assert!(signal, "the repair counts as a containment signal");
+}
+
+#[tokio::test]
 async fn submit_needs_the_report_file() {
     let f = fixture();
     let s = spec(
@@ -661,5 +699,8 @@ fn webfetch_hosts_takes_exact_domain_rules() {
         "Read(./src/**)".to_string(),
         " WebFetch(domain:10.0.0.5) ".to_string(),
     ];
-    assert_eq!(ostra_tools::webfetch_hosts(&rules), vec!["localhost", "10.0.0.5"]);
+    assert_eq!(
+        ostra_tools::webfetch_hosts(&rules),
+        vec!["localhost", "10.0.0.5"]
+    );
 }

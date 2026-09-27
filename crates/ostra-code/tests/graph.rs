@@ -208,6 +208,38 @@ fn react_components_through_barrels() {
 }
 
 #[test]
+fn workspace_packages_resolve_by_name_through_their_barrel() {
+    let files: &[(&str, &str)] = &[
+        (
+            "ui/package.json",
+            r#"{"name": "@acme/ui", "exports": {".": "./src/index.ts", "./theme": {"types": "./src/theme.ts"}}}"#,
+        ),
+        ("ui/src/index.ts", "export { Button } from \"./Button\";\n"),
+        (
+            "ui/src/Button.tsx",
+            "export function Button() { return null; }\n",
+        ),
+        ("ui/src/theme.ts", "export const dark = 1;\n"),
+        ("app/package.json", r#"{"name": "app"}"#),
+        (
+            "app/src/Page.tsx",
+            "import { Button as B2, type Tone } from \"@acme/ui\";\nimport { dark } from \"@acme/ui/theme\";\nimport { Button } from \"@acme/ui\";\nexport function Page() { return Button() + dark; }\n",
+        ),
+    ];
+    with_files(files, |ix| {
+        let n = ix.neighbors("app/src/Page.tsx", 50).unwrap();
+        assert_eq!(
+            paths(&n.uses),
+            vec![
+                ("ui/src/theme.ts", vec!["dark"]),
+                ("ui/src/Button.tsx", vec!["Button"]),
+                ("ui/src/index.ts", vec![]),
+            ]
+        );
+    });
+}
+
+#[test]
 fn go_package_import_narrows_to_used_files() {
     with(|ix| {
         let n = ix.neighbors("cmd/main.go", 50).unwrap();
@@ -850,13 +882,19 @@ fn editor_jumps_follow_implementation_links() {
         let impls = found(ix, &at("src/shape.rs", shape, 1, 12), Implementations);
         assert_eq!(
             impls,
-            [("src/circle.rs".to_string(), 2), ("src/square.rs".to_string(), 2)]
+            [
+                ("src/circle.rs".to_string(), 2),
+                ("src/square.rs".to_string(), 2)
+            ]
         );
         // A trait method leads to the methods that implement it.
         let area = found(ix, &at("src/shape.rs", shape, 2, 8), Implementations);
         assert_eq!(
             area,
-            [("src/circle.rs".to_string(), 7), ("src/square.rs".to_string(), 7)]
+            [
+                ("src/circle.rs".to_string(), 7),
+                ("src/square.rs".to_string(), 7)
+            ]
         );
         let circle = "use crate::shape::Shape;\npub struct Circle { r: f64 }\n";
         let up = found(ix, &at("src/circle.rs", circle, 2, 13), Supertypes);

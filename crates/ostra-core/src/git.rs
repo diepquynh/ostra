@@ -2,6 +2,9 @@
 //! written by whoever controls the folder, including an agent, so it must not choose programs
 //! that git starts while Ostra lists files, shows a diff, or stages.
 
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+
 /// For every git command Ostra starts: no fsmonitor program, no `ext::` transport, no askpass
 /// program from the repository.
 pub const NO_EXEC: &[&str] = &[
@@ -39,7 +42,10 @@ pub const AGENT_CONFIG: &[(&str, &str)] = &[
 /// after the entries `existing` (the parent's `GIT_CONFIG_COUNT`) already holds, so both apply.
 pub fn config_env(pairs: &[(&str, &str)], existing: Option<&str>) -> Vec<(String, String)> {
     let base: usize = existing.and_then(|c| c.trim().parse().ok()).unwrap_or(0);
-    let mut env = vec![("GIT_CONFIG_COUNT".to_string(), (base + pairs.len()).to_string())];
+    let mut env = vec![(
+        "GIT_CONFIG_COUNT".to_string(),
+        (base + pairs.len()).to_string(),
+    )];
     for (i, (k, v)) in pairs.iter().enumerate() {
         env.push((format!("GIT_CONFIG_KEY_{}", base + i), k.to_string()));
         env.push((format!("GIT_CONFIG_VALUE_{}", base + i), v.to_string()));
@@ -71,7 +77,10 @@ mod tests {
             ]
         );
         assert_eq!(config_env(&[("a.b", "1")], None)[0].1, "1");
-        assert_eq!(config_env(&[("a.b", "1")], Some("junk"))[1].0, "GIT_CONFIG_KEY_0");
+        assert_eq!(
+            config_env(&[("a.b", "1")], Some("junk"))[1].0,
+            "GIT_CONFIG_KEY_0"
+        );
     }
 }
 
@@ -107,6 +116,75 @@ pub fn blank_filters(query_output: &[u8]) -> Vec<String> {
     out
 }
 
+/// Repos [`filter_overrides`] reads at most, which bounds the git processes it starts.
+const MAX_FILTER_REPOS: usize = 256;
+
+/// [`blank_filters`] for `root` and every submodule git enters from it, for the status, diff,
+/// and staging Ostra runs itself.
+pub async fn filter_overrides(root: &Path) -> Vec<String> {
+    blank_filters_of(root, true).await
+}
+
+/// [`blank_filters`] for the submodules git enters from `root` but not `root` itself, for
+/// commands the user asked for, so the repository's own filters (git-crypt, say) still apply.
+pub async fn submodule_filter_overrides(root: &Path) -> Vec<String> {
+    blank_filters_of(root, false).await
+}
+
+/// A status, diff, `add`, or commit runs `git status` inside each populated submodule in the
+/// index, which reads that repository's own config, including one an agent created and staged.
+/// The `-c` overrides reach those child processes, so each such repository's drivers are blanked.
+async fn blank_filters_of(root: &Path, with_root: bool) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let mut queue = vec![(root.to_path_buf(), with_root)];
+    let mut read = 0;
+    while let Some((repo, blank)) = queue.pop() {
+        if read == MAX_FILTER_REPOS {
+            tracing::warn!(
+                "stopped reading submodule filter drivers at {}: a status there may run one",
+                repo.display()
+            );
+            break;
+        }
+        read += 1;
+        if blank {
+            for pair in blank_filters(&query(&repo, FILTER_QUERY).await).chunks(2) {
+                if !out.contains(&pair[1]) {
+                    out.extend_from_slice(pair);
+                }
+            }
+        }
+        let index = query(&repo, &["ls-files", "--stage", "-z"]).await;
+        for entry in index.split(|b| *b == 0) {
+            let Some(rest) = entry.strip_prefix(b"160000 ") else {
+                continue;
+            };
+            let Some(tab) = rest.iter().position(|b| *b == b'\t') else {
+                continue;
+            };
+            let sub = repo.join(std::ffi::OsStr::from_bytes(&rest[tab + 1..]));
+            if std::fs::symlink_metadata(sub.join(".git")).is_ok() {
+                queue.push((sub, true));
+            }
+        }
+    }
+    out
+}
+
+async fn query(repo: &Path, args: &[&str]) -> Vec<u8> {
+    tokio::process::Command::new("git")
+        .args(AUTOMATIC)
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .await
+        .map(|o| o.stdout)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod filter_tests {
     use super::*;
@@ -119,5 +197,58 @@ mod filter_tests {
             ["-c", "filter.x.clean=", "-c", "filter.y.process="]
         );
         assert!(blank_filters(b"").is_empty());
+    }
+
+    /// A repo with one filter driver named `name` and a file it would filter, left modified.
+    fn repo_with_driver(dir: &Path, name: &str) {
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}: {out:?}");
+        };
+        std::fs::create_dir_all(dir).unwrap();
+        git(&["init", "-q"]);
+        std::fs::write(dir.join(".gitattributes"), format!("*.txt filter={name}\n")).unwrap();
+        std::fs::write(dir.join("f.txt"), "one\n").unwrap();
+        git(&["config", &format!("filter.{name}.clean"), "false"]);
+        git(&["-c", &format!("filter.{name}.clean="), "add", "-A"]);
+        git(&["commit", "-qm", "i"]);
+    }
+
+    #[tokio::test]
+    async fn submodules_in_the_index_have_their_drivers_blanked_at_every_depth() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("top");
+        repo_with_driver(&root, "own");
+        repo_with_driver(&root.join("a/sub"), "one");
+        repo_with_driver(&root.join("a/sub/deep"), "two");
+        repo_with_driver(&root.join("untracked"), "three");
+        for (dir, path) in [(root.join("a/sub"), "deep"), (root.clone(), "a/sub")] {
+            let out = std::process::Command::new("git")
+                .args(["-c", "core.fsmonitor=false", "add", path])
+                .current_dir(&dir)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{out:?}");
+        }
+        assert_eq!(
+            filter_overrides(&root).await,
+            [
+                "-c",
+                "filter.own.clean=",
+                "-c",
+                "filter.one.clean=",
+                "-c",
+                "filter.two.clean="
+            ]
+        );
+        assert_eq!(
+            submodule_filter_overrides(&root).await,
+            ["-c", "filter.one.clean=", "-c", "filter.two.clean="]
+        );
     }
 }

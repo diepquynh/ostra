@@ -182,7 +182,7 @@ it comes first.
 | --- | --- | --- | --- |
 | Data dir | `~/.local/share/ostra` | `~/Library/Application Support/ostra` | `OSTRA_DATA_DIR` |
 | Config file | `~/.config/ostra/config.toml` | `~/Library/Application Support/ostra/config.toml` | `OSTRA_CONFIG` |
-| Sandbox tool caches, one set per workspace | `~/.cache/ostra/sandbox/` | `~/.cache/ostra/sandbox/` | `OSTRA_SANDBOX_CACHE` |
+| Sandbox tool caches, one set per session and one per project or workspace program | `~/.cache/ostra/sandbox/` | `~/.cache/ostra/sandbox/` | `OSTRA_SANDBOX_CACHE` |
 
 Both dirs come from the `dirs` crate, so they follow `XDG_DATA_HOME` and `XDG_CONFIG_HOME` on Linux.
 

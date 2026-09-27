@@ -8,13 +8,14 @@
 //! hidden path returns EPERM instead of looking empty, `/tmp` is denied instead of private
 //! (`TMPDIR` points at the scratch dir), and a harness gets no disposable home.
 
-use crate::config::{SandboxConfig, SandboxMode};
+use crate::config::{SandboxConfig, SandboxMode, SandboxNetwork};
+use crate::egress;
 use crate::exec::ExecContext;
 use crate::paths;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// Files that run code in the user's later shells, logins, or builds. They stay read-only even
 /// where their folder is writable, so an agent cannot leave a program behind for the user. A
@@ -52,7 +53,10 @@ const PERSISTENCE_IN_HOME: &[&str] = &[
 ];
 
 /// Paths inside a `.git` dir that choose programs git runs. A trailing `/` marks a dir.
-const GIT_PROTECTED: &[&str] = &["config", "hooks/", "info/"];
+/// `config.worktree` is read only with `extensions.worktreeConfig`, which `config` sets, so the
+/// empty placeholder a missing one gets is harmless. `commondir` cannot have one: git refuses to
+/// open a repository whose `commondir` is empty; [`repair_git_dirs`] covers it instead.
+const GIT_PROTECTED: &[&str] = &["config", "config.worktree", "hooks/", "info/"];
 
 /// Variables that point a command at the desktop session, an agent, or a daemon socket.
 const UNSET_VARS: &[&str] = &[
@@ -77,9 +81,8 @@ const DOCKER_SOCKETS: &[&str] = &[
     "~/.local/share/containers/podman/machine",
 ];
 
-/// The sandbox's own tool caches, one set per workspace under `~/.cache/ostra/sandbox/` (or
-/// `$OSTRA_SANDBOX_CACHE`). The
-/// user's `~/.cargo`, `~/.npm`, and `~/.cache` stay read-only, because builds on the host run
+/// The sandbox's own tool caches under `~/.cache/ostra/sandbox/` (or `$OSTRA_SANDBOX_CACHE`): one
+/// set per session for agents and one per project for project programs. The user's `~/.cargo`, `~/.npm`, and `~/.cache` stay read-only, because builds on the host run
 /// what those caches hold (extracted crate sources, npm and pnpm stores, Go build output). macOS
 /// tools ignore `XDG_CACHE_HOME` and write under `~/Library/Caches`, which stays read-only for the
 /// same reason, so they get their own variables.
@@ -99,6 +102,54 @@ const CACHE_ENV: &[(&str, &str)] = &[
 /// The user's cargo settings, linked into the sandbox's `CARGO_HOME` so builds keep the same
 /// linker and registry settings. Credentials are not linked.
 const CARGO_SETTINGS: &[&str] = &["config.toml", "config"];
+
+fn cache_base(home: &Path) -> PathBuf {
+    std::env::var_os("OSTRA_SANDBOX_CACHE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cache/ostra/sandbox"))
+}
+
+/// The tool caches of every agent execution in one session.
+pub fn session_cache(home: &Path, session: &crate::ids::SessionId) -> PathBuf {
+    cache_base(home).join(format!("session-{session}"))
+}
+
+/// Caches keyed by a path. `salt` keeps two users of the same path apart.
+fn keyed_cache(home: &Path, salt: &str, key: &Path) -> PathBuf {
+    cache_base(home).join(stable_hex(salt, key))
+}
+
+/// 16 hex digits of SHA-256 over `salt` and `path`. Names on disk use it instead of
+/// `DefaultHasher`, whose algorithm may change between Rust releases and would move them.
+fn stable_hex(salt: &str, path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::ffi::OsStrExt;
+    let mut h = Sha256::new();
+    h.update(salt.as_bytes());
+    h.update([0]);
+    h.update(path.as_os_str().as_bytes());
+    h.finalize()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Removes a session's tool caches on a thread of its own, because they can hold gigabytes.
+pub fn remove_session_cache(session: &crate::ids::SessionId) {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let dir = session_cache(Path::new(&home), session);
+    if dir.is_dir() {
+        let _ = std::thread::Builder::new()
+            .name("ostra-cache-remove".into())
+            .spawn(move || {
+                if let Err(e) = std::fs::remove_dir_all(&dir) {
+                    tracing::warn!("could not remove the session cache {}: {e}", dir.display());
+                }
+            });
+    }
+}
 
 /// Seatbelt's front end. Called by absolute path and checked to be root-owned, because the
 /// Homebrew prefix on `PATH` is writable by the user.
@@ -120,6 +171,27 @@ impl Backend {
             Backend::Seatbelt => "seatbelt",
         }
     }
+}
+
+static HELPER: OnceLock<PathBuf> = OnceLock::new();
+
+/// Names the `ostra` binary that starts first inside every bubblewrap sandbox
+/// (`ostra sandbox-init`). Call before the first probe.
+pub fn set_helper(path: PathBuf) {
+    let _ = HELPER.set(path);
+}
+
+/// The helper binary: the one [`set_helper`] named, else an `ostra` next to this program or one
+/// dir up, which finds `target/debug/ostra` from a test binary in `target/debug/deps`.
+pub fn helper() -> Option<PathBuf> {
+    if let Some(p) = HELPER.get() {
+        return Some(p.clone());
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    [dir.join("ostra"), dir.parent()?.join("ostra")]
+        .into_iter()
+        .find(|p| p.is_file())
 }
 
 /// The sandbox backend when one works on this machine. Probed once per process.
@@ -155,6 +227,10 @@ fn probe_bwrap() -> Result<PathBuf, String> {
                 .find(|p| p.is_file())
         })
         .ok_or("The `bwrap` command is not installed.")?;
+    let helper = helper().ok_or(
+        "The `ostra` binary that starts first inside each sandbox was not found next to this program.",
+    )?;
+    // The helper binds the new network namespace's loopback, so this also checks it comes up.
     let out = std::process::Command::new(&bin)
         .args([
             "--ro-bind",
@@ -165,8 +241,11 @@ fn probe_bwrap() -> Result<PathBuf, String> {
             "--proc",
             "/proc",
             "--unshare-pid",
-            "true",
+            "--unshare-net",
+            "--",
         ])
+        .arg(&helper)
+        .args(["sandbox-init", "--proxy", "/dev/null", "--", "true"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .output()
@@ -235,13 +314,24 @@ pub const UNAVAILABLE: &str = "Run Ostra outside any other sandbox, because macO
 #[cfg(not(target_os = "macos"))]
 pub const UNAVAILABLE: &str = "Install bubblewrap (the `bwrap` command) on the Linux machine that runs Ostra, or allow unprivileged user namespaces, because agent commands otherwise run with the full rights of your user. Choose sandbox mode off in the workspace settings, or set `[sandbox] mode = \"off\"` in config.toml, to run without it on purpose.";
 
-/// What the sandbox on this machine cannot enforce, for the setup check.
-pub fn known_gaps(backend: &Backend) -> Option<&'static str> {
+/// What the sandbox on this machine cannot enforce under `network`, for the setup check.
+pub fn known_gaps(backend: &Backend, network: SandboxNetwork) -> Option<String> {
     match backend {
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         Backend::Bubblewrap(_) => None,
-        Backend::Seatbelt => Some(
-            "Keep tokens out of the environment of long-running programs, such as exports in your shell profile, and keep them in the keychain or a file the sandbox hides, because on macOS agent commands can read the arguments and startup environment of every program running as your user, and Seatbelt cannot block that.",
-        ),
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        Backend::Bubblewrap(_) => Some("Run Ostra on x86_64 or aarch64 where agent commands must not create user namespaces, because the seccomp filter that refuses them is built for those two only.".into()),
+        Backend::Seatbelt => {
+            let mut gaps = String::from(
+                "Keep tokens out of the environment of long-running programs, such as exports in your shell profile, and keep them in the keychain or a file the sandbox hides, because on macOS agent commands can read the arguments and startup environment of every program running as your user, and Seatbelt cannot block that.",
+            );
+            if matches!(network, SandboxNetwork::Allowlist | SandboxNetwork::Public) {
+                gaps.push_str(" Set `[sandbox] network = \"none\"` in config.toml where agent commands need no network, because on macOS the egress proxy is not in place yet, so they share the host network, local services and the LAN included.");
+            } else if network == SandboxNetwork::None {
+                gaps.push_str(" Use the native executor where agent commands must have no network, because on macOS a harness CLI keeps the host network under `none` to reach its model API, local services and the LAN included.");
+            }
+            Some(gaps)
+        }
     }
 }
 
@@ -280,18 +370,18 @@ pub struct HostCommand {
 }
 
 /// [`HostCommand`] for `program args` started in `cwd`, writing only under `roots`. The global
-/// config is read fresh, and `mode` is the workspace's own sandbox mode, when it sets one. `Err`
-/// when the mode is `required` and no sandbox is available.
+/// config is read fresh, and `ws` holds the workspace's own sandbox settings. `Err` when the mode
+/// is `required` and no sandbox is available.
 pub fn host_command(
     program: &str,
     args: &[String],
     cwd: &Path,
     roots: &[&Path],
-    mode: Option<SandboxMode>,
+    ws: &crate::config::WorkspaceSandbox,
 ) -> Result<HostCommand, String> {
     let mut global: crate::config::GlobalConfig =
         crate::config::load_toml(&paths::global_config_path()).unwrap_or_default();
-    global.sandbox = global.sandbox.for_workspace(mode);
+    global.sandbox = global.sandbox.for_workspace(ws);
     let mut env_remove: Vec<String> = crate::config::credential_env_names(&global, &[])
         .into_iter()
         .collect();
@@ -387,13 +477,24 @@ impl SandboxedCommand {
 pub struct Members {
     own: String,
     group: String,
+    /// The egress proxy and forwarded sockets, held so they live as long as the invocation.
+    #[allow(dead_code)]
+    listeners: Vec<Arc<egress::Listener>>,
+    /// Held so the decoys stay watched while a process of the invocation runs.
+    #[allow(dead_code)]
+    decoys: Option<Arc<crate::decoy::Decoys>>,
 }
 
 impl Members {
-    fn new() -> Members {
+    fn new(
+        listeners: Vec<Arc<egress::Listener>>,
+        decoys: Option<Arc<crate::decoy::Decoys>>,
+    ) -> Members {
         Members {
             own: format!("dev.ostra.sandbox.{}", uuid::Uuid::new_v4().simple()),
             group: group_marker(),
+            listeners,
+            decoys,
         }
     }
 
@@ -416,16 +517,25 @@ const CANARY: &str = "dev.ostra.sandbox.canary";
 /// The marker every sandbox of this data dir carries, so a restarted server finds the processes
 /// an earlier one left behind.
 fn group_marker() -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::hash::DefaultHasher::new();
-    paths::data_dir().hash(&mut h);
-    format!("dev.ostra.sandbox.d{:016x}", h.finish())
+    format!("dev.ostra.sandbox.d{}", stable_hex("", &paths::data_dir()))
 }
 
 /// Kills processes that sandboxes of this data dir left running. Call once at server start,
 /// before any execution starts.
 pub fn kill_leftovers() -> usize {
     kill_marked(&group_marker())
+}
+
+/// Removes the egress sockets a server of this data dir left behind when it stopped without
+/// dropping them. Call once at server start, while no other server of the data dir runs.
+pub fn remove_stale_sockets() -> usize {
+    let Ok(dir) = std::fs::read_dir(egress_dir()) else {
+        return 0;
+    };
+    dir.flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "sock"))
+        .filter(|e| std::fs::remove_file(e.path()).is_ok())
+        .count()
 }
 
 /// SIGKILLs every process of this user in a sandbox marked `marker`, until none is left. Returns
@@ -661,7 +771,14 @@ pub struct Profile {
     /// The host dir mounted at `/tmp`. `None` gives `/tmp` an empty tmpfs.
     scratch: Option<PathBuf>,
     env: Vec<(String, String)>,
-    network: bool,
+    /// What the network namespace lets out, through the egress proxy.
+    policy: egress::Policy,
+    /// The proxy shared by every command of this profile, once started.
+    egress: Option<Arc<egress::Listener>>,
+    /// Loopback ports inside the sandbox forwarded to host sockets, such as the hook bridge.
+    forwards: Vec<(u16, Arc<egress::Listener>)>,
+    /// Fake credential files bound into hidden paths and watched, once planted.
+    decoys: Option<Arc<crate::decoy::Decoys>>,
     new_session: bool,
     /// The per-workspace cache dir, whose `tmp` is `TMPDIR` under Seatbelt when no scratch dir
     /// is set.
@@ -681,7 +798,7 @@ impl Profile {
     /// private.
     pub fn for_execution(ctx: &ExecContext, cfg: &SandboxConfig, home: &Path) -> Profile {
         let mut p = Profile {
-            network: cfg.network,
+            policy: egress::Policy::new(cfg),
             ..Profile::base()
         };
         for root in [
@@ -694,16 +811,24 @@ impl Profile {
                 p = p.writable(root);
             }
         }
-        let cache_key = if ctx.workspace_root.as_os_str().is_empty() {
-            &ctx.repo_root
-        } else {
-            &ctx.workspace_root
+        // One session's downloads must not feed a later session's builds, so each session gets
+        // its own caches. A run outside a session keys on its workspace, apart from programs.
+        let cache = match &ctx.session_id {
+            Some(id) => session_cache(home, id),
+            None => {
+                let key = if ctx.workspace_root.as_os_str().is_empty() {
+                    &ctx.repo_root
+                } else {
+                    &ctx.workspace_root
+                };
+                keyed_cache(home, "agents", key)
+            }
         };
         let own = match ctx.executor {
             crate::ExecutorKind::Harness(h) => Some(h),
             crate::ExecutorKind::Native => None,
         };
-        p = p.common(cfg, home, own, cache_key);
+        p = p.common(cfg, home, own, cache);
         if !ctx.session_root.as_os_str().is_empty() {
             // Other executions' harness dirs in this session hold their bridge tokens.
             let harness = paths::session_state_dir(&ctx.session_root).join("harness");
@@ -729,18 +854,17 @@ impl Profile {
 
     /// For a program Ostra starts for a project or workspace (a format command, a language
     /// server, a code provider, a stdio MCP server): the same rules as an agent command, with
-    /// `roots` writable. The network stays on, because these programs fetch dependencies and
-    /// call their own services.
+    /// `roots` writable and the same network choice.
     pub fn for_program(roots: &[&Path], cfg: &SandboxConfig, home: &Path) -> Profile {
         let mut p = Profile {
-            network: true,
+            policy: egress::Policy::new(cfg),
             ..Profile::base()
         };
         for r in roots {
             p = p.writable(r);
         }
         let key = roots.first().copied().unwrap_or(Path::new("/"));
-        p = p.common(cfg, home, None, key);
+        p = p.common(cfg, home, None, keyed_cache(home, "", key));
         for r in roots {
             p = p.workspace_state(r);
         }
@@ -762,12 +886,12 @@ impl Profile {
         cfg: &SandboxConfig,
         home: &Path,
         own: Option<crate::HarnessKind>,
-        cache_key: &Path,
+        cache: PathBuf,
     ) -> Profile {
         for w in &cfg.extra_writable {
             self = self.writable(&expand(home, w));
         }
-        self.add_caches(cache_key, home);
+        self.add_caches(cache, home);
         let mut hidden: Vec<PathBuf> = vec![paths::data_dir()];
         // Ostra's own config dir, or only the file when `OSTRA_CONFIG` places it in a shared dir.
         hidden.push(match std::env::var_os("OSTRA_CONFIG") {
@@ -824,30 +948,36 @@ impl Profile {
         self
     }
 
-    /// Each repo's `.git` bound onto itself, so it cannot be renamed away, with what chooses
-    /// programs inside it read-only.
+    /// What chooses programs in each repo's git dir read-only, at any depth under `roots`, and a
+    /// `.git` file read-only so it cannot name a planted git dir. The dirs above them are pinned
+    /// by [`Profile::plan`], so none of them can be renamed away.
     fn protect_git(mut self, roots: &[&Path]) -> Profile {
         for repo in git_repos(roots) {
-            let git = repo.join(".git");
-            self = self.writable(&git);
-            for dir in git_dirs(&git) {
+            let Some(git) = GitDir::of(&repo) else {
+                continue;
+            };
+            if git.file {
+                self = self.read_only(&repo.join(".git"));
+            }
+            if git.linked {
+                // A linked worktree reads its main repo's config, which that repo's entry covers.
+                self = self.protect(&git.dir, "config.worktree");
+                continue;
+            }
+            for dir in git_dirs(&git.dir) {
                 for rel in GIT_PROTECTED {
                     self = self.protect(&dir, rel);
+                }
+                for w in read_dirs(&dir.join("worktrees")) {
+                    self = self.protect(&w, "config.worktree");
                 }
             }
         }
         self
     }
 
-    /// Per-workspace tool caches the sandbox owns, set through their variables.
-    fn add_caches(&mut self, key_path: &Path, home: &Path) {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::hash::DefaultHasher::new();
-        key_path.hash(&mut h);
-        let root = std::env::var_os("OSTRA_SANDBOX_CACHE")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".cache/ostra/sandbox"))
-            .join(format!("{:016x}", h.finish()));
+    /// The tool caches the sandbox owns under `root`, set through their variables.
+    fn add_caches(&mut self, root: PathBuf, home: &Path) {
         let _ = make_private_dir_all(&root.join("tmp"));
         self.cache_root = real(&root);
         for (var, sub) in CACHE_ENV {
@@ -972,9 +1102,110 @@ impl Profile {
         self
     }
 
-    pub fn network(mut self, on: bool) -> Self {
-        self.network = on;
+    /// Hosts a harness CLI reaches under every network choice: see [`egress::Policy::allow`].
+    pub fn allow_hosts(
+        mut self,
+        builtin: Vec<egress::HostRule>,
+        trusted: Vec<egress::HostRule>,
+    ) -> Self {
+        self.policy.allow(builtin, trusted);
         self
+    }
+
+    /// Starts this profile's egress proxy, shared by every command it wraps, when `backend`
+    /// gives the sandbox its own network namespace and the policy lets anything out. A command
+    /// wrapped without one starts its own, which reports decisions to the log only.
+    pub fn start_egress(
+        mut self,
+        backend: &Backend,
+        on: egress::OnDecision,
+    ) -> std::io::Result<Self> {
+        if matches!(backend, Backend::Bubblewrap(_)) && self.policy.needs_proxy() {
+            self.egress = Some(Arc::new(egress::proxy(
+                self.policy.clone(),
+                &egress_dir(),
+                on,
+            )?));
+        }
+        Ok(self)
+    }
+
+    /// Rule P3: plants the built-in decoys and the workspace's own (`extra`, `~/` paths), and
+    /// reports each one's first open to `on`. A decoy goes where a hidden dir's tmpfs can hold a
+    /// new file, or over an existing file, so the host is never written. Bubblewrap only, because
+    /// the decoys are bind mounts watched with inotify.
+    pub fn watch_decoys(
+        mut self,
+        backend: &Backend,
+        home: &Path,
+        extra: &[String],
+        on: crate::decoy::OnOpen,
+    ) -> std::io::Result<Self> {
+        if !matches!(backend, Backend::Bubblewrap(_)) {
+            return Ok(self);
+        }
+        let mounts = self.ordered();
+        let in_tmpfs = |path: &Path| {
+            mounts
+                .iter()
+                .filter(|m| m.dest() != path && path.starts_with(m.dest()))
+                .max_by_key(|m| m.dest().components().count())
+                .is_some_and(|m| matches!(m, Mount::Hidden(_) | Mount::HomeTmpfs(_)))
+        };
+        let ssh_reachable = self.policy.reaches_port(22);
+        let mut at: Vec<(PathBuf, crate::decoy::Kind)> = vec![];
+        for (rel, kind) in crate::decoy::wanted(extra) {
+            if kind == crate::decoy::Kind::SshKey && ssh_reachable {
+                continue;
+            }
+            let Some(dest) = real_or_missing(&home.join(&rel)) else {
+                continue;
+            };
+            let fits = match std::fs::metadata(&dest) {
+                Ok(m) => m.is_file(),
+                Err(_) => in_tmpfs(&dest),
+            };
+            if fits && !at.iter().any(|(d, _)| *d == dest) {
+                at.push((dest, kind));
+            }
+        }
+        if !at.is_empty() {
+            self.decoys = Some(Arc::new(crate::decoy::Decoys::plant(
+                &crate::decoy::dir(),
+                &at,
+                on,
+            )?));
+        }
+        Ok(self)
+    }
+
+    /// Makes `127.0.0.1:<target port>` inside the sandbox's network namespace reach `target` on
+    /// the host, through a socket of its own and the helper. Under `host`, and under Seatbelt,
+    /// the port is reachable as it is, so nothing is forwarded.
+    pub fn forward(
+        mut self,
+        backend: &Backend,
+        target: std::net::SocketAddr,
+    ) -> std::io::Result<Self> {
+        if matches!(backend, Backend::Bubblewrap(_)) && self.private_network() {
+            let l = egress::splice(&egress_dir(), target)?;
+            self.forwards.push((target.port(), Arc::new(l)));
+        }
+        Ok(self)
+    }
+
+    /// Like [`Profile::forward`], to a Unix socket that Ostra serves itself, such as the hook
+    /// bridge socket, which answers only the harness callbacks.
+    pub fn forward_socket(mut self, backend: &Backend, port: u16, socket: &Path) -> Self {
+        if matches!(backend, Backend::Bubblewrap(_)) && self.private_network() {
+            let l = egress::Listener::served_elsewhere(socket.to_path_buf());
+            self.forwards.push((port, Arc::new(l)));
+        }
+        self
+    }
+
+    fn private_network(&self) -> bool {
+        self.policy.network() != SandboxNetwork::Host
     }
 
     /// `setsid` for the command, which blocks `TIOCSTI` input injection into the terminal Ostra
@@ -1056,12 +1287,59 @@ impl Profile {
             matches!(parent, Some(Mount::Writable { src, dest }) if src == dest)
                 && placeholder(path, *dir).is_ok()
         });
+        // A mount point cannot be renamed, but the dirs above it can: `mv repo r && git init repo`
+        // would leave a protected `.git` behind under another name. Each dir between a writable
+        // bind and a mount inside it is bound onto itself, as Seatbelt pins them with a rule.
+        let by_dest: std::collections::HashMap<&Path, &Mount> =
+            out.iter().map(|m| (m.dest(), m)).collect();
+        let mut pins: Vec<PathBuf> = vec![];
+        for m in &out {
+            if matches!(
+                m,
+                Mount::HomeTmpfs(_) | Mount::HomeEntry(..) | Mount::Link { .. }
+            ) {
+                continue;
+            }
+            let mut below = vec![];
+            for a in m.dest().ancestors().skip(1) {
+                if let Some(enclosing) = by_dest.get(a) {
+                    if matches!(enclosing, Mount::Writable { src, dest } if src == dest) {
+                        pins.append(&mut below);
+                    }
+                    break;
+                }
+                if pins.iter().any(|p| p == a) {
+                    pins.append(&mut below);
+                    break;
+                }
+                below.push(a.to_path_buf());
+            }
+        }
+        pins.sort();
+        pins.dedup();
+        out.extend(
+            pins.into_iter()
+                .filter(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()))
+                .map(|p| Mount::Writable {
+                    src: p.clone(),
+                    dest: p,
+                }),
+        );
         out
     }
 
     /// Everything bubblewrap needs before the program: mounts, namespaces, and the directory
     /// the program starts in. Creates placeholders for missing protected paths.
     pub fn args(&self, chdir: &Path) -> Vec<OsString> {
+        self.args_with(chdir, self.egress.as_deref(), &self.forwards)
+    }
+
+    fn args_with(
+        &self,
+        chdir: &Path,
+        egress: Option<&egress::Listener>,
+        forwards: &[(u16, Arc<egress::Listener>)],
+    ) -> Vec<OsString> {
         let mut a: Vec<OsString> = vec![];
         let mut push = |xs: &[&std::ffi::OsStr]| a.extend(xs.iter().map(|x| x.to_os_string()));
         push(&["--ro-bind".as_ref(), "/".as_ref(), "/".as_ref()]);
@@ -1101,6 +1379,9 @@ impl Profile {
                 }
             }
         }
+        for (src, dest) in self.decoys.iter().flat_map(|d| d.binds()) {
+            push(&["--ro-bind".as_ref(), src.as_os_str(), dest.as_os_str()]);
+        }
         for v in UNSET_VARS {
             push(&["--unsetenv".as_ref(), v.as_ref()]);
         }
@@ -1108,8 +1389,18 @@ impl Profile {
             push(&["--setenv".as_ref(), k.as_ref(), v.as_ref()]);
         }
         push(&["--unshare-pid".as_ref(), "--unshare-ipc".as_ref()]);
-        if !self.network {
+        if self.private_network() {
+            // A namespace of its own: loopback, abstract Unix sockets, the LAN, and host services
+            // are out of reach, and only the sockets bound below lead out.
             push(&["--unshare-net".as_ref()]);
+            let sockets = egress.into_iter().chain(forwards.iter().map(|(_, l)| &**l));
+            for l in sockets {
+                push(&[
+                    "--bind".as_ref(),
+                    l.socket().as_os_str(),
+                    l.socket().as_os_str(),
+                ]);
+            }
         }
         push(&["--die-with-parent".as_ref()]);
         if self.new_session {
@@ -1137,7 +1428,49 @@ impl Profile {
     {
         match backend {
             Backend::Bubblewrap(bin) => {
-                let mut a = self.args(chdir);
+                let helper =
+                    helper().ok_or("The sandbox helper (the `ostra` binary) is missing.")?;
+                let egress = match &self.egress {
+                    Some(l) => Some(l.clone()),
+                    None if self.policy.needs_proxy() => Some(Arc::new(
+                        egress::proxy(self.policy.clone(), &egress_dir(), Arc::new(log_decision))
+                            .map_err(|e| format!("Cannot start the sandbox's egress proxy: {e}"))?,
+                    )),
+                    None => None,
+                };
+                let mut forwards = self.forwards.clone();
+                if self.private_network() {
+                    for port in self.policy.loopback_ports() {
+                        if forwards.iter().any(|(p, _)| *p == port) {
+                            continue;
+                        }
+                        let target =
+                            std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+                        let l = egress::splice(&egress_dir(), target).map_err(|e| {
+                            format!("Cannot forward 127.0.0.1:{port} into the sandbox: {e}")
+                        })?;
+                        forwards.push((port, Arc::new(l)));
+                    }
+                }
+                let mut a = self.args_with(chdir, egress.as_deref(), &forwards);
+                a.push("--".into());
+                a.push(helper.into_os_string());
+                a.push("sandbox-init".into());
+                let mut listeners: Vec<Arc<egress::Listener>> = vec![];
+                if self.private_network() {
+                    if let Some(l) = &egress {
+                        a.push("--proxy".into());
+                        a.push(l.socket().into());
+                    }
+                    for (port, l) in &forwards {
+                        let mut f = OsString::from(format!("{port}="));
+                        f.push(l.socket());
+                        a.push("--forward".into());
+                        a.push(f);
+                        listeners.push(l.clone());
+                    }
+                }
+                listeners.extend(egress);
                 a.push("--".into());
                 a.push(program.to_os_string());
                 a.extend(args.into_iter().map(Into::into));
@@ -1147,11 +1480,11 @@ impl Profile {
                     env: vec![],
                     env_remove: vec![],
                     cwd: chdir.to_path_buf(),
-                    members: None,
+                    members: Some(Members::new(listeners, self.decoys.clone())),
                 })
             }
             Backend::Seatbelt => {
-                let members = Members::new();
+                let members = Members::new(vec![], None);
                 let mut a: Vec<OsString> = vec!["-p".into(), self.seatbelt(&members)?.into()];
                 a.push(program.to_os_string());
                 a.extend(args.into_iter().map(Into::into));
@@ -1284,7 +1617,9 @@ impl Profile {
                 sbpl_str(TTY_PARAM)?
             ));
         }
-        if self.network {
+        // The egress proxy is not in place on macOS yet: any network choice but `none` (or a
+        // harness's own hosts under `none`) shares the host network, a gap `known_gaps` reports.
+        if self.policy.network() != SandboxNetwork::None || self.policy.needs_proxy() {
             out.push_str(SEATBELT_NETWORK);
         }
         // A mount point cannot be renamed; here every writable dir above a protected path is
@@ -1463,28 +1798,178 @@ fn db_files(db: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The roots that are git work trees, and their direct children that are, so a workspace's
-/// projects are covered too.
-fn git_repos(roots: &[&Path]) -> Vec<PathBuf> {
-    let mut out = vec![];
-    for root in roots {
-        if root.as_os_str().is_empty() {
+/// Undoes what an agent can write inside a repository's `.git` that makes git load another
+/// repository's config, and so run its `core.fsmonitor`, `credential.helper`, or hooks: a
+/// `commondir` in a repository's own git dir (which git never writes there) is removed, and a
+/// linked worktree's `commondir` that no longer names `../..` is restored. Takes the repos
+/// [`git_repos`] found, the ones [`Profile::protect_git`] covers. Returns the paths it changed.
+pub fn repair_git_dirs(repos: &[PathBuf]) -> Vec<PathBuf> {
+    let mut changed = vec![];
+    for repo in repos {
+        let Some(git) = GitDir::of(repo) else {
+            continue;
+        };
+        if git.linked {
             continue;
         }
-        let Some(root) = real(root) else { continue };
-        if root.join(".git").is_dir() && !out.contains(&root) {
-            out.push(root.clone());
-        }
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.join(".git").is_dir() && !out.contains(&p) {
-                    out.push(p);
+        for dir in git_dirs(&git.dir) {
+            let own = dir.join("commondir");
+            if let Ok(meta) = std::fs::symlink_metadata(&own) {
+                let removed = if meta.is_dir() {
+                    std::fs::remove_dir_all(&own)
+                } else {
+                    std::fs::remove_file(&own)
+                };
+                if removed.is_ok() {
+                    changed.push(own);
+                }
+            }
+            for w in read_dirs(&dir.join("worktrees")) {
+                let common = w.join("commondir");
+                let Ok(meta) = std::fs::symlink_metadata(&common) else {
+                    continue;
+                };
+                let intact = meta.is_file()
+                    && std::fs::read_to_string(&common).is_ok_and(|t| t.trim() == "../..");
+                if intact {
+                    continue;
+                }
+                if meta.is_dir() {
+                    let _ = std::fs::remove_dir_all(&common);
+                } else {
+                    let _ = std::fs::remove_file(&common);
+                }
+                if std::fs::write(&common, "../..\n").is_ok() {
+                    changed.push(common);
                 }
             }
         }
     }
+    changed
+}
+
+/// The correction an agent gets for each path [`repair_git_dirs`] changed.
+pub fn git_repair_note(path: &Path) -> String {
+    format!(
+        "Leave `{}` to git: Ostra undid it, because a `commondir` makes git load another repository's config and run the programs it names.",
+        path.display()
+    )
+}
+
+/// Dirs [`git_repos`] reads before it stops, which bounds the walk in a large tree.
+const GIT_WALK_DIRS: usize = 20_000;
+/// Repos [`git_repos`] returns at most, which bounds the mounts they add.
+const GIT_WALK_REPOS: usize = 128;
+
+/// Every git work tree under `roots` at any depth, shallowest first: a dir holding a `.git` dir
+/// or a `.git` file. Symlinks, `node_modules`, and dirs tagged as caches (`CACHEDIR.TAG`, as
+/// Cargo tags `target/`) are not entered, and the walk stops after [`GIT_WALK_DIRS`] dirs or
+/// [`GIT_WALK_REPOS`] repos.
+pub fn git_repos(roots: &[&Path]) -> Vec<PathBuf> {
+    let mut queue: std::collections::VecDeque<PathBuf> = roots
+        .iter()
+        .filter(|r| !r.as_os_str().is_empty())
+        .filter_map(|r| real(r))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    let mut out = vec![];
+    while let Some(dir) = queue.pop_front() {
+        if !seen.insert(dir.clone()) {
+            continue;
+        }
+        if seen.len() > GIT_WALK_DIRS || out.len() >= GIT_WALK_REPOS {
+            tracing::warn!(
+                "stopped looking for git repositories at {}: repositories below it keep a writable .git/config",
+                dir.display()
+            );
+            break;
+        }
+        if dir.join("CACHEDIR.TAG").is_file() {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut subdirs = vec![];
+        for e in rd.flatten() {
+            let name = e.file_name();
+            if name == ".git" {
+                let git = e.path();
+                if (git.is_dir() || git.is_file()) && !out.contains(&dir) {
+                    out.push(dir.clone());
+                }
+            } else if name != "node_modules" && e.file_type().is_ok_and(|t| t.is_dir()) {
+                subdirs.push(e.path());
+            }
+        }
+        subdirs.sort();
+        queue.extend(subdirs);
+    }
     out
+}
+
+/// A work tree's git dir: its `.git` dir, or the dir its `.git` file names.
+struct GitDir {
+    dir: PathBuf,
+    /// Named by a `.git` file.
+    file: bool,
+    /// A linked worktree's dir, `<common dir>/worktrees/<name>`, whose config is the main repo's.
+    linked: bool,
+}
+
+impl GitDir {
+    fn of(repo: &Path) -> Option<GitDir> {
+        let git = repo.join(".git");
+        if git.is_dir() {
+            return Some(GitDir {
+                dir: git,
+                file: false,
+                linked: false,
+            });
+        }
+        let mut head = String::new();
+        std::io::Read::read_to_string(
+            &mut std::io::Read::take(std::fs::File::open(&git).ok()?, 4096),
+            &mut head,
+        )
+        .ok()?;
+        let named = head.lines().next()?.strip_prefix("gitdir:")?.trim();
+        let dir = real(&repo.join(named))?;
+        let linked = dir
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|n| n == "worktrees");
+        dir.is_dir().then_some(GitDir {
+            dir,
+            file: true,
+            linked,
+        })
+    }
+}
+
+/// The dirs directly inside `dir`, none when it is missing.
+fn read_dirs(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+/// Where each execution's egress socket lives: inside the data dir, which every sandbox hides.
+pub fn egress_dir() -> PathBuf {
+    paths::data_dir().join("egress")
+}
+
+fn log_decision(d: egress::Decision) {
+    match &d.reason {
+        None => tracing::info!(host = %d.host, port = d.port, "sandbox egress allowed"),
+        Some(r) => {
+            tracing::warn!(host = %d.host, port = d.port, local = d.local, "sandbox egress refused: {r}")
+        }
+    }
 }
 
 fn user_id() -> Option<u32> {
@@ -1517,6 +2002,9 @@ mod tests {
             protected_paths: vec![],
             memory_db: PathBuf::new(),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
         }
     }
 
@@ -1604,9 +2092,15 @@ mod tests {
         assert!(cargo.join("config.toml").is_symlink());
         assert!(has(&["--setenv", "TMPDIR", "/tmp"]));
         assert!(has(&["--unshare-pid"]) && has(&["--new-session"]));
-        assert!(!has(&["--unshare-net"]));
+        assert!(has(&["--unshare-net"]));
+        let host = SandboxConfig {
+            network: SandboxNetwork::Host,
+            ..Default::default()
+        };
+        let args = Profile::for_execution(&ctx(&root), &host, &home).args(&root);
+        assert!(!args.iter().any(|a| a == "--unshare-net"));
         let off = SandboxConfig {
-            network: false,
+            network: SandboxNetwork::None,
             ..Default::default()
         };
         let args = Profile::for_execution(&ctx(&root), &off, &home)
@@ -1614,6 +2108,271 @@ mod tests {
             .args(&root);
         assert!(args.iter().any(|a| a == "--unshare-net"));
         assert!(!args.iter().any(|a| a == "--new-session"));
+    }
+
+    #[test]
+    fn planted_commondir_files_are_undone() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = d.path().join("repo");
+        let git = repo.join(".git");
+        std::fs::create_dir_all(git.join("worktrees/wt")).unwrap();
+        std::fs::create_dir_all(git.join("worktrees/ok")).unwrap();
+        std::fs::create_dir_all(git.join("modules/sub")).unwrap();
+        std::fs::write(git.join("config"), "").unwrap();
+        std::fs::write(git.join("modules/sub/config"), "").unwrap();
+        std::fs::write(git.join("commondir"), "/tmp/evil\n").unwrap();
+        std::fs::write(git.join("modules/sub/commondir"), "/tmp/evil\n").unwrap();
+        std::fs::write(git.join("worktrees/wt/commondir"), "/tmp/evil\n").unwrap();
+        std::fs::write(git.join("worktrees/ok/commondir"), "../..\n").unwrap();
+        let mut changed = repair_git_dirs(&git_repos(&[&repo]));
+        changed.sort();
+        let real = std::fs::canonicalize(&git).unwrap();
+        assert_eq!(
+            changed,
+            vec![
+                real.join("commondir"),
+                real.join("modules/sub/commondir"),
+                real.join("worktrees/wt/commondir"),
+            ]
+        );
+        assert!(!git.join("commondir").exists());
+        assert_eq!(
+            std::fs::read_to_string(git.join("worktrees/wt/commondir")).unwrap(),
+            "../..\n"
+        );
+        assert!(
+            repair_git_dirs(&git_repos(&[&repo])).is_empty(),
+            "a repaired repo stays quiet"
+        );
+    }
+
+    #[test]
+    fn repos_are_found_at_any_depth_but_not_in_build_output() {
+        let d = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(d.path()).unwrap();
+        for dir in [
+            ".git",
+            "a/.git",
+            "a/b/c/.git",
+            "node_modules/x/.git",
+            "target/y/.git",
+            "a/.git/modules/m",
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        std::fs::write(root.join("target/CACHEDIR.TAG"), "").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/.git"), "gitdir: ../a/.git/modules/m\n").unwrap();
+        std::os::unix::fs::symlink(root.join("a"), root.join("link")).unwrap();
+        assert_eq!(
+            git_repos(&[&root, &root.join("a")]),
+            vec![
+                root.clone(),
+                root.join("a"),
+                root.join("sub"),
+                root.join("a/b/c")
+            ]
+        );
+        let sub = GitDir::of(&root.join("sub")).unwrap();
+        assert_eq!(sub.dir, root.join("a/.git/modules/m"));
+        assert!(sub.file && !sub.linked);
+    }
+
+    #[test]
+    fn nested_repos_and_git_files_are_protected_and_pinned() {
+        let (_d, root, home) = layout();
+        let repo = root.join("repo");
+        let deep = repo.join("vendor/lib/dep");
+        std::fs::create_dir_all(&deep).unwrap();
+        let git = |dir: &Path, args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir)
+                .output()
+                .unwrap();
+            assert!(ok.status.success(), "{args:?}: {ok:?}");
+        };
+        git(&deep, &["init", "-q"]);
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.email=a@b",
+                "-c",
+                "user.name=a",
+                "commit",
+                "-q",
+                "--allow-empty",
+                "-m",
+                "i",
+            ],
+        );
+        git(&repo, &["worktree", "add", "-q", "wt"]);
+        let gitfile = std::fs::read_to_string(repo.join("wt/.git")).unwrap();
+        let p = Profile::for_execution(&ctx(&root), &SandboxConfig::default(), &home);
+        let script = format!(
+            r#"
+            git -C {deep} config core.fsmonitor x 2>/dev/null || echo deep-config-read-only
+            echo 'gitdir: /tmp' > wt/.git 2>/dev/null || echo git-file-read-only
+            mv {deep} {deep}-moved 2>/dev/null || echo deep-repo-not-renamed
+            mv vendor vendor-moved 2>/dev/null || echo ancestor-not-renamed
+            mv wt wt-moved 2>/dev/null || echo worktree-not-renamed
+            echo a > vendor/f && echo other-writes-stay
+            "#,
+            deep = deep.display(),
+        );
+        let Some(out) = run_in(&p, &repo, &script) else {
+            return;
+        };
+        for want in [
+            "deep-config-read-only",
+            "git-file-read-only",
+            "deep-repo-not-renamed",
+            "ancestor-not-renamed",
+            "worktree-not-renamed",
+            "other-writes-stay",
+        ] {
+            assert!(out.contains(want), "missing {want}:\n{out}");
+        }
+        assert!(deep.join(".git/config").is_file());
+        assert_eq!(
+            std::fs::read_to_string(repo.join("wt/.git")).unwrap(),
+            gitfile
+        );
+    }
+
+    #[test]
+    fn names_on_disk_use_a_stable_hash() {
+        assert_ne!(
+            stable_hex("", Path::new("/w")),
+            stable_hex("agents", Path::new("/w"))
+        );
+        // SHA-256 of one NUL byte: a change here moves every user's caches and markers.
+        assert_eq!(stable_hex("", Path::new("")), "6e340b9cffb37a98");
+    }
+
+    #[test]
+    fn each_session_gets_its_own_caches_apart_from_programs() {
+        let (_d, root, home) = layout();
+        let cargo = |p: Profile| {
+            strings(p.args(&root))
+                .windows(3)
+                .find(|w| w[0] == "--setenv" && w[1] == "CARGO_HOME")
+                .map(|w| PathBuf::from(&w[2]))
+                .unwrap()
+        };
+        let cfg = SandboxConfig::default();
+        let in_session = |id: &str| ExecContext {
+            session_id: Some(id.into()),
+            ..ctx(&root)
+        };
+        let s1 = cargo(Profile::for_execution(&in_session("s_1"), &cfg, &home));
+        let s2 = cargo(Profile::for_execution(&in_session("s_2"), &cfg, &home));
+        assert_eq!(s1, session_cache(&home, &"s_1".into()).join("cargo"));
+        assert_ne!(s1, s2);
+        let outside = cargo(Profile::for_execution(&ctx(&root), &cfg, &home));
+        let program = cargo(Profile::for_program(&[&root], &cfg, &home));
+        assert_ne!(outside, program, "agents never write a program's cache");
+        assert!(![&s1, &s2].contains(&&outside));
+    }
+
+    #[test]
+    fn opening_a_decoy_is_reported_and_listing_is_not() {
+        let (_d, root, home) = layout();
+        std::fs::write(
+            home.join(".git-credentials"),
+            "https://u:real@example.invalid\n",
+        )
+        .unwrap();
+        std::fs::write(home.join(".ssh/id_rsa"), "real key\n").unwrap();
+        let Some(b) = backend().filter(|b| matches!(b, Backend::Bubblewrap(_))) else {
+            return;
+        };
+        let seen = Arc::new(std::sync::Mutex::new(vec![]));
+        let s = seen.clone();
+        let p = Profile::for_execution(&ctx(&root), &SandboxConfig::default(), &home)
+            .watch_decoys(b, &home, &[], Arc::new(move |p| s.lock().unwrap().push(p)))
+            .unwrap();
+        let script = format!(
+            "ls -la {ssh} >/dev/null; stat {ssh}/id_ed25519 >/dev/null && echo stat-ok
+            cat {ssh}/id_rsa | head -1; cat {ssh}/id_rsa {creds} | grep -c real",
+            ssh = home.join(".ssh").display(),
+            creds = home.join(".git-credentials").display(),
+        );
+        let out = run_in(&p, &root.join("repo"), &script).unwrap();
+        assert!(out.contains("stat-ok"), "{out}");
+        assert!(out.contains("-----BEGIN OPENSSH PRIVATE KEY-----"), "{out}");
+        assert!(
+            out.contains("\n0"),
+            "the real credentials stay hidden: {out}"
+        );
+        let start = std::time::Instant::now();
+        while seen.lock().unwrap().len() < 2 && start.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut got = seen.lock().unwrap().clone();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![home.join(".git-credentials"), home.join(".ssh/id_rsa")]
+        );
+    }
+
+    #[test]
+    fn workspace_decoys_cover_files_and_fill_hidden_dirs_only() {
+        let (_d, root, home) = layout();
+        std::fs::create_dir_all(home.join(".aws")).unwrap();
+        std::fs::create_dir_all(home.join(".config/app")).unwrap();
+        std::fs::write(home.join(".config/app/token"), "real\n").unwrap();
+        std::fs::create_dir_all(home.join(".visible")).unwrap();
+        let Some(b) = backend().filter(|b| matches!(b, Backend::Bubblewrap(_))) else {
+            return;
+        };
+        let seen = Arc::new(std::sync::Mutex::new(vec![]));
+        let s = seen.clone();
+        let extra = [
+            "~/.aws/sso/cache/x.json".to_string(),
+            "~/.config/app/token".to_string(),
+            "~/.visible/missing".to_string(),
+        ];
+        let p = Profile::for_execution(&ctx(&root), &SandboxConfig::default(), &home)
+            .watch_decoys(
+                b,
+                &home,
+                &extra,
+                Arc::new(move |p| s.lock().unwrap().push(p)),
+            )
+            .unwrap();
+        let script = format!(
+            "cat {aws} {token} | grep -c real; cat {missing} 2>/dev/null || echo skipped",
+            aws = home.join(".aws/sso/cache/x.json").display(),
+            token = home.join(".config/app/token").display(),
+            missing = home.join(".visible/missing").display(),
+        );
+        let out = run_in(&p, &root.join("repo"), &script).unwrap();
+        assert!(out.starts_with("0\n"), "the real token is covered: {out}");
+        assert!(out.contains("skipped"), "{out}");
+        assert!(
+            !home.join(".visible/missing").exists(),
+            "the host is never written"
+        );
+        let start = std::time::Instant::now();
+        while seen.lock().unwrap().len() < 2 && start.elapsed() < std::time::Duration::from_secs(5)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let mut got = seen.lock().unwrap().clone();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                home.join(".aws/sso/cache/x.json"),
+                home.join(".config/app/token")
+            ]
+        );
     }
 
     #[test]
@@ -1755,6 +2514,126 @@ mod tests {
     }
 
     #[test]
+    fn a_private_network_leads_out_only_through_its_own_proxy() {
+        let Some(b @ Backend::Bubblewrap(_)) = backend() else {
+            eprintln!("bubblewrap unavailable; skipping");
+            return;
+        };
+        let (_d, root, home) = layout();
+        let host = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = host.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for mut s in host.incoming().flatten() {
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
+            }
+        });
+        let unlisted = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let unlisted_port = unlisted.local_addr().unwrap().port();
+        let abs = format!("ostra-test-{}", uuid::Uuid::new_v4().simple());
+        let abs_listener = {
+            use std::os::linux::net::SocketAddrExt;
+            let addr = std::os::unix::net::SocketAddr::from_abstract_name(&abs).unwrap();
+            std::os::unix::net::UnixListener::bind_addr(&addr).unwrap()
+        };
+        let cfg = SandboxConfig {
+            allowed_hosts: vec![format!("127.0.0.1:{port}")],
+            ..Default::default()
+        };
+        let seen: Arc<std::sync::Mutex<Vec<egress::Decision>>> = Arc::default();
+        let s2 = seen.clone();
+        let other = Profile::for_execution(&ctx(&root), &cfg, &home)
+            .start_egress(b, Arc::new(|_| {}))
+            .unwrap();
+        let p = Profile::for_execution(&ctx(&root), &cfg, &home)
+            .start_egress(b, Arc::new(move |d| s2.lock().unwrap().push(d)))
+            .unwrap();
+        let script = format!(
+            r#"
+            bash -c 'exec 3<>/dev/tcp/127.0.0.1/{unlisted_port}' 2>/dev/null && echo direct-loopback
+            echo "listed-forwarded:$(curl -s --max-time 5 http://127.0.0.1:{port}/)"
+            python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect("\0{abs}")' 2>/dev/null && echo abstract-socket
+            echo "via-proxy:$(curl -s --max-time 5 --noproxy '' -x "$HTTP_PROXY" http://127.0.0.1:{port}/)"
+            echo "refused:$(curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 --noproxy '' -x "$HTTP_PROXY" http://127.0.0.1:1/)"
+            ls {dir}
+            "#,
+            dir = egress_dir().display(),
+        );
+        let out = run_in(&p, &root, &script).unwrap();
+        assert!(!out.contains("direct-loopback"), "{out}");
+        assert!(!out.contains("abstract-socket"), "{out}");
+        assert!(out.contains("via-proxy:ok"), "{out}");
+        assert!(out.contains("listed-forwarded:ok"), "{out}");
+        assert!(out.contains("refused:403"), "{out}");
+        let own = p.egress.as_ref().unwrap().socket().file_name().unwrap();
+        let theirs = other.egress.as_ref().unwrap().socket().file_name().unwrap();
+        assert!(out.contains(own.to_str().unwrap()), "{out}");
+        assert!(!out.contains(theirs.to_str().unwrap()), "{out}");
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.iter().any(|d| d.allowed && d.port == port), "{seen:?}");
+        assert!(
+            seen.iter().any(|d| !d.allowed && d.local && d.port == 1),
+            "{seen:?}"
+        );
+
+        let open = SandboxConfig {
+            network: SandboxNetwork::Host,
+            ..Default::default()
+        };
+        let p = Profile::for_execution(&ctx(&root), &open, &home);
+        let out = run_in(
+            &p,
+            &root,
+            &format!(
+                "bash -c 'exec 3<>/dev/tcp/127.0.0.1/{unlisted_port}' && echo direct-loopback\npython3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"\\0{abs}\")' && echo abstract-socket"
+            ),
+        )
+        .unwrap();
+        assert!(
+            out.contains("direct-loopback") && out.contains("abstract-socket"),
+            "{out}"
+        );
+        drop((abs_listener, unlisted));
+    }
+
+    #[test]
+    fn a_sandboxed_command_cannot_make_new_user_namespaces() {
+        let Some(Backend::Bubblewrap(bwrap)) = backend() else {
+            eprintln!("bubblewrap unavailable; skipping");
+            return;
+        };
+        let (_d, root, home) = layout();
+        let script = format!(
+            r#"
+            unshare -U true 2>/dev/null && echo nested-userns
+            {bwrap} --ro-bind / / true 2>/dev/null && echo nested-bwrap
+            python3 -c 'import os; os.unshare(os.CLONE_NEWUSER)' 2>&1 | grep -q 'not permitted' && echo userns-eperm
+            python3 -c 'import fcntl, termios; fcntl.ioctl(0, termios.TIOCSTI, b"x")' 2>&1 | grep -q 'not permitted' && echo tiocsti-eperm
+            python3 -c 'import os, threading; t = threading.Thread(target=print); t.start(); t.join(); os._exit(0) if os.fork() == 0 else os.wait()' && echo fork-ok
+            echo "pipe:$(echo a | tr a b)"
+            "#,
+            bwrap = bwrap.display(),
+        );
+        for network in [SandboxNetwork::Allowlist, SandboxNetwork::Host] {
+            let cfg = SandboxConfig {
+                network,
+                ..Default::default()
+            };
+            let p = Profile::for_execution(&ctx(&root), &cfg, &home);
+            let out = run_in(&p, &root, &script).unwrap();
+            assert!(!out.contains("nested-userns"), "{network:?}: {out}");
+            assert!(!out.contains("nested-bwrap"), "{network:?}: {out}");
+            for want in ["userns-eperm", "tiocsti-eperm", "fork-ok", "pipe:b"] {
+                assert!(out.contains(want), "{network:?}: missing {want}:\n{out}");
+            }
+        }
+    }
+
+    #[test]
     fn decide_follows_the_mode() {
         let off = SandboxConfig {
             mode: SandboxMode::Off,
@@ -1775,6 +2654,8 @@ mod tests {
         p.seatbelt(&Members {
             own: "dev.ostra.sandbox.test".into(),
             group: "dev.ostra.sandbox.dtest".into(),
+            listeners: vec![],
+            decoys: None,
         })
         .unwrap()
     }
@@ -1806,13 +2687,10 @@ mod tests {
         let writable_repo = at(&format!(
             "(allow file-read* file-write* (subpath \"{repo}\"))"
         ));
-        let writable_git = at(&format!(
-            "(allow file-read* file-write* (subpath \"{git}\"))"
-        ));
         let config = at(&format!(
             "(deny file-write* network-bind (literal \"{git}/config\"))"
         ));
-        assert!(writable_repo < writable_git && writable_git < config);
+        assert!(writable_repo < config);
         at(&format!(
             "(deny file-write* network-bind (subpath \"{git}/hooks\"))"
         ));
@@ -1843,7 +2721,7 @@ mod tests {
         assert!(text.contains("dev.ostra.sandbox.test"));
         assert!(!text.contains("(param"));
         let off = SandboxConfig {
-            network: false,
+            network: SandboxNetwork::None,
             ..Default::default()
         };
         let text = policy(&Profile::for_execution(&ctx(&root), &off, &home).tty(true));

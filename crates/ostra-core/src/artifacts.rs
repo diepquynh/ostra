@@ -244,7 +244,11 @@ mod tests {
 
     #[test]
     fn a_hidden_folder_hides_everything_inside_it() {
-        let units = tidy_units(vec!["notes".into(), "notes/a.md".into(), "data/x.csv".into()]);
+        let units = tidy_units(vec![
+            "notes".into(),
+            "notes/a.md".into(),
+            "data/x.csv".into(),
+        ]);
         assert_eq!(units, ["data/x.csv", "notes"]);
         assert!(is_hidden(&units, "notes"));
         assert!(is_hidden(&units, "notes/later/b.md"));

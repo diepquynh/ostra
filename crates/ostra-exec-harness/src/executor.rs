@@ -22,6 +22,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// How often a running harness's repositories are checked for a planted `commondir`.
+const GIT_CHECK_EVERY: Duration = Duration::from_secs(2);
+
+/// Undoes a planted `commondir` in the execution's repositories and reports each as a denial by
+/// the `git-metadata` guard, which counts as a containment signal.
+fn report_git_repairs(repos: &[PathBuf], host: &Arc<dyn ExecutionHost>) {
+    for path in ostra_core::sandbox::repair_git_dirs(repos) {
+        host.emit(ostra_core::exec::ExecutionDelta::Policy {
+            call_id: String::new(),
+            decision: ostra_core::policy::PolicyDecision::deny(
+                ostra_core::policy::RuleRef::guard(ostra_core::containment::GIT_METADATA),
+                ostra_core::sandbox::git_repair_note(&path),
+            ),
+        });
+    }
+}
+
 /// How long a session may sit with no hook event and no terminal output before it is nudged.
 pub const DEFAULT_IDLE_NUDGE: Duration = Duration::from_secs(240);
 const MAX_IDLE_NUDGES: u32 = 2;
@@ -182,6 +199,9 @@ pub struct HarnessExecutorConfig {
     pub ostra_binary: PathBuf,
     /// Base URL of the running server, for example `http://127.0.0.1:4100`.
     pub server_url: String,
+    /// The server's Unix socket that answers only the harness callbacks. A sandbox with its own
+    /// network reaches the bridge through it instead of the whole server.
+    pub bridge_socket: Option<PathBuf>,
     pub home: PathBuf,
     pub idle_nudge: Duration,
     pub cols: u16,
@@ -194,6 +214,7 @@ impl HarnessExecutorConfig {
             global,
             ostra_binary,
             server_url,
+            bridge_socket: None,
             home: dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")),
             idle_nudge: DEFAULT_IDLE_NUDGE,
             cols: DEFAULT_COLS,
@@ -250,7 +271,7 @@ impl HarnessExecutor {
         host: &Arc<dyn ExecutionHost>,
     ) -> Result<Arc<PtySession>, String> {
         let cfg = self.config();
-        let sandbox = cfg.global.sandbox.for_workspace(spec.ctx.sandbox_mode);
+        let sandbox = cfg.global.sandbox.for_workspace(&spec.ctx.sandbox());
         let command = cfg.global.harness_command(harness);
         if which::which(&command).is_err() {
             return Err(launch_error(format!(
@@ -282,6 +303,7 @@ impl HarnessExecutor {
                 .unwrap_or_default(),
             ostra_binary: cfg.ostra_binary.clone(),
             server_url: cfg.server_url.clone(),
+            bridge_socket: cfg.bridge_socket.clone(),
             token: live.token().to_string(),
             config_dir,
             resume_session: spec
@@ -310,7 +332,14 @@ impl HarnessExecutor {
             plan,
             members,
             warning: unsandboxed,
-        } = crate::sandbox::wrap(plan, &input, &sandbox).map_err(launch_error)?;
+        } = crate::sandbox::wrap(
+            plan,
+            &input,
+            &sandbox,
+            ostra_core::exec::egress_reporter(host.clone()),
+            ostra_core::exec::decoy_reporter(host.clone()),
+        )
+        .map_err(launch_error)?;
         if let Some(w) = unsandboxed {
             if ostra_core::sandbox::first_warning() {
                 tracing::warn!("agent commands run without a sandbox: {w}");
@@ -352,12 +381,13 @@ impl HarnessExecutor {
     async fn supervise(
         &self,
         spec: &ExecutionSpec,
-        harness: HarnessKind,
         live: &Arc<LiveExecution>,
         pty: &Arc<PtySession>,
         host: &Arc<dyn ExecutionHost>,
+        repos: &[PathBuf],
         cancel: &CancellationToken,
     ) -> End {
+        let harness = live.harness;
         let idle_nudge = self.config().idle_nudge;
         let started = Instant::now();
         let budget = spec.timeout_secs.max(30);
@@ -366,6 +396,7 @@ impl HarnessExecutor {
         let mut submit_seen_at: Option<Instant> = None;
         let mut reported_session: Option<String> = None;
         let inspect = spec.resume.as_ref().is_some_and(|r| r.inspect);
+        let mut git_checked = Instant::now();
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => return End::Cancelled,
@@ -373,6 +404,12 @@ impl HarnessExecutor {
                 info = pty.wait_exit() => {
                     return if live.has_submit() { End::Submitted } else { End::Exited(info.code, started.elapsed()) };
                 }
+            }
+            // The CLI's commands never pass a hook Ostra could check, so its repos are checked on a
+            // clock, keeping short the time a planted `commondir` could reach the user's own git.
+            if git_checked.elapsed() >= GIT_CHECK_EVERY {
+                git_checked = Instant::now();
+                report_git_repairs(repos, host);
             }
             let s = live.snapshot();
             if s.session_id.is_some() && s.session_id != reported_session {
@@ -477,6 +514,8 @@ impl Executor for HarnessExecutor {
         if spec.resume.as_ref().is_some_and(|r| r.inspect) {
             live.set_inspect();
         }
+        let repos =
+            ostra_core::sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]);
         let result = match self.launch(&spec, harness, &live, &host).await {
             Ok(pty) => {
                 self.ptys.insert(spec.id.clone(), pty.clone());
@@ -490,8 +529,9 @@ impl Executor for HarnessExecutor {
                     stop_following.clone(),
                 ));
                 let end = self
-                    .supervise(&spec, harness, &live, &pty, &host, &cancel)
+                    .supervise(&spec, &live, &pty, &host, &repos, &cancel)
                     .await;
+                report_git_repairs(&repos, &host);
                 // Stopped before the final result, so a late live reading cannot overwrite it.
                 stop_following.cancel();
                 let _ = follower.await;

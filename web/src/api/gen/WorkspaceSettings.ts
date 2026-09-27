@@ -6,6 +6,7 @@ import type { NotificationSettings } from "./NotificationSettings";
 import type { ProjectEntry } from "./ProjectEntry";
 import type { Routing } from "./Routing";
 import type { SandboxMode } from "./SandboxMode";
+import type { SandboxNetwork } from "./SandboxNetwork";
 import type { WorkspacePermissions } from "./WorkspacePermissions";
 import type { YoloSettings } from "./YoloSettings";
 
@@ -15,6 +16,21 @@ export type WorkspaceSettings = { name: string, projects: Array<ProjectEntry>, r
  * global one. Kept in the registry, never in `workspace.toml`.
  */
 sandbox_mode: SandboxMode | null, 
+/**
+ * Network choice for this workspace in place of the global `[sandbox] network`. `None`
+ * follows the global one. Kept in the registry, never in `workspace.toml`.
+ */
+sandbox_network: SandboxNetwork | null, 
+/**
+ * More hosts the sandbox's egress proxy lets through for this workspace, added to the
+ * global `[sandbox] allowed_hosts`. Kept in the registry, never in `workspace.toml`.
+ */
+sandbox_allowed_hosts: Array<string>, 
+/**
+ * More decoy credential files (`~/...`) in this workspace's agent sandboxes, added to the
+ * built-in ones, which cannot be removed. Kept in the registry, never in `workspace.toml`.
+ */
+sandbox_decoys: Array<string>, 
 /**
  * External MCP servers whose tools every executor can call (HANDOVER 10.6).
  */

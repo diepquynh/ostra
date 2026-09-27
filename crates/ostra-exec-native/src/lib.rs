@@ -84,6 +84,10 @@ impl Executor for NativeExecutor {
             host: host.clone(),
             usage: usage.clone(),
             cancel: inner.clone(),
+            git_repos: ostra_core::sandbox::git_repos(&[
+                &spec.ctx.repo_root,
+                &spec.ctx.workspace_root,
+            ]),
             spec,
         };
         let fut = run.execute();
@@ -119,6 +123,8 @@ struct Run {
     host: Arc<dyn ExecutionHost>,
     usage: Arc<Mutex<Usage>>,
     cancel: CancellationToken,
+    /// The repos the sandbox protects, found once at the start.
+    git_repos: Vec<std::path::PathBuf>,
     spec: ExecutionSpec,
 }
 
@@ -351,10 +357,10 @@ impl Run {
         .with_private_hosts(ostra_tools::webfetch_hosts(&ctx.permissions.allow))
         .with_scrub_env(mcp_secret_vars(ctx));
         let mut _scratch = None;
-        let env = match sandbox_for(ctx) {
+        let env = match sandbox_for(ctx, self.host.clone()) {
             Ok(Sandbox::On(backend, profile)) => {
                 _scratch = profile.scratch_dir().map(|d| Scratch(d.to_path_buf()));
-                env.with_sandbox(backend, profile)
+                env.with_sandbox(backend, *profile)
             }
             Ok(Sandbox::Off(warning)) => {
                 if let Some(w) = warning {
@@ -779,7 +785,9 @@ impl Run {
             });
         });
         let out = ostra_tools::execute(env, id, &call, Some(live), self.cancel.clone()).await;
+        let mut repaired = vec![];
         if name == "Bash" {
+            repaired = ostra_core::sandbox::repair_git_dirs(&self.git_repos);
             let cmd = call.str_field("command").unwrap_or_default();
             let inputs = policy_inputs(&self.spec.ctx);
             let configured: Vec<String> = inputs
@@ -798,6 +806,19 @@ impl Run {
             result_known: true,
         };
         let mut text = out.text.clone();
+        for path in &repaired {
+            let note = ostra_core::sandbox::git_repair_note(path);
+            // Counted as a containment signal, like the guard's own refusals.
+            self.host.emit(ExecutionDelta::Policy {
+                call_id: id.into(),
+                decision: PolicyDecision::deny(
+                    ostra_core::policy::RuleRef::guard(ostra_core::containment::GIT_METADATA),
+                    &note,
+                ),
+            });
+            text.push_str("\n\n");
+            text.push_str(&note);
+        }
         for obs in policy.observe(&call, &outcome) {
             match obs {
                 Observation::AppendNote(note) => {
@@ -841,7 +862,10 @@ impl Run {
 }
 
 enum Sandbox {
-    On(ostra_core::sandbox::Backend, ostra_core::sandbox::Profile),
+    On(
+        ostra_core::sandbox::Backend,
+        Box<ostra_core::sandbox::Profile>,
+    ),
     Off(Option<String>),
 }
 
@@ -870,11 +894,15 @@ fn mcp_secret_vars(ctx: &ostra_core::exec::ExecContext) -> Vec<String> {
 }
 
 /// The `[sandbox]` table is read fresh, so a change applies to the next execution. The workspace's
-/// own mode, when it sets one, takes the place of the global mode.
-fn sandbox_for(ctx: &ostra_core::exec::ExecContext) -> Result<Sandbox, String> {
+/// own mode, when it sets one, takes the place of the global mode. Every Bash call of the
+/// execution shares one egress proxy and one set of decoys, which report to `host`.
+fn sandbox_for(
+    ctx: &ostra_core::exec::ExecContext,
+    host: Arc<dyn ExecutionHost>,
+) -> Result<Sandbox, String> {
     let global: ostra_core::config::GlobalConfig =
         ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
-    let sandbox = global.sandbox.for_workspace(ctx.sandbox_mode);
+    let sandbox = global.sandbox.for_workspace(&ctx.sandbox());
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "/".into());
@@ -884,8 +912,17 @@ fn sandbox_for(ctx: &ostra_core::exec::ExecContext) -> Result<Sandbox, String> {
                 .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
             let profile = ostra_core::sandbox::Profile::for_execution(ctx, &sandbox, &home)
                 .scratch(&scratch)
-                .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
-            Sandbox::On(backend, profile)
+                .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?
+                .start_egress(&backend, ostra_core::exec::egress_reporter(host.clone()))
+                .map_err(|e| format!("Cannot start the sandbox's egress proxy: {e}"))?
+                .watch_decoys(
+                    &backend,
+                    &home,
+                    &ctx.sandbox_decoys,
+                    ostra_core::exec::decoy_reporter(host),
+                )
+                .map_err(|e| format!("Cannot plant the sandbox's decoy files: {e}"))?;
+            Sandbox::On(backend, Box::new(profile))
         }
         ostra_core::sandbox::Decision::Unsandboxed(w) => Sandbox::Off(w),
     })

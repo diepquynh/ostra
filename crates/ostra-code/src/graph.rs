@@ -815,12 +815,13 @@ impl ProjectIndex {
             .collect();
         let name = &*self.name_list[m.name as usize];
         let e = &self.entries[a as usize];
-        // `use other_crate::name` through a re-export: an import spelling the name lands in the
-        // definition's package.
+        // `use other_crate::name` or `import { name } from "@scope/pkg"` through a re-export: an
+        // import spelling the name lands in the definition's package.
         let imported_by_name = |f: u32| {
             e.imports.iter().zip(&e.targets).any(|(i, t)| {
                 let spelled = i.spec.rsplit([':', '.', '/']).next() == Some(name)
-                    || i.alts.iter().any(|x| x == name);
+                    || i.alts.iter().any(|x| x == name)
+                    || i.names.iter().any(|x| x == name);
                 spelled
                     && t.as_ref().is_some_and(|t| {
                         let dir = if t.folder {

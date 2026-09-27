@@ -438,6 +438,9 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         nav: Default::default(),
     });
     code_tools.bind(&app);
+    let socket = crate::bridge::serve_bridge_socket(&app)
+        .map_err(|e| anyhow::anyhow!("cannot create the hook bridge socket: {e}"))?;
+    app.shared.harness.set_bridge_socket(socket);
     tokio::spawn(crate::files::run_touches(Arc::downgrade(&app), touch_rx));
     tokio::spawn(crate::nav::run(Arc::downgrade(&app)));
     for record in app.shared.registry.list_workspaces()? {
@@ -453,7 +456,24 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
             tracing::error!("could not open workspace {}: {e:#}", record.name);
         }
     }
+    sweep_session_caches(&app);
     Ok(app)
+}
+
+/// Removes the tool caches of this server's ended sessions, which the engine removes when a
+/// session ends, for a removal that failed or a server that stopped first. Only sessions this data
+/// dir knows are touched, because other data dirs share the cache root.
+pub fn sweep_session_caches(app: &App) {
+    for w in app.all_workspaces() {
+        for s in w.db.list_sessions().unwrap_or_default() {
+            if matches!(
+                s.status,
+                ostra_core::api::SessionStatus::Completed | ostra_core::api::SessionStatus::Failed
+            ) {
+                ostra_core::sandbox::remove_session_cache(&s.id);
+            }
+        }
+    }
 }
 
 async fn bind(ip: std::net::IpAddr, port: Option<u16>) -> anyhow::Result<tokio::net::TcpListener> {
@@ -484,6 +504,11 @@ pub async fn run(opts: ServeOptions) -> anyhow::Result<()> {
         if n > 0 {
             tracing::info!("stopped {n} processes left running in earlier sandboxes");
         }
+        let n = ostra_core::sandbox::remove_stale_sockets();
+        if n > 0 {
+            tracing::info!("removed {n} egress sockets left by an earlier server");
+        }
+        ostra_core::decoy::remove_stale();
     }
     let app = build(&opts, port).await?;
     crate::auth::write_server_file(&app.auth)?;
@@ -517,6 +542,9 @@ pub async fn run(opts: ServeOptions) -> anyhow::Result<()> {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await?;
+    if let Some(sock) = app.shared.harness.bridge_socket() {
+        let _ = std::fs::remove_file(sock);
+    }
     crate::auth::remove_server_file();
     Ok(())
 }

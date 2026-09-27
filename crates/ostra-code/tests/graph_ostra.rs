@@ -196,9 +196,14 @@ fn typescript_barrel_and_types() {
         // A barrel passes names on; its importers depend on the files that define them.
         let hubs = ix.hubs(20);
         assert!(!hubs.iter().any(|h| h.path == "web/src/api/types.ts"));
+        // `Button` comes through the `@ostra/design` package's barrel, design/src/index.ts.
+        let n = ix
+            .neighbors("design/src/components/core/Button.tsx", 200)
+            .unwrap();
         assert!(
-            hubs.iter()
-                .any(|h| h.path == "web/src/design/components/core/Button.tsx")
+            n.used_by
+                .iter()
+                .any(|l| l.path == "web/src/shell/QuickDock.tsx")
         );
         let n = ix.neighbors("web/src/api/index.ts", 200).unwrap();
         assert!(n.used_by.len() > 10);
@@ -212,11 +217,7 @@ fn typescript_barrel_and_types() {
             .find(|l| l.path == "web/src/api/gen/CodeFile.ts")
             .expect("SourceView uses the generated CodeFile");
         assert_eq!(file.names, vec!["CodeFile".to_string()]);
-        let c = ix.callers(
-            "Button",
-            Some("web/src/design/components/core/Button.tsx"),
-            500,
-        );
+        let c = ix.callers("Button", Some("design/src/components/core/Button.tsx"), 500);
         assert!(c.callers.iter().filter(|x| x.name.is_some()).count() > 10);
     });
 }

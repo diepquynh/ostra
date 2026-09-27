@@ -95,6 +95,26 @@ pub struct ExecContext {
     /// The workspace's sandbox mode in place of the global one, when it sets one.
     #[serde(default)]
     pub sandbox_mode: Option<SandboxMode>,
+    /// The workspace's network choice in place of the global one, when it sets one.
+    #[serde(default)]
+    pub sandbox_network: Option<crate::config::SandboxNetwork>,
+    /// The workspace's own allowed hosts, added to the global ones.
+    #[serde(default)]
+    pub sandbox_allowed_hosts: Vec<String>,
+    /// The workspace's own decoy paths, added to the built-in ones.
+    #[serde(default)]
+    pub sandbox_decoys: Vec<String>,
+}
+
+impl ExecContext {
+    /// The sandbox settings the workspace keeps in the registry.
+    pub fn sandbox(&self) -> crate::config::WorkspaceSandbox {
+        crate::config::WorkspaceSandbox {
+            mode: self.sandbox_mode,
+            network: self.sandbox_network,
+            allowed_hosts: self.sandbox_allowed_hosts.clone(),
+        }
+    }
 }
 
 /// Everything needed to run one execution.
@@ -213,6 +233,52 @@ pub enum ExecutionDelta {
     NativeSessionId {
         id: String,
     },
+    /// The egress proxy's first answer for a host and port.
+    Egress {
+        host: String,
+        port: u16,
+        allowed: bool,
+        /// Why it was refused, with the setting that allows it first.
+        reason: Option<String>,
+        /// The destination is loopback, private, or link-local.
+        local: bool,
+    },
+    /// A process in the sandbox opened a decoy credential file (Rule P3).
+    Decoy {
+        path: String,
+    },
+}
+
+/// Sends the egress proxy's decisions to `host` as [`ExecutionDelta::Egress`], from a thread of
+/// its own, because the proxy's runtime must not block on the host. The thread ends when the
+/// proxy drops the callback.
+pub fn egress_reporter(host: Arc<dyn ExecutionHost>) -> crate::egress::OnDecision {
+    let (tx, rx) = std::sync::mpsc::channel::<crate::egress::Decision>();
+    let _ = std::thread::Builder::new()
+        .name("ostra-egress-report".into())
+        .spawn(move || {
+            for d in rx {
+                host.emit(ExecutionDelta::Egress {
+                    host: d.host,
+                    port: d.port,
+                    allowed: d.allowed,
+                    reason: d.reason,
+                    local: d.local,
+                });
+            }
+        });
+    Arc::new(move |d| {
+        let _ = tx.send(d);
+    })
+}
+
+/// Sends each decoy open to `host` as [`ExecutionDelta::Decoy`].
+pub fn decoy_reporter(host: Arc<dyn ExecutionHost>) -> crate::decoy::OnOpen {
+    Arc::new(move |p| {
+        host.emit(ExecutionDelta::Decoy {
+            path: p.display().to_string(),
+        })
+    })
 }
 
 /// Callbacks an executor uses while it runs. Implemented by the engine.

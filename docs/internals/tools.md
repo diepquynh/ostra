@@ -96,10 +96,10 @@ The permission layer sorts tools into families, and the family decides which rul
 The guards (write scope, state ownership, the report path, the lesson gate, the build streak, self-protection)
 run before this, on every family. They are on [Agent containment](../security/agent-containment.md).
 
-The Permissions tab of Settings sets the mode, the sandbox, and the allow, ask, and deny rules, and shows the
-global rules read-only:
+The Permissions tab of Settings sets the mode, the sandbox (its mode, network choice, allowed hosts, and decoy
+files), and the allow, ask, and deny rules, and shows the global rules read-only:
 
-![The Permissions settings tab with mode, sandbox, rules, and global rules](../images/console/settings-permissions.png)
+![The Permissions settings tab with mode, sandbox, network, decoy files, rules, and global rules](../images/console/settings-permissions.png)
 
 ## One call, start to finish
 

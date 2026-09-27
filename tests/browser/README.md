@@ -33,4 +33,4 @@ dialog, popup, or navigation away from the app.
 | `signin` | The token leaves the URL, no request carries it, and what the profile keeps is spent |
 | `uploads` | SVG and HTML uploads never render inline, through chips, the artifact view, or raw links |
 | `storage` | localStorage, sessionStorage, IndexedDB, and Cache Storage hold no transcripts, tokens, or keys |
-| `site` | Docs Markdown with test strings, every docs page, search and hostile addresses, the homepage and its console shot loading only same-origin files under their meta CSP, messages from another origin ignored by the shot, and storage |
+| `site` | Docs Markdown with test strings, Mermaid diagrams with hostile labels, links, and directives, every docs page, search and hostile addresses, the homepage and its console shot loading only same-origin files under their meta CSP, messages from another origin ignored by the shot, and storage |

@@ -125,7 +125,11 @@ fn subtree(root: &Path, rel: &str, out: &mut Vec<(String, bool)>) {
             return;
         };
         for e in read.flatten() {
-            subtree(root, &format!("{rel}/{}", e.file_name().to_string_lossy()), out);
+            subtree(
+                root,
+                &format!("{rel}/{}", e.file_name().to_string_lossy()),
+                out,
+            );
         }
     }
 }
@@ -135,7 +139,13 @@ fn subtree(root: &Path, rel: &str, out: &mut Vec<(String, bool)>) {
 fn relocate(w: &WorkspaceRt, from: &str, to: &str, units: Vec<String>) -> Result<(), ApiErr> {
     let units = artifacts::tidy_units(units);
     let (visible, hidden) = (ensure(&visible_root(w))?, ensure(&hidden_root(w))?);
-    let dest_root = |p: &str| if artifacts::is_hidden(&units, p) { &hidden } else { &visible };
+    let dest_root = |p: &str| {
+        if artifacts::is_hidden(&units, p) {
+            &hidden
+        } else {
+            &visible
+        }
+    };
     let mut plan = vec![];
     for root in [&visible, &hidden] {
         let mut entries = vec![];
@@ -156,7 +166,11 @@ fn relocate(w: &WorkspaceRt, from: &str, to: &str, units: Vec<String>) -> Result
         }
     }
     for (_, _, dst, is_dir) in &plan {
-        let dir = if *is_dir { Some(dst.as_path()) } else { dst.parent() };
+        let dir = if *is_dir {
+            Some(dst.as_path())
+        } else {
+            dst.parent()
+        };
         if let Some(d) = dir {
             std::fs::create_dir_all(d).map_err(io)?;
         }

@@ -118,7 +118,9 @@ Before the first model call, a run does the following, in order:
 4. Builds the tool environment: the persistent shell directory, the set of files read so far, an HTTP client,
    and the list of environment variables every child process must not inherit.
 5. Decides the sandbox. The `[sandbox]` table is read fresh. If it asks for a sandbox, Bash runs under
-   bubblewrap on Linux or Seatbelt on macOS with a per-execution scratch `/tmp`. If it allows running without
+   bubblewrap on Linux or Seatbelt on macOS with a per-execution scratch `/tmp`, and on bubblewrap under
+   `allowlist` or `public` with one egress proxy that every Bash call of the execution shares; its decisions are recorded with the execution's
+   activity ([sandboxing](../security/sandboxing.md#network)). If it allows running without
    one and none is available, the run says so in the Activity view. [OS compatibility](../platforms/os-compatibility.md)
    lists which backend each platform has.
 6. Assembles the tool list from the agent's capabilities (see [Tools](tools.md)), adds the typed `Document`
@@ -331,6 +333,13 @@ or token, a PreToolUse answers with a denial that tells the agent to stop. An un
 or a hook whose harness does not match the execution also denies. Tokens are compared in constant time.
 `/internal/*` accepts local peers only.
 
+A harness in a bubblewrap sandbox with a network of its own cannot reach the server's TCP port. At startup the
+server also serves the two `/internal/*` routes, and nothing else, on a Unix socket in the data dir
+(`serve_bridge_socket`). Inside the sandbox, Ostra's helper listens on the bridge's port on loopback and forwards
+each connection to that socket, so `ostra hook` and `ostra mcp-stdio` call the same URL as outside, and the
+console's API is not reachable from the sandbox at all. When the server listens on an address other than
+loopback, the launch sets `OSTRA_URL` to `http://127.0.0.1:<port>`, because the sandbox has only loopback.
+
 A Stop event goes through the bridge too, and that is how Ostra keeps an agent from stopping without a result.
 If the agent stops before it has submitted, the bridge blocks the stop and tells it to call its submit tool. It
 does that twice. On the third stop the run ends as an error ("The agent ended its turn three times without
@@ -437,7 +446,10 @@ units of 10^-10 dollars. Antigravity records no usage at all, so its runs show n
 ### Sandbox
 
 When the sandbox is on, the CLI itself runs inside it, so its shell tool and everything it starts inherit it.
-Ostra tells the CLI not to start its own sandbox, because macOS cannot nest Seatbelt profiles. Under bubblewrap
+Ostra tells the CLI not to start its own sandbox, because macOS cannot nest Seatbelt profiles. On bubblewrap the
+CLI gets one egress proxy for the whole launch. Whatever the network choice, it lets the CLI reach its own model
+and sign-in hosts (`egress::model_hosts`) and the hosts of the model endpoints configured for it: `*_BASE_URL`
+variables, `env.*_BASE_URL` in Claude Code's `settings.json`, and Codex's `model_providers.*.base_url`. Under bubblewrap
 your home folder is overlaid so the CLI can write its state dirs without leaving files your later shells or CLI
 sessions would run. Under Seatbelt there is no overlay, so the rest of the home stays read-only. Harness
 executors use POSIX PTYs and process groups, so they run on Linux and macOS.

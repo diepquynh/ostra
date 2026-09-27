@@ -27,6 +27,8 @@ pub struct LaunchInput<'a> {
     /// Absolute path of the `ostra` binary that serves `hook` and `mcp-stdio`.
     pub ostra_binary: PathBuf,
     pub server_url: String,
+    /// See [`crate::executor::HarnessExecutorConfig::bridge_socket`].
+    pub bridge_socket: Option<PathBuf>,
     pub token: String,
     /// Per-execution config dir, created by the caller.
     pub config_dir: PathBuf,
@@ -760,6 +762,9 @@ pub(crate) mod tests {
                 protected_paths: vec![],
                 memory_db: root.join("repo/.ostra/memory/knowledge.sqlite3"),
                 sandbox_mode: None,
+                sandbox_network: None,
+                sandbox_allowed_hosts: vec![],
+                sandbox_decoys: vec![],
             },
             resume: None,
             harness_session_id: None,
@@ -778,6 +783,7 @@ pub(crate) mod tests {
             extra_args: vec![],
             ostra_binary: PathBuf::from("/opt/ostra/bin/ostra"),
             server_url: "http://127.0.0.1:4100".into(),
+            bridge_socket: None,
             token: "tok".into(),
             config_dir: root.join("cfg"),
             resume_session: None,

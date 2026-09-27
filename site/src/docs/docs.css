@@ -325,6 +325,14 @@ body {
   overflow-x: auto;
   white-space: pre;
 }
+.md-diagram {
+  margin: 0 0 18px;
+  overflow-x: auto;
+}
+.md-diagram > svg {
+  display: block;
+  margin: 0 auto;
+}
 .md-strong {
   color: var(--text-primary);
   font-weight: 600;

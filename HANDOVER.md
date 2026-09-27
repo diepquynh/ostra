@@ -419,7 +419,11 @@ edit, so Ostra does not run what they name until the user approved that exact co
   A new workspace's file is approved; a file already in the folder when the workspace is created is not.
   Workspaces registered before approvals existed have their files approved once, at the first start.
 - Rule A2: the permission mode and YOLO live in the registry per workspace, never in a folder file. A folder
-  file's `permissions.mode` and `yolo` are ignored, and Ostra no longer writes them there.
+  file's `permissions.mode` and `yolo` are ignored, and Ostra no longer writes them there. The same holds for
+  spend limits, the sandbox mode, the sandbox network choice (`sandbox_network`, in place of the global
+  `[sandbox] network`), the sandbox's extra allowed hosts (`sandbox_allowed_hosts`), which add to the
+  global `[sandbox] allowed_hosts` and never remove a global or built-in host, and the workspace's own decoy
+  files (`sandbox_decoys`, `~/` paths, at most 32), which add to the built-in decoys and never remove one.
 
 ## 8. The engine
 
@@ -481,6 +485,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | C2 | Context added mid-session is queued or sent now. Queued context lets running executions finish on the old request, and the next step sees it. Context sent now first interrupts every running execution; each re-runs from its spawn block with the updated request, not from where it stopped. Either way it is an amendment, so Rules D2 and D10 apply. |
 | P1 | A paused session starts nothing: no spawn, judge, command, gate, or YOLO answer. Pausing interrupts every running execution and denies its waiting permission asks. Gates can still be answered and context added; both take effect on continue. |
 | P2 | Continuing a paused session resumes each execution the pause interrupted, where it stopped: a native execution from its stored transcript, a harness execution through its resume command with the stored session id and the prompt "Continue the workflow." A harness is sent Esc before it is stopped, so its session is saved whole. Context added while paused cancels the resume: those executions re-run from their spawn blocks, because a resumed conversation would not see it. |
+| P3 | Ostra pauses a session as in P1 on the third containment signal of one execution, YOLO included. A signal is a Layer 1 denial by the `secret-read`, `self-protection`, or `git-metadata` guard, an egress proxy refusal of a loopback, private, or link-local destination, or, on Linux, a process opening one of the decoy credential files the sandbox plants in hidden credential paths (`~/.ssh/id_rsa` and `id_ed25519` where no SSH port is reachable, `~/.git-credentials`, `~/.vault-token`, plus the workspace's `sandbox_decoys`). A refused public host is not a signal, because builds call telemetry hosts; it shows in the Activity view only. The engine records at most three signals per execution, so a retry loop cannot flood the log, and the board names the execution that paused the session. Continuing (P2) is the user's "this was fine": the resumed run is a new execution and starts at zero. |
 
 ### 8.3 Judge calls
 
@@ -781,7 +786,8 @@ Memory stays in each project's `.ostra/memory/knowledge.sqlite3`, using `UC/mcp/
 - **Native execution:** continue from `messages`.
 - **Harness execution:** open the harness's resume command with the stored native session id in a new PTY.
 - **Pause:** the user can pause a session, for example when a provider quota runs out, and continue it later
-  (Rules P1 and P2). A paused session survives a restart paused, and its interrupted executions resume on
+  (Rules P1 and P2). Ostra also pauses it on its own after three containment signals from one execution
+  (Rule P3). A paused session survives a restart paused, and its interrupted executions resume on
   continue instead of re-running.
 - **Session list:** each session shows its stage (the hub's `inferStage` idea, taken from events), its
   executions, and a Resume or Open action.
@@ -1180,6 +1186,11 @@ The server runs shell commands for its caller, so these ship in the first build:
   - The PTY gets the server's whole environment, because harness auth depends on it (section 10.2). Provider
     keys in that environment are visible to the harness and to commands it runs.
   - The execution token is in the harness's environment. It only acts as that execution.
+  - Your own git reads what an agent's repository names. The sandbox contains agents, not you. An agent can
+    create a repository in the workspace with a config that names programs, and stage it as a submodule. Git
+    that Ostra runs on the host passes overrides that start neither its fsmonitor command nor its filter drivers
+    (`ostra_core::git`); the git you run yourself, in a terminal or a desktop app, reads that config as git
+    always does.
 
 ## 16. Milestones
 

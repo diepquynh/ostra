@@ -407,7 +407,11 @@ impl GitAuth {
                 }
                 envs.push((
                     "OSTRA_GIT_HOST".into(),
-                    c.host.split('/').next().unwrap_or_default().to_ascii_lowercase(),
+                    c.host
+                        .split('/')
+                        .next()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase(),
                 ));
                 envs.push((
                     "OSTRA_GIT_USERNAME".into(),
@@ -421,7 +425,9 @@ impl GitAuth {
                 // In the owner-only data dir, which the sandbox hides, not in the shared temp dir.
                 let private = ostra_core::paths::ensure_data_dir()?.join("tmp");
                 std::fs::create_dir_all(&private)?;
-                let tmp = tempfile::Builder::new().prefix("ostra-git-").tempdir_in(&private)?;
+                let tmp = tempfile::Builder::new()
+                    .prefix("ostra-git-")
+                    .tempdir_in(&private)?;
                 let key = tmp.path().join("id");
                 write_private(&key, &format!("{}\n", c.secret.trim_end()))?;
                 envs.push((
@@ -524,10 +530,19 @@ pub async fn run_git(
     timeout: Duration,
     mut on_line: impl FnMut(&str),
 ) -> Result<String, String> {
+    if let Some(dir) = cwd {
+        // A planted `commondir` would hand this command another repository's config, whose
+        // credential helper or SSH command a push or pull would run.
+        for p in ostra_core::sandbox::repair_git_dirs(&ostra_core::sandbox::git_repos(&[dir])) {
+            tracing::warn!("removed a planted {} before running git", p.display());
+        }
+    }
     let mut cmd = tokio::process::Command::new("git");
     cmd.args(ostra_core::git::NO_EXEC);
     if let Some(dir) = cwd {
-        cmd.arg("-C").arg(dir);
+        cmd.args(ostra_core::git::submodule_filter_overrides(dir).await)
+            .arg("-C")
+            .arg(dir);
     }
     cmd.args(&auth.args)
         .args(args)
@@ -967,7 +982,10 @@ mod tests {
             secret: "t".into(),
         };
         assert!(matches(&https, &cred));
-        assert!(!matches(&plain, &cred), "a token never goes over plain http");
+        assert!(
+            !matches(&plain, &cred),
+            "a token never goes over plain http"
+        );
         let r = parse_remote("ssh://git@git.example:2222/team/app").unwrap();
         assert_eq!(r.key, "git.example:2222/team/app");
         assert!(r.ssh);
@@ -1175,7 +1193,12 @@ mod tests {
                 .stdout(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
-            child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
             String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
         };
         assert!(ask("protocol=https\nhost=github.com\n\n").contains("password=tok"));

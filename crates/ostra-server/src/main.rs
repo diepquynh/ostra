@@ -82,8 +82,16 @@ enum Command {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Inside a sandbox, before a runtime or logging starts. Hidden from `--help` on purpose.
+    let mut raw = std::env::args_os().skip(1);
+    if raw.next().is_some_and(|a| a == "sandbox-init") {
+        std::process::exit(ostra_core::sandbox_init::main(raw.collect()));
+    }
     // Before anything reads the environment or starts a thread.
     ostra_core::sandbox::scrub_startup_env();
+    if let Ok(exe) = std::env::current_exe() {
+        ostra_core::sandbox::set_helper(exe);
+    }
     let cli = Cli::parse();
     // SAFETY: no other thread exists yet; the runtime starts below.
     unsafe { ostra_server::env::extend_path() };
@@ -115,7 +123,8 @@ fn main() -> anyhow::Result<()> {
             if list.is_empty() {
                 println!("No browser is signed in.");
             }
-            let date = |d: chrono::DateTime<chrono::Utc>| d.format("%Y-%m-%d %H:%M UTC").to_string();
+            let date =
+                |d: chrono::DateTime<chrono::Utc>| d.format("%Y-%m-%d %H:%M UTC").to_string();
             for s in list {
                 println!(
                     "{}  signed in {}  last seen {}  from {}  {}",
@@ -138,7 +147,9 @@ fn main() -> anyhow::Result<()> {
             } else {
                 let id = id.unwrap_or_default();
                 if !ostra_server::auth::revoke_sign_in(&registry, &id)? {
-                    anyhow::bail!("No sign-in {id}. Run `ostra sessions` to list the current ones.");
+                    anyhow::bail!(
+                        "No sign-in {id}. Run `ostra sessions` to list the current ones."
+                    );
                 }
                 println!("Revoked {id}. That browser is signed out within 5 seconds.");
             }

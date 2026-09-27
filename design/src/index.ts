@@ -48,13 +48,13 @@ export {
 } from "./components/navigation/CommandPalette";
 export { ContextMenu, type ContextMenuProps } from "./components/navigation/ContextMenu";
 export {
+  dragHasFiles,
   FileTree,
   type FileTreeCreating,
   type FileTreeEntry,
   type FileTreeFolder,
   type FileTreeProps,
   type FileTreeRow,
-  dragHasFiles,
   fileIcon,
   NewEntryField,
   parentDir,

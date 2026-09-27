@@ -3,6 +3,7 @@ import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import type {
   AgentInfo,
   Complexity,
+  GlobalSandbox,
   HarnessStatus,
   PermissionRules,
   SandboxMode,
@@ -11,11 +12,14 @@ import type {
 } from "../../api/types";
 import {
   COMPLEXITY_AGENTS,
+  DECOY_GUIDE,
   NATIVE_ONLY,
   PERMISSION_MODES,
   ROUTE_KEYS,
   runsUnsandboxed,
   SANDBOX_MODES,
+  SANDBOX_NETWORKS,
+  takesHosts,
   UNSANDBOXED_EFFECTS,
 } from "../../content/agents";
 import { FileTagInput } from "../../features/context/FileTagInput";
@@ -572,6 +576,146 @@ export function UnsandboxedBanner({ status }: { status: SandboxStatus }) {
   );
 }
 
+/** Workspace decoy paths, added to the built-in ones. Disabled where the server cannot plant decoys. */
+function DecoysPanel({ form, update, issues, sandbox }: SectionProps & { sandbox: SandboxStatus }) {
+  return (
+    <Panel title="Decoy files" subtitle="added to the built-in ones">
+      <div className="wp-stack" style={{ gap: 10 }}>
+        <p className="wp-lead">
+          Fake credential files in each agent sandbox. Opening one is a containment signal, and three signals from one
+          execution pause the session.
+        </p>
+        {!sandbox.decoys && (
+          <Banner tone="info" title="Decoy files need the Linux sandbox, so this server cannot plant them">
+            <p style={{ margin: "4px 0 0" }}>
+              They are bind mounts that bubblewrap provides. See{" "}
+              <a href={DECOY_GUIDE} target="_blank" rel="noopener noreferrer">
+                decoy credential files in the sandboxing guide
+              </a>
+              .
+            </p>
+          </Banner>
+        )}
+        <div>
+          <span className="wp-muted">Always planted, and cannot be removed:</span>
+          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+            {sandbox.builtin_decoys.map((d) => (
+              <li key={d}>
+                <code>{d}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <Input
+          label="This workspace's decoys"
+          mono
+          multiline
+          rows={3}
+          disabled={!sandbox.decoys}
+          placeholder="~/.aws/credentials"
+          value={form.decoys}
+          error={errorText(issues("sandbox_decoys"))}
+          hint="One path per line, starting with ~/. A decoy covers an existing file, or fills a hidden folder."
+          onChange={(e) => update((f) => void (f.decoys = e.target.value))}
+        />
+      </div>
+    </Panel>
+  );
+}
+
+/** The network choice in place of the global one, and hosts added to the global and built-in ones. */
+function NetworkPanel({
+  form,
+  update,
+  issues,
+  sandbox,
+  global,
+}: SectionProps & { sandbox: SandboxStatus; global: GlobalSandbox }) {
+  const label = (n: string) => SANDBOX_NETWORKS.find((c) => c.network === n)?.label ?? n;
+  const effective = form.network || global.network;
+  return (
+    <Panel title="Network" subtitle="for this workspace, in place of the global choice">
+      <div className="wp-stack" style={{ gap: 10 }}>
+        <Checkbox
+          radio
+          name="sandbox-network"
+          checked={form.network === ""}
+          onChange={() => update((f) => void (f.network = ""))}
+          label={`Use the global setting (${label(global.network)})`}
+          description="Follows [sandbox] network in ~/.config/ostra/config.toml."
+        />
+        {SANDBOX_NETWORKS.map((c) => (
+          <Checkbox
+            key={c.network}
+            radio
+            name="sandbox-network"
+            checked={form.network === c.network}
+            onChange={() => update((f) => void (f.network = c.network))}
+            label={c.label}
+            description={c.help}
+          />
+        ))}
+        <FieldIssues issues={issues("sandbox_network")} />
+        {sandbox.backend === "seatbelt" && effective !== "none" && (
+          <Banner
+            tone="info"
+            title="Choose None where agent commands need no network, because macOS has no egress proxy yet"
+          >
+            <p style={{ margin: "4px 0 0" }}>
+              On macOS every other choice shares the host network, local services and the LAN included.
+            </p>
+          </Banner>
+        )}
+        <Anchor id="sandbox_allowed_hosts">
+          <Input
+            label="This workspace's hosts"
+            mono
+            multiline
+            rows={3}
+            placeholder={"mirror.corp.example\n*.internal.example:8443\n127.0.0.1:8317"}
+            value={form.allowedHosts}
+            error={errorText(issues("sandbox_allowed_hosts"))}
+            hint={
+              takesHosts(effective)
+                ? "One per line: a host name, *.domain, or an IP address, with an optional :port (443 and 80 without one). A loopback host needs its port."
+                : `These apply under Allowlist and Public only, so ${label(effective)} ignores them.`
+            }
+            onChange={(e) => update((f) => void (f.allowedHosts = e.target.value))}
+          />
+        </Anchor>
+        <div>
+          <span className="wp-muted">
+            {global.allowed_hosts.length === 0
+              ? "The global config lists no hosts."
+              : "Also allowed, from the global config:"}
+          </span>
+          {global.allowed_hosts.length > 0 && (
+            <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+              {global.allowed_hosts.map((h) => (
+                <li key={h}>
+                  <code>{h}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <details>
+          <summary className="wp-muted" style={{ cursor: "pointer" }}>
+            Built in under Allowlist: {sandbox.builtin_hosts.length} hosts
+          </summary>
+          <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>
+            {sandbox.builtin_hosts.map((h) => (
+              <li key={h}>
+                <code>{h}</code>
+              </li>
+            ))}
+          </ul>
+        </details>
+      </div>
+    </Panel>
+  );
+}
+
 export function PermissionsSection({
   form,
   update,
@@ -579,7 +723,13 @@ export function PermissionsSection({
   global,
   sandbox,
   savedSandbox,
-}: SectionProps & { global: PermissionRules; sandbox: SandboxStatus; savedSandbox: SandboxMode | null }) {
+  globalSandbox,
+}: SectionProps & {
+  global: PermissionRules;
+  sandbox: SandboxStatus;
+  savedSandbox: SandboxMode | null;
+  globalSandbox: GlobalSandbox;
+}) {
   // The chosen mode before it is saved: off never sandboxes, auto only where a sandbox works.
   const unsandboxed =
     form.sandbox === "off" ||
@@ -631,6 +781,12 @@ export function PermissionsSection({
               {unsandboxed && <UnsandboxedBanner status={sandbox} />}
             </div>
           </Panel>
+        </Anchor>
+        <Anchor id="sandbox_network">
+          <NetworkPanel form={form} update={update} issues={issues} sandbox={sandbox} global={globalSandbox} />
+        </Anchor>
+        <Anchor id="sandbox_decoys">
+          <DecoysPanel form={form} update={update} issues={issues} sandbox={sandbox} />
         </Anchor>
         <Panel title="Rules" subtitle="deny beats ask, ask beats allow">
           <div className="wp-stack">

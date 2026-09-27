@@ -130,10 +130,21 @@ fn git_read_only(args: &[bash::Word]) -> bool {
     let only_flags = |allowed: &[&str]| rest.iter().all(|w| allowed.contains(&w.text()));
     // Listing forms only: with a name these create, rename, or delete.
     let listing = match sub {
-        "branch" => only_flags(&["-a", "-r", "-v", "-vv", "--list", "--show-current", "--all", "--remotes"]),
+        "branch" => only_flags(&[
+            "-a",
+            "-r",
+            "-v",
+            "-vv",
+            "--list",
+            "--show-current",
+            "--all",
+            "--remotes",
+        ]),
         "tag" => only_flags(&["-l", "--list"]),
         "remote" => only_flags(&["-v", "--verbose"]),
-        "describe" => rest.iter().all(|w| w.text().starts_with("--") || !w.text().starts_with('-')),
+        "describe" => rest
+            .iter()
+            .all(|w| w.text().starts_with("--") || !w.text().starts_with('-')),
         "config" => matches!(
             rest.first().map(|w| w.text()),
             Some("--get" | "--get-all" | "--list" | "-l" | "--get-regexp")
@@ -142,9 +153,14 @@ fn git_read_only(args: &[bash::Word]) -> bool {
     };
     (GIT_READ.contains(&sub) || listing)
         && !rest.iter().any(|w| {
-            ["--output", "--ext-diff", "--textconv", "--open-files-in-pager"]
-                .iter()
-                .any(|f| long_opt_is(w.text(), f))
+            [
+                "--output",
+                "--ext-diff",
+                "--textconv",
+                "--open-files-in-pager",
+            ]
+            .iter()
+            .any(|f| long_opt_is(w.text(), f))
         })
 }
 
@@ -169,7 +185,10 @@ fn is_read_only(cmd: &SimpleCommand) -> bool {
     if EXEC_CAPABLE.contains(&name.as_str()) && args.iter().any(|w| !w.is_static() || w.glob) {
         return false;
     }
-    let has = |f: &str| args.iter().any(|w| w.text() == f || long_opt_is(w.text(), f));
+    let has = |f: &str| {
+        args.iter()
+            .any(|w| w.text() == f || long_opt_is(w.text(), f))
+    };
     match name.as_str() {
         "find" => ![
             "-exec", "-execdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls", "-ok",
@@ -198,7 +217,10 @@ fn is_read_only(cmd: &SimpleCommand) -> bool {
 /// session and runs outside the policy.
 fn runs_code_later(p: &Path) -> bool {
     let s = p.to_string_lossy();
-    let name = p.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
     matches!(
         name.as_ref(),
         ".mcp.json"
@@ -231,8 +253,8 @@ fn runs_code_later(p: &Path) -> bool {
             "/.claude/hooks/",
             "/.grok/",
         ]
-            .iter()
-            .any(|d| s.contains(d))
+        .iter()
+        .any(|d| s.contains(d))
 }
 
 impl ExecutionPolicy {
@@ -312,7 +334,10 @@ impl ExecutionPolicy {
             .str_field("file_path")
             .or_else(|| call.str_field("path"))?;
         // C3: relative to the directory the tool runs in, which a harness reports as `cwd`.
-        Some((self.roots.resolve(&self.start_cwd(call), raw), raw.to_string()))
+        Some((
+            self.roots.resolve(&self.start_cwd(call), raw),
+            raw.to_string(),
+        ))
     }
 
     /// The path a reading tool opens: file tools, and a Skill loaded from a path.

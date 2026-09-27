@@ -282,6 +282,7 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
           global={detail.global_permissions}
           sandbox={detail.sandbox}
           savedSandbox={detail.settings.sandbox_mode}
+          globalSandbox={detail.global_sandbox}
         />
       )}
       {tab === "instructions" && (

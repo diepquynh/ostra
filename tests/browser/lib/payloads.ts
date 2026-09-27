@@ -47,6 +47,38 @@ export function markdown(tag: string, fake: string): string {
   ].join("\n");
 }
 
+/** Mermaid blocks whose labels, links, and directives must stay inert when the docs draw them. */
+export function mermaid(tag: string, fake: string): string {
+  const c = (id: string) => `${fake}/canary/${tag}-${id}`;
+  return [
+    "```mermaid",
+    `%%{init: {"securityLevel": "loose", "htmlLabels": true}}%%`,
+    "flowchart TB",
+    `  a["PW-MERMAID-${tag} <img src=x onerror=${js(`${tag}-mmimg`)}>"] --> b["<a href='javascript:${js(`${tag}-mmlink`)}'>mm link</a>"]`,
+    `  b --> c["<iframe src='javascript:parent.${js(`${tag}-mmframe`)}'></iframe>"]`,
+    `  c --> d["<style>*{background:url(${c("mmcss")})}</style><script>${js(`${tag}-mmscript`)}</script>"]`,
+    `  click a "javascript:${js(`${tag}-mmclick`)}"`,
+    `  click b call eval("${js(`${tag}-mmcall`)}")`,
+    `  click c href "${c("mmhref")}"`,
+    "```",
+    "",
+    "```mermaid",
+    "---",
+    "config:",
+    "  htmlLabels: true",
+    "  flowchart:",
+    "    htmlLabels: true",
+    "---",
+    "flowchart LR",
+    `  e["PW-MERMAID-front <img src=x onerror=${js(`${tag}-mmfront`)}>"]`,
+    "```",
+    "",
+    "```mermaid",
+    `flowchart TB <img src=x onerror=${js(`${tag}-mmbad`)}> --> -->`,
+    "```",
+  ].join("\n");
+}
+
 /** A one-line string for titles, names, and labels. */
 export const inline = (tag: string) => `PW-${tag} <img src=x onerror="${js(`${tag}-inline`)}"> "'><svg onload=${js(`${tag}-svg`)}>`;
 

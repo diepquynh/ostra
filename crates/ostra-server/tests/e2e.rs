@@ -285,6 +285,119 @@ async fn boot_with(root: &Path, change: impl FnOnce(&mut GlobalConfig)) -> Serve
     Server { app, base, client }
 }
 
+/// A server start removes the tool caches of its ended sessions and leaves every other cache,
+/// because other data dirs share the cache root.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ended_sessions_lose_leftover_caches_at_start() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, app } = boot(root).await;
+    let app_dir = root.join("app");
+    std::fs::create_dir_all(app_dir.join(".ostra")).unwrap();
+    std::fs::write(app_dir.join(".ostra/INVENTORY.md"), "# app Inventory\n").unwrap();
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "caches", "root": root.join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let _: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces/{}/projects", ws.id))
+        .json(&json!({"path": app_dir, "key": "app", "stack": null}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let s: SessionSummary = client
+        .post(format!("{base}/api/workspaces/{}/sessions", ws.id))
+        .json(&json!({"request": "Explain the app"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let _ = client
+        .post(format!("{base}/api/sessions/{}/stop", s.id))
+        .send()
+        .await;
+    wait_for(&client, &base, s.id.as_str(), |d| {
+        matches!(
+            d.summary.status,
+            SessionStatus::Failed | SessionStatus::Completed
+        )
+    })
+    .await;
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    let ended = ostra_core::sandbox::session_cache(&home, &s.id);
+    let foreign = ostra_core::sandbox::session_cache(&home, &"s_from_another_data_dir".into());
+    assert!(ended.starts_with(root.join("sandbox-cache")));
+    for d in [&ended, &foreign] {
+        std::fs::create_dir_all(d.join("cargo")).unwrap();
+    }
+    ostra_server::app::sweep_session_caches(&app);
+    for _ in 0..100 {
+        if !ended.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!ended.exists(), "the ended session's cache is removed");
+    assert!(
+        foreign.exists(),
+        "a session this server does not know keeps its cache"
+    );
+}
+
+/// A sandboxed harness reaches the hook bridge through the server's bridge socket, which answers
+/// the harness callbacks and nothing else, so `/api` stays out of a sandbox's reach.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_bridge_socket_serves_only_harness_callbacks() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { app, .. } = boot(dir.path()).await;
+    let sock = app.shared.harness.bridge_socket().unwrap().to_path_buf();
+    assert!(sock.starts_with(dir.path().join("data/egress")));
+    let status = |req: String| {
+        let sock = sock.clone();
+        async move {
+            let mut s = tokio::net::UnixStream::connect(&sock).await.unwrap();
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).await.unwrap();
+            out.split(' ').nth(1).unwrap_or("").to_string()
+        }
+    };
+    let body = serde_json::to_string(&ostra_exec_harness::protocol::PolicyRequest {
+        execution: "x_1".into(),
+        harness: ostra_core::HarnessKind::Claude,
+        event: ostra_exec_harness::protocol::HookEvent::PreToolUse,
+        payload: json!({}),
+    })
+    .unwrap();
+    let policy = format!(
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1:1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        ostra_exec_harness::protocol::POLICY_PATH,
+        body.len()
+    );
+    assert_eq!(
+        status(policy).await,
+        "401",
+        "the bridge answers, and wants a token"
+    );
+    for path in ["/api/workspaces", "/api/auth/exchange", "/"] {
+        let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:1\r\nConnection: close\r\n\r\n");
+        assert_eq!(status(req).await, "404", "{path}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn yolo_implement_session_end_to_end() {
     let _serial = SERIAL.lock().await;
@@ -2984,6 +3097,76 @@ async fn a_new_workspace_needs_no_approval_for_its_own_commands() {
     assert_eq!(saved.settings.permissions.mode, PermissionMode::Plan);
 }
 
+#[tokio::test]
+async fn a_workspace_network_choice_and_hosts_build_on_the_global_sandbox() {
+    use ostra_core::config::{SandboxNetwork, WorkspaceSettings};
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let Server { base, client, .. } = boot_with(dir.path(), |g| {
+        g.server.use_ip_host = true;
+        g.sandbox.network = SandboxNetwork::Public;
+        g.sandbox.allowed_hosts = vec!["mirror.corp.example".into()];
+    })
+    .await;
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "net", "root": dir.path().join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(ws.global_sandbox.network, SandboxNetwork::Public);
+    assert_eq!(ws.global_sandbox.allowed_hosts, ["mirror.corp.example"]);
+    for h in ["registry.npmjs.org", "api.anthropic.com"] {
+        assert!(ws.sandbox.builtin_hosts.iter().any(|b| b == h), "{h}");
+    }
+    let patch = |s: &WorkspaceSettings| {
+        client
+            .patch(format!("{base}/api/workspaces/{}", ws.id))
+            .json(s)
+            .send()
+    };
+
+    let mut s = ws.settings.clone();
+    s.sandbox_network = Some(SandboxNetwork::Allowlist);
+    s.sandbox_allowed_hosts = vec!["localhost".into(), "https://docs.example/x".into()];
+    let bad = patch(&s).await.unwrap();
+    assert_eq!(bad.status(), 422);
+    let err: Value = bad.json().await.unwrap();
+    let paths: Vec<&str> = err["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        ["sandbox_allowed_hosts[0]", "sandbox_allowed_hosts[1]"]
+    );
+
+    s.sandbox_allowed_hosts = vec!["localhost:8317".into(), "*.internal.example".into()];
+    let saved: WorkspaceDetail = patch(&s).await.unwrap().json().await.unwrap();
+    assert_eq!(
+        saved.settings.sandbox_network,
+        Some(SandboxNetwork::Allowlist)
+    );
+    assert_eq!(
+        saved.settings.sandbox_allowed_hosts,
+        ["localhost:8317", "*.internal.example"]
+    );
+    assert_eq!(
+        saved.global_sandbox, ws.global_sandbox,
+        "a workspace never changes the global config"
+    );
+    let file = std::fs::read_to_string(dir.path().join("ws/.ostra/workspace.toml")).unwrap();
+    assert!(
+        !file.contains("sandbox_"),
+        "Rule A2: kept in the registry\n{file}"
+    );
+}
+
 /// Sign in with a fresh token, as a separate browser, and return its `Cookie` header value.
 async fn sign_in_cookie(server: &Server) -> String {
     let url = server.app.auth.sign_in_url().unwrap();
@@ -3169,12 +3352,20 @@ async fn the_browser_boundary_refuses_page_content_and_other_sites() {
         r.send()
     };
 
-    let ok = get(&[("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "empty")])
-        .await
-        .unwrap();
+    let ok = get(&[
+        ("sec-fetch-site", "same-origin"),
+        ("sec-fetch-dest", "empty"),
+    ])
+    .await
+    .unwrap();
     assert_eq!(ok.status(), 200);
     let csp = ok.headers()["content-security-policy"].to_str().unwrap();
-    for part in ["script-src 'self'", "img-src 'self' data:", "frame-ancestors 'none'", "object-src 'none'"] {
+    for part in [
+        "script-src 'self'",
+        "img-src 'self' data:",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+    ] {
         assert!(csp.contains(part), "{csp}");
     }
     assert_eq!(ok.headers()["cache-control"], "no-store");
@@ -3182,9 +3373,18 @@ async fn the_browser_boundary_refuses_page_content_and_other_sites() {
     for headers in [
         vec![("sec-fetch-site", "cross-site")],
         vec![("sec-fetch-site", "same-site")],
-        vec![("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "image")],
-        vec![("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "script")],
-        vec![("sec-fetch-site", "same-origin"), ("sec-fetch-dest", "iframe")],
+        vec![
+            ("sec-fetch-site", "same-origin"),
+            ("sec-fetch-dest", "image"),
+        ],
+        vec![
+            ("sec-fetch-site", "same-origin"),
+            ("sec-fetch-dest", "script"),
+        ],
+        vec![
+            ("sec-fetch-site", "same-origin"),
+            ("sec-fetch-dest", "iframe"),
+        ],
         vec![("origin", "http://evil.example")],
         vec![("origin", "null")],
     ] {
@@ -3238,7 +3438,11 @@ async fn the_browser_boundary_refuses_page_content_and_other_sites() {
             .send()
             .await
             .unwrap();
-        assert_ne!(r.status(), 403, "{path} without browser headers reaches the bridge");
+        assert_ne!(
+            r.status(),
+            403,
+            "{path} without browser headers reaches the bridge"
+        );
     }
 
     let page = client.get(format!("{base}/")).send().await.unwrap();
@@ -3281,7 +3485,10 @@ async fn a_loopback_server_lives_at_its_private_name() {
     let (origin, token) = url.split_once("/#token=").unwrap();
     let host = origin.trim_start_matches("http://");
     let (name, port) = host.split_once(':').unwrap();
-    assert!(name.starts_with("ostra-") && name.ends_with(".localhost"), "{host}");
+    assert!(
+        name.starts_with("ostra-") && name.ends_with(".localhost"),
+        "{host}"
+    );
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
 
     let plain = reqwest::Client::builder()
@@ -3315,7 +3522,11 @@ async fn a_loopback_server_lives_at_its_private_name() {
         .await
         .unwrap();
     assert_eq!(r.status(), 204);
-    let env = private.get(format!("{origin}/api/environment")).send().await.unwrap();
+    let env = private
+        .get(format!("{origin}/api/environment"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(env.status(), 200);
 }
 
@@ -3482,7 +3693,10 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         .await
         .unwrap();
     assert_eq!(saved.content.as_deref(), Some("Use spaces.\n"));
-    assert_eq!(saved.read_only, None, "artifacts are editable though they sit in .ostra/");
+    assert_eq!(
+        saved.read_only, None,
+        "artifacts are editable though they sit in .ostra/"
+    );
     let visible = ostra_core::artifacts::dir(&root.join("ws"));
     assert_eq!(
         std::fs::read_to_string(visible.join("guides/style.md")).unwrap(),
@@ -3633,6 +3847,25 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         )
     })
     .await;
+    // The session ends at once, but its cancelled execution is recorded as finished only when the
+    // executor returns, and a move waits for that too (Rule W4).
+    let mut unblocked = false;
+    for _ in 0..200 {
+        let listed: WorkspaceArtifacts = client
+            .get(&arts)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if listed.delete_blocked.is_none() {
+            unblocked = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(unblocked, "the stopped session's execution never finished");
 
     let r = client
         .get(at("/download", "data/sample.csv"))
@@ -3651,16 +3884,21 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         .await
         .unwrap();
     assert_eq!(into_itself.status(), 400);
-    let listed: WorkspaceArtifacts = client
+    let r = client
         .post(format!("{arts}/move"))
         .json(&json!({"from": "data", "to": "fixtures/data"}))
         .send()
         .await
-        .unwrap()
-        .json()
-        .await
         .unwrap();
-    assert!(listed.artifacts.iter().any(|a| a.path == "fixtures/data/sample.csv"));
+    let (status, text) = (r.status(), r.text().await.unwrap());
+    let listed: WorkspaceArtifacts =
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{status} {text}: {e}"));
+    assert!(
+        listed
+            .artifacts
+            .iter()
+            .any(|a| a.path == "fixtures/data/sample.csv")
+    );
     assert!(!visible.join("data").exists(), "the old folder is gone");
     // A hidden artifact moves inside the hidden folder, so it stays hidden.
     let listed: WorkspaceArtifacts = client
@@ -3672,7 +3910,12 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         .json()
         .await
         .unwrap();
-    assert!(listed.artifacts.iter().any(|a| a.path == "archive/style.md" && a.hidden));
+    assert!(
+        listed
+            .artifacts
+            .iter()
+            .any(|a| a.path == "archive/style.md" && a.hidden)
+    );
     // Rule W2: a hidden folder hides all it holds, including files added to it later.
     let listed: WorkspaceArtifacts = client
         .post(format!("{arts}/hidden"))
@@ -3683,8 +3926,16 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         .json()
         .await
         .unwrap();
-    assert!(listed.artifacts.iter().any(|a| a.path == "fixtures/data/sample.csv" && a.hidden));
-    assert!(!visible.join("fixtures").exists(), "nothing of the folder stays visible");
+    assert!(
+        listed
+            .artifacts
+            .iter()
+            .any(|a| a.path == "fixtures/data/sample.csv" && a.hidden)
+    );
+    assert!(
+        !visible.join("fixtures").exists(),
+        "nothing of the folder stays visible"
+    );
     let later: WorkspaceArtifact = client
         .post(at("", "fixtures/later.csv"))
         .body("x")
@@ -3711,7 +3962,11 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         .send()
         .await
         .unwrap();
-    assert_eq!(one.status(), 409, "a file inside a hidden folder is shown with its folder");
+    assert_eq!(
+        one.status(),
+        409,
+        "a file inside a hidden folder is shown with its folder"
+    );
     let listed: WorkspaceArtifacts = client
         .post(format!("{arts}/hidden"))
         .json(&json!({"path": "fixtures", "hidden": false}))
@@ -3721,9 +3976,18 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         .json()
         .await
         .unwrap();
-    assert!(listed.artifacts.iter().all(|a| !a.path.starts_with("fixtures/") || !a.hidden));
+    assert!(
+        listed
+            .artifacts
+            .iter()
+            .all(|a| !a.path.starts_with("fixtures/") || !a.hidden)
+    );
     assert!(visible.join("fixtures/later.csv").is_file());
-    let _ = client.delete(at("", "fixtures/later.csv")).send().await.unwrap();
+    let _ = client
+        .delete(at("", "fixtures/later.csv"))
+        .send()
+        .await
+        .unwrap();
     let listed: WorkspaceArtifacts = client
         .delete(at("", "fixtures/data/sample.csv"))
         .send()

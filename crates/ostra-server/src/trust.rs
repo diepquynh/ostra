@@ -332,6 +332,12 @@ struct Access {
     limits: Option<ostra_core::config::Limits>,
     #[serde(default)]
     sandbox_mode: Option<ostra_core::config::SandboxMode>,
+    #[serde(default)]
+    sandbox_network: Option<ostra_core::config::SandboxNetwork>,
+    #[serde(default)]
+    sandbox_allowed_hosts: Vec<String>,
+    #[serde(default)]
+    sandbox_decoys: Vec<String>,
 }
 
 fn access(registry: &RegistryDb, root: &Path) -> Access {
@@ -349,6 +355,9 @@ fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) {
         yolo: s.yolo.default,
         limits: Some(s.limits.clone()),
         sandbox_mode: s.sandbox_mode,
+        sandbox_network: s.sandbox_network,
+        sandbox_allowed_hosts: s.sandbox_allowed_hosts.clone(),
+        sandbox_decoys: s.sandbox_decoys.clone(),
     })
     .unwrap_or_default();
     if let Err(e) = registry.kv_set(&access_key(root), &body) {
@@ -356,19 +365,28 @@ fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) {
     }
 }
 
-// Rule A2: the permission mode, YOLO, spend limits, and sandbox mode come from the registry,
-// never from a folder file, because a repository could otherwise lift its own budget or sandbox.
+// Rule A2: the permission mode, YOLO, spend limits, and the sandbox mode, network, hosts, and decoys
+// come from the registry, never from a folder file, because a repository could otherwise lift its
+// own budget, open its own sandbox, or plant decoys that pause every session.
 pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
     let a = access(registry, root);
     s.permissions.mode = a.mode;
     s.yolo.default = a.yolo;
     s.limits = a.limits.unwrap_or_default();
     s.sandbox_mode = a.sandbox_mode;
+    s.sandbox_network = a.sandbox_network;
+    s.sandbox_allowed_hosts = a.sandbox_allowed_hosts;
+    s.sandbox_decoys = a.sandbox_decoys;
 }
 
-/// The workspace's own sandbox mode, from the registry (Rule A2). `None` follows the global one.
-pub fn sandbox_mode(registry: &RegistryDb, root: &Path) -> Option<ostra_core::config::SandboxMode> {
-    access(registry, root).sandbox_mode
+/// The workspace's own sandbox settings, from the registry (Rule A2).
+pub fn sandbox(registry: &RegistryDb, root: &Path) -> ostra_core::config::WorkspaceSandbox {
+    let a = access(registry, root);
+    ostra_core::config::WorkspaceSandbox {
+        mode: a.sandbox_mode,
+        network: a.sandbox_network,
+        allowed_hosts: a.sandbox_allowed_hosts,
+    }
 }
 
 /// The settings programs run with: [`overlay`], and while the file waits for approval, no MCP
@@ -425,6 +443,9 @@ fn write_file(root: &Path, s: &WorkspaceSettings) -> Result<(), ConfigError> {
         t.remove("yolo");
         t.remove("limits");
         t.remove("sandbox_mode");
+        t.remove("sandbox_network");
+        t.remove("sandbox_allowed_hosts");
+        t.remove("sandbox_decoys");
         if let Some(p) = t.get_mut("permissions").and_then(|p| p.as_table_mut()) {
             p.remove("mode");
         }
@@ -911,26 +932,45 @@ mod tests {
     }
 
     #[test]
-    fn the_sandbox_mode_lives_in_the_registry_and_a_folder_file_cannot_set_it() {
+    fn the_sandbox_settings_live_in_the_registry_and_a_folder_file_cannot_set_them() {
         let (d, r) = registry();
         let root = d.path().join("ws");
         std::fs::create_dir_all(paths::workspace_runtime(&root)).unwrap();
         let mut s = WorkspaceSettings::seeded("w");
         s.sandbox_mode = Some(SandboxMode::Off);
+        s.sandbox_network = Some(ostra_core::config::SandboxNetwork::Host);
+        s.sandbox_allowed_hosts = vec!["evil.example".into()];
+        s.sandbox_decoys = vec!["~/.gitconfig".into()];
         save_toml(&paths::workspace_toml(&root), &s).unwrap();
         let file = raw(&root).unwrap();
-        assert_eq!(effective(&r, &root, file.clone()).sandbox_mode, None);
-        assert_eq!(sandbox_mode(&r, &root), None);
+        let eff = effective(&r, &root, file.clone());
+        assert_eq!(eff.sandbox_mode, None);
+        assert_eq!(eff.sandbox_network, None);
+        assert!(eff.sandbox_allowed_hosts.is_empty());
+        assert!(eff.sandbox_decoys.is_empty());
+        assert_eq!(sandbox(&r, &root), Default::default());
 
         s.sandbox_mode = Some(SandboxMode::Auto);
+        s.sandbox_network = Some(ostra_core::config::SandboxNetwork::None);
+        s.sandbox_allowed_hosts = vec!["mirror.lan:8080".into()];
+        s.sandbox_decoys = vec!["~/.aws/credentials".into()];
         save_workspace(&r, &root, &s).unwrap();
         let text = std::fs::read_to_string(paths::workspace_toml(&root)).unwrap();
         assert!(!text.contains("sandbox_mode"), "{text}");
-        assert_eq!(sandbox_mode(&r, &root), Some(SandboxMode::Auto));
+        assert!(!text.contains("sandbox_allowed_hosts"), "{text}");
+        assert!(!text.contains("sandbox_network"), "{text}");
+        assert!(!text.contains("sandbox_decoys"), "{text}");
+        let ws = sandbox(&r, &root);
+        assert_eq!(ws.mode, Some(SandboxMode::Auto));
+        assert_eq!(ws.network, Some(ostra_core::config::SandboxNetwork::None));
+        assert_eq!(ws.allowed_hosts, vec!["mirror.lan:8080".to_string()]);
+        let eff = effective(&r, &root, raw(&root).unwrap());
+        assert_eq!(eff.sandbox_mode, Some(SandboxMode::Auto));
         assert_eq!(
-            effective(&r, &root, raw(&root).unwrap()).sandbox_mode,
-            Some(SandboxMode::Auto)
+            eff.sandbox_allowed_hosts,
+            vec!["mirror.lan:8080".to_string()]
         );
+        assert_eq!(eff.sandbox_decoys, vec!["~/.aws/credentials".to_string()]);
     }
 
     #[test]

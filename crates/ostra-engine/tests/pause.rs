@@ -1,12 +1,12 @@
-//! Pause, resume, and mid-session context (Rules C1, C2, P1, P2) on a real engine.
+//! Pause, resume, containment, and mid-session context (Rules C1, C2, P1, P2, P3) on a real engine.
 
 use async_trait::async_trait;
 use ostra_core::api::{CreateSession, SessionStatus};
 use ostra_core::config::{GlobalConfig, ProjectEntry, ResolvedRoute, WorkspaceSettings};
 use ostra_core::event::{ContextDelivery, ContextFile, SessionEvent, SessionOptions};
 use ostra_core::exec::{
-    CancellationToken, ExecutionHost, ExecutionResult, ExecutionSpec, ExecutionStatus, Executor,
-    ResumeInfo, Usage,
+    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
+    ExecutionStatus, Executor, ResumeInfo, Usage,
 };
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{SessionId, WorkspaceId};
@@ -20,11 +20,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-/// Runs until cancelled, and records the resume and capabilities each run was given.
+/// Runs until cancelled, and records the resume and capabilities each run was given. The first
+/// run emits `deltas` before it waits.
 #[derive(Default)]
 struct Hanging {
     resumes: Mutex<Vec<Option<ResumeInfo>>>,
     caps: Mutex<Vec<usize>>,
+    deltas: Mutex<Vec<ExecutionDelta>>,
 }
 
 #[async_trait]
@@ -32,11 +34,15 @@ impl Executor for Hanging {
     async fn run(
         &self,
         spec: ExecutionSpec,
-        _host: Arc<dyn ExecutionHost>,
+        host: Arc<dyn ExecutionHost>,
         cancel: CancellationToken,
     ) -> ExecutionResult {
         self.resumes.lock().unwrap().push(spec.resume.clone());
         self.caps.lock().unwrap().push(spec.capabilities.len());
+        let deltas = std::mem::take(&mut *self.deltas.lock().unwrap());
+        for d in deltas {
+            host.emit(d);
+        }
         cancel.cancelled().await;
         let mut r = ExecutionResult::with_status(ExecutionStatus::Cancelled);
         r.native_session_id = Some("sid-1".into());
@@ -48,6 +54,10 @@ struct Fake {
     ws: WorkspaceSettings,
     exec: Arc<Hanging>,
     harness: bool,
+    /// Holds the first executor lookup, which a spawn makes before it records its start, until
+    /// the test sends on the channel; `held` says it is waiting.
+    hold: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    held: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
@@ -70,6 +80,11 @@ impl Services for Fake {
         self.ws.clone()
     }
     fn executor(&self, kind: ExecutorKind) -> Option<Arc<dyn Executor>> {
+        let hold = self.hold.lock().unwrap().take();
+        if let Some(rx) = hold {
+            self.held.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = rx.recv();
+        }
         (kind == ExecutorKind::Native || self.harness)
             .then(|| self.exec.clone() as Arc<dyn Executor>)
     }
@@ -103,6 +118,7 @@ struct Setup {
     _dir: tempfile::TempDir,
     engine: Engine,
     exec: Arc<Hanging>,
+    services: Arc<Fake>,
 }
 
 fn setup() -> Setup {
@@ -110,6 +126,14 @@ fn setup() -> Setup {
 }
 
 fn setup_with(harness: bool) -> Setup {
+    static CACHE: std::sync::Once = std::sync::Once::new();
+    // SAFETY: set once, before any engine here starts; nothing in this file starts a sandbox.
+    CACHE.call_once(|| unsafe {
+        std::env::set_var(
+            "OSTRA_SANDBOX_CACHE",
+            std::env::temp_dir().join("ostra-test-pause-cache"),
+        );
+    });
     let dir = tempfile::tempdir().unwrap();
     let app = dir.path().join("app");
     std::fs::create_dir_all(app.join(".ostra")).unwrap();
@@ -136,13 +160,21 @@ fn setup_with(harness: bool) -> Setup {
         ws,
         exec: exec.clone(),
         harness,
+        hold: Mutex::new(None),
+        held: Default::default(),
     });
     let db = WorkspaceDb::open(&dir.path().join("workspace.db")).unwrap();
-    let engine = Engine::new(dir.path().to_path_buf(), WorkspaceId::new(), db, services);
+    let engine = Engine::new(
+        dir.path().to_path_buf(),
+        WorkspaceId::new(),
+        db,
+        services.clone(),
+    );
     Setup {
         _dir: dir,
         engine,
         exec,
+        services,
     }
 }
 
@@ -196,7 +228,7 @@ async fn pause_interrupts_and_resume_continues_the_run() {
     let paused = st.executions.values().next().unwrap();
     let result = paused.result.as_ref().unwrap();
     assert_eq!(result.status, ExecutionStatus::Interrupted);
-    assert_eq!(result.error.as_deref(), Some("Paused by the user."));
+    assert_eq!(result.error.as_deref(), Some("The session was paused."));
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(
         t.exec.resumes.lock().unwrap().len(),
@@ -216,6 +248,107 @@ async fn pause_interrupts_and_resume_continues_the_run() {
     assert_eq!(resume.note.as_deref(), Some(PAUSE_RESUME_NOTE));
     assert!(e.resume_session(&s).is_err());
     e.stop_session(&s).unwrap();
+}
+
+fn refused(host: &str, port: u16, local: bool) -> ExecutionDelta {
+    ExecutionDelta::Egress {
+        host: host.into(),
+        port,
+        allowed: false,
+        reason: Some("not listed".into()),
+        local,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn containment_signals_pause_the_session() {
+    let t = setup();
+    let e = &t.engine;
+    *t.exec.deltas.lock().unwrap() = vec![
+        refused("telemetry.example.com", 443, false),
+        refused("127.0.0.1", 8001, true),
+        refused("10.0.0.1", 22, true),
+        refused("169.254.169.254", 80, true),
+        refused("127.0.0.1", 8002, true),
+    ];
+    let s = start(e, vec![]);
+    until("the session pauses", || e.state(&s).unwrap().paused).await;
+    until("the explore is interrupted", || {
+        e.state(&s).unwrap().running_executions().count() == 0
+    })
+    .await;
+    let st = e.state(&s).unwrap();
+    let explore = st.executions.values().next().unwrap();
+    assert_eq!(st.contained.as_ref(), Some(&explore.id));
+    assert_eq!(
+        explore.result.as_ref().unwrap().status,
+        ExecutionStatus::Interrupted
+    );
+    let signals = e
+        .db()
+        .events(&s)
+        .unwrap()
+        .iter()
+        .filter(|ev| matches!(ev.event, SessionEvent::ContainmentSignal { .. }))
+        .count();
+    assert_eq!(
+        signals, 3,
+        "a public refusal is no signal, and the log stops at the pause"
+    );
+    let summary = e.db().get_session(&s).unwrap().unwrap();
+    assert_eq!(summary.status, SessionStatus::Paused);
+    assert!(
+        summary.stage_label.contains("containment"),
+        "{}",
+        summary.stage_label
+    );
+
+    e.resume_session(&s).unwrap();
+    until("the explore resumes", || {
+        t.exec.resumes.lock().unwrap().len() == 2
+    })
+    .await;
+    assert_eq!(e.state(&s).unwrap().contained, None);
+    e.stop_session(&s).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_ended_session_loses_its_tool_caches() {
+    let t = setup();
+    let e = &t.engine;
+    let s = start(e, vec![]);
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
+    let dir = ostra_core::sandbox::session_cache(&home, &s);
+    assert!(dir.starts_with(std::env::temp_dir().join("ostra-test-pause-cache")));
+    std::fs::create_dir_all(dir.join("cargo/registry")).unwrap();
+    until("the explore runs", || {
+        t.exec.resumes.lock().unwrap().len() == 1
+    })
+    .await;
+    e.stop_session(&s).unwrap();
+    until("the cache is removed", || !dir.exists()).await;
+}
+
+/// A stop that lands while a spawn is being set up starts nothing: the spawn finds the session
+/// ended when it records its start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stop_during_spawn_setup_starts_nothing() {
+    let t = setup();
+    let e = &t.engine;
+    let (release, rx) = std::sync::mpsc::channel();
+    *t.services.hold.lock().unwrap() = Some(rx);
+    let s = start(e, vec![]);
+    until("a spawn is being set up", || {
+        t.services.held.load(std::sync::atomic::Ordering::SeqCst)
+    })
+    .await;
+    e.stop_session(&s).unwrap();
+    release.send(()).unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let st = e.state(&s).unwrap();
+    assert!(st.executions.is_empty(), "{:?}", st.executions.keys());
+    assert!(t.exec.resumes.lock().unwrap().is_empty(), "no executor ran");
+    assert!(e.db().running_executions().unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

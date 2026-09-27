@@ -24,4 +24,17 @@ message?: string,
 /**
  * What the working sandbox cannot enforce on this OS.
  */
-gaps?: string, };
+gaps?: string, 
+/**
+ * Decoy credential files work here: they need bubblewrap, so Linux only.
+ */
+decoys: boolean, 
+/**
+ * The decoys every agent sandbox gets, as `~/` paths. A workspace adds to them.
+ */
+builtin_decoys: Array<string>, 
+/**
+ * The hosts every command reaches under `allowlist`: package registries, source hosts, and
+ * the harness CLIs' model APIs. A workspace adds to them.
+ */
+builtin_hosts: Array<string>, };

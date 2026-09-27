@@ -1,4 +1,4 @@
-import type { AgentName, PermissionMode, SandboxMode, SandboxStatus } from "../api/types";
+import type { AgentName, PermissionMode, SandboxMode, SandboxNetwork, SandboxStatus } from "../api/types";
 
 /** Every route key in `routing.model.byAgent`, with a one-line role. */
 export const ROUTE_KEYS: { key: AgentName | "judge"; role: string }[] = [
@@ -61,10 +61,37 @@ export const PERMISSION_MODES: { mode: PermissionMode; label: string; help: stri
 /** Agent commands start without a sandbox: the mode is off, or auto on a machine without one. Required never does. */
 export const runsUnsandboxed = (s: SandboxStatus) => !s.active && s.mode !== "required";
 
+/** The sandboxing guide's decoy section on the repository, because the console ships no docs. */
+export const DECOY_GUIDE =
+  "https://github.com/diepquynh/ostra/blob/master/docs/security/sandboxing.md#decoy-credential-files";
+
+/** Network choices for sandboxed commands, as `[sandbox] network` and `sandbox_network` take them. */
+export const SANDBOX_NETWORKS: { network: SandboxNetwork; label: string; help: string }[] = [
+  { network: "none", label: "None", help: "Commands reach nothing. A harness CLI still reaches its own model API." },
+  {
+    network: "allowlist",
+    label: "Allowlist",
+    help: "Package registries, source hosts, the harness CLIs' model APIs, and the hosts listed below.",
+  },
+  {
+    network: "public",
+    label: "Public",
+    help: "Any public address, and the hosts listed below. Loopback, private, and link-local addresses stay refused.",
+  },
+  {
+    network: "host",
+    label: "Host",
+    help: "The host's network as it is, unfiltered: every local service, the LAN, and the cloud metadata address.",
+  },
+];
+
+/** The allowed hosts apply only under these choices. */
+export const takesHosts = (n: SandboxNetwork) => n === "allowlist" || n === "public";
+
 /** What works only for Ostra's own file tools, not for shell commands, while agent commands run without a sandbox. */
 export const UNSANDBOXED_EFFECTS = [
   "Hidden workspace artifacts can be read by a shell command that walks the disk, such as find ~.",
   "Ostra's data dir and your CLI sign-in files can be read by a shell command that does not name them.",
   "A program a command starts can write anywhere your user can. Ostra checks the writes it can read in the command itself.",
-  "[sandbox] network = false does not apply.",
+  "The [sandbox] network setting does not apply: commands reach any host, your local services and LAN included.",
 ];

@@ -95,6 +95,17 @@ pub struct WorkspaceDetail {
     /// Whether this workspace's agent commands run sandboxed: the global `[sandbox]` config with
     /// the workspace's own mode in place of the global one.
     pub sandbox: SandboxStatus,
+    /// The network choice and hosts from `[sandbox]` in the global config, which the workspace's
+    /// own choice replaces and its hosts add to.
+    pub global_sandbox: GlobalSandbox,
+}
+
+/// The parts of the global `[sandbox]` config a workspace's settings build on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GlobalSandbox {
+    pub network: crate::config::SandboxNetwork,
+    pub allowed_hosts: Vec<String>,
 }
 
 /// The command-bearing settings of one folder file, as the user approves them together.
@@ -523,6 +534,13 @@ pub struct SandboxStatus {
     /// What the working sandbox cannot enforce on this OS.
     #[ts(optional)]
     pub gaps: Option<String>,
+    /// Decoy credential files work here: they need bubblewrap, so Linux only.
+    pub decoys: bool,
+    /// The decoys every agent sandbox gets, as `~/` paths. A workspace adds to them.
+    pub builtin_decoys: Vec<String>,
+    /// The hosts every command reaches under `allowlist`: package registries, source hosts, and
+    /// the harness CLIs' model APIs. A workspace adds to them.
+    pub builtin_hosts: Vec<String>,
 }
 
 impl SandboxStatus {
@@ -541,8 +559,21 @@ impl SandboxStatus {
             message,
             gaps: backend()
                 .filter(|_| active)
-                .and_then(known_gaps)
-                .map(str::to_string),
+                .and_then(|b| known_gaps(b, cfg.network)),
+            decoys: matches!(backend(), Some(crate::sandbox::Backend::Bubblewrap(_))),
+            builtin_decoys: crate::decoy::HOME_DECOYS
+                .iter()
+                .map(|(rel, _)| format!("~/{rel}"))
+                .collect(),
+            builtin_hosts: crate::egress::DEFAULT_ALLOWED_HOSTS
+                .iter()
+                .chain(
+                    crate::HarnessKind::ALL
+                        .iter()
+                        .flat_map(|h| crate::egress::model_hosts(*h)),
+                )
+                .map(|h| h.to_string())
+                .collect(),
         }
     }
 }
@@ -700,7 +731,8 @@ pub enum SessionStatus {
     Failed,
     /// Nothing is running and no gate is open, but the session is not done.
     Stalled,
-    /// The user paused it. Nothing starts until they continue it.
+    /// The user paused it, or containment signals did (Rule P3). Nothing starts until the user
+    /// continues it.
     Paused,
 }
 

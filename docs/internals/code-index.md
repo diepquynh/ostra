@@ -64,8 +64,12 @@ looking for. This keeps memory small on large repositories and means the answer 
 now.
 
 Imports resolve from the language's own rules plus the project's manifests: `Cargo.toml` package names,
-`go.mod` module paths, and `package.json` and `tsconfig.json` for aliased paths. An import that leaves the
-project, such as `std::path::Path` or a third-party package, is marked `external`.
+`go.mod` module paths, and `package.json` and `tsconfig.json` for aliased paths. A `package.json` also names a
+workspace package: an import of `@scope/ui` or `@scope/ui/theme` resolves to the file its `exports` entry names
+(the first of the `types`, `import`, `default`, `module`, and `require` conditions), else, for the package
+itself, to its top-level `types`, `module`, or `main`, and for a subpath without an entry, to that path in the
+package folder. An import that
+leaves the project, such as `std::path::Path` or a third-party package, is marked `external`.
 
 ### Staying current
 
@@ -139,6 +143,9 @@ Some care goes into keeping the graph honest:
 - Index modules (`lib.rs`, `mod.rs`, `index.ts`, `__init__.py`, and files with `export * from`) re-export
   names. A walk does not step through them on an import alone, because the names already link to the files that
   define them.
+- Across packages, a bare name links to a function only when an import spells it: `use other::name` in Rust, or
+  `import { name } from "@scope/ui"` in JavaScript and TypeScript, where every name from another file needs an
+  import. In Rust, a type, macro, or top-level constant from a crate the package depends on links without one.
 - Test files are recognized by folder (`tests/`, `__tests__/`, `spec/`, `fixtures/`) and by name
   (`_test.go`, `.spec.ts`, `Test.java`, and others), so answers can separate code from its tests.
 

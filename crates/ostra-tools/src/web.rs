@@ -1,7 +1,7 @@
 use crate::text::truncate_end;
 use crate::{ToolEnv, ToolOutput, required, str_arg};
 use serde_json::Value;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
@@ -61,54 +61,7 @@ impl reqwest::dns::Resolve for PublicResolver {
     }
 }
 
-/// Loopback, private, link-local, CGNAT, unique-local, multicast, and reserved ranges.
-pub(crate) fn is_private(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => private_v4(v4),
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return private_v4(v4);
-            }
-            let s = v6.segments();
-            // `::a.b.c.d` (IPv4-compatible) carries an IPv4 address too.
-            if s[..6] == [0, 0, 0, 0, 0, 0] && (s[6] != 0 || s[7] > 1) {
-                let [a, b] = s[6].to_be_bytes();
-                let [c, d] = s[7].to_be_bytes();
-                return private_v4(Ipv4Addr::new(a, b, c, d));
-            }
-            // Local-use NAT64 (`64:ff9b:1::/48`) translates to addresses the network chooses.
-            if s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1 {
-                return true;
-            }
-            let nat64 = s[0] == 0x64 && s[1] == 0xff9b && s[2..6] == [0, 0, 0, 0];
-            if nat64 {
-                let [a, b] = s[6].to_be_bytes();
-                let [c, d] = s[7].to_be_bytes();
-                return private_v4(Ipv4Addr::new(a, b, c, d));
-            }
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || (s[0] & 0xfe00) == 0xfc00
-                || (s[0] & 0xffc0) == 0xfe80
-                || (s[0] & 0xffc0) == 0xfec0
-        }
-    }
-}
-
-fn private_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, _, _] = ip.octets();
-    ip.is_loopback()
-        || ip.is_private()
-        || ip.is_link_local()
-        || ip.is_unspecified()
-        || ip.is_broadcast()
-        || ip.is_multicast()
-        || a == 0
-        || (a == 100 && (b & 0xc0) == 64)
-        || (a == 198 && (b & 0xfe) == 18)
-        || a >= 240
-}
+pub(crate) use ostra_core::egress::is_private;
 
 /// A URL whose host is a private IP literal, which the resolver never sees.
 fn private_literal(url: &reqwest::Url, private_hosts: &[String]) -> bool {
@@ -412,4 +365,3 @@ mod tests {
         }
     }
 }
-

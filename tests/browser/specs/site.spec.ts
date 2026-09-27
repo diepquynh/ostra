@@ -44,8 +44,40 @@ test("docs render a page of test strings as text", async ({ page, state, guard }
   const foreign = foreignRequests(page, state.site);
   await page.goto(`${state.site}/docs/#test-doc`);
   await audit(page, guard, "PW-MARKER-docs", "docs test page", state.site);
+  // Mermaid draws two blocks with SVG text labels, whatever their directives ask; the one that does not parse shows
+  // its source.
+  const diagram = page.locator(".md-diagram svg");
+  await expect(diagram).toHaveCount(2);
+  await expect(diagram.getByText("PW-MERMAID-docs").first()).toBeVisible();
+  await expect(diagram.getByText("PW-MERMAID-front").first()).toBeVisible();
+  await expect(page.locator(".md-pre").filter({ hasText: "mmbad" })).toBeVisible();
   // Only images bundled from docs/images load, so none of the payload's images does.
   expect(await page.locator("article img").count()).toBe(0);
+  for (const node of await diagram.locator(".node").all()) await node.click({ timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  expect(await domProblems(page)).toEqual([]);
+  const html = (sel: string) => page.locator(sel).evaluateAll((els) => els.map((e) => e.outerHTML.slice(0, 120)));
+  expect(await html(".md-diagram :is(a, img, image, iframe, script, foreignObject)")).toEqual([]);
+  expect(new URL(page.url()).origin).toBe(state.site);
+  expect(foreign).toEqual([]);
+});
+
+test("the sandboxing page draws its diagrams from the site's own bundle in both themes", async ({
+  page,
+  state,
+  guard,
+}) => {
+  onSite(guard, state.site);
+  const foreign = foreignRequests(page, state.site);
+  await page.goto(`${state.site}/docs/#sandboxing`);
+  const diagrams = page.locator(".md-diagram svg");
+  await expect(diagrams).toHaveCount(4);
+  await expect(diagrams.getByText("ostra sandbox-init", { exact: false }).first()).toBeVisible();
+  expect(await domProblems(page)).toEqual([]);
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
+  await expect(diagrams).toHaveCount(4);
+  await expect(diagrams.getByText("ostra sandbox-init", { exact: false }).first()).toBeVisible();
+  expect(await domProblems(page)).toEqual([]);
   expect(foreign).toEqual([]);
 });
 

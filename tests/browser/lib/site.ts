@@ -8,7 +8,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { REPO_ROOT, ROOT } from "./env";
-import { markdown } from "./payloads";
+import { markdown, mermaid } from "./payloads";
 
 export const SITE_DIR = path.join(ROOT, "site");
 /** Its own site: Chromium resolves any `*.localhost` to loopback. */
@@ -33,7 +33,7 @@ export function buildSite(fake: string) {
     throw new Error("site/public/console is missing: run the suite once without PW_SKIP_BUILD");
   execFileSync("npx", ["vite", "build", "--outDir", SITE_DIR, "--emptyOutDir"], {
     cwd: site,
-    env: { ...process.env, VITE_TEST_DOC: markdown("docs", fake) },
+    env: { ...process.env, VITE_TEST_DOC: `${markdown("docs", fake)}\n\n${mermaid("docs", fake)}` },
     stdio: "inherit",
   });
 }

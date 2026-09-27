@@ -10,8 +10,11 @@ CLI, so these guarantees hold whatever a command turns out to do:
   does not see them.
 - **Nothing is left behind to run later.** Shell startup files, login and autostart entries, and `.git/config` and
   hooks are read-only, so an agent cannot plant a program that runs the next time you open a terminal or run git.
-- **Writes stay in the workspace.** The repo, the session, a private `/tmp`, and per-workspace tool caches are
-  writable; the rest of the machine is read-only, your own `~/.cargo` and `~/.npm` included.
+- **Writes stay in the workspace.** The repo, the session, a private `/tmp`, and the session's own tool caches
+  are writable; the rest of the machine is read-only, your own `~/.cargo` and `~/.npm` included.
+- **Network access is limited to hosts you allow.** On Linux a sandboxed command has a network of its own and
+  reaches the outside only through a proxy that lets through package registries, source hosts, model APIs, and
+  the hosts you list. Local services, the LAN, and the cloud metadata address stay out of reach.
 - **Your session stays closed.** The desktop bus, the SSH agent, the display, and Docker and Podman sockets are
   hidden or unset, and a command cannot signal a process outside its sandbox.
 - **It is on by default and fails closed.** The default mode, `required`, refuses to start an execution the
@@ -36,6 +39,112 @@ The code is one module, [`crates/ostra-core/src/sandbox.rs`](../../crates/ostra-
 harness wrapping in [`crates/ostra-exec-harness/src/sandbox.rs`](../../crates/ostra-exec-harness/src/sandbox.rs).
 It lives in `ostra-core` because every crate that starts a process (the tools, both executors, the code index,
 the engine, and the server) depends on it.
+
+## Architecture
+
+The diagrams follow one process from the component that starts it to the kernel mechanisms that confine it.
+Solid arrows are calls and data flow, dotted arrows point at a kernel mechanism, and thick arrows are the Unix
+sockets that are a Linux sandbox's only way out.
+
+Every process Ostra starts for an agent or a project goes through one profile and one mode decision, then renders
+for the backend the machine has:
+
+```mermaid
+flowchart TB
+  bash["Native Bash tool call<br/>a fresh sandbox per call"]
+  harness["Harness CLI<br/>sandboxed as a whole process"]
+  programs["Project programs<br/>formatter, language servers,<br/>code providers, stdio MCP"]
+  lists["Shared lists<br/>HOME_CREDENTIALS,<br/>PERSISTENCE_IN_HOME, git_repos"]
+  forExec["Profile::for_execution"]
+  forProg["Profile::for_program<br/>through host_command"]
+  ordered["Profile::ordered<br/>rules sorted by depth"]
+  probe["Backend probe<br/>once per server process"]
+  decide["sandbox::decide<br/>the mode, per execution"]
+  render["Profile::command"]
+  none["No backend<br/>required refuses, auto warns"]
+  bwrap["Linux<br/>bwrap and ostra sandbox-init"]
+  sbx["macOS<br/>/usr/bin/sandbox-exec"]
+  bash --> forExec
+  harness --> forExec
+  programs --> forProg
+  lists --> forExec
+  lists --> forProg
+  forExec --> ordered
+  forProg --> ordered
+  ordered --> render
+  probe --> decide
+  decide --> render
+  decide --> none
+  render --> bwrap
+  render --> sbx
+```
+
+On Linux, bubblewrap builds the namespaces, and `ostra sandbox-init` locks the process down before the command
+starts:
+
+```mermaid
+flowchart TB
+  apparmor["AppArmor userns restriction<br/>can stop bwrap, so the probe fails"]
+  bwrap["bwrap<br/>read-only root, binds, tmpfs"]
+  ns["Kernel: namespaces<br/>user, mount, pid, ipc, net"]
+  init["ostra sandbox-init<br/>the first program inside"]
+  nnp["Kernel: PR_SET_NO_NEW_PRIVS"]
+  seccomp["Kernel: seccomp-bpf filter"]
+  cmd["The command and<br/>every process it starts"]
+  apparmor -.-> bwrap
+  bwrap -. "creates" .-> ns
+  bwrap --> init
+  init -. "sets" .-> nnp
+  init -. "loads" .-> seccomp
+  init -- "exec" --> cmd
+```
+
+The command then reaches the network and the hook bridge only through sockets into the Ostra server, and a decoy
+file it opens raises a signal:
+
+```mermaid
+flowchart TB
+  cmd["A command in the sandbox"]
+  init["ostra sandbox-init<br/>loopback forwards"]
+  egress["Egress proxy, in the server<br/>host check, one lookup, SNI"]
+  bridge["Hook bridge, in the server<br/>answers /internal/* only"]
+  hosts(("Allowed hosts"))
+  decoy["Decoy credential files<br/>bound read-only into hidden paths"]
+  ino["Kernel: inotify<br/>watched from the server"]
+  signal["Containment signal<br/>Rule P3"]
+  cmd -- "connects on loopback" --> init
+  init == "egress socket" ==> egress
+  init == "bridge socket" ==> bridge
+  egress --> hosts
+  egress -- "private address refused" --> signal
+  cmd -. "opens" .-> decoy
+  decoy -.-> ino
+  ino -- "first open" --> signal
+```
+
+On macOS, the kernel's Seatbelt module enforces the policy, and Ostra finds the processes to stop by the marker
+names the policy carries:
+
+```mermaid
+flowchart TB
+  sbx["/usr/bin/sandbox-exec -p SBPL<br/>root-owned binary only"]
+  kext["Sandbox kernel extension<br/>file, mach, signal, network checks"]
+  cmd["The command and its children"]
+  cleanup["Process cleanup<br/>at the invocation's end and at start"]
+  check["sandbox_check<br/>matches the marker names"]
+  sbx -- "policy" --> kext
+  sbx --> cmd
+  kext -. "enforces" .-> cmd
+  cleanup --> check
+  check -- "stops" --> cmd
+```
+
+On Linux, Ostra loads no Linux security module of its own. Confinement comes from namespaces, which bubblewrap
+creates from an unprivileged user namespace, and from the seccomp filter and `no_new_privs` that `ostra
+sandbox-init` installs. AppArmor matters only because its user namespace restriction can stop bubblewrap from
+starting, and then the probe reports the machine as unable to sandbox. On macOS, Seatbelt is the kernel's own
+sandbox policy module: `sandbox-exec` hands it the SBPL policy, and the kernel checks each file, mach, signal, and
+network call against it. The sections below describe each box.
 
 ## Policy and sandbox
 
@@ -99,8 +208,9 @@ agent can read the toolchain, system headers, and the repo's dependencies withou
 ### Writable
 
 - The workspace root, the repo root, the session root, and the execution's session dir.
-- `.git` of each repo, bound writable onto itself. Commits, branches, and the index work; the bind also means
-  `.git` cannot be renamed away (see [git](#git-stays-usable-and-closed)).
+- On bubblewrap, each dir between a writable root and a rule inside it, bound writable onto itself: `.git`, the
+  repo dir that holds it, and every dir above that up to the root. A mount point cannot be renamed, so nothing
+  protected can be moved out from under its rule (see [git](#git-stays-usable-and-closed)).
 - A private `/tmp` (see [temporary files](#temporary-files)).
 - The per-workspace tool caches (see [tool caches](#tool-caches)).
 - Each entry of `[sandbox] extra_writable`.
@@ -167,6 +277,53 @@ client secrets, and every `OSTRA_*` variable, and project programs lose provider
 `OSTRA_*` variable. A harness CLI inherits Ostra's environment minus every credential variable except its own
 sign-in key, and gets fresh bridge variables for its own execution (see [secrets and data](secrets-and-data.md)).
 
+#### Decoy credential files
+
+On Linux, an agent execution also finds decoy files inside some hidden paths: fake credentials that
+authenticate nowhere, planted where an agent has no reason to look. Opening one is a containment signal (Rule
+P3), because the `secret-read` guard sees only reads made through a tool, and a `cat ~/.ssh/id_rsa` in Bash or
+in a script would otherwise find an empty dir and leave no trace.
+
+| Decoy | Planted when |
+| --- | --- |
+| `~/.ssh/id_rsa`, `~/.ssh/id_ed25519` | `~/.ssh` exists, or the execution is a harness CLI's, and no SSH port is reachable: the network choice is `none` or `allowlist` and no allowed host names port 22 |
+| `~/.git-credentials` | the file exists, or the execution is a harness CLI's |
+| `~/.vault-token` | the file exists, or the execution is a harness CLI's |
+
+The SSH keys depend on the network because `ssh` opens its keys on its own when it authenticates, and a build
+that fetches a dependency over SSH would raise a signal. `~/.netrc` gets no decoy, because Python `requests`
+(and so `pip`) and Go module downloads read it on every fetch.
+
+A workspace can add its own decoys (`sandbox_decoys`), such as `~/.aws/credentials` or a token file only your
+team uses. The built-in list always applies, and a workspace adds to it without removing any entry. Each entry
+is a file path starting with `~/`. Saving a harness CLI's sign-in file is a validation error, because a decoy
+there would sign that CLI out in the sandbox. More than 32 entries is one too, because each decoy is a watched
+file and a mount in every agent sandbox. The list is kept in the registry, never in `.ostra/workspace.toml`
+(Rule A2), because a repository could otherwise plant decoys at paths agents read all the time and pause every
+session. A workspace decoy whose file name starts with `id_` under `~/.ssh/` is treated as an SSH key, and the
+same port 22 condition applies.
+
+The Settings screen shows the list on the Permissions tab under "Decoy files", with the built-in decoys listed
+above it as fixed entries. On a server that cannot plant decoys (macOS, or no bubblewrap), the field is
+disabled and links to this section. `GET /api/workspaces/<id>` reports that as `sandbox.decoys`, and the
+built-in list as `sandbox.builtin_decoys`.
+
+Each execution gets its own decoys with fresh random contents, written to `<data dir>/decoys/<16 hex>/`, which
+the sandbox hides, and bound read-only into place. Ostra never writes the host to make room for one, so a decoy
+is planted in one of two places. Where the file exists, the decoy is bound over it, which also hides the real
+file, and covers a hidden file's `/dev/null` bind. Where it does not, the decoy goes only inside a hidden dir's
+tmpfs (or a harness's disposable home), where bubblewrap creates the missing folders, so `~/.aws/sso/cache/x.json`
+works when `~/.aws` exists. A path that fits neither is skipped.
+
+Ostra watches each file with inotify from outside the sandbox. inotify follows the file, not the path, so the watch sees an open through the bind mount in the
+sandbox's mount namespace. Only an open counts: `ls ~/.ssh` and `stat` do not. Each decoy reports its first open
+and then stops being watched, so one decoy raises at most one signal per execution. A native execution shares
+one set of decoys across its Bash calls; a harness execution keeps its set for the life of the CLI. The decoys
+are removed when the execution ends, and at server start any a crashed server left behind.
+
+Project programs (formatters, language servers, code providers, MCP servers) get no decoys, because their
+signals have no session to pause. Seatbelt has no bind mounts, so macOS plants none.
+
 ### A deeper rule overrides a shallower one
 
 Rules overlap: the repo is writable, `.git/hooks` inside it is read-only, and `.ostra/sessions/<this session>`
@@ -193,17 +350,60 @@ programs to run from its config: `core.fsmonitor`, `core.sshCommand`, hook scrip
 both properties:
 
 - `.git` is writable, so objects, refs, and the index can change.
-- `.git/config`, `.git/hooks/`, and `.git/info/` are read-only in each repo and each submodule gitdir, so an agent
-  cannot plant a hook or an fsmonitor command that runs later outside the sandbox, when the user or Ostra runs git.
-- `.git` is bound onto itself. A bind-mount point cannot be renamed, so `mv .git .g && git init` cannot swap in a
-  new config. On Seatbelt, which has no mounts, a `file-write-unlink` deny on every ancestor of a protected path
-  inside a writable dir does the same job.
+- `.git/config`, `.git/config.worktree`, `.git/hooks/`, and `.git/info/` are read-only in each repo and each
+  submodule gitdir, so an agent cannot plant a hook or an fsmonitor command that runs later outside the sandbox,
+  when the user or Ostra runs git. A missing `config.worktree` gets an empty read-only placeholder, which git
+  ignores unless `config` turns on `extensions.worktreeConfig`. Each linked worktree's own
+  `.git/worktrees/<name>/config.worktree` is read-only too, for a repo that turns that extension on.
+- A `.git` file, as a submodule checkout or a linked worktree has, is read-only, so it cannot be pointed at a git
+  dir the agent wrote. The git dir it names gets the same read-only paths as a `.git` dir; for a linked worktree,
+  whose config is its main repo's, that is only its `config.worktree`.
+- `.git/commondir` cannot get a placeholder, because git refuses to open a repository whose `commondir` is empty.
+  A `commondir` makes git load another folder's `config`, so Ostra undoes one instead
+  ([`repair_git_dirs`](../../crates/ostra-core/src/sandbox.rs)): it removes a `commondir` from a repository's own
+  git dir, where git never writes one, and restores a linked worktree's `commondir` that no longer names `../..`.
+  It checks after every native Bash call, every 2 seconds while a harness CLI runs and once when it exits, and
+  before Ostra's own staging, commits, pulls, and pushes. The agent reads the correction in its tool result
+  (native), and each repair is recorded as a refusal by the `git-metadata` guard, which counts as a containment
+  signal. Between the write and the check, a git command the user runs in that repository would read the planted
+  config.
+- Nothing protected can be renamed away. A bind-mount point cannot be renamed, but the dirs above one can, so
+  `mv repo r && git init repo` would leave the protected `.git` under `r` and put a fresh, writable config where
+  the user runs git. On bubblewrap, [`Profile::plan`](../../crates/ostra-core/src/sandbox.rs) therefore binds every
+  dir between a writable root and a rule inside it onto itself: `.git`, the repo dir, and each dir above it. A
+  rename across two of those binds fails with `EXDEV`, which `mv` handles by copying. On Seatbelt, which has no
+  mounts, a `file-write-unlink` deny on every ancestor of a protected path inside a writable dir does the same
+  job.
 - Every git process a sandboxed command starts gets `core.fsmonitor=false`, `safe.bareRepository=explicit`, and
   `protocol.ext.allow=never` through `GIT_CONFIG_COUNT`, so a malicious repo config the agent did not write still
   cannot start a program ([`crates/ostra-core/src/git.rs`](../../crates/ostra-core/src/git.rs)).
+- Every git command Ostra runs on the host (status, diffs, staging, commits, pulls, pushes) gets
+  `core.fsmonitor=false`, `protocol.ext.allow=never`, and an empty `core.askPass` as `-c` options, and blanks the
+  filter drivers of every submodule in the index, at any depth
+  ([`filter_overrides`](../../crates/ostra-core/src/git.rs)). A status, a diff, `git add`, or a commit runs
+  `git status` inside each populated submodule, which reads that repository's own config, and `-c` options reach
+  those child processes. Without the blanking, a repository the agent created and staged (by its own `git add`
+  or Ostra's staging) would run its clean filter the next time Ostra listed changes: git hashes a file again
+  through the filter when its size is unchanged and its time is not. Status, diffs, and staging also blank the
+  root repo's drivers except git-lfs; a commit, pull, or push you ask for keeps them, so a filter such as
+  git-crypt still applies to what you commit. The search reads at most 256 repositories.
 
-The repos covered are the workspace root, the repo root, and their direct children that contain a `.git` dir. A
-checkout whose `.git` is a file, such as a worktree or a submodule checkout, is not covered.
+The repos covered are every dir under the workspace root and the repo root that holds a `.git` dir or file, at any
+depth, found when the execution starts
+([`git_repos`](../../crates/ostra-core/src/sandbox.rs)). The walk goes breadth first and does not enter symlinks,
+`node_modules`, or dirs tagged as caches with a `CACHEDIR.TAG` (Cargo tags `target/`), because those hold build
+output, not the user's repos. It stops after 20,000 dirs or 128 repos and logs where it stopped, which bounds the
+mounts and the time it adds (about 90 ms for 12,000 dirs, measured on Ostra's own tree). An execution's
+`commondir` checks cover the repos found at its start; Ostra's staging and git commands walk again. A repo the
+agent creates during the execution is its own, like a repo it clones: its config is writable.
+
+This is the line the sandbox draws on purpose: it keeps agents from going further than they should, and it does
+not guard the git you run yourself. Git that Ostra runs on the host starts neither the fsmonitor command nor the
+filter drivers such a config names, the two that a status, diff, or staging reaches. Git an agent runs inside
+the sandbox may start them, where the agent could start any program anyway. Git you run in a terminal or a
+desktop app reads that config, as it reads the config of any repository you clone, and a plain `git status`
+enters a submodule an agent staged in your repo. Review a submodule an agent added before you run git there.
+The [threat model](threat-model.md#risks-ostra-accepts) lists this as an accepted risk.
 
 ### Temporary files
 
@@ -223,10 +423,17 @@ honor `TMPDIR` work; a program that hard-codes `/tmp` fails with `EPERM`.
 ### Tool caches
 
 A build inside the sandbox needs to download crates and packages, but it must not write the user's own caches,
-because the user's host builds would then run what an agent put there. The sandbox gives each workspace its own
-caches under `~/.cache/ostra/sandbox/<hash>/` (or `$OSTRA_SANDBOX_CACHE/<hash>`), created 0700, and points the
-tools at them. Agent executions hash the workspace root; project programs hash their first root, the project
-root, so they keep a cache apart from the agents'.
+because the user's host builds would then run what an agent put there. For the same reason one session must not
+write the caches a later session builds from: an agent that a README talked into planting a package would
+otherwise reach every session after it. So the sandbox gives each session its own caches under
+`~/.cache/ostra/sandbox/session-<id>/` (or `$OSTRA_SANDBOX_CACHE/session-<id>`), created 0700, and points the
+tools at them. Every agent execution in the session shares them, and the engine removes them when the session
+ends (completed, failed, or stopped), because an ended session runs no more tools. A server start removes any
+cache an ended session left behind, for a removal that failed; it touches only its own data dir's sessions,
+because other data dirs share the cache root. A run outside a session, such as a side-panel
+run, uses a cache keyed by a hash of its workspace root. Project programs (formatters, language servers, code
+providers, stdio MCP servers) hash their first root, the project root or, for a stdio MCP server, the workspace
+root, so they keep a cache that no agent writes.
 
 | Variable | Cache dir |
 | --- | --- |
@@ -243,23 +450,144 @@ root, so they keep a cache apart from the agents'.
 The user's `~/.cargo/config.toml` and `~/.cargo/config` are linked into the sandbox `CARGO_HOME`, so registry mirrors and build settings
 carry over, and cargo's credentials file is not.
 
-Two consequences follow. The first build in a workspace downloads its dependencies again, and an agent's build
+Two consequences follow. The first build in every session downloads its dependencies again, and an agent's build
 and the user's build do not share compiled dependencies. `~/.rustup` stays read-only, so a toolchain the project
 pins but the user has not installed fails inside the sandbox; install it on the host once.
 
 ### Network
 
-`[sandbox] network` (default `true`) sets network access for native Bash. With `false`, bubblewrap unshares the
-network namespace, so a command has no network at all, loopback included. On Seatbelt, `false` drops the rules that allow IP
-traffic and DNS. With `true`, bubblewrap keeps the host network, and Seatbelt allows outbound IP, localhost binds
-and inbound local connections, and DNS through mDNSResponder. On Seatbelt, Unix sockets are allowed only inside
-writable dirs, whatever the setting, and denied everywhere else.
+`[sandbox] network` chooses what a sandboxed command can reach. It applies to native Bash, harness CLIs, and
+the programs Ostra starts for a project alike. A workspace can choose its own in place of the global one
+(`sandbox_network`), kept in the registry like its mode, so a repository cannot change it.
 
-Harness CLIs and project programs always get the network, whatever the setting says. A harness needs its model
-API and Ostra's hook bridge on loopback, and language servers and MCP servers fetch dependencies and call their
-own services. The network is the boundary the sandbox leaves open: a sandboxed command with network can send anything
-it can read. What it can read is the workspace and the rest of the read-only filesystem, and the hidden list is
-what keeps secrets out of that.
+| Choice | A sandboxed command reaches |
+| --- | --- |
+| `none` | Nothing. A harness CLI still reaches its own model API and Ostra's hook bridge. |
+| `allowlist` (default) | The built-in hosts below, the hosts in `allowed_hosts`, and, for a harness, the model endpoints you configured for it |
+| `public` | Any public address, and the hosts in `allowed_hosts`. Loopback, private, and link-local addresses stay refused. |
+| `host` | The host's network as it is: every local service, the LAN, and the cloud metadata address |
+
+The built-in hosts ([`DEFAULT_ALLOWED_HOSTS`](../../crates/ostra-core/src/egress.rs)) are the package registries
+and source hosts that builds fetch from: crates.io and its index, npm and Yarn, PyPI, the Go module proxy,
+GitHub (including raw files and release downloads), Maven Central, Gradle, Google's Maven, RubyGems, and NuGet.
+The model API and sign-in hosts of all four harness CLIs are built in too (`egress::model_hosts`), so a test or a
+tool that calls a model API works under `allowlist`. A built-in host must resolve to a public address, so a DNS
+answer that points one at your LAN is refused.
+
+#### How a command gets out on Linux
+
+Under every choice but `host`, bubblewrap gives the sandbox its own network namespace (`--unshare-net`). Its only
+interface is its own loopback, so a test that starts a server on `127.0.0.1` and connects to it works, and
+nothing on the host's loopback, the LAN, or the host's abstract Unix sockets is reachable. The only ways out are
+Unix sockets Ostra binds into that namespace, one per purpose:
+
+```
+sandbox (own network namespace)                        Ostra server (host network)
+  curl https://registry.npmjs.org/...
+    │ HTTPS_PROXY=http://127.0.0.1:<free port>
+    ▼
+  ostra sandbox-init ── <data dir>/egress/<id>.sock ──> egress proxy ── policy ──> registry.npmjs.org:443
+    127.0.0.1:<bridge port> ── bridge-<id>.sock ─────> hook bridge (/internal/* only)
+    127.0.0.1:<listed port> ── <id>.sock ────────────> 127.0.0.1:<listed port> on the host
+```
+
+The first program in the sandbox is Ostra's helper, `ostra sandbox-init`
+([`sandbox_init.rs`](../../crates/ostra-core/src/sandbox_init.rs)). It listens on the sandbox's loopback and
+forwards each connection to one of the sockets: the execution's egress proxy on a free port, and fixed ports for
+the hook bridge and for each loopback host you listed. It sets `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` (and
+their lowercase forms) to the proxy, `NO_PROXY` to `localhost,127.0.0.1,::1`, and `NODE_USE_ENV_PROXY=1` so that
+Node's built-in `fetch` uses the proxy too. Then it loads the seccomp filter and starts the command.
+
+The egress proxy runs in the Ostra server, on a runtime of its own. Under `allowlist` and `public` each execution
+gets one, and so does a harness CLI under `none`: every Bash call of a native execution shares it, and so does
+everything a harness CLI starts. Native Bash under `none` gets no proxy and no way out. Its socket lives at
+`<data dir>/egress/<16 hex>.sock`, in a dir only you can open, and is removed when the execution ends; a server
+that stopped without removing its sockets has them removed at the next start. The data dir is hidden from every
+sandbox and each socket is bound only into its own sandbox, so no execution can reach another's proxy.
+
+The proxy speaks HTTP/1.1. It accepts `CONNECT host:port`, which carries HTTPS and any other TCP protocol, and
+plain HTTP in absolute form (`GET http://host/path`), which it sends on in origin form with `Connection: close`
+and without `Proxy-*` headers. For each request it:
+
+1. Checks the host by name against the policy. An unlisted name is never looked up, so the proxy leaks no DNS
+   query for it.
+2. Resolves the name itself and connects to the address it checked, never a second lookup, so a DNS answer that
+   changes between the check and the connection cannot move it to another address.
+3. For a `CONNECT` to a host name, reads the TLS ClientHello and compares its server name (SNI) with the host.
+   A different name closes the tunnel, because a CDN that routes by server name would otherwise carry an allowed
+   tunnel to any site it serves. A tunnel without TLS, or one where the destination speaks first (an SSH banner),
+   passes.
+
+Limits: a request head of 8 KiB, 256 open connections at a time per execution (a connection over the cap is
+closed without an answer), 30 seconds to send the head, and 10 seconds to connect.
+
+A refusal answers `403` with the correction first, for example:
+
+```
+Add `evil.example` to `[sandbox] allowed_hosts` in config.toml, or set `[sandbox] network = "public"`, to let
+sandboxed commands reach it, because the sandbox lets traffic through only to listed hosts.
+```
+
+The first allowed connection and the first refusal of each host and port are recorded with the execution's
+activity as an `egress` item; the console does not display them yet. A refusal of a loopback, private, or
+link-local destination is also a containment signal, and three of those from one execution pause the session
+(see [agent containment](agent-containment.md#containment-signals-pause-the-session)).
+
+#### Allowed hosts
+
+Each entry of `allowed_hosts` is a host name, `*.domain` (every name below `domain`, not `domain` itself), an
+IPv4 address, or an IPv6 address in brackets, each with an optional `:port`. Without a port an entry allows 443
+and 80. A host you list may resolve to any address, including a private one, because it is often a mirror or a
+model gateway on your LAN.
+
+A loopback entry needs a port (`127.0.0.1:8317`, `localhost:8317`), and saving one without is a validation error.
+Programs connect to loopback directly instead of through the proxy (`NO_PROXY`), so Ostra forwards each listed
+loopback port from the sandbox's loopback to the host's.
+
+The global list is `[sandbox] allowed_hosts` in `config.toml`. Each workspace can add its own
+(`sandbox_allowed_hosts`), which is kept in the registry, never in `.ostra/workspace.toml`, and adds to the global
+and built-in hosts without removing any (Rule A2). A change to either list or to the network choice applies to
+the next execution, replaces a running language server on its next use, and reconnects a stdio MCP server.
+
+The Settings screen sets both on the Permissions tab, in the Network panel: the four choices plus "Use the global
+setting", which names the global choice, then the workspace's hosts, one per line. Under the field the panel
+lists the global hosts and, folded, the built-in ones. Under `none` or `host` the field stays editable, and its
+hint says the choice ignores the hosts. On macOS the panel says to choose `none` unless it is chosen, because
+Ostra has no egress proxy there (Seatbelt on macOS, below). The server checks every host as you edit and again at
+save, and a host that does not parse shows its issue on the field. `GET /api/workspaces/<id>` carries what the panel shows:
+`global_sandbox` (the global `network` and `allowed_hosts`) and `sandbox.builtin_hosts`.
+
+#### An upstream proxy
+
+On a machine that reaches the internet only through an HTTP proxy, set `[sandbox] upstream_proxy =
+"http://proxy.example:3128"`. The egress proxy still checks every host by name. It then opens a `CONNECT` tunnel
+through the upstream (or sends plain HTTP to it in absolute form), passing a name that does not resolve on this
+machine to the upstream as a name, unless it is a local-only name you did not list (`printer.local`, a single
+label). A host you listed that resolves to a private address is reached directly, because an internal mirror is
+rarely behind the corporate proxy. Through the upstream, the upstream resolves the name, so the address check
+and the single lookup above apply only to direct connections. The upstream takes no credentials. An upstream
+answer other than `200` to a `CONNECT` becomes a `502` with that answer in it; its answer to plain HTTP passes
+through unchanged.
+
+#### What the proxy changes
+
+- **Only HTTP and HTTPS clients that honor the proxy variables reach the network.** A program that ignores them
+  gets no network at all. Git over SSH does not work under `none`, `allowlist`, or `public`; use HTTPS remotes.
+- **Project programs reach only allowed hosts too.** A formatter, language server, code provider, or stdio MCP
+  server that calls its own service needs that host in `allowed_hosts`.
+- **A harness CLI's own web tools reach only allowed hosts.** Ostra's native `WebFetch` runs in the server, not in
+  the sandbox, and has its own address checks ([tools](../internals/tools.md)).
+- **A harness reaches the model endpoints you chose for it.** Ostra adds the host of every `*_BASE_URL` variable
+  in the CLI's launch environment or in Ostra's own, of `env.*_BASE_URL` in Claude Code's `settings.json`, and of
+  `model_providers.*.base_url` in Codex's `config.toml`. Those may resolve anywhere, like a host you listed.
+
+#### Seatbelt on macOS
+
+Seatbelt has no network namespace, and Ostra has no egress proxy on macOS. Under `none`, native Bash and
+project programs get no IP traffic or DNS. Under every other choice, and for a harness CLI under every choice
+because it needs its model API, a sandboxed command shares the host's network: outbound IP, localhost binds and
+inbound local connections, and DNS through mDNSResponder. The sandbox status reports this as a known gap. On Seatbelt, Unix sockets are allowed only
+inside writable dirs, whatever the setting, and denied everywhere else.
 
 ## Harness CLIs in the sandbox
 
@@ -286,13 +614,20 @@ to `Profile::for_execution`:
   continue without it.
 - **The PTY stays the controlling terminal.** Native Bash runs with `--new-session`, which blocks `TIOCSTI` input
   injection into the terminal Ostra was started from. A harness runs in a PTY that must be its controlling
-  terminal, so that flag is off, and on Seatbelt the policy allows exactly that PTY's device (`-D TTY=<path>`)
-  and every other terminal stays denied.
+  terminal, so that flag is off. On bubblewrap the seccomp filter refuses `TIOCSTI` instead, and on Seatbelt the
+  policy allows exactly that PTY's device (`-D TTY=<path>`) and every other terminal stays denied.
 - **The CLI's own sandbox is off inside Ostra's.** When Ostra runs Claude Code sandboxed, it writes
   `"sandbox": {"enabled": false}` into the execution's settings, because macOS cannot nest Seatbelt sandboxes and
   Ostra's profile already covers the CLI. Codex always runs with `--dangerously-bypass-approvals-and-sandbox`,
   because Ostra's hooks and sandbox take the place of its approvals; this flag is passed whether or not Ostra's
   sandbox is active, so a Codex execution in mode `off` has no sandbox at all.
+- **Its model API and the hook bridge stay reachable.** Under every network choice the CLI reaches its own
+  model and sign-in hosts and the model endpoints you configured for it (see [network](#network)). On bubblewrap
+  with a network of its own, the hook bridge's port is forwarded to the server's bridge socket, which answers
+  only `/internal/*`, so a command in the sandbox cannot reach Ostra's API even with a stolen cookie. When Ostra
+  listens on an address other than loopback, `OSTRA_URL` inside such a sandbox becomes
+  `http://127.0.0.1:<port>`, because loopback is where the helper forwards the port. Under `host` and on
+  Seatbelt the CLI calls the server's own address, as an unsandboxed one does.
 - **Only its own sign-in is visible.** The CLI keeps its own sign-in file and its own API key variables (for
   example `ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex). Every other harness's sign-in and
   every other provider key is hidden or removed. The agent's own shell commands inside that CLI can read the
@@ -316,18 +651,53 @@ Bubblewrap builds a new mount namespace from the rules:
 3. The ordered rules: `--bind` for writable, `--ro-bind` for read-only, `--tmpfs` for a hidden dir,
    `--ro-bind /dev/null` for a hidden file, `--symlink` for links.
 4. `--unsetenv` for the session variables and `--setenv` for the cache and temp variables.
-5. `--unshare-pid --unshare-ipc`, and `--unshare-net` when the network is off.
+5. `--unshare-pid --unshare-ipc`, and `--unshare-net` under every network choice but `host`.
 6. `--die-with-parent`, and `--new-session` outside a PTY.
+7. The program itself is `ostra sandbox-init`, which binds the forwards and the proxy port described under
+   [network](#network), loads the seccomp filter below, starts the command, and exits with its status.
 
 The pid namespace means a sandboxed command sees only its own processes, so it cannot read another process's
 environment or command line, or send it a signal. `--die-with-parent` means every process in the sandbox ends
 when Ostra stops the command, including one that detached.
 
-Ostra calls `bwrap` from `PATH` and test-runs it at startup
-(`bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid true`). The run fails where unprivileged user
-namespaces are blocked, which is the case in many containers and on Ubuntu 24.04 with its AppArmor default; the
-message names the fix. Ostra reports no known gaps for bubblewrap (`known_gaps`); the limits under
-[what the sandbox does not cover](#what-the-sandbox-does-not-cover) still apply.
+#### Kernel calls a sandboxed command cannot make
+
+Before it starts the command, `ostra sandbox-init` loads a seccomp filter (`crates/ostra-core/src/seccomp.rs`). The
+kernel keeps a filter across `fork` and `exec` and never removes it, so it covers everything the command starts.
+The helper loads it while it still has one thread, because a filter applies only to the thread that loads it and
+to what that thread starts afterwards. It sets `no_new_privs` first, so no program inside can gain privileges
+through a setuid bit either.
+
+| Refused | Answer | Why |
+| --- | --- | --- |
+| `unshare` and `clone` with `CLONE_NEWUSER` | `EPERM` | A new user namespace gives the command every capability inside it, and with them new mount and network namespaces, a large part of the kernel an unprivileged program can otherwise not reach |
+| `clone3` | `ENOSYS` | Its flags sit in memory a filter cannot read, so the filter makes glibc fall back to `clone`, whose flags it can |
+| `io_uring_setup`, `io_uring_enter`, `io_uring_register` | `ENOSYS` | io_uring bypasses per-call filtering and has a long record of kernel bugs; libuv and others fall back to ordinary calls |
+| `bpf`, `userfaultfd`, `perf_event_open` | `EPERM` | Builds and tests do not need them, and each has been a common way into the kernel |
+| `keyctl`, `add_key`, `request_key` | `EPERM` | The kernel keyring is shared across the user's sessions |
+| `kexec_load`, `kexec_file_load`, `init_module`, `finit_module`, `delete_module`, `open_by_handle_at` | `EPERM` | Kernel replacement, modules, and file handles that step outside a mount namespace |
+| `ioctl` with `TIOCSTI` or `TIOCLINUX` | `EPERM` | Typing into a terminal. `--new-session` already blocks this outside a PTY; the filter also covers a harness in its PTY |
+
+The filter answers with an error instead of ending the process, so a program that probes for a feature falls
+back. It checks the architecture first and ends a process that makes calls of another one, such as 32-bit x86
+calls on x86_64, because those have other numbers; on x86_64 it also refuses the x32 numbers, which reach the
+same calls. The filter exists for x86_64 and aarch64. On other Linux machines commands run without it, and the
+sandbox status reports that as a known gap.
+
+This changes what an agent command can run:
+
+- **A sandbox inside the sandbox fails,** because every one of them starts with a new user namespace:
+  `bwrap`, `unshare -U`, rootless Podman, Flatpak, and Chromium's own sandbox. Puppeteer needs
+  `--no-sandbox` (Playwright passes it already). Harness CLIs keep their own sandbox off inside Ostra's (see
+  [harness CLIs in the sandbox](#harness-clis-in-the-sandbox)), so they are not affected.
+- **Ostra's own sandbox tests cannot run inside an Ostra agent,** for the same reason.
+
+Ostra calls `bwrap` from `PATH` and test-runs it at startup: a new pid and network namespace, with the helper
+inside it running `true`. The run fails where unprivileged user namespaces are blocked, which is the case in many
+containers and on Ubuntu 24.04 with its AppArmor default; the message names the fix. Because the helper loads the
+filter in that run too, a kernel that refuses it also makes the sandbox unavailable, so no command runs in a
+sandbox without its filter. On x86_64 and aarch64 Ostra reports no known gaps for bubblewrap (`known_gaps`); the
+limits under [what the sandbox does not cover](#what-the-sandbox-does-not-cover) still apply.
 
 ### Seatbelt on macOS
 
@@ -402,16 +772,19 @@ folder travels with the repository and a repository could otherwise turn its own
 is a workspace registered before approvals existed: its old file values move into the registry once. See
 [settings and routing](../internals/settings-and-routing.md) for the rest of Rule A2.
 
-Only the mode can be set per workspace. `network`, `extra_writable`, and `extra_hidden` come from the global
-config for every workspace, so a workspace cannot widen the paths an agent can write.
+A workspace can set its mode and network choice and add allowed hosts, all kept in the registry, so only you
+change them, never a file in the repository. `upstream_proxy`, `extra_writable`, and `extra_hidden` come from
+the global config for every workspace, so a workspace cannot widen the paths an agent can write.
 
 ### Settings
 
 ```toml
 [sandbox]
-mode = "required"                    # "required", "auto", or "off"
-network = true                       # false: native Bash commands get no network at all
-extra_writable = ["~/.config/my-lsp"] # absolute, or starting with ~/
+mode = "required"                          # "required", "auto", or "off"
+network = "allowlist"                      # "none", "allowlist", "public", or "host"
+allowed_hosts = ["mirror.corp.example", "*.internal.example:8443", "127.0.0.1:8317"]
+upstream_proxy = "http://proxy.corp.example:3128"   # optional
+extra_writable = ["~/.config/my-lsp"]      # absolute, or starting with ~/
 extra_hidden = ["~/work/other-client"]
 ```
 
@@ -441,40 +814,58 @@ Ostra reports it in these places:
 - **In the Artifacts tab,** a warning says shell commands can read hidden artifacts, with a button to the setting.
 
 The status all of these read is `SandboxStatus` ([`api.rs`](../../crates/ostra-core/src/api.rs)): `mode`,
-`available`, `backend`, `active`, `message`, and `gaps`. The workspace detail carries the workspace's own status,
-the global config with the workspace's mode in its place.
+`available`, `backend`, `active`, `message`, `gaps`, `decoys`, `builtin_decoys`, and `builtin_hosts`. The
+workspace detail carries the workspace's own status, the global config with the workspace's mode, network choice,
+and hosts in place, and next to it `global_sandbox`, the global choice and hosts alone, which the Network panel
+needs because the merged status no longer shows them.
 
-The screenshot shows the Sandbox panel on the Permissions tab:
+The screenshot shows the Sandbox, Network, and Decoy files panels on the Permissions tab:
 
-![The workspace Permissions tab with the Sandbox panel](../images/console/settings-permissions.png)
+![The workspace Permissions tab with the Sandbox, Network, and Decoy files panels](../images/console/settings-permissions.png)
 
 Without the sandbox, the policy still checks every tool call, and the file tools still refuse the data dir, the
 credential stores, and hidden artifacts. What is lost is everything a command does that its tool call does not
 name: `find ~` reads the credential stores, a build script can write anywhere the user can, including `~/.bashrc`
-and `.git/hooks`, and `[sandbox] network = false` does not apply. Programs Ostra starts for a project run
+and `.git/hooks`, and the network choice does not apply, so commands reach every host, local services
+included. Programs Ostra starts for a project run
 unsandboxed in that case too, without a status line of their own.
 
 ## What the sandbox does not cover
 
 These limits follow from the design, and the sections above give the reasons:
 
-- **Network exfiltration.** A sandboxed command with network can send what it can read. Hiding secrets is the
-  defense, not closing the network, except for native Bash with `network = false`.
-- **Abstract Unix sockets on Linux.** They live in the network namespace, so with the network on, a command can
-  connect to one the host exposes. `network = false` closes them for native Bash.
-- **Nested repositories below the first level.** Git's config is protected in the workspace root, the repo root,
-  and their direct children. A repo nested deeper has a writable `.git/config`.
+- **What an allowed host receives.** A command can send what it can read to any host it may reach. GitHub,
+  the registries, and the model APIs all accept uploads, so under `allowlist` the network still carries data
+  out; hiding secrets is the defense, and `none` the only closed network.
+- **Domain fronting inside TLS.** The proxy compares the TLS server name with the `CONNECT` host, but it does not
+  decrypt the tunnel, so it cannot see an HTTP `Host` header inside it that names another site on the same CDN.
+- **Telemetry.** CLIs and build tools that report to hosts outside the list are refused. The four harness CLIs
+  continued without it when measured; add the host for a tool that does not.
+- **macOS shares the host network** under every choice but `none`, and for a harness CLI under `none` too.
+- **Repositories past the walk's limits, and new ones.** Git's config is protected in every repo the walk finds when
+  an execution starts. A repo below a skipped dir (`node_modules`, a cache), past the walk's 20,000 dirs or 128
+  repos, or created by the agent during the execution has a writable `.git/config`. Ostra's own git does not run
+  its fsmonitor command or filter drivers; your own git does, by design (see
+  [Git stays usable and closed](#git-stays-usable-and-closed)).
 - **Paths that are not on the hidden list.** A secret in an unusual place, such as a token file in the repo or a
   key in `~/Documents`, is readable unless `extra_hidden` names it.
 - **What the agent is allowed to change.** The sandbox lets an agent write the whole workspace. Stage-level limits
   (a reviewer that must not edit code, a builder confined to its paths) are the policy's write scope.
 - **Seatbelt's process arguments gap**, described under [Seatbelt](#seatbelt-on-macos).
+- **Decoys are a tripwire, not a wall.** The decoy list is in this page, so an agent that has read it can avoid
+  the files. A decoy catches a model probing for credentials, and the hidden list is what keeps the real ones
+  out of reach.
 
 ## Where to look in the code
 
 | Topic | File |
 | --- | --- |
 | `Profile`, both backends, the lists, `decide`, `host_command`, the probe | [`crates/ostra-core/src/sandbox.rs`](../../crates/ostra-core/src/sandbox.rs) |
+| The helper inside each bubblewrap sandbox | [`crates/ostra-core/src/sandbox_init.rs`](../../crates/ostra-core/src/sandbox_init.rs) |
+| The egress proxy, host rules, built-in hosts, the SNI check, the upstream proxy | [`crates/ostra-core/src/egress.rs`](../../crates/ostra-core/src/egress.rs) |
+| The hook bridge socket | `serve_bridge_socket` in [`crates/ostra-server/src/bridge.rs`](../../crates/ostra-server/src/bridge.rs) |
+| The seccomp filter | [`crates/ostra-core/src/seccomp.rs`](../../crates/ostra-core/src/seccomp.rs) |
+| Decoy credential files and their inotify watch | [`crates/ostra-core/src/decoy.rs`](../../crates/ostra-core/src/decoy.rs) |
 | `HOME_CREDENTIALS` and the data dir | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |
 | `SandboxConfig`, `SandboxMode`, `validate_sandbox` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
 | `SandboxStatus` | [`crates/ostra-core/src/api.rs`](../../crates/ostra-core/src/api.rs) |

@@ -331,7 +331,13 @@ impl<'s> Walker<'s> {
                 // unquoted parts are joined before looking for one.
                 let unquoted: String = parts
                     .iter()
-                    .map(|n| if n.kind() == "word" { self.text(*n) } else { "\u{0}" })
+                    .map(|n| {
+                        if n.kind() == "word" {
+                            self.text(*n)
+                        } else {
+                            "\u{0}"
+                        }
+                    })
                     .collect();
                 parts
                     .iter()
@@ -634,7 +640,11 @@ impl<'s> Walker<'s> {
             "comment" => {}
             // `[ -f x ]` and `[[ -d src ]]` over plain words only: an expansion or a subscript
             // in a test is evaluated, and can run a command.
-            "test_command" if !self.text(node).trim_matches(['[', ']', ' ']).contains(['$', '`', '[', ']', '(']) => {}
+            "test_command"
+                if !self
+                    .text(node)
+                    .trim_matches(['[', ']', ' '])
+                    .contains(['$', '`', '[', ']', '(']) => {}
             kind => {
                 if node.is_named() && !STRUCTURAL.contains(&kind) {
                     self.modelled = false;
@@ -886,7 +896,10 @@ fn targets_of(cmd: &SimpleCommand, unresolved: &mut bool) -> Vec<(TargetSpec, St
                     } else {
                         args[i].clone()
                     });
-                } else if let Some(d) = t.strip_prefix("-t").filter(|d| !d.is_empty() && !t.starts_with("--")) {
+                } else if let Some(d) = t
+                    .strip_prefix("-t")
+                    .filter(|d| !d.is_empty() && !t.starts_with("--"))
+                {
                     target_dir = Some(if args[i].is_static() {
                         Word::literal(d)
                     } else {

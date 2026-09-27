@@ -58,6 +58,8 @@ struct Registry {
 pub struct HarnessRuntime {
     exe: PathBuf,
     callback: String,
+    /// The Unix socket serving only [`internal_routes`], set once the server binds it.
+    bridge_socket: OnceLock<PathBuf>,
     live: Arc<LiveRegistry>,
     ptys: Arc<PtyRegistry>,
     executor: OnceLock<Arc<HarnessExecutor>>,
@@ -93,12 +95,22 @@ impl HarnessRuntime {
         HarnessRuntime {
             exe,
             callback,
+            bridge_socket: OnceLock::new(),
             live,
             ptys: PtyRegistry::new(),
             executor: OnceLock::new(),
             registry,
             bridge,
         }
+    }
+
+    /// Set before the first harness execution starts.
+    pub fn set_bridge_socket(&self, path: PathBuf) {
+        let _ = self.bridge_socket.set(path);
+    }
+
+    pub fn bridge_socket(&self) -> Option<&std::path::Path> {
+        self.bridge_socket.get().map(PathBuf::as_path)
     }
 
     pub fn set_write_sink(&self, sink: tokio::sync::mpsc::UnboundedSender<Touch>) {
@@ -117,11 +129,12 @@ impl HarnessRuntime {
         let exec = self
             .executor
             .get_or_init(|| {
-                let cfg = HarnessExecutorConfig::new(
+                let mut cfg = HarnessExecutorConfig::new(
                     global.clone(),
                     self.exe.clone(),
                     format!("http://{}", self.callback),
                 );
+                cfg.bridge_socket = self.bridge_socket.get().cloned();
                 Arc::new(HarnessExecutor::new(
                     cfg,
                     self.live.clone(),
@@ -482,6 +495,20 @@ async fn mcp_route(
     Json(app.shared.harness.bridge.handle_mcp(&token, req).await).into_response()
 }
 
+/// Serves [`internal_routes`] on a Unix socket in the egress dir, which sandboxes with their own
+/// network reach the hook bridge through. Nothing else of the server answers there.
+pub fn serve_bridge_socket(app: &Arc<App>) -> std::io::Result<PathBuf> {
+    let path = ostra_core::egress::socket_path(&ostra_core::sandbox::egress_dir(), "bridge-")?;
+    let listener = tokio::net::UnixListener::bind(&path)?;
+    let router = internal_routes().with_state(app.clone());
+    tokio::spawn(async move {
+        if let Err(e) = axum::serve(listener, router).await {
+            tracing::error!("the hook bridge socket stopped: {e}");
+        }
+    });
+    Ok(path)
+}
+
 pub fn internal_routes() -> axum::Router<Arc<App>> {
     axum::Router::new()
         .route(
@@ -575,6 +602,9 @@ mod tests {
             protected_paths: vec![],
             memory_db: dir.join("memory.sqlite3"),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
         };
         Arc::new(Running {
             policy: ExecutionPolicy::new(ctx.clone(), Default::default()),

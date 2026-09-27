@@ -9,6 +9,7 @@ import type {
   ModelChoice,
   PermissionMode,
   SandboxMode,
+  SandboxNetwork,
   ValidationIssue,
   WorkspaceSettings,
 } from "../../api/types";
@@ -68,6 +69,12 @@ export type SettingsForm = {
   mode: PermissionMode;
   /** `""` follows the global `[sandbox] mode`. */
   sandbox: SandboxMode | "";
+  /** `""` follows the global `[sandbox] network`. */
+  network: SandboxNetwork | "";
+  /** The workspace's own allowed hosts, one per line. */
+  allowedHosts: string;
+  /** The workspace's own decoy paths, one per line. */
+  decoys: string;
   allow: string;
   ask: string;
   deny: string;
@@ -319,6 +326,9 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
     yolo: s.yolo.default,
     mode: s.permissions.mode,
     sandbox: s.sandbox_mode ?? "",
+    network: s.sandbox_network ?? "",
+    allowedHosts: lines(s.sandbox_allowed_hosts),
+    decoys: lines(s.sandbox_decoys),
     allow: lines(s.permissions.allow),
     ask: lines(s.permissions.ask),
     deny: lines(s.permissions.deny),
@@ -405,6 +415,9 @@ export function fromForm(
   s.yolo.default = form.yolo;
   s.permissions.mode = form.mode;
   s.sandbox_mode = form.sandbox || null;
+  s.sandbox_network = form.network || null;
+  s.sandbox_allowed_hosts = unlines(form.allowedHosts);
+  s.sandbox_decoys = unlines(form.decoys);
   s.permissions.allow = unlines(form.allow);
   s.permissions.ask = unlines(form.ask);
   s.permissions.deny = unlines(form.deny);
@@ -463,6 +476,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
 export function tabOf(path: string): SettingsTab {
   const head = path.split(/[.[]/)[0];
   if (head === "mcp_servers") return "mcp";
+  if (head.startsWith("sandbox_")) return "permissions";
   if (
     head === "projects" ||
     head === "routing" ||
@@ -486,6 +500,7 @@ export function fieldIds(form: SettingsForm): string[] {
     "notifications.push",
   ];
   ids.push("permissions.mode", "permissions.allow", "permissions.ask", "permissions.deny");
+  ids.push("sandbox_mode", "sandbox_network", "sandbox_allowed_hosts", "sandbox_decoys");
   form.projects.forEach((_, i) => ids.push(`projects[${i}]`));
   ids.push("mcp_servers");
   form.mcp.forEach((_, i) => {

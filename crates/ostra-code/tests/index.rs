@@ -280,7 +280,7 @@ esac"#,
         command,
         root: root.clone(),
         timeout: Duration::from_secs(1),
-        sandbox: None,
+        sandbox: Default::default(),
     });
     let chain = [external, native];
     let r = root.to_string_lossy().into_owned();

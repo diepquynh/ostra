@@ -970,7 +970,9 @@ pub fn parse_block(agent: AgentName, text: &str) -> Result<BTreeMap<String, Stri
         match present.len() {
             1 => check(present[0], kinds[*present[0]], &values[*present[0]])?,
             0 => {
-                return Err("missing required parameter: one of `Phase file:` or `No plan:`".into());
+                return Err(
+                    "missing required parameter: one of `Phase file:` or `No plan:`".into(),
+                );
             }
             _ => return Err("give exactly one of `Phase file:` or `No plan:`, not both".into()),
         }

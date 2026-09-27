@@ -160,7 +160,7 @@ impl Code {
         };
         let list = files.index(w, key).await?;
         let settings = w.effective_settings();
-        let sandbox = settings.sandbox_mode;
+        let sandbox = settings.sandbox();
         let project = settings.projects.into_iter().find(|p| p.key == key);
         let id: ProjectId = (w.id.clone(), key.to_string());
         let native: Arc<dyn CodeProvider> = Arc::new(NativeProvider {
@@ -176,7 +176,7 @@ impl Code {
                 command: cp.command,
                 root: root.clone(),
                 timeout: Duration::from_secs(cp.timeout_secs.into()),
-                sandbox,
+                sandbox: sandbox.clone(),
             }));
         }
         for config in project.map(|p| p.language_servers).unwrap_or_default() {
@@ -186,7 +186,7 @@ impl Code {
                 root: root.clone(),
                 config,
                 base: native.clone(),
-                sandbox,
+                sandbox: sandbox.clone(),
             }));
         }
         chain.push(native);
@@ -267,7 +267,7 @@ impl Code {
             list: list.clone(),
         });
         let settings = w.effective_settings();
-        let sandbox = settings.sandbox_mode;
+        let sandbox = settings.sandbox();
         let project = settings.projects.into_iter().find(|p| p.key == key);
         let servers = project
             .map(|p| p.language_servers)
@@ -279,7 +279,7 @@ impl Code {
                 root: root.clone(),
                 config,
                 base: base.clone(),
-                sandbox,
+                sandbox: sandbox.clone(),
             })
             .collect();
         Ok(HintRig {
@@ -430,7 +430,7 @@ impl Code {
             )
         })?;
         let settings = w.effective_settings();
-        let sandbox = settings.sandbox_mode;
+        let sandbox = settings.sandbox();
         let project = settings.projects.into_iter().find(|p| p.key == key);
         let config = project
             .into_iter()

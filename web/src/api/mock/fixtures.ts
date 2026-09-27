@@ -80,6 +80,9 @@ export const settings: WorkspaceSettings = {
   notifications: { push: true },
   limits: { max_parallel_executions: 3, session_budget_usd: 25 },
   sandbox_mode: null,
+  sandbox_network: null,
+  sandbox_allowed_hosts: [],
+  sandbox_decoys: [],
   mcp_servers: [
     {
       name: "github",
@@ -175,7 +178,23 @@ export const workspaceDetail: WorkspaceDetail = {
   stacks,
   global_permissions: { allow: [], ask: [], deny: ["Bash(rm -rf /*)"] },
   pending_commands: [],
-  sandbox: { mode: "required", available: true, backend: "bubblewrap", active: true },
+  sandbox: {
+    mode: "required",
+    available: true,
+    backend: "bubblewrap",
+    active: true,
+    decoys: true,
+    builtin_decoys: ["~/.ssh/id_rsa", "~/.ssh/id_ed25519", "~/.git-credentials", "~/.vault-token"],
+    builtin_hosts: [
+      "index.crates.io",
+      "registry.npmjs.org",
+      "pypi.org",
+      "github.com",
+      "api.anthropic.com",
+      "api.openai.com",
+    ],
+  },
+  global_sandbox: { network: "allowlist", allowed_hosts: ["mirror.corp.example"] },
 };
 
 export const phases: PhaseInfo[] = [

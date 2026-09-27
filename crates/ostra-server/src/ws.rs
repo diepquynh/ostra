@@ -224,7 +224,10 @@ async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
     recheck.tick().await;
     let mut revoked = app.auth.subscribe_revoked();
     let mine = crate::auth::cookie_hash(&cookie);
-    let signed_out = CloseFrame { code: 4401, reason: "Signed out".into() };
+    let signed_out = CloseFrame {
+        code: 4401,
+        reason: "Signed out".into(),
+    };
     loop {
         tokio::select! {
             _ = recheck.tick() => {

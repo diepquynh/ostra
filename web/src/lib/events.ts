@@ -314,6 +314,16 @@ export function describeEvent(e: SessionEvent): string {
       return "Session paused";
     case "session_resumed":
       return "Session continued";
+    case "containment_signal":
+      switch (e.signal.kind) {
+        case "guard":
+          return `Containment signal: the ${e.signal.rule} guard refused a tool call`;
+        case "egress":
+          return `Containment signal: refused a connection to ${e.signal.host}:${e.signal.port}`;
+        case "decoy":
+          return `Containment signal: a command opened the decoy file ${e.signal.path}`;
+      }
+      break;
     case "yolo_set":
       return e.enabled ? "YOLO turned on" : "YOLO turned off";
     case "decision_made":

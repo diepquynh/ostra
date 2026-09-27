@@ -180,8 +180,8 @@ pub struct CommandProvider {
     pub command: Vec<String>,
     pub root: PathBuf,
     pub timeout: Duration,
-    /// The workspace's sandbox mode in place of the global one, when it sets one.
-    pub sandbox: Option<ostra_core::config::SandboxMode>,
+    /// The workspace's own sandbox settings.
+    pub sandbox: ostra_core::config::WorkspaceSandbox,
 }
 
 impl CommandProvider {
@@ -192,7 +192,7 @@ impl CommandProvider {
             args,
             &self.root,
             &[&self.root],
-            self.sandbox,
+            &self.sandbox,
         )?;
         let mut cmd = tokio::process::Command::new(&hc.program);
         for k in &hc.env_remove {

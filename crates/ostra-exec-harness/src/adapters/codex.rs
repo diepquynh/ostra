@@ -142,7 +142,10 @@ mod tests {
         )) else {
             panic!()
         };
-        assert_eq!(call.str_field("command"), Some("bash -lc 'echo a; rm -rf ~/x'"));
+        assert_eq!(
+            call.str_field("command"),
+            Some("bash -lc 'echo a; rm -rf ~/x'")
+        );
 
         let patch = "*** Begin Patch\n*** Add File: src/a.rs\n+x\n*** End Patch\n";
         let PreParse::Call { call, .. } =

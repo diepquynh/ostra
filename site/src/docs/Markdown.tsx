@@ -1,17 +1,19 @@
 import type { PhrasingContent, RootContent } from "mdast";
 import type { ReactNode } from "react";
+import type { Theme } from "../shared/theme";
+import { Diagram } from "./Diagram";
 import { type Docs, type Page, resolvePath, type Target } from "./model";
 import { IMAGES } from "./sources";
 
-type Ctx = { docs: Docs; page: Page; go: (t: Target) => void };
+type Ctx = { docs: Docs; page: Page; go: (t: Target) => void; theme: Theme };
 
 /**
- * The page's blocks as React elements. Raw HTML is never rendered, except `<br>`. Only images bundled from docs/images
+ * The page's blocks as React elements. Raw HTML is never rendered, except `<br>` and the SVG Mermaid draws in strict mode. Only images bundled from docs/images
  * render; any other image is a link to the file, because the site loads no image from another origin (the same rule
  * as the console's CSP).
  */
-export function Markdown({ docs, page, go }: Ctx) {
-  const ctx = { docs, page, go };
+export function Markdown({ docs, page, go, theme }: Ctx) {
+  const ctx = { docs, page, go, theme };
   return <>{page.blocks.map((b, i) => block(b, `b${i}`, ctx))}</>;
 }
 
@@ -34,6 +36,7 @@ function block(n: RootContent, key: string, ctx: Ctx): ReactNode {
         </p>
       );
     case "code":
+      if (n.lang === "mermaid") return <Diagram key={key} source={n.value} theme={ctx.theme} />;
       return (
         <pre key={key} className="md-pre">
           <code>{n.value}</code>

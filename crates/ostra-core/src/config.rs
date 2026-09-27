@@ -154,6 +154,35 @@ impl SandboxMode {
     }
 }
 
+/// What sandboxed programs reach on the network. Every choice but `host` gives each sandbox its
+/// own network namespace, so loopback, the LAN, and the host's services are out of reach, and
+/// traffic leaves only through Ostra's egress proxy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum SandboxNetwork {
+    /// No network. A harness CLI still reaches its own model API.
+    None,
+    /// Package registries, source hosts, a harness's model API, and `allowed_hosts`.
+    #[default]
+    Allowlist,
+    /// Any public address. Loopback, private, and link-local addresses stay refused.
+    Public,
+    /// The host network, unfiltered.
+    Host,
+}
+
+impl SandboxNetwork {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SandboxNetwork::None => "none",
+            SandboxNetwork::Allowlist => "allowlist",
+            SandboxNetwork::Public => "public",
+            SandboxNetwork::Host => "host",
+        }
+    }
+}
+
 /// `[sandbox]` in `config.toml`: the sandbox profile for agent commands (the native Bash tool,
 /// harness CLIs, and programs Ostra starts for a project).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -161,8 +190,13 @@ impl SandboxMode {
 #[ts(export)]
 pub struct SandboxConfig {
     pub mode: SandboxMode,
-    /// Share the host network. `false` gives agent commands no network at all.
-    pub network: bool,
+    pub network: SandboxNetwork,
+    /// More hosts the egress proxy lets through under `allowlist`: `host`, `*.domain`, or
+    /// either with `:port`. A listed host may resolve to a private address.
+    pub allowed_hosts: Vec<String>,
+    /// An HTTP proxy the egress proxy connects through, `http://host:port`, for a machine that
+    /// reaches the internet only through one.
+    pub upstream_proxy: Option<String>,
     /// More paths agent commands may write, absolute or `~/...`.
     pub extra_writable: Vec<String>,
     /// More paths agent commands must not see, absolute or `~/...`.
@@ -173,21 +207,93 @@ impl Default for SandboxConfig {
     fn default() -> Self {
         SandboxConfig {
             mode: SandboxMode::Required,
-            network: true,
+            network: SandboxNetwork::Allowlist,
+            allowed_hosts: vec![],
+            upstream_proxy: None,
             extra_writable: vec![],
             extra_hidden: vec![],
         }
     }
 }
 
+/// The sandbox settings a workspace keeps in the registry, never in `workspace.toml` (Rule A2).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WorkspaceSandbox {
+    /// In place of the global `[sandbox] mode`; `None` follows it.
+    pub mode: Option<SandboxMode>,
+    /// In place of the global `[sandbox] network`; `None` follows it.
+    pub network: Option<SandboxNetwork>,
+    /// Added to the global `[sandbox] allowed_hosts`.
+    pub allowed_hosts: Vec<String>,
+}
+
 impl SandboxConfig {
-    /// This config with a workspace's own mode in place of the global one, when it sets one.
-    pub fn for_workspace(&self, mode: Option<SandboxMode>) -> SandboxConfig {
+    /// This config with a workspace's own mode and network choice in place of the global ones,
+    /// when it sets them, and its hosts added to the global ones. A workspace never removes a
+    /// global or built-in host.
+    pub fn for_workspace(&self, ws: &WorkspaceSandbox) -> SandboxConfig {
+        let mut allowed_hosts = self.allowed_hosts.clone();
+        allowed_hosts.extend(
+            ws.allowed_hosts
+                .iter()
+                .filter(|h| !self.allowed_hosts.contains(h))
+                .cloned(),
+        );
         SandboxConfig {
-            mode: mode.unwrap_or(self.mode),
+            mode: ws.mode.unwrap_or(self.mode),
+            network: ws.network.unwrap_or(self.network),
+            allowed_hosts,
             ..self.clone()
         }
     }
+}
+
+/// An `allowed_hosts` list that does not parse, one issue per entry, under `path`.
+fn validate_hosts(path: &str, hosts: &[String]) -> Vec<ValidationIssue> {
+    hosts
+        .iter()
+        .enumerate()
+        .filter_map(|(i, h)| {
+            let message = match crate::egress::HostRule::parse(h) {
+                None => format!(
+                    "Write `{h}` as a host name, `*.domain`, or an IP address, optionally with `:port`, because the egress proxy matches hosts, not URLs."
+                ),
+                Some(r) if r.is_loopback() && r.port().is_none() => format!(
+                    "Add the port to `{h}`, such as `{h}:8080`, because programs connect to loopback directly and the sandbox forwards only the ports you list."
+                ),
+                Some(_) => return None,
+            };
+            Some(ValidationIssue {
+                path: format!("{path}[{i}]"),
+                message,
+            })
+        })
+        .collect()
+}
+
+/// A `sandbox_decoys` list: `~/` file paths, no harness sign-in file, at most
+/// [`crate::decoy::MAX_WORKSPACE_DECOYS`].
+fn validate_decoys(decoys: &[String]) -> Vec<ValidationIssue> {
+    let mut issues: Vec<ValidationIssue> = decoys
+        .iter()
+        .enumerate()
+        .filter_map(|(i, d)| {
+            crate::decoy::invalid(d).map(|message| ValidationIssue {
+                path: format!("sandbox_decoys[{i}]"),
+                message,
+            })
+        })
+        .collect();
+    let max = crate::decoy::MAX_WORKSPACE_DECOYS;
+    if decoys.len() > max {
+        issues.push(ValidationIssue {
+            path: "sandbox_decoys".into(),
+            message: format!(
+                "List at most {max} decoys, because each one is a watched file and a mount in every agent sandbox."
+            ),
+        });
+    }
+    issues
 }
 
 /// Every `[sandbox]` path must be absolute or start with `~/`, because a relative path would
@@ -209,6 +315,17 @@ pub fn validate_sandbox(cfg: &SandboxConfig) -> Vec<ValidationIssue> {
                 });
             }
         }
+    }
+    issues.extend(validate_hosts("sandbox.allowed_hosts", &cfg.allowed_hosts));
+    if let Some(u) = &cfg.upstream_proxy
+        && crate::egress::parse_upstream(u).is_none()
+    {
+        issues.push(ValidationIssue {
+            path: "sandbox.upstream_proxy".into(),
+            message: format!(
+                "Write `{u}` as `http://host:port`, without a path or credentials, because the egress proxy connects to it with plain HTTP CONNECT."
+            ),
+        });
     }
     issues
 }
@@ -425,6 +542,15 @@ pub struct WorkspaceSettings {
     /// Sandbox mode for this workspace in place of the global `[sandbox] mode`. `None` follows the
     /// global one. Kept in the registry, never in `workspace.toml`.
     pub sandbox_mode: Option<SandboxMode>,
+    /// Network choice for this workspace in place of the global `[sandbox] network`. `None`
+    /// follows the global one. Kept in the registry, never in `workspace.toml`.
+    pub sandbox_network: Option<SandboxNetwork>,
+    /// More hosts the sandbox's egress proxy lets through for this workspace, added to the
+    /// global `[sandbox] allowed_hosts`. Kept in the registry, never in `workspace.toml`.
+    pub sandbox_allowed_hosts: Vec<String>,
+    /// More decoy credential files (`~/...`) in this workspace's agent sandboxes, added to the
+    /// built-in ones, which cannot be removed. Kept in the registry, never in `workspace.toml`.
+    pub sandbox_decoys: Vec<String>,
     /// External MCP servers whose tools every executor can call (HANDOVER 10.6).
     pub mcp_servers: Vec<McpServerConfig>,
 }
@@ -786,6 +912,18 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "Sandbox mode for agent commands, in place of the global one",
     ),
     (
+        "sandbox_network",
+        "What sandboxed commands may reach, in place of the global choice",
+    ),
+    (
+        "sandbox_allowed_hosts",
+        "More hosts sandboxed commands may reach, added to the global list",
+    ),
+    (
+        "sandbox_decoys",
+        "More decoy credential files in agent sandboxes, added to the built-in ones",
+    ),
+    (
         "mcp_servers",
         "External MCP servers whose tools agents can use",
     ),
@@ -837,7 +975,19 @@ impl WorkspaceSettings {
             notifications: NotificationSettings::default(),
             limits: Limits::default(),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
             mcp_servers: vec![],
+        }
+    }
+
+    /// The sandbox settings this workspace keeps in the registry.
+    pub fn sandbox(&self) -> WorkspaceSandbox {
+        WorkspaceSandbox {
+            mode: self.sandbox_mode,
+            network: self.sandbox_network,
+            allowed_hosts: self.sandbox_allowed_hosts.clone(),
         }
     }
 
@@ -1077,7 +1227,8 @@ pub fn validate_workspace(
     env: &Environment,
     default_tier: impl Fn(&str) -> Tier,
 ) -> Vec<ValidationIssue> {
-    let mut issues = vec![];
+    let mut issues = validate_hosts("sandbox_allowed_hosts", &ws.sandbox_allowed_hosts);
+    issues.extend(validate_decoys(&ws.sandbox_decoys));
     let issue = |path: String, message: String| ValidationIssue { path, message };
 
     if ws.name.trim().is_empty() {
@@ -1608,19 +1759,73 @@ mod tests {
             toml::from_str::<GlobalConfig>("").unwrap().sandbox.mode,
             SandboxMode::Required
         );
-        assert_eq!(global.for_workspace(None).mode, SandboxMode::Required);
+        let mode = |m: Option<SandboxMode>| WorkspaceSandbox {
+            mode: m,
+            ..Default::default()
+        };
         assert_eq!(
-            global.for_workspace(Some(SandboxMode::Off)).mode,
+            global.for_workspace(&mode(None)).mode,
+            SandboxMode::Required
+        );
+        assert_eq!(
+            global.for_workspace(&mode(Some(SandboxMode::Off))).mode,
             SandboxMode::Off
         );
         let auto = SandboxConfig {
             mode: SandboxMode::Auto,
-            network: false,
+            network: SandboxNetwork::None,
             ..Default::default()
         };
-        let ws = auto.for_workspace(Some(SandboxMode::Required));
-        assert_eq!((ws.mode, ws.network), (SandboxMode::Required, false));
-        assert_eq!(auto.for_workspace(None).mode, SandboxMode::Auto);
+        let ws = auto.for_workspace(&mode(Some(SandboxMode::Required)));
+        assert_eq!(
+            (ws.mode, ws.network),
+            (SandboxMode::Required, SandboxNetwork::None)
+        );
+        assert_eq!(
+            toml::from_str::<GlobalConfig>("").unwrap().sandbox.network,
+            SandboxNetwork::Allowlist
+        );
+        let bad = SandboxConfig {
+            allowed_hosts: vec![
+                "https://x.dev/path".into(),
+                "*.corp.example:8443".into(),
+                "localhost".into(),
+                "127.0.0.1:8317".into(),
+                "[::1]".into(),
+            ],
+            ..Default::default()
+        };
+        let issues = validate_sandbox(&bad);
+        let paths: Vec<&str> = issues.iter().map(|i| i.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "sandbox.allowed_hosts[0]",
+                "sandbox.allowed_hosts[2]",
+                "sandbox.allowed_hosts[4]"
+            ]
+        );
+        assert!(issues[1].message.starts_with("Add the port to `localhost`"));
+        assert_eq!(auto.for_workspace(&mode(None)).mode, SandboxMode::Auto);
+        let listed = SandboxConfig {
+            allowed_hosts: vec!["a.dev".into()],
+            ..Default::default()
+        };
+        let ws = WorkspaceSandbox {
+            mode: None,
+            network: Some(SandboxNetwork::Public),
+            allowed_hosts: vec!["a.dev".into(), "mirror.lan:8080".into()],
+        };
+        let merged = listed.for_workspace(&ws);
+        assert_eq!(
+            merged.allowed_hosts,
+            vec!["a.dev".to_string(), "mirror.lan:8080".to_string()]
+        );
+        assert_eq!(merged.network, SandboxNetwork::Public);
+        assert_eq!(
+            listed.for_workspace(&WorkspaceSandbox::default()).network,
+            SandboxNetwork::Allowlist
+        );
     }
 
     #[test]
@@ -1829,6 +2034,39 @@ deny = ["Bash(git push *)"]
                 "projects[1].code_provider.timeout_secs"
             ]
         );
+    }
+
+    #[test]
+    fn workspace_decoys_are_validated_and_capped() {
+        let env = Environment {
+            installed_harnesses: vec![],
+            providers_with_keys: vec!["anthropic".into()],
+        };
+        let paths = |decoys: Vec<String>| -> Vec<String> {
+            let ws = WorkspaceSettings {
+                name: "x".into(),
+                sandbox_decoys: decoys,
+                ..Default::default()
+            };
+            validate_workspace(&GlobalConfig::default(), &ws, &env, tier)
+                .into_iter()
+                .map(|i| i.path)
+                .filter(|p| p.starts_with("sandbox_decoys"))
+                .collect()
+        };
+        assert!(paths(vec!["~/.aws/credentials".into()]).is_empty());
+        assert_eq!(
+            paths(vec![
+                "~/.aws/credentials".into(),
+                "/etc/shadow".into(),
+                "~/.codex/auth.json".into()
+            ]),
+            vec!["sandbox_decoys[1]", "sandbox_decoys[2]"]
+        );
+        let many = (0..=crate::decoy::MAX_WORKSPACE_DECOYS)
+            .map(|i| format!("~/.d{i}"))
+            .collect();
+        assert_eq!(paths(many), vec!["sandbox_decoys"]);
     }
 
     #[test]

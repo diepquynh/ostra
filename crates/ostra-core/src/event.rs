@@ -538,6 +538,12 @@ pub enum SessionEvent {
     SessionPaused,
     /// The user continued a paused session (Rule P2).
     SessionResumed,
+    /// Rule P3: an execution did something that looks like an attempt to leave its sandbox. The
+    /// runner records at most [`crate::containment::PAUSE_AFTER`] per execution.
+    ContainmentSignal {
+        execution: ExecutionId,
+        signal: crate::containment::ContainmentSignal,
+    },
     YoloSet {
         enabled: bool,
     },

@@ -511,6 +511,9 @@ mod tests {
             protected_paths: vec![],
             memory_db: root.join("session/memory/knowledge.sqlite3"),
             sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
         };
         let profile = ostra_core::sandbox::Profile::for_execution(
             &ctx,

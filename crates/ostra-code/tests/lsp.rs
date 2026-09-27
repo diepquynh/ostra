@@ -7,8 +7,10 @@ use ostra_code::lsp::{Connector, LspPool, LspProvider};
 use ostra_code::provider::{Answer, CodeProvider, NativeProvider, ask};
 use ostra_code::{CLASSES, Indexes};
 use ostra_core::api::FileIndex;
-use ostra_core::code::{CompletionKind, NavigateTarget, PROTOCOL_VERSION, ProviderRequest, SymbolKind, TokenClass};
-use ostra_core::config::{LanguageServerConfig, SandboxMode};
+use ostra_core::code::{
+    CompletionKind, NavigateTarget, PROTOCOL_VERSION, ProviderRequest, SymbolKind, TokenClass,
+};
+use ostra_core::config::{LanguageServerConfig, SandboxMode, WorkspaceSandbox};
 use parking_lot::Mutex;
 use pretty_assertions::assert_eq;
 use serde_json::{Value, json};
@@ -152,7 +154,7 @@ fn rig() -> Rig {
     let log: Log = Arc::default();
     let starts = Arc::new(AtomicUsize::new(0));
     let (l, s) = (log.clone(), starts.clone());
-    let connect: Connector = Arc::new(move |_cmd: &[String], root: &Path, _sandbox|  {
+    let connect: Connector = Arc::new(move |_cmd: &[String], root: &Path, _sandbox| {
         s.fetch_add(1, Ordering::SeqCst);
         let (ours, theirs) = tokio::io::duplex(1 << 20);
         tokio::spawn(fake_server(root.to_path_buf(), theirs, l.clone()));
@@ -197,7 +199,7 @@ impl Rig {
                     initialization_options: None,
                 },
                 base: native.clone(),
-                sandbox: None,
+                sandbox: Default::default(),
             }),
             native,
         ]
@@ -216,7 +218,7 @@ impl Rig {
                 initialization_options: None,
             },
             base: chain[1].clone(),
-            sandbox: None,
+            sandbox: Default::default(),
         }
     }
 
@@ -504,7 +506,7 @@ async fn other_languages_and_deps_go_to_the_built_in_provider_without_a_server()
 }
 
 #[tokio::test]
-async fn a_changed_sandbox_mode_starts_the_server_again() {
+async fn changed_sandbox_settings_start_the_server_again() {
     let r = rig();
     let cfg = LanguageServerConfig {
         command: vec!["/usr/bin/fake-ls".into()],
@@ -513,12 +515,38 @@ async fn a_changed_sandbox_mode_starts_the_server_again() {
         initialization_options: None,
     };
     let key = "p".to_string();
-    let get = |mode| r.pool.get(&key, r.dir.path(), &cfg, mode, Duration::from_secs(5));
-    get(None).await.unwrap();
-    get(None).await.unwrap();
+    let (r, key, cfg) = (&r, &key, &cfg);
+    let get = |ws: WorkspaceSandbox| async move {
+        r.pool
+            .get(key, r.dir.path(), cfg, &ws, Duration::from_secs(5))
+            .await
+    };
+    get(WorkspaceSandbox::default()).await.unwrap();
+    get(WorkspaceSandbox::default()).await.unwrap();
     assert_eq!(r.starts.load(Ordering::SeqCst), 1);
-    get(Some(SandboxMode::Off)).await.unwrap();
+    let off = WorkspaceSandbox {
+        mode: Some(SandboxMode::Off),
+        ..Default::default()
+    };
+    get(off).await.unwrap();
     assert_eq!(r.starts.load(Ordering::SeqCst), 2);
+    let hosts = WorkspaceSandbox {
+        mode: Some(SandboxMode::Off),
+        allowed_hosts: vec!["mirror.lan".into()],
+        ..Default::default()
+    };
+    get(hosts.clone()).await.unwrap();
+    assert_eq!(r.starts.load(Ordering::SeqCst), 3);
+    let network = WorkspaceSandbox {
+        network: Some(ostra_core::config::SandboxNetwork::Public),
+        ..hosts
+    };
+    get(network).await.unwrap();
+    assert_eq!(
+        r.starts.load(Ordering::SeqCst),
+        4,
+        "a network change restarts the server"
+    );
 }
 
 #[tokio::test]
@@ -582,7 +610,7 @@ async fn a_server_that_cannot_start_falls_through_with_the_reason() {
                 initialization_options: None,
             },
             base: native.clone(),
-            sandbox: None,
+            sandbox: Default::default(),
         }),
         native,
     ];
@@ -701,7 +729,7 @@ async fn live(
             initialization_options: options,
         },
         base: native,
-        sandbox: None,
+        sandbox: Default::default(),
     };
     let roots = root.to_string_lossy().into_owned();
     let req = ProviderRequest::Usages {
@@ -784,13 +812,19 @@ async fn navigation_asks_implementations_and_the_type_hierarchy() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!((up.locations[0].path.as_str(), up.locations[0].line), ("b.rs", 2));
+    assert_eq!(
+        (up.locations[0].path.as_str(), up.locations[0].line),
+        ("b.rs", 2)
+    );
     // The supertypes request carries the item the prepare step returned.
     assert_eq!(
         r.params("typeHierarchy/supertypes")[0]["item"]["name"],
         "helper"
     );
-    let py = At { path: "c.py", ..cursor };
+    let py = At {
+        path: "c.py",
+        ..cursor
+    };
     assert!(
         lsp.navigate(&py, NavigateTarget::Supertypes, wait)
             .await
@@ -910,7 +944,7 @@ async fn live_gopls_into_the_standard_library() {
             initialization_options: None,
         },
         base: Arc::new(ostra_code::provider::Unanswered),
-        sandbox: None,
+        sandbox: Default::default(),
     };
     let req = ProviderRequest::Usages {
         version: PROTOCOL_VERSION,
@@ -933,7 +967,10 @@ async fn live_gopls_into_the_standard_library() {
     }
     let u = found.expect("gopls found the definition");
     let def = &u.definitions[0];
-    let uri = def.uri.clone().expect("the definition is outside the project");
+    let uri = def
+        .uri
+        .clone()
+        .expect("the definition is outside the project");
     assert!(def.path.ends_with("strings/strings.go"), "{def:?}");
     let file = lsp.external_file(&uri).await.unwrap();
     assert_eq!(file.language.as_deref(), Some("go"));
@@ -944,7 +981,11 @@ async fn live_gopls_into_the_standard_library() {
         .external_usages(&uri, "ToUpper", def.line, Some(def.col), 50)
         .await
         .unwrap();
-    let refs: Vec<_> = back.references.iter().map(|r| (r.path.as_str(), r.line)).collect();
+    let refs: Vec<_> = back
+        .references
+        .iter()
+        .map(|r| (r.path.as_str(), r.line))
+        .collect();
     assert_eq!(refs, vec![("main.go", 5)], "{back:?}");
     lsp.pool.forget(&0u8);
 }

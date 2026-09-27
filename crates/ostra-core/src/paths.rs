@@ -375,7 +375,10 @@ mod tests {
             root.join("outside/x")
         );
         std::os::unix::fs::symlink(root.join("outside/new"), repo.join("dangling")).unwrap();
-        assert_eq!(resolve(&repo, Path::new("dangling")), root.join("outside/new"));
+        assert_eq!(
+            resolve(&repo, Path::new("dangling")),
+            root.join("outside/new")
+        );
         assert_eq!(resolve(&repo, Path::new("a/../b/c")), repo.join("b/c"));
     }
 

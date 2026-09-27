@@ -205,8 +205,9 @@ const defaultConsole = {
 };
 
 describe("the Artifacts tab without a sandbox", () => {
-  const withSandbox = (sandbox: SandboxStatus) =>
-    render(
+  const withSandbox = (status: Omit<SandboxStatus, "decoys" | "builtin_decoys" | "builtin_hosts">) => {
+    const sandbox: SandboxStatus = { decoys: true, builtin_decoys: [], builtin_hosts: [], ...status };
+    return render(
       <ConsoleContext.Provider
         value={{
           ...defaultConsole,
@@ -226,6 +227,7 @@ describe("the Artifacts tab without a sandbox", () => {
         />
       </ConsoleContext.Provider>,
     );
+  };
 
   it("warns that shell commands can read hidden artifacts when commands run unsandboxed", async () => {
     withSandbox({ mode: "off", available: true, active: false });

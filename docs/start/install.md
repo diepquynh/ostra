@@ -35,8 +35,8 @@ for one workspace in its settings:
 
 ```toml
 [sandbox]
-mode = "off"      # "required" (the default), "auto", or "off"
-network = true    # false gives agent commands no network at all
+mode = "off"            # "required" (the default), "auto", or "off"
+network = "allowlist"   # "none", "allowlist" (the default), "public", or "host"
 ```
 
 `auto` sandboxes where it can and runs unsandboxed with a warning where it cannot. `off` runs agent commands
