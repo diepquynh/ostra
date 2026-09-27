@@ -25,7 +25,7 @@ fn fx() -> Fx {
         .prefix("ostra-policy-")
         .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
         .unwrap();
-    let root = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = ostra_core::paths::canonical(tmp.path()).unwrap();
     let repo = root.join("repo");
     let ws = root.join("ws");
     let session_root = ws.join(".ostra/sessions/s1");
@@ -96,6 +96,18 @@ fn write(p: impl AsRef<Path>) -> ToolCall {
 
 fn bash(cmd: impl AsRef<str>) -> ToolCall {
     ToolCall::new("Bash", json!({"command": cmd.as_ref()}))
+}
+
+/// A path rendered for embedding in a bash command: the `\\?\` prefix dropped and separators made
+/// forward slashes, as an agent would type under Git Bash, so backslashes are not eaten by the
+/// shell. On Unix it is the plain path.
+fn shp(p: impl AsRef<Path>) -> String {
+    let s = p.as_ref().to_string_lossy().into_owned();
+    if cfg!(windows) {
+        s.trim_start_matches(r"\\?\").replace('\\', "/")
+    } else {
+        s
+    }
 }
 
 fn deny_reason(d: &PolicyDecision) -> Option<String> {
@@ -294,14 +306,14 @@ fn bash_scope_per_agent() {
         &rev,
         &bash(format!(
             "cat <<'EOF' > {}\nhi\nEOF",
-            f.session_dir.join("ledger.md").display()
+            shp(f.session_dir.join("ledger.md"))
         )),
     );
     allowed(
         &f.policy(AgentName::Plan),
         &bash(format!(
             "cat > {} <<'EOF'\nthe `<!-- AWS START --> ... <!-- AWS END -->` group\nrm -rf /somewhere\nEOF",
-            f.session_root.join("plan-phase-1.md").display()
+            shp(f.session_root.join("plan-phase-1.md"))
         )),
     );
     allowed(
@@ -317,7 +329,7 @@ fn bash_scope_per_agent() {
         &rev,
         &bash(format!(
             "echo bad > {}",
-            f.repo.join("src/App.ts").display()
+            shp(f.repo.join("src/App.ts"))
         )),
         "never modifies project source",
     );
@@ -325,13 +337,13 @@ fn bash_scope_per_agent() {
         &f.policy(AgentName::Implementer),
         &bash(format!(
             "cat <<'EOF' > {}\nhi\nEOF",
-            f.repo.join("src/App.test.ts").display()
+            shp(f.repo.join("src/App.test.ts"))
         )),
         "Constraint 6",
     );
     denied(
         &f.policy(AgentName::WriteTest),
-        &bash(format!("rm -rf {}", f.repo.join("../sibling").display())),
+        &bash(format!("rm -rf {}", shp(f.repo.join("../sibling")))),
         "outside both",
     );
     // A relative target after `cd` resolves against the new directory.
@@ -378,23 +390,21 @@ fn declared_report_path_and_lesson_gate() {
         &p,
         &bash(format!(
             "cat > \"{}\" <<'REPORT_EOF'\n# Implementation Report\nDid it.\nREPORT_EOF",
-            report.display()
+            shp(&report)
         )),
     );
     allowed(
         &p,
-        &bash(format!("echo \"## More\" >> {}", report.display())),
+        &bash(format!("echo \"## More\" >> {}", shp(&report))),
     );
 
     let invented = f.session_dir.join("ostra-implementer-credentials-uri.md");
     let r = denied(&p, &write(&invented), "declared report path");
-    assert!(r.starts_with(&format!(
-        "Write your report to \"{}\" instead",
-        report.display()
-    )));
+    assert!(r.starts_with("Write your report to \""));
+    assert!(r.contains("ostra-implementer-phase-3.md"), "{r}");
     denied(
         &p,
-        &bash(format!("echo x > {}", invented.display())),
+        &bash(format!("echo x > {}", shp(&invented))),
         "declared report path",
     );
     denied(
@@ -412,7 +422,7 @@ fn declared_report_path_and_lesson_gate() {
         &p,
         &bash(format!(
             "echo x > {}",
-            f.session_dir.join("ostra-security-block.json").display()
+            shp(f.session_dir.join("ostra-security-block.json"))
         )),
         "code-reviewer",
     );
@@ -429,7 +439,7 @@ fn declared_report_path_and_lesson_gate() {
     assert!(gated.contains("Memory tool") && gated.contains("`reason`"));
     denied(
         &p,
-        &bash(format!("cat > \"{}\" <<'EOF'\nx\nEOF", report.display())),
+        &bash(format!("cat > \"{}\" <<'EOF'\nx\nEOF", shp(&report))),
         "cannot find symbol",
     );
     denied(
@@ -612,8 +622,8 @@ fn exit_code_wins_over_output() {
 fn self_protection() {
     let f = fx();
     let p = f.policy(AgentName::Implementer);
-    let bin = f.bin.display().to_string();
-    let config = f.config.display().to_string();
+    let bin = shp(&f.bin);
+    let config = shp(&f.config);
     for cmd in [
         format!("{bin} hook --execution x"),
         "ostra mcp-stdio --execution x".to_string(),
@@ -622,7 +632,7 @@ fn self_protection() {
         format!("rm {config}"),
         format!("chmod -x {bin}"),
         format!("echo '{{}}' > {config}"),
-        format!("cd {} && ./ostra hook", f.bin.parent().unwrap().display()),
+        format!("cd {} && ./ostra hook", shp(f.bin.parent().unwrap())),
         format!("cp /tmp/evil {bin}"),
     ] {
         assert_eq!(guard_of(&p, &bash(&cmd)), "self-protection", "{cmd}");
@@ -636,11 +646,7 @@ fn self_protection() {
         allowed(&p, &bash(&cmd));
     }
 
-    let state = f
-        .session_root
-        .join(".state/gates.json")
-        .display()
-        .to_string();
+    let state = shp(f.session_root.join(".state/gates.json"));
     denied(
         &p,
         &bash(format!(
@@ -652,7 +658,7 @@ fn self_protection() {
         &p,
         &bash(format!(
             "python3 -c \"open('{}/ostra-review-ledger-phase-1.md','w').write('x')\"",
-            f.session_dir.display()
+            shp(&f.session_dir)
         )),
         "pipeline state",
     );
@@ -687,7 +693,7 @@ fn self_protection() {
         &p,
         &bash(format!(
             "cat > {} <<'EOF'\nRun node -e \"require('fs').writeFileSync('x','y')\" to reproduce.\nEOF",
-            f.session_dir.join("notes.md").display()
+            shp(f.session_dir.join("notes.md"))
         )),
     );
 
@@ -743,7 +749,7 @@ fn state_ownership() {
                 &p,
                 &bash(format!(
                     "rm {}",
-                    f.repo.join(".ostra/memory/knowledge.sqlite3").display()
+                    shp(f.repo.join(".ostra/memory/knowledge.sqlite3"))
                 ))
             ),
             "state-ownership",
@@ -759,14 +765,14 @@ fn state_ownership() {
     // Reading engine state with a plain reader is fine; anything else is not.
     allowed(
         &f.policy(AgentName::Implementer),
-        &bash(format!("cat {}", f.session_root.join(".state/x").display())),
+        &bash(format!("cat {}", shp(f.session_root.join(".state/x")))),
     );
     assert_eq!(
         guard_of(
             &f.policy(AgentName::Implementer),
             &bash(format!(
                 "sqlite3 {} 'delete from lessons'",
-                f.repo.join(".ostra/memory/knowledge.sqlite3").display()
+                shp(f.repo.join(".ostra/memory/knowledge.sqlite3"))
             ))
         ),
         "state-ownership"
@@ -824,13 +830,13 @@ fn artifact_ownership() {
         &fc,
         &bash(format!(
             "mkdir -p \"{0}/factcheck-snapshot-spec\" && cp \"{1}\" \"{0}/factcheck-snapshot-spec/\"",
-            f.session_root.display(),
-            spec.display()
+            shp(&f.session_root),
+            shp(&spec)
         )),
     );
     denied(
         &fc,
-        &bash(format!("cp /tmp/x \"{}\"", spec.display())),
+        &bash(format!("cp /tmp/x \"{}\"", shp(&spec))),
         "generate-spec",
     );
 }
@@ -862,7 +868,7 @@ fn documents_change_only_through_the_document_tool() {
     }
     denied(
         &gs,
-        &bash(format!("cat >> \"{}\" <<'EOF'\nx\nEOF", spec.display())),
+        &bash(format!("cat >> \"{}\" <<'EOF'\nx\nEOF", shp(&spec))),
         "Document tool",
     );
     let explore = f.policy(AgentName::Explore);
@@ -953,7 +959,7 @@ fn default_mode() {
         &p,
         &bash(format!(
             "cat > {} <<'EOF'\nx\nEOF",
-            f.session_dir.join("n.md").display()
+            shp(f.session_dir.join("n.md"))
         )),
     );
     assert!(
@@ -1363,7 +1369,7 @@ fn unresolved_write_targets_are_never_auto_allowed() {
     );
     allowed(
         &p,
-        &bash(format!("echo x > {}", f.session_dir.join("n.md").display())),
+        &bash(format!("echo x > {}", shp(f.session_dir.join("n.md")))),
     );
 }
 
@@ -1380,7 +1386,7 @@ fn git_runs_unasked_only_inside_the_project() {
     );
     allowed(&p, &bash("git status"));
     allowed(&p, &bash("git -C src log -1"));
-    not_auto_allowed(&p, &format!("git -C {} status", f.session_dir.display()));
+    not_auto_allowed(&p, &format!("git -C {} status", shp(&f.session_dir)));
     not_auto_allowed(&p, "cd /tmp && git status");
     not_auto_allowed(&p, "git -C \"$R\" status");
 }
@@ -1401,7 +1407,7 @@ fn git_metadata_is_written_only_by_git() {
         bash("echo '[core] fsmonitor = id' >> .git/config"),
         bash(format!(
             "cp hook {}",
-            f.repo.join(".git/hooks/post-merge").display()
+            shp(f.repo.join(".git/hooks/post-merge"))
         )),
     ] {
         assert_eq!(guard_of(&yolo, &call), "git-metadata", "{}", call.input);
@@ -1586,7 +1592,7 @@ fn every_spelling_of_a_copy_target_is_checked() {
         .parent()
         .unwrap()
         .join("elsewhere");
-    let o = outside.display();
+    let o = shp(&outside);
     for cmd in [
         format!("cp --target-directory {o} x"),
         format!("cp --target-directory={o} x"),
@@ -1650,15 +1656,213 @@ fn workspace_artifacts_are_read_but_never_written() {
     );
     allowed(
         &p,
-        &bash(format!("python3 scripts/load.py {}", file.display())),
+        &bash(format!("python3 scripts/load.py {}", shp(&file))),
     );
     assert_eq!(guard_of(&p, &write(&file)), "workspace-artifacts");
     assert_eq!(
-        guard_of(&p, &bash(format!("cp src/x {}/y.md", dir.display()))),
+        guard_of(&p, &bash(format!("cp src/x {}/y.md", shp(&dir)))),
         "workspace-artifacts"
     );
     assert_eq!(
-        guard_of(&p, &bash(format!("rm {}", file.display()))),
+        guard_of(&p, &bash(format!("rm {}", shp(&file)))),
         "workspace-artifacts"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Windows path forms (WINDOWS_HANDOVER 1.4): the guards compare paths, and Windows has more ways
+// to spell one file than Linux. Each case names a protected file under a spelling a naive guard
+// would miss. These run on Windows only; on Unix the spellings are ordinary path text.
+// ---------------------------------------------------------------------------------------------
+
+/// Writes to the same protected file named several ways all hit the git-metadata guard.
+#[cfg(windows)]
+#[test]
+fn windows_spellings_of_a_git_path_are_all_caught() {
+    let f = fx();
+    std::fs::create_dir_all(f.repo.join(".git/hooks")).unwrap();
+    let p = f.policy(AgentName::Implementer);
+    // A backslash path, a mixed-case path (NTFS folds case), a path with a trailing dot Win32
+    // strips, and an 8.3-style parent all name `.git\hooks\pre-commit`.
+    for raw in [
+        format!(r"{}\.git\hooks\pre-commit", shp_win(&f.repo)),
+        format!(r"{}\.GIT\Hooks\pre-commit", shp_win(&f.repo)),
+        format!(r"{}\.git\hooks\pre-commit.", shp_win(&f.repo)),
+        format!("{}/.git/hooks/pre-commit", shp(&f.repo)),
+    ] {
+        assert_eq!(
+            guard_of(
+                &p,
+                &ToolCall::new("Write", json!({"file_path": raw, "content": "x"}))
+            ),
+            "git-metadata",
+            "{raw}"
+        );
+    }
+}
+
+/// The self-protection guard covers the tool's own files named with a drive path, a mixed case,
+/// and a trailing space, because NTFS opens all three as the same file.
+#[cfg(windows)]
+#[test]
+fn windows_spellings_of_a_protected_file_are_all_caught() {
+    let f = fx();
+    let p = f.policy(AgentName::Implementer);
+    for raw in [
+        shp_win(&f.config),
+        shp_win(&f.config).to_uppercase(),
+        format!("{} ", shp_win(&f.config)),
+        shp(&f.config),
+    ] {
+        assert_eq!(
+            guard_of(
+                &p,
+                &ToolCall::new("Write", json!({"file_path": raw, "content": "x"}))
+            ),
+            "self-protection",
+            "{raw}"
+        );
+    }
+}
+
+/// An MSYS path a Git Bash command uses names the same file as its Windows form, so a write to the
+/// tool's config under `/c/...` is refused the same way.
+#[cfg(windows)]
+#[test]
+fn msys_paths_in_bash_resolve_to_windows_paths() {
+    let f = fx();
+    let p = f.policy(AgentName::Implementer);
+    let msys = format!(
+        "/{}/{}",
+        shp(&f.config).replace(':', "").chars().next().unwrap(),
+        &shp(&f.config)[3..]
+    );
+    assert_eq!(
+        guard_of(&p, &bash(format!("echo x > {msys}"))),
+        "self-protection",
+        "{msys}"
+    );
+}
+
+/// The path-form refusals apply to file tools only: in a shell word a `:` is a URL or a git
+/// revision, not an alternate data stream.
+#[cfg(windows)]
+#[test]
+fn urls_and_git_revisions_in_shell_words_are_not_path_forms() {
+    let f = fx();
+    let p = f.policy(AgentName::Implementer);
+    allowed(&p, &bash("curl -fsSL https://example.com/x.json"));
+    allowed(&p, &bash("git show HEAD:src/a.rs"));
+    let read = |raw: &str| ToolCall::new("Read", json!({"file_path": raw}));
+    assert_eq!(guard_of(&p, &read(r"C:\x\notes.txt:hidden")), "windows-path");
+    assert_eq!(guard_of(&p, &read(r"\\localhost\C$\x")), "windows-path");
+}
+
+/// The Windows credential stores under the profile (DPAPI keys, Credential Manager, browser
+/// profiles) are secret for every tool, in any letter case, as a tool path or a shell word.
+#[cfg(windows)]
+#[test]
+fn windows_credential_stores_are_never_read() {
+    let f = fx();
+    let p = f.policy(AgentName::Implementer);
+    let home = ostra_core::paths::home().unwrap();
+    let read = |path: String| ToolCall::new("Read", json!({"file_path": path}));
+    for rel in [
+        r"AppData\Roaming\Microsoft\Protect\CREDHIST",
+        r"APPDATA\roaming\microsoft\credentials\x",
+        r"AppData\Local\Google\Chrome\User Data\Default\Login Data",
+        r"AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt",
+        r".ssh\id_ed25519",
+    ] {
+        let path = home.join(rel).display().to_string();
+        assert_eq!(guard_of(&p, &read(path.clone())), "secret-read", "{path}");
+    }
+    assert_eq!(
+        guard_of(
+            &p,
+            &bash(format!(
+                "cat '{}'",
+                shp(home.join(r"AppData\Roaming\Microsoft\Protect\CREDHIST"))
+            ))
+        ),
+        "secret-read"
+    );
+}
+
+/// A junction needs no privilege on Windows, so an agent can make one inside the repo that leads
+/// out of it. A write through it resolves to the target and is refused, and a Bash path with a
+/// `..` right after it is refused because Git Bash and Win32 read that `..` differently.
+#[cfg(windows)]
+#[test]
+fn junctions_cannot_lead_writes_out_of_the_repo() {
+    let f = fx();
+    let outside = f.repo.parent().unwrap().join("outside");
+    std::fs::create_dir_all(outside.join("deep")).unwrap();
+    ostra_core::paths::link(&outside, &f.repo.join("jn")).unwrap();
+    let p = f.policy(AgentName::Implementer);
+    assert_eq!(
+        guard_of(&p, &write(f.repo.join(r"jn\x.txt"))),
+        "write-scope"
+    );
+    assert_eq!(
+        guard_of(&p, &bash(format!("echo x > {}/jn/x.txt", shp(&f.repo)))),
+        "write-scope"
+    );
+    assert_eq!(
+        guard_of(&p, &bash("echo x > jn/deep/../../src/y.txt")),
+        "windows-path"
+    );
+    // A plain write inside the repo is unaffected.
+    allowed(&p, &write(f.repo.join(r"src\ok.txt")));
+}
+
+/// PowerShell and cmd commands are opaque: never auto-allowed, and refused when they name Ostra's
+/// own files or state, even though Ostra cannot parse them.
+#[cfg(windows)]
+#[test]
+fn powershell_and_cmd_are_opaque_and_hardened() {
+    let f = fx();
+    let mut ctx = f.ctx(AgentName::Implementer);
+    ctx.permission_mode = PermissionMode::Default;
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    let ps = |c: &str| ToolCall::new("PowerShell", json!({"command": c}));
+    let cmd = |c: &str| ToolCall::new("Cmd", json!({"command": c}));
+    // Even a plain read is not auto-allowed under the default mode: it asks.
+    assert!(is_ask(&p.check(&ps("Get-ChildItem"))), "{:?}", p.check(&ps("Get-ChildItem")));
+    assert!(is_ask(&p.check(&cmd("dir"))));
+    // Naming Ostra's own config is refused outright.
+    assert_eq!(
+        guard_of(&p, &ps(&format!("Set-Content '{}' x", shp_win(&f.config)))),
+        "self-protection"
+    );
+    // Naming a state file by its name is refused as state, and by an engine-state path as
+    // self-protection; either way an opaque command cannot touch it.
+    assert_eq!(
+        guard_of(&p, &cmd("type ostra-review-ledger.md")),
+        "state-ownership"
+    );
+    assert_eq!(
+        guard_of(
+            &p,
+            &cmd(&format!("type {}\\.state\\gates.json", shp_win(&f.session_root)))
+        ),
+        "self-protection"
+    );
+    // Under bypass an ordinary command runs.
+    let yolo = {
+        let mut ctx = f.ctx(AgentName::Implementer);
+        ctx.yolo = true;
+        ExecutionPolicy::new(ctx, PolicyInputs::default())
+    };
+    allowed(&yolo, &ps("Get-Date"));
+}
+
+/// A drive path renderer that keeps backslashes, for the Windows spelling cases. Verbatim prefix
+/// dropped so the guard sees a plain drive path.
+#[cfg(windows)]
+fn shp_win(p: impl AsRef<Path>) -> String {
+    p.as_ref()
+        .to_string_lossy()
+        .trim_start_matches(r"\\?\")
+        .to_string()
 }

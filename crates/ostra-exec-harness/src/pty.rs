@@ -53,7 +53,10 @@ pub const PARENT_SESSION_ENV: &[&str] = &[
 type OutputSink = Box<dyn Fn(&[u8]) + Send + Sync>;
 
 pub struct PtySession {
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    /// `None` once closed, which on Windows asks the attached programs to exit.
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
+    /// The CLI and what it starts. `None` when the CLI exited before it could be adopted.
+    tree: Option<ostra_core::proctree::Tree>,
     input: SyncSender<Vec<u8>>,
     pid: Option<u32>,
     /// Also held while an output chunk is broadcast, so a snapshot and a new receiver line up.
@@ -98,13 +101,21 @@ impl PtySession {
             })
             .map_err(|e| io(e.into()))?;
         let mut cmd = CommandBuilder::new(&plan.program);
+        // Only Seatbelt asks for the PTY's device path, so only Unix has one to give.
         if let Some(param) = &plan.tty_param {
-            let tty = pair
-                .master
-                .tty_name()
-                .ok_or_else(|| std::io::Error::other("the PTY has no device name"))?;
-            cmd.arg("-D");
-            cmd.arg(format!("{param}={}", tty.display()));
+            #[cfg(unix)]
+            {
+                let tty = pair
+                    .master
+                    .tty_name()
+                    .ok_or_else(|| std::io::Error::other("the PTY has no device name"))?;
+                cmd.arg("-D");
+                cmd.arg(format!("{param}={}", tty.display()));
+            }
+            #[cfg(not(unix))]
+            return Err(std::io::Error::other(format!(
+                "no PTY device to pass as {param}"
+            )));
         }
         cmd.args(&plan.args);
         cmd.cwd(&plan.cwd);
@@ -125,6 +136,8 @@ impl PtySession {
         let mut child = pair.slave.spawn_command(cmd).map_err(|e| io(e.into()))?;
         drop(pair.slave);
         let pid = child.process_id();
+        // The PTY child leads its own session on Unix, so its group is it and its descendants.
+        let tree = pid.and_then(|p| ostra_core::proctree::Tree::adopt_running(p).ok());
         let reader = pair.master.try_clone_reader().map_err(|e| io(e.into()))?;
         let mut writer = pair.master.take_writer().map_err(|e| io(e.into()))?;
         let (input, queued) = sync_channel::<Vec<u8>>(WRITE_QUEUE);
@@ -144,7 +157,8 @@ impl PtySession {
         let (exit_tx, exit_rx) = watch::channel(None);
         let (cols, rows) = clamp_size(cols, rows);
         let session = Arc::new(PtySession {
-            master: Mutex::new(pair.master),
+            master: Mutex::new(Some(pair.master)),
+            tree,
             input,
             pid,
             screen: Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)),
@@ -225,12 +239,14 @@ impl PtySession {
     /// Resize, clamped to a size the screen model can hold.
     pub fn resize(&self, cols: u16, rows: u16) {
         let (cols, rows) = clamp_size(cols, rows);
-        let _ = self.master.lock().resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        if let Some(m) = self.master.lock().as_ref() {
+            let _ = m.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            });
+        }
         self.screen.lock().screen_mut().set_size(rows, cols);
     }
 
@@ -279,28 +295,32 @@ impl PtySession {
         *self.members.lock() = members;
     }
 
-    /// Signal the process group, then kill it if it is still alive after `grace`. Then kill what
-    /// is left in the CLI's sandbox, even when the CLI itself has already exited.
+    /// Ask the CLI to exit, then kill its process tree if it is still alive after `grace`. Then
+    /// kill what is left in the CLI's sandbox, even when the CLI itself has already exited. The
+    /// request is SIGTERM to the process group on Unix; on Windows it is closing the
+    /// pseudoconsole, which sends the attached programs `CTRL_CLOSE_EVENT`.
     pub async fn terminate(&self, grace: Duration) {
         if self.exit_info().is_none() {
-            self.signal(libc::SIGTERM);
+            if cfg!(windows) {
+                drop(self.master.lock().take());
+            }
+            if let Some(t) = &self.tree {
+                t.terminate();
+            }
             if tokio::time::timeout(grace, self.wait_exit()).await.is_err() {
-                self.signal(libc::SIGKILL);
+                if let Some(t) = &self.tree {
+                    t.kill();
+                }
                 let _ = tokio::time::timeout(Duration::from_secs(2), self.wait_exit()).await;
             }
         }
-        drop(self.members.lock().take());
-    }
-
-    fn signal(&self, sig: i32) {
-        if let Some(pid) = self.pid.and_then(|p| i32::try_from(p).ok()) {
-            // SAFETY: plain kill(2) on the child's process group; the PTY child leads its own
-            // session, so -pid addresses it and its descendants only.
-            unsafe {
-                libc::kill(-pid, sig);
-                libc::kill(pid, sig);
-            }
+        // Programs the CLI left running on Windows are still in its job.
+        if cfg!(windows)
+            && let Some(t) = &self.tree
+        {
+            t.kill();
         }
+        drop(self.members.lock().take());
     }
 }
 
@@ -575,6 +595,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn sh(script: &str) -> LaunchPlan {
         LaunchPlan {
             program: "/bin/sh".into(),
@@ -589,6 +610,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     async fn wait_for(pty: &PtySession, text: &str) {
         for _ in 0..100 {
             if pty.screen_text().contains(text) {
@@ -613,6 +635,7 @@ mod tests {
         assert!(parser.screen().contents().contains("up"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_zero_size_resize_is_clamped() {
         let pty =
@@ -623,6 +646,7 @@ mod tests {
         pty.terminate(Duration::from_millis(200)).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn stream_starts_where_the_snapshot_ends() {
         let pty = PtySession::spawn(
@@ -657,6 +681,7 @@ mod tests {
         pty.terminate(Duration::from_millis(200)).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn answers_queries_with_a_viewer_attached() {
         let pty = PtySession::spawn(
@@ -671,6 +696,7 @@ mod tests {
         pty.terminate(Duration::from_millis(200)).await;
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn runs_a_program_in_a_pty() {
         let tmp = tempfile::tempdir().unwrap();
@@ -713,6 +739,7 @@ mod tests {
         assert!(pty.snapshot().starts_with(b"\x1bc"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn terminate_kills_the_group() {
         let tmp = tempfile::tempdir().unwrap();
@@ -733,5 +760,34 @@ mod tests {
         pty.terminate(Duration::from_millis(300)).await;
         assert!(pty.exit_info().is_some());
         assert!(t.elapsed() < Duration::from_secs(4));
+    }
+
+    /// A ConPTY smoke test: cmd runs in the pseudoconsole, its output reaches the screen, and
+    /// terminate ends it and its job.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn runs_a_program_in_a_conpty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plan = LaunchPlan {
+            program: ostra_core::shells::cmd().to_string_lossy().into_owned(),
+            args: vec!["/d".into(), "/c".into(), "echo conpty-ok & pause".into()],
+            env: vec![],
+            cwd: tmp.path().to_path_buf(),
+            files: vec![],
+            links: vec![],
+            session_id: None,
+            env_remove: vec![],
+            tty_param: None,
+        };
+        let pty = PtySession::spawn(&plan, 80, 24, Box::new(|_| {})).unwrap();
+        for _ in 0..100 {
+            if pty.screen_text().contains("conpty-ok") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(pty.screen_text().contains("conpty-ok"), "{}", pty.screen_text());
+        pty.terminate(Duration::from_millis(500)).await;
+        assert!(pty.exit_info().is_some());
     }
 }

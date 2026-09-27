@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 fn with_ostra<R>(f: impl FnOnce(&mut ProjectIndex) -> R) -> R {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let root = root.canonicalize().unwrap();
+    let root = ostra_core::paths::canonical(&root).unwrap();
     let out = Command::new("git")
         .arg("-C")
         .arg(&root)

@@ -230,7 +230,7 @@ async fn main() {
             std::fs::write(path, text).unwrap();
         }
         Code {
-            root: repo.canonicalize().unwrap(),
+            root: ostra_core::paths::canonical(&repo).unwrap(),
             list: Arc::new(ostra_core::api::FileIndex {
                 paths: CODE_FILES.iter().map(|(p, _)| p.to_string()).collect(),
                 truncated: false,
@@ -256,11 +256,18 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let socket = harden.then(|| dir.join("bridge.sock"));
-    if let Some(sock) = &socket {
+    #[cfg(unix)]
+    let unix_socket = socket.clone();
+    #[cfg(not(unix))]
+    let unix_socket: Option<PathBuf> = None;
+    if let Some(sock) = &unix_socket {
         // The bridge answers only on the socket, as the server's does; the TCP port logs any hit.
         let _ = std::fs::remove_file(sock);
-        let unix = tokio::net::UnixListener::bind(sock).unwrap();
-        tokio::spawn(async move { axum::serve(unix, router).await.unwrap() });
+        #[cfg(unix)]
+        {
+            let unix = tokio::net::UnixListener::bind(sock).unwrap();
+            tokio::spawn(async move { axum::serve(unix, router).await.unwrap() });
+        }
         let trap_log = log.clone();
         let trap = Router::new().fallback(move |uri: axum::http::Uri| {
             let log = trap_log.clone();
@@ -480,6 +487,11 @@ try:
     s.connect("\0{name}"); print("abstract socket: REACHED")
 except OSError as e: print("abstract socket: unreachable", e)'"#
     )
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_checks(_log: Arc<Log>) -> String {
+    "echo \"process checks: none on this OS\"".into()
 }
 
 #[cfg(target_os = "macos")]

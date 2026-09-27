@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
+use tokio::net::{TcpListener, TcpStream};
+#[cfg(unix)]
+use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
 /// Package registries and source hosts that builds fetch from under `allowlist`.
@@ -710,6 +712,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 type Client = Box<dyn Stream>;
 
 enum Incoming {
+    #[cfg(unix)]
     Unix(UnixListener),
     Tcp(TcpListener),
 }
@@ -717,6 +720,7 @@ enum Incoming {
 impl Incoming {
     async fn accept(&self) -> std::io::Result<Client> {
         match self {
+            #[cfg(unix)]
             Incoming::Unix(l) => l.accept().await.map(|(c, _)| Box::new(c) as Client),
             Incoming::Tcp(l) => l.accept().await.map(|(c, _)| Box::new(c) as Client),
         }
@@ -733,12 +737,17 @@ pub enum Target {
 
 /// A fresh owner-only socket path in `dir`, which is created 0700.
 pub fn socket_path(dir: &Path, prefix: &str) -> std::io::Result<PathBuf> {
-    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(dir)?;
-    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .recursive(true)
+            .create(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)?;
     Ok(dir.join(format!(
         "{prefix}{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..16]
@@ -757,8 +766,17 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
+#[cfg(not(unix))]
+fn bind(_dir: &Path) -> std::io::Result<(PathBuf, Incoming)> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Unix sockets exist only on Linux and macOS.",
+    ))
+}
+
 /// A fresh owner-only socket in `dir`, bound on the egress runtime.
-fn bind(dir: &Path) -> std::io::Result<(PathBuf, UnixListener)> {
+#[cfg(unix)]
+fn bind(dir: &Path) -> std::io::Result<(PathBuf, Incoming)> {
     let socket = socket_path(dir, "")?;
     let std_listener = std::os::unix::net::UnixListener::bind(&socket).map_err(|e| {
         std::io::Error::new(
@@ -771,7 +789,7 @@ fn bind(dir: &Path) -> std::io::Result<(PathBuf, UnixListener)> {
     })?;
     std_listener.set_nonblocking(true)?;
     let _guard = runtime().enter();
-    Ok((socket, UnixListener::from_std(std_listener)?))
+    Ok((socket, Incoming::Unix(UnixListener::from_std(std_listener)?)))
 }
 
 /// A fresh port on `127.0.0.1`, bound on the egress runtime. Only IPv4, because clients are
@@ -811,7 +829,7 @@ pub fn proxy(policy: Policy, dir: &Path, on: OnDecision) -> std::io::Result<List
         socket,
         port: None,
         url: None,
-        stop: Some(serve_proxy(Incoming::Unix(listener), policy, on, None)),
+        stop: Some(serve_proxy(listener, policy, on, None)),
     })
 }
 
@@ -849,10 +867,13 @@ fn serve_splice(incoming: Incoming, target: Target) -> CancellationToken {
                         _ => return,
                     }
                 }
+                #[cfg(unix)]
                 Target::Socket(p) => match UnixStream::connect(p).await {
                     Ok(s) => Box::new(s),
                     Err(_) => return,
                 },
+                #[cfg(not(unix))]
+                Target::Socket(_) => return,
             };
             let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
         }
@@ -868,7 +889,7 @@ pub fn splice(dir: &Path, target: SocketAddr) -> std::io::Result<Listener> {
         socket,
         port: None,
         url: None,
-        stop: Some(serve_splice(Incoming::Unix(listener), Target::Tcp(target))),
+        stop: Some(serve_splice(listener, Target::Tcp(target))),
     })
 }
 
@@ -1567,8 +1588,10 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     type Seen = Arc<Mutex<Vec<Decision>>>;
 
+    #[cfg(unix)]
     fn start(p: Policy, dir: &Path) -> (Listener, Seen) {
         let seen: Seen = Arc::default();
         let s = seen.clone();
@@ -1576,6 +1599,7 @@ mod tests {
         (l, seen)
     }
 
+    #[cfg(unix)]
     fn exchange(sock: &Path, send: &[u8]) -> String {
         use std::io::{Read, Write};
         let mut s = std::os::unix::net::UnixStream::connect(sock).unwrap();
@@ -1587,6 +1611,7 @@ mod tests {
     }
 
     /// A one-shot upstream on loopback that records what it received and answers `answer`.
+    #[cfg(unix)]
     fn upstream(answer: &'static str) -> (u16, std::thread::JoinHandle<String>) {
         use std::io::{Read, Write};
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1612,6 +1637,7 @@ mod tests {
         (port, t)
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_live_proxy_reaches_public_hosts_through_the_upstream_proxy() {
         use std::io::{Read, Write};
@@ -1709,6 +1735,7 @@ mod tests {
         assert_eq!(parse_upstream("http://proxy.corp"), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_live_proxy_checks_the_tls_server_name_against_the_connect_host() {
         use std::io::Read;
@@ -1842,6 +1869,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_live_proxy_allows_listed_hosts_and_refuses_the_rest() {
         let d = tempfile::tempdir().unwrap();

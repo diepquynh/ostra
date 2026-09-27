@@ -70,8 +70,7 @@ pub struct Roots {
 
 impl Roots {
     pub fn new(ctx: &ExecContext) -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
+        let home = ostra_core::paths::home()
             .unwrap_or_else(|| PathBuf::from("/"));
         let session_root = canon(&ctx.session_root);
         let mut temps = vec![canon(&std::env::temp_dir()), canon(Path::new("/tmp"))];
@@ -122,7 +121,10 @@ impl Roots {
         if let Some(rest) = raw.strip_prefix("~/") {
             return paths::resolve(&self.home, Path::new(rest));
         }
-        paths::resolve(base, Path::new(raw))
+        // Git Bash writes MSYS paths (`/c/Users/me`, `/tmp`), which name a different file than the
+        // same text would on Unix, so they are translated before the guard compares.
+        let translated = paths::from_msys(raw);
+        paths::resolve(base, &translated)
     }
 
     pub fn in_session(&self, p: &Path) -> bool {
@@ -318,13 +320,56 @@ pub fn is_test_path(rel: &str) -> bool {
 // Write checks
 // ---------------------------------------------------------------------------------------------
 
+/// On Windows, a word that looks like a path even without a forward slash: a backslash, a drive
+/// (`C:` or `C:\`), or a verbatim or UNC prefix. Always false on Unix, where only `/` and `~`
+/// mark a path.
+fn is_windows_pathlike(text: &str) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let b = text.as_bytes();
+    text.contains('\\') || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
+}
+
 fn proc_of_process(p: &Path) -> bool {
-    let mut parts = p.components().skip(1);
+    use std::path::Component;
+    let mut parts = p
+        .components()
+        .skip_while(|c| matches!(c, Component::Prefix(_) | Component::RootDir));
     parts.next().is_some_and(|c| c.as_os_str() == "proc")
         && parts.next().is_some_and(|c| {
             let s = c.as_os_str().to_string_lossy();
             s == "self" || s == "thread-self" || s.chars().all(|c| c.is_ascii_digit())
         })
+}
+
+pub const WINDOWS_PATH: &str = "windows-path";
+
+/// Hardening (WINDOWS_HANDOVER 1.4): a Windows path form the guards do not compare against, such
+/// as an alternate data stream (`file:stream`), a reserved device name (`CON`, `COM1`), a UNC or
+/// device path (`\\host\share`, `\\?\`), or a drive-relative path (`C:foo`). Refused for any tool
+/// call, because such a spelling could reach a protected file under a name the guards miss.
+/// Always `None` on Unix.
+pub fn check_windows_path(raw: &str, target: &Path) -> Option<Denial> {
+    if let Some(what) = paths::windows_path_problem(raw) {
+        return Some(deny(
+            WINDOWS_PATH,
+            format!(
+                "Do not use \"{raw}\": it is {what}, which Ostra refuses in a tool call because it can name a protected \
+                 file under a spelling the guards do not check. Use a plain drive path such as C:\\path\\to\\file."
+            ),
+        ));
+    }
+    if paths::is_reserved_device(target) {
+        return Some(deny(
+            WINDOWS_PATH,
+            format!(
+                "Do not use \"{raw}\": it names a Windows device (such as CON, NUL, or COM1), which opens the device \
+                 instead of a file. Choose another name."
+            ),
+        ));
+    }
+    None
 }
 
 /// Hardening: reads of credentials and process memory are refused for every tool and mode.
@@ -355,7 +400,7 @@ pub fn check_shell_reads(roots: &Roots, parsed: &Parsed, start: &Path) -> Option
             .chain(cmd.redirects.iter().filter_map(|r| r.target.as_ref()));
         for w in words {
             let text = w.text();
-            let pathlike = text.contains('/') || text.starts_with('~');
+            let pathlike = text.contains('/') || text.starts_with('~') || is_windows_pathlike(text);
             let names_proc = text.contains("/proc/");
             if !(pathlike || names_proc) {
                 continue;
@@ -392,6 +437,12 @@ pub fn check_write(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
+
+    // Hardening (Windows): refuse a stream, device, UNC, or drive-relative spelling before the
+    // scope checks, since it could name a protected file the guards would not recognize.
+    if let Some(d) = check_windows_path(raw, target) {
+        return Some(d);
+    }
 
     // Tool self-protection (plugin-policy.js checkPluginWrite).
     if roots.is_protected(target) {
@@ -695,6 +746,24 @@ pub struct ShellTarget {
     pub command: usize,
     pub path: PathBuf,
     pub raw: String,
+    /// On Windows, the raw path has a `..` right after a junction or symlink, so Win32 and Git
+    /// Bash may reach different files ([`paths::dot_dot_after_link`]).
+    pub ambiguous: bool,
+}
+
+/// Hardening (Windows): refuses a shell write target whose `..` follows a link, because Git Bash
+/// may apply it to the link's target while the guard resolves it as Win32 does.
+pub fn check_ambiguous_target(t: &ShellTarget) -> Option<Denial> {
+    t.ambiguous.then(|| {
+        deny(
+            WINDOWS_PATH,
+            format!(
+                "Name \"{}\" without a `..` after a junction or symlink: Git Bash and Windows programs resolve that \
+                 `..` differently, so Ostra cannot tell which file the command writes.",
+                t.raw
+            ),
+        )
+    })
 }
 
 /// Resolve every write target of a parsed command against the starting cwd.
@@ -725,10 +794,12 @@ pub fn shell_targets(roots: &Roots, parsed: &Parsed, start: &Path) -> Vec<ShellT
                     (roots.resolve(&base, &raw), raw)
                 }
             };
+            let ambiguous = paths::dot_dot_after_link(&base, &paths::from_msys(&raw));
             ShellTarget {
                 command: t.command,
                 path,
                 raw,
+                ambiguous,
             }
         })
         .collect()
@@ -810,12 +881,23 @@ fn is_plain_reader(cmd: &SimpleCommand) -> bool {
 static PATH_CANDIDATE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"[~\w./@-]*/[~\w./@-]+").unwrap());
 
+/// A Windows path in shell text: a drive path (`C:\x`, `C:/x`) or a backslash path (`.git\x`,
+/// `dir\file`). Matched only on Windows, in addition to [`PATH_CANDIDATE`].
+static WIN_PATH_CANDIDATE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[A-Za-z]:[\\/][\w.\\/@ -]*|[\w.@-]*\\[\w.\\/@-]+").unwrap());
+
 fn path_candidates(text: &str) -> Vec<String> {
     let mut out: Vec<String> = PATH_CANDIDATE
         .find_iter(text)
-        .map(|m| {
-            m.as_str()
-                .trim_end_matches([')', ',', ';', ':', '\'', '"', '`'])
+        .map(|m| m.as_str().to_string())
+        .collect();
+    if cfg!(windows) {
+        out.extend(WIN_PATH_CANDIDATE.find_iter(text).map(|m| m.as_str().to_string()));
+    }
+    out = out
+        .into_iter()
+        .map(|s| {
+            s.trim_end_matches([')', ',', ';', ':', '\'', '"', '`', ' '])
                 .to_string()
         })
         .filter(|s| !s.is_empty())
@@ -838,6 +920,45 @@ static SPAWN_API: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
+
+/// Layer 1 for an opaque shell (PowerShell, cmd), which Ostra cannot parse into commands. The
+/// write-scope and read guards need a parsed command, so instead the raw text is scanned for the
+/// paths that must never be touched however they are reached: Ostra's own state and databases, a
+/// credential store, and the tool's own binary or config. A hit is refused; anything else falls
+/// to the permission layer, which never auto-allows these tools. `start` is the shell's cwd.
+pub fn check_opaque_shell(roots: &Roots, raw: &str, start: &Path) -> Option<Denial> {
+    if let Some(m) = STATE_NAME.find(raw) {
+        return Some(deny(
+            STATE_OWNERSHIP,
+            format!(
+                "Do not name \"{}\" in a PowerShell or cmd command: it is pipeline state, and such a command is invisible \
+                 to Ostra's write guards, so it cannot be allowed to touch one. Do the work that makes the record update \
+                 itself, or use the Bash tool for a command Ostra can check.",
+                m.as_str().trim_start_matches(['/', '\\'])
+            ),
+        ));
+    }
+    for candidate in path_candidates(raw) {
+        let value = candidate
+            .split_once('=')
+            .map_or(candidate.as_str(), |(k, v)| if k.starts_with('-') { v } else { &candidate });
+        let p = roots.resolve(start, value);
+        if roots.is_secret(&p) {
+            return check_read(roots, &p, value);
+        }
+        if roots.is_protected(&p) || roots.is_engine_state(&p) {
+            return Some(deny(
+                SELF_PROTECTION,
+                format!(
+                    "Do not name \"{value}\" in a PowerShell or cmd command: it is part of Ostra itself or its engine \
+                     state, which such a command cannot be allowed to touch because Ostra cannot read what it does. Use \
+                     the Bash tool, or say what you need in your report."
+                ),
+            ));
+        }
+    }
+    None
+}
 
 /// Guards that read a whole shell command: running Ostra itself, touching its files with
 /// anything but a reader, and opaque interpreter write channels (plugin-policy.js).

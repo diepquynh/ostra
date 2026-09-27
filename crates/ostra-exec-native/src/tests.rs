@@ -68,7 +68,8 @@ fn fixture() -> Fixture {
     });
     // Outside OS temp, because the policy never asks for writes there.
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
-    let root = std::fs::canonicalize(dir.path()).unwrap();
+    // Strip the Windows `\\?\` verbatim prefix so derived paths match what the tools resolve to.
+    let root = ostra_core::paths::strip_verbatim(&ostra_core::paths::canonical(dir.path()).unwrap());
     let repo = root.join("repo");
     let session = root.join("ws/.ostra/sessions/s_1/app");
     let outside = root.join("elsewhere");
@@ -663,7 +664,10 @@ async fn relative_paths_are_checked_against_the_shell_cwd() {
     std::fs::write(&victim, "orig").unwrap();
     let root = f.repo.parent().unwrap();
     let p = ScriptedProvider::new();
-    p.push_tool_use("Bash", json!({"command": format!("cd {}", root.display())}));
+    p.push_tool_use(
+        "Bash",
+        json!({"command": format!("cd {}", root.display().to_string().replace('\\', "/"))}),
+    );
     p.push_tool_use("Bash", json!({"command": "cd elsewhere"}));
     p.push_tool_use(
         "Write",

@@ -21,9 +21,18 @@ pub fn terminal_id(harness: HarnessKind, action: HarnessSetupAction) -> Executio
 
 /// A shell prefix that stops with a readable message when `tool` is missing, instead of the
 /// shell's bare "not found" halfway through a pipeline.
+#[cfg(not(windows))]
 fn require(tool: &str) -> String {
     format!(
         "command -v {tool} >/dev/null 2>&1 || {{ echo 'Install {tool} on the machine that runs Ostra, then try again, because the installer downloads with it.'; exit 127; }}; "
+    )
+}
+
+/// [`require`] in PowerShell, the shell Windows installers run in.
+#[cfg(windows)]
+fn require(tool: &str) -> String {
+    format!(
+        "if (-not (Get-Command {tool} -ErrorAction SilentlyContinue)) {{ Write-Output 'Install {tool} on the machine that runs Ostra, then try again, because the installer runs with it.'; exit 127 }}; "
     )
 }
 
@@ -36,8 +45,22 @@ pub fn command(
     match action {
         HarnessSetupAction::Install => {
             let script = ostra_exec_harness::install_script(harness);
-            let checked = format!("{}{script}", require("curl"));
-            ("sh".into(), vec!["-c".into(), checked], script.into())
+            let checked = match ostra_exec_harness::installer_tool(harness) {
+                Some(tool) => format!("{}{script}", require(tool)),
+                None => script.to_string(),
+            };
+            #[cfg(not(windows))]
+            let (program, args) = ("sh".to_string(), vec!["-c".to_string(), checked]);
+            #[cfg(windows)]
+            let (program, args) = (
+                ostra_core::shells::powershell().to_string_lossy().into_owned(),
+                vec![
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    checked,
+                ],
+            );
+            (program, args, script.into())
         }
         HarnessSetupAction::Login => {
             let (program, args) = ostra_exec_harness::login_command(global, harness);
@@ -112,9 +135,19 @@ mod tests {
     fn commands_per_action() {
         let g = GlobalConfig::default();
         let (p, a, line) = command(&g, HarnessKind::Codex, HarnessSetupAction::Install);
-        assert_eq!((p.as_str(), a[0].as_str()), ("sh", "-c"));
-        assert!(a[1].starts_with("command -v curl ") && a[1].ends_with(&line));
-        assert_eq!(line, "curl -fsSL https://chatgpt.com/codex/install.sh | sh");
+        #[cfg(not(windows))]
+        {
+            assert_eq!((p.as_str(), a[0].as_str()), ("sh", "-c"));
+            assert!(a[1].starts_with("command -v curl ") && a[1].ends_with(&line));
+            assert_eq!(line, "curl -fsSL https://chatgpt.com/codex/install.sh | sh");
+        }
+        #[cfg(windows)]
+        {
+            assert!(p.to_ascii_lowercase().ends_with("powershell.exe"), "{p}");
+            let script = a.last().unwrap();
+            assert!(script.starts_with("if (-not (Get-Command npm ") && script.ends_with(&line));
+            assert_eq!(line, "npm install -g @openai/codex");
+        }
         let (p, a, line) = command(&g, HarnessKind::Claude, HarnessSetupAction::Login);
         assert_eq!(
             (p.as_str(), a),

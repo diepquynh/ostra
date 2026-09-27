@@ -668,7 +668,7 @@ fn project_holding(app: &App, dir: &Path) -> Option<(Arc<WorkspaceRt>, String, P
     let mut best: Option<(Arc<WorkspaceRt>, String, PathBuf)> = None;
     for w in workspaces {
         for p in w.effective_settings().projects {
-            let Ok(root) = std::fs::canonicalize(&p.path) else {
+            let Ok(root) = ostra_core::paths::canonical(&p.path) else {
                 continue;
             };
             let longer = best
@@ -690,7 +690,7 @@ impl ostra_tools::CodeNav for CodeTools {
             .get()
             .and_then(Weak::upgrade)
             .ok_or("The Ostra server is shutting down.")?;
-        let dir = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+        let dir = ostra_core::paths::canonical(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
         let (w, key, root) = project_holding(&app, &dir).ok_or_else(|| {
             format!(
                 "{} is not inside a project of an open workspace, so it has no code index.",

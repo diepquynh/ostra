@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn edits_new_files_and_new_folders_arrive_ignored_ones_do_not() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().canonicalize().unwrap();
+        let root = ostra_core::paths::canonical(dir.path()).unwrap();
         std::fs::write(root.join(".gitignore"), "target/\n").unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/a.rs"), "fn a() {}\n").unwrap();

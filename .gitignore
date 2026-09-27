@@ -9,4 +9,6 @@ web/dist
 /config/
 /SECURITY_HANDOVER.md
 /MACOS_SANDBOX_HANDOVER.md
+/WINDOWS_HANDOVER.md
 /.design-sync/
+/tests/windows-probes/target/

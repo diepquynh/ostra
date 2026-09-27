@@ -93,6 +93,7 @@ pub fn login_command(global: &GlobalConfig, harness: HarnessKind) -> (String, Ve
 }
 
 /// The vendor's official installer for a harness CLI, a shell pipeline for `sh -c`.
+#[cfg(not(windows))]
 pub fn install_script(harness: HarnessKind) -> &'static str {
     match harness {
         HarnessKind::Claude => "curl -fsSL https://claude.ai/install.sh | bash",
@@ -102,10 +103,48 @@ pub fn install_script(harness: HarnessKind) -> &'static str {
     }
 }
 
+/// The official Windows installer as a PowerShell command. Grok Build and Antigravity have none
+/// Ostra runs for them, so their terminal says where to look instead.
+#[cfg(windows)]
+pub fn install_script(harness: HarnessKind) -> &'static str {
+    match harness {
+        HarnessKind::Claude => "irm https://claude.ai/install.ps1 | iex",
+        HarnessKind::Codex => "npm install -g @openai/codex",
+        HarnessKind::Grok => {
+            "Write-Output 'Install Grok Build by following its instructions for Windows, then check again, because Ostra has no Windows installer command for it.'; exit 1"
+        }
+        HarnessKind::Agy => {
+            "Write-Output 'Install Antigravity by following its instructions for Windows, then check again, because Ostra has no Windows installer command for it.'; exit 1"
+        }
+    }
+}
+
+/// The tool a harness's installer downloads with, which the setup terminal checks for first.
+pub fn installer_tool(harness: HarnessKind) -> Option<&'static str> {
+    if cfg!(windows) {
+        (harness == HarnessKind::Codex).then_some("npm")
+    } else {
+        Some("curl")
+    }
+}
+
 /// Where the official installers put their binaries. A server started before an install does
 /// not see a shell profile's `PATH` change, so these join its `PATH` at start.
 pub fn install_dirs(home: &Path) -> Vec<PathBuf> {
-    vec![home.join(".local/bin"), home.join(".grok/bin")]
+    #[cfg(not(windows))]
+    {
+        vec![home.join(".local/bin"), home.join(".grok/bin")]
+    }
+    #[cfg(windows)]
+    {
+        // Claude Code's native installer writes `~\.local\bin\claude.exe`; npm's global bin is
+        // `%APPDATA%\npm`, which lives under home.
+        vec![
+            home.join(".local").join("bin"),
+            home.join("AppData").join("Roaming").join("npm"),
+            home.join(".grok").join("bin"),
+        ]
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

@@ -593,6 +593,7 @@ export const mockApi: Api = {
       harnesses: f.workspaceDetail.harnesses,
       stacks: f.workspaceDetail.stacks,
       sandbox: { ...f.workspaceDetail.sandbox, mode: "auto" },
+      shell: { available: true, path: "/usr/bin/bash" },
     }),
   saveProvider: (name, edit) => {
     const p = f.workspaceDetail.providers.find((x) => x.name === name);

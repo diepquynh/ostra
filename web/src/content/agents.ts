@@ -23,12 +23,12 @@ export const COMPLEXITY_AGENTS = ["implementer", "write-test"] as const;
 /** Route keys that always run on the native executor. */
 export const NATIVE_ONLY = new Set(["judge", "quick-answer"]);
 
-/** Workspace sandbox choices. `""` follows the global `[sandbox] mode`, which is required unless it says otherwise. */
+/** Workspace sandbox choices. `""` follows the global `[sandbox] mode`; its default is required on Linux and macOS and auto on Windows, which has no sandbox backend yet. */
 export const SANDBOX_MODES: { mode: SandboxMode | ""; label: string; help: string }[] = [
   {
     mode: "",
     label: "Use the global setting",
-    help: "Follows [sandbox] mode in ~/.config/ostra/config.toml, which is required unless set.",
+    help: "Follows [sandbox] mode in the global config, which defaults to required on Linux and macOS and to auto on Windows.",
   },
   {
     mode: "required",

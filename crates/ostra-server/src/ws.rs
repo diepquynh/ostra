@@ -228,6 +228,12 @@ async fn run(app: Arc<App>, mut socket: WebSocket, cookie: String) {
         code: 4401,
         reason: "Signed out".into(),
     };
+    // A revoke between the upgrade and the subscription above was broadcast to no one. A revoke
+    // drops the cookie before it broadcasts, so this check sees any revoke the channel missed.
+    if !app.auth.check_cookie(&cookie) {
+        let _ = socket.send(Message::Close(Some(signed_out))).await;
+        return;
+    }
     loop {
         tokio::select! {
             _ = recheck.tick() => {

@@ -19,6 +19,7 @@ pub async fn environment(app: &App) -> EnvironmentStatus {
         harnesses: app.shared.env.read().harnesses.clone(),
         stacks: ostra_agents::stack_names(),
         sandbox: ostra_core::api::SandboxStatus::check(&app.shared.global().sandbox),
+        shell: ostra_core::api::ShellStatus::check(),
     }
 }
 
@@ -77,7 +78,7 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
         None
     } else {
         let root =
-            std::fs::canonicalize(&body.root).unwrap_or_else(|_| paths::normalize(&body.root));
+            ostra_core::paths::canonical(&body.root).unwrap_or_else(|_| paths::normalize(&body.root));
         if root.exists() && !root.is_dir() {
             issues.push(issue(
                 "root",
@@ -131,7 +132,7 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
     let runtime_dir = root.as_ref().map(|r| r.join(paths::RUNTIME_DIR));
     for (i, p) in body.projects.iter().flatten().enumerate() {
         let path = if p.path.is_absolute() {
-            std::fs::canonicalize(&p.path).unwrap_or_else(|_| p.path.clone())
+            ostra_core::paths::canonical(&p.path).unwrap_or_else(|_| p.path.clone())
         } else {
             p.path.clone()
         };
@@ -263,7 +264,7 @@ pub fn create(app: &Arc<App>, body: &CreateWorkspace) -> Result<Arc<WorkspaceRt>
     let registry = &app.shared.registry;
     std::fs::create_dir_all(&d.root)
         .map_err(|e| CreateError::Failed(format!("Could not create {}: {e}", d.root.display())))?;
-    let root = std::fs::canonicalize(&d.root).map_err(|e| CreateError::Failed(e.to_string()))?;
+    let root = ostra_core::paths::canonical(&d.root).map_err(|e| CreateError::Failed(e.to_string()))?;
     if registered(app, &root) {
         return Err(CreateError::Invalid(vec![issue(
             "root",

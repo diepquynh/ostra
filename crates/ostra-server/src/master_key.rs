@@ -148,7 +148,7 @@ fn check_key(registry: &RegistryDb, sealer: &Sealer) -> anyhow::Result<()> {
 
 /// One keychain entry per data dir, so separate Ostra installs keep separate keys.
 fn keychain_account(dir: &Path) -> String {
-    let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+    let dir = ostra_core::paths::canonical(dir).unwrap_or_else(|_| dir.to_path_buf());
     format!("master-key {}", dir.display())
 }
 
@@ -232,6 +232,9 @@ fn file_key(path: &Path) -> anyhow::Result<[u8; 32]> {
 }
 
 fn restrict(path: &Path) -> anyhow::Result<()> {
+    // On Windows the file keeps the ACL it inherits from the data dir under the user's profile.
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -278,10 +281,10 @@ mod tests {
             unreachable_set,
         )
         .unwrap();
-        let path = dir.path().join("master.key");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let path = dir.path().join("master.key");
             let mode = std::fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
         }

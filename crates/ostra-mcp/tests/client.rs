@@ -169,9 +169,21 @@ async fn stdio_crash_is_reported() {
 async fn stdio_server_does_not_inherit_removed_variables() {
     // SAFETY: no other test reads this variable.
     unsafe { std::env::set_var("OSTRA_MCP_TEST_SECRET", "leaked") };
+    // Git Bash on Windows, /bin/sh elsewhere: the script is POSIX either way.
+    let sh = if cfg!(windows) {
+        match ostra_core::shells::bash() {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(_) => {
+                eprintln!("Git Bash not installed; skipping");
+                return;
+            }
+        }
+    } else {
+        "/bin/sh".to_string()
+    };
     let e = Client::connect(
         Endpoint::Stdio {
-            program: "/bin/sh".into(),
+            program: sh,
             args: vec![
                 "-c".into(),
                 "echo \"secret=[${OSTRA_MCP_TEST_SECRET-unset}] keep=[$KEEP]\" >&2; exit 3".into(),

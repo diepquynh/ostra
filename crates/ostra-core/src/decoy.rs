@@ -162,20 +162,15 @@ impl Decoys {
     /// under `base` ([`dir`]) and starts watching them. `on` runs on the watcher's thread.
     pub fn plant(base: &Path, at: &[(PathBuf, Kind)], on: OnOpen) -> std::io::Result<Decoys> {
         use std::io::Write;
-        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .recursive(true)
-            .create(base)?;
+        crate::paths::create_private_dir_all(base)?;
         let dir = base.join(&uuid::Uuid::new_v4().simple().to_string()[..16]);
-        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+        crate::paths::create_private_dir(&dir)?;
         let mut binds = vec![];
         for (i, (dest, kind)) in at.iter().enumerate() {
             let src = dir.join(i.to_string());
-            std::fs::OpenOptions::new()
+            crate::paths::private_file_options()
                 .write(true)
                 .create_new(true)
-                .mode(0o600)
                 .open(&src)?
                 .write_all(contents(*kind).as_bytes())?;
             binds.push((src, dest.clone()));

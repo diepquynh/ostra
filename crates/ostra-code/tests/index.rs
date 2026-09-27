@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(unused_imports))]
 use ostra_code::Indexes;
 use ostra_code::provider::{
     Answer, CodeProvider, CommandProvider, NativeProvider, ask, parse_answer,

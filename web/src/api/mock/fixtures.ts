@@ -182,6 +182,7 @@ export const workspaceDetail: WorkspaceDetail = {
   pending_commands: [],
   sandbox: {
     mode: "required",
+    default_mode: "required",
     available: true,
     backend: "bubblewrap",
     active: true,

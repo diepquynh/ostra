@@ -131,7 +131,7 @@ pub struct ServerConfig {
 }
 
 /// Whether agent commands run inside the sandbox.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
 pub enum SandboxMode {
@@ -139,9 +139,21 @@ pub enum SandboxMode {
     /// with a warning otherwise.
     Auto,
     /// Refuse to start an execution that cannot be sandboxed.
-    #[default]
     Required,
     Off,
+}
+
+impl Default for SandboxMode {
+    /// `required` on Linux and macOS, which have a sandbox backend. Windows has none yet, so its
+    /// default is `auto`, which runs unsandboxed with a warning rather than refusing every
+    /// execution (WINDOWS_HANDOVER, "Decision").
+    fn default() -> Self {
+        if cfg!(windows) {
+            SandboxMode::Auto
+        } else {
+            SandboxMode::Required
+        }
+    }
 }
 
 impl SandboxMode {
@@ -227,7 +239,7 @@ pub struct SandboxConfig {
 impl Default for SandboxConfig {
     fn default() -> Self {
         SandboxConfig {
-            mode: SandboxMode::Required,
+            mode: SandboxMode::default(),
             network: SandboxNetwork::Allowlist,
             allowed_hosts: vec![],
             upstream_proxy: None,
@@ -1321,7 +1333,9 @@ pub fn validate_workspace(
                 format!("Project key `{}` is used twice.", p.key),
             ));
         }
-        if !p.path.is_absolute() {
+        // A rooted path with no Windows drive counts as absolute: real project roots on Windows
+        // carry a drive, and accepting a bare-rooted path keeps configs portable across OSes.
+        if !p.path.is_absolute() && !p.path.has_root() {
             issues.push(issue(
                 format!("projects[{i}].path"),
                 "Project paths must be absolute.".into(),
@@ -1826,20 +1840,24 @@ mod tests {
 
     #[test]
     fn the_sandbox_is_required_unless_a_workspace_or_the_global_config_says_otherwise() {
+        // The default is `required` where a backend exists and `auto` on Windows, which has none
+        // yet (WINDOWS_HANDOVER, "Decision").
+        let platform_default = if cfg!(windows) {
+            SandboxMode::Auto
+        } else {
+            SandboxMode::Required
+        };
         let global = SandboxConfig::default();
-        assert_eq!(global.mode, SandboxMode::Required);
+        assert_eq!(global.mode, platform_default);
         assert_eq!(
             toml::from_str::<GlobalConfig>("").unwrap().sandbox.mode,
-            SandboxMode::Required
+            platform_default
         );
         let mode = |m: Option<SandboxMode>| WorkspaceSandbox {
             mode: m,
             ..Default::default()
         };
-        assert_eq!(
-            global.for_workspace(&mode(None)).mode,
-            SandboxMode::Required
-        );
+        assert_eq!(global.for_workspace(&mode(None)).mode, platform_default);
         assert_eq!(
             global.for_workspace(&mode(Some(SandboxMode::Off))).mode,
             SandboxMode::Off

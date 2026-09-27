@@ -802,7 +802,11 @@ export function PermissionsSection({
                   checked={form.sandbox === m.mode}
                   onChange={() => update((f) => void (f.sandbox = m.mode))}
                   label={m.label}
-                  description={m.help}
+                  description={
+                    m.mode === "" && sandbox
+                      ? `Follows [sandbox] mode in the global config, which is ${sandbox.default_mode} on this machine unless set.`
+                      : m.help
+                  }
                 />
               ))}
               <FieldIssues issues={issues("sandbox_mode")} />

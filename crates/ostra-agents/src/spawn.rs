@@ -887,7 +887,9 @@ fn check(id: &str, kind: Kind, value: &str) -> Result<(), String> {
     }
     match kind {
         Kind::AbsoluteDir | Kind::AbsolutePath => {
-            if !Path::new(v).is_absolute() {
+            // A rooted path with no Windows drive (`/ws`) counts as absolute here: real roots on
+            // Windows carry a drive, and accepting a bare-rooted path keeps prompts portable.
+            if !Path::new(v).is_absolute() && !Path::new(v).has_root() {
                 return Err(format!("`{id}` must be an absolute path, got `{v}`"));
             }
         }

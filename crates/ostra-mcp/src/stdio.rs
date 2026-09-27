@@ -24,6 +24,8 @@ pub(crate) struct Stdio {
     stderr: Arc<Mutex<String>>,
     stderr_eof: tokio::sync::watch::Receiver<bool>,
     _child: Mutex<Child>,
+    /// The server and what it starts (`npx` and `uvx` servers run in grandchildren).
+    tree: Option<ostra_core::proctree::Tree>,
     /// Dropped after [`Drop`] signals the group, see [`crate::Endpoint::Stdio`].
     _guard: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
@@ -49,10 +51,11 @@ impl Stdio {
             .stdout(PStdio::piped())
             .stderr(PStdio::piped())
             .kill_on_drop(true);
-        #[cfg(unix)]
-        cmd.process_group(0);
+        ostra_core::proctree::prepare_tokio(&mut cmd);
         let mut child = cmd
             .spawn()
+            .map_err(|e| McpError::Transport(format!("could not start `{program}`: {e}")))?;
+        let tree = ostra_core::proctree::Tree::of_tokio(&child)
             .map_err(|e| McpError::Transport(format!("could not start `{program}`: {e}")))?;
         let stdin = Arc::new(tokio::sync::Mutex::new(child.stdin.take().expect("piped")));
         let stdout = child.stdout.take().expect("piped");
@@ -122,6 +125,7 @@ impl Stdio {
             stderr,
             stderr_eof,
             _child: Mutex::new(child),
+            tree: Some(tree),
             _guard: guard,
         })
     }
@@ -161,11 +165,10 @@ impl Stdio {
 
 impl Drop for Stdio {
     fn drop(&mut self) {
-        // Servers started through `npx` or `uvx` run in grandchildren; end the whole group.
-        #[cfg(unix)]
-        if let Some(pid) = self._child.lock().id() {
-            // SAFETY: signals the process group this transport created.
-            unsafe { libc::kill(-(pid as i32), libc::SIGTERM) };
+        // Servers started through `npx` or `uvx` run in grandchildren; end the whole tree. On
+        // Windows dropping the tree closes its job, which kills them.
+        if let Some(t) = self.tree.take() {
+            t.terminate();
         }
     }
 }

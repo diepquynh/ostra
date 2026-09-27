@@ -230,16 +230,22 @@ describe("the Artifacts tab without a sandbox", () => {
   };
 
   it("warns that shell commands can read hidden artifacts when commands run unsandboxed", async () => {
-    withSandbox({ mode: "off", available: true, active: false });
+    withSandbox({ mode: "off", default_mode: "required", available: true, active: false });
     expect(await screen.findByText(/Shell commands can read hidden artifacts here/)).toBeTruthy();
   });
 
   it("stays quiet when the sandbox is on, or required and missing, because then no command runs unsandboxed", async () => {
-    withSandbox({ mode: "auto", available: true, active: true });
+    withSandbox({ mode: "auto", default_mode: "required", available: true, active: true });
     await screen.findByText("guides");
     expect(screen.queryByText(/Shell commands can read hidden artifacts/)).toBeNull();
     cleanup();
-    withSandbox({ mode: "required", available: false, active: false, message: "Install bubblewrap" });
+    withSandbox({
+      mode: "required",
+      default_mode: "required",
+      available: false,
+      active: false,
+      message: "Install bubblewrap",
+    });
     await screen.findByText("guides");
     expect(screen.queryByText(/Shell commands can read hidden artifacts/)).toBeNull();
   });

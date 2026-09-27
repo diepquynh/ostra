@@ -903,8 +903,7 @@ fn sandbox_for(
     let global: ostra_core::config::GlobalConfig =
         ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
     let sandbox = global.sandbox.for_workspace(&ctx.sandbox());
-    let home = std::env::var_os("HOME")
-        .map(std::path::PathBuf::from)
+    let home = ostra_core::paths::home()
         .unwrap_or_else(|| "/".into());
     Ok(match ostra_core::sandbox::decide(&sandbox)? {
         ostra_core::sandbox::Decision::Sandboxed(backend) => {

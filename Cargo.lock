@@ -1846,6 +1846,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cfc352a66ba903c23239ef51e809508b6fc2b0f90e3476ac7a9ff47e863ae95"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "keyring"
 version = "4.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2321,6 +2331,8 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "dirs",
+ "dunce",
+ "junction",
  "libc",
  "pretty_assertions",
  "regex",
@@ -2337,6 +2349,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2417,7 +2430,7 @@ dependencies = [
  "base64 0.23.1",
  "eventsource-stream",
  "futures",
- "libc",
+ "ostra-core",
  "parking_lot",
  "rand 0.10.3",
  "reqwest",
@@ -2541,6 +2554,7 @@ dependencies = [
  "url",
  "uuid",
  "which",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

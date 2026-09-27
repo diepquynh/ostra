@@ -40,7 +40,7 @@ pub fn project_docs(repo_root: &Path) -> Vec<ProjectDoc> {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        let real = ostra_core::paths::canonical(&path).unwrap_or_else(|_| path.clone());
         if content.trim().is_empty() || seen.iter().any(|(p, c)| *p == real || *c == content) {
             continue;
         }

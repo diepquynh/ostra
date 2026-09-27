@@ -136,6 +136,19 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    #[cfg(windows)]
+    #[test]
+    fn install_dirs_join_path_once_on_windows() {
+        let home = Path::new(r"C:\Users\me");
+        let npm = home.join(r"AppData\Roaming\npm");
+        let start = std::env::join_paths([Path::new(r"C:\Windows"), &npm]).unwrap();
+        let p = path_with_install_dirs(Some(start), home);
+        let dirs: Vec<_> = std::env::split_paths(&p).collect();
+        assert_eq!(dirs.iter().filter(|d| **d == npm).count(), 1);
+        assert!(dirs.contains(&home.join(r".grok\bin")));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn install_dirs_join_path_once() {
         let home = Path::new("/home/me");

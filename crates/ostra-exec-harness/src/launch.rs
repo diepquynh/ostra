@@ -64,8 +64,27 @@ pub struct LaunchPlan {
     pub tty_param: Option<String>,
 }
 
-/// POSIX single-quote a word for a hook command line, which harnesses run through a shell.
+/// Quote a word for a hook command line, which harnesses run through a shell: POSIX single quotes
+/// on Unix. On Windows the word must mean the same in Git Bash (Claude Code's hook shell) and in
+/// cmd, so separators become `/` and a word with a space is double-quoted; a word holding a
+/// character either shell expands inside double quotes falls back to POSIX quoting.
 pub fn shell_quote(s: &str) -> String {
+    if cfg!(windows) {
+        let s = s.replace('\\', "/");
+        let plain = |c: char| c.is_ascii_alphanumeric() || "-_./:=@+,".contains(c);
+        if !s.is_empty() && s.chars().all(plain) {
+            return s;
+        }
+        if !s.contains(['"', '%', '$', '`', '!', '\'']) {
+            return format!("\"{s}\"");
+        }
+        return posix_quote(&s);
+    }
+    posix_quote(s)
+}
+
+/// POSIX single-quote a word, for text Ostra's bash parser reads.
+pub fn posix_quote(s: &str) -> String {
     if !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "-_./:=@%+,".contains(c))
@@ -679,18 +698,16 @@ pub fn agy_hook_command(ostra_binary: &Path, event: HookEvent) -> String {
 /// `plan.links`.
 pub fn materialize(plan: &LaunchPlan) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     for (path, content) in &plan.files {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut f = std::fs::OpenOptions::new()
+        let mut f = ostra_core::paths::private_file_options()
             .write(true)
             .create(true)
             .truncate(true)
-            .mode(0o600)
             .open(path)?;
-        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        ostra_core::paths::restrict_to_owner(path, false)?;
         f.write_all(content.as_bytes())?;
     }
     for (link, target) in &plan.links {
@@ -700,7 +717,7 @@ pub fn materialize(plan: &LaunchPlan) -> std::io::Result<()> {
         if std::fs::symlink_metadata(link).is_ok() {
             continue;
         }
-        std::os::unix::fs::symlink(target, link)?;
+        ostra_core::paths::link(target, link)?;
     }
     Ok(())
 }
@@ -804,6 +821,14 @@ pub(crate) mod tests {
     fn quoting() {
         assert_eq!(shell_quote("/usr/bin/ostra"), "/usr/bin/ostra");
         assert_eq!(shell_quote("/a b/o'k"), "'/a b/o'\\''k'");
+        if cfg!(windows) {
+            assert_eq!(
+                shell_quote(r"C:\Program Files\Ostra\ostra.exe"),
+                "\"C:/Program Files/Ostra/ostra.exe\""
+            );
+            assert_eq!(shell_quote(r"C:\bin\ostra.exe"), "C:/bin/ostra.exe");
+            assert_eq!(shell_quote(r"C:\a b\$x"), "'C:/a b/$x'");
+        }
     }
 
     #[test]
@@ -1016,7 +1041,6 @@ pub(crate) mod tests {
 
     #[test]
     fn grok_does_not_trust_the_repository_and_files_are_private() {
-        use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("home/.grok")).unwrap();
         let s = spec(HarnessKind::Grok, "grok-4.5", tmp.path());
@@ -1034,9 +1058,13 @@ pub(crate) mod tests {
         );
         assert!(trust.contains(&*s.ctx.session_dir.to_string_lossy()));
         materialize(&p).unwrap();
-        let config = tmp.path().join("cfg/grok-home/config.toml");
-        let mode = std::fs::metadata(config).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let config = tmp.path().join("cfg/grok-home/config.toml");
+            let mode = std::fs::metadata(config).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
     }
 
     pub(crate) struct EnvGuard(&'static str, Option<std::ffi::OsString>);

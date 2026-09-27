@@ -2,6 +2,7 @@
 import type { HarnessStatus } from "./HarnessStatus";
 import type { ProviderStatus } from "./ProviderStatus";
 import type { SandboxStatus } from "./SandboxStatus";
+import type { ShellStatus } from "./ShellStatus";
 
 /**
  * `GET /api/environment`: what this machine offers, checked before any workspace exists.
@@ -10,4 +11,4 @@ export type EnvironmentStatus = { providers: Array<ProviderStatus>, harnesses: A
 /**
  * Stacks with a seed reference, the values a project's `stack` offers besides detection.
  */
-stacks: Array<string>, sandbox: SandboxStatus, };
+stacks: Array<string>, sandbox: SandboxStatus, shell: ShellStatus, };

@@ -2,8 +2,8 @@
 //! written by whoever controls the folder, including an agent, so it must not choose programs
 //! that git starts while Ostra lists files, shows a diff, or stages.
 
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// For every git command Ostra starts: no fsmonitor program, no `ext::` transport, no askpass
 /// program from the repository.
@@ -18,16 +18,36 @@ pub const NO_EXEC: &[&str] = &[
 
 /// For git commands Ostra runs without the user asking (status, listings, diffs, staging during
 /// review): [`NO_EXEC`] plus no hooks.
-pub const AUTOMATIC: &[&str] = &[
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "protocol.ext.allow=never",
-    "-c",
-    "core.askPass=",
-    "-c",
-    "core.hooksPath=/dev/null",
-];
+pub static AUTOMATIC: LazyLock<Vec<String>> = LazyLock::new(|| {
+    let mut out: Vec<String> = NO_EXEC.iter().map(|s| s.to_string()).collect();
+    out.push("-c".into());
+    out.push(format!("core.hooksPath={}", no_hooks_dir()));
+    out
+});
+
+/// A hooks dir that holds no hooks. Git for Windows reads `/dev/null/<hook>` as `\dev\null\<hook>`
+/// on the current drive, where any local user may create folders, so Windows uses an empty dir
+/// under Ostra's own data dir instead.
+fn no_hooks_dir() -> String {
+    if cfg!(windows) {
+        let dir = crate::paths::data_dir().join("no-hooks");
+        let _ = crate::paths::create_private_dir_all(&dir);
+        dir.to_string_lossy().replace('\\', "/")
+    } else {
+        "/dev/null".into()
+    }
+}
+
+/// A path git printed. Git for Windows prints UTF-8, and Unix git prints the raw bytes.
+fn path_from_git(bytes: &[u8]) -> PathBuf {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        std::ffi::OsStr::from_bytes(bytes).into()
+    }
+    #[cfg(not(unix))]
+    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+}
 
 /// Settings for git commands an agent process runs (a harness CLI's shell, an MCP server), so a
 /// `.git/config` an agent planted cannot start a program or reach an `ext::` transport. Hooks are
@@ -162,7 +182,7 @@ async fn blank_filters_of(root: &Path, with_root: bool) -> Vec<String> {
             let Some(tab) = rest.iter().position(|b| *b == b'\t') else {
                 continue;
             };
-            let sub = repo.join(std::ffi::OsStr::from_bytes(&rest[tab + 1..]));
+            let sub = repo.join(path_from_git(&rest[tab + 1..]));
             if std::fs::symlink_metadata(sub.join(".git")).is_ok() {
                 queue.push((sub, true));
             }
@@ -173,7 +193,7 @@ async fn blank_filters_of(root: &Path, with_root: bool) -> Vec<String> {
 
 async fn query(repo: &Path, args: &[&str]) -> Vec<u8> {
     tokio::process::Command::new("git")
-        .args(AUTOMATIC)
+        .args(AUTOMATIC.iter())
         .arg("-C")
         .arg(repo)
         .args(args)

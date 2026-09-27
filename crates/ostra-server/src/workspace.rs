@@ -158,7 +158,7 @@ pub fn import_entry(
         issues.push(field_issue("path", "Use an absolute path.".into()));
         None
     } else {
-        match std::fs::canonicalize(&req.path) {
+        match ostra_core::paths::canonical(&req.path) {
             Err(_) => {
                 issues.push(field_issue(
                     "path",
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn import_problems_name_their_field() {
         let dir = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let base = ostra_core::paths::canonical(dir.path()).unwrap();
         let (root, app) = (base.join("ws"), base.join("app"));
         std::fs::create_dir_all(root.join(".ostra/inner")).unwrap();
         std::fs::create_dir_all(&app).unwrap();

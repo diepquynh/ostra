@@ -216,7 +216,9 @@ fn is_read_only(cmd: &SimpleCommand) -> bool {
 /// Hardening: outside YOLO and bypass, a write to one always asks, because it outlives the
 /// session and runs outside the policy.
 fn runs_code_later(p: &Path) -> bool {
-    let s = p.to_string_lossy();
+    // Compare on forward slashes so the suffix and substring checks below hold on Windows too.
+    let s = p.to_string_lossy().replace('\\', "/");
+    let s = s.as_str();
     let name = p
         .file_name()
         .map(|n| n.to_string_lossy())
@@ -426,6 +428,16 @@ impl ExecutionPolicy {
             }
             return None;
         }
+        // Opaque shells (PowerShell, cmd) cannot be parsed, so their raw text is scanned for the
+        // paths that must never be touched; the permission layer never auto-allows them.
+        if matches!(tool, "PowerShell" | "Cmd")
+            && let Some(command) = call.str_field("command")
+        {
+            let start = self.start_cwd(call);
+            if let Some(d) = guards::check_opaque_shell(&self.roots, command, &start) {
+                return Some(d);
+            }
+        }
         for (path, raw) in self.write_paths(call) {
             if let Some(d) =
                 guards::check_write(&self.ctx, &self.roots, &path, &raw, pending.as_ref())
@@ -433,10 +445,14 @@ impl ExecutionPolicy {
                 return Some(d);
             }
         }
-        if let Some((path, raw)) = self.read_path(call)
-            && let Some(d) = guards::check_read(&self.roots, &path, &raw)
-        {
-            return Some(d);
+        if let Some((path, raw)) = self.read_path(call) {
+            // Only a file tool's path: in a shell word a `:` is usually a URL or a git revision.
+            if let Some(d) = guards::check_windows_path(&raw, &path) {
+                return Some(d);
+            }
+            if let Some(d) = guards::check_read(&self.roots, &path, &raw) {
+                return Some(d);
+            }
         }
         if let Some(parsed) = parsed {
             let start = self.start_cwd(call);
@@ -447,6 +463,9 @@ impl ExecutionPolicy {
                 return Some(d);
             }
             for t in guards::shell_targets(&self.roots, parsed, &start) {
+                if let Some(d) = guards::check_ambiguous_target(&t) {
+                    return Some(d);
+                }
                 if let Some(d) =
                     guards::check_write(&self.ctx, &self.roots, &t.path, &t.raw, pending.as_ref())
                 {

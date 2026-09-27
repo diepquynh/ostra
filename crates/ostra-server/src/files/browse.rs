@@ -115,8 +115,13 @@ impl BrowseCache {
     /// Create `raw` and its missing parents, like `mkdir -p`, then describe it.
     pub fn mkdir(&self, raw: &str, home: &Path) -> Result<FsBrowse, String> {
         let raw = raw.trim();
-        if !(raw.starts_with('/') || raw == "~" || raw.starts_with("~/")) {
-            return Err("Type an absolute path, starting with / or ~/.".into());
+        let absolute = Path::new(raw).is_absolute() || raw.starts_with('/');
+        if !(absolute || raw == "~" || raw.starts_with("~/")) {
+            return Err(if cfg!(windows) {
+                "Type an absolute path, such as C:\\Users\\you\\code or ~/code.".into()
+            } else {
+                "Type an absolute path, starting with / or ~/.".into()
+            });
         }
         let path = expand(raw, home);
         if path.exists() && !path.is_dir() {
@@ -144,7 +149,7 @@ impl BrowseCache {
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
         let exists = expanded.exists();
         let path = if exists {
-            std::fs::canonicalize(&expanded).unwrap_or(expanded)
+            ostra_core::paths::canonical(&expanded).unwrap_or(expanded)
         } else {
             expanded
         };
@@ -154,7 +159,7 @@ impl BrowseCache {
             path.clone()
         } else {
             let n = nearest_dir(path.parent().unwrap_or(Path::new("/")));
-            std::fs::canonicalize(&n).unwrap_or(n)
+            ostra_core::paths::canonical(&n).unwrap_or(n)
         };
         let (entries, truncated) = match &listed {
             Some(names) => {
@@ -239,7 +244,7 @@ mod tests {
     #[test]
     fn mkdir_creates_parents_and_refreshes_listings() {
         let dir = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let base = ostra_core::paths::canonical(dir.path()).unwrap();
         std::fs::write(base.join("file.txt"), "x").unwrap();
         let cache = BrowseCache::default();
         assert!(
@@ -275,7 +280,7 @@ mod tests {
     #[test]
     fn missing_path_reports_nearest_existing_ancestor() {
         let dir = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(dir.path()).unwrap();
+        let base = ostra_core::paths::canonical(dir.path()).unwrap();
         std::fs::create_dir_all(base.join("code/shop/.git")).unwrap();
         std::fs::create_dir_all(base.join("code/.hidden")).unwrap();
         std::fs::create_dir_all(base.join("code/web/.ostra")).unwrap();

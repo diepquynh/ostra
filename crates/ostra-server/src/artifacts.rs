@@ -41,7 +41,7 @@ fn hidden_root(w: &WorkspaceRt) -> PathBuf {
 /// The folder, created when missing, in its canonical form.
 fn ensure(root: &Path) -> Result<PathBuf, ApiErr> {
     std::fs::create_dir_all(root).map_err(io)?;
-    root.canonicalize().map_err(io)
+    ostra_core::paths::canonical(root).map_err(io)
 }
 
 fn contained(root: &Path, rel: &str) -> Result<Contained, ApiErr> {

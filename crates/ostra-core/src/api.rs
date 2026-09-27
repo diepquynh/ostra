@@ -514,6 +514,38 @@ pub struct EnvironmentStatus {
     /// Stacks with a seed reference, the values a project's `stack` offers besides detection.
     pub stacks: Vec<String>,
     pub sandbox: SandboxStatus,
+    pub shell: ShellStatus,
+}
+
+/// The shell the Bash tool runs: `bash` on Unix, Git for Windows' `bash.exe` on Windows, where the
+/// `bash` on `PATH` is often the WSL launcher.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ShellStatus {
+    pub available: bool,
+    /// The program the Bash tool starts.
+    #[ts(optional)]
+    pub path: Option<String>,
+    /// What to install when it is missing.
+    #[ts(optional)]
+    pub message: Option<String>,
+}
+
+impl ShellStatus {
+    pub fn check() -> Self {
+        match crate::shells::bash() {
+            Ok(p) => ShellStatus {
+                available: true,
+                path: Some(p.display().to_string()),
+                message: None,
+            },
+            Err(e) => ShellStatus {
+                available: false,
+                path: None,
+                message: Some(e),
+            },
+        }
+    }
 }
 
 /// Whether agent commands run inside the sandbox on this machine.
@@ -521,6 +553,10 @@ pub struct EnvironmentStatus {
 #[ts(export)]
 pub struct SandboxStatus {
     pub mode: crate::config::SandboxMode,
+    /// The effective default mode on this OS when none is set: `required` on Linux and macOS,
+    /// `auto` on Windows, which has no backend yet. The console shows this instead of assuming
+    /// `required` (WINDOWS_HANDOVER 1.1).
+    pub default_mode: crate::config::SandboxMode,
     /// A sandbox backend works here.
     pub available: bool,
     /// `bubblewrap` on Linux or `seatbelt` on macOS, when available.
@@ -554,6 +590,7 @@ impl SandboxStatus {
         };
         SandboxStatus {
             mode: cfg.mode,
+            default_mode: crate::config::SandboxMode::default(),
             available: backend().is_some(),
             backend: backend().map(|b| b.name().to_string()),
             active,
@@ -1194,6 +1231,34 @@ pub fn summary_line(text: &str) -> String {
 
 /// The summary line of a tool call: its tool and main argument, for example `Edit src/lib.rs` or
 /// `Bash npm test`. Paths under `root` are shown relative to it.
+/// Drops the `root` prefix from a tool-call path so the activity line reads relatively. On Windows
+/// the compare folds case, separators, and the `\\?\` prefix, since the resolved path and the root
+/// can differ in all three (WINDOWS_HANDOVER 1.4).
+fn strip_root(arg: &str, root: &std::path::Path) -> String {
+    #[cfg(windows)]
+    {
+        let root = crate::paths::strip_verbatim(root).display().to_string();
+        let mut out = arg.to_string();
+        for sep in ["\\", "/"] {
+            let prefix = format!("{}{sep}", root.replace(['\\', '/'], sep));
+            // ASCII lowercasing keeps byte offsets, so matches index the original text.
+            while let Some(at) = out.to_ascii_lowercase().find(&prefix.to_ascii_lowercase()) {
+                out.replace_range(at..at + prefix.len(), "");
+            }
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    {
+        let prefix = format!("{}/", root.display());
+        if prefix.len() > 1 {
+            arg.replace(&prefix, "")
+        } else {
+            arg.to_string()
+        }
+    }
+}
+
 pub fn tool_summary(call: &ToolCall, root: Option<&std::path::Path>) -> String {
     const KEYS: [&str; 8] = [
         "file_path",
@@ -1208,9 +1273,9 @@ pub fn tool_summary(call: &ToolCall, root: Option<&std::path::Path>) -> String {
     let Some(arg) = KEYS.iter().find_map(|k| call.str_field(k)) else {
         return summary_line(&call.tool);
     };
-    let arg = match root.map(|r| format!("{}/", r.display())) {
-        Some(prefix) if prefix.len() > 1 => arg.replace(&prefix, ""),
-        _ => arg.to_string(),
+    let arg = match root {
+        Some(r) => strip_root(arg, r),
+        None => arg.to_string(),
     };
     summary_line(&format!("{} {arg}", call.tool))
 }

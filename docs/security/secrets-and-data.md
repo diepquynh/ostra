@@ -123,8 +123,11 @@ It refuses any read, search, or write that names:
 - Any execution's harness directory, which holds that execution's bridge token.
 - Credential stores under your home directory: `.ssh`, `.gnupg`, `.aws`, `.azure`, `.config/gcloud`, `.kube`,
   `.docker`, `.netrc`, `.git-credentials`, `gh` and `hub` tokens, Cargo and PyPI credentials, Vault and
-  Terraform tokens, keyrings, `.password-store`, browser profiles, and on macOS the Keychains, Cookies, Mail,
-  Messages, and TCC folders.
+  Terraform tokens, keyrings, `.password-store`, browser profiles, on macOS the Keychains, Cookies, Mail,
+  Messages, and TCC folders, and on Windows the DPAPI master keys (`AppData\Roaming\Microsoft\Protect`), both
+  Credential Manager stores, the Chrome, Edge, Brave, and Firefox profiles, the `gcloud` and GitHub CLI configs
+  under `AppData\Roaming`, VS Code's `globalStorage`, the PowerShell history, and curl's `_netrc`. On Windows the
+  check ignores letter case, as NTFS does.
 
 Grep and Glob skip these paths too, so a broad search does not list them. The full list is `HOME_CREDENTIALS`
 in [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs), and the checks are in

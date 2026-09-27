@@ -24,7 +24,7 @@ pub struct GitOutput {
 pub async fn run(root: &Path, args: &[&str], cap: usize) -> Option<GitOutput> {
     let filters = ostra_core::git::filter_overrides(root).await;
     let mut child = tokio::process::Command::new("git")
-        .args(ostra_core::git::AUTOMATIC)
+        .args(ostra_core::git::AUTOMATIC.iter())
         .args(&filters)
         .arg("--no-optional-locks")
         .arg("--literal-pathspecs")
@@ -571,7 +571,7 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
     #[tokio::test]
     async fn listing_and_diffing_start_no_filter_driver() {
         let dir = tempfile::tempdir().unwrap();
-        let repo = std::fs::canonicalize(dir.path()).unwrap();
+        let repo = ostra_core::paths::canonical(dir.path()).unwrap();
         let marker = repo.join("ran");
         let git = |args: &[&str]| {
             std::process::Command::new("git")
@@ -586,7 +586,7 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         git(&["add", "."]);
         git(&["commit", "-qm", "init"]);
         std::fs::write(repo.join(".gitattributes"), "*.txt filter=x\n").unwrap();
-        let driver = format!("touch {}; cat", marker.display());
+        let driver = format!("touch {}; cat", marker.display().to_string().replace('\\', "/"));
         git(&["config", "filter.x.clean", &driver]);
         git(&["config", "filter.x.smudge", &driver]);
         std::fs::write(repo.join("a.txt"), "two\n").unwrap();
@@ -602,7 +602,7 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
     #[tokio::test]
     async fn a_staged_nested_repo_starts_no_filter_driver() {
         let dir = tempfile::tempdir().unwrap();
-        let repo = std::fs::canonicalize(dir.path()).unwrap();
+        let repo = ostra_core::paths::canonical(dir.path()).unwrap();
         let nested = repo.join("a/evil");
         let marker = repo.join("ran");
         let git = |cwd: &Path, args: &[&str]| {
@@ -623,7 +623,7 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         std::fs::write(nested.join("f.txt"), "one\n").unwrap();
         git(&nested, &["add", "-A"]);
         git(&nested, &["commit", "-qm", "x"]);
-        let driver = format!("touch {}; cat", marker.display());
+        let driver = format!("touch {}; cat", marker.display().to_string().replace('\\', "/"));
         git(&nested, &["config", "filter.x.clean", &driver]);
         git(&repo, &["add", "a/evil"]);
         // Same size, newer mtime: git hashes the file again, through the clean filter.
@@ -650,7 +650,7 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
     #[tokio::test]
     async fn status_diff_and_numstat_on_a_real_repo_subfolder() {
         let dir = tempfile::tempdir().unwrap();
-        let repo = std::fs::canonicalize(dir.path()).unwrap();
+        let repo = ostra_core::paths::canonical(dir.path()).unwrap();
         let git = |args: &[&str]| {
             let out = std::process::Command::new("git")
                 .args(["-c", "user.name=t", "-c", "user.email=t@t"])

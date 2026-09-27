@@ -495,6 +495,7 @@ async fn mcp_route(
     Json(app.shared.harness.bridge.handle_mcp(&token, req).await).into_response()
 }
 
+#[cfg(unix)]
 /// Serves [`internal_routes`] on a Unix socket in the egress dir, which sandboxes with their own
 /// network reach the hook bridge through. Nothing else of the server answers there.
 pub fn serve_bridge_socket(app: &Arc<App>) -> std::io::Result<PathBuf> {

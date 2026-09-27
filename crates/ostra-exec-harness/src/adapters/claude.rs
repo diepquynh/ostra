@@ -29,6 +29,8 @@ pub(crate) fn canonical_claude_call(name: &str, input: &Value, cwd: Option<&str>
                 with_file_path(input, &["notebook_path", "file_path"]),
             ),
             "Bash" => ToolCall::new("Bash", with_cwd(input.clone(), cwd)),
+            // Claude Code's Windows tool; the policy treats it as an opaque shell.
+            "PowerShell" => ToolCall::new("PowerShell", with_cwd(input.clone(), cwd)),
             "LS" => {
                 let path = get_str(input, &["path"]).unwrap_or(".");
                 ToolCall::new("Glob", json!({"pattern": "*", "path": path}))

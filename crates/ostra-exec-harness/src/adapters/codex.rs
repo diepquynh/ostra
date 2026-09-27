@@ -10,6 +10,26 @@ use serde_json::{Value, json};
 
 pub struct Codex;
 
+/// The canonical tool for a Codex shell call. On Unix it is `Bash`. On Windows Codex runs its
+/// commands in PowerShell unless the argv starts a POSIX shell, and Ostra's parser reads only
+/// bash, so anything else becomes the opaque `PowerShell` tool, which is never auto-allowed and
+/// has its raw text scanned for Ostra's own files and credentials.
+fn windows_shell_tool(input: &Value) -> &'static str {
+    if !cfg!(windows) {
+        return "Bash";
+    }
+    let first = match input.get("command").or_else(|| input.get("cmd")) {
+        Some(Value::Array(parts)) => parts.first().and_then(Value::as_str).map(str::to_string),
+        _ => None,
+    };
+    let posix = first.is_some_and(|w| {
+        let name = w.rsplit(['/', '\\']).next().unwrap_or(&w).to_ascii_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(&name);
+        matches!(name, "bash" | "sh")
+    });
+    if posix { "Bash" } else { "PowerShell" }
+}
+
 impl Adapter for Codex {
     fn kind(&self) -> HarnessKind {
         HarnessKind::Codex
@@ -42,12 +62,15 @@ impl Adapter for Codex {
                         Some(Value::Array(parts)) => parts
                             .iter()
                             .filter_map(Value::as_str)
-                            .map(crate::launch::shell_quote)
+                            .map(crate::launch::posix_quote)
                             .collect::<Vec<_>>()
                             .join(" "),
                         _ => String::new(),
                     };
-                    ToolCall::new("Bash", with_cwd(json!({"command": command}), cwd))
+                    ToolCall::new(
+                        windows_shell_tool(&input),
+                        with_cwd(json!({"command": command}), cwd),
+                    )
                 }
                 "apply_patch" => {
                     let patch = get_str(&input, &["command", "patch", "input"])
@@ -131,9 +154,11 @@ mod tests {
         else {
             panic!()
         };
+        // On Windows a command string runs in PowerShell, which the policy treats as opaque.
+        let shell = if cfg!(windows) { "PowerShell" } else { "Bash" };
         assert_eq!(
             call,
-            ToolCall::new("Bash", json!({"command": "ls -la", "cwd": "/repo"}))
+            ToolCall::new(shell, json!({"command": "ls -la", "cwd": "/repo"}))
         );
 
         let PreParse::Call { call, .. } = Codex.parse_pre(&payload(

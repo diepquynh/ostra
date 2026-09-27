@@ -138,10 +138,10 @@ pub fn normalize(raw: &str) -> Result<String, String> {
 /// The visible artifact at `rel`, when it is a regular file inside the folder.
 pub fn visible_file(workspace: &Path, rel: &str) -> Option<PathBuf> {
     let rel = normalize(rel).ok()?;
-    let root = dir(workspace).canonicalize().ok()?;
+    let root = crate::paths::canonical(dir(workspace)).ok()?;
     let full = root.join(&rel);
     let meta = std::fs::symlink_metadata(&full).ok()?;
-    (meta.is_file() && full.canonicalize().ok()?.starts_with(&root)).then_some(full)
+    (meta.is_file() && crate::paths::canonical(&full).ok()?.starts_with(&root)).then_some(full)
 }
 
 /// A custom skill kept as `skills/<name>/SKILL.md` in the workspace's artifacts.
@@ -191,7 +191,7 @@ pub fn tagged_files(
         let Ok(rel) = normalize(path.trim_end_matches('/')) else {
             continue;
         };
-        let (Ok(root), Ok(full)) = (root.canonicalize(), root.join(&rel).canonicalize()) else {
+        let (Ok(root), Ok(full)) = (crate::paths::canonical(root), crate::paths::canonical(root.join(&rel))) else {
             continue;
         };
         if full.starts_with(&root) {
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn tagged_files_resolve_visible_artifacts_and_project_files() {
         let ws = tempfile::tempdir().unwrap();
-        let root = ws.path().canonicalize().unwrap();
+        let root = crate::paths::canonical(ws.path()).unwrap();
         std::fs::create_dir_all(dir(&root).join("guides")).unwrap();
         std::fs::write(dir(&root).join("guides/style.md"), "x").unwrap();
         let project = root.join("web");

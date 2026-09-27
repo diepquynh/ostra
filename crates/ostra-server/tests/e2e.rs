@@ -1,3 +1,4 @@
+#![cfg_attr(not(unix), allow(unused_imports))]
 //! The whole stack with a scripted model: real listener, REST with cookie auth, engine, native
 //! loop, policy, tools, and git staging. The model plays each agent: it writes its files with the
 //! Write tool, then calls its submit tool.
@@ -357,6 +358,7 @@ async fn ended_sessions_lose_leftover_caches_at_start() {
 
 /// A sandboxed harness reaches the hook bridge through the server's bridge socket, which answers
 /// the harness callbacks and nothing else, so `/api` stays out of a sandbox's reach.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_bridge_socket_serves_only_harness_callbacks() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -875,7 +877,7 @@ async fn yolo_implement_session_end_to_end() {
             .status(),
         403
     );
-    std::os::unix::fs::symlink(root, app_dir.join("escape")).unwrap();
+    ostra_core::paths::link(root, &app_dir.join("escape")).unwrap();
     assert_eq!(
         get("file", &[("path", "escape/config.toml")])
             .await
@@ -1481,7 +1483,7 @@ async fn yolo_implement_session_end_to_end() {
         .await
         .unwrap();
     assert!(!fs.exists && !fs.readable);
-    assert_eq!(fs.nearest, std::fs::canonicalize(root).unwrap());
+    assert_eq!(fs.nearest, ostra_core::paths::canonical(root).unwrap());
 
     let made: FsBrowse = client
         .post(format!("{base}/api/fs/mkdir"))
@@ -2177,8 +2179,17 @@ async fn terminal_streams_over_the_socket() {
     .await
     .unwrap();
     assert!(matches!(next(&mut ws).await, Message::Text(t) if t.contains("subscribed")));
+    // Git Bash in the ConPTY on Windows; the script is POSIX either way.
+    let program = if cfg!(windows) {
+        ostra_core::shells::bash()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        "/bin/sh".into()
+    };
     let plan = ostra_exec_harness::launch::LaunchPlan {
-        program: "/bin/sh".into(),
+        program,
         args: vec![
             "-c".into(),
             "echo hello-ws; read x; echo after-$x; sleep 5".into(),
@@ -2570,6 +2581,7 @@ async fn the_git_dock_stages_commits_pushes_and_switches_branches() {
     assert_eq!(branches[0].subject, "Add new.txt");
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn harness_login_runs_in_a_setup_terminal() {
     use std::os::unix::fs::PermissionsExt;
@@ -2873,7 +2885,7 @@ async fn folder_commands_run_only_after_approval() {
         vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("touch {}", m.display()),
+            format!("touch {}", m.display().to_string().replace('\\', "/")),
         ]
     };
 
@@ -2886,7 +2898,7 @@ async fn folder_commands_run_only_after_approval() {
         app_dir.join(".ostra/project.toml"),
         format!(
             "[commands]\nformat = \"touch {}\"\n",
-            root.join("fmt-ran").display()
+            root.join("fmt-ran").display().to_string().replace('\\', "/")
         ),
     )
     .unwrap();
@@ -2950,7 +2962,10 @@ async fn folder_commands_run_only_after_approval() {
     );
     let shown = serde_json::to_string(&ws.pending_commands).unwrap();
     assert!(
-        shown.contains(&format!("touch {}", mcp_marker.display())),
+        shown.contains(&format!(
+            "touch {}",
+            mcp_marker.display().to_string().replace('\\', "/")
+        )),
         "{shown}"
     );
 

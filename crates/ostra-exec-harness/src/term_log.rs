@@ -6,7 +6,6 @@
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// Bytes of terminal output a replay shows.
@@ -38,7 +37,7 @@ impl TermLog {
     fn with_cap(path: PathBuf, cap: usize) -> std::io::Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
-            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+            ostra_core::paths::restrict_to_owner(dir, true)?;
         }
         let file = private(&path)?;
         Ok(TermLog {
@@ -78,14 +77,13 @@ impl TermLog {
 
 /// Create or truncate `path` as a file only its owner can read.
 fn private(path: &Path) -> std::io::Result<File> {
-    let file = OpenOptions::new()
+    let file = ostra_core::paths::private_file_options()
         .write(true)
         .create(true)
         .truncate(true)
-        .mode(0o600)
         .open(path)?;
-    // `mode` applies only on creation; an older transcript keeps its bits otherwise.
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    // The mode applies only on creation; an older transcript keeps its bits otherwise.
+    ostra_core::paths::restrict_to_owner(path, false)?;
     Ok(file)
 }
 
@@ -117,9 +115,13 @@ mod tests {
         let stored = std::fs::read(&path).unwrap();
         assert!(stored.len() <= 20, "{}", stored.len());
         assert!(stored.ends_with(b"888999"));
-        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&path), 0o600, "a trimmed transcript stays private");
-        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&path), 0o600, "a trimmed transcript stays private");
+            assert_eq!(mode(path.parent().unwrap()), 0o700);
+        }
         let log = TermLog::with_cap(path.clone(), 10).unwrap();
         log.append(b"new");
         assert_eq!(

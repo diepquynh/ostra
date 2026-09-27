@@ -1,0 +1,3 @@
+# Static CRT so the exe needs no Visual C++ redistributable on the probe VM.
+[build]
+rustflags = ["-C", "target-feature=+crt-static"]

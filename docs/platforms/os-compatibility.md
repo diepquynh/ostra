@@ -1,24 +1,29 @@
 # OS compatibility
 
-Run Ostra on Linux or macOS. Windows is not supported, and WSL 2 works as a Linux machine. The rest of this page
-explains why, what differs between Linux and macOS, and which parts of that claim someone has actually run.
+Run Ostra on Linux or macOS for the full sandbox. Ostra also builds and runs on Windows, without a sandbox, and WSL
+2 works as a Linux machine. The rest of this page explains what differs between the systems, and which parts of
+that claim someone has actually run.
 
 Ostra depends on the operating system in more places than a web server usually does, because it starts other
 programs on your behalf: a Bash shell for the native agents, a harness CLI in a terminal, MCP servers, language
 servers, and git. It has to confine those programs, stop them cleanly, and keep your credentials out of their
-reach. Each of those jobs uses a Unix facility, and the sandbox uses one that exists only on Linux and macOS.
+reach. On Linux and macOS each of those jobs uses a Unix facility. On Windows, Job Objects stop process trees and
+ConPTY runs terminals, but no sandbox confines what agent commands do yet.
 
 ## Support matrix
 
 | | Linux | macOS | WSL 2 | Windows |
 | --- | --- | --- | --- | --- |
-| Builds | Yes | Yes | Yes | No |
-| Agent sandbox | bubblewrap | Seatbelt (`sandbox-exec`) | bubblewrap, when user namespaces are allowed | None |
-| Harness terminals (PTY) | Yes | Yes | Yes | No |
-| Master key in the OS keychain | Secret Service over D-Bus, else a file | Keychain | Usually the file | Not reached |
-| Background service from `install.sh` | systemd user unit | launchd agent | systemd user unit, when WSL runs systemd | No |
+| Builds | Yes | Yes | Yes | Yes (`x86_64-pc-windows-msvc`) |
+| Agent sandbox | bubblewrap | Seatbelt (`sandbox-exec`) | bubblewrap, when user namespaces are allowed | None yet; default mode `auto` |
+| Shell for the Bash tool | `bash` | `bash` | `bash` | Git Bash (Git for Windows), required |
+| Extra shell tools | None | None | None | PowerShell and Cmd |
+| Harness terminals (PTY) | Yes | Yes | Yes | Yes, through ConPTY |
+| Stopping a process tree | Process group | Process group, plus the sandbox marker | Process group | Job Object |
+| Master key in the OS keychain | Secret Service over D-Bus, else a file | Keychain | Usually the file | Credential Manager, else a file |
+| Background service from `install.sh` | systemd user unit | launchd agent | systemd user unit, when WSL runs systemd | No; run `ostra` by hand |
 | Docker image | Yes (the image is Linux) | Through Docker Desktop's Linux VM | Through Docker | Through Docker Desktop's Linux VM |
-| How we know | Tested | Sandbox measured on macOS 26 | Inferred from the code | Inferred from the code |
+| How we know | Tested | Sandbox measured on macOS 26 | Inferred from the code | Test suite run on Windows 11 |
 
 "Tested" means the full test suite runs and Ostra is used daily on that system. "Inferred" means the answer comes
 from reading the code, and nobody has run it. The next section says what that covers in detail.
@@ -36,32 +41,52 @@ Ostra has no CI yet. Every result below comes from someone running the tests or 
   [`env_scrub.rs`](../../crates/ostra-core/tests/env_scrub.rs)). Older macOS releases have not been checked.
 - **WSL 2** runs a real Linux kernel, so the Linux build and bubblewrap apply unchanged. That is a reading of the
   code, not a report from a run.
-- **Windows** is inferred too: the code does not compile for it (see below).
+- **Windows**: `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` pass on
+  Windows 11 Pro 24H2 (build 26100), x86-64, with the MSVC toolchain, Rust 1.98.1, and Git for Windows 2.54, and
+  so do the `web/` checks, type check, and unit tests. The Windows-only tests cover the Job Object kill, the ConPTY
+  terminal, Git Bash discovery, the PowerShell and Cmd tools, and the path guards. The server starts, serves the console,
+  and stores and reads back its master key in the Credential Manager. The harness CLIs and a live session
+  against a model have not been run there.
 - **CPU architecture** is not special-cased anywhere. x86-64 is tested. Arm64 (Apple silicon, Graviton, a
   Raspberry Pi 5) has no architecture-specific code in its way, but no test run backs that.
 
-## Why Windows is not supported
+## Windows
 
-Ostra relies on Unix process control, and several modules call it without a platform gate, so a Windows build
-fails at compile time:
+Ostra builds and runs on Windows, and agents run, but agent commands are not sandboxed. What works, and what does
+not:
 
-- The native Bash tool starts `bash` in its own process group (`process_group(0)`) and kills the whole group
-  with `kill(-pid, SIGKILL)` when a command times out
-  ([`bash.rs`](../../crates/ostra-tools/src/bash.rs)). Without this, a command that starts a background server
-  would outlive its tool call.
-- Harness terminals stop a CLI with `SIGTERM`, wait for a grace period, then send `SIGKILL` to its process group
-  ([`pty.rs`](../../crates/ostra-exec-harness/src/pty.rs)).
-- Harness state is prepared with Unix file modes and symlinks
-  ([`launch.rs`](../../crates/ostra-exec-harness/src/launch.rs),
-  [`term_log.rs`](../../crates/ostra-exec-harness/src/term_log.rs)).
-- The sandbox itself exists only for Linux and macOS. `sandbox::probe` answers "The sandbox needs Linux or
-  macOS." everywhere else, and the default sandbox mode is `required`, so even a working Windows build would
-  refuse every execution until someone turned the sandbox off.
+- **No sandbox yet.** No Windows facility gives an unprivileged process its own view of the file system the way
+  bubblewrap does, so Windows has no backend. The default mode there is `auto`, which runs agent commands
+  unsandboxed with a warning at startup, on the setup screen, and in each execution. `required` refuses every
+  execution, with a reason that names WSL 2 or Docker. The policy still checks every tool call.
+  [Sandboxing](../security/sandboxing.md#windows) lists what that leaves open, such as registry `Run` keys and
+  scheduled tasks. For the full sandbox on a Windows machine, run Ostra in WSL 2 or Docker.
+- **Git for Windows is required.** The Bash tool runs Git Bash's `bin\bash.exe`, found from `git --exec-path` or
+  the default install dirs, and never the `bash.exe` in `System32`, which is the WSL launcher. The setup screen
+  shows whether it was found.
+- **PowerShell and Cmd tools.** Agents with the shell capability also get `PowerShell` and `Cmd` tools on Windows.
+  The policy cannot parse those commands, so it never allows one unasked
+  ([Agent containment](../security/agent-containment.md#powershell-and-cmd)).
+- **Paths are compared the way NTFS names files.** The guards follow junctions, ignore letter case, resolve 8.3
+  names, drop trailing dots and spaces, translate Git Bash's `/c/...` paths, and refuse shares, device paths, and
+  alternate data streams ([Windows paths](../security/agent-containment.md#windows-paths)).
+- **Process trees are Job Objects.** See [Processes and signals](#processes-and-signals).
+- **Harness CLIs run in ConPTY**, the Windows pseudoconsole, through the same `portable-pty` crate.
+- **Owner-only files rely on the profile's ACL.** Unix file modes do not exist on Windows. The data dir is under
+  `%LOCALAPPDATA%`, whose inherited ACL grants only you, SYSTEM, and administrators, and the files Ostra creates
+  there inherit it. Ostra sets no explicit ACL of its own.
+- **Git hooks are off in Ostra's own git calls through an empty dir.** Git for Windows reads
+  `core.hooksPath=/dev/null` as `\dev\null` on the current drive, where any local user may create folders, so
+  on Windows the setting names an empty `no-hooks` dir in Ostra's data dir instead
+  ([`git.rs`](../../crates/ostra-core/src/git.rs)).
+- **Git never waits on a sign-in window.** Ostra's git commands set `GCM_INTERACTIVE=never`, so Git Credential
+  Manager answers from stored credentials and never opens a dialog that no one would see.
+- **The hook bridge uses loopback HTTP.** The Unix socket that sandboxed harnesses reach it through is not created
+  on Windows; unsandboxed harness hooks call `/internal/*` on `127.0.0.1`, as they do on Linux in mode `off`.
 
-Some modules do carry `#[cfg(unix)]` gates with a fallback, such as file modes in the workspace database
-([`workspace.rs`](../../crates/ostra-store/src/workspace.rs)) and the file writer in
-[`files/mod.rs`](../../crates/ostra-server/src/files/mod.rs). Those gates are not a Windows port, and a Windows
-port is not planned. On a Windows machine, use WSL 2 or Docker.
+`install.sh`, `build.sh`, and `run.sh` are bash scripts for Linux and macOS. On Windows, build with `cargo build
+--release` after `npm ci` and `npm run build` in `web/`, and start `target\release\ostra.exe` by hand
+([Install](../start/install.md#windows)).
 
 ## The sandbox on each system
 
@@ -144,8 +169,8 @@ The `[sandbox] mode` setting in `config.toml`, or the workspace's own sandbox se
 
 | Mode | With a working backend | Without one |
 | --- | --- | --- |
-| `required` (default) | Sandboxed | Every execution is refused, with the reason |
-| `auto` | Sandboxed | Runs unsandboxed, with a warning at startup and in each execution |
+| `required` (default on Linux and macOS) | Sandboxed | Every execution is refused, with the reason |
+| `auto` (default on Windows) | Sandboxed | Runs unsandboxed, with a warning at startup and in each execution |
 | `off` | Unsandboxed | Unsandboxed |
 
 Unsandboxed agent commands run with the full rights of your user. Choose `off` only on purpose, for example in a
@@ -164,6 +189,30 @@ Every program Ostra starts gets a way to stop it and everything it spawned:
   run as grandchildren. Closing the transport sends `SIGTERM` to the group
   ([`stdio.rs`](../../crates/ostra-mcp/src/stdio.rs)).
 
+On Windows each of these runs in a Job Object instead ([`proctree.rs`](../../crates/ostra-core/src/proctree.rs)),
+created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and no breakaway, so closing the job's handle, or Ostra exiting,
+ends the whole tree:
+
+- **Bash, PowerShell, Cmd, and stdio MCP servers** start suspended, join their job, and only then run, so their
+  first child is already in the job. A timeout or stop ends the job. The suspended thread is resumed through
+  `NtResumeProcess`, because std does not return its handle, and a thread snapshot taken right after creation
+  can miss the new thread. Putting the child in its job at creation instead (`PROC_THREAD_ATTRIBUTE_JOB_LIST`) is
+  unstable in std on Rust 1.98.
+- **Harness CLIs** start through ConPTY, which chooses its own creation flags, so a CLI joins its job right after
+  it starts; a program it starts in that first moment is not in the job. Stopping one closes the pseudoconsole,
+  which sends the attached programs `CTRL_CLOSE_EVENT`, waits for the grace period, then ends the job.
+- The tools wait at most five seconds for a killed command to be reaped, so a process that does not end cannot
+  hang a tool call.
+
+Antivirus behavior monitors watch this kind of process control. Kaspersky flagged a debug build as
+`PDM:Trojan.Win32.Generic` while the PowerShell tool ran with `-ExecutionPolicy Bypass`; without the override,
+and with the suspended start above, the test suite ran without a detection. A probe that exercised the planned
+Windows sandbox behavior (creating a local user, giving it a restricted token, and spawning the command as that
+user) was killed with the same verdict, from the behavior alone and without any `-ExecutionPolicy Bypass`, while
+Windows Defender did not react. Release builds are not code-signed yet, which also counts against an unknown
+binary, so the Windows sandbox backend will need signing, and on some products an antivirus trusted-zone entry,
+to run reliably ([Sandboxing](../security/sandboxing.md#windows)).
+
 Harness CLIs inherit Ostra's environment minus the variables that would tie them to a session Ostra itself runs
 inside (`CLAUDECODE`, `CODEX_THREAD_ID`, and the rest of `PARENT_SESSION_ENV` in `pty.rs`). Without that, starting
 Ostra from inside Claude Code would make every Claude Code execution a nested child that cannot be resumed.
@@ -181,15 +230,20 @@ Ostra needs `bash` and `sh` on the machine:
 macOS ships an old bash 3.2 at `/bin/bash`. Ostra uses the first `bash` on `PATH`, so a Homebrew bash is used when
 it comes first.
 
+On Windows the Bash tool runs Git Bash by absolute path, and the `PowerShell` and `Cmd` tools run
+`powershell.exe` and `cmd.exe` from the system dir. Harness installers run in PowerShell there.
+
 ## Files, permissions, and credentials
 
-| | Linux | macOS | Override |
-| --- | --- | --- | --- |
-| Data dir | `~/.local/share/ostra` | `~/Library/Application Support/ostra` | `OSTRA_DATA_DIR` |
-| Config file | `~/.config/ostra/config.toml` | `~/Library/Application Support/ostra/config.toml` | `OSTRA_CONFIG` |
-| Sandbox tool caches, one set per session and one per project or workspace program | `~/.cache/ostra/sandbox/` | `~/.cache/ostra/sandbox/` | `OSTRA_SANDBOX_CACHE` |
+| | Linux | macOS | Windows | Override |
+| --- | --- | --- | --- | --- |
+| Data dir | `~/.local/share/ostra` | `~/Library/Application Support/ostra` | `%LOCALAPPDATA%\ostra` | `OSTRA_DATA_DIR` |
+| Config file | `~/.config/ostra/config.toml` | `~/Library/Application Support/ostra/config.toml` | `%APPDATA%\ostra\config.toml` | `OSTRA_CONFIG` |
+| Sandbox tool caches, one set per session and one per project or workspace program | `~/.cache/ostra/sandbox/` | `~/.cache/ostra/sandbox/` | Not used | `OSTRA_SANDBOX_CACHE` |
 
-Both dirs come from the `dirs` crate, so they follow `XDG_DATA_HOME` and `XDG_CONFIG_HOME` on Linux.
+Both dirs come from the `dirs` crate, so they follow `XDG_DATA_HOME` and `XDG_CONFIG_HOME` on Linux. On Windows
+they are in two different trees, `Local` and `Roaming`, and the home folder is the profile folder, since Windows
+does not set `HOME`.
 
 Ostra tightens file modes on Unix, because SQLite creates its `-wal` and `-shm` files world-readable:
 
@@ -205,6 +259,8 @@ ten seconds, and otherwise in an owner-only file in the data dir
 - **macOS** uses the login Keychain.
 - **Linux** uses the Secret Service over D-Bus (GNOME Keyring or KWallet). A headless server, a container, or an
   SSH session without a session bus has no Secret Service, so Ostra falls back to the file.
+- **Windows** uses the Credential Manager, as a generic credential named after the data dir. A server restart
+  reads the key back from it.
 - `OSTRA_MASTER_KEY_FILE` names a key file to use instead, for example a Docker secret. A read-only mount is left
   as it is, because its mode is the operator's choice.
 
@@ -219,6 +275,8 @@ restarts when the server fails:
   unless you enable lingering with `loginctl enable-linger`.
 - **macOS**: a launchd agent labeled `dev.ostra.server`, with its errors in `service.err.log` in the data dir.
 - Anything else: the script stops with "Unsupported system" and points you at `run.sh`.
+- **Windows** has no installer or service yet. Start `ostra.exe` by hand, or add it to Task Scheduler as a task at
+  logon, which needs no administrator rights.
 
 Service managers start programs with a minimal `PATH`, so the launcher records the `PATH` of the shell that ran
 `install.sh`. That is how the service finds harness CLIs installed in `~/.local/bin` or a Homebrew prefix.
@@ -257,8 +315,15 @@ its version and login state ([`setup.rs`](../../crates/ostra-exec-harness/src/se
 
 The setup screen can install a missing CLI by running the vendor's official installer (`curl -fsSL <vendor
 URL>/install.sh | sh` or `| bash`) in a terminal you watch, and it can run the CLI's own login flow the same way.
-Those installers need `curl` and a Unix shell. Which systems each CLI supports is up to its vendor, so check the
-vendor's page when a CLI will not install.
+Those installers need `curl` and a Unix shell. On Windows the terminal runs PowerShell instead: Claude Code's
+`irm https://claude.ai/install.ps1 | iex`, and `npm install -g @openai/codex` for Codex, which needs npm. Grok
+Build and Antigravity have no Windows installer command in Ostra, so their terminal says to follow the vendor's
+Windows instructions. Which systems each CLI supports is up to its vendor, so check the vendor's page when a CLI
+will not install.
+
+On Windows, a CLI's hook commands name `ostra.exe` with forward slashes and, when the path has a space, in double
+quotes, a form that Git Bash (Claude Code's hook shell) and cmd both read the same way. A Codex shell call reaches
+the policy as `PowerShell` unless it starts `bash` or `sh`, because Codex runs its commands in PowerShell there.
 
 Inside the sandbox, a CLI can read and write its own state dir (`~/.claude`, `~/.codex`, `~/.grok`, `~/.gemini`)
 and its own credential file, and nothing else under your home. Its settings, hooks, and instruction files stay
@@ -277,5 +342,5 @@ for live updates and the terminal (xterm.js), and the file views use the Monaco 
   delivers Web Push only to a site added to the home screen.
 - **Clipboard managers** can spend the one-time sign-in link when they preview it. Run `ostra url` for a new one.
 
-The server opens the sign-in URL with the system's default opener (`open` on macOS, `xdg-open` on Linux). On a
-headless machine, pass `--no-open` and copy the printed URL.
+The server opens the sign-in URL with the system's default opener (`open` on macOS, `xdg-open` on Linux, the
+default browser on Windows). On a headless machine, pass `--no-open` and copy the printed URL.

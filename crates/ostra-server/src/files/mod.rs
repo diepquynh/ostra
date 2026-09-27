@@ -135,7 +135,7 @@ pub(crate) fn project_root(w: &WorkspaceRt, key: &str) -> Result<PathBuf, ApiErr
     let path = w
         .project_path(key)
         .ok_or_else(|| not_found(format!("No project `{key}` in this workspace.")))?;
-    std::fs::canonicalize(&path).map_err(|_| {
+    ostra_core::paths::canonical(&path).map_err(|_| {
         not_found(format!(
             "The folder of project `{key}` is missing: {}.",
             path.display()
@@ -151,7 +151,7 @@ fn view_roots(w: &WorkspaceRt, key: &str) -> Result<(PathBuf, Option<PathBuf>), 
     }
     let make = |p: PathBuf| -> Result<PathBuf, ApiErr> {
         std::fs::create_dir_all(&p).map_err(internal)?;
-        p.canonicalize().map_err(internal)
+        ostra_core::paths::canonical(&p).map_err(internal)
     };
     Ok((
         make(artifacts::dir(&w.root))?,
@@ -759,10 +759,10 @@ fn read_only_reason(
     }
     // `file.real` is canonical, and `is_inside` compares lexically.
     let runtime = paths::workspace_runtime(&w.root);
-    let runtime = std::fs::canonicalize(&runtime).unwrap_or(runtime);
+    let runtime = ostra_core::paths::canonical(&runtime).unwrap_or(runtime);
     let memory = paths::project_runtime(root).join("memory");
     let artifacts = artifacts::dir(&w.root);
-    let artifacts = std::fs::canonicalize(&artifacts).unwrap_or(artifacts);
+    let artifacts = ostra_core::paths::canonical(&artifacts).unwrap_or(artifacts);
     let is_artifact = paths::is_inside(&artifacts, &file.real);
     if (paths::is_inside(&runtime, &file.real) && !is_artifact)
         || paths::is_inside(&memory, &file.real)
@@ -847,7 +847,7 @@ fn locate(workspaces: &[Arc<WorkspaceRt>], real: &Path) -> Option<(ProjectId, St
     let mut best: Option<(usize, ProjectId, String)> = None;
     for w in workspaces {
         for p in w.settings().projects {
-            let Ok(root) = std::fs::canonicalize(&p.path) else {
+            let Ok(root) = ostra_core::paths::canonical(&p.path) else {
                 continue;
             };
             if !paths::is_inside(&root, real) {

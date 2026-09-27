@@ -50,6 +50,9 @@ const PERSISTENCE_IN_HOME: &[&str] = &[
     "Library/Scripts/",
     "Library/Services/",
     "Library/Application Support/iTerm2/Scripts/",
+    "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/",
+    "Documents/PowerShell/",
+    "Documents/WindowsPowerShell/",
 ];
 
 /// Paths inside a `.git` dir that choose programs git runs. A trailing `/` marks a dir.
@@ -123,11 +126,10 @@ fn keyed_cache(home: &Path, salt: &str, key: &Path) -> PathBuf {
 /// `DefaultHasher`, whose algorithm may change between Rust releases and would move them.
 fn stable_hex(salt: &str, path: &Path) -> String {
     use sha2::{Digest, Sha256};
-    use std::os::unix::ffi::OsStrExt;
     let mut h = Sha256::new();
     h.update(salt.as_bytes());
     h.update([0]);
-    h.update(path.as_os_str().as_bytes());
+    h.update(path.as_os_str().as_encoded_bytes());
     h.finalize()[..8]
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -136,7 +138,7 @@ fn stable_hex(salt: &str, path: &Path) -> String {
 
 /// Removes a session's tool caches on a thread of its own, because they can hold gigabytes.
 pub fn remove_session_cache(session: &crate::ids::SessionId) {
-    let Some(home) = std::env::var_os("HOME") else {
+    let Some(home) = paths::home() else {
         return;
     };
     let dir = session_cache(Path::new(&home), session);
@@ -210,15 +212,17 @@ fn probed() -> &'static Result<Backend, String> {
 }
 
 fn probe() -> Result<Backend, String> {
-    if cfg!(target_os = "linux") {
-        probe_bwrap().map(Backend::Bubblewrap)
-    } else if cfg!(target_os = "macos") {
-        probe_seatbelt().map(|()| Backend::Seatbelt)
-    } else {
-        Err("The sandbox needs Linux or macOS.".into())
-    }
+    #[cfg(target_os = "linux")]
+    return probe_bwrap().map(Backend::Bubblewrap);
+    #[cfg(target_os = "macos")]
+    return probe_seatbelt().map(|()| Backend::Seatbelt);
+    #[cfg(windows)]
+    return Err("The Windows sandbox is not built yet.".into());
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    Err("The sandbox needs Linux or macOS.".into())
 }
 
+#[cfg(target_os = "linux")]
 fn probe_bwrap() -> Result<PathBuf, String> {
     let bin = std::env::var_os("PATH")
         .and_then(|path| {
@@ -266,6 +270,7 @@ fn probe_bwrap() -> Result<PathBuf, String> {
     ))
 }
 
+#[cfg(target_os = "macos")]
 fn probe_seatbelt() -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let meta =
@@ -311,7 +316,9 @@ pub enum Decision {
 
 #[cfg(target_os = "macos")]
 pub const UNAVAILABLE: &str = "Run Ostra outside any other sandbox, because macOS cannot nest them, and agent commands otherwise run with the full rights of your user. Choose sandbox mode off in the workspace settings, or set `[sandbox] mode = \"off\"` in config.toml, to run without it on purpose.";
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+pub const UNAVAILABLE: &str = "Run Ostra inside WSL 2 or in Docker to sandbox agent commands, because Ostra has no Windows sandbox yet and agent commands otherwise run with the full rights of your user. Choose sandbox mode off in the workspace settings, or set `[sandbox] mode = \"off\"` in config.toml, to run without it on purpose.";
+#[cfg(not(any(target_os = "macos", windows)))]
 pub const UNAVAILABLE: &str = "Install bubblewrap (the `bwrap` command) on the Linux machine that runs Ostra, or allow unprivileged user namespaces, because agent commands otherwise run with the full rights of your user. Choose sandbox mode off in the workspace settings, or set `[sandbox] mode = \"off\"` in config.toml, to run without it on purpose.";
 
 /// What the sandbox on this machine cannot enforce under `network`, for the setup check.
@@ -396,8 +403,7 @@ pub fn host_command(
     let found = find_program(program, cwd).ok_or_else(|| {
         format!("Cannot start `{program}`: no such program in the folder or on PATH.")
     })?;
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
+    let home = paths::home()
         .unwrap_or_else(|| "/".into());
     let sc = Profile::for_program(roots, &global.sandbox, &home).command(
         &backend,
@@ -531,12 +537,14 @@ pub fn remove_stale_sockets() -> usize {
 /// SIGKILLs every process of this user in a sandbox marked `marker`, until none is left. Returns
 /// how many it killed.
 fn kill_marked(marker: &str) -> usize {
+    #[allow(unused_mut)]
     let mut total = 0;
     for _ in 0..20 {
         let found = marked(marker);
         if found.is_empty() {
             break;
         }
+        #[cfg(unix)]
         for pid in &found {
             // SAFETY: kill(2) on a pid the kernel just reported as running in the marked sandbox.
             if unsafe { libc::kill(*pid, libc::SIGKILL) } == 0 {
@@ -603,7 +611,7 @@ fn marked(marker: &str) -> Vec<libc::pid_t> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn marked(_marker: &str) -> Vec<libc::pid_t> {
+fn marked(_marker: &str) -> Vec<i32> {
     vec![]
 }
 
@@ -656,7 +664,7 @@ fn expand(home: &Path, p: &str) -> PathBuf {
 /// Existing paths only, symlinks resolved, because bubblewrap mounts at real paths and Seatbelt
 /// matches them.
 fn real(p: &Path) -> Option<PathBuf> {
-    std::fs::canonicalize(p).ok()
+    crate::paths::canonical(p).ok()
 }
 
 /// The real path of `p`'s longest existing ancestor with the missing rest appended, for paths
@@ -688,21 +696,7 @@ pub fn new_scratch() -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
-fn make_private_dir_all(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .recursive(true)
-        .create(dir)
-}
-
-fn make_private_dir(dir: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
-        _ => Ok(()),
-    }
-}
+use paths::{create_private_dir as make_private_dir, create_private_dir_all as make_private_dir_all};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Mount {
@@ -980,9 +974,12 @@ impl Profile {
         let user_cargo = home.join(".cargo");
         for f in CARGO_SETTINGS {
             let (from, to) = (user_cargo.join(f), root.join("cargo").join(f));
+            #[cfg(unix)]
             if from.is_file() && std::fs::symlink_metadata(&to).is_err() {
                 let _ = std::os::unix::fs::symlink(&from, &to);
             }
+            #[cfg(not(unix))]
+            let _ = (from, to);
         }
         *self = std::mem::take(self).writable(&root);
     }
@@ -1869,7 +1866,6 @@ fn user_temp_dir() -> Option<PathBuf> {
 /// exists yet.
 fn placeholder(path: &Path, dir: bool) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     if dir {
         return std::fs::create_dir_all(path);
     }
@@ -1881,10 +1877,9 @@ fn placeholder(path: &Path, dir: bool) -> std::io::Result<()> {
     } else {
         b""
     };
-    std::fs::OpenOptions::new()
+    paths::private_file_options()
         .write(true)
         .create_new(true)
-        .mode(0o600)
         .open(path)?
         .write_all(body)
 }
@@ -2107,10 +2102,13 @@ fn log_decision(d: egress::Decision) {
 
 fn user_id() -> Option<u32> {
     // SAFETY: getuid cannot fail.
-    Some(unsafe { libc::getuid() })
+    #[cfg(unix)]
+    return Some(unsafe { libc::getuid() });
+    #[cfg(not(unix))]
+    None
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::config::PermissionMode;
@@ -2173,7 +2171,7 @@ mod tests {
     /// A workspace with a git repo and two sessions, and a home folder outside it.
     fn layout() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let d = tempfile::tempdir().unwrap();
-        let top = std::fs::canonicalize(d.path()).unwrap();
+        let top = crate::paths::canonical(d.path()).unwrap();
         let root = top.join("w");
         std::fs::create_dir_all(&root).unwrap();
         let ok = std::process::Command::new("git")
@@ -2261,7 +2259,7 @@ mod tests {
         std::fs::write(git.join("worktrees/ok/commondir"), "../..\n").unwrap();
         let mut changed = repair_git_dirs(&git_repos(&[&repo]));
         changed.sort();
-        let real = std::fs::canonicalize(&git).unwrap();
+        let real = crate::paths::canonical(&git).unwrap();
         assert_eq!(
             changed,
             vec![
@@ -2284,7 +2282,7 @@ mod tests {
     #[test]
     fn repos_are_found_at_any_depth_but_not_in_build_output() {
         let d = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(d.path()).unwrap();
+        let root = crate::paths::canonical(d.path()).unwrap();
         for dir in [
             ".git",
             "a/.git",

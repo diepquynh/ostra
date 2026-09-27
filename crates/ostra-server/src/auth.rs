@@ -199,13 +199,31 @@ pub fn is_local_address(ip: std::net::IpAddr) -> bool {
 
 /// The machine's host name, without a `.local` suffix (macOS often includes one).
 fn hostname() -> Option<String> {
-    let mut buf = [0u8; 256];
-    // SAFETY: gethostname writes at most `buf.len()` bytes into the buffer we own.
-    if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
-        return None;
-    }
-    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
-    let name = String::from_utf8_lossy(&buf[..end]).trim().to_lowercase();
+    #[cfg(unix)]
+    let name = {
+        let mut buf = [0u8; 256];
+        // SAFETY: gethostname writes at most `buf.len()` bytes into the buffer we own.
+        if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..end]).into_owned()
+    };
+    #[cfg(windows)]
+    let name = {
+        use windows_sys::Win32::System::SystemInformation::{
+            ComputerNameDnsHostname, GetComputerNameExW,
+        };
+        let mut buf = [0u16; 256];
+        let mut len = buf.len() as u32;
+        // SAFETY: `len` holds the buffer's size in UTF-16 units and receives the name's length.
+        if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buf.as_mut_ptr(), &mut len) } == 0
+        {
+            return None;
+        }
+        String::from_utf16_lossy(&buf[..len as usize])
+    };
+    let name = name.trim().to_lowercase();
     let name = name.strip_suffix(".local").unwrap_or(&name).to_string();
     (!name.is_empty()).then_some(name)
 }
@@ -698,15 +716,36 @@ pub fn server_running() -> bool {
 }
 
 /// `kill(pid, 0)` probes without signalling, on Linux and macOS alike. EPERM means the process
-/// exists under another user.
+/// exists under another user. On Windows the process is opened and its exit code read; access
+/// denied likewise means it exists under another user.
 fn process_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
+    #[cfg(unix)]
     // SAFETY: signal 0 performs only the existence and permission check.
     unsafe {
         libc::kill(pid, 0) == 0
             || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ACCESS_DENIED, STILL_ACTIVE};
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        // SAFETY: plain calls; the handle is checked and closed.
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+            if h.is_null() {
+                return std::io::Error::last_os_error().raw_os_error()
+                    == Some(ERROR_ACCESS_DENIED as i32);
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(h, &mut code) != 0;
+            CloseHandle(h);
+            ok && code == STILL_ACTIVE as u32
+        }
     }
 }
 

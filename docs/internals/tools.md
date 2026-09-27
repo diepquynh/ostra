@@ -90,6 +90,7 @@ The permission layer sorts tools into families, and the family decides which rul
 | Read | `Read`, `Grep`, `Glob` | Allowed unless a `deny` or `ask` rule names the path. `Read(~/.ssh/**)` style rules apply. |
 | Edit | `Write`, `Edit`, and harness equivalents (`MultiEdit`, `NotebookEdit`, `ApplyPatch`) | Each target path is judged. The session dir and the OS temp dir are allowed. Other paths follow the rules, then the permission mode: `acceptEdits` allows edits inside the project. A path that runs code later is judged by the mode even inside the project. |
 | Bash | `Bash` | The command is parsed with tree-sitter-bash and each simple command is matched separately, so `npm test && curl evil` does not pass on `Bash(npm test *)`. A command Ostra cannot parse, or one that uses shell syntax it does not model, asks, and plan mode refuses it. |
+| Other (opaque shells) | `PowerShell`, `Cmd` (Windows only) | Not parsed. Refused when the text names Ostra's own files, engine state, or a credential store; otherwise matched against `PowerShell(...)` and `Cmd(...)` rules, then the mode, which never allows one unasked. |
 | WebFetch | `WebFetch` | Matched against `WebFetch(domain:...)` rules. With no rule, it asks, except in bypass mode. |
 | Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, the code tools, `submit_*`, workspace MCP tools | Ostra's own tools are allowed. `Skill` with a `path` is judged as a Read of that file. Workspace MCP tools are allowed unless a rule says otherwise, and plan mode allows only those their server marks read-only (rule M1). |
 
@@ -166,7 +167,11 @@ apply without a human reading it: the model cannot change a place it did not nam
 
 ## Bash
 
-Runs a command in `bash` and returns stdout and stderr together.
+Runs a command in `bash` and returns stdout and stderr together. On Windows that is Git for Windows'
+`bin\bash.exe`, found by absolute path (`shells::bash` in [`shells.rs`](../../crates/ostra-core/src/shells.rs)),
+never the first `bash` on `PATH`, which is often `C:\Windows\System32\bash.exe`, the WSL launcher, running the
+command in a Linux VM with another view of the files. Without Git for Windows the tool fails with a message that
+says to install it, and the setup screen shows the same check ("Shell for the Bash tool").
 
 | Input | Meaning |
 | --- | --- |
@@ -176,7 +181,9 @@ Runs a command in `bash` and returns stdout and stderr together.
 
 **The working directory persists.** The shell starts at the project root. The command runs through `eval` in a
 wrapper script whose exit trap writes the final directory to a file, so a `cd` carries into the next call. Each
-call is still a new process: shell variables do not carry over.
+call is still a new process: shell variables do not carry over. Under Git Bash the trap writes `pwd -W`, the
+Windows form of the directory (`C:/Users/me/repo` rather than `/c/Users/me/repo`), because the other tools resolve
+paths against it.
 
 **Output streams and is bounded.** Output reaches the Activity view as the command prints it. In memory, Ostra
 keeps the head and tail of very long output, and the model gets at most 30,000 characters, keeping the start and
@@ -184,7 +191,9 @@ the end, because a build error is usually at one end or the other.
 
 **Nothing survives the call.** The command runs in its own process group. When it returns, times out, or is
 cancelled, the whole group is killed. A server or a watcher started with `&` is stopped when the command
-returns, which is why the prompt tells agents not to start one.
+returns, which is why the prompt tells agents not to start one. On Windows the shell starts suspended, joins a
+Job Object that kills its processes when its handle closes, and only then runs, so its first child is already in
+the job ([`proctree.rs`](../../crates/ostra-core/src/proctree.rs)). The job is closed when the call ends.
 
 **The environment is scrubbed.** Every credential variable that Ostra's config names, every workspace MCP secret,
 and every `OSTRA_*` variable is removed before the command starts. `GIT_PAGER` and `PAGER` are set to `cat`,
@@ -203,6 +212,29 @@ A Bash command that no rule allows waits for the user. The same run shows a Writ
 guard:
 
 ![A code reviewer run with a Bash call asking for permission and a denied Write](../images/console/reviewer-ask.png)
+
+## PowerShell and Cmd
+
+On Windows, the `shell` capability also gives an agent a `PowerShell` tool (Windows PowerShell 5.1,
+`powershell.exe` under the system dir) and a `Cmd` tool (`cmd.exe` under the system dir). Linux and macOS builds
+do not have them. They take the same inputs as Bash (`command`, `timeout`, `description`) and share its limits: the
+same timeouts, the same 30,000-character output bound, and the same scrubbed environment
+([`winshell.rs`](../../crates/ostra-tools/src/winshell.rs)).
+
+- **The working directory persists.** PowerShell runs `Set-Location` first and writes `(Get-Location).Path` in a
+  `finally` block; cmd runs `cd /d` first and `cd > <file>` last, which leaves the command's `ERRORLEVEL` as the
+  exit code.
+- **cmd's line is passed raw.** Rust quotes an inner `"` as `\"`, which cmd does not read, so the whole
+  `/d /s /c "..."` line reaches cmd unescaped. The command is not wrapped in parentheses, because a `)` in it would
+  end the group.
+- **Nothing survives the call.** Both start suspended in a Job Object, as Bash does on Windows.
+- **Your execution policy applies.** PowerShell runs with `-NoProfile -NonInteractive` and no
+  `-ExecutionPolicy` override, so running a `.ps1` script follows the policy set on the machine or by your
+  organization. An override was also what made Kaspersky's behavior monitor flag the build as a trojan.
+
+Ostra cannot parse either shell, so the policy never allows one unasked and refuses a command whose text names its
+own files or a credential store ([PowerShell and Cmd](../security/agent-containment.md#powershell-and-cmd)). Their
+descriptions tell agents to prefer Bash for that reason.
 
 ## Search tools
 

@@ -327,13 +327,11 @@ const MACOS_CERTS: &str = "/etc/ssl/cert.pem";
 
 fn copy_private(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
     let body = std::fs::read(from)?;
-    let mut f = std::fs::OpenOptions::new()
+    let mut f = ostra_core::paths::private_file_options()
         .write(true)
         .create(true)
         .truncate(true)
-        .mode(0o600)
         .open(to)?;
     f.write_all(&body)
 }
@@ -346,7 +344,7 @@ pub fn cleanup(config_dir: &Path) {
     let _ = std::fs::remove_dir_all(config_dir.join(SCRATCH));
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::launch::tests::{input, spec};
@@ -412,7 +410,7 @@ mod tests {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
         std::fs::create_dir_all(&base).unwrap();
         let tmp = tempfile::tempdir_in(&base).unwrap();
-        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let root = ostra_core::paths::canonical(tmp.path()).unwrap();
         for d in ["repo", "ws/.ostra/sessions/s_1/backend", "cfg", "home"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
@@ -515,7 +513,7 @@ mod tests {
         let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/test-tmp");
         std::fs::create_dir_all(&base).unwrap();
         let tmp = tempfile::tempdir_in(&base).unwrap();
-        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let root = ostra_core::paths::canonical(tmp.path()).unwrap();
         for d in [
             "repo",
             "ws/.ostra/sessions/s_1/backend",

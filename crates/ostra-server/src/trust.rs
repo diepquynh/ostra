@@ -22,7 +22,7 @@ pub const PENDING_MESSAGE: &str =
 
 /// Paths reach here canonical from some callers and as written in settings from others.
 fn canon(p: &Path) -> String {
-    std::fs::canonicalize(p)
+    ostra_core::paths::canonical(p)
         .unwrap_or_else(|_| p.to_path_buf())
         .display()
         .to_string()

@@ -334,6 +334,13 @@ function StepCheck({ w }: { w: Wizard }) {
                 result={e.sandbox.active ? "On" : "Off"}
                 tone={e.sandbox.active ? "ok" : "warn"}
               />
+              <CheckRow
+                delay={d()}
+                label="Shell for the Bash tool"
+                sub={e.shell.message ?? e.shell.path ?? ""}
+                result={e.shell.available ? "Found" : "Missing"}
+                tone={e.shell.available ? "ok" : "warn"}
+              />
             </div>
           </div>
           <SetupTerminalPanel run={setup.run} error={setup.error} onClose={setup.close} onCheck={w.env.reload} />

@@ -439,9 +439,14 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         nav: Default::default(),
     });
     code_tools.bind(&app);
-    let socket = crate::bridge::serve_bridge_socket(&app)
-        .map_err(|e| anyhow::anyhow!("cannot create the hook bridge socket: {e}"))?;
-    app.shared.harness.set_bridge_socket(socket);
+    // Only sandboxes use the socket, and Windows has neither; unsandboxed harness hooks reach
+    // `/internal/*` over loopback HTTP.
+    #[cfg(unix)]
+    {
+        let socket = crate::bridge::serve_bridge_socket(&app)
+            .map_err(|e| anyhow::anyhow!("cannot create the hook bridge socket: {e}"))?;
+        app.shared.harness.set_bridge_socket(socket);
+    }
     tokio::spawn(crate::files::run_touches(Arc::downgrade(&app), touch_rx));
     tokio::spawn(crate::nav::run(Arc::downgrade(&app)));
     for record in app.shared.registry.list_workspaces()? {

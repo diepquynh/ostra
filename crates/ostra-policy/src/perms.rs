@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 const KNOWN_TOOLS: &[&str] = &[
     "Bash",
+    "PowerShell",
+    "Cmd",
     "Read",
     "Write",
     "Edit",
@@ -165,9 +167,23 @@ impl Subject<'_> {
     }
 }
 
+/// A path as the glob matcher sees it: the `\\?\` prefix dropped and separators made `/`, so a
+/// pattern's `/` lines up with the path, and lowercased on Windows to match NTFS's case folding.
+fn glob_path(p: &Path) -> String {
+    let s = ostra_core::paths::strip_verbatim(p)
+        .to_string_lossy()
+        .replace('\\', "/");
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
 fn anchor(spec: &str, repo: &Path, home: &Path) -> String {
-    let repo = repo.to_string_lossy();
-    let home = home.to_string_lossy();
+    let spec = &if cfg!(windows) {
+        spec.to_lowercase()
+    } else {
+        spec.to_string()
+    };
+    let repo = glob_path(repo);
+    let home = glob_path(home);
     let mut pat = if let Some(rest) = spec.strip_prefix("//") {
         format!("/{rest}")
     } else if let Some(rest) = spec.strip_prefix("~/") {
@@ -266,7 +282,7 @@ impl Rule {
         match subject {
             Subject::Bash(cmd) => bash_forms(cmd).iter().any(|t| bash_spec_matches(spec, t)),
             Subject::Path { path, .. } => match path_matcher(spec, repo, home) {
-                Ok(m) => path.ancestors().any(|p| m.is_match(p)),
+                Ok(m) => path.ancestors().any(|p| m.is_match(glob_path(p))),
                 Err(_) => false,
             },
             Subject::Url { url } => {

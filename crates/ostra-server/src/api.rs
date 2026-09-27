@@ -1330,10 +1330,10 @@ const ARTIFACT_LIMIT: u64 = 4 * 1024 * 1024;
 
 /// A file inside some workspace's sessions folder, canonicalized (HANDOVER 13).
 fn session_file(app: &App, raw: &str) -> Result<(PathBuf, std::fs::Metadata), ApiErr> {
-    let path = std::fs::canonicalize(PathBuf::from(raw))
+    let path = ostra_core::paths::canonical(PathBuf::from(raw))
         .map_err(|_| ApiErr::not_found(format!("{raw} does not exist.")))?;
     let allowed = app.all_workspaces().iter().any(|w| {
-        std::fs::canonicalize(paths::sessions_root(&w.root))
+        ostra_core::paths::canonical(paths::sessions_root(&w.root))
             .is_ok_and(|root| paths::is_inside(&root, &path))
     });
     if !allowed {
@@ -1517,7 +1517,7 @@ struct DiffQuery {
 async fn git_show(root: &std::path::Path, rev_path: &str) -> String {
     let filters = ostra_core::git::filter_overrides(root).await;
     let out = tokio::process::Command::new("git")
-        .args(ostra_core::git::AUTOMATIC)
+        .args(ostra_core::git::AUTOMATIC.iter())
         .args(&filters)
         .arg("-C")
         .arg(root)
@@ -1869,7 +1869,7 @@ async fn fs_list(Query(q): Query<FsQuery>) -> Res<FsListing> {
         .filter(|p| !p.trim().is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")));
-    let path = std::fs::canonicalize(&start)
+    let path = ostra_core::paths::canonical(&start)
         .map_err(|_| ApiErr::not_found(format!("{} does not exist.", start.display())))?;
     let mut entries = vec![];
     let read = std::fs::read_dir(&path)

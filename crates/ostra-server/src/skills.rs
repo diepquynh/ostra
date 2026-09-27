@@ -165,7 +165,7 @@ pub fn frontmatter_description(text: &str) -> Option<String> {
 /// `rel` under the project, with symlinks resolved, or `None` when it leaves the project: skill
 /// paths come from `project.toml`, which the repository itself can supply.
 fn in_project(root: &Path, rel: &str) -> Option<PathBuf> {
-    let root = std::fs::canonicalize(root).ok()?;
+    let root = ostra_core::paths::canonical(root).ok()?;
     crate::files::tree::contain(&root, rel).ok().map(|c| c.real)
 }
 

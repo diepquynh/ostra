@@ -14,14 +14,15 @@ it, and every command the binary accepts.
 | `git` | Ostra clones, branches, stages, and commits in your projects. |
 | bubblewrap (`bwrap`), Linux only | Every agent command runs in a sandbox. On Linux that sandbox is bubblewrap. macOS uses the built-in Seatbelt (`sandbox-exec`), so it needs nothing extra. |
 
-Ostra supports Linux and macOS. `install.sh` refuses any other system, and the server relies on Unix process
-and permission calls. On Windows, run it in WSL 2 or in Docker. [OS compatibility](../platforms/os-compatibility.md)
-covers what differs between systems.
+Ostra supports Linux and macOS with the full sandbox. It also builds and runs on Windows, without a sandbox; see
+[Windows](#windows). `install.sh` refuses any system but Linux and macOS. For the sandbox on a Windows machine, run
+Ostra in WSL 2 or in Docker. [OS compatibility](../platforms/os-compatibility.md) covers what differs between
+systems.
 
 ### The sandbox check
 
-The sandbox mode defaults to `required`: an execution that cannot be sandboxed is refused, not run
-unsandboxed. On Linux two things can prevent a sandbox:
+On Linux and macOS the sandbox mode defaults to `required`: an execution that cannot be sandboxed is refused,
+not run unsandboxed. On Linux two things can prevent a sandbox:
 
 - **bubblewrap is missing.** Install it with `sudo apt install bubblewrap` or `sudo dnf install bubblewrap`.
 - **User namespaces are blocked.** bubblewrap needs unprivileged user namespaces. Ubuntu 24.04 and later
@@ -182,6 +183,37 @@ recorded into the service.
 The data folder lives in the `ostra-data` volume and the container's home folder in `ostra-home`, so harness
 CLIs you install from the setup check, and their logins, survive a rebuild. The sandbox inside a container
 needs user namespaces, which Docker's default seccomp profile blocks (see [The sandbox check](#the-sandbox-check)).
+
+## Windows
+
+Ostra builds and runs natively on Windows 10 and 11, without a sandbox: agent commands run with the full rights of
+your user, and the policy layer still checks every tool call. Read [what that leaves open](../security/sandboxing.md#windows)
+before you point it at a repository you care about. For the sandbox, run Ostra in WSL 2 or in Docker instead.
+
+You need:
+
+| Tool | Why |
+| --- | --- |
+| [rustup](https://rustup.rs) | Installs the pinned Rust 1.98.1 for the `x86_64-pc-windows-msvc` target on the first `cargo` call. |
+| Visual Studio Build Tools with the C++ workload and a Windows SDK | The MSVC linker and the C compiler for SQLite and the TLS library. |
+| Node.js 24 with npm | Builds the console in `web/`. |
+| [Git for Windows](https://git-scm.com/download/win) | Git itself, and Git Bash, which the Bash tool runs. Ostra refuses the WSL `bash.exe`. |
+
+Build in PowerShell from the repository root. `build.sh` is a bash script for Linux and macOS, so run its steps by
+hand:
+
+```powershell
+npm ci
+npm run build --workspace web     # writes web\dist, which the binary embeds
+cargo build --release -p ostra-server
+.\target\release\ostra.exe
+```
+
+Nothing installs a service on Windows; start `ostra.exe` in a terminal, or register it as a Task Scheduler task at
+logon. The data dir is `%LOCALAPPDATA%\ostra` and the config file `%APPDATA%\ostra\config.toml`. The sandbox mode
+defaults to `auto` there, so executions run and show that they are unsandboxed; set `mode = "off"` to silence the
+warning on purpose, or `required` to refuse every execution. The setup screen shows the sandbox status and whether
+Git Bash was found.
 
 ## Scratch setups
 

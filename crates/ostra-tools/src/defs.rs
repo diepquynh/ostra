@@ -302,6 +302,42 @@ fn bash_def() -> ToolDefinition {
     )
 }
 
+const POWERSHELL: &str = "Executes a Windows PowerShell command and returns its combined output. Windows only, alongside Bash.
+
+Usage:
+- Prefer Bash for anything that a POSIX shell can do, because Ostra reads Bash commands to keep them in scope. A PowerShell command is opaque to those checks, so it always needs approval and is refused outright if it names Ostra's own files or a credential path.
+- The working directory persists between calls. Default timeout is 120000 ms; pass timeout in milliseconds up to 600000. Output over 30000 characters is truncated. Processes left running are stopped when the command returns.";
+
+const CMD: &str = "Executes a Windows Cmd (cmd.exe) command and returns its combined output. Windows only, alongside Bash.
+
+Usage:
+- Prefer Bash or PowerShell. A cmd command is opaque to Ostra's scope checks, so it always needs approval and is refused if it names Ostra's own files or a credential path.
+- The working directory persists between calls. Default timeout is 120000 ms; pass timeout in milliseconds up to 600000. Processes left running are stopped when the command returns.";
+
+fn powershell_def() -> ToolDefinition {
+    def(
+        "PowerShell",
+        POWERSHELL,
+        json!({"type": "object", "properties": {
+            "command": {"type": "string", "description": "The PowerShell command to run"},
+            "timeout": {"type": "integer", "minimum": 1, "maximum": 600000, "description": "Timeout in milliseconds, up to 600000"},
+            "description": {"type": "string", "description": "What the command does, in 5 to 10 words"}
+        }, "required": ["command"], "additionalProperties": false}),
+    )
+}
+
+fn cmd_def() -> ToolDefinition {
+    def(
+        "Cmd",
+        CMD,
+        json!({"type": "object", "properties": {
+            "command": {"type": "string", "description": "The cmd.exe command to run"},
+            "timeout": {"type": "integer", "minimum": 1, "maximum": 600000, "description": "Timeout in milliseconds, up to 600000"},
+            "description": {"type": "string", "description": "What the command does, in 5 to 10 words"}
+        }, "required": ["command"], "additionalProperties": false}),
+    )
+}
+
 fn grep_def() -> ToolDefinition {
     def(
         "Grep",
@@ -430,6 +466,11 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
             Capability::Read => vec![read_def()],
             Capability::Write => vec![write_def()],
             Capability::Edit => vec![edit_def()],
+            // On Windows the shell capability also grants PowerShell and Cmd, which have no
+            // equivalent on Linux or macOS.
+            #[cfg(windows)]
+            Capability::Shell => vec![bash_def(), powershell_def(), cmd_def()],
+            #[cfg(not(windows))]
             Capability::Shell => vec![bash_def()],
             Capability::SearchText => vec![grep_def()],
             Capability::Glob => vec![glob_def()],
@@ -501,6 +542,10 @@ mod tests {
             Capability::MemoryRecall,
         ];
         let names: Vec<String> = definitions(&caps).into_iter().map(|d| d.name).collect();
+        // On Windows the shell capability also grants PowerShell and Cmd.
+        #[cfg(windows)]
+        assert_eq!(names, ["Read", "Bash", "PowerShell", "Cmd", "MemoryRecall"]);
+        #[cfg(not(windows))]
         assert_eq!(names, ["Read", "Bash", "MemoryRecall"]);
         assert!(wants_web_search(&caps));
         assert!(!wants_web_search(&[Capability::Read]));

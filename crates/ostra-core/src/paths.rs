@@ -27,6 +27,48 @@ pub fn global_config_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// `std::fs::canonicalize` without the `\\?\` prefix Windows adds, where the plain form names the
+/// same file (short enough, no reserved names). Git, shells, and most programs refuse a verbatim
+/// path, and guards compare against plain ones. On Unix it is `std::fs::canonicalize`.
+pub fn canonical(p: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(p)
+}
+
+/// The user's home folder: `$HOME` on Unix, the profile folder (`C:\Users\<name>`) on Windows,
+/// which does not set `HOME`.
+pub fn home() -> Option<PathBuf> {
+    dirs::home_dir()
+}
+
+/// A path a Git Bash command names, as a Windows path, so guards resolve it to the same file the
+/// shell writes: `/c/Users/me` becomes `C:\Users\me`, `/tmp` becomes Git's `%TEMP%`, and a
+/// leading `~` becomes the home folder. A path that is already a Windows path, or is not an MSYS
+/// path, comes back unchanged. Only on Windows; Unix paths are returned as they are.
+pub fn from_msys(raw: &str) -> PathBuf {
+    #[cfg(not(windows))]
+    return PathBuf::from(raw);
+    #[cfg(windows)]
+    {
+        let s = raw.trim();
+        // `/c/rest` or `/c` (a drive by MSYS letter), only for a real drive letter.
+        let bytes = s.as_bytes();
+        if bytes.len() >= 2
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && (bytes.len() == 2 || bytes[2] == b'/')
+        {
+            let drive = bytes[1].to_ascii_uppercase() as char;
+            let rest = &s[2..];
+            return PathBuf::from(format!("{drive}:{}", if rest.is_empty() { "\\" } else { rest }));
+        }
+        // `/tmp` is Git Bash's `%TEMP%`.
+        if s == "/tmp" || s.starts_with("/tmp/") {
+            return std::env::temp_dir().join(s.trim_start_matches("/tmp").trim_start_matches('/'));
+        }
+        PathBuf::from(s)
+    }
+}
+
 pub fn data_dir() -> PathBuf {
     if let Ok(p) = std::env::var("OSTRA_DATA_DIR") {
         return PathBuf::from(p);
@@ -99,6 +141,19 @@ pub const HOME_CREDENTIALS: &[HomeCredential] = &[
     cred("Library/Mail"),
     cred("Library/Application Support/com.apple.TCC"),
     cred("Library/Application Support/Code/User/globalStorage"),
+    // Windows, under the profile folder (WINDOWS_HANDOVER 1.5). `_netrc` is curl's Windows name.
+    cred("_netrc"),
+    cred("AppData/Roaming/gcloud"),
+    cred("AppData/Roaming/GitHub CLI"),
+    cred("AppData/Roaming/Microsoft/Protect"),
+    cred("AppData/Roaming/Microsoft/Credentials"),
+    cred("AppData/Local/Microsoft/Credentials"),
+    cred("AppData/Local/Google/Chrome/User Data"),
+    cred("AppData/Local/Microsoft/Edge/User Data"),
+    cred("AppData/Local/BraveSoftware"),
+    cred("AppData/Roaming/Mozilla/Firefox"),
+    cred("AppData/Roaming/Code/User/globalStorage"),
+    cred("AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt"),
     cli_cred(".claude/.credentials.json", crate::HarnessKind::Claude),
     cli_cred(".codex/auth.json", crate::HarnessKind::Codex),
     cli_cred(".grok/auth.json", crate::HarnessKind::Grok),
@@ -126,6 +181,79 @@ pub fn ensure_data_dir() -> std::io::Result<PathBuf> {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
     }
     Ok(dir)
+}
+
+/// Creates `dir` and its missing parents, the new ones owner-only (0700) on Unix. On Windows a new
+/// dir inherits its parent's ACL, which under the user's profile grants only that user, SYSTEM,
+/// and administrators.
+pub fn create_private_dir_all(dir: &Path) -> std::io::Result<()> {
+    #[allow(unused_mut)]
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    b.create(dir)
+}
+
+/// Creates `dir` owner-only, as [`create_private_dir_all`], succeeding when it already exists.
+pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[allow(unused_mut)]
+    let mut b = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
+    }
+    match b.create(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Open options that create a file owner-only (0600) on Unix; on Windows the file inherits its
+/// dir's ACL, as in [`create_private_dir_all`].
+pub fn private_file_options() -> std::fs::OpenOptions {
+    #[allow(unused_mut)]
+    let mut o = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o
+}
+
+/// Tightens an existing file (0600) or dir (0700) to its owner on Unix. On Windows it keeps the
+/// ACL it inherited, as in [`create_private_dir_all`].
+pub fn restrict_to_owner(path: &Path, dir: bool) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if dir { 0o700 } else { 0o600 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    let _ = (path, dir);
+    Ok(())
+}
+
+/// A link at `link` to `target`: a symlink on Unix. On Windows a dir gets a junction, which needs
+/// no privilege, and a file a symlink where Developer Mode allows one, else a hard link, else a
+/// copy.
+pub fn link(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    return std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    {
+        if target.is_dir() {
+            return junction::create(target, link);
+        }
+        std::os::windows::fs::symlink_file(target, link)
+            .or_else(|_| std::fs::hard_link(target, link))
+            .or_else(|_| std::fs::copy(target, link).map(|_| ()))
+    }
 }
 
 pub fn registry_db_path() -> PathBuf {
@@ -281,11 +409,253 @@ pub mod report {
     }
 }
 
-/// True if `inner` is `outer` or sits beneath it. Both should be absolute and normalized.
+/// True if `inner` is `outer` or sits beneath it. Both should be absolute and normalized. On
+/// Windows the comparison ignores letter case, as NTFS does.
 pub fn is_inside(outer: &Path, inner: &Path) -> bool {
-    let outer = normalize(outer);
-    let inner = normalize(inner);
+    let outer = fold(&normalize(outer));
+    let inner = fold(&normalize(inner));
     inner.starts_with(&outer)
+}
+
+/// The form of a path that guards compare. On Windows two names NTFS treats as one fold to the
+/// same text: `\\?\` is dropped, separators become `\`, and each character is uppercased and then
+/// lowercased where both map one to one, so every pair NTFS's uppercase table equates stays
+/// equal (the fold may equate a few pairs NTFS keeps apart, which only makes a guard stricter).
+/// Unix paths are case-sensitive and come back unchanged.
+pub fn fold(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let s = strip_verbatim(p).to_string_lossy().into_owned();
+        let folded: String = s
+            .chars()
+            .map(|c| {
+                if c == '/' {
+                    return '\\';
+                }
+                let mut up = c.to_uppercase();
+                let u = match (up.next(), up.next()) {
+                    (Some(u), None) => u,
+                    _ => c,
+                };
+                let mut low = u.to_lowercase();
+                match (low.next(), low.next()) {
+                    (Some(l), None) => l,
+                    _ => u,
+                }
+            })
+            .collect();
+        PathBuf::from(folded)
+    }
+    #[cfg(not(windows))]
+    p.to_path_buf()
+}
+
+/// `p` without the `\\?\` prefix `canonicalize` and `read_link` return on Windows: `\\?\C:\x`
+/// becomes `C:\x` and `\\?\UNC\srv\share\x` becomes `\\srv\share\x`. Other paths come back
+/// unchanged.
+pub fn strip_verbatim(p: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut comps = p.components();
+        let Some(Component::Prefix(prefix)) = comps.next() else {
+            return p.to_path_buf();
+        };
+        let mut out = match prefix.kind() {
+            Prefix::VerbatimDisk(d) => PathBuf::from(format!("{}:", d as char)),
+            Prefix::VerbatimUNC(server, share) => {
+                let mut s = std::ffi::OsString::from(r"\\");
+                s.push(server);
+                s.push(r"\");
+                s.push(share);
+                PathBuf::from(s)
+            }
+            _ => return p.to_path_buf(),
+        };
+        for c in comps {
+            match c {
+                Component::RootDir => out.push(r"\"),
+                other => out.push(other.as_os_str()),
+            }
+        }
+        out
+    }
+    #[cfg(not(windows))]
+    p.to_path_buf()
+}
+
+/// Why a path in a tool call names something other than a plain file path, on Windows: another
+/// machine or the local one by share name (`\\host\share`, `\\?\UNC\...`), a device or the object
+/// namespace (`\\.\`, `\\?\` other than a drive, `\??\`), a path relative to a drive's own
+/// working directory (`C:foo`), or an alternate data stream (`file:stream`). Guards compare
+/// drive paths only, so each of these could name a protected file under a spelling they miss.
+/// `None` for a plain path, and always on Unix.
+pub fn windows_path_problem(raw: &str) -> Option<&'static str> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let s = raw.trim().replace('/', r"\");
+    if s.starts_with(r"\??\") {
+        return Some("an NT object path");
+    }
+    if let Some(rest) = s.strip_prefix(r"\\") {
+        let disk = rest
+            .strip_prefix(r"?\")
+            .filter(|r| r.len() >= 3 && r.as_bytes()[0].is_ascii_alphabetic() && &r[1..3] == r":\");
+        return match disk {
+            Some(r) if !r[2..].contains(':') => None,
+            Some(_) => Some("an alternate data stream"),
+            None if rest.starts_with(r".\") || rest.starts_with(r"?\") => {
+                Some("a device or object namespace path")
+            }
+            None => Some("a network or administrative share path"),
+        };
+    }
+    let b = s.as_bytes();
+    let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    if drive && b.get(2) != Some(&b'\\') {
+        return Some("a path relative to a drive's working directory");
+    }
+    let rest = if drive { &s[2..] } else { &s[..] };
+    rest.contains(':').then_some("an alternate data stream")
+}
+
+/// Windows device names, which open a device under any extension and in any folder.
+const RESERVED_NAMES: &[&str] = &[
+    "con", "prn", "aux", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+    "com¹", "com²", "com³", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
+    "lpt9", "lpt¹", "lpt²", "lpt³", "conin$", "conout$",
+];
+
+/// True when the last component of `p` is a Windows device name other than `NUL` (`CON`,
+/// `COM1.txt`, `lpt1 .log`), which opens a device instead of a file. Always false on Unix.
+pub fn is_reserved_device(p: &Path) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
+        return false;
+    };
+    let stem = name.split('.').next().unwrap_or_default().trim_end_matches([' ', '.']);
+    RESERVED_NAMES.contains(&stem)
+}
+
+/// A component as Win32 opens it: trailing dots and spaces dropped, and an alternate data stream
+/// suffix (`name:stream`) dropped, so the name is the file the stream belongs to.
+#[cfg(windows)]
+fn win32_name(n: &std::ffi::OsStr) -> std::ffi::OsString {
+    let s = n.to_string_lossy();
+    let s = s.split(':').next().unwrap_or_default();
+    std::ffi::OsString::from(s.trim_end_matches(['.', ' ']))
+}
+
+/// `p` made absolute against `cwd` with `.`, `..`, and each component cleaned as Win32 does
+/// before the file system sees it: `..` applies lexically, even after a link.
+#[cfg(windows)]
+fn win32_lexical(cwd: &Path, p: &Path) -> PathBuf {
+    use std::path::Component;
+    let joined = strip_verbatim(&if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    });
+    let mut out = PathBuf::new();
+    let mut names = 0usize;
+    for c in joined.components() {
+        match c {
+            Component::Prefix(_) | Component::RootDir => out.push(c.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if names > 0 && out.pop() {
+                    names -= 1;
+                }
+            }
+            Component::Normal(n) => {
+                let n = win32_name(n);
+                if n.is_empty() {
+                    continue;
+                }
+                if n == ".." {
+                    if names > 0 && out.pop() {
+                        names -= 1;
+                    }
+                    continue;
+                }
+                out.push(n);
+                names += 1;
+            }
+        }
+    }
+    out
+}
+
+/// The path a Win32 program opens for `target` from `cwd`: `..` applied lexically, then the
+/// junctions and symlinks in it followed, dangling ones included, then the longest existing
+/// ancestor in its real letter case with long names in place of 8.3 short names.
+#[cfg(windows)]
+fn resolve_windows(cwd: &Path, target: &Path) -> PathBuf {
+    let mut path = win32_lexical(cwd, target);
+    if !path.is_absolute() {
+        return path;
+    }
+    for _ in 0..40 {
+        let mut existing = path.clone();
+        let mut tail: Vec<std::ffi::OsString> = vec![];
+        while std::fs::symlink_metadata(&existing).is_err() {
+            let Some(name) = existing.file_name().map(|n| n.to_os_string()) else {
+                return path;
+            };
+            tail.push(name);
+            if !existing.pop() {
+                return path;
+            }
+        }
+        // Joining an empty `rest` would append a trailing separator, so keep the path as is.
+        let join_rest = |base: PathBuf| {
+            tail.iter()
+                .rev()
+                .fold(base, |acc: PathBuf, n| acc.join(n))
+        };
+        match canonical(&existing) {
+            Ok(real) => return join_rest(strip_verbatim(&real)),
+            Err(_) => match std::fs::read_link(&existing) {
+                // A dangling link: the file lands at its target.
+                Ok(to) => {
+                    let base = existing.parent().map(Path::to_path_buf).unwrap_or_default();
+                    path = join_rest(win32_lexical(&base, &strip_verbatim(&to)));
+                }
+                Err(_) => return path,
+            },
+        }
+    }
+    path
+}
+
+/// True when `raw`, taken from `cwd`, has a `..` right after a component that is a junction or
+/// symlink. Win32 programs apply that `..` to the link's own folder, while Git Bash and other
+/// POSIX-style programs apply it to the link's target, so the two open different files and a
+/// guard cannot judge both. Always false on Unix, where [`resolve`] follows the kernel.
+pub fn dot_dot_after_link(cwd: &Path, raw: &Path) -> bool {
+    if !cfg!(windows) {
+        return false;
+    }
+    use std::path::Component;
+    let mut at = if raw.is_absolute() {
+        PathBuf::new()
+    } else {
+        cwd.to_path_buf()
+    };
+    let mut prev_link = false;
+    for c in raw.components() {
+        let dotdot = matches!(c, Component::ParentDir)
+            || matches!(c, Component::Normal(n) if n == "..");
+        if dotdot && prev_link {
+            return true;
+        }
+        at.push(c.as_os_str());
+        prev_link = std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink());
+    }
+    false
 }
 
 /// Lexical normalization: resolves `.` and `..` without touching the filesystem.
@@ -306,8 +676,17 @@ pub fn normalize(path: &Path) -> PathBuf {
 
 /// Resolve `target` against `cwd` the way the kernel would: one component at a time, following
 /// each symlink (dangling ones included) before a later `..` applies, so a link cannot make a
-/// path look inside a root when the write lands outside it.
+/// path look inside a root when the write lands outside it. On Windows it resolves as Win32
+/// does (see `resolve_windows`).
 pub fn resolve(cwd: &Path, target: &Path) -> PathBuf {
+    #[cfg(windows)]
+    return resolve_windows(cwd, target);
+    #[cfg(not(windows))]
+    resolve_posix(cwd, target)
+}
+
+#[cfg(not(windows))]
+fn resolve_posix(cwd: &Path, target: &Path) -> PathBuf {
     use std::collections::VecDeque;
     use std::ffi::OsString;
     use std::path::Component;
@@ -364,7 +743,7 @@ mod tests {
     #[test]
     fn resolve_follows_links_before_dot_dot() {
         let dir = tempfile::tempdir().unwrap();
-        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let root = canonical(dir.path()).unwrap();
         let repo = root.join("repo");
         let outside = root.join("outside/deep");
         std::fs::create_dir_all(&repo).unwrap();
@@ -426,5 +805,74 @@ mod tests {
         assert!(is_inside(Path::new("/a/b"), Path::new("/a/b/c/../d")));
         assert!(!is_inside(Path::new("/a/b"), Path::new("/a/b/../c")));
         assert!(!is_inside(Path::new("/a/b"), Path::new("/a/bc")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn is_inside_folds_case_and_separators() {
+        assert!(is_inside(
+            Path::new(r"C:\Users\Me\repo"),
+            Path::new(r"c:\users\me\REPO\src\a.rs")
+        ));
+        assert!(is_inside(
+            Path::new(r"\\?\C:\Users\Me\repo"),
+            Path::new(r"C:/Users/Me/repo/src")
+        ));
+        assert!(!is_inside(
+            Path::new(r"C:\Users\Me\repo"),
+            Path::new(r"C:\Users\Me\repo-other")
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn strip_verbatim_removes_the_prefix() {
+        assert_eq!(strip_verbatim(Path::new(r"\\?\C:\x\y")), PathBuf::from(r"C:\x\y"));
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\srv\share\f")),
+            PathBuf::from(r"\\srv\share\f")
+        );
+        assert_eq!(strip_verbatim(Path::new(r"C:\x")), PathBuf::from(r"C:\x"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_problems_are_named() {
+        assert_eq!(windows_path_problem(r"C:\ok\file.txt"), None);
+        assert_eq!(windows_path_problem("C:/ok/file.txt"), None);
+        assert!(windows_path_problem(r"\\host\share\f").is_some());
+        assert!(windows_path_problem(r"\\.\PhysicalDrive0").is_some());
+        assert!(windows_path_problem(r"\??\C:\x").is_some());
+        assert!(windows_path_problem("C:file").is_some());
+        assert!(windows_path_problem(r"C:\x\file.txt:hidden").is_some());
+        assert!(windows_path_problem(r"\\?\C:\x\y:s").is_some());
+        // A verbatim drive path is allowed through, to be normalized by `resolve`.
+        assert_eq!(windows_path_problem(r"\\?\C:\x\y"), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reserved_device_names_are_caught_except_nul() {
+        assert!(is_reserved_device(Path::new(r"C:\x\CON")));
+        assert!(is_reserved_device(Path::new(r"C:\x\com1.txt")));
+        assert!(is_reserved_device(Path::new(r"C:\x\LPT9")));
+        assert!(!is_reserved_device(Path::new(r"C:\x\NUL")));
+        assert!(!is_reserved_device(Path::new(r"C:\x\console.txt")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_strips_verbatim_and_applies_dot_dot_lexically() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = strip_verbatim(&canonical(dir.path()).unwrap());
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        // `..` after a real dir applies lexically on Windows.
+        assert_eq!(resolve(&repo, Path::new("a/../b/c")), repo.join("b\\c"));
+        // A forward-slash drive path resolves to the same file as its backslash form.
+        assert_eq!(
+            resolve(Path::new(r"C:\other"), &PathBuf::from(format!("{}/repo/x", root.display().to_string().replace('\\', "/")))),
+            repo.join("x")
+        );
     }
 }

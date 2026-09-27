@@ -944,8 +944,8 @@ fn validate_files(
         {
             return Err(outside());
         }
-        let root = project.path.canonicalize().map_err(|_| outside())?;
-        let full = root.join(path).canonicalize().map_err(|_| outside())?;
+        let root = ostra_core::paths::canonical(&project.path).map_err(|_| outside())?;
+        let full = ostra_core::paths::canonical(root.join(path)).map_err(|_| outside())?;
         let wants_folder = f.path.trim_end().ends_with('/');
         if !full.starts_with(&root)
             || !(full.is_file() || full.is_dir())

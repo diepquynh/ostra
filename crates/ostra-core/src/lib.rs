@@ -23,6 +23,7 @@ pub mod paths;
 pub mod pipeline;
 pub mod policy;
 pub mod pricing;
+pub mod proctree;
 pub mod sandbox;
 pub mod sandbox_init;
 #[cfg(all(
@@ -30,6 +31,7 @@ pub mod sandbox_init;
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 pub mod seccomp;
+pub mod shells;
 pub mod slug;
 pub mod submit;
 

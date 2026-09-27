@@ -27,10 +27,26 @@ pub fn describe(uri: &str) -> Option<Described> {
     let u = Url::parse(uri).ok()?;
     match u.scheme() {
         "file" => {
-            let p = u.to_file_path().ok()?;
-            let full = p.to_string_lossy().into_owned();
-            let name = p.file_name()?.to_string_lossy().into_owned();
-            let home = std::env::var("HOME").unwrap_or_default();
+            // Decode the path from the URI rather than `to_file_path`, which is OS-specific and
+            // rejects a POSIX path on Windows. `/C:/x` from a Windows URI drops its leading slash.
+            let decoded = unescape(u.path());
+            let full = match decoded.strip_prefix('/') {
+                Some(rest)
+                    if rest.len() >= 2
+                        && rest.as_bytes()[0].is_ascii_alphabetic()
+                        && rest.as_bytes()[1] == b':' =>
+                {
+                    rest.replace('/', "\\")
+                }
+                _ => decoded.clone(),
+            };
+            let name = full
+                .rsplit(['/', '\\'])
+                .find(|s| !s.is_empty())?
+                .to_string();
+            let home = ostra_core::paths::home()
+                .map(|h| h.to_string_lossy().into_owned())
+                .unwrap_or_default();
             let path = match full.strip_prefix(&home) {
                 Some(rest) if !home.is_empty() && rest.starts_with('/') => format!("~{rest}"),
                 _ => full,

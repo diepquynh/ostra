@@ -3,7 +3,8 @@
 Sandboxing is a very powerful feature of Ostra. It makes it safe to let agents run real commands on your machine:
 builds, tests, package installs, and whole harness CLIs such as Claude Code and Codex. Every one of those processes
 starts inside an OS sandbox (bubblewrap on Linux, Seatbelt on macOS). The kernel enforces it, not the agent or the
-CLI, so these guarantees hold whatever a command turns out to do:
+CLI, so these guarantees hold whatever a command turns out to do. Windows has no sandbox backend yet, so none of
+them hold there; [When there is no sandbox](#when-there-is-no-sandbox) says what does:
 
 - **Your secrets stay out of reach.** SSH and GPG keys, cloud and registry credentials, browser profiles, the
   keychain, other CLIs' sign-ins, and Ostra's own data dir are hidden. A command that walks the disk with `find ~`
@@ -19,8 +20,8 @@ CLI, so these guarantees hold whatever a command turns out to do:
   are open by default, with ports you can block or a setting that closes them.
 - **Your session stays closed.** The desktop bus, the SSH agent, the display, and Docker and Podman sockets are
   hidden or unset, and a command cannot signal a process outside its sandbox.
-- **It is on by default and fails closed.** The default mode, `required`, refuses to start an execution the
-  machine cannot sandbox, and a repository cannot turn its own sandbox off.
+- **It is on by default and fails closed.** On Linux and macOS the default mode, `required`, refuses to start an
+  execution the machine cannot sandbox, and a repository cannot turn its own sandbox off.
 - **It needs no container or VM.** macOS ships Seatbelt, and Linux needs only the `bubblewrap` package. There is
   no image to maintain, and the toolchain you build with on the host builds inside it.
 
@@ -257,7 +258,9 @@ Hidden paths are not readable at all. On bubblewrap a hidden dir is an empty tmp
 - **Credential stores** (`HOME_CREDENTIALS`): `.ssh`, `.gnupg`, `.aws`, `.azure`, `.config/gcloud`, `.kube`,
   `.docker`, `.netrc`, `.git-credentials`, the `gh` and `hub` tokens, cargo and PyPI credentials, `.vault-token`,
   Terraform credentials, keyrings, `.password-store`, `.Xauthority`, browser profiles, and on macOS
-  `Library/Keychains`, cookies, Safari, Mail, Messages, the TCC database, and app containers. Harness sign-in
+  `Library/Keychains`, cookies, Safari, Mail, Messages, the TCC database, and app containers. The Windows stores
+  under `AppData` (DPAPI keys, Credential Manager, browser profiles, the PowerShell history) are on the list for
+  the Windows backend to come; today the policy enforces them there. Harness sign-in
   files (`.claude/.credentials.json`, `.codex/auth.json`, `.grok/auth.json`, `.gemini/oauth_creds.json`) are on
   the list too; a harness execution keeps only its own sign-in file visible, so Claude Code cannot read the
   Codex login.
@@ -856,8 +859,8 @@ Seatbelt cannot start inside another Seatbelt sandbox. If Ostra itself runs sand
 sandboxed app's terminal), the probe detects `sandbox_apply: Operation not permitted` and says to start Ostra
 outside it.
 
-Other operating systems have no backend; the probe answers "The sandbox needs Linux or macOS." Platform
-specifics, container setups, and WSL are in [OS compatibility](../platforms/os-compatibility.md).
+Windows has no backend yet; the probe answers "The Windows sandbox is not built yet." and names WSL 2 or Docker,
+and other systems get "The sandbox needs Linux or macOS." Platform specifics, container setups, and WSL are in [OS compatibility](../platforms/os-compatibility.md).
 
 ## Modes
 
@@ -866,13 +869,18 @@ specifics, container setups, and WSL are in [OS compatibility](../platforms/os-c
 
 | Mode | With a backend | Without one |
 | --- | --- | --- |
-| `required` (default) | Sandboxed | The execution does not start, and the error says why and how to fix it |
-| `auto` | Sandboxed | Runs unsandboxed, with a warning |
+| `required` (default on Linux and macOS) | Sandboxed | The execution does not start, and the error says why and how to fix it |
+| `auto` (default on Windows) | Sandboxed | Runs unsandboxed, with a warning |
 | `off` | Unsandboxed | Unsandboxed |
 
-`required` is the default because a machine that silently loses its sandbox (a kernel update that blocks user
-namespaces, a container that drops a capability) would otherwise keep running agents with the user's full
-rights. Choose `off` only on purpose, for example in a disposable VM, or to test a harness the sandbox blocks.
+`required` is the default on Linux and macOS because a machine that silently loses its sandbox (a kernel update
+that blocks user namespaces, a container that drops a capability) would otherwise keep running agents with the
+user's full rights. Windows has no backend, so `required` there would refuse every execution; its default is
+`auto` instead (`SandboxMode::default` in [`config.rs`](../../crates/ostra-core/src/config.rs)). Setting
+`required` on Windows gives the refusal, with a reason that names WSL 2 or Docker for a sandboxed setup. The
+effective default reaches the console as `SandboxStatus.default_mode`, which the workspace Sandbox panel shows for
+"Use the global setting". Choose `off` only on purpose, for example in a disposable VM, or to test a harness the
+sandbox blocks.
 
 The mode is decided per execution (`sandbox::decide`), from the global config read fresh and the workspace's
 mode, so a change applies to the next execution with no restart. When the workspace's own mode changes, a running
@@ -929,7 +937,8 @@ Ostra reports it in these places:
 - **In the Artifacts tab,** a warning says shell commands can read hidden artifacts, with a button to the setting.
 
 The status all of these read is `SandboxStatus` ([`api.rs`](../../crates/ostra-core/src/api.rs)): `mode`,
-`available`, `backend`, `active`, `message`, `gaps`, `decoys`, `builtin_decoys`, and `builtin_hosts`. The
+`default_mode`, `available`, `backend`, `active`, `message`, `gaps`, `decoys`, `builtin_decoys`, and
+`builtin_hosts`. The
 workspace detail carries the workspace's own status, the global config with the workspace's mode, network choice,
 and hosts in place, and next to it `global_sandbox`, the global choice and hosts alone, which the Network panel
 needs because the merged status no longer shows them.
@@ -944,6 +953,41 @@ name: `find ~` reads the credential stores, a build script can write anywhere th
 and `.git/hooks`, and the network choice does not apply, so commands reach every host, local services
 included. Programs Ostra starts for a project run
 unsandboxed in that case too, without a status line of their own.
+
+### Windows
+
+Every Windows execution runs unsandboxed today, under the default `auto`. On top of the losses above, these gaps
+are specific to Windows:
+
+- **Persistence outside files.** An agent command can add an HKCU `Run` key, create a scheduled task, or register
+  a COM or WMI handler, each of which runs a program later as you. `reg add`, `schtasks`, and PowerShell cmdlets
+  are opaque to the policy, which reads paths, not registry keys or task definitions. The Startup folder and the
+  PowerShell profiles (`Documents\PowerShell`, `Documents\WindowsPowerShell`) are on the persistence list, but
+  only a sandbox enforces that list, so it waits for the Windows backend.
+- **PowerShell and Cmd commands are not parsed.** The PowerShell and Cmd tools, and a harness's own PowerShell
+  commands, reach the policy as opaque shells: never allowed without asking, and refused when their text names
+  Ostra's files, engine state, or a credential store, but their writes are not checked path by path the way a
+  Bash command's are. See [PowerShell and Cmd](agent-containment.md#powershell-and-cmd) for how those tools are judged.
+- **Process trees in a PTY.** Bash, PowerShell, Cmd, and stdio MCP servers start suspended and join a Job Object
+  before they run, so a timeout or stop ends everything they started. A harness CLI in a terminal starts through
+  ConPTY, which picks its own creation flags, so it joins its job right after it starts; a program it starts in
+  that first moment would outlive the stop. Unsandboxed, an agent command can also leave its tree on purpose, for
+  example through a scheduled task.
+- **No decoys, no network choice.** Decoy files and the egress proxy need a backend, so neither applies.
+- **Shares and alternate names.** The guards compare drive paths. A tool call that names a UNC share, a device
+  path, a drive-relative path, or an alternate data stream is refused rather than compared (see
+  [Windows paths](agent-containment.md#windows-paths)).
+- **A behavior monitor can flag or kill the sandbox runner.** The Windows backend confines a command by creating
+  a low-privilege local user, spawning the command as that user with a restricted token, and installing a
+  per-user network filter. A third-party antivirus behavior monitor treats that pattern as malware: on a machine
+  with Kaspersky, a probe that exercised it was terminated with the verdict `PDM:Trojan.Win32.Generic`, from the
+  behavior alone and without the `-ExecutionPolicy Bypass` flag that triggered an earlier detection. Windows
+  Defender did not react to the same behavior. Because a killed runner fails an execution while it is being set
+  up, the Windows backend needs a code-signed binary, and on some products an entry in the antivirus trusted
+  zone, before it can be relied on. Release builds are not signed yet.
+
+For the full sandbox on a Windows machine, run Ostra inside WSL 2 or in Docker, which are Linux and use
+bubblewrap.
 
 ## What the sandbox does not cover
 

@@ -384,6 +384,11 @@ impl GitAuth {
     pub fn new(cred: Option<&SavedGitCredential>) -> std::io::Result<Self> {
         // Git has no terminal to ask on, so every prompt fails instead of waiting forever.
         let mut envs = vec![("GIT_TERMINAL_PROMPT".to_string(), "0".to_string())];
+        // Git for Windows' Credential Manager asks in a window, not the terminal, so a server
+        // with no one at the desktop would wait on it forever. Stored credentials still answer.
+        if cfg!(windows) {
+            envs.push(("GCM_INTERACTIVE".to_string(), "never".to_string()));
+        }
         let mut args = vec![];
         let mut dir = None;
         let ssh_base = "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new";

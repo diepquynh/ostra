@@ -281,7 +281,7 @@ async fn start(
             "`{name}` counts columns in {encoding}. Ostra needs a server that counts them in utf-16."
         ));
     }
-    let real_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+    let real_root = ostra_core::paths::canonical(&root).unwrap_or_else(|_| root.clone());
     tracing::info!(server = %name, root = %root.display(), "language server started");
     Ok(Arc::new(Server {
         name,

@@ -126,7 +126,8 @@ many it stopped.
 
 ### Every execution fails with a sandbox message
 
-The sandbox mode defaults to `required`. On Linux, Ostra needs bubblewrap and unprivileged user namespaces.
+The sandbox mode defaults to `required` on Linux and macOS (`auto` on Windows, which has no sandbox yet). On Linux,
+Ostra needs bubblewrap and unprivileged user namespaces.
 The message says which is missing:
 
 - "Install bubblewrap (the `bwrap` command)": install it with `sudo apt install bubblewrap` or

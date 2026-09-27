@@ -858,8 +858,10 @@ impl SessionState {
             } else {
                 self.project_path(&f.project)
             };
+            // Forward slashes so the path reads consistently in the prompt on every OS, and never
+            // mixes separators when a forward-slash relative path is joined to a Windows root.
             let abs = root
-                .map(|p| p.join(&f.path).display().to_string())
+                .map(|p| p.join(&f.path).display().to_string().replace('\\', "/"))
                 .unwrap_or_else(|| f.path.clone());
             let kind = if f.is_folder() { "folder, " } else { "" };
             s.push_str(&format!("\n- `{abs}` ({kind}{})", f.tag()));

@@ -12,6 +12,8 @@ mod misc;
 mod search;
 mod text;
 mod web;
+#[cfg(windows)]
+mod winshell;
 
 use ostra_core::AgentName;
 use ostra_core::policy::ToolCall;
@@ -166,7 +168,7 @@ impl ToolEnv {
         match call.tool.as_str() {
             "Read" | "Write" | "Edit" => absolute("file_path"),
             "Grep" | "Glob" | "Skill" | "Document" => absolute("path"),
-            "Bash" => {
+            "Bash" | "PowerShell" | "Cmd" => {
                 map.insert(
                     "cwd".into(),
                     serde_json::Value::String(self.cwd().display().to_string()),
@@ -208,19 +210,21 @@ impl ToolEnv {
     }
 
     pub fn has_read(&self, path: &Path) -> bool {
-        self.read_files.lock().contains(path)
+        self.read_files.lock().contains(&ostra_core::paths::fold(path))
     }
 
     pub fn mark_read(&self, path: &Path) {
-        self.read_files.lock().insert(path.to_path_buf());
+        // Key on the folded form so a verbatim path (`\\?\…`, e.g. the declared report file) and a
+        // resolved path match on Windows despite prefix, case, and separator differences.
+        self.read_files.lock().insert(ostra_core::paths::fold(path));
     }
 }
 
 fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
+        && let Some(home) = ostra_core::paths::home()
     {
-        return PathBuf::from(home).join(rest);
+        return home.join(rest);
     }
     PathBuf::from(path)
 }
@@ -245,6 +249,14 @@ pub async fn execute(
             "Write" => fs::write(env, input).await,
             "Edit" => fs::edit(env, input).await,
             "Bash" => bash::run(env, call_id, input, live.clone(), cancel.clone()).await,
+            #[cfg(windows)]
+            "PowerShell" => {
+                winshell::run(env, call_id, input, winshell::Shell::PowerShell, live.clone(), cancel.clone()).await
+            }
+            #[cfg(windows)]
+            "Cmd" => {
+                winshell::run(env, call_id, input, winshell::Shell::Cmd, live.clone(), cancel.clone()).await
+            }
             "Grep" => search::grep(env, input).await,
             "Glob" => search::glob(env, input).await,
             "Skill" => misc::skill(env, input).await,
@@ -263,7 +275,10 @@ pub async fn execute(
             other => ToolOutput::err(format!("Unknown tool `{other}`.")),
         }
     };
-    let mut out = if call.tool == "Bash" {
+    // The shell tools drain their own output and honor cancellation internally, so they are not
+    // wrapped in the cancel select that would drop that work.
+    let self_cancelling = matches!(call.tool.as_str(), "Bash" | "PowerShell" | "Cmd");
+    let mut out = if self_cancelling {
         fut.await
     } else {
         tokio::select! {
@@ -301,10 +316,10 @@ pub(crate) mod testutil {
     pub fn env_in(dir: &Path) -> ToolEnv {
         let repo = dir.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let repo = std::fs::canonicalize(&repo).unwrap();
+        let repo = ostra_core::paths::canonical(&repo).unwrap();
         let session = dir.join("session");
         std::fs::create_dir_all(&session).unwrap();
-        let session = std::fs::canonicalize(&session).unwrap();
+        let session = ostra_core::paths::canonical(&session).unwrap();
         ToolEnv::new(ToolEnvConfig {
             agent: AgentName::Implementer,
             report_file: Some(session.join("ostra-implementer-phase-1.md")),
@@ -347,7 +362,7 @@ mod tests {
     fn canonical_call_uses_the_shell_cwd() {
         let d = tempfile::tempdir().unwrap();
         let env = env_in(d.path());
-        let outside = std::fs::canonicalize(d.path()).unwrap().join("session");
+        let outside = ostra_core::paths::canonical(d.path()).unwrap().join("session");
         env.set_cwd(outside.clone());
         let write = env.canonical_call(&ToolCall::new(
             "Write",
@@ -355,7 +370,9 @@ mod tests {
         ));
         assert_eq!(
             write.input["file_path"],
-            outside.join("victim.toml").display().to_string()
+            ostra_core::paths::strip_verbatim(&outside.join("victim.toml"))
+                .display()
+                .to_string()
         );
         let bash = env.canonical_call(&ToolCall::new(
             "Bash",

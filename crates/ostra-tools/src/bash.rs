@@ -12,15 +12,30 @@ pub const MAX_TIMEOUT_MS: u64 = 600_000;
 const MAX_OUTPUT_CHARS: usize = 30_000;
 const CAPTURE_HALF: usize = 128 * 1024;
 const DRAIN_GRACE: Duration = Duration::from_millis(300);
+/// How long to wait for a killed command to be reaped.
+pub(crate) const KILL_WAIT: Duration = Duration::from_secs(5);
 
 // The command runs through `eval` in the same shell so a `cd` persists into the EXIT trap, which
 // records the final directory for the next call.
+#[cfg(not(windows))]
 const SCRIPT: &str = r#"exec 2>&1
 __ostra_cmd=$OSTRA_CMD
 __ostra_pwd=$OSTRA_PWD_FILE
 cd -- "$OSTRA_CWD" || exit 1
 unset OSTRA_CMD OSTRA_PWD_FILE OSTRA_CWD
 trap 'pwd -P > "$__ostra_pwd" 2>/dev/null' EXIT
+eval "$__ostra_cmd"
+"#;
+
+// Git Bash's `pwd -P` prints an MSYS path (`/c/Users/me`); `pwd -W` prints the Windows path the
+// next call and the other tools resolve against, after `cd -P` resolves links.
+#[cfg(windows)]
+const SCRIPT: &str = r#"exec 2>&1
+__ostra_cmd=$OSTRA_CMD
+__ostra_pwd=$OSTRA_PWD_FILE
+cd -- "$OSTRA_CWD" || exit 1
+unset OSTRA_CMD OSTRA_PWD_FILE OSTRA_CWD
+trap '{ cd -P . && pwd -W; } > "$__ostra_pwd" 2>/dev/null' EXIT
 eval "$__ostra_cmd"
 "#;
 
@@ -35,7 +50,7 @@ pub(crate) fn configured_secret_vars() -> Vec<String> {
 }
 
 /// Inherited variables a child must not see: the configured secrets and every `OSTRA_*`.
-fn scrubbed_vars(
+pub(crate) fn scrubbed_vars(
     inherited: impl Iterator<Item = std::ffi::OsString>,
     secrets: &[String],
 ) -> Vec<std::ffi::OsString> {
@@ -45,14 +60,14 @@ fn scrubbed_vars(
 }
 
 /// Output capture bounded in memory: everything up to `2 * CAPTURE_HALF`, then head and tail.
-struct Capture {
+pub(crate) struct Capture {
     head: Vec<u8>,
     tail: std::collections::VecDeque<u8>,
     total: usize,
 }
 
 impl Capture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Capture {
             head: Vec::new(),
             tail: std::collections::VecDeque::new(),
@@ -60,7 +75,7 @@ impl Capture {
         }
     }
 
-    fn push(&mut self, bytes: &[u8]) {
+    pub(crate) fn push(&mut self, bytes: &[u8]) {
         self.total += bytes.len();
         for &b in bytes {
             if self.head.len() < CAPTURE_HALF {
@@ -74,7 +89,7 @@ impl Capture {
         }
     }
 
-    fn text(&self) -> String {
+    pub(crate) fn text(&self) -> String {
         let dropped = self.total - self.head.len() - self.tail.len();
         let head = String::from_utf8_lossy(&self.head);
         let tail: Vec<u8> = self.tail.iter().copied().collect();
@@ -89,12 +104,12 @@ impl Capture {
 }
 
 /// Splits streamed bytes into valid UTF-8 text, holding back an incomplete trailing sequence.
-struct Utf8Stream {
-    pending: Vec<u8>,
+pub(crate) struct Utf8Stream {
+    pub(crate) pending: Vec<u8>,
 }
 
 impl Utf8Stream {
-    fn push(&mut self, bytes: &[u8]) -> String {
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> String {
         self.pending.extend_from_slice(bytes);
         match std::str::from_utf8(&self.pending) {
             Ok(s) => {
@@ -117,16 +132,7 @@ impl Utf8Stream {
     }
 }
 
-fn kill_group(pid: Option<u32>) {
-    if let Some(pid) = pid {
-        // SAFETY: plain syscall; a negative pid targets the process group the child leads.
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGKILL);
-        }
-    }
-}
-
-fn spawn_reader<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
+pub(crate) fn spawn_reader<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
     mut r: R,
     tx: mpsc::UnboundedSender<Vec<u8>>,
 ) {
@@ -203,7 +209,10 @@ pub async fn run(
             _members = sc.members;
             c
         }
-        None => tokio::process::Command::new("bash"),
+        None => match ostra_core::shells::bash() {
+            Ok(bash) => tokio::process::Command::new(bash),
+            Err(e) => return ToolOutput::err(e),
+        },
     };
     for name in scrubbed_vars(std::env::vars_os().map(|(k, _)| k), &env.scrub_env) {
         cmd.env_remove(name);
@@ -221,13 +230,19 @@ pub async fn run(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .process_group(0)
         .kill_on_drop(true);
+    ostra_core::proctree::prepare_tokio(&mut cmd);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => return ToolOutput::err(format!("Cannot start bash: {e}")),
     };
-    let pid = child.id();
+    let tree = match ostra_core::proctree::Tree::of_tokio(&child) {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = child.start_kill();
+            return ToolOutput::err(format!("Cannot start bash: {e}"));
+        }
+    };
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     if let Some(out) = child.stdout.take() {
         spawn_reader(out, tx.clone());
@@ -263,8 +278,9 @@ pub async fn run(
         }
     };
     if !matches!(end, End::Exited(_)) {
-        kill_group(pid);
-        let _ = child.wait().await;
+        tree.kill();
+        // Bounded: on Windows a process killed partway through its own creation never exits.
+        let _ = tokio::time::timeout(KILL_WAIT, child.wait()).await;
     }
     loop {
         match tokio::time::timeout(DRAIN_GRACE, rx.recv()).await {
@@ -272,15 +288,16 @@ pub async fn run(
             Ok(None) => break,
             Err(_) => {
                 // Background processes still hold the pipe; stop them so nothing outlives the call.
-                kill_group(pid);
+                tree.kill();
                 break;
             }
         }
     }
 
+    drop(tree);
     drop(_members);
     if let Ok(dir) = std::fs::read_to_string(&pwd_file) {
-        let dir = env.sandbox_to_host(&std::path::PathBuf::from(dir.trim_end_matches('\n')));
+        let dir = env.sandbox_to_host(&std::path::PathBuf::from(dir.trim_end_matches(['\n', '\r'])));
         if dir.is_dir() {
             env.set_cwd(dir);
         }
@@ -358,7 +375,7 @@ mod tests {
         run_tool(&env, "Bash", json!({"command": "cd .. && exit 1"})).await;
         assert!(env.cwd().ends_with("sub"));
         let out = run_tool(&env, "Read", json!({"file_path": "missing"})).await;
-        assert!(out.text.contains("/sub/missing"));
+        assert!(out.text.replace('\\', "/").contains("/sub/missing"), "{}", out.text);
     }
 
     #[tokio::test]
@@ -460,10 +477,18 @@ mod tests {
     async fn child_does_not_see_scrubbed_vars() {
         let d = tempfile::tempdir().unwrap();
         let mut env = env_in(d.path());
-        // HOME is always set in the test process, so it stands in for a provider key here.
-        env.scrub_env.push("HOME".into());
-        let out = run_tool(&env, "Bash", json!({"command": "echo \"${HOME-unset}\""})).await;
-        assert_eq!(out.text, "unset");
+        // A variable set in this process stands in for a provider key. HOME is unsuitable on
+        // Windows, where Git Bash re-derives it, so use a name the shell will not recreate.
+        // SAFETY: no other test reads this variable.
+        unsafe { std::env::set_var("OSTRA_TEST_PROVIDER_KEY", "leaked") };
+        env.scrub_env.push("OSTRA_TEST_PROVIDER_KEY".into());
+        let out = run_tool(
+            &env,
+            "Bash",
+            json!({"command": "echo \"[${OSTRA_TEST_PROVIDER_KEY-unset}]\""}),
+        )
+        .await;
+        assert_eq!(out.text, "[unset]");
     }
 
     #[tokio::test]
@@ -491,7 +516,7 @@ mod tests {
             return None;
         };
         let env = env_in(dir);
-        let root = std::fs::canonicalize(dir).unwrap();
+        let root = ostra_core::paths::canonical(dir).unwrap();
         let ctx = ostra_core::exec::ExecContext {
             execution_id: "x_sb".into(),
             session_id: None,
@@ -530,7 +555,7 @@ mod tests {
     #[tokio::test]
     async fn sandbox_confines_writes_and_hides_secrets() {
         let d = tempfile::tempdir().unwrap();
-        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        let home = ostra_core::paths::canonical(d.path()).unwrap().join("home");
         std::fs::create_dir_all(home.join(".ssh")).unwrap();
         std::fs::write(home.join(".ssh/id_ed25519"), "SECRET").unwrap();
         std::fs::write(home.join(".bashrc"), "").unwrap();
@@ -564,7 +589,7 @@ mod tests {
         .await;
         assert!(out.is_error, "{}", out.text);
         assert_eq!(std::fs::read_to_string(&rc).unwrap(), "");
-        if let Some(real_home) = std::env::var_os("HOME") {
+        if let Some(real_home) = ostra_core::paths::home() {
             let probe = std::path::Path::new(&real_home).join(format!(
                 ".ostra-sandbox-probe-{}",
                 uuid::Uuid::new_v4().simple()
@@ -615,7 +640,7 @@ mod tests {
     #[tokio::test]
     async fn sandbox_keeps_git_config_read_only_and_cwd_persistent() {
         let d = tempfile::tempdir().unwrap();
-        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        let home = ostra_core::paths::canonical(d.path()).unwrap().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let repo = env_in(d.path()).config().repo_root.clone();
         let ok = std::process::Command::new("git")
@@ -657,7 +682,7 @@ mod tests {
     #[tokio::test]
     async fn sandbox_tmp_is_private_and_persists_across_calls() {
         let d = tempfile::tempdir().unwrap();
-        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        let home = ostra_core::paths::canonical(d.path()).unwrap().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let marker =
             std::env::temp_dir().join(format!("ostra-host-{}", uuid::Uuid::new_v4().simple()));
@@ -686,7 +711,7 @@ mod tests {
     #[tokio::test]
     async fn sandbox_timeout_stops_background_children() {
         let d = tempfile::tempdir().unwrap();
-        let home = std::fs::canonicalize(d.path()).unwrap().join("home");
+        let home = ostra_core::paths::canonical(d.path()).unwrap().join("home");
         std::fs::create_dir_all(&home).unwrap();
         let Some(env) = sandboxed(d.path(), &home) else {
             return;

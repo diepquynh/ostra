@@ -6,6 +6,12 @@ import type { SandboxMode } from "./SandboxMode";
  */
 export type SandboxStatus = { mode: SandboxMode, 
 /**
+ * The effective default mode on this OS when none is set: `required` on Linux and macOS,
+ * `auto` on Windows, which has no backend yet. The console shows this instead of assuming
+ * `required` (WINDOWS_HANDOVER 1.1).
+ */
+default_mode: SandboxMode, 
+/**
  * A sandbox backend works here.
  */
 available: boolean, 

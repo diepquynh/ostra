@@ -642,7 +642,11 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
     let brief = build_brief(&input).unwrap();
     assert!(brief.starts_with("## Repo brief for implementer"));
     assert!(brief.contains("`./mvnw -q compile`"));
-    assert!(brief.contains("/ws/backend/.agents/skills/entity/SKILL.md"));
+    // The brief renders paths with the OS separator, so compare with slashes normalized.
+    assert!(
+        brief.replace('\\', "/").contains("/ws/backend/.agents/skills/entity/SKILL.md"),
+        "{brief}"
+    );
     assert!(brief.contains("use for JPA entity"));
     assert!(brief.contains("single timestamp per method"));
     assert!(!brief.contains("already in the table"));

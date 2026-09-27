@@ -184,7 +184,16 @@ describe("request body and workspace.toml preview", () => {
         { harness: "codex", command: "codex", installed: codexInstalled, version: null, logged_in: true },
       ],
       stacks: [],
-      sandbox: { mode: "auto", available: true, active: true, decoys: true, builtin_decoys: [], builtin_hosts: [] },
+      sandbox: {
+        mode: "auto",
+        default_mode: "required",
+        available: true,
+        active: true,
+        decoys: true,
+        builtin_decoys: [],
+        builtin_hosts: [],
+      },
+      shell: { available: true, path: "/usr/bin/bash" },
     });
     expect(presetsFor(null)).toEqual(["native"]);
     expect(presetsFor(env(true, true))).toEqual(["native", "codex", "claude"]);

@@ -1,0 +1,34 @@
+[package]
+name = "winprobe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Standalone probe for the Windows sandbox design (WINDOWS_HANDOVER.md, Phase 2 "verify first").
+# Not a workspace member. Built with crt-static (see .cargo/config.toml) so the single exe runs on
+# a bare Windows VM with no Visual C++ runtime. Copied to the VM with scp; run there by hand.
+
+[[bin]]
+name = "winprobe"
+path = "src/main.rs"
+
+[dependencies.windows-sys]
+version = "0.61"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Memory",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+    "Win32_System_LibraryLoader",
+]
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"

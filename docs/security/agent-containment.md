@@ -186,6 +186,45 @@ A few guards were added on top of the Ultracode ports during Ostra's security re
   ([Workspace artifacts](../internals/workspaces.md#workspace-artifacts)).
 - **Read-only session.** When a user reopens an ended harness run to look back over it, every tool call in that
   session is refused with `guard: read-only-session`.
+- **Windows path forms** (`guard: windows-path`). See the next section.
+
+### Windows paths
+
+The guards work by comparing paths, and Windows has more ways than Linux to name one file. On Windows every path
+a tool call names goes through `paths::resolve` ([`paths.rs`](../../crates/ostra-core/src/paths.rs)), which opens
+it the way a Win32 program would:
+
+- `..` applies lexically, before links, because Win32 collapses it before the file system sees the path.
+- Junctions and symlinks are followed, dangling ones included. A junction needs no privilege, so an agent can make
+  one inside the repo that leads out of it; the write lands at the target, and the guard judges the target.
+- The longest existing ancestor comes back in its real letter case, with long names in place of 8.3 short names
+  (`PROGRA~1`), and without the `\\?\` prefix.
+- Trailing dots and spaces are dropped from each name, and so is an alternate data stream suffix, as Win32 does:
+  `.git\config.` and `.git\config ` both open `.git\config`.
+
+The guards then compare the folded form (`paths::fold`): separators become `\`, and each character is uppercased
+and then lowercased, so two names NTFS treats as one always compare equal (`.GIT\Hooks` is `.git\hooks`). The
+permission rules match the same way, case-insensitively.
+
+A few forms are refused outright rather than compared, because each can name a protected file under a spelling
+the guards would not recognize:
+
+| Form | Example |
+| --- | --- |
+| A network or administrative share | `\\localhost\C$\Users\me\.ssh\id_ed25519` |
+| A device or object namespace path | `\\.\PhysicalDrive0`, `\\?\GLOBALROOT\...`, `\??\C:\...` |
+| A path relative to a drive's own working directory | `C:foo` |
+| An alternate data stream | `notes.txt:hidden` |
+| A device name as a file name | `CON`, `COM1.txt`, `LPT1` (not `NUL`, which is harmless) |
+
+Git Bash names paths the MSYS way. Before a Bash command's paths reach the guards, `/c/Users/me` becomes
+`C:\Users\me` and `/tmp` becomes Git's `%TEMP%` (`paths::from_msys`), so a write to `/c/Users/me/.bashrc` is judged
+as the file it opens. A Bash write target with a `..` right after a junction or symlink is refused, because Git Bash
+applies that `..` to the link's target while Win32 applies it to the link's own folder, and the guard cannot judge
+both. The fixtures `windows_spellings_of_a_git_path_are_all_caught`,
+`windows_spellings_of_a_protected_file_are_all_caught`, `msys_paths_in_bash_resolve_to_windows_paths`,
+`junctions_cannot_lead_writes_out_of_the_repo`, and `windows_credential_stores_are_never_read` in
+[`tests/policy.rs`](../../crates/ostra-policy/tests/policy.rs) run on Windows.
 
 ## Layer 2: permissions
 
@@ -297,6 +336,31 @@ These cases come from the fixture `only_fully_understood_commands_are_read_only`
 [`tests/policy.rs`](../../crates/ostra-policy/tests/policy.rs), which asserts that each of them is not allowed
 unasked in default and plan mode.
 
+### PowerShell and Cmd
+
+On Windows, agents also get a `PowerShell` and a `Cmd` tool, and harnesses bring their own: Claude Code's
+`PowerShell` tool, and Codex, which runs its shell commands in PowerShell there. Ostra's parser reads only bash, so
+it cannot split a PowerShell or cmd command into simple commands or find its write targets. These tools get every
+other part of the Bash tool's hardening, and the policy treats the rest the way it treats a Bash command it could
+not parse:
+
+- **Never allowed without asking.** No command of these tools counts as read-only, and a write target is never
+  known, so default and accept-edits mode ask, plan mode refuses, and only bypass, YOLO, or an allow rule such as
+  `PowerShell(Get-ChildItem *)` lets one run unasked.
+- **Refused when the text names what no agent touches.** Layer 1 scans the raw command (`check_opaque_shell` in
+  [`guards.rs`](../../crates/ostra-policy/src/guards.rs)) for pipeline state names (`ostra-review-ledger.md`,
+  `workspace.db`, and the rest), and resolves every path in it, in drive and backslash form as well as with `/`.
+  A path into Ostra's data dir or a credential store is refused as a secret read, and a path to Ostra's binary,
+  config, databases, or engine state is refused as self-protection, in every mode, YOLO included.
+- **The same process hardening.** The configured credential variables and every `OSTRA_*` variable are removed
+  from the child, the working dir persists between calls, and the whole process tree is killed when the call ends
+  or times out.
+
+A Codex shell call on Windows reaches the policy as `Bash` only when its argv starts `bash` or `sh`, and as
+`PowerShell` otherwise, so a PowerShell command is never read as bash. Prefer the Bash tool: the tools' own
+descriptions tell agents so, because only a Bash command gets its writes checked path by path. The fixture
+`powershell_and_cmd_are_opaque_and_hardened` covers these rules.
+
 ## Harness executors get the same policy
 
 A harness executor runs an agent inside Claude Code, Codex, Grok Build, or Antigravity. Those CLIs have their own
@@ -359,8 +423,8 @@ Checking at both points would ask the user twice for one call.
 
 The policy is not the only layer around a harness. Ostra also runs agent commands and each harness CLI inside an
 OS sandbox (bubblewrap on Linux, Seatbelt on macOS), which limits what the CLI and its children can reach on disk,
-including actions no hook reports. The default mode, `required`, refuses to start an execution the machine cannot
-sandbox. [Sandboxing](sandboxing.md) covers the profile, the modes, and what is lost without it.
+including actions no hook reports. On Linux and macOS the default mode, `required`, refuses to start an execution the
+machine cannot sandbox; Windows has no sandbox yet and defaults to `auto`. [Sandboxing](sandboxing.md) covers the profile, the modes, and what is lost without it.
 
 ## Why a denial leads with the correction
 

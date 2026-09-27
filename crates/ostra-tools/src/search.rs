@@ -11,6 +11,12 @@ use std::time::SystemTime;
 const MAX_GLOB_RESULTS: usize = 100;
 const MAX_GREP_OUTPUT: usize = 30_000;
 
+/// A path for tool output, with forward slashes on every OS so agents and tests read one form.
+fn disp(p: &Path) -> String {
+    let s = p.display().to_string();
+    if cfg!(windows) { s.replace('\\', "/") } else { s }
+}
+
 fn walker(
     root: &Path,
     glob: Option<&str>,
@@ -56,11 +62,10 @@ struct SecretFilter {
 
 impl SecretFilter {
     fn new() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
+        let home = ostra_core::paths::home()
             .unwrap_or_default();
         let both = |p: PathBuf| {
-            [std::fs::canonicalize(&p).ok(), Some(p)]
+            [ostra_core::paths::canonical(&p).ok(), Some(p)]
                 .into_iter()
                 .flatten()
         };
@@ -283,7 +288,7 @@ fn grep_blocking(a: GrepArgs) -> ToolOutput {
             hits.truncate(limit);
             let mut out = format!("Found {total} file{}\n", if total == 1 { "" } else { "s" });
             for p in &hits {
-                out.push_str(&format!("{}\n", p.display()));
+                out.push_str(&format!("{}\n", disp(p)));
             }
             ToolOutput::ok(truncate_end(out.trim_end(), MAX_GREP_OUTPUT))
         }
@@ -294,7 +299,7 @@ fn grep_blocking(a: GrepArgs) -> ToolOutput {
                 let mut sink = CountSink(0);
                 if searcher.search_path(&matcher, &p, &mut sink).is_ok() && sink.0 > 0 {
                     total += sink.0;
-                    rows.push(format!("{}:{}", p.display(), sink.0));
+                    rows.push(format!("{}:{}", disp(&p), sink.0));
                 }
             }
             if rows.is_empty() {
@@ -318,7 +323,7 @@ fn grep_blocking(a: GrepArgs) -> ToolOutput {
                     stopped_early = true;
                     break;
                 }
-                let shown = p.display().to_string();
+                let shown = disp(&p);
                 let mut file_lines = vec![];
                 let mut sink = ContentSink {
                     path: &shown,
@@ -414,9 +419,10 @@ fn glob_blocking(pattern: String, root: PathBuf) -> ToolOutput {
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
         .filter(|e| {
-            e.path()
-                .strip_prefix(&root)
-                .is_ok_and(|rel| matcher.is_match(rel))
+            e.path().strip_prefix(&root).is_ok_and(|rel| {
+                // Match with forward slashes so a `**/*.rs` pattern matches on Windows too.
+                matcher.is_match(rel) || matcher.is_match(rel.to_string_lossy().replace('\\', "/"))
+            })
         })
         .map(|e| e.into_path())
         .collect();
@@ -426,7 +432,7 @@ fn glob_blocking(pattern: String, root: PathBuf) -> ToolOutput {
     sort_by_mtime(&mut hits);
     let total = hits.len();
     hits.truncate(MAX_GLOB_RESULTS);
-    let mut out: String = hits.iter().map(|p| format!("{}\n", p.display())).collect();
+    let mut out: String = hits.iter().map(|p| format!("{}\n", disp(p))).collect();
     if total > MAX_GLOB_RESULTS {
         out.push_str(&format!(
             "(Results are truncated: showing {MAX_GLOB_RESULTS} of {total}. Use a more specific path or pattern.)\n"
@@ -556,7 +562,7 @@ mod tests {
 
     #[test]
     fn search_skips_credential_stores() {
-        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        let Some(home) = ostra_core::paths::home() else {
             return;
         };
         let f = super::SecretFilter::new();
