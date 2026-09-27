@@ -172,6 +172,22 @@ quick-question dock are open) is stored per workspace in the database's `meta` t
 `GET` and `PATCH /api/workspaces/<id>/ui`, capped at 64 KiB of JSON, so another browser opens the workspace
 the way you left it.
 
+### Keyboard shortcuts
+
+The console follows VS Code's keys: ⌘K opens the command palette, ⌘/ the quick-question dock, ⌘B toggles the
+sidebar, ⇧⌘E the Files tab, and Ctrl+Tab and Ctrl+Shift+Tab step through the open tabs (Ctrl in place of ⌘
+outside macOS). A browser keeps some combos for itself, such as Ctrl+Tab, Ctrl+W, and Ctrl+N, so the page
+never sees them.
+
+In Chromium browsers the palette offers **Lock keyboard shortcuts in fullscreen**. It puts the page in
+fullscreen and calls `navigator.keyboard.lock()`, the Keyboard Lock API that vscode.dev uses, because the
+browser honors the lock only in fullscreen. While it holds, key presses reach the console before the browser:
+the console's shortcuts work, ⌘W (Ctrl+W) closes the focused console tab instead of the browser tab, and
+Escape goes to the page, so a harness terminal receives it. Inside a terminal Ctrl+W stays with the shell,
+where it deletes a word. The status bar shows **Shortcuts locked** for as long as the lock holds. Holding
+Escape, leaving fullscreen, clicking that item, or running **Release keyboard shortcuts** from the palette
+releases the lock. The code is `web/src/lib/keyboardLock.ts`; browsers without the API do not list the command.
+
 ### Settings are read from disk each time
 
 Ostra keeps no copy of a workspace's settings in memory. It reads `workspace.toml` each time it needs it and

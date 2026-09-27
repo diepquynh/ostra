@@ -4,9 +4,12 @@ import type { ProjectView } from "../api/types";
 import { humanize } from "./format";
 import { modHint } from "./keys";
 
+/** Where the Keyboard Lock API is missing, the palette leaves its command out. */
+export type LockState = "unsupported" | "locked" | "unlocked";
+
 /** Local commands, as the design's App.jsx lists them. `cmd:*` ids run an action instead of opening a tab. */
-export function paletteCommands(dockHint = modHint("/")): PaletteItem[] {
-  return [
+export function paletteCommands(dockHint = modHint("/"), lock: LockState = "unsupported"): PaletteItem[] {
+  const items: PaletteItem[] = [
     { id: "ws:overview", group: "Workspace", icon: "plus", label: "New task", hint: "overview" },
     { id: "cmd:new-workspace", group: "Workspace", icon: "box", label: "New workspace…" },
     { id: "cmd:add-project", group: "Workspace", icon: "folder-plus", label: "Add project…" },
@@ -15,6 +18,14 @@ export function paletteCommands(dockHint = modHint("/")): PaletteItem[] {
     { id: "cmd:dock", group: "Actions", icon: "message-square", label: "Ask a quick question", hint: dockHint },
     { id: "cmd:theme", group: "Actions", icon: "sun-moon", label: "Toggle light and dark theme" },
   ];
+  if (lock !== "unsupported")
+    items.push({
+      id: "cmd:keyboard-lock",
+      group: "Actions",
+      icon: "lock",
+      label: lock === "locked" ? "Release keyboard shortcuts" : "Lock keyboard shortcuts in fullscreen",
+    });
+  return items;
 }
 
 /** Result rows before the commands; the palette renders every row, so keep the list short. */

@@ -12,6 +12,8 @@ type StatusBarProps = {
   open: (id: string, opts?: OpenOptions) => void;
   theme: Theme;
   toggleTheme: () => void;
+  keysLocked: boolean;
+  unlockKeys: () => void;
 };
 
 const ABOVE = { top: "auto", bottom: "calc(100% + 4px)" } as const;
@@ -41,7 +43,7 @@ function Connection() {
   );
 }
 
-export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarProps) {
+export function StatusBar({ ws, session, open, theme, toggleTheme, keysLocked, unlockKeys }: StatusBarProps) {
   const { activity } = useActivity(ws);
   const { sessions } = useSessionSummaries(ws);
   const [menu, setMenu] = useState<"running" | "gates" | null>(null);
@@ -129,6 +131,15 @@ export function StatusBar({ ws, session, open, theme, toggleTheme }: StatusBarPr
         </span>
       )}
       <span style={{ flex: 1 }} />
+      {keysLocked && (
+        <button
+          className="shell-status-item"
+          onClick={unlockKeys}
+          title="Browser shortcuts such as Ctrl+Tab and Ctrl+W go to the console. Hold Escape or click to release them."
+        >
+          <Icon name="lock" size={12} /> Shortcuts locked
+        </button>
+      )}
       {summary && (
         <span
           className="shell-status-item"

@@ -50,6 +50,12 @@ describe("palette", () => {
     ]);
   });
 
+  it("offers the keyboard lock only where the browser supports it", () => {
+    expect(commands.some((c) => c.id === "cmd:keyboard-lock")).toBe(false);
+    expect(paletteCommands("⌘/", "unlocked").at(-1)?.label).toBe("Lock keyboard shortcuts in fullscreen");
+    expect(paletteCommands("⌘/", "locked").at(-1)?.label).toBe("Release keyboard shortcuts");
+  });
+
   it("builds local rows for sessions, executions, artifacts and projects", () => {
     expect(local.map((i) => [i.group, i.id])).toEqual([
       ["Sessions", "session:s1"],

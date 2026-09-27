@@ -13,6 +13,7 @@ import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
 import type { SessionStatus } from "../api/types";
 import { useAsync, useChannel } from "../lib/hooks";
+import { useKeyboardLock } from "../lib/keyboardLock";
 import { isMac, modKeys, shortcutOf } from "../lib/keys";
 import { useSessionSummaries, useWorkspaceTree } from "../lib/live";
 import { ConsoleContext, type ConsoleContextValue, type OpenOptions, type Theme } from "../lib/nav";
@@ -223,13 +224,23 @@ function Shell({ ws }: { ws: string }) {
     [ws, tabs, open, taskDraft, theme, detail.data, detail.reload, setPref],
   );
 
+  const keyLock = useKeyboardLock();
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const lockedRef = useRef(keyLock.locked);
+  lockedRef.current = keyLock.locked;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const s = shortcutOf(e);
+      const s = shortcutOf(e, isMac, lockedRef.current);
       if (!s) return;
+      // Ctrl+W deletes a word in a shell, so the terminal keeps it.
+      if (s === "close-tab" && (e.target as HTMLElement | null)?.closest?.(".ex-xterm")) return;
       e.preventDefault();
+      if (s === "close-tab") {
+        const { active } = tabsRef.current;
+        if (active) dispatch({ type: "close", id: active });
+        return;
+      }
       if (s === "next-tab" || s === "prev-tab") {
         // Strip order, wrapping at the ends, like VS Code with its MRU switcher turned off.
         const { tabs: list, active } = tabsRef.current;
@@ -277,6 +288,7 @@ function Shell({ ws }: { ws: string }) {
     else if (command === "add-project") setDialog("add-project");
     else if (command === "dock") setPref("dockOpen", true);
     else if (command === "theme") ctx.shell.toggleTheme();
+    else if (command === "keyboard-lock") keyLock.toggle();
   };
 
   const onTabsDoubleClick = (e: MouseEvent) => {
@@ -478,7 +490,15 @@ function Shell({ ws }: { ws: string }) {
             />
           )}
         </div>
-        <StatusBar ws={ws} session={activeSession} open={open} theme={theme} toggleTheme={ctx.shell.toggleTheme} />
+        <StatusBar
+          ws={ws}
+          session={activeSession}
+          open={open}
+          theme={theme}
+          toggleTheme={ctx.shell.toggleTheme}
+          keysLocked={keyLock.locked}
+          unlockKeys={keyLock.unlock}
+        />
       </div>
       {dialog === "new-workspace" && <NewWorkspaceDialog onClose={() => setDialog(null)} />}
       {dialog === "add-project" && (
@@ -512,6 +532,7 @@ function Shell({ ws }: { ws: string }) {
           if (t.kind === "command") runCommand(t.command);
           else open(t.id, { anchor: t.anchor });
         }}
+        lock={!keyLock.supported ? "unsupported" : keyLock.locked ? "locked" : "unlocked"}
       />
     </ConsoleContext.Provider>
   );

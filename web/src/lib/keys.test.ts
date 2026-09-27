@@ -39,4 +39,11 @@ describe("console shortcuts", () => {
     expect(shortcutOf(key("b", { meta: true, shift: true }), true)).toBeNull();
     expect(shortcutOf(key("x", { meta: true }), true)).toBeNull();
   });
+
+  it("claims ⌘W only while the keyboard is locked", () => {
+    expect(shortcutOf(key("w", { meta: true }), true)).toBeNull();
+    expect(shortcutOf(key("w", { meta: true }), true, true)).toBe("close-tab");
+    expect(shortcutOf(key("W", { ctrl: true }), false, true)).toBe("close-tab");
+    expect(shortcutOf(key("w", { ctrl: true, shift: true }), false, true)).toBeNull();
+  });
 });
