@@ -56,7 +56,30 @@ function Assert-Environment {
     }
 }
 
+# A terminal opened before rustup or Node.js was installed keeps its old PATH, so the saved entries a new
+# terminal would see are added.
+function Update-Path {
+    $known = @($env:Path -split ';')
+    foreach ($scope in 'User', 'Machine') {
+        foreach ($dir in @([Environment]::GetEnvironmentVariable('Path', $scope) -split ';')) {
+            if ($dir -and $known -notcontains $dir) {
+                $env:Path = "$env:Path;$dir"
+                $known += $dir
+            }
+        }
+    }
+}
+
+function Assert-Tool([string]$name, [string]$install) {
+    if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
+        throw "Install $install, then open a new terminal and run install.ps1 again, because the build needs $name and it is not on PATH."
+    }
+}
+
 function Build-Ostra {
+    Update-Path
+    Assert-Tool 'npm' 'Node.js 24 (https://nodejs.org)'
+    Assert-Tool 'cargo' 'Rust with rustup (https://rustup.rs)'
     Push-Location $repo
     try {
         # The binary embeds web\dist at compile time, so the UI is built first.

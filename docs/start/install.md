@@ -239,7 +239,9 @@ changes three things compared with `install.sh`:
 - `OSTRA_CONFIG` and `OSTRA_DATA_DIR` work only as saved user variables (`setx`). The installer refuses a value that
   exists only in the current shell, because the server would not see it.
 
-The installer also refuses to start while another Ostra server uses the same data dir, such as an `ostra.exe`
+Before it builds, the installer adds the saved user and machine `PATH` entries to its own, so a terminal opened
+before rustup or Node.js was installed still finds `cargo` and `npm`. The installer also refuses to start while
+another Ostra server uses the same data dir, such as an `ostra.exe`
 started by hand, because two servers must not share one registry. If PowerShell refuses to run the script, allow
 local scripts once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
