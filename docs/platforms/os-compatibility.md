@@ -21,7 +21,7 @@ ConPTY runs terminals, but no sandbox confines what agent commands do yet.
 | Harness terminals (PTY) | Yes | Yes | Yes | Yes, through ConPTY |
 | Stopping a process tree | Process group | Process group, plus the sandbox marker | Process group | Job Object |
 | Master key in the OS keychain | Secret Service over D-Bus, else a file | Keychain | Usually the file | Credential Manager, else a file |
-| Background service from `install.sh` | systemd user unit | launchd agent | systemd user unit, when WSL runs systemd | No; run `ostra` by hand |
+| Background service | systemd user unit (`install.sh`) | launchd agent (`install.sh`) | systemd user unit, when WSL runs systemd | Task Scheduler task at logon (`install.ps1`) |
 | Docker image | Yes (the image is Linux) | Through Docker Desktop's Linux VM | Through Docker | Through Docker Desktop's Linux VM |
 | How we know | Tested | Sandbox measured on macOS 26 | Inferred from the code | Test suite run on Windows 11 |
 
@@ -84,9 +84,9 @@ not:
 - **The hook bridge uses loopback HTTP.** The Unix socket that sandboxed harnesses reach it through is not created
   on Windows; unsandboxed harness hooks call `/internal/*` on `127.0.0.1`, as they do on Linux in mode `off`.
 
-`install.sh`, `build.sh`, and `run.sh` are bash scripts for Linux and macOS. On Windows, build with `cargo build
---release` after `npm ci` and `npm run build` in `web/`, and start `target\release\ostra.exe` by hand
-([Install](../start/install.md#windows)).
+`install.sh`, `build.sh`, and `run.sh` are bash scripts for Linux and macOS. On Windows, `install.ps1` builds, installs,
+and registers the service. To build by hand, run `cargo build --release` after `npm ci` and `npm run build` in
+`web/`, and start `target\release\ostra.exe` ([Install](../start/install.md#windows)).
 
 ## The sandbox on each system
 
@@ -204,12 +204,10 @@ ends the whole tree:
 - The tools wait at most five seconds for a killed command to be reaped, so a process that does not end cannot
   hang a tool call.
 
-Antivirus behavior monitors watch this kind of process control. Kaspersky flagged a debug build as
-`PDM:Trojan.Win32.Generic` while the PowerShell tool ran with `-ExecutionPolicy Bypass`; without the override,
-and with the suspended start above, the test suite ran without a detection. A probe that exercised the planned
-Windows sandbox behavior (creating a local user, giving it a restricted token, and spawning the command as that
-user) was killed with the same verdict, from the behavior alone and without any `-ExecutionPolicy Bypass`, while
-Windows Defender did not react. Release builds are not code-signed yet, which also counts against an unknown
+Antivirus behavior monitors watch this kind of process control. With the suspended start above, the test suite
+runs on a machine with Kaspersky without a detection. A probe that exercised the planned Windows sandbox behavior
+(creating a local user, giving it a restricted token, and spawning the command as that user) was killed as
+`PDM:Trojan.Win32.Generic` from the behavior alone, while Windows Defender did not react. Release builds are not code-signed yet, which also counts against an unknown
 binary, so the Windows sandbox backend will need signing, and on some products an antivirus trusted-zone entry,
 to run reliably ([Sandboxing](../security/sandboxing.md#windows)).
 
@@ -275,11 +273,14 @@ restarts when the server fails:
   unless you enable lingering with `loginctl enable-linger`.
 - **macOS**: a launchd agent labeled `dev.ostra.server`, with its errors in `service.err.log` in the data dir.
 - Anything else: the script stops with "Unsupported system" and points you at `run.sh`.
-- **Windows** has no installer or service yet. Start `ostra.exe` by hand, or add it to Task Scheduler as a task at
-  logon, which needs no administrator rights.
+- **Windows**: `install.ps1` registers a Task Scheduler task at logon, `dev.ostra.server`, which needs no
+  administrator rights. The task runs `ostra.exe` under a windowless console and repeats every 5 minutes, which
+  starts the server again after it exits ([Install](../start/install.md#windows)).
 
 Service managers start programs with a minimal `PATH`, so the launcher records the `PATH` of the shell that ran
-`install.sh`. That is how the service finds harness CLIs installed in `~/.local/bin` or a Homebrew prefix.
+`install.sh`. That is how the service finds harness CLIs installed in `~/.local/bin` or a Homebrew prefix. A Windows
+task starts with the user's saved environment instead, so `install.ps1` records nothing, and it refuses
+`OSTRA_ENV_FILE` and shell-only `OSTRA_CONFIG` or `OSTRA_DATA_DIR`, which the task would not see.
 
 ## Docker
 

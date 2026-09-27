@@ -15,7 +15,8 @@ it, and every command the binary accepts.
 | bubblewrap (`bwrap`), Linux only | Every agent command runs in a sandbox. On Linux that sandbox is bubblewrap. macOS uses the built-in Seatbelt (`sandbox-exec`), so it needs nothing extra. |
 
 Ostra supports Linux and macOS with the full sandbox. It also builds and runs on Windows, without a sandbox; see
-[Windows](#windows). `install.sh` refuses any system but Linux and macOS. For the sandbox on a Windows machine, run
+[Windows](#windows). `install.sh` refuses any system but Linux and macOS; on Windows, `install.ps1` does its job.
+For the sandbox on a Windows machine, run
 Ostra in WSL 2 or in Docker. [OS compatibility](../platforms/os-compatibility.md) covers what differs between
 systems.
 
@@ -209,8 +210,41 @@ cargo build --release -p ostra-server
 .\target\release\ostra.exe
 ```
 
-Nothing installs a service on Windows; start `ostra.exe` in a terminal, or register it as a Task Scheduler task at
-logon. The data dir is `%LOCALAPPDATA%\ostra` and the config file `%APPDATA%\ostra\config.toml`. The sandbox mode
+To run Ostra as a login service instead, use `install.ps1`, the Windows counterpart of `install.sh`. It needs no
+administrator rights:
+
+```powershell
+.\install.ps1                  # build, install to ~\.local\bin, register and start the task
+.\install.ps1 --port 8080      # extra flags pass through to `ostra serve`
+.\install.ps1 status
+.\install.ps1 url              # a fresh sign-in URL
+.\install.ps1 restart
+.\install.ps1 uninstall        # removes the task and binary, keeps config and data
+```
+
+It registers a Task Scheduler task, `dev.ostra.server`, that starts at logon under your own account. The task runs
+`ostra.exe serve --no-open` under `conhost.exe --headless`, which gives the server a console with no window, so
+nothing opens at logon. The task also repeats every 5 minutes and skips the run while a server is running, which
+starts the server again within 5 minutes after it exits. `install.ps1` stops the server by ending its process,
+because a windowless console has no Ctrl+C to send; recovery resumes the interrupted executions at the next start,
+as it does after a crash.
+
+A scheduled task starts with your saved environment, not the environment of the shell that ran the installer. That
+changes three things compared with `install.sh`:
+
+- Nothing records `PATH`. The task sees the user `PATH` that a new terminal sees, so a harness CLI whose installer
+  added itself to `PATH` is found after `.\install.ps1 restart`.
+- `OSTRA_ENV_FILE` is refused, because nothing reads a credentials file before `ostra.exe` starts. Save provider keys
+  in the setup screen, or as user environment variables.
+- `OSTRA_CONFIG` and `OSTRA_DATA_DIR` work only as saved user variables (`setx`). The installer refuses a value that
+  exists only in the current shell, because the server would not see it.
+
+The installer also refuses to start while another Ostra server uses the same data dir, such as an `ostra.exe`
+started by hand, because two servers must not share one registry. If PowerShell refuses to run the script, allow
+local scripts once with `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+Otherwise, start `ostra.exe` in a terminal. The data dir is `%LOCALAPPDATA%\ostra` and the config file
+`%APPDATA%\ostra\config.toml`. The sandbox mode
 defaults to `auto` there, so executions run and show that they are unsandboxed; set `mode = "off"` to silence the
 warning on purpose, or `required` to refuse every execution. The setup screen shows the sandbox status and whether
 Git Bash was found.

@@ -35,7 +35,7 @@ URL fragment, which browsers do not send to a server, so only programs that load
 spend it; many previewers do.
 
 Run `ostra url` for a fresh link and open it directly, without passing it through a tool that previews
-links. Under the login service, `./install.sh url` does the same.
+links. Under the login service, `./install.sh url` (`.\install.ps1 url` on Windows) does the same.
 
 ### "This sign-in link expired"
 
@@ -149,7 +149,8 @@ own login in a terminal, then retry from the gate, or switch the agent to the
 native executor in the workspace's routing.
 
 Under the login service, a CLI installed after `./install.sh` may not be on the service's `PATH`, because the
-service keeps the `PATH` of the shell that installed it. Run `./install.sh` again.
+service keeps the `PATH` of the shell that installed it. Run `./install.sh` again. On Windows the task reads the
+saved user `PATH` at each start, so run `.\install.ps1 restart` after the CLI's installer adds itself to `PATH`.
 
 ### A tool call waits for permission
 

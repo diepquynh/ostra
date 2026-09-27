@@ -977,14 +977,15 @@ are specific to Windows:
 - **Shares and alternate names.** The guards compare drive paths. A tool call that names a UNC share, a device
   path, a drive-relative path, or an alternate data stream is refused rather than compared (see
   [Windows paths](agent-containment.md#windows-paths)).
-- **A behavior monitor can flag or kill the sandbox runner.** The Windows backend confines a command by creating
-  a low-privilege local user, spawning the command as that user with a restricted token, and installing a
-  per-user network filter. A third-party antivirus behavior monitor treats that pattern as malware: on a machine
-  with Kaspersky, a probe that exercised it was terminated with the verdict `PDM:Trojan.Win32.Generic`, from the
-  behavior alone and without the `-ExecutionPolicy Bypass` flag that triggered an earlier detection. Windows
-  Defender did not react to the same behavior. Because a killed runner fails an execution while it is being set
-  up, the Windows backend needs a code-signed binary, and on some products an entry in the antivirus trusted
-  zone, before it can be relied on. Release builds are not signed yet.
+- **A behavior monitor can flag or kill the sandbox runner.** The planned Windows backend, not built yet, will
+  confine a command by creating a low-privilege local user, spawning the command as that user with a restricted
+  token, and installing a per-user network filter. A third-party antivirus behavior monitor treats that pattern
+  as malware: on a machine with Kaspersky, a test probe of the design (`tests/windows-probes/`) was terminated
+  with the verdict `PDM:Trojan.Win32.Generic`, from the behavior alone. Windows Defender did not react to the
+  same behavior. Because a
+  killed runner would fail an execution while it is being set up, the backend needs a code-signed binary, and on
+  some products an entry in the antivirus trusted zone, before it can be relied on. Release builds are not
+  signed yet.
 
 For the full sandbox on a Windows machine, run Ostra inside WSL 2 or in Docker, which are Linux and use
 bubblewrap.

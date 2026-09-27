@@ -5,6 +5,29 @@ fact-check, plan, build, review, test, and docs. You start one binary and work i
 executes every tool call, code drives the pipeline from stage to stage and holds every gate, and models do the
 work inside each stage. `HANDOVER.md` is the design brief this implementation follows.
 
+> [!WARNING]
+> **Ostra is not malware, but on Windows your antivirus may report it as malware.** Kaspersky's behavior monitor
+> killed a Windows sandbox test probe as `PDM:Trojan.Win32.Generic`. Windows Defender did not react to the same
+> behavior. The verdict comes from what the program does, not from a known signature, because
+> running agents under control takes the same system calls that malware uses:
+>
+> - Every shell an agent runs starts suspended and joins a Job Object, so a stop or a timeout ends every process
+>   it started.
+> - Harness CLIs such as Claude Code and Codex run in a pseudoconsole (ConPTY) that the browser streams.
+> - `install.ps1` registers a Task Scheduler task that starts the server at logon.
+> - The planned Windows sandbox backend will create low-privilege local users, start each command as one of them
+>   with a restricted token, and add a per-user network filter. Ostra does none of this yet, but a test probe of
+>   that design (`tests/windows-probes/`) was killed by the same monitor.
+>
+> Build Ostra from source, so you know what runs. Release builds are not code-signed yet, and a signature is what
+> these products need before they trust it. If your antivirus blocks Ostra, add only the `ostra.exe` you built to
+> its trusted list instead of turning protection off, because agent commands on Windows run unsandboxed today,
+> with your user's full rights.
+>
+> [Sandboxing](docs/security/sandboxing.md) explains how Ostra confines agents, and
+> [its Windows section](docs/security/sandboxing.md#windows) covers what the monitor reacts to and what stays open
+> until Windows has a sandbox.
+
 ## Build and run
 
 ### Quick start
@@ -118,6 +141,10 @@ The service applies the `export` lines of the credentials file at every start, a
 shell that installed it so it finds harness CLIs. On Linux it runs while you are logged in; run
 `loginctl enable-linger $USER` to keep it running after logout. Service logs are in
 `journalctl --user -u ostra` on Linux and `service.err.log` in the data directory on macOS.
+
+On Windows, `.\install.ps1` takes the same commands and registers a Task Scheduler task at logon, with no
+administrator rights. It reads no credentials file, so save keys in the setup screen or as user environment
+variables ([Install](docs/start/install.md#windows)).
 
 ### Run in Docker
 
