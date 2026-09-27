@@ -3,10 +3,10 @@
 
 use crate::api::ApiErr;
 use crate::files;
-use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
 use ostra_core::config::{Commands, ProjectProfile, ValidationIssue, load_toml, save_toml};
 use ostra_core::paths;
+use ostra_workspace::WorkspaceRt;
 
 pub const MAX_COMMAND_LEN: usize = 2_000;
 
@@ -78,8 +78,8 @@ pub fn save(w: &WorkspaceRt, key: &str, body: Commands) -> Result<Commands, ApiE
     profile.commands = commands;
     save_toml(&path, &profile)
         .map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    crate::trust::saved_format(
-        &w.shared.registry,
+    ostra_workspace::trust::saved_format(
+        w.host.registry(),
         &root,
         before.as_deref(),
         profile.commands.format.as_deref(),

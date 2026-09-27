@@ -1,6 +1,6 @@
 //! The console layout per workspace (`/api/workspaces/:ws/ui`), stored as JSON in the workspace db.
 
-use crate::workspace::WorkspaceRt;
+use crate::WorkspaceRt;
 use ostra_core::api::{UI_STATE_MAX_BYTES, WorkspaceUiState};
 use serde_json::{Map, Value};
 

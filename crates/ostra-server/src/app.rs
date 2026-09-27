@@ -3,17 +3,18 @@
 use crate::auth::Auth;
 use crate::env::EnvStatus;
 use crate::files::Files;
-use crate::workspace::WorkspaceRt;
+use crate::services::ServerServices;
 use anyhow::Context;
-use ostra_core::api::ServerMsg;
-use ostra_core::config::{GlobalConfig, load_toml, save_toml};
+use ostra_core::api::{HarnessStatus, ProviderStatus, ServerMsg};
+use ostra_core::config::{Environment, GlobalConfig, load_toml, save_toml};
 use ostra_core::ids::WorkspaceId;
 use ostra_core::paths;
-use ostra_engine::EngineNotice;
+use ostra_engine::{EngineNotice, Services};
 use ostra_exec_native::NativeExecutor;
 use ostra_notify::{Notifier, VapidKeys};
 use ostra_providers::Providers;
 use ostra_store::RegistryDb;
+use ostra_workspace::{DeleteError, WorkspaceHost, WorkspaceRt};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -121,6 +122,45 @@ impl Shared {
     }
 }
 
+impl WorkspaceHost for Shared {
+    fn registry(&self) -> &RegistryDb {
+        &self.registry
+    }
+
+    fn global(&self) -> GlobalConfig {
+        Shared::global(self)
+    }
+
+    fn environment(&self) -> Environment {
+        Environment {
+            installed_harnesses: self.env.read().installed(),
+            providers_with_keys: self
+                .providers
+                .status()
+                .into_iter()
+                .filter(|p| p.has_key)
+                .map(|p| p.name)
+                .collect(),
+        }
+    }
+
+    fn providers(&self) -> Vec<ProviderStatus> {
+        self.providers.status()
+    }
+
+    fn harnesses(&self) -> Vec<HarnessStatus> {
+        self.env.read().harnesses.clone()
+    }
+
+    fn services(self: Arc<Self>, id: &WorkspaceId, root: &Path) -> Arc<dyn Services> {
+        Arc::new(ServerServices {
+            shared: self,
+            root: root.to_path_buf(),
+            workspace: id.clone(),
+        })
+    }
+}
+
 /// A notice from one workspace's engine, tagged with the workspace.
 #[derive(Clone, Debug)]
 pub struct HubMsg {
@@ -150,19 +190,6 @@ pub struct App {
     pub push: broadcast::Sender<Pushed>,
     /// The Sessions tree, search, and workspace activity.
     pub nav: Arc<crate::nav::Nav>,
-}
-
-#[derive(Debug)]
-pub enum DeleteError {
-    NotFound(String),
-    Busy(String),
-    Store(ostra_store::StoreError),
-}
-
-impl From<ostra_store::StoreError> for DeleteError {
-    fn from(e: ostra_store::StoreError) -> Self {
-        DeleteError::Store(e)
-    }
 }
 
 /// Opens the registry with owner-only modes on the database and its SQLite side files, because it
@@ -251,8 +278,7 @@ impl App {
         self.workspaces.read().values().cloned().collect()
     }
 
-    /// Unregister a workspace and delete `workspace.toml` and `workspace.db`. Project folders,
-    /// session artifact folders, and per-project `.ostra/` files stay on disk.
+    /// Unregister a workspace and delete its settings and database; projects stay on disk.
     pub fn delete_workspace(&self, id: &WorkspaceId) -> Result<(), DeleteError> {
         let record = self
             .shared
@@ -263,19 +289,11 @@ impl App {
             // Held across the check, so no request reaches the engine between the check and removal.
             let mut open = self.workspaces.write();
             if let Some(rt) = open.get(id) {
-                let Ok(mut deleted) = rt.work.try_write() else {
-                    return Err(DeleteError::Busy(crate::workspace::STARTING.into()));
-                };
-                if let Some(reason) = rt.busy()? {
-                    return Err(DeleteError::Busy(reason));
-                }
-                *deleted = true;
-                drop(deleted);
+                rt.retire()?;
                 open.remove(id);
             }
         }
-        self.shared.registry.remove_workspace(id)?;
-        crate::trust::forget(&self.shared.registry, &record.root);
+        ostra_workspace::unregister(&self.shared.registry, id, &record.root)?;
         self.nav.forget(id);
         self.shared.mcp.forget(&record.root);
         let _ = self.push.send(Pushed {
@@ -284,20 +302,6 @@ impl App {
                 workspace: id.clone(),
             },
         });
-        let db = paths::workspace_db(&record.root);
-        let mut files = vec![paths::workspace_toml(&record.root), db.clone()];
-        files.extend(["-wal", "-shm"].map(|s| {
-            let mut p = db.clone().into_os_string();
-            p.push(s);
-            PathBuf::from(p)
-        }));
-        for f in files {
-            match std::fs::remove_file(&f) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => tracing::warn!("deleting {}: {e}", f.display()),
-            }
-        }
         Ok(())
     }
 

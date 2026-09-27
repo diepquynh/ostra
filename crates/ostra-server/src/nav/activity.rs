@@ -1,10 +1,10 @@
 //! `GET /api/workspaces/:ws/activity`: running executions, open gates, and recent spend.
 
 use crate::api::ApiErr;
-use crate::workspace::WorkspaceRt;
 use chrono::{DateTime, Days, TimeZone, Utc};
 use ostra_core::api::{OpenGateRef, RunningExecution, WorkspaceActivity};
 use ostra_core::ids::{ExecutionId, SessionId};
+use ostra_workspace::WorkspaceRt;
 use std::collections::HashMap;
 
 /// Starts of the spend windows for `now` in its own time zone: local midnight today, and local

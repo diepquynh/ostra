@@ -1143,6 +1143,7 @@ ostra/
     ostra-notify                  Web Push
     ostra-mcp                     MCP client: stdio and streamable HTTP transports, OAuth
     ostra-code                    tokenizer, project code index, LSP client, code providers for the Files view
+    ostra-workspace               workspace settings checks, projects, approvals, create/delete, open-workspace runtime
     ostra-server                  axum, WebSocket, auth, embedded web build, CLI entry (serve, hook, mcp-stdio)
   assets/
     agents/<name>/{agent.toml, prompt.md}

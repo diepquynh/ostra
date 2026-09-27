@@ -29,7 +29,7 @@ them, and each result becomes another event.
 
 ## The crates
 
-Ostra is thirteen crates in one Cargo workspace. Each has one job.
+Ostra is fourteen crates in one Cargo workspace. Each has one job.
 
 | Crate | What it owns |
 | --- | --- |
@@ -45,6 +45,7 @@ Ostra is thirteen crates in one Cargo workspace. Each has one job.
 | `ostra-code` | A tokenizer, the per-project code index, a language server client, and the code providers for the Files view |
 | `ostra-mcp` | The MCP client: stdio and streamable HTTP transports, and OAuth sign-in |
 | `ostra-notify` | Web Push, written without OpenSSL |
+| `ostra-workspace` | Workspaces: settings checks, projects, command approvals, creating and deleting a workspace, and the runtime of an open one |
 | `ostra-server` | The `ostra` binary: axum, auth, REST, WebSocket, the embedded web build, the CLI |
 
 ## Which way the dependencies point
@@ -65,6 +66,7 @@ layer 2   ostra-tools        → core, store
 
 layer 3   ostra-exec-native  → core, store, tools, policy, providers
           ostra-exec-harness → core, tools, code
+          ostra-workspace    → core, store, engine, agents, policy
 
 layer 4   ostra-server       → every crate above
 ```
@@ -79,6 +81,12 @@ Three rules keep this shape:
    and `ostra-agents`, and nothing else from Ostra.
 3. `ostra-server` is the one place where the real pieces meet. It builds the providers, the executors, the
    MCP gateway, and the notifier, and hands them to each engine through traits.
+
+`ostra-workspace` sits beside the executors for the same reason as the engine: it knows no provider,
+executor, or server. What an open workspace needs from the process (the registry, the global config, the
+machine facts for validation, provider and harness status, and the engine's `Services`) arrives through the
+`WorkspaceHost` trait in `crates/ostra-workspace/src/host.rs`, which the server implements on its shared
+state in `crates/ostra-server/src/app.rs`.
 
 ## Why the engine knows so little
 

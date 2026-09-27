@@ -252,7 +252,7 @@ is running, because the running server holds the session; use the board or the A
 | What | Where |
 | --- | --- |
 | `Limits` and their defaults, save-time checks | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
-| Limits kept in the registry (Rule A2) | [`crates/ostra-server/src/trust.rs`](../../crates/ostra-server/src/trust.rs) |
+| Limits kept in the registry (Rule A2) | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
 | Slot limiter, budget in `plan_ctx`, live cost updates, stop and pause | [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
 | Budget guard and the budget gate | `Planner::push` in [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) |
 | `spent_usd`, `budget_raised`, and how a raise folds | [`crates/ostra-engine/src/state.rs`](../../crates/ostra-engine/src/state.rs) |

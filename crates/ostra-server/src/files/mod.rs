@@ -10,7 +10,6 @@ pub mod watch;
 
 use crate::api::ApiErr;
 use crate::app::{App, Pushed};
-use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use git::GitStatus;
@@ -24,6 +23,7 @@ use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::{ExecutionId, WorkspaceId};
 use ostra_core::paths;
 use ostra_engine::EngineNotice;
+use ostra_workspace::WorkspaceRt;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};

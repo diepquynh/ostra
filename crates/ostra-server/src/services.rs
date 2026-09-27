@@ -27,7 +27,7 @@ impl ServerServices {
     }
 
     fn settings(&self) -> WorkspaceSettings {
-        crate::trust::effective(&self.shared.registry, &self.root, self.file_settings())
+        ostra_workspace::trust::effective(&self.shared.registry, &self.root, self.file_settings())
     }
 }
 
@@ -116,15 +116,17 @@ impl Services for ServerServices {
     }
 
     fn command_approved(&self, project: &std::path::Path, command: &str) -> bool {
-        crate::trust::format_approved(&self.shared.registry, project, command)
+        ostra_workspace::trust::format_approved(&self.shared.registry, project, command)
     }
 
     fn add_allow_rule(&self, rule: &str) {
         let mut s = self.file_settings();
-        crate::trust::overlay(&self.shared.registry, &self.root, &mut s);
+        ostra_workspace::trust::overlay(&self.shared.registry, &self.root, &mut s);
         if !s.permissions.allow.iter().any(|r| r == rule) {
             s.permissions.allow.push(rule.to_string());
-            if let Err(e) = crate::trust::save_workspace(&self.shared.registry, &self.root, &s) {
+            if let Err(e) =
+                ostra_workspace::trust::save_workspace(&self.shared.registry, &self.root, &s)
+            {
                 tracing::warn!("could not save the allow rule: {e}");
             }
         }

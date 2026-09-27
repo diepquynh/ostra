@@ -24,6 +24,7 @@ ostra-store = { path = "crates/ostra-store" }
 ostra-notify = { path = "crates/ostra-notify" }
 ostra-code = { path = "crates/ostra-code" }
 ostra-mcp = { path = "crates/ostra-mcp" }
+ostra-workspace = { path = "crates/ostra-workspace" }
 
 tokio = { version = "1.53", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }

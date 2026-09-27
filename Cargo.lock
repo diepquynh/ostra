@@ -2535,6 +2535,7 @@ dependencies = [
  "ostra-providers",
  "ostra-store",
  "ostra-tools",
+ "ostra-workspace",
  "parking_lot",
  "rand 0.10.3",
  "reqwest",
@@ -2600,6 +2601,26 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "ostra-workspace"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "ostra-agents",
+ "ostra-core",
+ "ostra-engine",
+ "ostra-policy",
+ "ostra-store",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

@@ -31,6 +31,7 @@ ostra-exec-harness harness executors: PTY, per-harness adapters, hook bridge, MC
 ostra-notify      Web Push without OpenSSL
 ostra-mcp         MCP client for workspace MCP servers: stdio and streamable HTTP, OAuth
 ostra-code        tokenizer, per-project code index (usages, imports, symbols), LSP client, code providers
+ostra-workspace   workspaces: settings checks, projects, command approvals (trust), create/delete, WorkspaceRt
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
 ```
 
@@ -40,7 +41,8 @@ React components), `web/` (the console, embedded in the binary), and `site/` (th
 
 `ostra-core` depends on nothing internal. `ostra-engine` knows no executor, provider, or server: it reaches
 them through the `Services`, `SpawnFactory`, and `Executor` traits, and `ostra-server` wires the real ones in.
-Keep it that way. A new capability the engine needs becomes a trait method, not a dependency.
+Keep it that way. A new capability the engine needs becomes a trait method, not a dependency. The same holds
+for `ostra-workspace`: it reaches the server only through `WorkspaceHost`, which `Shared` implements.
 
 ## The patterns every change follows
 

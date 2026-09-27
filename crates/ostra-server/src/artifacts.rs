@@ -6,10 +6,10 @@
 
 use crate::api::ApiErr;
 use crate::files::tree::{self, Contained};
-use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
 use ostra_core::api::{SessionStatus, WorkspaceArtifact, WorkspaceArtifacts};
 use ostra_core::artifacts::{self, MAX_ARTIFACT_BYTES, MAX_ARTIFACTS};
+use ostra_workspace::WorkspaceRt;
 use std::path::{Path, PathBuf};
 
 fn bad(m: impl Into<String>) -> ApiErr {

@@ -6,11 +6,11 @@
 use crate::app::App;
 use crate::files::git::run;
 use crate::git::{GitAuth, GitError, branch_ok, claim, git_quiet, remote_auth, run_git};
-use crate::workspace::WorkspaceRt;
 use ostra_core::api::{
     GitBranch, GitChange, GitCheckoutRequest, GitMark, GitOpResult, GitPaths, GitRepoStatus,
 };
 use ostra_core::ids::SessionId;
+use ostra_workspace::WorkspaceRt;
 use std::path::Path;
 use std::time::Duration;
 

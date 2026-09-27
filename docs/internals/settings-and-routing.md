@@ -31,7 +31,7 @@ Two rules close that gap.
 and the workspace's sandbox mode, network choice, extra allowed hosts, decoy files, and macOS loopback settings are read from the registry
 and never from `workspace.toml`. The overlay that
 enforces it is short enough to quote
-([`crates/ostra-server/src/trust.rs`](../../crates/ostra-server/src/trust.rs)):
+([`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs)):
 
 ```rust
 // Rule A2: the permission mode, YOLO, spend limits, and the sandbox mode, network, hosts, decoys,
@@ -468,8 +468,10 @@ on the Settings screen and kept in the registry (Rule A2).
 | Settings types, defaults, `resolve_route`, `validate_workspace`, `check_profile` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
 | Tiers, effort levels, complexity | [`crates/ostra-core/src/model.rs`](../../crates/ostra-core/src/model.rs) |
 | Executor names and parsing | [`crates/ostra-core/src/executor.rs`](../../crates/ostra-core/src/executor.rs) |
-| Registry overlay and approvals (Rules A1, A2) | [`crates/ostra-server/src/trust.rs`](../../crates/ostra-server/src/trust.rs) |
-| Machine facts for validation, extra checks, save | [`crates/ostra-server/src/workspace.rs`](../../crates/ostra-server/src/workspace.rs) |
+| Registry overlay and approvals (Rules A1, A2) | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
+| Extra checks beyond `validate_workspace` | [`crates/ostra-workspace/src/settings.rs`](../../crates/ostra-workspace/src/settings.rs) |
+| Machine facts for validation | `WorkspaceHost::environment` in [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |
+| Saving settings | `save_settings` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs) |
 | Route resolution at spawn time | `perform_spawn` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
 | Effort and instructions reaching the agent | [`crates/ostra-engine/src/factory.rs`](../../crates/ostra-engine/src/factory.rs) |
 | The design brief for settings | [HANDOVER section 7](../../HANDOVER.md#7-settings) |

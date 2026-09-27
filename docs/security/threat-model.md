@@ -55,7 +55,7 @@ See [Agent containment](agent-containment.md) for the policy and the sandbox,
 A repository can also carry settings. `.ostra/workspace.toml` and `.ostra/project.toml` can name commands (MCP
 servers, language servers, formatters) and can arrive with a clone, a `git pull`, or an agent's edit. Ostra
 starts those programs only after you approved that exact content, and the permission mode and YOLO are never
-read from a folder file. See [`crates/ostra-server/src/trust.rs`](../../crates/ostra-server/src/trust.rs).
+read from a folder file. See [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs).
 
 ### A malicious MCP server
 
@@ -126,7 +126,7 @@ per minute per address. [Install](../start/install.md) covers binding and remote
 | Credential theft by an agent | Secret-path guard, sandbox, scrubbed environment for agent commands | [Agent containment](agent-containment.md), [Secrets and data](secrets-and-data.md) |
 | Credentials in logs | Redaction of git secrets, no bodies or keys in the server log | [Secrets and data](secrets-and-data.md) |
 | Harness sign-in abuse | The provider's own CLI signs in; Ostra never handles the consumer token | [Secrets and data](secrets-and-data.md), [Provider usage](../providers/README.md) |
-| Unapproved programs from a repository | Content-hash approval of folder-file commands | [`trust.rs`](../../crates/ostra-server/src/trust.rs) |
+| Unapproved programs from a repository | Content-hash approval of folder-file commands | [`trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
 | Runaway spend | Parallel execution slots, session budget gate that YOLO never answers | [Spend and limits](../internals/spend-and-limits.md) |
 
 ## Risks Ostra accepts

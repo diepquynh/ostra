@@ -23,7 +23,4 @@ pub mod repo;
 pub mod services;
 pub mod setup;
 pub mod skills;
-pub mod trust;
-pub mod ui_state;
-pub mod workspace;
 pub mod ws;

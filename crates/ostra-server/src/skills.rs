@@ -2,13 +2,13 @@
 //! the older `.ostra/skills/`, and skills that sit in a harness's own directory until they are adopted.
 
 use crate::api::ApiErr;
-use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
 use ostra_core::api::{
     InitStatus, ProjectSkills, SkillAdopt, SkillDoc, SkillOrigin, SkillSave, SkillView,
 };
 use ostra_core::config::{ProjectProfile, SkillEntry, load_toml, save_toml};
 use ostra_core::paths;
+use ostra_workspace::WorkspaceRt;
 use std::path::{Path, PathBuf};
 
 pub const KINDS: &[&str] = &["convention", "module-hub", "creation", "test", "other"];

@@ -17,6 +17,7 @@ ostra-exec-harness.workspace = true
 ostra-notify.workspace = true
 ostra-code.workspace = true
 ostra-mcp.workspace = true
+ostra-workspace.workspace = true
 tokio.workspace = true
 libc.workspace = true
 tokio-util.workspace = true

@@ -7,7 +7,6 @@ use crate::api::ApiErr;
 use crate::app::{App, Pushed};
 use crate::code_watch::{self, Batch, OnBatch, ProjectWatch};
 use crate::files::{self, Files, ProjectId};
-use crate::workspace::WorkspaceRt;
 use axum::http::StatusCode;
 use ostra_code::hint::{self, At};
 use ostra_code::provider::{self, Answer, CodeProvider, CommandProvider, NativeProvider};
@@ -17,6 +16,7 @@ use ostra_core::code::{
     CodeCompletion, CodeExternalFile, CodeNavigation, CodeSignatureHelp, CodeUsages,
     NavigateTarget, PROTOCOL_VERSION, ProviderRequest,
 };
+use ostra_workspace::WorkspaceRt;
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;

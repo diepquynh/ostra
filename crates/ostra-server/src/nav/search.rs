@@ -8,11 +8,11 @@
 
 use crate::api::ApiErr;
 use crate::app::App;
-use crate::workspace::WorkspaceRt;
 use ostra_core::api::{FileIndex, SearchHit, SearchKind, SearchResults, TreeSession};
 use ostra_core::config::SETTING_KEYS;
 use ostra_core::paths;
 use ostra_store::MemoryStore;
+use ostra_workspace::WorkspaceRt;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;

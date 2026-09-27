@@ -3,7 +3,6 @@
 use crate::app::App;
 use crate::auth::{Auth, cookie_value};
 use crate::files;
-use crate::workspace::WorkspaceRt;
 use axum::Json;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
@@ -19,6 +18,7 @@ use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
 use ostra_core::paths;
 use ostra_engine::EngineError;
 use ostra_store::MemoryStore;
+use ostra_workspace::WorkspaceRt;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -765,8 +765,10 @@ async fn create_workspace(
     refresh_env(&app).await;
     match crate::setup::create(&app, &body) {
         Ok(rt) => Ok(Json(rt.detail())),
-        Err(crate::setup::CreateError::Invalid(issues)) => Err(ApiErr::invalid_workspace(issues)),
-        Err(crate::setup::CreateError::Failed(m)) => {
+        Err(ostra_workspace::CreateError::Invalid(issues)) => {
+            Err(ApiErr::invalid_workspace(issues))
+        }
+        Err(ostra_workspace::CreateError::Failed(m)) => {
             Err(ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m))
         }
     }
@@ -784,7 +786,10 @@ async fn validate_new_workspace(
     Json(body): Json<CreateWorkspace>,
 ) -> Res<Vec<ValidationIssue>> {
     refresh_env(&app).await;
-    Ok(Json(crate::setup::validate(&app, &body)))
+    Ok(Json(ostra_workspace::create::validate(
+        app.shared.as_ref(),
+        &body,
+    )))
 }
 
 async fn environment(State(app): AppState) -> Json<EnvironmentStatus> {
@@ -848,7 +853,7 @@ async fn patch_ui_state(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Res<WorkspaceUiState> {
-    use crate::ui_state::UiStateError;
+    use ostra_workspace::ui_state::UiStateError;
     ws(&app, &id)?.patch_ui_state(&body).map(Json).map_err(|e| {
         let status = match e {
             UiStateError::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -885,7 +890,7 @@ async fn delete_workspace(
     State(app): AppState,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiErr> {
-    use crate::app::DeleteError;
+    use ostra_workspace::DeleteError;
     app.delete_workspace(&WorkspaceId::from(id.as_str()))
         .map_err(|e| match e {
             DeleteError::NotFound(m) => ApiErr::not_found(m),
@@ -902,7 +907,7 @@ async fn approve_commands(
     Json(body): Json<ApproveCommands>,
 ) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
-    crate::trust::approve(
+    ostra_workspace::trust::approve(
         &app.shared.registry,
         &w.root,
         &w.settings(),
@@ -910,10 +915,10 @@ async fn approve_commands(
         &body.hash,
     )
     .map_err(|e| match e {
-        crate::trust::ApproveError::NoProject(k) => {
+        ostra_workspace::trust::ApproveError::NoProject(k) => {
             ApiErr::not_found(format!("No project `{k}` in this workspace."))
         }
-        crate::trust::ApproveError::Changed => ApiErr::new(
+        ostra_workspace::trust::ApproveError::Changed => ApiErr::new(
             StatusCode::CONFLICT,
             "Review the commands again, because the file changed after they were shown.",
         ),
@@ -938,10 +943,12 @@ async fn import_project(
 ) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
     w.import_project(&body).map_err(|e| match e {
-        crate::setup::CreateError::Invalid(issues) => {
+        ostra_workspace::CreateError::Invalid(issues) => {
             ApiErr::invalid_request(issues, "import the project")
         }
-        crate::setup::CreateError::Failed(m) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m),
+        ostra_workspace::CreateError::Failed(m) => {
+            ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m)
+        }
     })?;
     Ok(Json(w.detail()))
 }
@@ -968,10 +975,10 @@ fn git_err(e: crate::git::GitError) -> ApiErr {
         crate::git::GitError::Busy(m) => ApiErr::new(StatusCode::CONFLICT, m),
         crate::git::GitError::Git(m) => ApiErr::new(StatusCode::BAD_GATEWAY, m),
         crate::git::GitError::Invalid(m) => ApiErr::bad(m),
-        crate::git::GitError::Import(crate::setup::CreateError::Invalid(issues)) => {
+        crate::git::GitError::Import(ostra_workspace::CreateError::Invalid(issues)) => {
             ApiErr::invalid_request(issues, "import the cloned project")
         }
-        crate::git::GitError::Import(crate::setup::CreateError::Failed(m)) => {
+        crate::git::GitError::Import(ostra_workspace::CreateError::Failed(m)) => {
             ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, m)
         }
     }
@@ -1155,7 +1162,7 @@ async fn remove_project(
     Path((id, key)): Path<(String, String)>,
 ) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
-    use crate::workspace::RemoveProjectError;
+    use ostra_workspace::RemoveProjectError;
     w.remove_project(&key).map_err(|e| match e {
         RemoveProjectError::NotFound(m) => ApiErr::not_found(m),
         RemoveProjectError::Busy(m) => ApiErr::new(StatusCode::CONFLICT, m),

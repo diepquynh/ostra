@@ -80,8 +80,8 @@ Folders that Windows marks hidden or system, such as `$Recycle.Bin`, are left ou
 ![The Review step with the settings summary and the workspace.toml preview](../images/console/new-workspace-review.png)
 
 When you reach the review step, the dialog sends the whole request to `POST /api/workspaces/validate`, and **Create workspace** sends it
-to `POST /api/workspaces`. Both run the same function, `setup::draft` in
-`crates/ostra-server/src/setup.rs`, which builds the complete `WorkspaceSettings` from the request and checks
+to `POST /api/workspaces`. Both run the same function, `create::draft` in
+`crates/ostra-workspace/src/create.rs`, which builds the complete `WorkspaceSettings` from the request and checks
 it as a whole without writing anything. It refuses:
 
 - an empty or relative folder, a path that is a file, and a folder that is already a registered workspace,
@@ -137,7 +137,7 @@ the server log, and one that fails to open is logged as an error. Neither is del
 shows both with **Folder missing** and zero projects, because Ostra did not open them, and they cannot be
 selected. Restore the folder and restart the server to open it again.
 
-Opening a workspace (`WorkspaceRt::open` in `crates/ostra-server/src/workspace.rs`, then `App::attach`) does
+Opening a workspace (`WorkspaceRt::open` in `crates/ostra-workspace/src/runtime.rs`, then `App::attach`) does
 the following:
 
 1. For a workspace registered before command approvals existed, approves its current files once and copies
@@ -156,7 +156,10 @@ runs.
 ## The workspace in the running server
 
 Each open workspace is a `WorkspaceRt`: its id, its root folder, its `WorkspaceDb`, its `Engine`, and the list
-of clones and pulls in progress. The server keeps them in one map keyed by workspace id.
+of clones and pulls in progress. The server keeps them in one map keyed by workspace id. `WorkspaceRt` lives
+in the `ostra-workspace` crate and reaches the server only through the `WorkspaceHost` trait: the registry,
+the global config, the machine facts that validation needs, provider and harness status, and the engine's
+`Services` for the workspace.
 
 ![The workspace overview with the New task form and the sessions table](../images/console/workspace.png)
 
@@ -386,10 +389,13 @@ database for the session, because the command line does not know which workspace
 
 | What | Where |
 | --- | --- |
-| Create request validation and creation | [`crates/ostra-server/src/setup.rs`](../../crates/ostra-server/src/setup.rs) |
-| `WorkspaceRt`: open, settings, projects, busy check | [`crates/ostra-server/src/workspace.rs`](../../crates/ostra-server/src/workspace.rs) |
-| Opening at startup, `attach`, `delete_workspace` | [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |
-| Registry overlay, approvals, and what the file keeps out | [`crates/ostra-server/src/trust.rs`](../../crates/ostra-server/src/trust.rs) |
+| Create request validation and registration | [`crates/ostra-workspace/src/create.rs`](../../crates/ostra-workspace/src/create.rs) |
+| `WorkspaceRt`: open, settings, projects, busy check, `retire`, `unregister` | [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs) |
+| Import checks and the project list's git branch | [`crates/ostra-workspace/src/projects.rs`](../../crates/ostra-workspace/src/projects.rs) |
+| What a workspace asks of the server | [`crates/ostra-workspace/src/host.rs`](../../crates/ostra-workspace/src/host.rs) |
+| The stored console layout | [`crates/ostra-workspace/src/ui_state.rs`](../../crates/ostra-workspace/src/ui_state.rs) |
+| Opening at startup, `attach`, `delete_workspace`, the `WorkspaceHost` implementation | [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |
+| Registry overlay, approvals, and what the file keeps out | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
 | The `workspaces` table | [`crates/ostra-store/src/registry.rs`](../../crates/ostra-store/src/registry.rs) |
 | `workspace.db` and its `.gitignore` | [`crates/ostra-store/src/workspace.rs`](../../crates/ostra-store/src/workspace.rs) |
 | Every workspace path | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |

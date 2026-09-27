@@ -161,7 +161,10 @@ impl McpGateway {
     }
 
     fn conn(&self, key: &Key, cfg: &McpServerConfig) -> Arc<Conn> {
-        let fp = fingerprint(cfg, &crate::trust::sandbox(&self.registry, &key.0));
+        let fp = fingerprint(
+            cfg,
+            &ostra_workspace::trust::sandbox(&self.registry, &key.0),
+        );
         let mut conns = self.conns.lock();
         match conns.get(key) {
             Some(c) if c.fingerprint == fp => c.clone(),
@@ -220,7 +223,7 @@ impl McpGateway {
             &cfg.command[1..],
             &key.0,
             &[&key.0],
-            &crate::trust::sandbox(&self.registry, &key.0),
+            &ostra_workspace::trust::sandbox(&self.registry, &key.0),
         )
         .map_err(ConnError::Other)?;
         let mut env = hc.env;
@@ -254,7 +257,7 @@ impl McpGateway {
         if v != mcp::SAVED_SECRET {
             return expand(field, v, refused);
         }
-        crate::trust::mcp_secret(&self.registry, &key.0, cfg, field).ok_or_else(|| {
+        ostra_workspace::trust::mcp_secret(&self.registry, &key.0, cfg, field).ok_or_else(|| {
             ConnError::Other(format!(
                 "enter `{field}` again in settings, because Ostra could not read its saved value"
             ))
@@ -299,13 +302,13 @@ impl McpGateway {
         let result: Result<(Arc<Client>, Vec<ToolInfo>), ConnError> = async {
             // Rule A1: no server starts from a workspace file that waits for approval, and it
             // starts from the approved copy.
-            let approved = crate::trust::approved_workspace_file(&self.registry, root)
-                .ok_or_else(|| ConnError::Other(crate::trust::PENDING_MESSAGE.into()))?;
+            let approved = ostra_workspace::trust::approved_workspace_file(&self.registry, root)
+                .ok_or_else(|| ConnError::Other(ostra_workspace::trust::PENDING_MESSAGE.into()))?;
             let cfg = approved
                 .mcp_servers
                 .into_iter()
                 .find(|c| c == cfg)
-                .ok_or_else(|| ConnError::Other(crate::trust::PENDING_MESSAGE.into()))?;
+                .ok_or_else(|| ConnError::Other(ostra_workspace::trust::PENDING_MESSAGE.into()))?;
             let endpoint = self.endpoint(&key, &cfg)?;
             let client = Client::connect(endpoint, CONNECT_TIMEOUT)
                 .await
@@ -427,8 +430,8 @@ impl McpGateway {
     ) -> Result<String, String> {
         // Rule A1: signing in sends `oauth.client_secret_env` to the server's endpoints, so it
         // uses the approved copy of the file.
-        let s = crate::trust::approved_workspace_file(&self.registry, root)
-            .ok_or(crate::trust::PENDING_MESSAGE)?;
+        let s = ostra_workspace::trust::approved_workspace_file(&self.registry, root)
+            .ok_or(ostra_workspace::trust::PENDING_MESSAGE)?;
         let cfg = s
             .mcp_servers
             .iter()

@@ -3,7 +3,6 @@
 //! environment and one-off `-c` options, and never land in a repository's `.git/config`.
 
 use crate::app::{App, Pushed};
-use crate::workspace::{WorkspaceRt, field_issue, key_and_stack};
 use ostra_core::api::SessionStatus;
 use ostra_core::api::{
     CloneProject, GitCredentialEdit, GitCredentialKind, GitCredentialView, GitPullResult,
@@ -14,6 +13,9 @@ use ostra_core::event::SessionKind;
 use ostra_core::ids::SessionId;
 use ostra_core::paths;
 use ostra_store::{RegistryDb, StoreError};
+use ostra_workspace::WorkspaceRt;
+use ostra_workspace::projects::key_and_stack;
+use ostra_workspace::settings::field_issue;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -753,7 +755,7 @@ pub enum GitError {
     /// The request cannot run as asked; the text says what to change.
     Invalid(String),
     /// The checkout exists but could not be imported.
-    Import(crate::setup::CreateError),
+    Import(ostra_workspace::CreateError),
 }
 
 /// Keys and folders with a clone, pull, or other git command in progress, released when it ends.
@@ -771,7 +773,7 @@ impl Drop for Claim<'_> {
 pub(crate) fn claim<'a>(w: &'a WorkspaceRt, key: &str, dest: &Path) -> Result<Claim<'a>, GitError> {
     let work = w.work.try_read().ok().filter(|deleted| !**deleted);
     if work.is_none() {
-        return Err(GitError::Busy(crate::workspace::STARTING.into()));
+        return Err(GitError::Busy(ostra_workspace::STARTING.into()));
     }
     let mut busy = w.cloning.lock();
     if let Some((k, _)) = busy

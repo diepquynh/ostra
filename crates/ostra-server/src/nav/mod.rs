@@ -11,11 +11,11 @@ pub mod search;
 
 use crate::api::ApiErr;
 use crate::app::{App, Pushed};
-use crate::workspace::WorkspaceRt;
 use ostra_core::api::{ServerMsg, TreeSession, WorkspaceActivity, WorkspaceTree};
 use ostra_core::exec::ExecutionDelta;
 use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_engine::EngineNotice;
+use ostra_workspace::WorkspaceRt;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Weak;
