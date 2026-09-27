@@ -72,6 +72,12 @@ not:
   alternate data streams ([Windows paths](../security/agent-containment.md#windows-paths)).
 - **Process trees are Job Objects.** See [Processes and signals](#processes-and-signals).
 - **Harness CLIs run in ConPTY**, the Windows pseudoconsole, through the same `portable-pty` crate.
+- **Harness commands resolve through `PATHEXT`.** Ostra looks up a harness command itself and takes only a file with
+  a `PATHEXT` extension, because npm installs a CLI as an extensionless `sh` script for Git Bash next to its `.cmd`,
+  and Windows cannot start the script. An npm `.cmd` shim runs its JavaScript entry point with `node` directly,
+  because `cmd.exe` cannot pass the multi-line arguments a harness receives; any other batch file is refused, with a
+  message to point the harness command at an `.exe`
+  ([`command.rs`](../../crates/ostra-exec-harness/src/command.rs)).
 - **Owner-only files rely on the profile's ACL.** Unix file modes do not exist on Windows. The data dir is under
   `%LOCALAPPDATA%`, whose inherited ACL grants only you, SYSTEM, and administrators, and the files Ostra creates
   there inherit it. Ostra sets no explicit ACL of its own.

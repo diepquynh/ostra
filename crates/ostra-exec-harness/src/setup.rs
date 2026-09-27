@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 async fn run(cmd: &str, args: &[&str]) -> Option<(i32, String)> {
-    let child = tokio::process::Command::new(cmd)
+    let program = crate::command::resolve(cmd).ok()?;
+    let child = tokio::process::Command::new(&program.program)
+        .args(&program.prefix)
         .args(args)
         .stdin(std::process::Stdio::null())
         .kill_on_drop(true)

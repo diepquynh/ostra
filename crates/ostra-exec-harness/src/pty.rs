@@ -100,7 +100,9 @@ impl PtySession {
                 pixel_height: 0,
             })
             .map_err(|e| io(e.into()))?;
-        let mut cmd = CommandBuilder::new(&plan.program);
+        let program = crate::command::resolve(&plan.program).map_err(std::io::Error::other)?;
+        let mut cmd = CommandBuilder::new(&program.program);
+        cmd.args(&program.prefix);
         // Only Seatbelt asks for the PTY's device path, so only Unix has one to give.
         if let Some(param) = &plan.tty_param {
             #[cfg(unix)]

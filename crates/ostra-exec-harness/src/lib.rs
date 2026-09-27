@@ -4,6 +4,7 @@
 
 pub mod adapters;
 pub mod bridge;
+pub mod command;
 pub mod executor;
 pub mod launch;
 pub mod live;
