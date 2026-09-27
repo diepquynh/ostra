@@ -82,7 +82,6 @@ struct Caps {
     thinking: Thinking,
     effort: EffortSupport,
     forced_tool_choice: bool,
-    new_web_tools: bool,
     fallbacks: bool,
 }
 
@@ -101,7 +100,6 @@ fn caps(model: &str) -> Caps {
         thinking: Thinking::Adaptive,
         effort: EffortSupport::Full,
         forced_tool_choice: forced,
-        new_web_tools: true,
         fallbacks,
     };
     if is_model(model, "claude-fable-5-1")
@@ -136,7 +134,6 @@ fn caps(model: &str) -> Caps {
             thinking: Thinking::Budget,
             effort: EffortSupport::Basic,
             forced_tool_choice: true,
-            new_web_tools: false,
             fallbacks: false,
         };
     }
@@ -153,7 +150,6 @@ fn caps(model: &str) -> Caps {
             thinking: Thinking::Budget,
             effort: EffortSupport::None,
             forced_tool_choice: true,
-            new_web_tools: false,
             fallbacks: false,
         };
     }
@@ -290,21 +286,13 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
     }
 
     let mut tools: Vec<Value> = vec![];
+    // The 20260209 web tools run inside code execution, whose failures cost a turn each; the
+    // earlier versions call the search and fetch backends directly.
     if req.server_tools.web_search {
-        let t = if caps.new_web_tools {
-            "web_search_20260209"
-        } else {
-            "web_search_20250305"
-        };
-        tools.push(json!({"type": t, "name": "web_search"}));
+        tools.push(json!({"type": "web_search_20250305", "name": "web_search"}));
     }
     if req.server_tools.web_fetch {
-        let t = if caps.new_web_tools {
-            "web_fetch_20260209"
-        } else {
-            "web_fetch_20250910"
-        };
-        tools.push(json!({"type": t, "name": "web_fetch"}));
+        tools.push(json!({"type": "web_fetch_20250910", "name": "web_fetch"}));
     }
     let client_tools = req.tools.len();
     for (i, t) in req.tools.iter().enumerate() {
@@ -831,8 +819,8 @@ mod tests {
         assert_eq!(b["output_config"]["effort"], "xhigh");
         assert_eq!(b["system"][1]["cache_control"]["type"], "ephemeral");
         assert!(b["system"][0].get("cache_control").is_none());
-        assert_eq!(b["tools"][0]["type"], "web_search_20260209");
-        assert_eq!(b["tools"][1]["type"], "web_fetch_20260209");
+        assert_eq!(b["tools"][0]["type"], "web_search_20250305");
+        assert_eq!(b["tools"][1]["type"], "web_fetch_20250910");
         assert_eq!(b["tools"][3]["cache_control"]["type"], "ephemeral");
         assert!(b["tools"][2].get("cache_control").is_none());
         assert_eq!(

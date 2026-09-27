@@ -138,6 +138,11 @@ minutes apart: a long build or a permission card you have not answered yet would
 Each turn sends the whole conversation and streams the answer back. Text and thinking deltas are buffered and
 flushed every 160 characters or at a newline, so the Activity view shows sentences instead of one row per token.
 When the provider runs a server-side tool (web search, or the provider's fetch), that shows up as a status line.
+While the provider offers its own fetch tool, Ostra's `WebFetch` is left out so the model sees one fetch tool.
+On Anthropic, Ostra sends the `web_search_20250305` and `web_fetch_20250910` tools, which call the search and
+fetch backends directly. The 2026 versions run inside Anthropic's code-execution sandbox, and when code
+execution is rate limited (`too_many_requests`), every search fails, each failure costs a model turn, and the
+model concludes it has no internet access.
 
 What happens next depends on why the model stopped:
 
