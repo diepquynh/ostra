@@ -130,6 +130,10 @@ impl Tree {
         }
     }
 
+    /// Lets go of the tree. On Windows this closes its job, which kills what is still in it; a
+    /// Unix process group holds nothing to close.
+    pub fn end(self) {}
+
     /// Kills every process of the tree.
     pub fn kill(&self) {
         #[cfg(unix)]

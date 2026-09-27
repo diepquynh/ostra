@@ -294,7 +294,7 @@ pub async fn run(
         }
     }
 
-    drop(tree);
+    tree.end();
     drop(_members);
     if let Ok(dir) = std::fs::read_to_string(&pwd_file) {
         let dir = env.sandbox_to_host(&std::path::PathBuf::from(dir.trim_end_matches(['\n', '\r'])));

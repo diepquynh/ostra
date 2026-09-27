@@ -468,9 +468,7 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
             Capability::Edit => vec![edit_def()],
             // On Windows the shell capability also grants PowerShell and Cmd, which have no
             // equivalent on Linux or macOS.
-            #[cfg(windows)]
-            Capability::Shell => vec![bash_def(), powershell_def(), cmd_def()],
-            #[cfg(not(windows))]
+            Capability::Shell if cfg!(windows) => vec![bash_def(), powershell_def(), cmd_def()],
             Capability::Shell => vec![bash_def()],
             Capability::SearchText => vec![grep_def()],
             Capability::Glob => vec![glob_def()],
@@ -543,10 +541,11 @@ mod tests {
         ];
         let names: Vec<String> = definitions(&caps).into_iter().map(|d| d.name).collect();
         // On Windows the shell capability also grants PowerShell and Cmd.
-        #[cfg(windows)]
-        assert_eq!(names, ["Read", "Bash", "PowerShell", "Cmd", "MemoryRecall"]);
-        #[cfg(not(windows))]
-        assert_eq!(names, ["Read", "Bash", "MemoryRecall"]);
+        if cfg!(windows) {
+            assert_eq!(names, ["Read", "Bash", "PowerShell", "Cmd", "MemoryRecall"]);
+        } else {
+            assert_eq!(names, ["Read", "Bash", "MemoryRecall"]);
+        }
         assert!(wants_web_search(&caps));
         assert!(!wants_web_search(&[Capability::Read]));
     }
