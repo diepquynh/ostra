@@ -5,6 +5,10 @@ fact-check, plan, build, review, test, and docs. You start one binary and work i
 executes every tool call, code drives the pipeline from stage to stage and holds every gate, and models do the
 work inside each stage. `HANDOVER.md` is the design brief this implementation follows.
 
+Ostra does not compete with Claude Code, Codex, or any other agent harness. It runs them as executors, next to its
+own native agent loop. It exists to help developers get used to working with AI agents in a structured software
+development lifecycle, where each stage has a defined output and a gate you answer before the next stage starts.
+
 > [!WARNING]
 > **Ostra is not malware, but on Windows your antivirus may report it as malware.** Kaspersky's behavior monitor
 > killed a Windows sandbox test probe as `PDM:Trojan.Win32.Generic`. Windows Defender did not react to the same

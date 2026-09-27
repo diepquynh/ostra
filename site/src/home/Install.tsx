@@ -6,7 +6,11 @@ type Line = { cmd: string; note?: string };
 
 const CLONE: Line = { cmd: "git clone https://github.com/diepquynh/ostra && cd ostra" };
 
-const METHODS: Record<string, { label: string; note: string; lines: Line[] }> = {
+const NEEDS = "Needs rustup, Node.js 24, a C compiler and git. On Linux, also bubblewrap.";
+
+type Method = { label: string; note: string; lines: Line[]; prompt?: string; needs?: string; anchor?: string };
+
+const METHODS: Record<string, Method> = {
   quick: {
     label: "Quick start",
     note: "Builds the UI and the binary, then opens a sign-in URL in your browser.",
@@ -24,6 +28,19 @@ const METHODS: Record<string, { label: string; note: string; lines: Line[] }> = 
       { cmd: "mkdir -p config && sudo chown 1000:1000 config" },
       { cmd: "docker compose up -d", note: "# publishes on 127.0.0.1:7878" },
       { cmd: "docker compose exec ostra ostra url", note: "# open it on localhost:7878" },
+    ],
+  },
+  windows: {
+    label: "Windows",
+    note: "Runs Ostra as a logon task, with no administrator rights. Agent commands run without a sandbox on Windows.",
+    prompt: "PS>",
+    needs: "Needs rustup, Node.js 24, Visual Studio Build Tools with the C++ workload, and Git for Windows.",
+    anchor: "windows",
+    lines: [
+      // Windows PowerShell 5.1 has no `&&`.
+      { cmd: "git clone https://github.com/diepquynh/ostra; cd ostra" },
+      { cmd: ".\\install.ps1", note: "# builds, starts the task, prints a sign-in URL" },
+      { cmd: ".\\install.ps1 url", note: "# a fresh URL; add a model key in setup" },
     ],
   },
 };
@@ -61,7 +78,7 @@ export function Install() {
         <div className="home-install__lines">
           {m.lines.map((l) => (
             <div key={l.cmd} className="home-install__line">
-              <span className="home-install__prompt">$</span>
+              <span className="home-install__prompt">{m.prompt ?? "$"}</span>
               <span>{l.cmd}</span>
               {l.note && <span className="home-install__note">{l.note}</span>}
             </div>
@@ -72,8 +89,8 @@ export function Install() {
         </div>
       </div>
       <div className="home-install__needs">
-        <span>Needs rustup, Node.js 24, a C compiler and git. On Linux, also bubblewrap.</span>
-        <a href={docsHref("build-and-run")}>Full install steps</a>
+        <span>{m.needs ?? NEEDS}</span>
+        <a href={m.anchor ? docsHref("install", m.anchor) : docsHref("build-and-run")}>Full install steps</a>
       </div>
     </div>
   );
