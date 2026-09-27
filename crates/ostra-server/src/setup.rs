@@ -11,7 +11,7 @@ pub async fn environment(app: &App) -> EnvironmentStatus {
         providers: app.shared.providers.status(),
         harnesses: app.shared.env.read().harnesses.clone(),
         stacks: ostra_agents::stack_names(),
-        sandbox: ostra_core::api::SandboxStatus::check(&app.shared.global().sandbox),
+        sandbox: ostra_sandbox::status(&app.shared.global().sandbox),
         shell: ostra_core::api::ShellStatus::check(),
     }
 }

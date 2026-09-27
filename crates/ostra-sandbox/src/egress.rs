@@ -5,8 +5,10 @@
 //! destination host and port of every connection, lets through only what the policy allows, and
 //! connects to the address it checked, never a second lookup.
 
-use crate::HarnessKind;
-use crate::config::{LoopbackAccess, SandboxConfig, SandboxNetwork};
+use crate::sys::{Os, Platform};
+use ostra_core::HarnessKind;
+use ostra_core::config::{LoopbackAccess, SandboxConfig, SandboxNetwork};
+use ostra_core::paths;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -14,8 +16,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-#[cfg(unix)]
-use tokio::net::{UnixListener, UnixStream};
 use tokio_util::sync::CancellationToken;
 
 /// Package registries and source hosts that builds fetch from under `allowlist`.
@@ -712,16 +712,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Stream for T {}
 type Client = Box<dyn Stream>;
 
 enum Incoming {
-    #[cfg(unix)]
-    Unix(UnixListener),
+    Local(<Platform as Os>::LocalListener),
     Tcp(TcpListener),
 }
 
 impl Incoming {
     async fn accept(&self) -> std::io::Result<Client> {
         match self {
-            #[cfg(unix)]
-            Incoming::Unix(l) => l.accept().await.map(|(c, _)| Box::new(c) as Client),
+            Incoming::Local(l) => Platform::accept_local(l)
+                .await
+                .map(|c| Box::new(c) as Client),
             Incoming::Tcp(l) => l.accept().await.map(|(c, _)| Box::new(c) as Client),
         }
     }
@@ -737,17 +737,7 @@ pub enum Target {
 
 /// A fresh owner-only socket path in `dir`, which is created 0700.
 pub fn socket_path(dir: &Path, prefix: &str) -> std::io::Result<PathBuf> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .recursive(true)
-            .create(dir)?;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir_all(dir)?;
+    Platform::socket_dir(dir)?;
     Ok(dir.join(format!(
         "{prefix}{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..16]
@@ -766,19 +756,11 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-#[cfg(not(unix))]
-fn bind(_dir: &Path) -> std::io::Result<(PathBuf, Incoming)> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "Unix sockets exist only on Linux and macOS.",
-    ))
-}
-
 /// A fresh owner-only socket in `dir`, bound on the egress runtime.
-#[cfg(unix)]
 fn bind(dir: &Path) -> std::io::Result<(PathBuf, Incoming)> {
     let socket = socket_path(dir, "")?;
-    let std_listener = std::os::unix::net::UnixListener::bind(&socket).map_err(|e| {
+    let _guard = runtime().enter();
+    let listener = Platform::bind_local(&socket).map_err(|e| {
         std::io::Error::new(
             e.kind(),
             format!(
@@ -787,9 +769,7 @@ fn bind(dir: &Path) -> std::io::Result<(PathBuf, Incoming)> {
             ),
         )
     })?;
-    std_listener.set_nonblocking(true)?;
-    let _guard = runtime().enter();
-    Ok((socket, Incoming::Unix(UnixListener::from_std(std_listener)?)))
+    Ok((socket, Incoming::Local(listener)))
 }
 
 /// A fresh port on `127.0.0.1`, bound on the egress runtime. Only IPv4, because clients are
@@ -867,13 +847,10 @@ fn serve_splice(incoming: Incoming, target: Target) -> CancellationToken {
                         _ => return,
                     }
                 }
-                #[cfg(unix)]
-                Target::Socket(p) => match UnixStream::connect(p).await {
+                Target::Socket(p) => match Platform::connect_local(&p).await {
                     Ok(s) => Box::new(s),
                     Err(_) => return,
                 },
-                #[cfg(not(unix))]
-                Target::Socket(_) => return,
             };
             let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
         }
@@ -1372,6 +1349,48 @@ async fn handle(mut client: Client, shared: &Shared) {
         return;
     }
     let _ = tokio::io::copy_bidirectional(&mut client, &mut up).await;
+}
+
+/// Removes the egress sockets a server of this data dir left behind when it stopped without
+/// dropping them. Call once at server start, while no other server of the data dir runs.
+pub fn remove_stale_sockets() -> usize {
+    let Ok(dir) = std::fs::read_dir(socket_dir()) else {
+        return 0;
+    };
+    dir.flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "sock"))
+        .filter(|e| std::fs::remove_file(e.path()).is_ok())
+        .count()
+}
+
+/// What points a command's HTTP clients at the egress proxy at `url`. Loopback goes direct.
+pub fn proxy_env(url: &str) -> Vec<(String, String)> {
+    let url = url.to_string();
+    let mut out = vec![];
+    for k in ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"] {
+        out.push((k.to_string(), url.clone()));
+        out.push((k.to_ascii_lowercase(), url.clone()));
+    }
+    for k in ["NO_PROXY", "no_proxy"] {
+        out.push((k.to_string(), "localhost,127.0.0.1,::1".to_string()));
+    }
+    out.push(("NODE_USE_ENV_PROXY".into(), "1".into()));
+    out
+}
+
+/// Where each execution's egress socket lives: inside the data dir, which every sandbox hides.
+pub fn socket_dir() -> PathBuf {
+    paths::data_dir().join("egress")
+}
+
+/// Reports a decision to the log only, for a command wrapped without a profile proxy.
+pub(crate) fn log_decision(d: Decision) {
+    match &d.reason {
+        None => tracing::info!(host = %d.host, port = d.port, "sandbox egress allowed"),
+        Some(r) => {
+            tracing::warn!(host = %d.host, port = d.port, local = d.local, "sandbox egress refused: {r}")
+        }
+    }
 }
 
 #[cfg(test)]

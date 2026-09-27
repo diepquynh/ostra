@@ -40,13 +40,13 @@ pub fn status_of(submit: &serde_json::Value) -> ExecutionStatus {
 fn seatbelt(mode: Option<SandboxMode>) -> bool {
     let global: ostra_core::config::GlobalConfig =
         ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
-    ostra_core::sandbox::decide(&global.sandbox.for_workspace(
+    ostra_sandbox::decide(&global.sandbox.for_workspace(
         &ostra_core::config::WorkspaceSandbox {
             mode,
             ..Default::default()
         },
-    )) == Ok(ostra_core::sandbox::Decision::Sandboxed(
-        ostra_core::sandbox::Backend::Seatbelt,
+    )) == Ok(ostra_sandbox::Decision::Sandboxed(
+        ostra_sandbox::Backend::Seatbelt,
     ))
 }
 

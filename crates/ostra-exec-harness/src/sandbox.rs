@@ -8,8 +8,8 @@ use crate::launch::{LaunchInput, LaunchPlan, grok_home_real};
 use crate::protocol::ENV_URL;
 use ostra_core::HarnessKind;
 use ostra_core::config::SandboxConfig;
-use ostra_core::egress::HostRule;
-use ostra_core::sandbox::{self, Backend, Decision, Members, Profile};
+use ostra_sandbox::egress::HostRule;
+use ostra_sandbox::{self as sandbox, Backend, Decision, Members, Profile};
 use std::ffi::OsStr;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -96,8 +96,8 @@ pub fn wrap(
     plan: LaunchPlan,
     inp: &LaunchInput<'_>,
     cfg: &SandboxConfig,
-    on: ostra_core::egress::OnDecision,
-    on_decoy: ostra_core::decoy::OnOpen,
+    on: ostra_sandbox::egress::OnDecision,
+    on_decoy: ostra_sandbox::decoy::OnOpen,
 ) -> Result<Wrapped, String> {
     let backend = match sandbox::decide(cfg)? {
         Decision::Sandboxed(b) => b,
@@ -109,7 +109,7 @@ pub fn wrap(
             });
         }
     };
-    let seatbelt = backend == Backend::Seatbelt;
+    let mounts = backend.has_mount_namespace();
     let bridge = bridge_addr(&inp.server_url)?;
     // The CLI needs its PTY as controlling terminal, its model API under every network choice,
     // and Ostra's hook bridge on the same loopback port inside its network namespace.
@@ -147,11 +147,11 @@ pub fn wrap(
     }
     let mut profile = profile
         .new_session(false)
-        .tty(seatbelt)
+        .tty(backend.tty_param().is_some())
         .writable(&inp.config_dir)
         .scratch(&inp.config_dir.join(SCRATCH))
         .map_err(|e| format!("creating the sandbox's /tmp: {e}"))?;
-    if !seatbelt {
+    if mounts {
         profile = profile.home_overlay(&inp.home);
     }
     let (rw, settings_dir, ro) = harness_dirs(inp);
@@ -161,7 +161,7 @@ pub fn wrap(
     for rel in ro {
         profile = profile.protect(&settings_dir, rel);
     }
-    if inp.harness == HarnessKind::Claude && !seatbelt {
+    if inp.harness == HarnessKind::Claude && mounts {
         let real = inp.home.join(".claude.json");
         let copy = inp.config_dir.join(CLAUDE_JSON_COPY);
         if real.is_file() {
@@ -186,7 +186,7 @@ pub fn wrap(
         }
     }
     env.extend(sc.env.iter().cloned());
-    if seatbelt {
+    if backend == Backend::Seatbelt {
         env.extend(seatbelt_env(&sc.env));
     }
     let mut env_remove = plan.env_remove.clone();
@@ -197,7 +197,7 @@ pub fn wrap(
             args: sc.args.iter().map(|a| text(a)).collect(),
             env,
             env_remove,
-            tty_param: seatbelt.then(|| sandbox::TTY_PARAM.to_string()),
+            tty_param: backend.tty_param().map(str::to_string),
             ..plan
         },
         members: sc.members,
@@ -236,7 +236,7 @@ fn bridge_addr(server_url: &str) -> Result<SocketAddr, String> {
 
 /// The CLI's model API and sign-in hosts, which must resolve to public addresses.
 fn model_hosts(harness: HarnessKind) -> Vec<HostRule> {
-    ostra_core::egress::model_hosts(harness)
+    ostra_sandbox::egress::model_hosts(harness)
         .iter()
         .filter_map(|h| HostRule::parse(h))
         .collect()

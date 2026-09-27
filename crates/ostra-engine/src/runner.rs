@@ -1165,7 +1165,7 @@ impl Inner {
             let ended = !was_terminal && st.is_terminal();
             if ended {
                 // An ended session runs no more tools, and a later one must not build from its downloads.
-                ostra_core::sandbox::remove_session_cache(session);
+                ostra_sandbox::remove_session_cache(session);
             }
             let init_changed = matches!(st.kind, SessionKind::Init { .. })
                 && (matches!(event, SessionEvent::SessionCreated { .. }) || ended);
@@ -1825,7 +1825,7 @@ impl Inner {
                     Some(cmd) => {
                         self.append_command_started(session, purpose, project, &cmd)?;
                         // The project's own program, so it runs under the agent sandbox.
-                        let (code, out) = match ostra_core::sandbox::host_command(
+                        let (code, out) = match ostra_sandbox::host_command(
                             "bash",
                             &["-c".into(), cmd.clone()],
                             &root,
@@ -1843,8 +1843,8 @@ impl Inner {
                         (String::new(), Some(0), "No files to stage.".to_string())
                     } else {
                         // Staging keeps each review focused on the unstaged diff (Step 2).
-                        for p in ostra_core::sandbox::repair_git_dirs(
-                            &ostra_core::sandbox::git_repos(&[&root]),
+                        for p in ostra_sandbox::repair_git_dirs(
+                            &ostra_sandbox::git_repos(&[&root]),
                         ) {
                             tracing::warn!("removed a planted {} before staging", p.display());
                         }
@@ -2372,7 +2372,7 @@ async fn run_shell(
 
 async fn run_host(
     cwd: &Path,
-    hc: &ostra_core::sandbox::HostCommand,
+    hc: &ostra_sandbox::HostCommand,
     timeout_secs: u64,
 ) -> (Option<i32>, String) {
     let mut cmd = tokio::process::Command::new(&hc.program);

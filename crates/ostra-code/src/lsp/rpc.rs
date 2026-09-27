@@ -26,7 +26,7 @@ pub struct Transport {
     pub stderr: Option<Box<dyn AsyncRead + Send + Unpin>>,
     pub child: Option<tokio::process::Child>,
     /// Kills what the server leaves running in its sandbox once the connection is gone.
-    pub sandbox: Option<ostra_core::sandbox::Members>,
+    pub sandbox: Option<ostra_sandbox::Members>,
 }
 
 type Reply = Result<Value, String>;
@@ -66,7 +66,7 @@ pub struct Client {
     out: mpsc::UnboundedSender<Vec<u8>>,
     shared: Arc<Shared>,
     child: Mutex<Option<tokio::process::Child>>,
-    sandbox: Mutex<Option<ostra_core::sandbox::Members>>,
+    sandbox: Mutex<Option<ostra_sandbox::Members>>,
     closed: AtomicBool,
 }
 

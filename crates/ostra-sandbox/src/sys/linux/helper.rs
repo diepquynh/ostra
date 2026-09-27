@@ -1,67 +1,10 @@
-//! `ostra sandbox-init`: the first program inside a bubblewrap sandbox. The sandbox has its own
-//! network namespace, so the helper listens on its loopback and forwards each connection to a
-//! Unix socket that Ostra bound in: the egress proxy, and fixed ports such as the hook bridge.
-//! It loads the seccomp filter, then starts the command and exits with its status. Std threads only, no async runtime.
-//!
-//! Arguments: `[--proxy <socket>] [--forward <port>=<socket>]... -- <program> [args...]`.
+//! The Linux side of `ostra sandbox-init` ([`crate::init`]): the loopback listeners, the seccomp
+//! filter, and the command.
 
-use std::ffi::OsString;
+use crate::init::{Args, FAILED};
 use std::path::PathBuf;
 
-/// Exit status for a helper that cannot start the command, as `env` and `timeout` use.
-const FAILED: i32 = 125;
-
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-struct Args {
-    proxy: Option<PathBuf>,
-    forwards: Vec<(u16, PathBuf)>,
-    program: OsString,
-    args: Vec<OsString>,
-}
-
-fn parse(raw: Vec<OsString>) -> Result<Args, String> {
-    let mut it = raw.into_iter();
-    let mut proxy = None;
-    let mut forwards = vec![];
-    loop {
-        let a = it.next().ok_or("missing `--` before the program")?;
-        match a.to_str() {
-            Some("--proxy") => {
-                proxy = Some(PathBuf::from(it.next().ok_or("--proxy needs a socket")?))
-            }
-            Some("--forward") => {
-                let f = it.next().ok_or("--forward needs <port>=<socket>")?;
-                let f = f.to_str().ok_or("--forward is not UTF-8")?;
-                let (port, sock) = f.split_once('=').ok_or("--forward needs <port>=<socket>")?;
-                let port: u16 = port.parse().map_err(|_| format!("bad port `{port}`"))?;
-                forwards.push((port, PathBuf::from(sock)));
-            }
-            Some("--") => break,
-            _ => return Err(format!("unknown argument `{}`", a.to_string_lossy())),
-        }
-    }
-    let program = it.next().ok_or("missing the program")?;
-    Ok(Args {
-        proxy,
-        forwards,
-        program,
-        args: it.collect(),
-    })
-}
-
-/// Runs the helper and returns the exit status for the process.
-pub fn main(raw: Vec<OsString>) -> i32 {
-    match parse(raw).and_then(run) {
-        Ok(code) => code,
-        Err(e) => {
-            eprintln!("ostra sandbox-init: {e}");
-            FAILED
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run(args: Args) -> Result<i32, String> {
+pub(super) fn run(args: Args) -> Result<i32, String> {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpListener};
     use std::os::unix::process::ExitStatusExt;
     let bind = |ip: IpAddr, port: u16| {
@@ -81,14 +24,14 @@ fn run(args: Args) -> Result<i32, String> {
     if let Some(sock) = args.proxy {
         let l = bind(Ipv4Addr::LOCALHOST.into(), 0)?;
         let port = l.local_addr().map_err(|e| e.to_string())?.port();
-        cmd.envs(crate::sandbox::proxy_env(&format!(
+        cmd.envs(crate::egress::proxy_env(&format!(
             "http://127.0.0.1:{port}"
         )));
         listeners.push((l, sock));
     }
     // While the helper still has one thread, so the filter covers every thread it starts.
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    crate::seccomp::install()?;
+    super::seccomp::install()?;
     for (l, sock) in listeners {
         std::thread::spawn(move || forward(l, sock));
     }
@@ -121,13 +64,7 @@ fn run(args: Args) -> Result<i32, String> {
     Ok(status.code().unwrap_or(FAILED))
 }
 
-#[cfg(not(target_os = "linux"))]
-fn run(_args: Args) -> Result<i32, String> {
-    Err("the sandbox helper runs on Linux only".into())
-}
-
 /// Accepts on the sandbox's loopback and splices each connection to `sock`.
-#[cfg(target_os = "linux")]
 fn forward(l: std::net::TcpListener, sock: PathBuf) {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};

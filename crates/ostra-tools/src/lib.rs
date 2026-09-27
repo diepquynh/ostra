@@ -68,7 +68,7 @@ pub struct ToolEnv {
     /// Variables removed from every child process: provider credentials and Ostra's own.
     scrub_env: Vec<String>,
     /// The backend and profile Bash runs under; `None` runs it unsandboxed.
-    sandbox: Option<(ostra_core::sandbox::Backend, ostra_core::sandbox::Profile)>,
+    sandbox: Option<(ostra_sandbox::Backend, ostra_sandbox::Profile)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -124,8 +124,8 @@ impl ToolEnv {
     /// Runs every Bash command under `backend` with this profile.
     pub fn with_sandbox(
         mut self,
-        backend: ostra_core::sandbox::Backend,
-        profile: ostra_core::sandbox::Profile,
+        backend: ostra_sandbox::Backend,
+        profile: ostra_sandbox::Profile,
     ) -> Self {
         self.sandbox = Some((backend, profile));
         self
@@ -135,7 +135,7 @@ impl ToolEnv {
     /// the scratch dir at `/tmp`; Seatbelt remaps nothing.
     pub fn sandbox_to_host(&self, inside: &Path) -> PathBuf {
         match &self.sandbox {
-            Some((ostra_core::sandbox::Backend::Bubblewrap(_), profile)) => profile.to_host(inside),
+            Some((backend, profile)) if backend.has_mount_namespace() => profile.to_host(inside),
             _ => inside.to_path_buf(),
         }
     }

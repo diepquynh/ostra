@@ -17,13 +17,15 @@ pub fn default_tier(key: &str) -> Tier {
         .unwrap_or(Tier::Balanced)
 }
 
-/// Settings validation: routes, harness availability, keys, projects, and permission rules.
+/// Settings validation: routes, harness availability, keys, projects, sandbox entries, and
+/// permission rules.
 pub fn validate_settings(
     global: &GlobalConfig,
     env: &Environment,
     settings: &WorkspaceSettings,
 ) -> Vec<ValidationIssue> {
-    let mut issues = validate_workspace(global, settings, env, default_tier);
+    let mut issues = ostra_sandbox::validate::workspace(settings);
+    issues.extend(validate_workspace(global, settings, env, default_tier));
     let lists = [
         ("allow", &settings.permissions.allow),
         ("ask", &settings.permissions.ask),

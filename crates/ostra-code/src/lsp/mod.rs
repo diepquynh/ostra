@@ -58,7 +58,7 @@ pub fn spawn_process(
         .split_first()
         .ok_or_else(|| std::io::Error::other("The command is empty."))?;
     // The server runs the project's build scripts and macros, so it runs under the sandbox.
-    let hc = ostra_core::sandbox::host_command(program, args, root, &[root], sandbox)
+    let hc = ostra_sandbox::host_command(program, args, root, &[root], sandbox)
         .map_err(std::io::Error::other)?;
     let mut cmd = tokio::process::Command::new(&hc.program);
     for k in &hc.env_remove {

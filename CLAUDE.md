@@ -21,6 +21,8 @@ stage and answer a small set of named judgment questions.
 ostra-core        ids, settings and route resolution, pipeline enums, submit schemas, the event log,
                   API DTOs (exported to TypeScript), the Executor and ExecutionHost traits
 ostra-store       SQLite: workspace db (event log plus materialized tables), registry, project memory
+ostra-sandbox     sandbox profiles, the bubblewrap and Seatbelt backends, the egress proxy, decoys, and the
+                  per-OS layer (`sys/`, one `Os` impl per OS, picked in `sys/mod.rs` only)
 ostra-policy      guards and permissions over canonical ToolCalls; bash parsing
 ostra-tools       native tool implementations (Read, Write, Edit, Bash, Grep, Glob, Skill, WebFetch, ...)
 ostra-providers   Anthropic and OpenAI streaming clients; ScriptedProvider for tests

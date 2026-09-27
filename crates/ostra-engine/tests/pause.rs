@@ -355,7 +355,7 @@ async fn an_ended_session_loses_its_tool_caches() {
     let e = &t.engine;
     let s = start(e, vec![]);
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
-    let dir = ostra_core::sandbox::session_cache(&home, &s);
+    let dir = ostra_sandbox::session_cache(&home, &s);
     assert!(dir.starts_with(std::env::temp_dir().join("ostra-test-pause-cache")));
     std::fs::create_dir_all(dir.join("cargo/registry")).unwrap();
     until("the explore runs", || {

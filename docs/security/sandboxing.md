@@ -38,10 +38,26 @@ This page explains which processes run sandboxed, what the profile lets them rea
 renders for bubblewrap on Linux and Seatbelt on macOS, how the mode is chosen and why a folder cannot change it,
 what happens when no sandbox is available, and what the sandbox does not cover.
 
-The code is one module, [`crates/ostra-core/src/sandbox.rs`](../../crates/ostra-core/src/sandbox.rs), plus the
-harness wrapping in [`crates/ostra-exec-harness/src/sandbox.rs`](../../crates/ostra-exec-harness/src/sandbox.rs).
-It lives in `ostra-core` because every crate that starts a process (the tools, both executors, the code index,
-the engine, and the server) depends on it.
+The code is its own crate, [`ostra-sandbox`](../../crates/ostra-sandbox/src/lib.rs), plus the harness wrapping
+in [`crates/ostra-exec-harness/src/sandbox.rs`](../../crates/ostra-exec-harness/src/sandbox.rs). Every crate that
+starts a process (the tools, both executors, the code index, the engine, and the server) depends on it, and it
+depends only on `ostra-core`.
+
+The crate keeps each OS difference in one place, in three layers:
+
+- **The profile** ([`profile.rs`](../../crates/ostra-sandbox/src/profile.rs)) describes one execution's boundary
+  without naming a backend: what is writable, read-only, and hidden, the environment, the egress policy, the
+  decoys. Where the backends differ, it asks the backend instead of matching on it.
+- **The backends** ([`bwrap.rs`](../../crates/ostra-sandbox/src/bwrap.rs) and
+  [`seatbelt.rs`](../../crates/ostra-sandbox/src/seatbelt.rs)) each implement one `Enforcer` trait
+  ([`backend.rs`](../../crates/ostra-sandbox/src/backend.rs)): how the proxy and forwarded ports are reached, where
+  decoys can go, and how a command is wrapped. Both are plain code built on every OS, so a Linux machine tests the
+  Seatbelt policy text and a Mac tests the bubblewrap arguments.
+- **The OS layer** ([`sys/`](../../crates/ostra-sandbox/src/sys/mod.rs)) is the only code that calls the kernel:
+  the probe, the `sandbox-init` helper and its seccomp filter, Unix sockets, finding a Seatbelt sandbox's
+  processes, the decoy watchers, and the startup environment scrub. Each OS implements one `Os` trait in a file of
+  its own (`sys/linux/`, `sys/macos/`, and `sys/other.rs` for Windows and the rest, where each call refuses), and
+  `sys/mod.rs` is the one place that picks the implementation.
 
 ## Architecture
 
@@ -153,7 +169,7 @@ network call against it. The sections below describe each box.
 
 The policy and the sandbox answer different questions:
 
-| | Policy (`ostra-policy`) | Sandbox (`ostra-core::sandbox`) |
+| | Policy (`ostra-policy`) | Sandbox (`ostra-sandbox`) |
 | --- | --- | --- |
 | Sees | One canonical `ToolCall` before it runs | Every syscall of the process tree after it starts |
 | Decides on | Paths and commands the call names | Paths, sockets, and processes the kernel is asked for |
@@ -342,7 +358,7 @@ and execution:
 ```
 
 The kernel's Sandbox extension logs each refusal to the system log with that message. One `log stream` process
-per server ([`decoy.rs`](../../crates/ostra-core/src/decoy.rs)) reads only records from the kernel (process 0,
+per server ([`sys/macos/log.rs`](../../crates/ostra-sandbox/src/sys/macos/log.rs)) reads only records from the kernel (process 0,
 sender `Sandbox`) that carry a decoy message, because any process may log text of its own, and reports the
 file's first refusal. The rule covers `file-read-data` alone, so `stat` and `ls ~/.ssh` raise nothing. The same
 port 22 condition applies to SSH keys. The server starts the reader at startup, and it waits until `log stream`
@@ -393,7 +409,7 @@ both properties:
   whose config is its main repo's, that is only its `config.worktree`.
 - `.git/commondir` cannot get a placeholder, because git refuses to open a repository whose `commondir` is empty.
   A `commondir` makes git load another folder's `config`, so Ostra undoes one instead
-  ([`repair_git_dirs`](../../crates/ostra-core/src/sandbox.rs)): it removes a `commondir` from a repository's own
+  ([`repair_git_dirs`](../../crates/ostra-sandbox/src/git.rs)): it removes a `commondir` from a repository's own
   git dir, where git never writes one, and restores a linked worktree's `commondir` that no longer names `../..`.
   It checks after every native Bash call, every 2 seconds while a harness CLI runs and once when it exits, and
   before Ostra's own staging, commits, pulls, and pushes. The agent reads the correction in its tool result
@@ -402,7 +418,7 @@ both properties:
   config.
 - Nothing protected can be renamed away. A bind-mount point cannot be renamed, but the dirs above one can, so
   `mv repo r && git init repo` would leave the protected `.git` under `r` and put a fresh, writable config where
-  the user runs git. On bubblewrap, [`Profile::plan`](../../crates/ostra-core/src/sandbox.rs) therefore binds every
+  the user runs git. On bubblewrap, [`Profile::plan`](../../crates/ostra-sandbox/src/bwrap.rs) therefore binds every
   dir between a writable root and a rule inside it onto itself: `.git`, the repo dir, and each dir above it. A
   rename across two of those binds fails with `EXDEV`, which `mv` handles by copying. On Seatbelt, which has no
   mounts, a `file-write-unlink` deny on every ancestor of a protected path inside a writable dir does the same
@@ -423,7 +439,7 @@ both properties:
 
 The repos covered are every dir under the workspace root and the repo root that holds a `.git` dir or file, at any
 depth, found when the execution starts
-([`git_repos`](../../crates/ostra-core/src/sandbox.rs)). The walk goes breadth first and does not enter symlinks,
+([`git_repos`](../../crates/ostra-sandbox/src/git.rs)). The walk goes breadth first and does not enter symlinks,
 `node_modules`, or dirs tagged as caches with a `CACHEDIR.TAG` (Cargo tags `target/`), because those hold build
 output, not the user's repos. It stops after 20,000 dirs or 128 repos and logs where it stopped, which bounds the
 mounts and the time it adds (about 90 ms for 12,000 dirs, measured on Ostra's own tree). An execution's
@@ -500,7 +516,7 @@ the programs Ostra starts for a project alike. A workspace can choose its own in
 | `public` | Any public address, and the hosts in `allowed_hosts`. Loopback, private, and link-local addresses stay refused. |
 | `host` | The host's network as it is: every local service, the LAN, and the cloud metadata address |
 
-The built-in hosts ([`DEFAULT_ALLOWED_HOSTS`](../../crates/ostra-core/src/egress.rs)) are the package registries
+The built-in hosts ([`DEFAULT_ALLOWED_HOSTS`](../../crates/ostra-sandbox/src/egress.rs)) are the package registries
 and source hosts that builds fetch from: crates.io and its index, npm and Yarn, PyPI, the Go module proxy,
 GitHub (including raw files and release downloads), Maven Central, Gradle, Google's Maven, RubyGems, and NuGet.
 The model API and sign-in hosts of all four harness CLIs are built in too (`egress::model_hosts`), so a test or a
@@ -525,7 +541,7 @@ sandbox (own network namespace)                        Ostra server (host networ
 ```
 
 The first program in the sandbox is Ostra's helper, `ostra sandbox-init`
-([`sandbox_init.rs`](../../crates/ostra-core/src/sandbox_init.rs)). It listens on the sandbox's loopback and
+([`init.rs`](../../crates/ostra-sandbox/src/init.rs) and [`sys/linux/helper.rs`](../../crates/ostra-sandbox/src/sys/linux/helper.rs)). It listens on the sandbox's loopback and
 forwards each connection to one of the sockets: the execution's egress proxy on a free port, and fixed ports for
 the hook bridge and for each loopback host you listed. It sets `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` (and
 their lowercase forms) to the proxy, `NO_PROXY` to `localhost,127.0.0.1,::1`, and `NODE_USE_ENV_PROXY=1` so that
@@ -663,7 +679,7 @@ Under every choice but `host`:
 
 - **The proxy is the same one, on a port instead of a socket.** Each execution's proxy listens on a free port of
   `127.0.0.1` (`egress::loopback_proxy`), and the command gets the same proxy variables as on Linux
-  (`sandbox::proxy_env`). Where the loopback is open, a sandbox can connect to another execution's proxy port,
+  (`egress::proxy_env`). Where the loopback is open, a sandbox can connect to another execution's proxy port,
   so each loopback proxy requires a credential of its own, carried in its URL
   (`http://ostra:<32 hex>@127.0.0.1:<port>`), and answers `407 Proxy Authentication Required` without it. No
   other sandbox can read the credential, because the policy refuses reading another process's environment
@@ -765,7 +781,7 @@ when Ostra stops the command, including one that detached.
 
 #### Kernel calls a sandboxed command cannot make
 
-Before it starts the command, `ostra sandbox-init` loads a seccomp filter (`crates/ostra-core/src/seccomp.rs`). The
+Before it starts the command, `ostra sandbox-init` loads a seccomp filter (`crates/ostra-sandbox/src/sys/linux/seccomp.rs`). The
 kernel keeps a filter across `fork` and `exec` and never removes it, so it covers everything the command starts.
 The helper loads it while it still has one thread, because a filter applies only to the thread that loads it and
 to what that thread starts afterwards. It sets `no_new_privs` first, so no program inside can gain privileges
@@ -1026,15 +1042,25 @@ These limits follow from the design, and the sections above give the reasons:
 
 | Topic | File |
 | --- | --- |
-| `Profile`, both backends, the lists, `decide`, `host_command`, the probe | [`crates/ostra-core/src/sandbox.rs`](../../crates/ostra-core/src/sandbox.rs) |
-| The helper inside each bubblewrap sandbox | [`crates/ostra-core/src/sandbox_init.rs`](../../crates/ostra-core/src/sandbox_init.rs) |
-| The egress proxy, host rules, built-in hosts, the SNI check, the upstream proxy | [`crates/ostra-core/src/egress.rs`](../../crates/ostra-core/src/egress.rs) |
+| `Profile`, the path lists, the environment | [`crates/ostra-sandbox/src/profile.rs`](../../crates/ostra-sandbox/src/profile.rs) |
+| `Backend`, the `Enforcer` trait, `decide` | [`crates/ostra-sandbox/src/backend.rs`](../../crates/ostra-sandbox/src/backend.rs) |
+| Bubblewrap mounts and arguments | [`crates/ostra-sandbox/src/bwrap.rs`](../../crates/ostra-sandbox/src/bwrap.rs) |
+| The Seatbelt policy | [`crates/ostra-sandbox/src/seatbelt.rs`](../../crates/ostra-sandbox/src/seatbelt.rs) |
+| The `Os` trait and which OS implements it | [`crates/ostra-sandbox/src/sys/mod.rs`](../../crates/ostra-sandbox/src/sys/mod.rs) |
+| The probes, one per OS | [`sys/linux/mod.rs`](../../crates/ostra-sandbox/src/sys/linux/mod.rs), [`sys/macos/mod.rs`](../../crates/ostra-sandbox/src/sys/macos/mod.rs) |
+| Git dirs: the walk, the protected paths, `repair_git_dirs` | [`crates/ostra-sandbox/src/git.rs`](../../crates/ostra-sandbox/src/git.rs) |
+| `host_command` for programs Ostra starts | [`crates/ostra-sandbox/src/host.rs`](../../crates/ostra-sandbox/src/host.rs) |
+| A Seatbelt sandbox's processes and their end | [`crates/ostra-sandbox/src/members.rs`](../../crates/ostra-sandbox/src/members.rs) |
+| The helper inside each bubblewrap sandbox | [`crates/ostra-sandbox/src/init.rs`](../../crates/ostra-sandbox/src/init.rs), [`sys/linux/helper.rs`](../../crates/ostra-sandbox/src/sys/linux/helper.rs) |
+| The egress proxy, host rules, built-in hosts, the SNI check, the upstream proxy | [`crates/ostra-sandbox/src/egress.rs`](../../crates/ostra-sandbox/src/egress.rs) |
 | The hook bridge socket | `serve_bridge_socket` in [`crates/ostra-server/src/bridge.rs`](../../crates/ostra-server/src/bridge.rs) |
-| The seccomp filter | [`crates/ostra-core/src/seccomp.rs`](../../crates/ostra-core/src/seccomp.rs) |
-| Decoy credential files, their inotify watch, and the macOS log reader | [`crates/ostra-core/src/decoy.rs`](../../crates/ostra-core/src/decoy.rs) |
+| The seccomp filter | [`crates/ostra-sandbox/src/sys/linux/seccomp.rs`](../../crates/ostra-sandbox/src/sys/linux/seccomp.rs) |
+| Decoy credential files | [`crates/ostra-sandbox/src/decoy.rs`](../../crates/ostra-sandbox/src/decoy.rs) |
+| Their inotify watch, and the macOS log reader | [`sys/linux/inotify.rs`](../../crates/ostra-sandbox/src/sys/linux/inotify.rs), [`sys/macos/log.rs`](../../crates/ostra-sandbox/src/sys/macos/log.rs) |
 | `HOME_CREDENTIALS` and the data dir | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |
-| `SandboxConfig`, `SandboxMode`, `validate_sandbox` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
-| `SandboxStatus` | [`crates/ostra-core/src/api.rs`](../../crates/ostra-core/src/api.rs) |
+| `SandboxConfig`, `SandboxMode` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
+| Checking the sandbox settings at save time | [`crates/ostra-sandbox/src/validate.rs`](../../crates/ostra-sandbox/src/validate.rs) |
+| `SandboxStatus` and how it is filled in | [`crates/ostra-core/src/api.rs`](../../crates/ostra-core/src/api.rs), [`crates/ostra-sandbox/src/status.rs`](../../crates/ostra-sandbox/src/status.rs) |
 | Native Bash wrapping, scratch `/tmp`, env scrub | [`crates/ostra-tools/src/bash.rs`](../../crates/ostra-tools/src/bash.rs) |
 | The profile per native execution | [`crates/ostra-exec-native/src/lib.rs`](../../crates/ostra-exec-native/src/lib.rs) |
 | Harness wrapping and state dirs | [`crates/ostra-exec-harness/src/sandbox.rs`](../../crates/ostra-exec-harness/src/sandbox.rs) |

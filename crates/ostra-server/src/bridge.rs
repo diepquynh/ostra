@@ -499,7 +499,7 @@ async fn mcp_route(
 /// Serves [`internal_routes`] on a Unix socket in the egress dir, which sandboxes with their own
 /// network reach the hook bridge through. Nothing else of the server answers there.
 pub fn serve_bridge_socket(app: &Arc<App>) -> std::io::Result<PathBuf> {
-    let path = ostra_core::egress::socket_path(&ostra_core::sandbox::egress_dir(), "bridge-")?;
+    let path = ostra_sandbox::egress::socket_path(&ostra_sandbox::egress::socket_dir(), "bridge-")?;
     let listener = tokio::net::UnixListener::bind(&path)?;
     let router = internal_routes().with_state(app.clone());
     tokio::spawn(async move {

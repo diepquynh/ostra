@@ -84,7 +84,7 @@ impl Executor for NativeExecutor {
             host: host.clone(),
             usage: usage.clone(),
             cancel: inner.clone(),
-            git_repos: ostra_core::sandbox::git_repos(&[
+            git_repos: ostra_sandbox::git_repos(&[
                 &spec.ctx.repo_root,
                 &spec.ctx.workspace_root,
             ]),
@@ -379,7 +379,7 @@ impl Run {
             }
             Ok(Sandbox::Off(warning)) => {
                 if let Some(w) = warning {
-                    if ostra_core::sandbox::first_warning() {
+                    if ostra_sandbox::first_warning() {
                         tracing::warn!("agent commands run without a sandbox: {w}");
                     }
                     self.host.emit(ExecutionDelta::Status {
@@ -815,7 +815,7 @@ impl Run {
         let out = ostra_tools::execute(env, id, &call, Some(live), self.cancel.clone()).await;
         let mut repaired = vec![];
         if name == "Bash" {
-            repaired = ostra_core::sandbox::repair_git_dirs(&self.git_repos);
+            repaired = ostra_sandbox::repair_git_dirs(&self.git_repos);
             let cmd = call.str_field("command").unwrap_or_default();
             let inputs = policy_inputs(&self.spec.ctx);
             let configured: Vec<String> = inputs
@@ -835,7 +835,7 @@ impl Run {
         };
         let mut text = out.text.clone();
         for path in &repaired {
-            let note = ostra_core::sandbox::git_repair_note(path);
+            let note = ostra_sandbox::git_repair_note(path);
             // Counted as a containment signal, like the guard's own refusals.
             self.host.emit(ExecutionDelta::Policy {
                 call_id: id.into(),
@@ -891,8 +891,8 @@ impl Run {
 
 enum Sandbox {
     On(
-        ostra_core::sandbox::Backend,
-        Box<ostra_core::sandbox::Profile>,
+        ostra_sandbox::Backend,
+        Box<ostra_sandbox::Profile>,
     ),
     Off(Option<String>),
 }
@@ -933,25 +933,25 @@ fn sandbox_for(
     let sandbox = global.sandbox.for_workspace(&ctx.sandbox());
     let home = ostra_core::paths::home()
         .unwrap_or_else(|| "/".into());
-    Ok(match ostra_core::sandbox::decide(&sandbox)? {
-        ostra_core::sandbox::Decision::Sandboxed(backend) => {
-            let scratch = ostra_core::sandbox::new_scratch()
+    Ok(match ostra_sandbox::decide(&sandbox)? {
+        ostra_sandbox::Decision::Sandboxed(backend) => {
+            let scratch = ostra_sandbox::new_scratch()
                 .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?;
-            let profile = ostra_core::sandbox::Profile::for_execution(ctx, &sandbox, &home)
+            let profile = ostra_sandbox::Profile::for_execution(ctx, &sandbox, &home)
                 .scratch(&scratch)
                 .map_err(|e| format!("Cannot create the sandbox's /tmp: {e}"))?
-                .start_egress(&backend, ostra_core::exec::egress_reporter(host.clone()))
+                .start_egress(&backend, ostra_sandbox::report::egress(host.clone()))
                 .map_err(|e| format!("Cannot start the sandbox's egress proxy: {e}"))?
                 .watch_decoys(
                     &backend,
                     &home,
                     &ctx.sandbox_decoys,
-                    ostra_core::exec::decoy_reporter(host),
+                    ostra_sandbox::report::decoys(host),
                 )
                 .map_err(|e| format!("Cannot plant the sandbox's decoy files: {e}"))?;
             Sandbox::On(backend, Box::new(profile))
         }
-        ostra_core::sandbox::Decision::Unsandboxed(w) => Sandbox::Off(w),
+        ostra_sandbox::Decision::Unsandboxed(w) => Sandbox::Off(w),
     })
 }
 

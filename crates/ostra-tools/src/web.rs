@@ -61,7 +61,7 @@ impl reqwest::dns::Resolve for PublicResolver {
     }
 }
 
-pub(crate) use ostra_core::egress::is_private;
+pub(crate) use ostra_sandbox::egress::is_private;
 
 /// A URL whose host is a private IP literal, which the resolver never sees.
 fn private_literal(url: &reqwest::Url, private_hosts: &[String]) -> bool {

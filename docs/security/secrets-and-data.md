@@ -141,7 +141,7 @@ cannot name it in a tool call.
 
 The policy judges a tool call by the paths it names, and a shell script can build a path at run time that the
 policy never sees. So agent commands run in a sandbox the kernel enforces: bubblewrap on Linux and Seatbelt
-(`sandbox-exec`) on macOS ([`crates/ostra-core/src/sandbox.rs`](../../crates/ostra-core/src/sandbox.rs)). What
+(`sandbox-exec`) on macOS (the [`ostra-sandbox`](../../crates/ostra-sandbox/src/lib.rs) crate). What
 each platform supports is in [OS compatibility](../platforms/os-compatibility.md).
 
 - The host is read-only, and only the execution's own roots are writable.

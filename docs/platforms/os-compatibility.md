@@ -37,8 +37,8 @@ Ostra has no CI yet. Every result below comes from someone running the tests or 
   Docker image builds on Ubuntu 26.04. Other distributions are expected to work when they ship bubblewrap and
   allow unprivileged user namespaces, but nobody has tried each one.
 - **macOS** has a Seatbelt sandbox that was measured probe by probe on macOS 26, and it has tests of its own
-  (`#[cfg(target_os = "macos")]` in [`sandbox.rs`](../../crates/ostra-core/src/sandbox.rs) and
-  [`env_scrub.rs`](../../crates/ostra-core/tests/env_scrub.rs)). Older macOS releases have not been checked.
+  (the Seatbelt tests in [`tests.rs`](../../crates/ostra-sandbox/src/tests.rs), which skip where no Seatbelt
+  works, and [`env_scrub.rs`](../../crates/ostra-sandbox/tests/env_scrub.rs)). Older macOS releases have not been checked.
 - **WSL 2** runs a real Linux kernel, so the Linux build and bubblewrap apply unchanged. That is a reading of the
   code, not a report from a run.
 - **Windows**: `cargo test --workspace` and `cargo clippy --workspace --all-targets -- -D warnings` pass on
@@ -98,7 +98,7 @@ and registers the service. To build by hand, run `cargo build --release` after `
 
 The sandbox is the reason the operating system matters most. The policy layer judges every tool call by the paths
 it names, but a shell can hide a path inside a variable or a script, so the kernel enforces a second boundary
-underneath. One `Profile` in [`sandbox.rs`](../../crates/ostra-core/src/sandbox.rs) describes that boundary:
+underneath. One `Profile` in [`profile.rs`](../../crates/ostra-sandbox/src/profile.rs) describes that boundary:
 
 - The host file system is read-only.
 - Only the execution's own roots are writable: the worktree or project it works on, its scratch dir, and its tool

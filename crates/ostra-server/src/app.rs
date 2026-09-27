@@ -91,8 +91,8 @@ impl Shared {
     /// good copy.
     pub fn global(&self) -> GlobalConfig {
         match load_toml::<GlobalConfig>(&self.global_path) {
-            Ok(g) if !ostra_core::config::validate_sandbox(&g.sandbox).is_empty() => {
-                for i in ostra_core::config::validate_sandbox(&g.sandbox) {
+            Ok(g) if !ostra_sandbox::validate::global(&g.sandbox).is_empty() => {
+                for i in ostra_sandbox::validate::global(&g.sandbox) {
                     tracing::warn!(
                         "{}: {}; using the last good global config",
                         i.path,
@@ -348,14 +348,14 @@ impl App {
 }
 
 pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
-    ostra_core::sandbox::set_server_port(port);
+    ostra_sandbox::set_server_port(port);
     let global_path = ensure_global_config()?;
     let global: GlobalConfig =
         load_toml(&global_path).with_context(|| format!("reading {}", global_path.display()))?;
-    if let Some(i) = ostra_core::config::validate_sandbox(&global.sandbox).first() {
+    if let Some(i) = ostra_sandbox::validate::global(&global.sandbox).first() {
         anyhow::bail!("{}: {} ({})", i.path, i.message, global_path.display());
     }
-    let sandbox = ostra_core::api::SandboxStatus::check(&global.sandbox);
+    let sandbox = ostra_sandbox::status(&global.sandbox);
     match &sandbox.message {
         None if sandbox.active => {
             tracing::info!(
@@ -480,7 +480,7 @@ pub fn sweep_session_caches(app: &App) {
                 s.status,
                 ostra_core::api::SessionStatus::Completed | ostra_core::api::SessionStatus::Failed
             ) {
-                ostra_core::sandbox::remove_session_cache(&s.id);
+                ostra_sandbox::remove_session_cache(&s.id);
             }
         }
     }
@@ -510,18 +510,18 @@ pub async fn run(opts: ServeOptions) -> anyhow::Result<()> {
     // Processes an earlier server's sandboxes left running (macOS, where nothing ends them with
     // their parent), before recovery starts executions again.
     if !crate::auth::server_running() {
-        let n = ostra_core::sandbox::kill_leftovers();
+        let n = ostra_sandbox::kill_leftovers();
         if n > 0 {
             tracing::info!("stopped {n} processes left running in earlier sandboxes");
         }
-        let n = ostra_core::sandbox::remove_stale_sockets();
+        let n = ostra_sandbox::egress::remove_stale_sockets();
         if n > 0 {
             tracing::info!("removed {n} egress sockets left by an earlier server");
         }
-        ostra_core::decoy::remove_stale();
+        ostra_sandbox::decoy::remove_stale();
     }
     // Waits for `log stream` to attach, which can take seconds.
-    tokio::task::spawn_blocking(ostra_core::decoy::watch_reports);
+    tokio::task::spawn_blocking(ostra_sandbox::decoy::watch_reports);
     let app = build(&opts, port).await?;
     crate::auth::write_server_file(&app.auth)?;
     let url = app.auth.sign_in_url()?;

@@ -508,10 +508,10 @@ mod tests {
     /// A tool env whose Bash runs sandboxed with `home` as the home folder, or `None` where no
     /// sandbox works.
     fn sandboxed(dir: &std::path::Path, home: &std::path::Path) -> Option<ToolEnv> {
-        let Some(backend) = ostra_core::sandbox::backend() else {
+        let Some(backend) = ostra_sandbox::backend() else {
             eprintln!(
                 "no sandbox here ({}); skipping",
-                ostra_core::sandbox::unavailable_message()
+                ostra_sandbox::unavailable_message()
             );
             return None;
         };
@@ -542,7 +542,7 @@ mod tests {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
         };
-        let profile = ostra_core::sandbox::Profile::for_execution(
+        let profile = ostra_sandbox::Profile::for_execution(
             &ctx,
             &ostra_core::config::SandboxConfig::default(),
             home,

@@ -66,7 +66,7 @@ pub struct PtySession {
     exit: watch::Receiver<Option<ExitInfo>>,
     /// The CLI's sandbox members, killed with the session because a child that left the process
     /// group would otherwise outlive it.
-    members: Mutex<Option<ostra_core::sandbox::Members>>,
+    members: Mutex<Option<ostra_sandbox::Members>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,7 +293,7 @@ impl PtySession {
     }
 
     /// Kills the session's sandbox members when it terminates or drops.
-    pub fn hold(&self, members: Option<ostra_core::sandbox::Members>) {
+    pub fn hold(&self, members: Option<ostra_sandbox::Members>) {
         *self.members.lock() = members;
     }
 

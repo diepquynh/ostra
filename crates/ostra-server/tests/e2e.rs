@@ -336,8 +336,8 @@ async fn ended_sessions_lose_leftover_caches_at_start() {
     })
     .await;
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap();
-    let ended = ostra_core::sandbox::session_cache(&home, &s.id);
-    let foreign = ostra_core::sandbox::session_cache(&home, &"s_from_another_data_dir".into());
+    let ended = ostra_sandbox::session_cache(&home, &s.id);
+    let foreign = ostra_sandbox::session_cache(&home, &"s_from_another_data_dir".into());
     assert!(ended.starts_with(root.join("sandbox-cache")));
     for d in [&ended, &foreign] {
         std::fs::create_dir_all(d.join("cargo")).unwrap();

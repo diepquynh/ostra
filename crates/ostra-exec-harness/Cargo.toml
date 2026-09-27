@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ostra-core.workspace = true
+ostra-sandbox.workspace = true
 portable-pty.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

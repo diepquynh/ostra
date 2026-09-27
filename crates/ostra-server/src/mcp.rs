@@ -218,7 +218,7 @@ impl McpGateway {
             });
         }
         // The server is the workspace's own program, so it runs under the agent sandbox.
-        let hc = ostra_core::sandbox::host_command(
+        let hc = ostra_sandbox::host_command(
             &cfg.command[0],
             &cfg.command[1..],
             &key.0,

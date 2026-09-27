@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 ostra-core.workspace = true
+ostra-sandbox.workspace = true
 ostra-providers.workspace = true
 ostra-tools.workspace = true
 ostra-policy.workspace = true

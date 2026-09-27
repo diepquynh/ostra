@@ -85,12 +85,12 @@ fn main() -> anyhow::Result<()> {
     // Inside a sandbox, before a runtime or logging starts. Hidden from `--help` on purpose.
     let mut raw = std::env::args_os().skip(1);
     if raw.next().is_some_and(|a| a == "sandbox-init") {
-        std::process::exit(ostra_core::sandbox_init::main(raw.collect()));
+        std::process::exit(ostra_sandbox::init::main(raw.collect()));
     }
     // Before anything reads the environment or starts a thread.
-    ostra_core::sandbox::scrub_startup_env();
+    ostra_sandbox::scrub_startup_env();
     if let Ok(exe) = std::env::current_exe() {
-        ostra_core::sandbox::set_helper(exe);
+        ostra_sandbox::set_helper(exe);
     }
     let cli = Cli::parse();
     // SAFETY: no other thread exists yet; the runtime starts below.

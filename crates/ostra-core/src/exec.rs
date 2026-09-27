@@ -257,38 +257,6 @@ pub enum ExecutionDelta {
     },
 }
 
-/// Sends the egress proxy's decisions to `host` as [`ExecutionDelta::Egress`], from a thread of
-/// its own, because the proxy's runtime must not block on the host. The thread ends when the
-/// proxy drops the callback.
-pub fn egress_reporter(host: Arc<dyn ExecutionHost>) -> crate::egress::OnDecision {
-    let (tx, rx) = std::sync::mpsc::channel::<crate::egress::Decision>();
-    let _ = std::thread::Builder::new()
-        .name("ostra-egress-report".into())
-        .spawn(move || {
-            for d in rx {
-                host.emit(ExecutionDelta::Egress {
-                    host: d.host,
-                    port: d.port,
-                    allowed: d.allowed,
-                    reason: d.reason,
-                    local: d.local,
-                });
-            }
-        });
-    Arc::new(move |d| {
-        let _ = tx.send(d);
-    })
-}
-
-/// Sends each decoy open to `host` as [`ExecutionDelta::Decoy`].
-pub fn decoy_reporter(host: Arc<dyn ExecutionHost>) -> crate::decoy::OnOpen {
-    Arc::new(move |p| {
-        host.emit(ExecutionDelta::Decoy {
-            path: p.display().to_string(),
-        })
-    })
-}
-
 /// Callbacks an executor uses while it runs. Implemented by the engine.
 #[async_trait::async_trait]
 pub trait ExecutionHost: Send + Sync {

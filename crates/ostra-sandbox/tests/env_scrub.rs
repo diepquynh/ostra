@@ -33,7 +33,7 @@ fn procargs(pid: i32) -> Vec<u8> {
 fn startup_env_is_not_readable_from_another_process() {
     use std::io::{BufRead, Write};
     if std::env::var_os(CHILD).is_some() {
-        ostra_core::sandbox::scrub_startup_env();
+        ostra_sandbox::scrub_startup_env();
         assert_eq!(std::env::var("OSTRA_SCRUB_SECRET").as_deref(), Ok(SECRET));
         println!("scrubbed");
         std::io::stdout().flush().unwrap();

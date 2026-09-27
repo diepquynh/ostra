@@ -540,7 +540,7 @@ pub async fn run_git(
     if let Some(dir) = cwd {
         // A planted `commondir` would hand this command another repository's config, whose
         // credential helper or SSH command a push or pull would run.
-        for p in ostra_core::sandbox::repair_git_dirs(&ostra_core::sandbox::git_repos(&[dir])) {
+        for p in ostra_sandbox::repair_git_dirs(&ostra_sandbox::git_repos(&[dir])) {
             tracing::warn!("removed a planted {} before running git", p.display());
         }
     }

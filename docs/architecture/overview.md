@@ -29,11 +29,12 @@ them, and each result becomes another event.
 
 ## The crates
 
-Ostra is fourteen crates in one Cargo workspace. Each has one job.
+Ostra is fifteen crates in one Cargo workspace. Each has one job.
 
 | Crate | What it owns |
 | --- | --- |
-| `ostra-core` | Ids, settings and route resolution, pipeline enums, submit schemas, the event types, API types, the `Executor` and `ExecutionHost` traits, the sandbox, every derived path |
+| `ostra-core` | Ids, settings and route resolution, pipeline enums, submit schemas, the event types, API types, the `Executor` and `ExecutionHost` traits, every derived path |
+| `ostra-sandbox` | The sandbox under agent commands and project programs: profiles, the bubblewrap and Seatbelt backends, the egress proxy, decoys, and one OS layer per platform |
 | `ostra-store` | SQLite: the workspace database, the machine registry, each project's lesson memory |
 | `ostra-policy` | Guards and permissions over canonical tool calls, and the bash parser |
 | `ostra-tools` | Native tool implementations: Read, Write, Edit, Bash, Grep, Glob, Skill, WebFetch, and the rest |
@@ -58,15 +59,16 @@ layer 1   ostra-store      → core
           ostra-policy     → core
           ostra-agents     → core
           ostra-providers  → core
-          ostra-code       → core
+          ostra-sandbox    → core
           ostra-notify     → core
 
-layer 2   ostra-tools        → core, store
-          ostra-engine       → core, store, agents
+layer 2   ostra-tools        → core, store, sandbox
+          ostra-code         → core, sandbox
+          ostra-engine       → core, store, agents, sandbox
 
-layer 3   ostra-exec-native  → core, store, tools, policy, providers
-          ostra-exec-harness → core, tools, code
-          ostra-workspace    → core, store, engine, agents, policy
+layer 3   ostra-exec-native  → core, store, tools, policy, providers, sandbox
+          ostra-exec-harness → core, tools, code, sandbox
+          ostra-workspace    → core, store, engine, agents, policy, sandbox
 
 layer 4   ostra-server       → every crate above
 ```
@@ -78,7 +80,7 @@ Three rules keep this shape:
 1. `ostra-core` depends on no other Ostra crate. Every other crate can use its types, so a type that two
    crates share lives there.
 2. `ostra-engine` knows no executor, no provider, and no server. It depends on `ostra-core`, `ostra-store`,
-   and `ostra-agents`, and nothing else from Ostra.
+   `ostra-agents`, and `ostra-sandbox` (for the project commands it runs itself), and nothing else from Ostra.
 3. `ostra-server` is the one place where the real pieces meet. It builds the providers, the executors, the
    MCP gateway, and the notifier, and hands them to each engine through traits.
 

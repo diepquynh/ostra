@@ -580,42 +580,6 @@ pub struct SandboxStatus {
     pub builtin_hosts: Vec<String>,
 }
 
-impl SandboxStatus {
-    pub fn check(cfg: &crate::config::SandboxConfig) -> Self {
-        use crate::sandbox::{Decision, backend, decide, known_gaps};
-        let (active, message) = match decide(cfg) {
-            Ok(Decision::Sandboxed(_)) => (true, None),
-            Ok(Decision::Unsandboxed(w)) => (false, w),
-            Err(e) => (false, Some(e)),
-        };
-        SandboxStatus {
-            mode: cfg.mode,
-            default_mode: crate::config::SandboxMode::default(),
-            available: backend().is_some(),
-            backend: backend().map(|b| b.name().to_string()),
-            active,
-            message,
-            gaps: backend()
-                .filter(|_| active)
-                .and_then(|b| known_gaps(b, cfg.network)),
-            decoys: backend().is_some_and(crate::decoy::supported),
-            builtin_decoys: crate::decoy::HOME_DECOYS
-                .iter()
-                .map(|(rel, _)| format!("~/{rel}"))
-                .collect(),
-            builtin_hosts: crate::egress::DEFAULT_ALLOWED_HOSTS
-                .iter()
-                .chain(
-                    crate::HarnessKind::ALL
-                        .iter()
-                        .flat_map(|h| crate::egress::model_hosts(*h)),
-                )
-                .map(|h| h.to_string())
-                .collect(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CreatePermissions {

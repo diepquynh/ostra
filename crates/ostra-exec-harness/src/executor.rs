@@ -28,12 +28,12 @@ const GIT_CHECK_EVERY: Duration = Duration::from_secs(2);
 /// Undoes a planted `commondir` in the execution's repositories and reports each as a denial by
 /// the `git-metadata` guard, which counts as a containment signal.
 fn report_git_repairs(repos: &[PathBuf], host: &Arc<dyn ExecutionHost>) {
-    for path in ostra_core::sandbox::repair_git_dirs(repos) {
+    for path in ostra_sandbox::repair_git_dirs(repos) {
         host.emit(ostra_core::exec::ExecutionDelta::Policy {
             call_id: String::new(),
             decision: ostra_core::policy::PolicyDecision::deny(
                 ostra_core::policy::RuleRef::guard(ostra_core::containment::GIT_METADATA),
-                ostra_core::sandbox::git_repair_note(&path),
+                ostra_sandbox::git_repair_note(&path),
             ),
         });
     }
@@ -312,8 +312,8 @@ impl HarnessExecutor {
                 .and_then(|r| r.native_session_id.clone()),
             home: cfg.home.clone(),
             sandboxed: matches!(
-                ostra_core::sandbox::decide(&sandbox),
-                Ok(ostra_core::sandbox::Decision::Sandboxed(_))
+                ostra_sandbox::decide(&sandbox),
+                Ok(ostra_sandbox::Decision::Sandboxed(_))
             ),
             credential_env: {
                 let ws: ostra_core::config::WorkspaceSettings = ostra_core::config::load_toml(
@@ -336,12 +336,12 @@ impl HarnessExecutor {
             plan,
             &input,
             &sandbox,
-            ostra_core::exec::egress_reporter(host.clone()),
-            ostra_core::exec::decoy_reporter(host.clone()),
+            ostra_sandbox::report::egress(host.clone()),
+            ostra_sandbox::report::decoys(host.clone()),
         )
         .map_err(launch_error)?;
         if let Some(w) = unsandboxed {
-            if ostra_core::sandbox::first_warning() {
+            if ostra_sandbox::first_warning() {
                 tracing::warn!("agent commands run without a sandbox: {w}");
             }
             host.emit(ExecutionDelta::Status {
@@ -515,7 +515,7 @@ impl Executor for HarnessExecutor {
             live.set_inspect();
         }
         let repos =
-            ostra_core::sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]);
+            ostra_sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]);
         let result = match self.launch(&spec, harness, &live, &host).await {
             Ok(pty) => {
                 self.ptys.insert(spec.id.clone(), pty.clone());

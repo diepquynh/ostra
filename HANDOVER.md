@@ -1132,6 +1132,7 @@ ostra/
   Cargo.toml                      workspace
   crates/
     ostra-core                    ids, domain types, event types
+    ostra-sandbox                 profiles, bubblewrap and Seatbelt backends, egress proxy, decoys, per-OS layer
     ostra-engine                  state machine, scheduler, judge calls, rule implementations
     ostra-agents                  asset loading, minijinja rendering, spawn structs, repo brief
     ostra-exec-native             agent loop
