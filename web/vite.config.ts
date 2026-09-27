@@ -1,19 +1,29 @@
 /// <reference types="vitest/config" />
 
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
+// Vite compares paths as strings. Started from a miscased Windows path (c:\users\...), the workspace symlinks resolve
+// to the real casing, the optimizer sees two Reacts, and the page renders blank. The real path gives one casing.
+const root = realpathSync.native(fileURLToPath(new URL(".", import.meta.url)));
+
 const target = process.env.OSTRA_DEV_SERVER ?? "http://127.0.0.1:7878";
 
-// The homepage's console shot (VITE_SHOT=1) is served by a static host, so the policy the server sends as a header
-// (crates/ostra-server/src/api.rs) travels in the page instead. The mock socket opens no connection.
+// The homepage's console shot (VITE_SHOT=1, set by `--mode shot`) is served by a static host, so the policy the server
+// sends as a header (crates/ostra-server/src/api.rs) travels in the page instead. The mock socket opens no connection.
+let shot = false;
 const shotCsp: Plugin = {
   name: "ostra-shot-csp",
   apply: "build",
+  configResolved: (config) => {
+    shot = config.env.VITE_SHOT === "1";
+  },
   transformIndexHtml: {
     order: "pre",
     handler: (html) =>
-      process.env.VITE_SHOT === "1"
+      shot
         ? html.replace(
             "<head>",
             `<head>\n    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; manifest-src 'self'" />`,
@@ -23,6 +33,7 @@ const shotCsp: Plugin = {
 };
 
 export default defineConfig({
+  root,
   plugins: [react(), shotCsp],
   server: {
     port: 5173,

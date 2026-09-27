@@ -1,10 +1,14 @@
 /// <reference types="vitest/config" />
 
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
 
-const repo = fileURLToPath(new URL("..", import.meta.url));
+// Vite compares paths as strings. Started from a miscased Windows path (c:\users\...), the workspace symlinks resolve
+// to the real casing, the optimizer sees two Reacts, and the page renders blank. The real path gives one casing.
+const root = realpathSync.native(fileURLToPath(new URL(".", import.meta.url)));
+const repo = realpathSync.native(fileURLToPath(new URL("..", import.meta.url)));
 
 // A static host sends no headers, so the policy the console's server sends (crates/ostra-server/src/api.rs)
 // travels as a meta tag: scripts from this origin only, no remote images, and only the homepage frames the console.
@@ -27,6 +31,7 @@ const csp: Plugin = {
 };
 
 export default defineConfig({
+  root,
   plugins: [react(), csp],
   // Relative asset paths, so the site works from any folder of a static host.
   base: "./",
@@ -39,8 +44,8 @@ export default defineConfig({
     emptyOutDir: true,
     rolldownOptions: {
       input: {
-        home: fileURLToPath(new URL("index.html", import.meta.url)),
-        docs: fileURLToPath(new URL("docs/index.html", import.meta.url)),
+        home: `${root}/index.html`,
+        docs: `${root}/docs/index.html`,
       },
     },
   },

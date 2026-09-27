@@ -148,7 +148,7 @@ packages:
 - `site/`: the homepage and these docs, deployed as a static site.
 
 `web/` and `site/` both import from `@ostra/design` and never from each other. The homepage shows a live
-copy of the console, built from `web/` with mock data (`VITE_MOCK=1 VITE_SHOT=1`) into `site/public/console`,
+copy of the console, built from `web/` with mock data (Vite's `shot` mode, which sets `VITE_MOCK=1 VITE_SHOT=1`) into `site/public/console`,
 so the picture on the homepage is the real console rather than a screenshot.
 
 ## Where to go next

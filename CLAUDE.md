@@ -171,8 +171,9 @@ Running Ostra against a real repo, and especially against this repo, starts many
 - `pkill -f "<pattern>"` matches the shell running it. Find the pid with `pgrep` and `kill` it.
 - The release binary embeds `web/dist` at compile time: run `npm run build` in `web/` before
   `cargo build --release` when the UI or `design/` changed.
-- The homepage's console shot is `web/` built with `VITE_MOCK=1 VITE_SHOT=1` into `site/public/console`
-  (`npm run build:console` in `site/`). `npm run dev` in `site/` shows it only after one such build.
+- The homepage's console shot is `web/` built with `--mode shot` (`web/.env.shot`: `VITE_MOCK=1 VITE_SHOT=1`)
+  into `site/public/console` (`npm run build:console` in `site/`). Set these through Vite modes, not inline in npm
+  scripts, because npm runs scripts through `cmd.exe` on Windows. `npm run dev` in `site/` shows it only after one such build.
 - One-time sign-in tokens: `ostra url` mints a new one; clipboard managers that preview links spend them.
   Server log: `~/.local/share/ostra/server.log`.
 - `server.json` in the data dir records the running server; `ostra stop` refuses while it is alive.
