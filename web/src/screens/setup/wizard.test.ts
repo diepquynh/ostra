@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EnvironmentStatus } from "../../api/types";
 import {
+  basename,
   canContinue,
   expandHome,
   importErrors,
@@ -101,6 +102,12 @@ describe("step state", () => {
     expect(expandHome("/x/~/y", "/home/me")).toBe("/x/~/y");
     expect(projectStart("/home/me/code/shop")).toBe("/home/me/code/");
     expect(projectStart("~/")).toBe("~/");
+    expect(isChosen("C:\\code\\shop")).toBe(true);
+    expect(isChosen("C:\\code\\")).toBe(false);
+    expect(isChosen("C:")).toBe(false);
+    expect(basename("C:\\code\\shop")).toBe("shop");
+    expect(expandHome("~\\code", "C:\\Users\\me")).toBe("C:\\Users\\me\\code");
+    expect(projectStart("C:\\Users\\me\\code\\shop")).toBe("C:\\Users\\me\\code\\");
   });
 });
 

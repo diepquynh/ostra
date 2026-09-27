@@ -72,6 +72,11 @@ check (provider keys and harness CLIs), the name and folder, projects, defaults,
 The folder can be one that does not exist yet; Ostra creates it when it creates the workspace. Until you type
 a name, the name follows the folder you pick.
 
+On Windows the picker takes `C:\...` and `C:/...` paths, and `~\` as well as `~/`. Windows has no single root, so
+`/` lists the drives, `C:` opens the root of that drive, and going up from a drive root returns to the drive list.
+Folders that Windows marks hidden or system, such as `$Recycle.Bin`, are left out, the way dot folders are
+([`browse.rs`](../../crates/ostra-server/src/files/browse.rs)).
+
 ![The Review step with the settings summary and the workspace.toml preview](../images/console/new-workspace-review.png)
 
 When you reach the review step, the dialog sends the whole request to `POST /api/workspaces/validate`, and **Create workspace** sends it

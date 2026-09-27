@@ -1,6 +1,7 @@
 // Pure state for the setup steps: values, step order, what each step needs before Continue, the
 // request body, the workspace.toml preview, and which step a validation issue belongs to.
 
+import { baseName, endsWithSep, isAbsolutePath, withSep } from "@ostra/design";
 import type {
   CloneProject,
   CreateWorkspace,
@@ -87,14 +88,13 @@ export function keyError(key: string, taken: string[]): string | null {
   return null;
 }
 
-export const basename = (p: string) => p.replace(/\/+$/, "").split("/").pop() ?? "";
+export const basename = baseName;
 
-/** A typed path picks a folder when it is absolute (or starts with "~/") and does not end in "/". */
-export const isChosen = (p: string) =>
-  (p.startsWith("/") || p.startsWith("~/")) && !p.endsWith("/") && basename(p) !== "";
+/** A typed path picks a folder when it is absolute (or starts with "~/") and does not end in a separator. */
+export const isChosen = (p: string) => isAbsolutePath(p) && !endsWithSep(p) && basename(p) !== "";
 
 export const expandHome = (p: string, home: string | null) =>
-  home && (p === "~" || p.startsWith("~/")) ? home + p.slice(1) : p;
+  home && (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) ? home + p.slice(1) : p;
 
 /** Set the folder. Until the user types a name, the name follows the chosen folder's. */
 export function patchName(v: WizardValues, root: string): Partial<WizardValues> {
@@ -108,7 +108,8 @@ export function canContinue(id: StepId, v: WizardValues): boolean {
 }
 
 /** The folder to start browsing for projects: the one that holds the workspace folder. */
-export const projectStart = (root: string) => (isChosen(root) ? root.slice(0, root.lastIndexOf("/") + 1) : "~/");
+export const projectStart = (root: string) =>
+  isChosen(root) ? withSep(root.slice(0, root.length - basename(root).length)) : "~/";
 
 export type ImportField = "key" | "path" | "stack";
 export type ImportErrors = Partial<Record<ImportField, string>>;

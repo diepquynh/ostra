@@ -1,7 +1,19 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Checkbox, Combobox, type FolderLister, FolderPicker, type FsEntry, Input, Switch, splitPath } from "./index";
+import {
+  baseName,
+  Checkbox,
+  Combobox,
+  type FolderLister,
+  FolderPicker,
+  type FsEntry,
+  Input,
+  Switch,
+  splitPath,
+  trimSep,
+  withSep,
+} from "./index";
 
 afterEach(cleanup);
 
@@ -95,6 +107,28 @@ describe("splitPath", () => {
     expect(splitPath("~/code/sh", "/home/me")).toEqual({ dir: "/home/me/code", prefix: "sh" });
     expect(splitPath("~/co")).toEqual({ dir: "~", prefix: "co" });
     expect(splitPath("code/sh")).toBeNull();
+  });
+
+  it("reads Windows paths with either separator, and a bare drive filters the drive list", () => {
+    expect(splitPath("C:\\Users\\me\\co", "C:\\Users\\me")).toEqual({ dir: "C:\\Users\\me", prefix: "co" });
+    expect(splitPath("C:/Users/", "C:\\Users\\me")).toEqual({ dir: "C:/Users", prefix: "" });
+    expect(splitPath("C:\\Us")).toEqual({ dir: "C:\\", prefix: "Us" });
+    expect(splitPath("C:\\")).toEqual({ dir: "C:\\", prefix: "" });
+    expect(splitPath("D:")).toEqual({ dir: "/", prefix: "D:" });
+    expect(splitPath("~\\code\\sh", "C:\\Users\\me")).toEqual({ dir: "C:\\Users\\me\\code", prefix: "sh" });
+    expect(splitPath("~/code/sh", "C:\\Users\\me")).toEqual({ dir: "C:\\Users\\me/code", prefix: "sh" });
+    expect(splitPath("Users\\me")).toBeNull();
+  });
+
+  it("keeps roots when trimming and adds the path's own separator", () => {
+    expect(trimSep("C:\\Users\\me\\\\")).toBe("C:\\Users\\me");
+    expect(trimSep("C:\\")).toBe("C:\\");
+    expect(trimSep("/home/me/")).toBe("/home/me");
+    expect(trimSep("/")).toBe("/");
+    expect(withSep("C:\\Users")).toBe("C:\\Users\\");
+    expect(withSep("/home")).toBe("/home/");
+    expect(baseName("C:\\Users\\shop\\")).toBe("shop");
+    expect(baseName("/srv/shop")).toBe("shop");
   });
 });
 

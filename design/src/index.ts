@@ -29,12 +29,18 @@ export { StatusDot, type StatusDotProps } from "./components/feedback/StatusDot"
 export { Checkbox, type CheckboxProps } from "./components/forms/Checkbox";
 export { Combobox, type ComboboxProps, type ComboItem } from "./components/forms/Combobox";
 export {
+  baseName,
+  endsWithSep,
   type FolderLister,
   type FolderListing,
   FolderPicker,
   type FolderPickerProps,
   type FsEntry,
+  isAbsolutePath,
+  isWindowsPath,
   splitPath,
+  trimSep,
+  withSep,
 } from "./components/forms/FolderPicker";
 export { Input, type InputProps } from "./components/forms/Input";
 export { Select, type SelectOption, type SelectProps } from "./components/forms/Select";

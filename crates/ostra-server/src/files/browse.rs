@@ -16,15 +16,58 @@ pub const MAX_LIMIT: usize = 2000;
 /// Stop reading a folder after this many entries, so `/usr/lib`-sized folders stay fast.
 const MAX_SCAN: usize = 50_000;
 
-/// Expand `~` and `~/...` against `home`; a relative path is taken from `home` too.
+/// Windows has no single root, so `/` there lists the drives instead of a folder.
+pub const DRIVE_LIST: &str = "/";
+
+fn is_drive_list(p: &Path) -> bool {
+    cfg!(windows) && p.as_os_str() == DRIVE_LIST
+}
+
+/// The drive roots, from the bitmask of mapped letters, so no drive is touched and an empty card
+/// reader cannot stall the listing.
+#[cfg(windows)]
+fn drives() -> Vec<String> {
+    // SAFETY: a plain call with no arguments.
+    let mask = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
+    (0..26u8)
+        .filter(|i| mask & (1 << i) != 0)
+        .map(|i| format!("{}:", (b'A' + i) as char))
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn drives() -> Vec<String> {
+    vec![]
+}
+
+fn tilde_rest(raw: &str) -> Option<&str> {
+    raw.strip_prefix("~/")
+        .or_else(|| raw.strip_prefix("~\\").filter(|_| cfg!(windows)))
+}
+
+/// Expand `~` and `~/...` against `home`; a relative path is taken from `home` too. On Windows,
+/// `/` is [`DRIVE_LIST`], `C:` is the root of that drive, and a Git Bash `/c/...` path is
+/// translated.
 pub fn expand(raw: &str, home: &Path) -> PathBuf {
     let raw = raw.trim();
+    if cfg!(windows) {
+        if !raw.is_empty() && raw.chars().all(|c| c == '/' || c == '\\') {
+            return PathBuf::from(DRIVE_LIST);
+        }
+        let b = raw.as_bytes();
+        // Windows reads `C:` as that drive's current folder; the picker means its root.
+        if b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+            return PathBuf::from(format!("{raw}\\"));
+        }
+    }
     let p = if raw.is_empty() || raw == "~" {
         home.to_path_buf()
-    } else if let Some(rest) = raw.strip_prefix("~/") {
+    } else if let Some(rest) = tilde_rest(raw) {
         home.join(rest)
     } else if Path::new(raw).is_absolute() {
         PathBuf::from(raw)
+    } else if cfg!(windows) && raw.starts_with('/') {
+        paths::from_msys(raw)
     } else {
         home.join(raw)
     };
@@ -74,8 +117,27 @@ pub fn filter_names<'a>(
     (out, total > limit)
 }
 
-/// Folder names read at an instant.
-type Folders = (Instant, Arc<Vec<String>>);
+struct Folder {
+    name: String,
+    /// Marked hidden or system on Windows, such as `$Recycle.Bin` or `Documents and Settings`.
+    hidden: bool,
+}
+
+/// Folders read at an instant.
+type Folders = (Instant, Arc<Vec<Folder>>);
+
+#[cfg(windows)]
+fn hidden(e: &std::fs::DirEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_SYSTEM};
+    e.metadata()
+        .is_ok_and(|m| m.file_attributes() & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM) != 0)
+}
+
+#[cfg(not(windows))]
+fn hidden(_: &std::fs::DirEntry) -> bool {
+    false
+}
 
 #[derive(Default)]
 pub struct BrowseCache {
@@ -83,8 +145,8 @@ pub struct BrowseCache {
 }
 
 impl BrowseCache {
-    /// Folder names directly inside `dir`, or `None` when it cannot be read.
-    fn folders(&self, dir: &Path) -> Option<Arc<Vec<String>>> {
+    /// Folders directly inside `dir`, or `None` when it cannot be read.
+    fn folders(&self, dir: &Path) -> Option<Arc<Vec<Folder>>> {
         let now = Instant::now();
         {
             let mut cache = self.dirs.lock();
@@ -102,7 +164,10 @@ impl BrowseCache {
                 Err(_) => false,
             };
             if is_dir {
-                names.push(e.file_name().to_string_lossy().to_string());
+                names.push(Folder {
+                    name: e.file_name().to_string_lossy().to_string(),
+                    hidden: hidden(&e),
+                });
             }
         }
         let names = Arc::new(names);
@@ -116,7 +181,7 @@ impl BrowseCache {
     pub fn mkdir(&self, raw: &str, home: &Path) -> Result<FsBrowse, String> {
         let raw = raw.trim();
         let absolute = Path::new(raw).is_absolute() || raw.starts_with('/');
-        if !(absolute || raw == "~" || raw.starts_with("~/")) {
+        if !(absolute || raw == "~" || tilde_rest(raw).is_some()) {
             return Err(if cfg!(windows) {
                 "Type an absolute path, such as C:\\Users\\you\\code or ~/code.".into()
             } else {
@@ -124,6 +189,9 @@ impl BrowseCache {
             });
         }
         let path = expand(raw, home);
+        if is_drive_list(&path) {
+            return Err("Type a folder on a drive, such as C:\\code.".into());
+        }
         if path.exists() && !path.is_dir() {
             return Err(format!(
                 "Choose another name, because {} is a file.",
@@ -147,6 +215,30 @@ impl BrowseCache {
         let expanded = expand(raw.unwrap_or(""), home);
         let prefix = prefix.unwrap_or("").trim();
         let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+        if is_drive_list(&expanded) {
+            let all = drives();
+            let (names, truncated) = filter_names(all.iter().map(String::as_str), prefix, limit);
+            return FsBrowse {
+                path: expanded.clone(),
+                parent: None,
+                home: home.to_path_buf(),
+                exists: true,
+                readable: true,
+                nearest: expanded,
+                entries: names
+                    .into_iter()
+                    .map(|name| FsEntry {
+                        name,
+                        is_dir: true,
+                        is_git: false,
+                        is_ostra_project: false,
+                    })
+                    .collect(),
+                truncated,
+                is_git: false,
+                is_ostra_project: false,
+            };
+        }
         let exists = expanded.exists();
         let path = if exists {
             ostra_core::paths::canonical(&expanded).unwrap_or(expanded)
@@ -163,12 +255,18 @@ impl BrowseCache {
         };
         let (entries, truncated) = match &listed {
             Some(names) => {
-                // Dot folders appear only when the typed prefix asks for them.
-                let show_hidden = prefix.starts_with('.');
+                // Dot folders appear only when the typed prefix asks for them, and hidden or system
+                // ones only when their name starts with it.
+                let show_dot = prefix.starts_with('.');
+                let lower = prefix.to_lowercase();
                 let visible = names
                     .iter()
-                    .map(String::as_str)
-                    .filter(|n| show_hidden || !n.starts_with('.'));
+                    .filter(|f| {
+                        (show_dot || !f.name.starts_with('.'))
+                            && (!f.hidden
+                                || (!lower.is_empty() && f.name.to_lowercase().starts_with(&lower)))
+                    })
+                    .map(|f| f.name.as_str());
                 let (names, truncated) = filter_names(visible, prefix, limit);
                 let entries = names
                     .into_iter()
@@ -188,7 +286,11 @@ impl BrowseCache {
         };
         let is_dir = path.is_dir();
         FsBrowse {
-            parent: path.parent().map(Path::to_path_buf),
+            // A drive root's parent is the drive list.
+            parent: path
+                .parent()
+                .map(Path::to_path_buf)
+                .or_else(|| cfg!(windows).then(|| PathBuf::from(DRIVE_LIST))),
             home: home.to_path_buf(),
             exists,
             readable,
@@ -215,6 +317,40 @@ mod tests {
         assert_eq!(expand("/srv/repos", home), PathBuf::from("/srv/repos"));
         assert_eq!(expand("code", home), PathBuf::from("/home/me/code"));
         assert_eq!(expand("~other", home), PathBuf::from("/home/me/~other"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_lists_drives_at_the_root_and_reads_drive_paths() {
+        let home = Path::new(r"C:\Users\me");
+        assert_eq!(expand("/", home), PathBuf::from(DRIVE_LIST));
+        assert_eq!(expand("\\", home), PathBuf::from(DRIVE_LIST));
+        assert_eq!(expand("c:", home), PathBuf::from(r"c:\"));
+        assert_eq!(expand(r"~\code", home), PathBuf::from(r"C:\Users\me\code"));
+        assert_eq!(expand("/c/Users", home), PathBuf::from(r"C:\Users"));
+
+        let cache = BrowseCache::default();
+        let root = cache.browse(Some("/"), None, None, home);
+        assert!(root.exists && root.readable && root.parent.is_none());
+        assert!(
+            root.entries.iter().any(|e| e.name == "C:"),
+            "{:?}",
+            root.entries
+        );
+        let c = cache.browse(Some("C:"), None, None, home);
+        assert_eq!(c.parent, Some(PathBuf::from(DRIVE_LIST)));
+        assert!(c.readable && !c.entries.is_empty(), "{c:?}");
+        assert!(cache.mkdir("/", home).is_err());
+
+        let names = |b: &FsBrowse| b.entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+        let all = cache.browse(Some(r"C:\"), None, Some(MAX_LIMIT), home);
+        assert!(
+            !names(&all).iter().any(|n| n == "$Recycle.Bin"),
+            "{:?}",
+            names(&all)
+        );
+        let asked = cache.browse(Some(r"C:\"), Some("$rec"), None, home);
+        assert_eq!(names(&asked), vec!["$Recycle.Bin"]);
     }
 
     #[test]

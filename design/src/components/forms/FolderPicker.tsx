@@ -67,17 +67,74 @@ interface Parsed {
   prefix: string;
 }
 
+const DRIVE = /^[A-Za-z]:/;
+const DRIVE_NAME = /^[A-Za-z]:$/;
+const DRIVE_ROOT = /^[A-Za-z]:[\\/]$/;
+
+/**
+ * A Windows path: it starts with a drive letter, or with "~" when home is a Windows path. Both "\" and "/" separate
+ * its parts. On a Windows server, "/" is the list of drives.
+ */
+export const isWindowsPath = (p: string, home?: string) =>
+  DRIVE.test(p) || p.startsWith("~\\") || (p.startsWith("~") && !!home && DRIVE.test(home));
+
+/** Absolute, or starting with "~" and a separator: a path the server resolves the same way from any folder. */
+export const isAbsolutePath = (p: string) =>
+  p.startsWith("/") || p.startsWith("~/") || p.startsWith("~\\") || /^[A-Za-z]:[\\/]/.test(p);
+
+const lastSep = (p: string, win: boolean) =>
+  win ? Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")) : p.lastIndexOf("/");
+
+/** A trailing separator marks a folder being browsed rather than chosen. */
+export const endsWithSep = (p: string, home?: string) =>
+  p.endsWith("/") || (isWindowsPath(p, home) && p.endsWith("\\"));
+
+/** The path without trailing separators, keeping a root ("/" or "C:\"). */
+export function trimSep(p: string, home?: string): string {
+  let v = p;
+  while (v.length > 1 && endsWithSep(v, home) && !DRIVE_ROOT.test(v)) v = v.slice(0, -1);
+  return v;
+}
+
+/** The path with one trailing separator: "/" for POSIX, and for Windows the one the path already uses. */
+export function withSep(p: string, home?: string): string {
+  if (endsWithSep(p, home)) return p;
+  if (!isWindowsPath(p, home)) return `${p}/`;
+  return !p.includes("\\") && p.slice(2).includes("/") ? `${p}/` : `${p}\\`;
+}
+
+/** The last part of a path, without trailing separators. */
+export function baseName(p: string, home?: string): string {
+  const v = trimSep(p, home);
+  return v.slice(lastSep(v, isWindowsPath(v, home)) + 1);
+}
+
 /** Split a typed path into the directory to list and the name prefix to filter by. Null when it is not absolute. */
 export function splitPath(typed: string, home?: string): Parsed | null {
   const v = home && typed.startsWith("~") ? home + typed.slice(1) : typed;
+  const win = isWindowsPath(v, home);
   // Without a known home, "~" paths are listed as typed and the server expands them.
-  if (!v.startsWith("/") && !v.startsWith("~")) return null;
-  const i = v.lastIndexOf("/");
+  if (!v.startsWith("/") && !v.startsWith("~") && !win) return null;
+  // A bare drive such as "C:" filters the drive list.
+  if (DRIVE_NAME.test(v)) return { dir: "/", prefix: v };
+  const i = lastSep(v, win);
   if (i < 0) return { dir: v, prefix: "" };
-  return { dir: i === 0 ? "/" : v.slice(0, i), prefix: v.slice(i + 1) };
+  const dir = i === 0 ? "/" : win && i === 2 ? v.slice(0, 3) : v.slice(0, i);
+  return { dir, prefix: v.slice(i + 1) };
 }
 
-const join = (dir: string, name: string) => (dir === "/" ? "" : dir.replace(/\/$/, "")) + "/" + name;
+/** A drive in the list opens as its root; other names join with the directory's own separator. */
+const join = (dir: string, name: string) => (dir === "/" && DRIVE_NAME.test(name) ? `${name}\\` : withSep(dir) + name);
+
+/** The folder above, with a trailing separator; a drive root goes up to the drive list. */
+function parentOf(p: string): string {
+  if (DRIVE_NAME.test(p) || DRIVE_ROOT.test(p)) return "/";
+  const win = isWindowsPath(p);
+  const t = trimSep(p);
+  const i = lastSep(t, win);
+  if (i <= 0) return "/";
+  return win && i === 2 ? t.slice(0, 3) : t.slice(0, i + 1);
+}
 
 interface Browse {
   requested: string;
@@ -186,10 +243,11 @@ export function FolderPicker(props: FolderPickerProps) {
   }, [b.entries, prefix]);
 
   const current = b.current;
-  const enter = (name: string) => onChange?.(join(current, name) + "/");
-  const selected = value.replace(/\/$/, "") || "/";
+  const winHome = !!home && isWindowsPath(home);
+  const enter = (name: string) => onChange?.(withSep(join(current, name)));
+  const selected = trimSep(value, home) || "/";
   const isSelected = !!parsed && !prefix && parsed.dir === current;
-  const showSelected = isSelected && !value.endsWith("/");
+  const showSelected = isSelected && !endsWithSep(value, home);
 
   // The typed folder, when it does not exist yet: the missing directory itself, or a name no entry matches exactly.
   const [creating, setCreating] = useState(false);
@@ -209,7 +267,7 @@ export function FolderPicker(props: FolderPickerProps) {
     props.mkdir(target).then(
       () => {
         setCreating(false);
-        onChange?.(target + "/");
+        onChange?.(withSep(target));
         b.reload();
       },
       (e: unknown) => {
@@ -233,10 +291,9 @@ export function FolderPicker(props: FolderPickerProps) {
       e.preventDefault();
       if (shown[hi] && prefix) enter(shown[hi].name);
       else if (!b.missing) onChange?.(current);
-    } else if (e.key === "Backspace" && parsed && !prefix && value.endsWith("/") && value.length > 1) {
+    } else if (e.key === "Backspace" && parsed && !prefix && endsWithSep(value, home) && value.length > 1) {
       e.preventDefault();
-      const up = current.slice(0, current.lastIndexOf("/") + 1) || "/";
-      onChange?.(up);
+      onChange?.(parentOf(current));
     }
   };
 
@@ -246,7 +303,7 @@ export function FolderPicker(props: FolderPickerProps) {
         <Icon name="folder" size={14} className="os-input__icon" />
         <input
           value={value}
-          placeholder="/absolute/path/to/folder"
+          placeholder={winHome ? "C:\\path\\to\\folder" : "/absolute/path/to/folder"}
           spellCheck={false}
           autoComplete="off"
           aria-label="Folder path"
@@ -269,7 +326,13 @@ export function FolderPicker(props: FolderPickerProps) {
           </span>
         )}
       </div>
-      {value && !parsed && <span className="os-field__error">Type an absolute path, starting with / or ~/.</span>}
+      {value && !parsed && (
+        <span className="os-field__error">
+          {winHome
+            ? "Type an absolute path, such as C:\\Users\\you\\code or ~\\code."
+            : "Type an absolute path, starting with / or ~/."}
+        </span>
+      )}
       <div className="os-picker">
         <div className="os-picker__bar">
           <Icon
@@ -300,7 +363,7 @@ export function FolderPicker(props: FolderPickerProps) {
             <div
               className="os-picker__row"
               title="Open the nearest folder that exists"
-              onClick={() => onChange?.(b.nearest === "/" ? "/" : b.nearest + "/")}
+              onClick={() => b.nearest && onChange?.(withSep(b.nearest))}
             >
               <Icon name="corner-left-up" size={14} style={{ color: "var(--text-muted)" }} />
               <span style={{ color: "var(--text-secondary)" }}>{b.nearest}</span>
@@ -323,7 +386,7 @@ export function FolderPicker(props: FolderPickerProps) {
             <div style={{ padding: "8px 10px", color: "var(--bad)", fontSize: "var(--text-sm)" }}>{createError}</div>
           )}
           {!b.missing && b.parent && !prefix && (
-            <div className="os-picker__row" onClick={() => onChange?.(b.parent === "/" ? "/" : b.parent + "/")}>
+            <div className="os-picker__row" onClick={() => b.parent && onChange?.(withSep(b.parent))}>
               <Icon name="corner-left-up" size={14} style={{ color: "var(--text-muted)" }} />
               <span style={{ color: "var(--text-secondary)" }}>..</span>
             </div>
@@ -370,7 +433,8 @@ export function FolderPicker(props: FolderPickerProps) {
       </div>
       <span className="os-field__hint">
         Type a path to jump there. <Kbd>Tab</Kbd> completes, <Kbd>↑</Kbd>
-        <Kbd>↓</Kbd> pick a match, <Kbd>Enter</Kbd> uses the folder, <Kbd>⌫</Kbd> after a “/” goes up.
+        <Kbd>↓</Kbd> pick a match, <Kbd>Enter</Kbd> uses the folder, <Kbd>⌫</Kbd> after a “{winHome ? "\\" : "/"}” goes
+        up.
       </span>
     </div>
   );
