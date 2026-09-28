@@ -60,7 +60,7 @@ export function Install() {
   };
 
   return (
-    <div className="home-install">
+    <div data-reveal className="home-install">
       <div className="home-install__method">
         <Tabs
           variant="segmented"

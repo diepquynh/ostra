@@ -16,6 +16,7 @@ import { docsHref, REPO } from "../shared/links";
 import { useSiteTheme } from "../shared/theme";
 import { ConsoleShot } from "./ConsoleShot";
 import { Install } from "./Install";
+import { Intro } from "./Intro";
 
 const Code = ({ children }: { children: ReactNode }) => <code className="site-code">{children}</code>;
 
@@ -122,7 +123,7 @@ const FOOTER_LINKS: { label: string; links: [string, string][] }[] = [
 
 function SectionHead({ eyebrow, title, children }: { eyebrow: string; title: string; children: ReactNode }) {
   return (
-    <div className="home-section__head">
+    <div data-reveal className="home-section__head">
       <div className="site-eyebrow">{eyebrow}</div>
       <h2 className="home-h2">{title}</h2>
       <p className="home-lede">{children}</p>
@@ -134,7 +135,8 @@ export function Homepage() {
   const [theme, setTheme] = useSiteTheme();
   return (
     <div className="home">
-      <nav className="home-nav">
+      <Intro />
+      <nav data-reveal className="home-nav">
         <LiveMark state={REST} size={22} />
         <span className="home-wordmark">Ostra</span>
         <div className="home-nav__links">
@@ -154,12 +156,12 @@ export function Homepage() {
       </nav>
 
       <header className="home-hero">
-        <h1 className="home-h1">
+        <h1 data-reveal className="home-h1">
           Every stage shown.
           <br />
           Every gate yours.
         </h1>
-        <p className="home-hero__lede">
+        <p data-reveal className="home-hero__lede">
           Ostra runs a full engineering pipeline on your machine: research, spec, fact-check, plan, build, review, test
           and docs. Code drives the pipeline and holds every gate. Models do the work inside each stage, and you approve
           the spec and the plan before anything is built.
@@ -176,7 +178,7 @@ export function Homepage() {
         </SectionHead>
         <div className="home-security">
           {SECURITY.map((s) => (
-            <div key={s.title} className="home-security__item">
+            <div data-reveal key={s.title} className="home-security__item">
               <div className="home-security__title">
                 <Icon name={s.icon} size={16} />
                 <span>{s.title}</span>
@@ -185,7 +187,7 @@ export function Homepage() {
             </div>
           ))}
         </div>
-        <p className="home-footnote">
+        <p data-reveal className="home-footnote">
           A browser security suite tests these defenses in a real Chromium: agent and repo text in every render path,
           terminal escape sequences, cross-origin requests, the sign-in token, uploads and browser storage.{" "}
           <a href={docsHref("browser-security-suite")}>tests/browser</a>
@@ -198,7 +200,7 @@ export function Homepage() {
           the work.
         </SectionHead>
         <div className="home-executors">
-          <div className="home-card">
+          <div data-reveal className="home-card">
             <div className="home-card__head">
               <Icon name="activity" size={14} />
               <span>Ostra's agent loop</span>
@@ -218,7 +220,7 @@ export function Homepage() {
               <ToolCall tool="Bash" summary="git push origin refunds" state="error" policy={DENY} defaultOpen />
             </div>
           </div>
-          <div className="home-card">
+          <div data-reveal className="home-card">
             <div className="home-card__head">
               <Icon name="square-terminal" size={14} />
               <span>CLI harnesses</span>
@@ -244,7 +246,7 @@ export function Homepage() {
 
       <footer className="home-footer">
         <div className="home-footer__cols">
-          <div className="home-footer__about">
+          <div data-reveal className="home-footer__about">
             <p className="home-footer__tagline">
               A local workspace that runs the whole engineering pipeline, one gate at a time.
             </p>
@@ -253,7 +255,7 @@ export function Homepage() {
             </p>
           </div>
           {FOOTER_LINKS.map((col) => (
-            <div key={col.label} className="home-footer__col">
+            <div data-reveal key={col.label} className="home-footer__col">
               <div className="site-eyebrow">{col.label}</div>
               {col.links.map(([label, page]) => (
                 <a key={page} href={docsHref(page)}>
@@ -263,7 +265,7 @@ export function Homepage() {
             </div>
           ))}
         </div>
-        <div aria-hidden="true" className="home-footer__word">
+        <div data-reveal aria-hidden="true" className="home-footer__word">
           ostra
         </div>
       </footer>

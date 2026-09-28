@@ -70,7 +70,7 @@ export function ConsoleShot({ theme, setTheme }: { theme: Theme; setTheme: (t: T
   }, [index, stopped, hover]);
 
   return (
-    <section className="home-section home-section--shot">
+    <section data-reveal className="home-section home-section--shot">
       <div className="home-shot" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
         <iframe ref={frame} src={SRC} title="The Ostra console" loading="lazy" className="home-shot__frame" />
       </div>

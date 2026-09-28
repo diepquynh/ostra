@@ -1,5 +1,5 @@
 export type MarkArc = "done" | "run" | "wait" | "fail" | "off";
-export type MarkPearl = "run" | "wait" | "fail" | "ok" | "rest";
+export type MarkPearl = "run" | "wait" | "fail" | "ok" | "rest" | "off";
 /** Eight arcs, one per board lane from research to docs, and the center pearl. */
 export type MarkState = { arcs: MarkArc[]; pearl: MarkPearl | null };
 

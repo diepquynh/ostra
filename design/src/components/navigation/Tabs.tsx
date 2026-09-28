@@ -55,6 +55,19 @@ export interface TabsProps {
  * Tab strip. variant "bar" = editor tabs (closable, with icons); "underline" = in-page sections; "segmented" = compact toggles.
  * Controlled by value/onChange. Arrow keys, Home and End move between tabs and select them.
  */
+/**
+ * Scrolls a sideways strip so its selected tab is in view. It moves the strip only: scrollIntoView would also scroll
+ * every ancestor, including a page that frames the console, such as the homepage.
+ */
+export function revealSelectedTab(strip: HTMLElement) {
+  const tab = strip.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+  if (!tab) return;
+  const s = strip.getBoundingClientRect();
+  const t = tab.getBoundingClientRect();
+  if (t.left < s.left) strip.scrollLeft -= s.left - t.left;
+  else if (t.right > s.right) strip.scrollLeft += t.right - s.right;
+}
+
 export function Tabs({
   tabs,
   value,
@@ -95,9 +108,7 @@ export function Tabs({
   // A strip wider than its box scrolls sideways; keep the selected tab in view.
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the selection changes.
   useEffect(() => {
-    listRef.current
-      ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
-      ?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (listRef.current) revealSelectedTab(listRef.current);
   }, [value]);
 
   const onWheel = (e: WheelEvent<HTMLDivElement>) => {

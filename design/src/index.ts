@@ -67,7 +67,7 @@ export {
 } from "./components/navigation/FileTree";
 export { Menu, type MenuActionItem, type MenuItem, type MenuProps } from "./components/navigation/Menu";
 export { type StepItem, Stepper, type StepperProps } from "./components/navigation/Stepper";
-export { type TabItem, Tabs, type TabsProps } from "./components/navigation/Tabs";
+export { revealSelectedTab, type TabItem, Tabs, type TabsProps } from "./components/navigation/Tabs";
 export { TreeItem, type TreeItemProps } from "./components/navigation/TreeItem";
 export { TreeSection, type TreeSectionProps } from "./components/navigation/TreeSection";
 export { Decision, type DecisionProps } from "./components/pipeline/Decision";

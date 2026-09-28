@@ -1,4 +1,15 @@
-import { Button, Kbd, LiveMark, Menu, type MenuItem, REST, StatusDot, Tabs, type Tone } from "@ostra/design";
+import {
+  Button,
+  Kbd,
+  LiveMark,
+  Menu,
+  type MenuItem,
+  REST,
+  revealSelectedTab,
+  StatusDot,
+  Tabs,
+  type Tone,
+} from "@ostra/design";
 import {
   type CSSProperties,
   type MouseEvent,
@@ -127,11 +138,7 @@ function Shell({ ws }: { ws: string }) {
   // Keep the active tab on screen, so a tab opened past the edge of the strip does not need scrolling to.
   useEffect(() => {
     if (!tabs.active) return;
-    const id = requestAnimationFrame(() =>
-      stripEl.current
-        ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
-        ?.scrollIntoView?.({ block: "nearest", inline: "nearest" }),
-    );
+    const id = requestAnimationFrame(() => stripEl.current && revealSelectedTab(stripEl.current));
     return () => cancelAnimationFrame(id);
   }, [tabs]);
 
