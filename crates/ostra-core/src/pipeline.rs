@@ -212,6 +212,45 @@ pub struct Question {
     pub multi_select: bool,
 }
 
+impl Question {
+    /// The options as the console numbers them: the recommended option first, then the rest in
+    /// order. Must match `orderedOptions` in `web/src/lib/gateAnswers.ts`, because a typed answer
+    /// names options by these numbers.
+    pub fn display_options(&self) -> Vec<(usize, &QuestionOption)> {
+        let rec = self.options.get(self.recommended).map(|_| self.recommended);
+        rec.into_iter()
+            .chain((0..self.options.len()).filter(|i| Some(*i) != rec))
+            .enumerate()
+            .map(|(n, i)| (n + 1, &self.options[i]))
+            .collect()
+    }
+
+    /// Whether an answer is only option labels, as the console sends a picked option (several
+    /// joined by `; ` for a multi-select question).
+    pub fn is_option_answer(&self, answer: &str) -> bool {
+        answer
+            .split("; ")
+            .all(|part| self.options.iter().any(|o| o.label == part.trim()))
+    }
+
+    /// Rule J1: a typed answer with the options it may name by number or label, so the agent
+    /// reading it alone knows what "1 and 3" means. A picked option is returned as is.
+    pub fn answer_in_context(&self, answer: &str) -> String {
+        if self.is_option_answer(answer) {
+            return answer.to_string();
+        }
+        let opts: Vec<String> = self
+            .display_options()
+            .iter()
+            .map(|(n, o)| format!("{n}. {}: {}", o.label, o.description))
+            .collect();
+        format!(
+            "{answer}\n(The user typed this answer. It may name these options by number or label, combine them, and add to them: {})",
+            opts.join("; ")
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, schemars::JsonSchema)]
 #[ts(export)]
 pub struct QuestionOption {
@@ -227,4 +266,49 @@ pub struct QuestionAnswer {
     pub question: String,
     /// Chosen option labels, or free text for "Other".
     pub answer: String,
+}
+
+#[cfg(test)]
+mod question_tests {
+    use super::*;
+
+    fn q(recommended: usize) -> Question {
+        Question {
+            id: "Q1".into(),
+            question: "Which?".into(),
+            tag: "t".into(),
+            options: ["A", "B", "C"]
+                .iter()
+                .map(|l| QuestionOption {
+                    label: l.to_string(),
+                    description: format!("{l} desc"),
+                })
+                .collect(),
+            recommended,
+            multi_select: false,
+        }
+    }
+
+    #[test]
+    fn options_are_numbered_recommended_first() {
+        let labels = |q: &Question| {
+            q.display_options()
+                .iter()
+                .map(|(n, o)| format!("{n}{}", o.label))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(labels(&q(0)), ["1A", "2B", "3C"]);
+        assert_eq!(labels(&q(2)), ["1C", "2A", "3B"]);
+        assert_eq!(labels(&q(9)), ["1A", "2B", "3C"], "an out-of-range recommendation is ignored");
+    }
+
+    #[test]
+    fn a_typed_answer_carries_the_options() {
+        let q = q(1);
+        assert_eq!(q.answer_in_context("A"), "A");
+        assert_eq!(q.answer_in_context("A; C"), "A; C");
+        let typed = q.answer_in_context("1 and 3, plus an audit log");
+        assert!(typed.starts_with("1 and 3, plus an audit log\n"));
+        assert!(typed.contains("1. B: B desc; 2. A: A desc; 3. C: C desc"));
+    }
 }

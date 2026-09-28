@@ -2,6 +2,7 @@
 //! steps and appends the resulting events, and the planner runs again. Conformance fixtures test
 //! this function directly: event history in, expected next steps out.
 
+use crate::judge::NoteStage;
 use crate::state::*;
 use ostra_core::agent::AgentName;
 use ostra_core::event::{
@@ -66,6 +67,8 @@ pub struct SpawnInputs {
     pub context_files: Vec<PathBuf>,
     /// The feedback round a revision phase builds.
     pub revision: Option<u32>,
+    /// Rule J1: answers the judge kept for this stage.
+    pub user_notes: Vec<String>,
     /// Initializer inputs, by spawn label.
     pub init: BTreeMap<String, String>,
     pub init_item: Option<String>,
@@ -386,6 +389,13 @@ impl<'a> Planner<'a> {
             }
             return;
         };
+        // Rule J1: a spec or plan answer waits for the judge before any agent sees it.
+        for gate in s.held_answers.keys() {
+            self.push(Step::Judge {
+                judge: JudgeKind::RouteAnswer,
+                subject: Some(gate.to_string()),
+            });
+        }
         // Explore tasks spawn whatever the stage: rescue explores can arrive mid-build.
         self.explore_tasks();
         match category {
@@ -502,7 +512,7 @@ impl<'a> Planner<'a> {
         let tasks: Vec<&ExploreTask> = s
             .explore
             .iter()
-            .filter(|t| !matches!(t.origin, ExploreOrigin::Rescue { .. }))
+            .filter(|t| !t.origin.loop_bound())
             .collect();
         if tasks.iter().any(|t| !t.finished()) {
             return false;
@@ -558,6 +568,7 @@ impl<'a> Planner<'a> {
             || t.questions_gate.is_some()
             || t.approval_gate.is_some()
             || t.recurring_gate.is_some()
+            || t.routing.is_some()
         {
             return false;
         }
@@ -726,6 +737,7 @@ impl<'a> Planner<'a> {
             || t.questions_gate.is_some()
             || t.approval_gate.is_some()
             || t.recurring_gate.is_some()
+            || t.routing.is_some()
         {
             return false;
         }
@@ -906,6 +918,11 @@ impl<'a> Planner<'a> {
             } else {
                 None
             },
+            user_notes: match agent {
+                AgentName::Implementer => s.notes_for(NoteStage::Implement),
+                AgentName::WriteTest => s.notes_for(NoteStage::Tests),
+                _ => vec![],
+            },
             ..Default::default()
         };
         let purpose = match agent {
@@ -1029,7 +1046,7 @@ impl<'a> Planner<'a> {
                     subject: Some(exec.to_string()),
                 });
             }
-            LoopNext::RescueExplore { .. } => {}
+            LoopNext::RescueExplore { .. } | LoopNext::AnswerResearch { .. } => {}
             LoopNext::RescueGate { exec, stuck } => {
                 let agent = s
                     .executions
@@ -1342,6 +1359,7 @@ impl<'a> Planner<'a> {
                         phase: Some(p.info.clone()),
                         implementer_report: p.implementer_report.clone(),
                         report_file: Some(dir.join(report::epa(&p.info.id.to_string()))),
+                        user_notes: s.notes_for(NoteStage::Tests),
                         ..Default::default()
                     };
                     self.spawn(
@@ -1410,6 +1428,7 @@ impl<'a> Planner<'a> {
                         .filter_map(|p| p.implementer_report.clone())
                         .collect(),
                     report_file: Some(dir.join(report::module_docs())),
+                    user_notes: s.notes_for(NoteStage::Docs),
                     ..Default::default()
                 };
                 self.spawn(

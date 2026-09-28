@@ -49,7 +49,12 @@ resumes: ExecutionId | null, } | { "type": "execution_resumed", id: ExecutionId,
 /**
  * Why the YOLO judge chose this answer.
  */
-reason: string | null, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "autofix_applied", project: string, phase: number, tests: boolean, applied: Array<string>, 
+reason: string | null, 
+/**
+ * Rule J1: the answer waits for the Route answer or Feedback judge before it is applied.
+ * Answers recorded before the rule have none and fold as they always did.
+ */
+routed: boolean, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "autofix_applied", project: string, phase: number, tests: boolean, applied: Array<string>, 
 /**
  * Findings that could not be applied mechanically, with the reason.
  */

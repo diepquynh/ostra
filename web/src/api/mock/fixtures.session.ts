@@ -1572,7 +1572,14 @@ export function eventsFor(d: SessionDetail): StoredEvent[] {
     if (g.answer && g.answered_at)
       out.push({
         at: g.answered_at,
-        event: { type: "gate_answered", id: g.id, source: g.source ?? "user", answer: g.answer, reason: g.reason },
+        event: {
+          type: "gate_answered",
+          id: g.id,
+          source: g.source ?? "user",
+          answer: g.answer,
+          reason: g.reason,
+          routed: false,
+        },
       });
   }
   for (const [minute, event] of extraEvents.get(s.id) ?? []) out.push({ at: at(minute), event });

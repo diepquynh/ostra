@@ -1005,3 +1005,809 @@ report = "The fold sets feedback.accepted on a done answer; implementation_revie
 [[case.phase]]
 project = "web"
 report = "Accept sends {kind: choice, option: done}."
+
+# ---------------------------------------------------------------------------------------------------------
+# Route answer (Rule J1): what happens to each answer before any agent sees it. Every research case has a
+# counter-case that must not research, and every remember or discard case one that must deliver.
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "route-research-option-chosen"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add an `ostra catalog-mcp` subcommand: an MCP server over stdio that lets an agent query sessions by date range and export their events."
+note = "The session that motivated Rule J1: the spec agent offered a research pass and the user took it. The answer used to go straight back to generate-spec, which cannot research, so it asked again."
+spec = """
+# Spec: catalog MCP subcommand
+
+## Requirements
+- R1: When an agent calls `list_sessions` with a date range, the server shall return every session created in it.
+- R2: When an agent calls `export_events`, the server shall return the session's events as JSON lines.
+- R3: The server shall read the workspace database directly, without the HTTP API.
+
+## External Evidence
+| ID | Source | Claim |
+| E1 | crates.io rmcp 3.5.0 | stdio transport via `rmcp::transport::stdio()` |
+"""
+expect = { research = true, dispositions = { Q1 = "deliver", Q2 = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Research the workspace database schema and the official Rust MCP SDK."
+scope = "crates/ostra-store, crates.io rmcp"
+findings = "Sessions and events live in workspace.db (tables sessions, events). rmcp 3.5.0 is the official SDK with a stdio transport."
+not_covered = ["A read-only SQLite access pattern that is safe while the server holds the WAL"]
+doc = """
+# Research: store and MCP SDK
+
+- `crates/ostra-store/src/workspace.rs` opens workspace.db in WAL mode; `sessions` and `events(session_id, seq, type, payload, at)`.
+- rmcp 3.5.0 (crates.io) is the official Rust MCP SDK. `rmcp::transport::stdio()` serves over stdin and stdout.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "Should the subcommand open workspace.db read-only or through ostra-store's writer?"
+options = [["Read-only", "Open with SQLITE_OPEN_READ_ONLY so a running server keeps its writer."], ["Through ostra-store", "Reuse WorkspaceDb, which takes the writer lock."]]
+recommended = 0
+answer = "Read-only"
+
+[[case.question]]
+id = "Q2"
+question = "No research document covers reading a WAL database from a second process while the server writes it. Run another research pass on it before planning?"
+options = [["Run a research pass", "explore retrieves the SQLite WAL documentation on concurrent readers and checks how ostra-store opens the file."], ["Plan without it", "The plan assumes a read-only open is safe; a problem would show only at run time."]]
+recommended = 0
+answer = "Run a research pass"
+
+[[case]]
+id = "route-research-option-declined"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add an `ostra catalog-mcp` subcommand: an MCP server over stdio that lets an agent query sessions by date range and export their events."
+note = "Counter-case: the user declined the research the agent offered."
+spec = """
+# Spec: catalog MCP subcommand
+
+## Requirements
+- R1: When an agent calls `list_sessions` with a date range, the server shall return every session created in it.
+- R3: The server shall read the workspace database directly, without the HTTP API.
+"""
+expect = { research = false, dispositions = { Q1 = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Research the workspace database schema and the official Rust MCP SDK."
+scope = "crates/ostra-store, crates.io rmcp"
+findings = "Sessions and events live in workspace.db. rmcp 3.5.0 is the official SDK with a stdio transport."
+not_covered = ["A read-only SQLite access pattern that is safe while the server holds the WAL"]
+doc = """
+# Research: store and MCP SDK
+
+- `crates/ostra-store/src/workspace.rs` opens workspace.db in WAL mode.
+- rmcp 3.5.0 (crates.io) serves MCP over stdio with `rmcp::transport::stdio()`.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "No research document covers reading a WAL database from a second process while the server writes it. Run another research pass on it before planning?"
+options = [["Run a research pass", "explore retrieves the SQLite WAL documentation on concurrent readers."], ["Plan without it", "The plan assumes a read-only open is safe."]]
+recommended = 0
+answer = "Plan without it"
+
+[[case]]
+id = "route-research-free-text"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add an `ostra catalog-mcp` subcommand: an MCP server over stdio that lets an agent query sessions by date range."
+note = "Free text that asks Ostra to look something up before the question is settled."
+spec = """
+# Spec: catalog MCP subcommand
+
+## Requirements
+- R1: When an agent calls `list_sessions` with a date range, the server shall return every session created in it.
+- R2: When stdin closes, the server shall exit.
+"""
+expect = { research = true, dispositions = { Q1 = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Research the official Rust MCP SDK."
+scope = "crates.io rmcp"
+findings = "rmcp 3.5.0 is the official SDK with a stdio transport."
+doc = """
+# Research: MCP SDK
+
+rmcp 3.5.0 (crates.io) serves MCP over stdio with `rmcp::transport::stdio()`. Its shutdown behavior was not read.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "How should the server shut down when the client disconnects?"
+options = [["Exit on EOF", "Return from main when stdin closes."], ["Wait for a shutdown request", "Keep running until the client sends shutdown."]]
+recommended = 0
+answer = "I'm not sure. Look up what rmcp's stdio transport does when stdin closes, then pick whichever matches it."
+
+[[case]]
+id = "route-user-overrides-recommendation"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add a `limits.max_feedback_rounds` workspace setting."
+note = "The user picks the option the agent did not recommend; the judge must deliver it as given."
+spec = """
+# Spec: feedback round limit
+
+## Requirements
+- R1: The workspace settings shall accept `limits.max_feedback_rounds`.
+- R2: When a session reaches the limit, the implementation review gate shall offer only Accept.
+"""
+expect = { research = false, dispositions = { Q1 = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the implementation review gate and the limits settings."
+scope = "crates/ostra-engine/src/plan.rs, crates/ostra-core/src/settings.rs"
+findings = "Planner::implementation_review opens the gate; limits live in WorkspaceSettings.limits."
+doc = """
+# Research: feedback limit
+
+`Planner::implementation_review` opens the gate. `WorkspaceSettings.limits` holds `max_parallel_executions` and
+`session_budget_usd`; `validate_workspace` checks them at save.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "What should the default limit be?"
+options = [["No limit", "Absent means unlimited, as today."], ["5 rounds", "A default of 5."]]
+recommended = 0
+answer = "5 rounds"
+
+[[case]]
+id = "route-discard-question"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add a `limits.max_feedback_rounds` workspace setting."
+note = "The user tells Ostra to drop one question and answers the other."
+spec = """
+# Spec: feedback round limit
+
+## Requirements
+- R1: The workspace settings shall accept `limits.max_feedback_rounds`.
+- R2: When a session reaches the limit, the implementation review gate shall offer only Accept.
+"""
+expect = { research = false, dispositions = { Q1 = "deliver", Q2 = "discard" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the implementation review gate and the limits settings."
+scope = "crates/ostra-engine/src/plan.rs, crates/ostra-core/src/settings.rs"
+findings = "Planner::implementation_review opens the gate; limits live in WorkspaceSettings.limits."
+doc = """
+# Research: feedback limit
+
+`Planner::implementation_review` opens the gate. `WorkspaceSettings.limits` holds the existing limits.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "What should the default limit be?"
+options = [["No limit", "Absent means unlimited."], ["5 rounds", "A default of 5."]]
+recommended = 0
+answer = "No limit"
+
+[[case.question]]
+id = "Q2"
+question = "Should the Settings screen show the limit next to the budget?"
+options = [["Yes", "Show it in the Limits group."], ["No", "Leave the screen unchanged."]]
+recommended = 0
+answer = "Ignore this question, I don't care about the screen right now."
+
+[[case]]
+id = "route-deliver-and-remember-tests"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add a date range filter to GET /api/workspaces/:ws/sessions."
+note = "One answer settles the question and also instructs a later stage."
+spec = """
+# Spec: session date filter
+
+## Requirements
+- R1: When `from` and `to` are given, the endpoint shall return only sessions in that range.
+"""
+expect = { research = false, dispositions = { Q1 = "deliver" }, stages = { Q1 = ["tests"] } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the sessions list endpoint."
+scope = "crates/ostra-server/src/api.rs, crates/ostra-store/src/workspace.rs"
+findings = "list_sessions takes no filter; sessions has created_at and updated_at."
+doc = """
+# Research: sessions list
+
+`api::list_sessions` calls `WorkspaceDb::list_sessions()`, which returns every row. `sessions` has `created_at`
+and `updated_at`, both RFC 3339 strings.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "Which timestamp should the range filter on?"
+options = [["created_at", "When the session started."], ["updated_at", "When it last changed."]]
+recommended = 0
+answer = "created_at. And when you write the tests, cover both range boundaries with fixed timestamps, not the clock."
+
+[[case]]
+id = "route-remember-docs-at-approval"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+gate = "spec_approval"
+approved = true
+request = "Add a date range filter to GET /api/workspaces/:ws/sessions."
+note = "An approval whose text is only for the documentation stage keeps the approval."
+answer = "Looks good. When you write the module docs, add an example request with both parameters."
+spec = """
+# Spec: session date filter
+
+## Requirements
+- R1: When `from` and `to` are given, the endpoint shall return only sessions in that range.
+- R2: When `from` is after `to`, the endpoint shall return 400.
+"""
+expect = { dispositions = { answer = "remember" }, stages = { answer = ["docs"] } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the sessions list endpoint."
+scope = "crates/ostra-server/src/api.rs"
+findings = "list_sessions takes no filter."
+doc = """
+# Research: sessions list
+
+`api::list_sessions` calls `WorkspaceDb::list_sessions()`, which returns every row.
+"""
+
+[[case]]
+id = "route-approval-with-change"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+gate = "spec_approval"
+approved = true
+request = "Add a date range filter to GET /api/workspaces/:ws/sessions."
+note = "Counter-case: the approval carries a requirement change, so it is delivered."
+answer = "Approve, but the endpoint must also accept a `limit` parameter capped at 500."
+spec = """
+# Spec: session date filter
+
+## Requirements
+- R1: When `from` and `to` are given, the endpoint shall return only sessions in that range.
+"""
+expect = { research = false, dispositions = { answer = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the sessions list endpoint."
+scope = "crates/ostra-server/src/api.rs"
+findings = "list_sessions takes no filter."
+doc = """
+# Research: sessions list
+
+`api::list_sessions` calls `WorkspaceDb::list_sessions()`, which returns every row.
+"""
+
+[[case]]
+id = "route-stuck-asks-for-research"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "stuck"
+request = "Let `./run.sh` load provider credentials from a file named in an environment variable."
+diagnostic = "run.sh sources nothing today; I cannot tell which variable name the providers expect."
+need = "the environment variable that names the credentials file"
+answer = "I don't remember. Check how ostra-providers and run.sh read it today and use the same name."
+note = "The user does not have the fact and asks Ostra to find it."
+expect = { research = true, dispositions = { answer = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map run.sh and how the providers read credentials."
+scope = "run.sh, crates/ostra-providers"
+findings = "run.sh starts the server; providers read ANTHROPIC_API_KEY and OPENAI_API_KEY from the environment."
+doc = """
+# Research: credentials
+
+`run.sh` builds and starts `ostra serve`. `ostra-providers` reads `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`.
+Nothing here names a credentials file.
+"""
+
+[[case]]
+id = "route-stuck-states-the-fact"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "stuck"
+request = "Let `./run.sh` load provider credentials from a file named in an environment variable."
+diagnostic = "run.sh sources nothing today; I cannot tell which variable name the providers expect."
+need = "the environment variable that names the credentials file"
+answer = "It is OSTRA_ENV_FILE. Apply only its export lines, never source the whole file."
+note = "Counter-case: the user states the fact, so nothing needs research."
+expect = { research = false, route = "implementation_detail", dispositions = { answer = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map run.sh and how the providers read credentials."
+scope = "run.sh, crates/ostra-providers"
+findings = "run.sh starts the server; providers read ANTHROPIC_API_KEY and OPENAI_API_KEY from the environment."
+doc = """
+# Research: credentials
+
+`run.sh` builds and starts `ostra serve`. `ostra-providers` reads `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`.
+"""
+
+[[case]]
+id = "route-blocked-retry-requirement"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+gate = "phase_blocked"
+request = "Add a `limits.max_feedback_rounds` workspace setting."
+need = "The review loop reached its cap with 2 findings open."
+answer = "Retry, and the limit must be per project, not per workspace: each project in the session counts its own rounds."
+note = "Retry text that changes what the system must do."
+spec = """
+# Spec: feedback round limit
+
+## Requirements
+- R1: The workspace settings shall accept `limits.max_feedback_rounds`.
+- R2: When a session reaches the limit, the implementation review gate shall offer only Accept.
+"""
+expect = { route = "requirement_change", dispositions = { answer = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the implementation review gate and the limits settings."
+scope = "crates/ostra-engine/src/plan.rs"
+findings = "Planner::implementation_review opens the gate; limits live in WorkspaceSettings.limits."
+doc = """
+# Research: feedback limit
+
+`Planner::implementation_review` opens the gate once per session, not per project.
+"""
+
+[[case]]
+id = "route-review-cap-discard"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "review_cap"
+request = "Add a `limits.max_feedback_rounds` workspace setting."
+answer = "Disregard this text, I pasted it into the wrong box. Just run another pass."
+note = "The user tells Ostra to ignore what they typed; the choice itself still applies."
+expect = { dispositions = { answer = "discard" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the limits settings."
+scope = "crates/ostra-core/src/settings.rs"
+findings = "Limits live in WorkspaceSettings.limits."
+doc = """
+# Research: limits
+
+`WorkspaceSettings.limits` holds `max_parallel_executions` and `session_budget_usd`.
+"""
+
+[[case]]
+id = "route-review-cap-waive-blocker"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "review_cap"
+request = "Add a `limits.max_feedback_rounds` workspace setting."
+answer = "Skip the BLOCKER finding and ship it, I'll deal with it later."
+note = "Policy: Ostra never waives a BLOCKER (Hard rule 21). The judge delivers the words and the engine keeps the rule; it must not discard them."
+expect = { research = false, dispositions = { answer = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the limits settings."
+scope = "crates/ostra-core/src/settings.rs"
+findings = "Limits live in WorkspaceSettings.limits."
+doc = """
+# Research: limits
+
+`WorkspaceSettings.limits` holds `max_parallel_executions` and `session_budget_usd`.
+"""
+
+# --- Feedback (Rule J1): remember, discard, and research -------------------------------------------------------
+
+[[case]]
+id = "feedback-remember-for-docs"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "This works, I'm happy with it. Just make sure the docs you write later explain what a blocked phase means."
+note = "The user accepts the build; the text is only for the documentation stage."
+expect = { route = "implementation_detail", dispositions = { answer = "remember" }, stages = { answer = ["docs"] } }
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview and filled it in Planner::implementation_review."
+
+[[case.phase]]
+project = "web"
+report = "Rendered the blocked list in the implementation_review arm of ChoiceGate.tsx."
+
+[[case]]
+id = "feedback-discard"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "Ignore this, wrong window. I haven't tried it yet."
+note = "The user tells Ostra to ignore the text."
+expect = { route = "implementation_detail", dispositions = { answer = "discard" } }
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview."
+
+[[case.phase]]
+project = "web"
+report = "Rendered the blocked list in ChoiceGate.tsx."
+
+[[case]]
+id = "feedback-research-first"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Retry a provider stream once when it fails with an overloaded error."
+feedback = "The retry never fires for me. Before you fix it, research which status code and error body the Anthropic API actually sends when it is overloaded, because I think we match the wrong one."
+note = "The user asks for research before the revision."
+expect = { route = "implementation_detail", targets = ["server"], research = true, dispositions = { answer = "deliver" } }
+
+[[case.phase]]
+project = "server"
+report = "The Anthropic client retries once when the response status is 503."
+
+[[case.phase]]
+project = "web"
+report = "No change was needed in this phase."
+
+# --- Route answer (Rule J1): remember for implement, phase gates, mixed answers, typed options, forget ---------
+
+[[case]]
+id = "route-remember-implement"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add a date range filter to GET /api/workspaces/:ws/sessions."
+note = "The answer settles the question and tells the implementer how to build it."
+spec = """
+# Spec: session date filter
+
+## Requirements
+- R1: When `from` and `to` are given, the endpoint shall return only sessions in that range.
+"""
+expect = { dispositions = { Q1 = "deliver" }, stages = { Q1 = ["implement"] } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the sessions list endpoint."
+scope = "crates/ostra-server/src/api.rs, crates/ostra-store/src/workspace.rs"
+findings = "list_sessions takes no filter; sessions has created_at and updated_at as RFC 3339 strings."
+doc = """
+# Research: sessions list
+
+`api::list_sessions` calls `WorkspaceDb::list_sessions()`, which returns every row. `sessions` has `created_at`
+and `updated_at`, both RFC 3339 strings, compared as text elsewhere in ostra-store.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "Which timestamp should the range filter on?"
+options = [["created_at", "When the session started."], ["updated_at", "When it last changed."]]
+recommended = 0
+answer = "created_at. When you build it, filter in the SQL query with the existing text comparison, don't load every row and filter in Rust."
+
+[[case]]
+id = "route-no-note-for-a-plain-answer"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add a date range filter to GET /api/workspaces/:ws/sessions."
+note = "Counter-case: a requirement with nothing for a later stage keeps no note."
+spec = """
+# Spec: session date filter
+
+## Requirements
+- R1: When `from` and `to` are given, the endpoint shall return only sessions in that range.
+"""
+expect = { dispositions = { Q1 = "deliver" }, stages = { Q1 = [] } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the sessions list endpoint."
+scope = "crates/ostra-server/src/api.rs"
+findings = "list_sessions takes no filter."
+doc = """
+# Research: sessions list
+
+`api::list_sessions` calls `WorkspaceDb::list_sessions()`, which returns every row.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "Are the range bounds inclusive?"
+options = [["Both inclusive", "from <= created_at <= to."], ["Half open", "from <= created_at < to."]]
+recommended = 1
+answer = "Both inclusive"
+
+[[case]]
+id = "route-stuck-fact-with-a-tests-note"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "stuck"
+request = "Let `./run.sh` load provider credentials from a file named in an environment variable."
+diagnostic = "run.sh sources nothing today; I cannot tell which variable name the providers expect."
+need = "the environment variable that names the credentials file"
+answer = "It is OSTRA_ENV_FILE. And when you write the tests later, point it at a temp file, never at my real one."
+note = "A stated fact for now, plus an instruction for the test stage."
+expect = { research = false, dispositions = { answer = "deliver" }, stages = { answer = ["tests"] } }
+
+[[case.research]]
+project = "ostra"
+task = "Map run.sh and how the providers read credentials."
+scope = "run.sh, crates/ostra-providers"
+findings = "run.sh starts the server; providers read ANTHROPIC_API_KEY and OPENAI_API_KEY from the environment."
+doc = """
+# Research: credentials
+
+`run.sh` builds and starts `ostra serve`. `ostra-providers` reads `ANTHROPIC_API_KEY` and `OPENAI_API_KEY`.
+"""
+
+[[case]]
+id = "route-review-cap-docs-note"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "review_cap"
+request = "Add a `limits.max_feedback_rounds` workspace setting."
+answer = "Run another pass. Nothing to add for the fix, but when the docs get written, say the limit counts rounds per session."
+note = "The text is only for the documentation stage; the fix gets nothing from it."
+expect = { dispositions = { answer = "remember" }, stages = { answer = ["docs"] } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the limits settings."
+scope = "crates/ostra-core/src/settings.rs"
+findings = "Limits live in WorkspaceSettings.limits."
+doc = """
+# Research: limits
+
+`WorkspaceSettings.limits` holds `max_parallel_executions` and `session_budget_usd`.
+"""
+
+[[case]]
+id = "route-stuck-discard"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "stuck"
+request = "Let `./run.sh` load provider credentials from a file named in an environment variable."
+diagnostic = "run.sh sources nothing today; I cannot tell which variable name the providers expect."
+need = "the environment variable that names the credentials file"
+answer = "Oops, ignore this, I clicked the wrong button."
+note = "The user tells Ostra to ignore the text, so the phase stays blocked instead of getting a fake fact."
+expect = { research = false, dispositions = { answer = "discard" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map run.sh."
+scope = "run.sh"
+findings = "run.sh starts the server."
+doc = """
+# Research: run.sh
+
+`run.sh` builds and starts `ostra serve`.
+"""
+
+[[case]]
+id = "route-mixed-answers"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add an `ostra export` subcommand that writes a session's events to a file."
+note = "One drop, one plain pick, one pick with a note for the tests."
+spec = """
+# Spec: session export
+
+## Requirements
+- R1: When the user runs `ostra export <session-id>`, the command shall write the session's events as JSON lines.
+"""
+expect = { dispositions = { Q1 = "discard", Q2 = "deliver", Q3 = "deliver" }, stages = { Q2 = [], Q3 = ["tests"] } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the CLI and the event log."
+scope = "crates/ostra-server/src/cli.rs, crates/ostra-store"
+findings = "The CLI is clap-based; events are read with WorkspaceDb::events(session)."
+doc = """
+# Research: export
+
+`crates/ostra-server/src/cli.rs` defines the subcommands with clap. `WorkspaceDb::events(session)` returns the
+stored events in order.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "Should the command print progress while it writes?"
+options = [["Yes", "A line per 1000 events."], ["No", "Silent until done."]]
+recommended = 1
+answer = "Skip this one, it doesn't matter."
+
+[[case.question]]
+id = "Q2"
+question = "Where should the file go by default?"
+options = [["Current directory", "<session-id>.jsonl in the working directory."], ["Session folder", "Inside the session's folder."]]
+recommended = 0
+answer = "Current directory"
+
+[[case.question]]
+id = "Q3"
+question = "Should it compress the output?"
+options = [["No", "Plain JSON lines."], ["gzip", "Write .jsonl.gz."]]
+recommended = 0
+answer = "No. For the tests, build the session from the conformance H helper rather than a real database."
+
+[[case]]
+id = "route-typed-option-combo"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+request = "Add an `ostra export` subcommand that writes a session's events to a file."
+note = "A single-choice question answered in the typed field with two options by number and a requirement of its own."
+spec = """
+# Spec: session export
+
+## Requirements
+- R1: When the user runs `ostra export <session-id>`, the command shall write the session's events.
+"""
+expect = { route = "requirement_change", research = false, dispositions = { Q1 = "deliver" } }
+
+[[case.research]]
+project = "ostra"
+task = "Map the CLI and the event log."
+scope = "crates/ostra-server/src/cli.rs"
+findings = "The CLI is clap-based."
+doc = """
+# Research: export
+
+`crates/ostra-server/src/cli.rs` defines the subcommands with clap.
+"""
+
+[[case.question]]
+id = "Q1"
+question = "Which format should the export write?"
+options = [["JSON lines", "One event per line."], ["CSV", "One row per event, payload as a JSON column."], ["SQLite", "A copy of the rows in a new database."]]
+recommended = 0
+answer = "1 and 3, chosen with a --format flag, and every file must start with a header line naming the Ostra version."
+
+[[case]]
+id = "route-forget-a-note"
+judge = "route_answer"
+workspace = "one"
+track = "full"
+gate = "spec_approval"
+approved = true
+request = "Add a date range filter to GET /api/workspaces/:ws/sessions."
+answer = "Approved. And forget what I said earlier about fixed timestamps in the tests, the real clock is fine."
+note = "The user takes back one of two kept notes."
+spec = """
+# Spec: session date filter
+
+## Requirements
+- R1: When `from` and `to` are given, the endpoint shall return only sessions in that range.
+"""
+expect = { forget = ["N1"], research = false }
+
+[[case.notes]]
+stages = ["tests"]
+text = "Cover both range boundaries with fixed timestamps, not the clock."
+
+[[case.notes]]
+stages = ["docs"]
+text = "Add an example request with both parameters to the module docs."
+
+[[case.research]]
+project = "ostra"
+task = "Map the sessions list endpoint."
+scope = "crates/ostra-server/src/api.rs"
+findings = "list_sessions takes no filter."
+doc = """
+# Research: sessions list
+
+`api::list_sessions` calls `WorkspaceDb::list_sessions()`, which returns every row.
+"""
+
+[[case]]
+id = "route-replace-a-note"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "stuck"
+request = "Store session exports in Postgres."
+diagnostic = "The crate for the Postgres client is not in Cargo.toml yet."
+need = "which Postgres client crate to add"
+answer = "Use sqlx, not tokio-postgres."
+note = "The answer replaces a kept note, so the old one is forgotten and the new instruction delivered."
+expect = { forget = ["N1"], dispositions = { answer = "deliver" } }
+
+[[case.notes]]
+stages = ["implement"]
+text = "Use the tokio-postgres crate."
+
+[[case.research]]
+project = "ostra"
+task = "Map the storage crates."
+scope = "crates/ostra-store"
+findings = "ostra-store uses rusqlite only."
+doc = """
+# Research: storage
+
+`ostra-store` uses rusqlite and has no Postgres client.
+"""
+
+[[case]]
+id = "route-keep-unrelated-note"
+judge = "route_answer"
+workspace = "one"
+track = "light"
+gate = "stuck"
+request = "Store session exports in Postgres."
+diagnostic = "The crate for the Postgres client is not in Cargo.toml yet."
+need = "which Postgres client crate to add"
+answer = "Use sqlx."
+note = "Counter-case: the kept note is about tests, not the crate, so nothing is forgotten."
+expect = { forget = [], dispositions = { answer = "deliver" } }
+
+[[case.notes]]
+stages = ["tests"]
+text = "Run the Postgres tests against a throwaway container, never a shared database."
+
+[[case.research]]
+project = "ostra"
+task = "Map the storage crates."
+scope = "crates/ostra-store"
+findings = "ostra-store uses rusqlite only."
+doc = """
+# Research: storage
+
+`ostra-store` uses rusqlite and has no Postgres client.
+"""
+
+[[case]]
+id = "feedback-forget-a-note"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "All good, I accept it. Drop my earlier note about the docs, we don't need that section."
+note = "The user accepts and takes back a kept note."
+expect = { route = "implementation_detail", forget = ["N1"], dispositions = { answer = "remember" } }
+
+[[case.notes]]
+stages = ["docs"]
+text = "Explain in the docs what a blocked phase means."
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview."
+
+[[case.phase]]
+project = "web"
+report = "Rendered the blocked list in ChoiceGate.tsx."

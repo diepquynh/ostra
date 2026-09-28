@@ -8,7 +8,7 @@
 //! Each case builds the session state its judge would see, through the same fold and `judge_input` the
 //! engine uses, and calls the judge `OSTRA_EVAL_RUNS` times per model. The report lists pass counts, the
 //! spread of answers, and cost, and is written to `target/evals/`. `OSTRA_EVAL_CASES` filters case ids by
-//! substring. The test fails only when calls fail, because model results vary run to run.
+//! substring, several separated by commas. The test fails only when calls fail, because model results vary run to run.
 
 use chrono::Utc;
 use futures::StreamExt;
@@ -52,7 +52,42 @@ struct Case {
     phase: Vec<Phase>,
     #[serde(default)]
     note: Option<String>,
+    /// Route answer: the gate kind the user answered.
+    #[serde(default)]
+    gate: Option<String>,
+    /// Route answer: the open questions and the user's answer to each.
+    #[serde(default)]
+    question: Vec<EvalQuestion>,
+    /// Route answer: the text answer of a gate without questions.
+    #[serde(default)]
+    answer: Option<String>,
+    #[serde(default)]
+    approved: bool,
+    /// Route answer: a stuck gate's diagnostic, and its need or a blocked phase's reason.
+    #[serde(default)]
+    diagnostic: Option<String>,
+    #[serde(default)]
+    need: Option<String>,
+    /// Route answer and Feedback: notes kept at earlier gates, `N1` first.
+    #[serde(default)]
+    notes: Vec<EvalNote>,
     expect: Expect,
+}
+
+#[derive(Deserialize, Clone)]
+struct EvalNote {
+    stages: Vec<String>,
+    text: String,
+}
+
+#[derive(Deserialize, Clone)]
+struct EvalQuestion {
+    id: String,
+    question: String,
+    options: Vec<(String, String)>,
+    #[serde(default)]
+    recommended: usize,
+    answer: String,
 }
 
 #[derive(Deserialize, Clone)]
@@ -92,6 +127,18 @@ struct Expect {
     needed: Vec<String>,
     #[serde(default)]
     not_needed: Vec<String>,
+    /// Route answer and Feedback: the disposition each item must get.
+    #[serde(default)]
+    dispositions: BTreeMap<String, String>,
+    /// Route answer and Feedback: later stages each item must name.
+    #[serde(default)]
+    stages: BTreeMap<String, Vec<String>>,
+    /// Route answer and Feedback: whether research must be queued.
+    #[serde(default)]
+    research: Option<bool>,
+    /// Route answer and Feedback: the kept note IDs the answer must forget, exactly.
+    #[serde(default)]
+    forget: Option<Vec<String>>,
 }
 
 fn repo() -> PathBuf {
@@ -160,6 +207,7 @@ fn kind(judge: &str) -> JudgeKind {
         "feedback" => JudgeKind::Feedback,
         "sufficiency" => JudgeKind::Sufficiency,
         "stakes" => JudgeKind::Stakes,
+        "route_answer" => JudgeKind::RouteAnswer,
         other => panic!("no eval support for judge {other}"),
     }
 }
@@ -289,6 +337,26 @@ fn session(case: &Case, dir: &Path) -> SessionState {
     if case.judge == "stakes" {
         return SessionState::fold(SessionId::from("eval"), &log.events);
     }
+    keep_notes(&mut log, case, &session_root);
+    if case.judge == "route_answer" {
+        let (payload, answer) = route_gate(case, &session_root);
+        let routed = ostra_engine::state::answer_needs_route(&payload, &answer);
+        assert!(routed, "{}: the answer would not be routed", case.id);
+        log.ev(SessionEvent::GateOpened {
+            id: GateId::from(ROUTE_GATE),
+            title: route_title(&payload).into(),
+            explanation: String::new(),
+            payload,
+        });
+        log.ev(SessionEvent::GateAnswered {
+            id: GateId::from(ROUTE_GATE),
+            source: AnswerSource::User,
+            answer,
+            reason: None,
+            routed,
+        });
+        return SessionState::fold(SessionId::from("eval"), &log.events);
+    }
     if full {
         // Low stakes builds one inline phase per project, as the light track does.
         log.decide(
@@ -337,8 +405,218 @@ fn session(case: &Case, dir: &Path) -> SessionState {
             text: case.feedback.clone(),
         },
         reason: None,
+        routed: true,
     });
     SessionState::fold(SessionId::from("eval"), &log.events)
+}
+
+const ROUTE_GATE: &str = "g_eval";
+
+/// Each earlier note as the fold keeps one: an answered question the judge remembered.
+fn keep_notes(log: &mut Log, case: &Case, session_root: &Path) {
+    for (i, n) in case.notes.iter().enumerate() {
+        let gate = GateId::from(format!("g_note_{i}"));
+        let q = ostra_core::pipeline::Question {
+            id: "Q1".into(),
+            question: "An earlier question".into(),
+            tag: "Earlier".into(),
+            options: vec![],
+            recommended: 0,
+            multi_select: false,
+        };
+        log.ev(SessionEvent::GateOpened {
+            id: gate.clone(),
+            title: "Questions about the requirements".into(),
+            explanation: String::new(),
+            payload: GatePayload::OpenQuestions {
+                artifact: "spec".into(),
+                artifact_path: session_root.join("ostra-spec-1.md"),
+                questions: vec![q.clone()],
+            },
+        });
+        log.ev(SessionEvent::GateAnswered {
+            id: gate.clone(),
+            source: AnswerSource::User,
+            answer: GateAnswer::Questions {
+                answers: vec![ostra_core::pipeline::QuestionAnswer {
+                    id: q.id,
+                    question: q.question,
+                    answer: n.text.clone(),
+                }],
+            },
+            reason: None,
+            routed: true,
+        });
+        log.ev(SessionEvent::DecisionMade {
+            id: DecisionId::new(),
+            judge: JudgeKind::RouteAnswer,
+            subject: Some(gate.to_string()),
+            input_summary: String::new(),
+            output: json!({"route": "implementation_detail", "items": [{"id": "Q1", "disposition": "remember", "note": n.text, "stages": n.stages}], "research": [], "forget": [], "reason": "eval"}),
+            reason: "eval".into(),
+        });
+    }
+}
+
+fn route_title(p: &GatePayload) -> &'static str {
+    match p {
+        GatePayload::OpenQuestions { .. } => "Questions about the requirements",
+        GatePayload::SpecApproval { .. } => "Approve the spec",
+        GatePayload::PlanApproval { .. } => "Approve the plan",
+        GatePayload::Stuck { .. } => "Phase 1 is stuck",
+        GatePayload::PhaseBlocked { .. } => "Phase 1 is blocked",
+        GatePayload::ReviewCap { .. } => "Review of phase 1 reached its cap",
+        _ => "A question",
+    }
+}
+
+/// The gate a Route answer case answers, and the user's answer.
+fn route_gate(case: &Case, session_root: &Path) -> (GatePayload, GateAnswer) {
+    let text = case.answer.clone();
+    let choice = |option: &str| GateAnswer::Choice {
+        option: option.into(),
+        text: text.clone(),
+    };
+    let project = projects(&case.workspace)[0].0.clone();
+    match case.gate.as_deref().unwrap_or("open_questions") {
+        "open_questions" => (
+            GatePayload::OpenQuestions {
+                artifact: "spec".into(),
+                artifact_path: session_root.join("ostra-spec-1.md"),
+                questions: case
+                    .question
+                    .iter()
+                    .map(|q| ostra_core::pipeline::Question {
+                        id: q.id.clone(),
+                        question: q.question.clone(),
+                        tag: "Scope".into(),
+                        options: q
+                            .options
+                            .iter()
+                            .map(
+                                |(label, description)| ostra_core::pipeline::QuestionOption {
+                                    label: label.clone(),
+                                    description: description.clone(),
+                                },
+                            )
+                            .collect(),
+                        recommended: q.recommended,
+                        multi_select: false,
+                    })
+                    .collect(),
+            },
+            GateAnswer::Questions {
+                answers: case
+                    .question
+                    .iter()
+                    .map(|q| ostra_core::pipeline::QuestionAnswer {
+                        id: q.id.clone(),
+                        question: q.question.clone(),
+                        answer: q.answer.clone(),
+                    })
+                    .collect(),
+            },
+        ),
+        "spec_approval" => (
+            GatePayload::SpecApproval {
+                spec_path: session_root.join("ostra-spec-1.md"),
+                summary: "The approved spec.".into(),
+                findings: vec![],
+            },
+            GateAnswer::Approval {
+                approved: case.approved,
+                feedback: text.clone(),
+            },
+        ),
+        "stuck" => (
+            GatePayload::Stuck {
+                execution: ExecutionId::from("x_eval"),
+                agent: AgentName::Implementer,
+                project,
+                phase: Some(1),
+                diagnostic: case.diagnostic.clone().unwrap_or_default(),
+                need: case.need.clone().unwrap_or_default(),
+            },
+            choice("fact"),
+        ),
+        "phase_blocked" => (
+            GatePayload::PhaseBlocked {
+                project,
+                phase: 1,
+                reason: case.need.clone().unwrap_or_default(),
+            },
+            choice("retry"),
+        ),
+        "review_cap" => (
+            GatePayload::ReviewCap {
+                project,
+                phase: 1,
+                tests: false,
+                iterations: 3,
+                findings: vec![],
+                ledger_path: session_root.join("ledger.md"),
+            },
+            choice("another-pass"),
+        ),
+        other => panic!("{}: no eval support for gate {other}", case.id),
+    }
+}
+
+/// Route answer and Feedback: the item-level part of the answer, and whether it matches.
+fn score_items(e: &Expect, out: &Value) -> (String, bool) {
+    // Read the items as the engine does (`judge::item_for`): split parts merge, and on a gate with
+    // one text every item is about it.
+    let items: Vec<ostra_engine::judge::AnswerItem> =
+        serde_json::from_value(out["items"].clone()).unwrap_or_default();
+    let mut label = vec![];
+    let mut ok = true;
+    for (id, want) in &e.dispositions {
+        let merged = ostra_engine::judge::item_for(&items, id);
+        let got = serde_json::to_value(merged.disposition)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default();
+        let mut stages: Vec<String> = ostra_engine::judge::parts_for(&items, id)
+            .iter()
+            .flat_map(|p| p.stages.iter())
+            .filter_map(|s| serde_json::to_value(s).ok()?.as_str().map(String::from))
+            .collect();
+        stages.sort();
+        stages.dedup();
+        ok &= &got == want;
+        if let Some(want_stages) = e.stages.get(id) {
+            // An empty list means the item must name no stage.
+            ok &= if want_stages.is_empty() {
+                stages.is_empty()
+            } else {
+                want_stages.iter().all(|w| stages.contains(w))
+            };
+        }
+        label.push(if stages.is_empty() {
+            format!("{id}:{got}")
+        } else {
+            format!("{id}:{got}[{}]", stages.join(","))
+        });
+    }
+    let research = out["research"].as_array().map_or(0, |a| a.len());
+    if let Some(want) = e.research {
+        ok &= (research > 0) == want;
+    }
+    label.push(format!("research:{research}"));
+    let mut forget: Vec<String> = out["forget"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    forget.sort();
+    if let Some(want) = &e.forget {
+        let mut want = want.clone();
+        want.sort();
+        ok &= forget == want;
+    }
+    if !forget.is_empty() {
+        label.push(format!("forget:{}", forget.join(",")));
+    }
+    (label.join(" "), ok)
 }
 
 /// The research tasks with Not covered items, as the planner names them for the Sufficiency judge.
@@ -419,11 +697,20 @@ fn score(case: &Case, out: &Value) -> (String, bool) {
             }
             (label.join(" "), ok)
         }
+        "route_answer" => {
+            let route = out["route"].as_str().unwrap_or("?").to_string();
+            let (items, items_ok) = score_items(e, out);
+            let ok = e.route.as_deref().is_none_or(|r| r == route) && items_ok;
+            (format!("{route} {items}"), ok)
+        }
         _ => {
             let route = out["route"].as_str().unwrap_or("?").to_string();
             let got = sorted(&out["targets"]);
-            let ok = e.route.as_deref() == Some(route.as_str()) && got == want_targets;
-            (format!("{route} {}", got.join("+")), ok)
+            let (items, items_ok) = score_items(e, out);
+            let ok = e.route.as_deref() == Some(route.as_str())
+                && (want_targets.is_empty() || got == want_targets)
+                && items_ok;
+            (format!("{route} {} {items}", got.join("+")), ok)
         }
     }
 }
@@ -432,6 +719,8 @@ struct Outcome {
     case: String,
     model: String,
     label: Result<(String, bool, String), String>,
+    /// The decision as the model returned it.
+    output: Value,
     cost: f64,
 }
 
@@ -444,7 +733,7 @@ async fn judge_routing_evals() {
     let cases: Vec<Case> = file
         .case
         .into_iter()
-        .filter(|c| c.id.contains(&filter))
+        .filter(|c| filter.split(',').any(|f| c.id.contains(f.trim())))
         .collect();
     let models: Vec<String> = std::env::var("OSTRA_EVAL_MODELS")
         .unwrap_or_else(|_| "anthropic:claude-opus-5-5".into())
@@ -480,6 +769,7 @@ async fn judge_routing_evals() {
         let subject = match k {
             JudgeKind::Feedback => Some("0"),
             JudgeKind::Sufficiency => Some(sufficiency.as_str()),
+            JudgeKind::RouteAnswer => Some(ROUTE_GATE),
             _ => None,
         };
         let facts: Vec<ProjectFacts> = projects(&case.workspace)
@@ -524,20 +814,33 @@ async fn judge_routing_evals() {
                 .map_err(|e| e.to_string()),
                 Err(e) => Err(e.to_string()),
             };
-            let (label, cost) = match result {
+            let (label, cost, output) = match result {
                 Ok((out, usage)) => {
                     let name = model.split_once(':').map_or(model.as_str(), |(_, m)| m);
                     let cost = ostra_core::pricing::cost(name, &usage, 0);
-                    let (l, ok) = score(&case, &out);
-                    let reason = out["reason"].as_str().unwrap_or_default().to_string();
-                    (Ok((l, ok, reason)), cost)
+                    // Output the runner's parse would reject is retried there, so name it apart.
+                    let (l, ok) = if matches!(k, JudgeKind::RouteAnswer | JudgeKind::Feedback)
+                        && out["route"].as_str().is_none()
+                    {
+                        let raw: String = out.to_string().chars().take(160).collect();
+                        (format!("invalid {raw}"), false)
+                    } else {
+                        score(&case, &out)
+                    };
+                    // An unparsed tool input keeps its raw text, so the report shows why.
+                    let reason = match out.get(ostra_providers::anthropic::INVALID_INPUT_KEY) {
+                        Some(raw) => format!("invalid tool input: {raw}"),
+                        None => out["reason"].as_str().unwrap_or_default().to_string(),
+                    };
+                    (Ok((l, ok, reason)), cost, out)
                 }
-                Err(e) => (Err(e), 0.0),
+                Err(e) => (Err(e), 0.0, Value::Null),
             };
             Outcome {
                 case: case.id.clone(),
                 model,
                 label,
+                output,
                 cost,
             }
         })
@@ -564,6 +867,7 @@ async fn judge_routing_evals() {
             let mut pass = 0;
             let mut errors = vec![];
             let mut reasons = vec![];
+            let outputs: Vec<&Value> = os.iter().map(|o| &o.output).collect();
             for o in os {
                 match &o.label {
                     Ok((l, ok, reason)) => {
@@ -601,7 +905,7 @@ async fn judge_routing_evals() {
             );
             report.push(json!({
                 "case": case.id, "judge": case.judge, "model": model, "note": case.note,
-                "pass": pass, "runs": os.len(), "answers": spread, "errors": errors, "reasons": reasons,
+                "pass": pass, "runs": os.len(), "answers": spread, "errors": errors, "reasons": reasons, "outputs": outputs,
             }));
         }
     }
@@ -647,6 +951,7 @@ fn eval_cases_build_their_sessions() {
         let subject = match k {
             JudgeKind::Feedback => Some("0"),
             JudgeKind::Sufficiency => Some(sufficiency.as_str()),
+            JudgeKind::RouteAnswer => Some(ROUTE_GATE),
             _ => None,
         };
         let (input, _) = judge_input(&st, k, subject, &[]);
@@ -678,6 +983,44 @@ fn eval_cases_build_their_sessions() {
                 assert!(
                     input.contains(case.research[0].doc.lines().nth(1).unwrap()),
                     "{}",
+                    case.id
+                );
+            }
+            _ if !case.notes.is_empty()
+                && st.user_notes.iter().filter(|n| !n.forgotten).count() != case.notes.len() =>
+            {
+                panic!("{}: the earlier notes were not kept", case.id)
+            }
+            "route_answer" => {
+                assert!(
+                    st.held_answers.contains_key(&GateId::from(ROUTE_GATE))
+                        || st.phases.values().any(|p| matches!(
+                            p.impl_loop.next,
+                            ostra_engine::state::LoopNext::AwaitRoute { .. }
+                        ))
+                        || case
+                            .gate
+                            .as_deref()
+                            .is_some_and(|g| g != "open_questions" && g != "spec_approval"),
+                    "{}: the answer is not waiting for the judge",
+                    case.id
+                );
+                for q in &case.question {
+                    assert!(
+                        input.contains(&q.answer),
+                        "{}: answer {} missing",
+                        case.id,
+                        q.id
+                    );
+                }
+                if let Some(a) = &case.answer {
+                    assert!(input.contains(a.as_str()), "{}: answer missing", case.id);
+                }
+                assert!(
+                    !case.expect.dispositions.is_empty()
+                        || case.expect.research.is_some()
+                        || case.expect.route.is_some(),
+                    "{}: expects nothing",
                     case.id
                 );
             }

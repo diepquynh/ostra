@@ -53,7 +53,7 @@ export function QuestionsGate({ gate, payload, submit, fail, busy, error }: Gate
               {q.multi_select && <span style={muted}>Choose one or more</span>}
             </legend>
             <div style={{ fontWeight: "var(--weight-semibold)" }}>{q.question}</div>
-            {orderedOptions(q).map((o) => (
+            {orderedOptions(q).map((o, i) => (
               <Checkbox
                 key={o.label}
                 radio={!q.multi_select}
@@ -62,7 +62,7 @@ export function QuestionsGate({ gate, payload, submit, fail, busy, error }: Gate
                 onChange={() => set(toggleSelection(s, o.label, q.multi_select))}
                 label={
                   <>
-                    {o.label}
+                    {i + 1}. {o.label}
                     {o.recommended && (
                       <span style={{ marginLeft: 6 }}>
                         <Chip tone="ok">Recommended</Chip>
@@ -79,14 +79,14 @@ export function QuestionsGate({ gate, payload, submit, fail, busy, error }: Gate
               checked={s.selected.includes(OTHER)}
               onChange={() => set(toggleSelection(s, OTHER, q.multi_select))}
               label="Other"
-              description="Write your own answer."
+              description="Write your own answer. You can name options by number, combine them, and add requirements."
             />
             {s.selected.includes(OTHER) && (
               <Input
                 multiline
                 rows={2}
                 aria-label={`${q.id} answer`}
-                placeholder="Your answer"
+                placeholder="For example: 1 and 3, plus an audit log"
                 value={s.other}
                 onChange={(e) => set({ ...s, other: e.target.value })}
               />

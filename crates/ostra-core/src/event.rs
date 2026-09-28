@@ -626,6 +626,10 @@ pub enum SessionEvent {
         answer: GateAnswer,
         /// Why the YOLO judge chose this answer.
         reason: Option<String>,
+        /// Rule J1: the answer waits for the Route answer or Feedback judge before it is applied.
+        /// Answers recorded before the rule have none and fold as they always did.
+        #[serde(default)]
+        routed: bool,
     },
     /// Appended before a command process starts, so a long format run shows on the board.
     CommandStarted {

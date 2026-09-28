@@ -103,6 +103,8 @@ pub struct Extras {
     pub resume_instructions: Option<String>,
     pub prior_reports: Vec<PathBuf>,
     pub context_files: Vec<PathBuf>,
+    /// Rule J1: what the user said at an earlier gate for this stage, one entry per answer.
+    pub user_notes: Vec<String>,
     /// Free-form instructions below the parameters.
     pub task_note: Option<String>,
 }
@@ -203,6 +205,7 @@ impl Block {
         self.opt("Resume instructions", e.resume_instructions.as_deref());
         self.paths("Prior phase reports", &e.prior_reports);
         self.paths("Context files", &e.context_files);
+        self.list("User notes", &e.user_notes);
         if let Some(note) = e.task_note.as_deref().filter(|n| !n.trim().is_empty()) {
             let _ = writeln!(self.0, "\n{}", note.trim());
         }

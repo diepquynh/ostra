@@ -177,7 +177,8 @@ A few shapes recur:
   research, spec, plan, and review were skipped."
 - **`Extras`** holds optional context that renders only when present: research documents, user answers,
   verbatim findings, required skills, the review ledger, a rescue diagnostic, resume instructions after a
-  handoff, prior phase reports, and a free-form task note.
+  handoff, prior phase reports, user notes (answers the Route-answer judge kept for this stage, Rule J1), and a
+  free-form task note.
 
 Each struct renders itself in a fixed order: required lines, then the common four, then extras. The same module
 has a parser, `parse_block`, that reads a block back and validates it against the agent's contract, including

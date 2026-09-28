@@ -183,13 +183,41 @@ impl H {
         id
     }
 
+    /// Answer as the runner does: content-bearing answers wait for the judge (Rule J1).
     fn answer(&mut self, gate: &GateId, answer: GateAnswer) {
+        let payload = self
+            .events
+            .iter()
+            .find_map(|e| match &e.event {
+                SessionEvent::GateOpened { id, payload, .. } if id == gate => Some(payload.clone()),
+                _ => None,
+            })
+            .expect("gate opened");
+        let routed = ostra_engine::state::answer_needs_route(&payload, &answer);
+        self.answer_as(gate, answer, routed);
+    }
+
+    fn answer_as(&mut self, gate: &GateId, answer: GateAnswer, routed: bool) {
         self.ev(SessionEvent::GateAnswered {
             id: gate.clone(),
             source: AnswerSource::User,
             answer,
             reason: None,
+            routed,
         });
+    }
+
+    /// The Route answer judge's decision for a gate (Rule J1).
+    fn route(&mut self, gate: &GateId, output: Value) {
+        self.decide(JudgeKind::RouteAnswer, Some(gate.as_str()), output);
+    }
+
+    /// Deliver every answer of a gate, the judge's plainest decision.
+    fn deliver(&mut self, gate: &GateId) {
+        self.route(
+            gate,
+            json!({"route": "implementation_detail", "items": [], "research": [], "reason": "r"}),
+        );
     }
 
     fn command(&mut self, purpose: CommandPurpose, project: &str) {
@@ -463,6 +491,9 @@ fn d3_questions_before_fact_check_and_answers_rerun_spec() {
             answers: answers.clone(),
         },
     );
+    // Rule J1: the judge sees the answers before generate-spec does.
+    assert_eq!(h.summaries(), vec![format!("judge route-answer {g}")]);
+    h.deliver(&g);
     let rerun = h.spawn_step("spawn generate-spec");
     assert_eq!(rerun.inputs.answers, answers);
     assert!(
@@ -509,6 +540,7 @@ fn d3a_prior_findings() {
             feedback: Some("Drop the retry logic".into()),
         },
     );
+    h.deliver(&g);
     h.run("spawn generate-spec", spec_submit(0, 0));
     let third = h.spawn_step("spawn fact-check");
     assert_eq!(
@@ -923,6 +955,7 @@ fn d10_change_at_plan_approval_goes_to_spec() {
             feedback: Some("Drop the retry logic".into()),
         },
     );
+    h.deliver(&g);
     let spec = h.spawn_step("spawn generate-spec");
     assert_eq!(
         spec.inputs.changes,
@@ -977,6 +1010,7 @@ fn d10_spec_revision_gets_only_new_input() {
             feedback: Some("Drop the retry logic".into()),
         },
     );
+    h.deliver(&g);
     let rev = h.spawn_step("spawn generate-spec");
     assert_eq!(rev.inputs.changes, vec!["Drop the retry logic".to_string()]);
     h.run("spawn generate-spec", spec_submit(0, 0));
@@ -2072,7 +2106,13 @@ fn f1_feedback_builds_a_reviewed_revision_then_asks_again() {
     h.pass_phase(1);
     assert_eq!(h.summaries(), vec!["gate implementation_review"]);
     feedback(&mut h, "Show the cancel button only for open orders.");
-    // One project and no spec: nothing to judge, the revision builds directly.
+    // Rule J1: even one project with no spec goes through the judge.
+    assert_eq!(h.summaries(), vec!["judge feedback 0"]);
+    h.decide(
+        JudgeKind::Feedback,
+        Some("0"),
+        json!({"route": "implementation_detail", "targets": [{"project": "p", "instruction": "Show the cancel button only for open orders."}], "items": [], "research": [], "reason": "r"}),
+    );
     assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"]);
     let req = h.spawn_step("spawn implementer phase 2");
     assert_eq!(req.inputs.revision, Some(1));
@@ -2183,4 +2223,417 @@ fn f1_yolo_accepts_the_implementation() {
         ostra_engine::judge_input::yolo_plan(&st, &gate),
         Some(ostra_engine::judge_input::YoloPlan::Fixed { .. })
     ));
+}
+
+// ------------------------------------------------------------------------------------------
+// J1: every answer with content goes through the judge, which delivers, remembers, or discards
+// each part and may queue research first.
+// ------------------------------------------------------------------------------------------
+
+fn qa(id: &str, answer: &str) -> QuestionAnswer {
+    QuestionAnswer {
+        id: id.into(),
+        question: "Which?".into(),
+        answer: answer.into(),
+    }
+}
+
+#[test]
+fn j1_a_research_answer_runs_explore_before_the_spec() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(2, 0));
+    let g = h.open_gate("open_questions");
+    h.answer(
+        &g,
+        GateAnswer::Questions {
+            answers: vec![qa("Q1", "A"), qa("Q2", "Run a research pass")],
+        },
+    );
+    assert_eq!(h.summaries(), vec![format!("judge route-answer {g}")]);
+    h.route(
+        &g,
+        json!({"route": "requirement_change", "items": [
+            {"id": "Q1", "disposition": "deliver", "stages": [], "note": ""},
+            {"id": "Q2", "disposition": "deliver", "stages": [], "note": ""}
+        ], "research": [{"project": "p", "task": "Retrieve the docs of a Rust PostgreSQL client."}], "reason": "r"}),
+    );
+    // The spec waits for the research instead of receiving the request for it.
+    assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
+    let ex = h.spawn_step("spawn explore explore#1");
+    assert!(
+        ex.inputs
+            .task
+            .as_deref()
+            .unwrap()
+            .starts_with("Retrieve the docs of a Rust PostgreSQL client.")
+    );
+    h.run("spawn explore explore#1", explore_submit(1, &[]));
+    let rerun = h.spawn_step("spawn generate-spec");
+    let answers = &rerun.inputs.answers;
+    assert_eq!(answers[0], qa("Q1", "A"));
+    assert!(answers[1].answer.starts_with("Run a research pass\n"));
+    assert_eq!(
+        rerun.inputs.new_research_docs,
+        vec![PathBuf::from(
+            "/ws/.ostra/sessions/s1/p/ostra-research-1.md"
+        )]
+    );
+}
+
+#[test]
+fn j1_research_is_capped_and_kept_in_the_session_projects() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(1, 0));
+    let g = h.open_gate("open_questions");
+    h.answer(
+        &g,
+        GateAnswer::Questions {
+            answers: vec![qa("Q1", "Research all of it")],
+        },
+    );
+    let tasks: Vec<Value> = (0..5)
+        .map(|i| json!({"project": if i == 0 { "nope" } else { "p" }, "task": format!("t{i}")}))
+        .collect();
+    h.route(
+        &g,
+        json!({"route": "requirement_change", "items": [], "research": tasks, "reason": "r"}),
+    );
+    let st = h.state();
+    assert_eq!(
+        st.explore.len(),
+        1 + ostra_engine::judge::MAX_ANSWER_RESEARCH
+    );
+    assert!(st.explore.iter().all(|t| t.project == "p"));
+}
+
+#[test]
+fn j1_discarded_and_remembered_answers_do_not_reach_the_spec() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(2, 0));
+    let g = h.open_gate("open_questions");
+    h.answer(
+        &g,
+        GateAnswer::Questions {
+            answers: vec![
+                qa("Q1", "Ignore this one, it does not matter"),
+                qa("Q2", "Use tokio-postgres when you build it"),
+            ],
+        },
+    );
+    h.route(
+        &g,
+        json!({"route": "implementation_detail", "items": [
+            {"id": "Q1", "disposition": "discard", "stages": [], "note": ""},
+            {"id": "Q2", "disposition": "remember", "stages": ["implement"], "note": "Use the tokio-postgres crate."}
+        ], "research": [], "reason": "r"}),
+    );
+    let rerun = h.spawn_step("spawn generate-spec");
+    let answers = rerun.inputs.answers;
+    assert!(!answers[0].answer.contains("Ignore this one"));
+    assert!(answers[0].answer.contains("chose not to answer"));
+    assert!(answers[1].answer.contains("later stage"));
+    // The remembered note reaches the implementer, and only it.
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.run("spawn fact-check", fact("PASS", "spec", &[]));
+    let a = h.open_gate("spec_approval");
+    h.answer(
+        &a,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["judge stakes"],
+        "a bare approval is not routed"
+    );
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "low", "reason": "r"}),
+    );
+    let imp = h.spawn_step("spawn implementer phase 1 initial");
+    assert_eq!(
+        imp.inputs.user_notes,
+        vec!["Use the tokio-postgres crate.".to_string()]
+    );
+    h.run(
+        "spawn implementer phase 1 initial",
+        impl_submit(1, &["src/a.rs"]),
+    );
+    let review = h.spawn_step("spawn code-reviewer");
+    assert!(review.inputs.user_notes.is_empty());
+}
+
+#[test]
+fn j1_approval_text_waits_for_the_judge() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.run("spawn fact-check", fact("PASS", "spec", &[]));
+    let g = h.open_gate("spec_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: Some("Looks right. The docs should mention the new flag.".into()),
+        },
+    );
+    assert_eq!(h.summaries(), vec![format!("judge route-answer {g}")]);
+    assert!(!h.state().spec.approved);
+    h.route(
+        &g,
+        json!({"route": "implementation_detail", "items": [
+            {"id": "answer", "disposition": "remember", "stages": ["docs"], "note": "Mention the new flag."}
+        ], "research": [], "reason": "r"}),
+    );
+    let st = h.state();
+    assert!(
+        st.spec.approved,
+        "a note for later stages keeps the approval"
+    );
+    assert_eq!(
+        st.notes_for(ostra_engine::judge::NoteStage::Docs),
+        vec!["Mention the new flag."]
+    );
+    assert_eq!(h.summaries(), vec!["judge stakes"]);
+}
+
+#[test]
+fn j1_a_delivered_approval_text_changes_the_spec_even_when_approved() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.run("spawn fact-check", fact("PASS", "spec", &[]));
+    let g = h.open_gate("spec_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: Some("Approved, but cancellations must also refund the fee.".into()),
+        },
+    );
+    h.deliver(&g);
+    assert!(!h.state().spec.approved);
+    let rev = h.spawn_step("spawn generate-spec");
+    assert_eq!(
+        rev.inputs.changes,
+        vec!["Approved, but cancellations must also refund the fee.".to_string()]
+    );
+}
+
+#[test]
+fn j1_a_stuck_answer_can_ask_for_research_first() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (id, _) = h.start("spawn implementer");
+    h.finish(&id, ExecutionStatus::Ok, Some(json!({"status": "stuck", "report_path": "/r", "summary": "s", "stuck": {"diagnostic": "d", "need": "the shutdown API"}})));
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "gate", "reason": "r"}),
+    );
+    let g = h.open_gate("stuck");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "fact".into(),
+            text: Some("I don't know. Look up how rmcp shuts down a stdio server.".into()),
+        },
+    );
+    assert_eq!(h.summaries(), vec![format!("judge route-answer {g}")]);
+    h.route(
+        &g,
+        json!({"route": "implementation_detail", "items": [], "research": [{"project": "p", "task": "How rmcp shuts down a stdio server."}], "reason": "r"}),
+    );
+    let ex = h.spawn_step("spawn explore");
+    h.run(&Step::Spawn(Box::new(ex)).summary(), explore_submit(7, &[]));
+    let rerun = h.spawn_step("spawn implementer phase 1 rescue");
+    let ctx = rerun.inputs.instructions.unwrap();
+    assert!(ctx.contains("Look up how rmcp") && ctx.contains("ostra-research-7.md"));
+}
+
+#[test]
+fn j1_a_discarded_stuck_answer_leaves_the_phase_blocked() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (id, _) = h.start("spawn implementer");
+    h.finish(&id, ExecutionStatus::Ok, Some(json!({"status": "stuck", "report_path": "/r", "summary": "s", "stuck": {"diagnostic": "d", "need": "n"}})));
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "gate", "reason": "r"}),
+    );
+    let g = h.open_gate("stuck");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "fact".into(),
+            text: Some("Never mind, disregard what I typed.".into()),
+        },
+    );
+    h.route(
+        &g,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard", "stages": [], "note": ""}], "research": [], "reason": "r"}),
+    );
+    assert!(h.state().phases[&1].impl_loop.is_blocked());
+}
+
+#[test]
+fn j1_feedback_kept_for_later_accepts_and_discarded_feedback_asks_again() {
+    let mut h = light(&["p"]);
+    h.pass_phase(1);
+    feedback(
+        &mut h,
+        "Looks good. When you document it, mention the flag.",
+    );
+    h.decide(
+        JudgeKind::Feedback,
+        Some("0"),
+        json!({"route": "implementation_detail", "targets": [{"project": "p", "instruction": "x"}], "items": [{"id": "answer", "disposition": "remember", "stages": ["docs"], "note": "Mention the flag."}], "research": [], "reason": "r"}),
+    );
+    assert!(h.state().feedback.accepted);
+    assert_eq!(h.summaries(), vec!["command format p"]);
+
+    let mut h = light(&["p"]);
+    h.pass_phase(1);
+    feedback(&mut h, "Ignore that, I typed into the wrong box.");
+    h.decide(
+        JudgeKind::Feedback,
+        Some("0"),
+        json!({"route": "implementation_detail", "targets": [{"project": "p", "instruction": "x"}], "items": [{"id": "answer", "disposition": "discard", "stages": [], "note": ""}], "research": [], "reason": "r"}),
+    );
+    assert_eq!(h.state().phases.len(), 1, "no revision is built");
+    assert_eq!(h.summaries(), vec!["gate implementation_review"]);
+}
+
+#[test]
+fn j1_answers_recorded_before_the_rule_fold_as_they_did() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(1, 0));
+    let g = h.open_gate("open_questions");
+    h.answer_as(
+        &g,
+        GateAnswer::Questions {
+            answers: vec![qa("Q1", "A")],
+        },
+        false,
+    );
+    // Rule D3 as it was: the answer went straight to generate-spec.
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#2"]);
+}
+
+#[test]
+fn j1_only_answers_with_content_are_routed() {
+    use ostra_engine::state::answer_needs_route;
+    let approval = GatePayload::SpecApproval {
+        spec_path: PathBuf::new(),
+        summary: String::new(),
+        findings: vec![],
+    };
+    let yes = |feedback: Option<&str>| GateAnswer::Approval {
+        approved: true,
+        feedback: feedback.map(String::from),
+    };
+    assert!(!answer_needs_route(&approval, &yes(None)));
+    assert!(!answer_needs_route(&approval, &yes(Some("  "))));
+    assert!(answer_needs_route(&approval, &yes(Some("and rename it"))));
+    let budget = GatePayload::BudgetReached {
+        spent_usd: 1.0,
+        budget_usd: 1.0,
+    };
+    let raise = GateAnswer::Choice {
+        option: "raise".into(),
+        text: Some("5".into()),
+    };
+    assert!(
+        !answer_needs_route(&budget, &raise),
+        "a budget is the user's call, applied as typed"
+    );
+}
+
+#[test]
+fn j1_a_typed_answer_reaches_the_spec_with_the_numbered_options() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(2, 0));
+    let g = h.open_gate("open_questions");
+    h.answer(
+        &g,
+        GateAnswer::Questions {
+            answers: vec![qa("Q1", "1 and 2, plus an audit log"), qa("Q2", "B")],
+        },
+    );
+    h.deliver(&g);
+    let answers = h.spawn_step("spawn generate-spec").inputs.answers;
+    assert!(answers[0].answer.starts_with("1 and 2, plus an audit log\n"));
+    assert!(answers[0].answer.contains("1. A: a; 2. B: b"));
+    assert_eq!(answers[1].answer, "B", "a picked option goes as is");
+}
+
+#[test]
+fn j1_a_later_answer_forgets_a_kept_note() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(1, 0));
+    let g = h.open_gate("open_questions");
+    h.answer(
+        &g,
+        GateAnswer::Questions {
+            answers: vec![qa("Q1", "A. Build it with tokio-postgres.")],
+        },
+    );
+    h.route(
+        &g,
+        json!({"route": "implementation_detail", "items": [{"id": "Q1", "disposition": "deliver", "note": "Use tokio-postgres.", "stages": ["implement"]}], "research": [], "forget": [], "reason": "r"}),
+    );
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.run("spawn fact-check", fact("PASS", "spec", &[]));
+    let a = h.open_gate("spec_approval");
+    h.answer(
+        &a,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: Some("Approved. Use sqlx, not tokio-postgres.".into()),
+        },
+    );
+    // A decision for a gate that no longer waits forgets nothing.
+    h.route(
+        &g,
+        json!({"route": "implementation_detail", "items": [], "research": [], "forget": ["N1"], "reason": "stale"}),
+    );
+    assert!(!h.state().user_notes[0].forgotten);
+    h.route(
+        &a,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "remember", "note": "Use sqlx.", "stages": ["implement"]}], "research": [], "forget": ["N1"], "reason": "r"}),
+    );
+    let st = h.state();
+    assert!(st.user_notes[0].forgotten, "the note stays in the log");
+    assert_eq!(st.user_notes[1].id, "N2");
+    h.decide(JudgeKind::Stakes, None, json!({"stakes": "low", "reason": "r"}));
+    let imp = h.spawn_step("spawn implementer phase 1 initial");
+    assert_eq!(imp.inputs.user_notes, vec!["Use sqlx.".to_string()]);
+}
+
+#[test]
+fn j1_an_answer_split_into_parts_keeps_every_note() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (id, _) = h.start("spawn implementer");
+    h.finish(&id, ExecutionStatus::Ok, Some(json!({"status": "stuck", "report_path": "/r", "summary": "s", "stuck": {"diagnostic": "d", "need": "the variable"}})));
+    h.decide(JudgeKind::Rescue, Some(id.as_str()), json!({"action": "gate", "reason": "r"}));
+    let g = h.open_gate("stuck");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "fact".into(),
+            text: Some("It is OSTRA_ENV_FILE. In the tests, use a temp file.".into()),
+        },
+    );
+    // Two items for one text, the second with an invented ID: both are about the answer.
+    h.route(
+        &g,
+        json!({"route": "implementation_detail", "items": [
+            {"id": "answer", "disposition": "deliver", "note": "", "stages": []},
+            {"id": "answer-tests", "disposition": "remember", "note": "Use a temp file.", "stages": ["tests"]}
+        ], "research": [], "forget": [], "reason": "r"}),
+    );
+    let st = h.state();
+    assert_eq!(st.notes_for(ostra_engine::judge::NoteStage::Tests), vec!["Use a temp file."]);
+    let rerun = h.spawn_step("spawn implementer phase 1 rescue");
+    assert!(rerun.inputs.instructions.unwrap().contains("OSTRA_ENV_FILE"), "delivered, because one part is");
 }

@@ -358,10 +358,14 @@ reason:
 
 - **Accept the implementation** answers `done`. The session moves on to format, the closing gate, tests, docs,
   and the completion report.
-- **Send feedback** answers `feedback` with your text and starts a round. A round with no spec and one project
-  in scope becomes one revision phase in that project. Otherwise the Feedback judge
-  ([`assets/judges/feedback.md`](../../assets/judges/feedback.md)) routes the round and writes one instruction
-  per project it changes, so feedback on a backend and frontend pair can build a revision in each.
+- **Send feedback** answers `feedback` with your text and starts a round. The Feedback judge
+  ([`assets/judges/feedback.md`](../../assets/judges/feedback.md)) routes every round, one project or several,
+  and writes one instruction per project it changes, so feedback on a backend and frontend pair can build a
+  revision in each. It also decides what happens to the text (Rule J1): feedback that asks for a change is built;
+  feedback that accepts the build and only instructs a later stage ("the docs should explain X") accepts the
+  implementation and keeps the note for that stage; feedback you tell Ostra to ignore builds nothing and the gate
+  opens again. When the feedback asks for research first, the research runs before the revision, and the
+  revision reads it in the session context file.
 
 A revision phase is an inline phase with the next free phase ID and the title "Revision N". It runs the same
 implement and review loop as any phase and is staged when it passes, and the phase scheduler treats it like any

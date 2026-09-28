@@ -195,6 +195,7 @@ impl Engine {
                 self.inner.append(
                     &summary.id,
                     SessionEvent::GateAnswered {
+                        routed: false,
                         id: g,
                         source: AnswerSource::Engine,
                         answer: GateAnswer::Permission {
@@ -424,6 +425,7 @@ impl Engine {
                 source: AnswerSource::User,
                 answer: answer.clone(),
                 reason: None,
+                routed: crate::state::answer_needs_route(&view.payload, &answer),
             },
         )?;
         if let GateAnswer::Permission { answer } = answer
@@ -501,6 +503,7 @@ impl Engine {
                 let _ = self.inner.append(
                     session,
                     SessionEvent::GateAnswered {
+                        routed: false,
                         id: g.id.clone(),
                         source: AnswerSource::Yolo,
                         answer: GateAnswer::Permission {
@@ -1239,6 +1242,7 @@ impl Inner {
                 source,
                 answer,
                 reason,
+                ..
             } => {
                 let _ = self.db.answer_gate(id, *source, answer, reason.as_deref());
             }
@@ -1434,6 +1438,7 @@ impl Inner {
             self.append(
                 session,
                 SessionEvent::GateAnswered {
+                    routed: false,
                     id: g,
                     source: AnswerSource::Engine,
                     answer: GateAnswer::Permission {
@@ -1811,14 +1816,11 @@ impl Inner {
                 }
             }
         };
-        if self
-            .snapshot(session)?
-            .gates
-            .get(&gate)
-            .is_some_and(|g| g.answer.is_some())
-        {
+        let st = self.snapshot(session)?;
+        let Some(g) = st.gates.get(&gate).filter(|g| g.answer.is_none()) else {
             return Ok(());
-        }
+        };
+        let routed = crate::state::answer_needs_route(&g.payload, &answer);
         self.append(
             session,
             SessionEvent::GateAnswered {
@@ -1826,6 +1828,7 @@ impl Inner {
                 source: AnswerSource::Yolo,
                 answer,
                 reason: Some(reason),
+                routed,
             },
         )?;
         Ok(())
@@ -2611,6 +2614,7 @@ impl ExecutionHost for EngineHost {
             let _ = self.inner.append(
                 session,
                 SessionEvent::GateAnswered {
+                    routed: false,
                     id: gate,
                     source: AnswerSource::Yolo,
                     answer: GateAnswer::Permission {

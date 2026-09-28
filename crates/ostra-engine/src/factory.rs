@@ -39,6 +39,7 @@ fn work_extras(inputs: &SpawnInputs) -> Extras {
         research_docs: inputs.research_docs.clone(),
         prior_reports: inputs.prior_reports.clone(),
         context_files: inputs.context_files.clone(),
+        user_notes: inputs.user_notes.clone(),
         ..Default::default()
     };
     match inputs.work {
@@ -185,7 +186,10 @@ impl SpawnFactory for AgentsFactory {
                 implementer_report: required(i.implementer_report.clone(), "implementer report")?,
                 report_file: required(i.report_file.clone(), "report file")?,
                 phase_file: i.phase.as_ref().and_then(|p| p.file.clone()),
-                extra: Extras::default(),
+                extra: Extras {
+                    user_notes: i.user_notes.clone(),
+                    ..Default::default()
+                },
             }),
             AgentName::WriteTest => Box::new(WriteTestParams {
                 common,
@@ -199,7 +203,10 @@ impl SpawnFactory for AgentsFactory {
                 common,
                 implementer_reports: i.implementer_reports.clone(),
                 report_file: required(i.report_file.clone(), "report file")?,
-                extra: Extras::default(),
+                extra: Extras {
+                    user_notes: i.user_notes.clone(),
+                    ..Default::default()
+                },
             }),
             AgentName::PromptGeneration => Box::new(PromptGenParams {
                 common,

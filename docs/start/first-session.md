@@ -105,7 +105,10 @@ For an IMPLEMENT task you then see:
 2. **Spec.** The spec agent writes requirements in EARS form ("When X, the system shall Y") with acceptance
    criteria, from every research document. The spec is the contract every later stage checks against.
 3. **Open questions.** If the spec has questions only you can answer, a gate lists them with the recommended
-   option first. Every answer re-runs the spec agent. Ostra never edits the spec itself.
+   option first. Options are numbered, and Other takes a typed answer that can combine them, such as "1 and 3,
+   plus an audit log". A judge reads your answers first: it runs research when you ask for it, keeps an answer
+   that is only for a later stage for that stage, drops one you tell it to ignore, and forgets a kept note you
+   take back. The rest re-run the spec agent. Ostra never edits the spec itself.
 4. **Fact-check.** A separate agent checks every claim in the spec against the code and the sources it
    cites. A FAIL sends the findings back to the spec agent; a PASS unlocks approval.
 5. **Spec approval.** The approve button stays disabled until the fact-check passes. Rejecting needs a note

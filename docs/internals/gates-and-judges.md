@@ -18,7 +18,8 @@ The user's answer is checked before it is recorded. `runner::validate_answer` re
 not fit the gate ("That answer does not fit this gate."), an open-questions answer that leaves a question blank,
 and a rejection of a spec or plan with no feedback ("Say what to change."). A valid answer becomes a
 `GateAnswered` event, and the fold in [`state.rs`](../../crates/ostra-engine/src/state.rs) (`on_gate_answered`)
-turns it into new state that the planner acts on.
+turns it into new state that the planner acts on. An answer that carries content, such as a question's answer
+or any text, first goes to a judge that decides where it goes (Rule J1, [below](#every-answer-goes-through-a-judge-first)).
 
 Two properties follow from gates being events.
 
@@ -41,7 +42,7 @@ the LOW findings, and takes an optional change request:
 
 | Gate | Opens when | The user answers |
 | --- | --- | --- |
-| `open_questions` | The spec or the plan lists questions it could not settle | Every question, by choosing an option or writing text |
+| `open_questions` | The spec or the plan lists questions it could not settle | Every question, by choosing an option or writing text, which may combine numbered options |
 | `spec_approval` | The spec passed its fact-check | Approve, or reject with what to change |
 | `plan_approval` | The plan passed its fact-check | Approve, or reject with what to change |
 | `fact_check_recurring` | The spec or plan fact-check failed three times in a row | `another-round` (optionally with guidance) or `stop` |
@@ -58,9 +59,10 @@ the LOW findings, and takes an optional change request:
 
 ### Open questions
 
-The spec's open questions are asked before any fact-check (Rule D3). Each answer is added to the spec's pending
-input, and generate-spec runs again to write the answers into the spec. The plan's clarifying questions are
-handled differently: the answers are treated as a requirement change and go into the spec first (Rule D10),
+The spec's open questions are asked before any fact-check (Rule D3). The Route-answer judge reads the answers
+first (Rule J1). The ones it delivers are added to the spec's pending input, and generate-spec runs again to
+write them into the spec, after any research the judge queued. The plan's clarifying questions are handled
+differently: the delivered answers are treated as a requirement change and go into the spec first (Rule D10),
 because the plan agent reads only the spec.
 
 ![The open questions gate with a single-choice and a multiple-choice question](../images/console/gate-open-questions.png)
@@ -68,7 +70,10 @@ because the plan agent reads only the spec.
 ### Spec and plan approval
 
 Approving records the approved version. For the plan, approving also turns the Phase Index into the build queue.
-Rejecting with feedback adds the feedback to the spec as a change. For a plan, that is a requirement change:
+An approval with text waits for the Route-answer judge: when it delivers the text, the text is a change and the
+approval does not stand, because the user asked for something the approved version lacks; when it keeps the text
+for a later stage or discards it, and queues no research, the approval stands. Rejecting with feedback adds the feedback to the spec as a
+change. For a plan, that is a requirement change:
 both approvals are revoked, the spec is revised and re-approved, and the plan is revised in place.
 
 ![The plan approval gate with four phases and one LOW finding](../images/console/gate-plan-approval.png)
@@ -77,7 +82,8 @@ both approvals are revoked, the spec is revised and re-approved, and the plan is
 
 The fact-check loop between an author and its checker can fail to converge. After three FAILs in a row
 (`FACTCHECK_RECURRING_LIMIT`) the engine asks instead of spending another round. `another-round` allows three
-more FAILs before the next ask, and any guidance text goes to the author as a change. `stop` stops the stage and
+more FAILs before the next ask, and any guidance text goes through the Route-answer judge, then to the author as a
+change. `stop` stops the stage and
 the session fails.
 
 ![The fact-check-recurring gate with a HIGH and a MEDIUM finding and a guidance field](../images/console/gate-factcheck-recurring.png)
@@ -86,7 +92,7 @@ the session fails.
 
 Three review passes run per loop (`REVIEW_CAP`). If HIGH or MEDIUM findings are still open, the card shows them
 with the ledger path. `another-pass` adds one pass and sends the open findings to the fix agent, plus any text
-the user wrote. Anything else marks the phase blocked, with the finding count and ledger path as the reason.
+the user wrote once the Route-answer judge delivers it. Anything else marks the phase blocked, with the finding count and ledger path as the reason.
 
 BLOCKER findings never reach this gate. They loop without a cap until removed (Hard rule 21), and no answer can
 waive them.
@@ -99,7 +105,8 @@ its Guidance text and has no dismiss button:
 ### Stuck
 
 A stuck agent's diagnostic and need are shown. A `fact` answer goes to the Route-answer judge first, because a
-stated fact might be a requirement change rather than a detail. Any other answer blocks the phase.
+stated fact might be a requirement change rather than a detail, and because "I don't know, look it up" is a
+request for research rather than a fact. Any other answer, or a fact the judge discards, blocks the phase.
 
 A stuck gate names the execution and asks for the missing fact. Above it is a phase blocked gate for another phase:
 
@@ -237,8 +244,8 @@ it as "Ostra chose X because Y".
 | Sufficiency | Research finished with `Not covered` items | For each item: needed or not, plus a research task when needed | `sufficiency.md` |
 | Track | Research for an `IMPLEMENT` request finished and no track was forced | `light` (build from the research) or `full` (spec and plan first) | `track.md` |
 | Stakes | A full-track `IMPLEMENT` spec is approved | `low` (skip the plan), `medium`, or `high` | `stakes.md` |
-| Feedback | A feedback round needs routing: the session has a spec or several projects in scope | `requirement_change` or `implementation_detail`, and one `{project, instruction}` target per project it changes | `feedback.md` |
-| Route answer | A user's free text lands at a phase (stuck fact, blocked retry) | `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
+| Feedback | The user sends feedback at the implementation review gate | `requirement_change` or `implementation_detail`, one `{project, instruction}` target per project it changes, and what happens to the feedback (Rule J1) | `feedback.md` |
+| Route answer | Any other answer with content: open questions, approval text, guidance, a stuck fact, retry instructions | Per answer `deliver`, `remember`, or `discard`, research to run first, and `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
 | Rescue | An agent returned `stuck` | `rerun` with a stated fact, `explore` to find it, or `gate` to ask the user | `rescue.md` |
 | Resolve review | A review loop hit its budget under YOLO | `fix` with per-finding instructions, or `block` | `resolve-review.md` |
 | YOLO answer | A gate opens under YOLO and its plan is `Judge` | The gate's answer, in the schema for that gate | `yolo-answer.md` |
@@ -254,7 +261,9 @@ Each prompt tells the judge which way to lean when unsure, and why:
 - **Stakes** resolves upward, because skipping the plan removes the phase review that catches a wrong sequence.
 - **Feedback** resolves to `requirement_change` when a spec exists, because a spec that disagrees with the code
   misleads every later stage.
-- **Route answer** resolves to `requirement_change`, because a stale spec corrupts every stage after it.
+- **Route answer** resolves to `requirement_change`, because a stale spec corrupts every stage after it. It
+  delivers an answer unless the user's own words keep it for later or drop it, because dropping an answer the user
+  meant to give loses their decision.
 - **Rescue** never picks a plain retry, and after two rescues of the same phase with the same diagnostic it picks
   `gate`, because neither rescue changed the failure.
 - **YOLO answer** never invents a requirement, business rule, or fact, and picks the answer that sets work aside
@@ -264,16 +273,84 @@ The fold guards judge output as it guards agent output. A Classify result that d
 the session with a clear message; a Rescue or Resolve decision that arrives for a loop that has since moved on is
 ignored.
 
-### What a route decision does
+### Every answer goes through a judge first
 
-The Route-answer judge exists because an answer only reaches a later agent if it lands in the artifact that agent
-reads.
+An answer is not always content for the agent that asked. In one session the spec agent asked "No research
+document covers a Rust PostgreSQL client. Run another research pass before planning?" and the user picked "Run a
+research pass". That label went straight back to generate-spec, which cannot start research, so it asked the same
+question again. Rule J1 puts a judge between every answer with content and the agent: the Route-answer judge for
+open questions, approval text, fact-check guidance, review-cap text, a stuck fact, and retry instructions, and the
+Feedback judge for implementation feedback.
+
+`state::answer_needs_route` decides which answers wait. A bare choice with one meaning, such as approve, stop,
+retry, accept, or a budget raise, is applied at once, because there is nothing to route. The runner computes the
+flag when it records the answer and stores it on the event as `routed`, so the fold stays a function of the log.
+An answer recorded before the rule has no flag and folds as it always did, which keeps older sessions replaying to
+the same state.
+
+While an answer waits, the spec or plan behind it (`ArtifactTrack.routing`) or the phase behind it
+(`LoopNext::AwaitRoute`) starts nothing. The judge decides for each answer, one item per question ID or one item
+`answer` for a text:
+
+| Disposition | What the engine does |
+| --- | --- |
+| `deliver` | The agent that asked receives it as written. The default, and what an answer the judge did not name gets. |
+| `remember` | The agent that asked does not receive it. The judge's `note` is kept for the stages it names. |
+| `discard` | No agent receives it. The gate's answer stays in the log for traceability. |
+
+A model sometimes splits one answer into several items, one per part, sometimes under an invented ID.
+`judge::item_for` merges them: the answer is delivered when any part is, because the user gave it, and every part
+that names stages is kept as a note. On a gate with one text, every item is about that text.
+
+A remembered note is kept in the fold (`user_notes`) with an ID, `N1`, `N2`, and so on, and reaches later agents
+as a `User notes:` line: `implement`
+notes reach the implementer and fix passes, `tests` notes the path analyzer and the test writer, and `docs` notes
+the module documentation agent. Nothing can be kept for the plan agent, which reads only the spec (Rule D4); an
+answer the plan needs is delivered, so it lands in the spec. A delivered answer can name stages too, when part of
+it is also an instruction for later.
+
+A later answer can take a note back or replace it ("forget what I said about the timestamps", "use sqlx, not
+tokio-postgres"). The judge sees each kept note with its ID and lists the ones to drop in `forget`. A forgotten
+note stays in the fold and the log for traceability, marked `forgotten`, and reaches no agent. A decision that
+arrives for a gate that no longer waits forgets nothing.
+
+The open-questions card numbers each question's options, recommended first, and its Other field takes a typed
+answer. A typed answer may name options by number or label, combine options of a single-choice question, and add
+requirements: "1 and 3, plus an audit log". The agent that reads it sees only the text, so a typed answer that is
+not exactly option labels reaches it with the numbered options beside it (`Question::answer_in_context` in
+[`crates/ostra-core/src/pipeline.rs`](../../crates/ostra-core/src/pipeline.rs)). The numbering is
+`Question::display_options`, which must match the console's `orderedOptions`. A picked option goes as is.
+
+A spec question that is not delivered still has to leave the spec, or generate-spec would ask it again. It gets
+an engine-written answer instead: a discarded question tells the agent the user chose not to answer and to settle
+the point from the research, and a remembered one tells it a later stage has the answer. At a phase's gate, an
+answer that is not delivered takes the gate's plain path: a stuck fact blocks the phase, and a retry or another
+review pass runs with the review findings only.
+
+The judge may also queue research: up to three explore tasks (`MAX_ANSWER_RESEARCH`), each in a project the
+session has. For a spec or plan answer they are ordinary research, so Rule D2 holds the spec until they finish
+and the Sufficiency judge reads their Not covered items. The spec revision then gets the new documents with the
+answers. For a phase's answer the research belongs to that loop only (`LoopNext::AnswerResearch`), like a rescue
+explore, and the loop's next pass gets each document's path and findings with its instructions.
+
+The route still decides where a delivered answer at a phase goes:
 
 - `requirement_change`: the phase stops, the answer goes into the spec, and Rule D10 runs: spec revision, spec
-  approval, plan revision.
+  approval, plan revision. With no spec in the session there is nothing to change first, so the answer goes to
+  the phase.
 - `implementation_detail`: the text goes to the implementer or fix agent as an instruction. The spec does not
   change.
 - `stage_choice`: the text only chooses stages. The spec does not change (Rule T5).
+
+The user's words decide. The prompt tells the judge to follow the answer over the agent's recommendation and its
+own view, and to use `discard` only when the user says to ignore something. The one limit is Ostra's own rules,
+which no decision can reach because the engine applies them after the judge: guards, the budget, fact-check PASS
+before approval, the review cap count, BLOCKER removal, and a plan built only from an approved spec. An answer
+that asks for one of those, such as "skip the BLOCKER and ship it", is delivered as written, and the reason says
+which rule still applies.
+
+YOLO answers pass through the same judge, because a YOLO answer to "Run a research pass?" needs the research as
+much as a user's does.
 
 ## Overriding a judge
 
@@ -305,7 +382,7 @@ The Decisions tab of a session lists each judge decision with its reason and the
 
 A conformance fixture proves what the engine does with a judge's answer; it cannot say whether a model gives
 the right answer. The routing evals do that. [`tests/evals/judges.toml`](../../tests/evals/judges.toml) holds
-cases for the Classify, Track, and Feedback judges, each a request about Ostra's own source with the route a
+cases for the Classify, Sufficiency, Track, Stakes, Feedback, and Route-answer judges, each a request about Ostra's own source with the route a
 careful engineer would pick. Track and Feedback cases carry research documents, a spec, and phase reports
 written from the real code, and some are counter-cases that pull the other way, so a prompt change that fixes
 one case and breaks its opposite shows up.

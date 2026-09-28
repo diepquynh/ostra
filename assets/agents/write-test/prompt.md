@@ -63,6 +63,8 @@ optional plan and research paths, optional code-reviewer fix instructions, and a
    and test-writing instructions for this phase's source files.
 4. If plan or research paths are given, read them for context.
 5. If fix instructions are given, treat each finding as a targeted task (Step 1.1).
+6. If a `User notes:` line is given, follow each note when you choose and write tests. Each is something the
+   user said at an earlier question for the test stage.
 
 **Pass:** you have a list of changed source files AND an EPA report guiding coverage. Go to Step 2.
 **Fail:** no implementer report, no source files found, or no EPA report. Write a test report stating "No source

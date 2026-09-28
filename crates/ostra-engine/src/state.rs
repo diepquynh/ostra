@@ -2,9 +2,9 @@
 //! the same events always produce the same state, so a restart replays and continues.
 
 use crate::judge::{
-    AnswerRoute, ClassifyOut, FeedbackOut, FeedbackTarget, OptsIn, RescueAction, RescueOut,
-    ResolveAction, ResolveReviewOut, RouteAnswerOut, StakesOut, SufficiencyOut, TrackOut,
-    clean_title,
+    ANSWER_ITEM, AnswerItem, AnswerRoute, ClassifyOut, Disposition, ExploreTaskSpec, FeedbackOut,
+    FeedbackTarget, MAX_ANSWER_RESEARCH, NoteStage, OptsIn, RescueAction, RescueOut, ResolveAction,
+    ResolveReviewOut, RouteAnswerOut, StakesOut, SufficiencyOut, TrackOut, clean_title, item_for, parts_for,
 };
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
@@ -50,7 +50,126 @@ pub enum ExploreOrigin {
     Classify,
     Sufficiency,
     Amendment,
-    Rescue { phase: u32, tests: bool },
+    Rescue {
+        phase: u32,
+        tests: bool,
+    },
+    /// Rule J1: research the Route answer or Feedback judge queued for an answer before the spec.
+    Answer,
+    /// Rule J1: research for an answer at a phase's gate; only that loop waits for it.
+    LoopAnswer {
+        phase: u32,
+        tests: bool,
+    },
+}
+
+impl ExploreOrigin {
+    /// Research one work loop waits for, which never holds the rest of the session.
+    pub fn loop_bound(&self) -> bool {
+        matches!(
+            self,
+            ExploreOrigin::Rescue { .. } | ExploreOrigin::LoopAnswer { .. }
+        )
+    }
+}
+
+/// Rule J1: a spec or plan answer waiting for the Route answer judge.
+#[derive(Debug, Clone)]
+pub enum HeldAnswer {
+    Questions {
+        target: FactTarget,
+        answers: Vec<QuestionAnswer>,
+    },
+    Approval {
+        target: FactTarget,
+        /// The user approved a version that could be approved when they answered.
+        approve: bool,
+        version: u32,
+        text: String,
+    },
+    Recurring {
+        target: FactTarget,
+        text: String,
+    },
+}
+
+impl HeldAnswer {
+    pub fn target(&self) -> FactTarget {
+        match self {
+            HeldAnswer::Questions { target, .. }
+            | HeldAnswer::Approval { target, .. }
+            | HeldAnswer::Recurring { target, .. } => *target,
+        }
+    }
+}
+
+/// The spec or plan track as Rule J1 routing sees it.
+pub trait RoutingTrack {
+    fn set_routing(&mut self, gate: Option<GateId>);
+    fn clear_questions_gate(&mut self);
+}
+
+impl<T> RoutingTrack for ArtifactTrack<T> {
+    fn set_routing(&mut self, gate: Option<GateId>) {
+        self.routing = gate;
+    }
+    fn clear_questions_gate(&mut self) {
+        self.questions_gate = None;
+    }
+}
+
+/// An approval answer's decision and its non-empty text, when it has text.
+fn approval_text(answer: &GateAnswer) -> Option<(bool, String)> {
+    match answer {
+        GateAnswer::Approval {
+            approved,
+            feedback: Some(t),
+        } if !t.trim().is_empty() => Some((*approved, t.clone())),
+        _ => None,
+    }
+}
+
+/// Rule J1: whether an answer carries content the judge routes before it is applied. A bare
+/// choice, such as approve, stop, retry, or a budget raise, has one meaning and is applied as is.
+pub fn answer_needs_route(payload: &GatePayload, answer: &GateAnswer) -> bool {
+    let text = |t: &Option<String>| t.as_deref().is_some_and(|t| !t.trim().is_empty());
+    match (payload, answer) {
+        (GatePayload::OpenQuestions { .. }, GateAnswer::Questions { answers }) => {
+            !answers.is_empty()
+        }
+        (
+            GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. },
+            GateAnswer::Approval { feedback, .. },
+        ) => text(feedback),
+        (GatePayload::FactCheckRecurring { .. }, GateAnswer::Choice { option, text: t }) => {
+            option != "stop" && text(t)
+        }
+        (GatePayload::ReviewCap { .. }, GateAnswer::Choice { option, text: t }) => {
+            option == "another-pass" && text(t)
+        }
+        (GatePayload::Stuck { .. }, GateAnswer::Choice { option, text: t }) => {
+            option == "fact" && text(t)
+        }
+        (GatePayload::PhaseBlocked { .. }, GateAnswer::Choice { option, text: t }) => {
+            option == "retry" && text(t)
+        }
+        (GatePayload::ImplementationReview { .. }, GateAnswer::Choice { option, text: t }) => {
+            option == "feedback" && text(t)
+        }
+        _ => false,
+    }
+}
+
+/// Rule J1: part of an answer the judge kept for later stages.
+#[derive(Debug, Clone)]
+pub struct UserNote {
+    /// `N1`, `N2`, ... in the order kept, so a later answer can take one back.
+    pub id: String,
+    /// A later answer took it back; it stays for traceability and reaches no agent.
+    pub forgotten: bool,
+    pub stages: Vec<NoteStage>,
+    pub text: String,
+    pub gate: GateId,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +236,8 @@ pub struct ArtifactTrack<T> {
     pub approval_asked_version: u32,
     pub questions_gate: Option<GateId>,
     pub questions_asked_version: u32,
+    /// Rule J1: an answer about this artifact waits for the Route answer judge.
+    pub routing: Option<GateId>,
     pub recurring_gate: Option<GateId>,
     pub failed: Option<String>,
     pub failed_gate: Option<GateId>,
@@ -149,6 +270,7 @@ impl<T> ArtifactTrack<T> {
             approval_asked_version: 0,
             questions_gate: None,
             questions_asked_version: 0,
+            routing: None,
             recurring_gate: None,
             failed: None,
             failed_gate: None,
@@ -249,11 +371,23 @@ pub enum LoopNext {
         exec: ExecutionId,
         stuck: StuckInfo,
     },
-    /// A gate answer with free text waits for the Route answer judge.
+    /// A gate answer with free text waits for the Route answer judge (Rule J1).
     AwaitRoute {
         gate: GateId,
+        /// The user's words.
         text: String,
         then: WorkKind,
+        /// Fix instructions the delivered text is added to.
+        base: Option<String>,
+        /// The STUCK report a delivered fact answers.
+        stuck: Option<StuckInfo>,
+        /// What the loop does when the judge delivers nothing.
+        fallback: Box<LoopNext>,
+    },
+    /// Rule J1: research the judge queued for an answer; `next` runs when every task finished.
+    AnswerResearch {
+        tasks: Vec<u32>,
+        next: Box<LoopNext>,
     },
     Handoff {
         exec: ExecutionId,
@@ -712,6 +846,10 @@ pub struct SessionState {
     /// Dollars the user added to the session budget.
     pub budget_raised: f64,
     pub budget_gate: Option<GateId>,
+    /// Rule J1: spec and plan answers waiting for the Route answer judge.
+    pub held_answers: BTreeMap<GateId, HeldAnswer>,
+    /// Rule J1: answers the judge kept for later stages.
+    pub user_notes: Vec<UserNote>,
 
     pub executions: BTreeMap<ExecutionId, ExecRecord>,
     pub gates: BTreeMap<GateId, GateRecord>,
@@ -836,6 +974,8 @@ impl SessionState {
             prompt_gens: 0,
             budget_raised: 0.0,
             budget_gate: None,
+            held_answers: BTreeMap::new(),
+            user_notes: vec![],
             executions: BTreeMap::new(),
             gates: BTreeMap::new(),
             decisions: BTreeMap::new(),
@@ -1224,6 +1364,7 @@ impl SessionState {
                 source,
                 answer,
                 reason,
+                routed,
             } => {
                 let Some(g) = self.gates.get_mut(id) else {
                     return;
@@ -1236,7 +1377,7 @@ impl SessionState {
                 g.reason = reason.clone();
                 g.answered_at = Some(at);
                 let payload = g.payload.clone();
-                self.on_gate_answered(id, &payload, answer);
+                self.on_gate_answered(id, &payload, answer, *routed);
             }
             SessionEvent::CommandStarted {
                 purpose,
@@ -1378,6 +1519,341 @@ impl SessionState {
             self.plan.revoke_approval();
             self.plan.invalidated = true;
         }
+    }
+
+    fn track_mut(&mut self, target: FactTarget) -> &mut dyn RoutingTrack {
+        match target {
+            FactTarget::Spec => &mut self.spec,
+            FactTarget::Plan => &mut self.plan,
+        }
+    }
+
+    fn approve_spec(&mut self) {
+        self.spec.approved = true;
+        self.spec.approved_version = self.spec.version;
+        if self.plan.invalidated {
+            self.plan.needs_run = true;
+        }
+        for i in 0..self.feedback.rounds.len() {
+            if self.feedback.rounds[i].awaiting_spec {
+                self.feedback.rounds[i].awaiting_spec = false;
+                self.add_revision_phases(i);
+            }
+        }
+    }
+
+    fn hold_approval(&mut self, id: &GateId, target: FactTarget, approve: bool, text: String) {
+        let version = match target {
+            FactTarget::Spec => self.spec.version,
+            FactTarget::Plan => self.plan.version,
+        };
+        self.track_mut(target).set_routing(Some(id.clone()));
+        self.held_answers.insert(
+            id.clone(),
+            HeldAnswer::Approval {
+                target,
+                approve,
+                version,
+                text,
+            },
+        );
+    }
+
+    /// The implementation review gate a feedback round was answered at, when it was routed.
+    fn feedback_gate(&self, round: usize) -> Option<GateId> {
+        self.gates
+            .values()
+            .filter(|g| g.answer.is_some())
+            .find(|g| matches!(&g.payload, GatePayload::ImplementationReview { round: r, .. } if *r as usize == round + 1))
+            .map(|g| g.id.clone())
+    }
+
+    /// Rule J1: keep every part of an answer the judge named later stages for.
+    fn remember_parts(&mut self, gate: &GateId, items: &[AnswerItem], id: &str, answer: &str) {
+        let parts: Vec<AnswerItem> = parts_for(items, id).into_iter().cloned().collect();
+        for p in &parts {
+            self.remember(gate, p, answer);
+        }
+    }
+
+    /// Rule J1: keep the part of an answer the judge named later stages for.
+    fn remember(&mut self, gate: &GateId, item: &AnswerItem, answer: &str) {
+        if item.stages.is_empty() || item.disposition == Disposition::Discard {
+            return;
+        }
+        let text = if item.note.trim().is_empty() {
+            answer.to_string()
+        } else {
+            item.note.clone()
+        };
+        let mut stages = item.stages.clone();
+        stages.sort();
+        stages.dedup();
+        self.user_notes.push(UserNote {
+            id: format!("N{}", self.user_notes.len() + 1),
+            forgotten: false,
+            stages,
+            text,
+            gate: gate.clone(),
+        });
+    }
+
+    /// Rule J1: the user took back or replaced notes kept earlier.
+    fn forget(&mut self, ids: &[String]) {
+        for n in &mut self.user_notes {
+            if ids.iter().any(|i| i.trim() == n.id) {
+                n.forgotten = true;
+            }
+        }
+    }
+
+    /// Rule J1: queue the research the judge asked for, capped, in projects the session has.
+    fn queue_research(&mut self, tasks: &[ExploreTaskSpec], origin: ExploreOrigin) -> Vec<u32> {
+        let primary = self.primary();
+        tasks
+            .iter()
+            .filter(|t| !t.task.trim().is_empty())
+            .take(MAX_ANSWER_RESEARCH)
+            .map(|t| {
+                let project = if self.valid_project(&t.project) {
+                    t.project.clone()
+                } else {
+                    primary.clone()
+                };
+                let task = format!(
+                    "{}\n\nThe user asked for this research while answering a question. The whole request, for context: {}",
+                    t.task, self.request
+                );
+                self.push_explore(project, task, origin.clone())
+            })
+            .collect()
+    }
+
+    fn apply_held(&mut self, gate: &GateId, held: HeldAnswer, out: &RouteAnswerOut) {
+        let target = held.target();
+        self.track_mut(target).set_routing(None);
+        let research = self.queue_research(&out.research, ExploreOrigin::Answer);
+        let research_note = (!research.is_empty()).then(|| {
+            "The user asked for more research before this step. Fold the new research documents into the spec.".to_string()
+        });
+        match held {
+            HeldAnswer::Questions { target, answers } => {
+                let questions = match self.gates.get(gate).map(|g| &g.payload) {
+                    Some(GatePayload::OpenQuestions { questions, .. }) => questions.clone(),
+                    _ => vec![],
+                };
+                let mut sent = vec![];
+                for a in answers {
+                    let item = out.item(&a.id);
+                    let in_context = questions
+                        .iter()
+                        .find(|q| q.id == a.id)
+                        .map(|q| q.answer_in_context(&a.answer))
+                        .unwrap_or_else(|| a.answer.clone());
+                    self.remember_parts(gate, &out.items, &a.id, &in_context);
+                    let answer = match item.disposition {
+                        Disposition::Deliver => in_context,
+                        Disposition::Remember => format!(
+                            "The user gave this answer for a later stage, which receives it directly: {}. Remove the question and add no requirement for it.",
+                            if item.note.trim().is_empty() { &a.answer } else { &item.note }
+                        ),
+                        Disposition::Discard => "The user chose not to answer this. Remove the question, and settle the point from the research or record it as an assumption.".into(),
+                    };
+                    sent.push(QuestionAnswer { answer, ..a });
+                }
+                match target {
+                    FactTarget::Spec => {
+                        // Rule D3: every answer re-runs generate-spec.
+                        self.spec.answers.extend(sent);
+                        self.spec.needs_run = true;
+                    }
+                    FactTarget::Plan => {
+                        let text = sent
+                            .iter()
+                            .map(|a| format!("{} {}\nAnswer: {}", a.id, a.question, a.answer))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        // After the plan exists, answers go into the spec first (answer routing).
+                        self.requirement_change(format!(
+                            "Answers to the plan's clarifying questions:\n{text}{}",
+                            research_note.map(|n| format!("\n{n}")).unwrap_or_default()
+                        ));
+                    }
+                }
+            }
+            HeldAnswer::Approval {
+                target,
+                approve,
+                version,
+                text,
+            } => {
+                let item = out.item(ANSWER_ITEM);
+                self.remember_parts(gate, &out.items, ANSWER_ITEM, &text);
+                let change = match item.disposition {
+                    Disposition::Deliver => Some(text),
+                    _ => research_note,
+                };
+                match (target, change) {
+                    (FactTarget::Spec, Some(c)) => {
+                        self.spec.changes.push(c);
+                        self.spec.needs_run = true;
+                    }
+                    // Rule D10: a change after the plan exists goes into the spec first.
+                    (FactTarget::Plan, Some(c)) => self.requirement_change(c),
+                    (FactTarget::Spec, None) => {
+                        if approve && self.spec.version == version && !self.spec.needs_run {
+                            self.approve_spec();
+                        }
+                    }
+                    (FactTarget::Plan, None) => {
+                        if approve
+                            && self.plan.version == version
+                            && !self.plan.needs_run
+                            && !self.plan.invalidated
+                        {
+                            self.plan.approved = true;
+                            self.plan.approved_version = self.plan.version;
+                            self.adopt_plan_phases();
+                        }
+                    }
+                }
+            }
+            HeldAnswer::Recurring { target, text } => {
+                let item = out.item(ANSWER_ITEM);
+                self.remember_parts(gate, &out.items, ANSWER_ITEM, &text);
+                let change = match item.disposition {
+                    Disposition::Deliver => Some(text),
+                    _ => research_note,
+                };
+                match (target, change) {
+                    (FactTarget::Spec, Some(c)) => {
+                        self.spec.changes.push(c);
+                        self.spec.needs_run = true;
+                    }
+                    (FactTarget::Plan, Some(c)) => self.requirement_change(c),
+                    (_, None) => {}
+                }
+            }
+        }
+    }
+
+    fn apply_loop_route(
+        &mut self,
+        key: (u32, bool),
+        gate: &GateId,
+        next: LoopNext,
+        out: &RouteAnswerOut,
+    ) {
+        let LoopNext::AwaitRoute {
+            text,
+            then,
+            base,
+            stuck,
+            fallback,
+            ..
+        } = next
+        else {
+            return;
+        };
+        let item = out.item(ANSWER_ITEM);
+        self.remember_parts(gate, &out.items, ANSWER_ITEM, &text);
+        let deliver = item.disposition == Disposition::Deliver;
+        // With no spec there is nothing to change first, so the answer goes to the phase.
+        if deliver && out.route == AnswerRoute::RequirementChange && self.spec.current.is_some() {
+            // Rule D10: stop the phase and restart at the spec.
+            if let Some(l) = self.loop_mut(key) {
+                l.next = LoopNext::Blocked {
+                    reason: "The user changed a requirement; the spec is being updated (Rule D10)."
+                        .into(),
+                };
+                l.announced_block = true;
+                l.block_gate_answered = true;
+            }
+            self.requirement_change(text);
+            return;
+        }
+        let next = if deliver {
+            let instructions = match (&stuck, base) {
+                (Some(st), _) => rescue_context(st, &text),
+                (None, Some(b)) => format!("{b}\n\nThe user added: {text}"),
+                (None, None) => text,
+            };
+            LoopNext::Work {
+                kind: then,
+                instructions: Some(instructions),
+            }
+        } else {
+            *fallback
+        };
+        let tasks = if matches!(next, LoopNext::Work { .. }) {
+            self.queue_research(
+                &out.research,
+                ExploreOrigin::LoopAnswer {
+                    phase: key.0,
+                    tests: key.1,
+                },
+            )
+        } else {
+            vec![]
+        };
+        if let Some(l) = self.loop_mut(key) {
+            if matches!(next, LoopNext::Blocked { .. }) {
+                l.block_gate_answered = true;
+            }
+            l.next = if tasks.is_empty() {
+                next
+            } else {
+                LoopNext::AnswerResearch {
+                    tasks,
+                    next: Box::new(next),
+                }
+            };
+        }
+    }
+
+    /// Rule J1: once every research task an answer queued has finished, the loop continues with
+    /// their documents added to its instructions.
+    fn release_answer_research(&mut self, key: (u32, bool)) {
+        let Some(LoopNext::AnswerResearch { tasks, next }) =
+            self.loop_ref(key).map(|l| l.next.clone())
+        else {
+            return;
+        };
+        let found: Vec<&ExploreTask> = tasks
+            .iter()
+            .filter_map(|i| self.explore.get(*i as usize))
+            .collect();
+        if found.iter().any(|t| !t.finished()) {
+            return;
+        }
+        let docs: Vec<String> = found
+            .iter()
+            .filter_map(|t| t.result.as_ref())
+            .map(|r| format!("- {}: {}", r.research_path, r.findings_summary))
+            .collect();
+        let next = match *next {
+            LoopNext::Work { kind, instructions } if !docs.is_empty() => LoopNext::Work {
+                kind,
+                instructions: Some(format!(
+                    "{}\n\nResearch the user asked for. Read each document before you start:\n{}",
+                    instructions.unwrap_or_default(),
+                    docs.join("\n")
+                )),
+            },
+            other => other,
+        };
+        if let Some(l) = self.loop_mut(key) {
+            l.next = next;
+        }
+    }
+
+    /// Rule J1: the notes the judge kept for a later stage, oldest first.
+    pub fn notes_for(&self, stage: NoteStage) -> Vec<String> {
+        self.user_notes
+            .iter()
+            .filter(|n| !n.forgotten && n.stages.contains(&stage))
+            .map(|n| n.text.clone())
+            .collect()
     }
 
     fn interrupt_running(&mut self, why: Interrupt) {
@@ -1527,7 +2003,7 @@ impl SessionState {
         }
     }
 
-    fn add_feedback(&mut self, text: String) {
+    fn add_feedback(&mut self, text: String, routed: bool) {
         self.feedback.rounds.push(FeedbackRound {
             text: text.clone(),
             route: None,
@@ -1536,8 +2012,8 @@ impl SessionState {
             awaiting_spec: false,
             phases: vec![],
         });
-        // With no spec to change and one project to change, nothing is left to judge.
-        if self.spec.current.is_none() && self.scope.len() == 1 {
+        // Before Rule J1, a round with no spec and one project was built without the judge.
+        if !routed && self.spec.current.is_none() && self.scope.len() == 1 {
             let i = self.feedback.rounds.len() - 1;
             let targets = vec![FeedbackTarget {
                 project: self.primary(),
@@ -1875,39 +2351,32 @@ impl SessionState {
                 let Ok(out) = serde_json::from_value::<RouteAnswerOut>(output.clone()) else {
                     return;
                 };
+                if !self.held_answers.contains_key(&gate)
+                    && !self.phases.values().any(|p| {
+                        [&p.impl_loop, &p.test_loop].iter().any(
+                            |l| matches!(&l.next, LoopNext::AwaitRoute { gate: g, .. } if *g == gate),
+                        )
+                    })
+                {
+                    return;
+                }
+                self.forget(&out.forget);
+                if let Some(held) = self.held_answers.remove(&gate) {
+                    self.apply_held(&gate, held, &out);
+                    return;
+                }
                 let target = self
                     .phases
                     .iter()
                     .flat_map(|(id, p)| [((*id, false), &p.impl_loop), ((*id, true), &p.test_loop)])
                     .find_map(|(k, l)| match &l.next {
-                        LoopNext::AwaitRoute {
-                            gate: g,
-                            text,
-                            then,
-                        } if *g == gate => Some((k, text.clone(), *then)),
+                        LoopNext::AwaitRoute { gate: g, .. } if *g == gate => {
+                            Some((k, l.next.clone()))
+                        }
                         _ => None,
                     });
-                let Some((key, text, then)) = target else {
-                    return;
-                };
-                match out.route {
-                    AnswerRoute::RequirementChange => {
-                        // Rule D10: stop the phase and restart at the spec.
-                        if let Some(l) = self.loop_mut(key) {
-                            l.next = LoopNext::Blocked { reason: "The user changed a requirement; the spec is being updated (Rule D10).".into() };
-                            l.announced_block = true;
-                            l.block_gate_answered = true;
-                        }
-                        self.requirement_change(text);
-                    }
-                    AnswerRoute::ImplementationDetail | AnswerRoute::StageChoice => {
-                        if let Some(l) = self.loop_mut(key) {
-                            l.next = LoopNext::Work {
-                                kind: then,
-                                instructions: Some(text),
-                            };
-                        }
-                    }
+                if let Some((key, next)) = target {
+                    self.apply_loop_route(key, &gate, next, &out);
                 }
             }
             JudgeKind::Track => {
@@ -1930,7 +2399,29 @@ impl SessionState {
                 if self.feedback.rounds.get(i).is_none_or(|r| r.route.is_some()) {
                     return;
                 }
-                self.route_feedback(i, out.route, out.targets, Some(out.reason));
+                let Some(gate) = self.feedback_gate(i) else {
+                    self.route_feedback(i, out.route, out.targets, Some(out.reason));
+                    return;
+                };
+                let item = item_for(&out.items, ANSWER_ITEM);
+                let text = self.feedback.rounds[i].text.clone();
+                self.forget(&out.forget);
+                self.remember_parts(&gate, &out.items, ANSWER_ITEM, &text);
+                self.queue_research(&out.research, ExploreOrigin::Answer);
+                match item.disposition {
+                    Disposition::Deliver => {
+                        self.route_feedback(i, out.route, out.targets, Some(out.reason))
+                    }
+                    Disposition::Remember | Disposition::Discard => {
+                        let r = &mut self.feedback.rounds[i];
+                        r.route = Some(out.route);
+                        r.reason = Some(out.reason);
+                        // Keeping the feedback only for later stages accepts what was built.
+                        if item.disposition == Disposition::Remember {
+                            self.feedback.accepted = true;
+                        }
+                    }
+                }
             }
             JudgeKind::Completion => self.completion_decision = Some(id.clone()),
             JudgeKind::YoloAnswer => {}
@@ -2071,6 +2562,9 @@ impl SessionState {
                 }
                 let origin = t.origin.clone();
                 let summary = t.result.clone();
+                if let ExploreOrigin::LoopAnswer { phase, tests } = origin {
+                    self.release_answer_research((phase, tests));
+                }
                 if let (ExploreOrigin::Rescue { phase, tests }, Some(sub)) = (origin, summary) {
                     let task_idx = *task;
                     if let Some(l) = self.loop_mut((phase, tests))
@@ -2563,7 +3057,13 @@ impl SessionState {
         }
     }
 
-    fn on_gate_answered(&mut self, id: &GateId, payload: &GatePayload, answer: &GateAnswer) {
+    fn on_gate_answered(
+        &mut self,
+        id: &GateId,
+        payload: &GatePayload,
+        answer: &GateAnswer,
+        routed: bool,
+    ) {
         let choice = match answer {
             GateAnswer::Choice { option, text } => Some((
                 option.as_str(),
@@ -2577,6 +3077,20 @@ impl SessionState {
                     GateAnswer::Questions { answers } => answers.clone(),
                     _ => vec![],
                 };
+                let target = if artifact == "plan" {
+                    FactTarget::Plan
+                } else {
+                    FactTarget::Spec
+                };
+                if routed && !answers.is_empty() {
+                    // Rule J1: the judge decides where each answer goes before any agent sees it.
+                    let t = self.track_mut(target);
+                    t.clear_questions_gate();
+                    t.set_routing(Some(id.clone()));
+                    self.held_answers
+                        .insert(id.clone(), HeldAnswer::Questions { target, answers });
+                    return;
+                }
                 if artifact == "plan" {
                     self.plan.questions_gate = None;
                     if !answers.is_empty() {
@@ -2601,21 +3115,16 @@ impl SessionState {
                 // A change that landed after the gate opened revoked it; its answer is stale.
                 let current = self.spec.approval_gate.as_ref() == Some(id) && !self.spec.needs_run;
                 self.spec.approval_gate = None;
+                if routed && let Some((approved, text)) = approval_text(answer) {
+                    let approve = approved && current && self.spec.passed_current();
+                    self.hold_approval(id, FactTarget::Spec, approve, text);
+                    return;
+                }
                 match answer {
                     GateAnswer::Approval { approved: true, .. }
                         if current && self.spec.passed_current() =>
                     {
-                        self.spec.approved = true;
-                        self.spec.approved_version = self.spec.version;
-                        if self.plan.invalidated {
-                            self.plan.needs_run = true;
-                        }
-                        for i in 0..self.feedback.rounds.len() {
-                            if self.feedback.rounds[i].awaiting_spec {
-                                self.feedback.rounds[i].awaiting_spec = false;
-                                self.add_revision_phases(i);
-                            }
-                        }
+                        self.approve_spec()
                     }
                     GateAnswer::Approval {
                         feedback: Some(text),
@@ -2632,6 +3141,11 @@ impl SessionState {
                     && !self.plan.needs_run
                     && !self.plan.invalidated;
                 self.plan.approval_gate = None;
+                if routed && let Some((approved, text)) = approval_text(answer) {
+                    let approve = approved && current && self.plan.passed_current();
+                    self.hold_approval(id, FactTarget::Plan, approve, text);
+                    return;
+                }
                 match answer {
                     GateAnswer::Approval { approved: true, .. }
                         if current && self.plan.passed_current() =>
@@ -2675,6 +3189,17 @@ impl SessionState {
                     };
                 }
                 if let Some(text) = track_changes {
+                    if routed {
+                        self.track_mut(*target).set_routing(Some(id.clone()));
+                        self.held_answers.insert(
+                            id.clone(),
+                            HeldAnswer::Recurring {
+                                target: *target,
+                                text,
+                            },
+                        );
+                        return;
+                    }
                     match target {
                         FactTarget::Spec => {
                             self.spec.changes.push(text);
@@ -2705,13 +3230,30 @@ impl SessionState {
                         Some(("another-pass", text)) => {
                             l.extra_cap += 1;
                             let mut instr = fix_instructions(findings, &ledger);
-                            if let Some(t) = text {
-                                instr.push_str(&format!("\n\nThe user added: {t}"));
+                            match text {
+                                Some(t) if routed => {
+                                    l.next = LoopNext::AwaitRoute {
+                                        gate: id.clone(),
+                                        text: t,
+                                        then: WorkKind::Fix,
+                                        base: Some(instr.clone()),
+                                        stuck: None,
+                                        fallback: Box::new(LoopNext::Work {
+                                            kind: WorkKind::Fix,
+                                            instructions: Some(instr),
+                                        }),
+                                    };
+                                }
+                                text => {
+                                    if let Some(t) = text {
+                                        instr.push_str(&format!("\n\nThe user added: {t}"));
+                                    }
+                                    l.next = LoopNext::Work {
+                                        kind: WorkKind::Fix,
+                                        instructions: Some(instr),
+                                    };
+                                }
                             }
-                            l.next = LoopNext::Work {
-                                kind: WorkKind::Fix,
-                                instructions: Some(instr),
-                            };
                         }
                         _ => {
                             l.next = LoopNext::Blocked {
@@ -2737,8 +3279,13 @@ impl SessionState {
                             Some(("fact", Some(text))) => {
                                 l.next = LoopNext::AwaitRoute {
                                     gate: id.clone(),
-                                    text: rescue_context(&stuck, &text),
+                                    text,
                                     then: WorkKind::Rescue,
+                                    base: None,
+                                    fallback: Box::new(LoopNext::Blocked {
+                                        reason: format!("Stuck: {}", stuck.need),
+                                    }),
+                                    stuck: Some(stuck),
                                 }
                             }
                             _ => {
@@ -2768,31 +3315,33 @@ impl SessionState {
                         l.block_gate_answered = false;
                         l.resolve_rounds = 0;
                         l.open_before_resolve = None;
+                        let plain = LoopNext::Work {
+                            kind: WorkKind::Fix,
+                            instructions: l.last_review.as_ref().map(|r| {
+                                let hm: Vec<ReviewFinding> = r
+                                    .findings
+                                    .iter()
+                                    .filter(|f| {
+                                        matches!(
+                                            f.severity,
+                                            Severity::High | Severity::Medium | Severity::Blocker
+                                        )
+                                    })
+                                    .cloned()
+                                    .collect();
+                                fix_instructions(&hm, "the review ledger")
+                            }),
+                        };
                         l.next = match text {
                             Some(t) => LoopNext::AwaitRoute {
                                 gate: id.clone(),
                                 text: t,
                                 then: WorkKind::Fix,
+                                base: None,
+                                stuck: None,
+                                fallback: Box::new(plain),
                             },
-                            None => LoopNext::Work {
-                                kind: WorkKind::Fix,
-                                instructions: l.last_review.as_ref().map(|r| {
-                                    let hm: Vec<ReviewFinding> = r
-                                        .findings
-                                        .iter()
-                                        .filter(|f| {
-                                            matches!(
-                                                f.severity,
-                                                Severity::High
-                                                    | Severity::Medium
-                                                    | Severity::Blocker
-                                            )
-                                        })
-                                        .cloned()
-                                        .collect();
-                                    fix_instructions(&hm, "the review ledger")
-                                }),
-                            },
+                            None => plain,
                         };
                     }
                 }
@@ -2849,7 +3398,7 @@ impl SessionState {
                 }
                 self.feedback.gate = None;
                 match choice {
-                    Some(("feedback", Some(text))) => self.add_feedback(text),
+                    Some(("feedback", Some(text))) => self.add_feedback(text, routed),
                     _ => self.feedback.accepted = true,
                 }
             }
@@ -2915,6 +3464,11 @@ impl SessionState {
                     } else {
                         t.abandoned = true;
                     }
+                }
+                if let Some(ExploreOrigin::LoopAnswer { phase, tests }) =
+                    self.explore.get(*task as usize).map(|t| t.origin.clone())
+                {
+                    self.release_answer_research((phase, tests));
                 }
             }
             ExecPurpose::Spec { .. }

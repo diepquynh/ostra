@@ -74,6 +74,9 @@ one, every plan report the prompt names, and EVERY implementer report path the o
 union of the implementer reports as one change set. On a spec-driven run they span every deliverable, so an area
 may appear in several of them. Read each path the `Implementer reports:` line names, and no other.
 
+If a `User notes:` line is given, follow each note when you write the reference files. Each is something the user
+said at an earlier question for the documentation stage.
+
 From ALL implementer reports (aggregated), extract: the complete list of changed file paths, the change type per
 file (created, modified, or deleted), and a one-line summary of what each change accomplished.
 

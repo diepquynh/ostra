@@ -57,6 +57,8 @@ The prompt provides an **implementer report path** (required) and optional **pla
 1. {{tool_read}} the implementer report. Extract `## Changed Files` and list every created or modified **source**
    file (project code, not tests, docs, or config). {{tool_read}} the `**Phase:**` field if present.
 2. {{tool_read}} the plan and research documents if their paths are given.
+3. If a `User notes:` line is given, cover each note in the Test Writing Instructions. Each is something the user
+   said at an earlier question for the test stage.
 
 **Pass:** you have at least 1 source file to analyze. Go to Step 2.
 **Fail:** no implementer report, or no source files listed. Write an EPA report stating "No source files

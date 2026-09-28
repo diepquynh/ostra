@@ -116,6 +116,9 @@ Actions:
 3. If prior phase reports are given, {{tool_read}} them to learn what already exists. Do NOT re-implement prior
    work.
 4. If context files are given, {{tool_read}} them for background.
+5. If a `User notes:` line is given, follow each note. Each is something the user said at an earlier question
+   for this stage. A note never overrides the phase file or a fix instruction; when one conflicts, follow the
+   phase file and name the conflict in the change report.
 
 **Pass:** you have a clear ordered list of steps, each with a file path and action. Go to Step 1.1.
 **Fail:** no usable instructions. STOP. {{tool_write}} a report stating "No usable instructions

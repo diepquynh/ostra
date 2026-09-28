@@ -208,39 +208,103 @@ pub fn judge_input(
                         .unwrap_or_else(|| "none".into())
                 );
             }
-            let _ = writeln!(m, "\n# The user's feedback on the implementation\n\n{text}");
+            m.push('\n');
+            research_facts(&mut m, s);
+            notes_facts(&mut m, s);
+            let _ = writeln!(m, "# The user's feedback on the implementation\n\n{text}");
             (m, format!("Feedback: {}", first_line(&text)))
         }
         JudgeKind::RouteAnswer => {
             let gate = subject.and_then(|g| s.gates.get(&GateId::from(g)));
-            let text = s
-                .phases
-                .values()
-                .flat_map(|p| [&p.impl_loop, &p.test_loop])
-                .find_map(|l| match &l.next {
-                    LoopNext::AwaitRoute { gate: g, text, .. } if Some(g.as_str()) == subject => {
-                        Some(text.clone())
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
             let _ = writeln!(m, "# Request\n\n{request}\n");
-            if let Some(spec) = &s.spec.current {
-                let _ = writeln!(
-                    m,
-                    "# Current spec summary\n\n{}\nSpec file: {}\n",
-                    spec.summary, spec.spec_path
-                );
+            session_facts(&mut m, s);
+            let Some(g) = gate else {
+                return (m, "Answer: unknown gate".into());
+            };
+            let _ = writeln!(
+                m,
+                "# The gate the user answered\n\nKind: {}\nTitle: {}\n{}\n",
+                g.payload.kind_str(),
+                g.title,
+                g.explanation
+            );
+            let mut first = String::new();
+            match (&g.payload, &g.answer) {
+                (
+                    GatePayload::OpenQuestions {
+                        artifact,
+                        questions,
+                        ..
+                    },
+                    Some(GateAnswer::Questions { answers }),
+                ) => {
+                    let _ = writeln!(
+                        m,
+                        "The {artifact} agent asked these. Give one item per question ID.\n"
+                    );
+                    for q in questions {
+                        let _ = writeln!(
+                            m,
+                            "## {} {}\n\n{}, numbered as the user saw them:\n",
+                            q.id,
+                            q.question,
+                            if q.multi_select {
+                                "Choose one or more"
+                            } else {
+                                "Single choice, with a field for a typed answer"
+                            }
+                        );
+                        for (n, o) in q.display_options() {
+                            let _ = writeln!(
+                                m,
+                                "{n}. {}{}: {}",
+                                o.label,
+                                if n == 1 && q.options.get(q.recommended).is_some() {
+                                    " (the agent's recommendation)"
+                                } else {
+                                    ""
+                                },
+                                o.description
+                            );
+                        }
+                        let a = answers
+                            .iter()
+                            .find(|a| a.id == q.id)
+                            .map(|a| a.answer.as_str())
+                            .unwrap_or("(no answer)");
+                        if first.is_empty() {
+                            first = a.to_string();
+                        }
+                        let _ = writeln!(m, "\nThe user's answer: {a}\n");
+                    }
+                }
+                (payload, answer) => {
+                    gate_facts(&mut m, payload);
+                    let (approved, text) = match answer {
+                        Some(GateAnswer::Approval { approved, feedback }) => {
+                            (Some(*approved), feedback.clone().unwrap_or_default())
+                        }
+                        Some(GateAnswer::Choice { option, text }) => {
+                            let _ = writeln!(m, "The user chose: {option}\n");
+                            (None, text.clone().unwrap_or_default())
+                        }
+                        _ => (None, String::new()),
+                    };
+                    if let Some(a) = approved {
+                        let _ = writeln!(
+                            m,
+                            "The user {} it.\n",
+                            if a { "approved" } else { "did not approve" }
+                        );
+                    }
+                    let _ = writeln!(
+                        m,
+                        "Give one item with ID `answer`.\n\n## The user's answer\n\n{text}"
+                    );
+                    first = text;
+                }
             }
-            if let Some(g) = gate {
-                let _ = writeln!(
-                    m,
-                    "# The question that was asked\n\n{}\n{}\n",
-                    g.title, g.explanation
-                );
-            }
-            let _ = writeln!(m, "# The user's answer\n\n{text}");
-            (m, format!("Answer: {}", first_line(&text)))
+            (m, format!("Answer: {}", first_line(&first)))
         }
         JudgeKind::Rescue => {
             let exec = subject.map(ExecutionId::from);
@@ -379,6 +443,163 @@ pub fn judge_input(
             (m, gate.map(|g| g.title.clone()).unwrap_or_default())
         }
         JudgeKind::Completion => completion_input(s),
+    }
+}
+
+/// Rule J1: what the Route answer and Feedback judges need to see about the session.
+fn session_facts(m: &mut String, s: &SessionState) {
+    let _ = writeln!(
+        m,
+        "Category: {}\nTrack: {}\nProjects you may target: {}\n",
+        s.category.map(|c| c.as_str()).unwrap_or("unknown"),
+        s.track.map(|t| t.as_str()).unwrap_or("none"),
+        s.scope.join(", ")
+    );
+    research_facts(m, s);
+    match &s.spec.current {
+        Some(spec) => {
+            let _ = writeln!(
+                m,
+                "# Current spec\n\nSummary: {}\nSpec file: {}\n",
+                spec.summary, spec.spec_path
+            );
+        }
+        None => {
+            let _ = writeln!(
+                m,
+                "# No spec\n\nThis session has no spec, so a delivered answer goes to the agent that asked, whatever the route.\n"
+            );
+        }
+    }
+    if s.plan.current.is_some() {
+        let _ = writeln!(m, "# Plan phases\n");
+        for p in s.phases.values() {
+            let _ = writeln!(
+                m,
+                "- Phase {} ({}): {}",
+                p.info.id, p.info.project, p.info.title
+            );
+        }
+        m.push('\n');
+    }
+    notes_facts(m, s);
+}
+
+fn research_facts(m: &mut String, s: &SessionState) {
+    let _ = writeln!(m, "# Research documents so far\n");
+    let mut any = false;
+    for t in &s.explore {
+        let Some(r) = &t.result else { continue };
+        any = true;
+        let _ = writeln!(
+            m,
+            "- Task {} ({}): {}\n  Findings: {}\n  Not covered: {}",
+            t.idx,
+            t.project,
+            first_line(&t.task),
+            r.findings_summary,
+            if r.not_covered.is_empty() {
+                "none".to_string()
+            } else {
+                r.not_covered.join("; ")
+            }
+        );
+    }
+    let queued: Vec<&str> = s
+        .explore
+        .iter()
+        .filter(|t| t.result.is_none() && !t.abandoned)
+        .map(|t| t.task.as_str())
+        .collect();
+    for t in &queued {
+        any = true;
+        let _ = writeln!(m, "- Queued or running: {}", first_line(t));
+    }
+    if !any {
+        let _ = writeln!(m, "none");
+    }
+    m.push('\n');
+}
+
+fn notes_facts(m: &mut String, s: &SessionState) {
+    if s.user_notes.iter().any(|n| !n.forgotten) {
+        let _ = writeln!(m, "# Notes already kept for later stages\n");
+        for n in s.user_notes.iter().filter(|n| !n.forgotten) {
+            let stages: Vec<&str> = n
+                .stages
+                .iter()
+                .map(|x| match x {
+                    crate::judge::NoteStage::Implement => "implement",
+                    crate::judge::NoteStage::Tests => "tests",
+                    crate::judge::NoteStage::Docs => "docs",
+                })
+                .collect();
+            let _ = writeln!(m, "- {} ({}): {}", n.id, stages.join(", "), n.text);
+        }
+        m.push('\n');
+    }
+}
+
+/// The part of a gate's payload a Route answer judge needs, for gates without questions.
+fn gate_facts(m: &mut String, payload: &GatePayload) {
+    match payload {
+        GatePayload::SpecApproval { summary, .. } => {
+            let _ = writeln!(m, "Spec summary: {summary}\n");
+        }
+        GatePayload::PlanApproval {
+            summary, phases, ..
+        } => {
+            let _ = writeln!(m, "Plan summary: {summary}\nPhases:");
+            for p in phases {
+                let _ = writeln!(m, "- Phase {}: {}", p.id, p.title);
+            }
+            m.push('\n');
+        }
+        GatePayload::FactCheckRecurring {
+            target,
+            passes,
+            findings,
+        } => {
+            let _ = writeln!(
+                m,
+                "The {} fact-check failed {passes} times in a row with {} findings.\n",
+                target.as_str(),
+                findings.len()
+            );
+        }
+        GatePayload::ReviewCap {
+            phase,
+            iterations,
+            findings,
+            ..
+        } => {
+            let _ = writeln!(
+                m,
+                "Phase {phase}: {iterations} review passes ran and {} findings are open:",
+                findings.len()
+            );
+            for f in findings.iter().take(20) {
+                let _ = writeln!(m, "- {:?}: {}", f.severity, first_line(&f.description));
+            }
+            m.push('\n');
+        }
+        GatePayload::Stuck {
+            agent,
+            phase,
+            diagnostic,
+            need,
+            ..
+        } => {
+            let _ = writeln!(
+                m,
+                "The {agent} agent{} is stuck.\nIt needs: {need}\nDiagnostic:\n{diagnostic}\n",
+                phase.map(|p| format!(" of phase {p}")).unwrap_or_default()
+            );
+        }
+        GatePayload::PhaseBlocked { phase, reason, .. } => {
+            let _ = writeln!(m, "Phase {phase} is blocked: {reason}\n");
+        }
+        _ => {}
     }
 }
 
