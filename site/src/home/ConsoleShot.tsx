@@ -1,6 +1,7 @@
 import { StatusDot, type Tone } from "@ostra/design";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Theme } from "../shared/theme";
+import { reducedMotion } from "./reveal";
 
 // The web app's mock workspace (web/src/api/mock/fixtures.ts), built into console/ by `npm run build:console`.
 const WORKSPACE = "ws_demo";
@@ -61,16 +62,16 @@ export function ConsoleShot({ theme, setTheme }: { theme: Theme; setTheme: (t: T
     if (ready) send(SHOTS[index].open, theme);
   }, [ready, index, theme, send]);
 
+  const cycling = !stopped && !hover && !reducedMotion();
   // biome-ignore lint/correctness/useExhaustiveDependencies: each step re-arms the timer, so `index` must stay.
   useEffect(() => {
-    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-    if (stopped || hover || reduced) return;
+    if (!cycling) return;
     const t = setTimeout(() => setIndex((i) => (i + 1) % SHOTS.length), CYCLE_MS);
     return () => clearTimeout(t);
-  }, [index, stopped, hover]);
+  }, [index, cycling]);
 
   return (
-    <section data-reveal className="home-section home-section--shot">
+    <section data-reveal="rise" className="home-section home-section--shot">
       <div className="home-shot" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
         <iframe ref={frame} src={SRC} title="The Ostra console" loading="lazy" className="home-shot__frame" />
       </div>
@@ -88,6 +89,9 @@ export function ConsoleShot({ theme, setTheme }: { theme: Theme; setTheme: (t: T
           >
             <StatusDot tone={s.tone} />
             {s.label}
+            {i === index && cycling && (
+              <span key={index} className="home-shot__bar" style={{ animationDuration: `${CYCLE_MS}ms` }} />
+            )}
           </button>
         ))}
       </div>

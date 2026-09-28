@@ -1,6 +1,7 @@
 import { IconButton, Tabs } from "@ostra/design";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { docsHref } from "../shared/links";
+import { reducedMotion } from "./reveal";
 
 type Line = { cmd: string; note?: string };
 
@@ -45,12 +46,46 @@ const METHODS: Record<string, Method> = {
   },
 };
 
-export function Install() {
+// One character per step, in milliseconds.
+const CHAR_MS = 14;
+
+/** A command line that types in: a clip steps across the monospace text, one character per step. */
+function TypedLine({ line, delay, run }: { line: Line; delay: number; run: boolean }) {
+  const el = useRef<HTMLSpanElement>(null);
+  const text = line.note ? `${line.cmd}  ${line.note}` : line.cmd;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the line types once, when `run` turns on.
+  useLayoutEffect(() => {
+    if (!run || !el.current?.animate || reducedMotion()) return;
+    const a = el.current.animate([{ clipPath: "inset(0 100% 0 0)" }, { clipPath: "inset(0 0 0 0)" }], {
+      duration: text.length * CHAR_MS,
+      delay,
+      easing: `steps(${text.length}, end)`,
+      fill: "backwards",
+    });
+    return () => a.cancel();
+  }, [run]);
+  return (
+    <span ref={el} className="home-install__typed" style={run ? undefined : { clipPath: "inset(0 100% 0 0)" }}>
+      <span>{line.cmd}</span>
+      {line.note && <span className="home-install__note">{`  ${line.note}`}</span>}
+    </span>
+  );
+}
+
+/** The install box. Its commands type in once `run` turns on, and again after each change of method. */
+export function Install({ run }: { run: boolean }) {
   const [method, setMethod] = useState("quick");
+  const [changed, setChanged] = useState(false);
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
   const m = METHODS[method];
+  const delays: number[] = [];
+  let acc = changed ? 0 : 650;
+  for (const l of m.lines) {
+    delays.push(acc);
+    acc += (l.note ? l.cmd.length + 2 + l.note.length : l.cmd.length) * CHAR_MS + 140;
+  }
 
   const copy = () => {
     void navigator.clipboard?.writeText(m.lines.map((l) => l.cmd).join("\n")).catch(() => {});
@@ -69,6 +104,7 @@ export function Install() {
           value={method}
           onChange={(id) => {
             setMethod(id);
+            setChanged(true);
             setCopied(false);
           }}
         />
@@ -76,11 +112,10 @@ export function Install() {
       </div>
       <div className="home-install__box">
         <div className="home-install__lines">
-          {m.lines.map((l) => (
-            <div key={l.cmd} className="home-install__line">
+          {m.lines.map((l, i) => (
+            <div key={`${method}:${l.cmd}`} className="home-install__line">
               <span className="home-install__prompt">{m.prompt ?? "$"}</span>
-              <span>{l.cmd}</span>
-              {l.note && <span className="home-install__note">{l.note}</span>}
+              <TypedLine line={l} delay={delays[i]} run={run} />
             </div>
           ))}
         </div>

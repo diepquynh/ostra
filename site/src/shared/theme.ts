@@ -1,4 +1,4 @@
-import { markSvg, REST } from "@ostra/design";
+import { type MarkState, markSvg, REST } from "@ostra/design";
 import { useCallback, useEffect, useState } from "react";
 
 export type Theme = "light" | "dark";
@@ -15,8 +15,11 @@ function initialTheme(): Theme {
   return window.matchMedia?.("(prefers-color-scheme: light)").matches ? "light" : "dark";
 }
 
-/** The page theme, shared by the homepage and the docs. It sets `data-theme` and a favicon in the same colors. */
-export function useSiteTheme(): [Theme, (t: Theme) => void] {
+/**
+ * The page theme, shared by the homepage and the docs. It sets `data-theme` and a favicon in the same colors, drawn
+ * in the mark's state `mark`.
+ */
+export function useSiteTheme(mark: MarkState = REST): [Theme, (t: Theme) => void] {
   const [theme, setThemeState] = useState<Theme>(initialTheme);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -25,8 +28,8 @@ export function useSiteTheme(): [Theme, (t: Theme) => void] {
       icon = Object.assign(document.createElement("link"), { rel: "icon", type: "image/svg+xml" });
       document.head.append(icon);
     }
-    icon.href = `data:image/svg+xml,${encodeURIComponent(markSvg(REST, theme))}`;
-  }, [theme]);
+    icon.href = `data:image/svg+xml,${encodeURIComponent(markSvg(mark, theme))}`;
+  }, [theme, mark]);
   const setTheme = useCallback((t: Theme) => {
     setThemeState(t);
     try {

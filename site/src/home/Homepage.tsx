@@ -1,22 +1,13 @@
-import {
-  Chip,
-  Icon,
-  IconButton,
-  type IconName,
-  LiveMark,
-  type PolicyInfo,
-  REST,
-  Terminal,
-  type TerminalLine,
-  ToolCall,
-} from "@ostra/design";
-import type { ReactNode } from "react";
+import { Icon, IconButton, type IconName, LiveMark, type MarkState, REST } from "@ostra/design";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { GitHubMark } from "../shared/GitHubMark";
 import { docsHref, REPO } from "../shared/links";
 import { useSiteTheme } from "../shared/theme";
 import { ConsoleShot } from "./ConsoleShot";
+import { Executors } from "./Executors";
 import { Install } from "./Install";
 import { Intro } from "./Intro";
+import { Pipeline } from "./Pipeline";
 
 const Code = ({ children }: { children: ReactNode }) => <code className="site-code">{children}</code>;
 
@@ -87,21 +78,6 @@ const SECURITY: { icon: IconName; title: string; body: ReactNode }[] = [
   },
 ];
 
-const DENY: PolicyInfo = {
-  decision: "deny",
-  layer: "permission",
-  rule: "Bash(git push *)",
-  reason: "This workspace denies pushes.",
-  advice: "Leave the changes staged. Ostra stages each phase after review, and you push.",
-};
-
-const HARNESS_LINES: TerminalLine[] = [
-  ["fn", "› Implement phase 1: refund model and migration"],
-  ["muted", "  Read migrations/0012_orders.sql"],
-  ["add", "  Write migrations/0013_refunds.sql"],
-  ["warn", "  Permission asked: Bash(sqlx migrate run)"],
-];
-
 const FOOTER_LINKS: { label: string; links: [string, string][] }[] = [
   {
     label: "Start",
@@ -131,45 +107,75 @@ function SectionHead({ eyebrow, title, children }: { eyebrow: string; title: str
   );
 }
 
+function useScrolled() {
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const on = () => setScrolled(window.scrollY > 4);
+    on();
+    window.addEventListener("scroll", on, { passive: true });
+    return () => window.removeEventListener("scroll", on);
+  }, []);
+  return scrolled;
+}
+
 export function Homepage() {
-  const [theme, setTheme] = useSiteTheme();
+  const [pipeMark, setPipeMark] = useState<MarkState | null>(null);
+  const mark = pipeMark ?? REST;
+  const [theme, setTheme] = useSiteTheme(mark);
+  const [landed, setLanded] = useState(false);
+  const [typing, setTyping] = useState(false);
+  const navMark = useRef<HTMLDivElement>(null);
+  const scrolled = useScrolled();
   return (
     <div className="home">
-      <Intro />
-      <nav data-reveal className="home-nav">
-        <LiveMark state={REST} size={22} />
-        <span className="home-wordmark">Ostra</span>
-        <div className="home-nav__links">
-          <a className="site-quiet-link" href={docsHref()}>
-            Docs
-          </a>
-          <a className="site-quiet-link" href={REPO}>
-            <GitHubMark />
-            GitHub
-          </a>
-          <IconButton
-            icon={theme === "dark" ? "sun" : "moon"}
-            label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          />
-        </div>
-      </nav>
+      <Intro
+        navMark={navMark}
+        onHandoff={() => setTimeout(() => setTyping(true), 250)}
+        onLanded={() => setLanded(true)}
+      />
+      <div data-reveal="fade" className="home-nav-bar" data-scrolled={scrolled || undefined}>
+        <nav className="home-nav">
+          <div ref={navMark} className="home-nav__mark" style={{ opacity: landed ? 1 : 0 }}>
+            <LiveMark state={mark} size={22} />
+          </div>
+          <span className="home-wordmark">Ostra</span>
+          <div className="home-nav__links">
+            <a className="site-quiet-link" href={docsHref()}>
+              Docs
+            </a>
+            <a className="site-quiet-link" href={REPO}>
+              <GitHubMark />
+              GitHub
+            </a>
+            <IconButton
+              icon={theme === "dark" ? "sun" : "moon"}
+              label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            />
+          </div>
+        </nav>
+      </div>
 
       <header className="home-hero">
-        <h1 data-reveal className="home-h1">
-          Every stage shown.
-          <br />
-          Every gate yours.
+        <h1 className="home-h1">
+          <span data-reveal="line">
+            <span>Every stage shown.</span>
+          </span>
+          <span data-reveal="line">
+            <span>Every gate yours.</span>
+          </span>
         </h1>
         <p data-reveal className="home-hero__lede">
           Ostra runs a full engineering pipeline on your machine: research, spec, fact-check, plan, build, review, test
           and docs. Code drives the pipeline and holds every gate. Models do the work inside each stage, and you approve
           the spec and the plan before anything is built.
         </p>
-        <Install />
+        <Install run={typing} />
       </header>
 
       <ConsoleShot theme={theme} setTheme={setTheme} />
+
+      <Pipeline onMark={setPipeMark} />
 
       <section className="home-section">
         <SectionHead eyebrow="Security" title="Secure by design">
@@ -179,6 +185,7 @@ export function Homepage() {
         <div className="home-security">
           {SECURITY.map((s) => (
             <div data-reveal key={s.title} className="home-security__item">
+              <div data-line className="home-security__line" />
               <div className="home-security__title">
                 <Icon name={s.icon} size={16} />
                 <span>{s.title}</span>
@@ -199,49 +206,7 @@ export function Homepage() {
           Each stage runs on an executor you pick per agent. The pipeline and its gates stay the same whichever one does
           the work.
         </SectionHead>
-        <div className="home-executors">
-          <div data-reveal className="home-card">
-            <div className="home-card__head">
-              <Icon name="activity" size={14} />
-              <span>Ostra's agent loop</span>
-              <span style={{ marginLeft: "auto" }}>
-                <Chip mono tone="accent">
-                  native
-                </Chip>
-              </span>
-            </div>
-            <p className="home-card__body">
-              Streams as Activity: a thinking summary, text, and each tool call with its diff, output and policy
-              decision. A denied call shows the rule and what to do instead.
-            </p>
-            <div className="home-card__demo">
-              <ToolCall tool="Read" summary="src/orders/refund.rs" state="done" duration="0.1s" />
-              <ToolCall tool="Edit" summary="src/orders/refund.rs" state="done" duration="0.2s" />
-              <ToolCall tool="Bash" summary="git push origin refunds" state="error" policy={DENY} defaultOpen />
-            </div>
-          </div>
-          <div data-reveal className="home-card">
-            <div className="home-card__head">
-              <Icon name="square-terminal" size={14} />
-              <span>CLI harnesses</span>
-            </div>
-            <div className="home-card__body" style={{ display: "grid", gap: 14 }}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {["claude-code", "codex", "grok-build", "antigravity"].map((h) => (
-                  <Chip key={h} mono>{`harness:${h}`}</Chip>
-                ))}
-              </div>
-              <p style={{ margin: 0 }}>
-                Claude Code, Codex, Grok Build and Antigravity stream their own terminal, and you can type into it while
-                the execution runs. Hook decisions are recorded in a Tool calls tab. A permission ask pauses the run and
-                shows a banner above the terminal.
-              </p>
-            </div>
-            <div className="home-card__demo">
-              <Terminal title="codex" meta="~/code/acme/backend" lines={HARNESS_LINES} height={150} />
-            </div>
-          </div>
-        </div>
+        <Executors />
       </section>
 
       <footer className="home-footer">
@@ -265,8 +230,12 @@ export function Homepage() {
             </div>
           ))}
         </div>
-        <div data-reveal aria-hidden="true" className="home-footer__word">
-          ostra
+        <div data-reveal="letters" aria-hidden="true" className="home-footer__word">
+          {[..."ostra"].map((c, i) => (
+            <span key={c} style={{ transitionDelay: `${i * 0.07}s` }}>
+              {c}
+            </span>
+          ))}
         </div>
       </footer>
     </div>

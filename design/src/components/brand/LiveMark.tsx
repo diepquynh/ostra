@@ -1,6 +1,6 @@
 export type MarkArc = "done" | "run" | "wait" | "fail" | "off";
 export type MarkPearl = "run" | "wait" | "fail" | "ok" | "rest" | "off";
-/** Eight arcs, one per board lane from research to docs, and the center pearl. */
+/** Eight arcs, one per board lane from research to docs, and the center pearl. A pearl "off" or null is hidden. */
 export type MarkState = { arcs: MarkArc[]; pearl: MarkPearl | null };
 
 export const MARK_ARCS = 8;
@@ -57,8 +57,23 @@ const ARC_D = Array.from(
 const arcColor = (p: Palette, k: MarkArc) => (k === "run" ? p.done : p[k]);
 const pearlColor = (p: Palette, k: MarkPearl) => (k === "run" ? p.done : p[k]);
 
-export function LiveMark({ state, size = 16, label }: { state: MarkState; size?: number; label?: string }) {
+/**
+ * Each arc draws clockwise over an off-colored track when its state leaves "off", and the pearl scales in and out,
+ * so a changing state animates. `draw` is the duration of one arc's draw.
+ */
+export function LiveMark({
+  state,
+  size = 16,
+  label,
+  draw = "0.32s",
+}: {
+  state: MarkState;
+  size?: number;
+  label?: string;
+  draw?: string;
+}) {
   const p = CSS_PAL;
+  const pearl = state.pearl && state.pearl !== "off" ? state.pearl : null;
   return (
     <svg
       viewBox="0 0 32 32"
@@ -67,30 +82,39 @@ export function LiveMark({ state, size = 16, label }: { state: MarkState; size?:
       role={label ? "img" : undefined}
       aria-label={label}
       aria-hidden={label ? undefined : true}
-      style={{ display: "block", flex: "none" }}
+      style={{ display: "block", flex: "none", overflow: "visible" }}
     >
       <rect x={0.5} y={0.5} width={31} height={31} rx={8.5} fill={p.tile} stroke={p.edge} />
       {state.arcs.map((k, i) => (
-        <path
-          key={i}
-          d={ARC_D[i]}
-          fill="none"
-          stroke={arcColor(p, k)}
-          strokeWidth={3.6}
-          className={k === "run" ? "live-mark-pulse" : undefined}
-          style={{ transition: "stroke var(--dur-slow) var(--ease-out)" }}
-        />
+        <g key={i}>
+          <path d={ARC_D[i]} fill="none" stroke={p.off} strokeWidth={3.6} />
+          <path
+            d={ARC_D[i]}
+            fill="none"
+            stroke={arcColor(p, k === "off" ? "done" : k)}
+            strokeWidth={3.6}
+            pathLength={1}
+            strokeDasharray="1 1"
+            strokeDashoffset={k === "off" ? 1 : 0}
+            className={k === "run" ? "live-mark-pulse" : undefined}
+            style={{
+              transition: `stroke-dashoffset ${draw} cubic-bezier(0.35, 0.1, 0.35, 1), stroke var(--dur-slow) var(--ease-out)`,
+            }}
+          />
+        </g>
       ))}
-      {state.pearl && (
-        <circle
-          cx={16}
-          cy={16}
-          r={3.6}
-          fill={pearlColor(p, state.pearl)}
-          className={state.pearl === "run" ? "live-mark-pulse" : undefined}
-          style={{ transition: "fill var(--dur-slow)" }}
-        />
-      )}
+      <circle
+        cx={16}
+        cy={16}
+        r={3.6}
+        fill={pearlColor(p, pearl ?? "rest")}
+        className={pearl === "run" ? "live-mark-pulse" : undefined}
+        style={{
+          transformOrigin: "16px 16px",
+          transform: pearl ? "scale(1)" : "scale(0)",
+          transition: "transform 0.55s var(--ease-out), fill var(--dur-slow)",
+        }}
+      />
     </svg>
   );
 }
@@ -101,6 +125,9 @@ export function markSvg(state: MarkState, theme: "dark" | "light"): string {
   const arcs = state.arcs
     .map((k, i) => `<path d="${ARC_D[i]}" fill="none" stroke="${arcColor(p, k)}" stroke-width="3.6"/>`)
     .join("");
-  const pearl = state.pearl ? `<circle cx="16" cy="16" r="3.6" fill="${pearlColor(p, state.pearl)}"/>` : "";
+  const pearl =
+    state.pearl && state.pearl !== "off"
+      ? `<circle cx="16" cy="16" r="3.6" fill="${pearlColor(p, state.pearl)}"/>`
+      : "";
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x=".5" y=".5" width="31" height="31" rx="8.5" fill="${p.tile}" stroke="${p.edge}"/>${arcs}${pearl}</svg>`;
 }
