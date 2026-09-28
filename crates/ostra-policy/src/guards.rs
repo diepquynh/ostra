@@ -70,8 +70,7 @@ pub struct Roots {
 
 impl Roots {
     pub fn new(ctx: &ExecContext) -> Self {
-        let home = ostra_core::paths::home()
-            .unwrap_or_else(|| PathBuf::from("/"));
+        let home = ostra_core::paths::home().unwrap_or_else(|| PathBuf::from("/"));
         let session_root = canon(&ctx.session_root);
         let mut temps = vec![canon(&std::env::temp_dir()), canon(Path::new("/tmp"))];
         temps.dedup();
@@ -666,9 +665,13 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
             ),
         ));
     }
-    let legacy_skills = roots.repo.join(paths::LEGACY_SKILLS_DIR);
+    // The target is resolved through symlinks, so the dirs it is compared with are too: a skills
+    // dir may be a link to `skills/` or `.claude/skills/` elsewhere in the project.
+    let skills = canon(&paths::project_skills_dir(&roots.repo));
+    let legacy_skills = canon(&roots.repo.join(paths::LEGACY_SKILLS_DIR));
     // HANDOVER rule I2: the initializer writes skills only to `.agents/skills/`.
-    if agent == AgentName::Initializer && inside(&legacy_skills, target) {
+    if agent == AgentName::Initializer && inside(&legacy_skills, target) && !inside(&skills, target)
+    {
         return Some(deny(
             WRITE_SCOPE,
             format!(
@@ -679,14 +682,11 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
         ));
     }
     let extra: Option<Vec<PathBuf>> = match agent {
-        AgentName::Initializer => Some(vec![
-            paths::project_runtime(&roots.repo),
-            paths::project_skills_dir(&roots.repo),
-        ]),
+        AgentName::Initializer => Some(vec![canon(&paths::project_runtime(&roots.repo)), skills]),
         AgentName::ModuleDocumentation => Some(
             paths::project_skill_dirs(&roots.repo)
                 .into_iter()
-                .map(|d| d.join("module-hub").join("references"))
+                .map(|d| canon(&d.join("module-hub").join("references")))
                 .collect(),
         ),
         _ => None,
@@ -892,7 +892,11 @@ fn path_candidates(text: &str) -> Vec<String> {
         .map(|m| m.as_str().to_string())
         .collect();
     if cfg!(windows) {
-        out.extend(WIN_PATH_CANDIDATE.find_iter(text).map(|m| m.as_str().to_string()));
+        out.extend(
+            WIN_PATH_CANDIDATE
+                .find_iter(text)
+                .map(|m| m.as_str().to_string()),
+        );
     }
     out = out
         .into_iter()
@@ -941,7 +945,9 @@ pub fn check_opaque_shell(roots: &Roots, raw: &str, start: &Path) -> Option<Deni
     for candidate in path_candidates(raw) {
         let value = candidate
             .split_once('=')
-            .map_or(candidate.as_str(), |(k, v)| if k.starts_with('-') { v } else { &candidate });
+            .map_or(candidate.as_str(), |(k, v)| {
+                if k.starts_with('-') { v } else { &candidate }
+            });
         let p = roots.resolve(start, value);
         if roots.is_secret(&p) {
             return check_read(roots, &p, value);

@@ -269,6 +269,53 @@ fn write_scope_per_agent() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn initializer_writes_through_linked_skills_dirs() {
+    use std::os::unix::fs::symlink;
+    // `.agents/skills` linked to a skills dir elsewhere in the project.
+    for target in ["skills", ".claude/skills", ".ostra/skills"] {
+        let f = fx();
+        std::fs::create_dir_all(f.repo.join(target)).unwrap();
+        std::fs::create_dir_all(f.repo.join(".agents")).unwrap();
+        symlink(f.repo.join(target), f.repo.join(".agents/skills")).unwrap();
+        let init = f.policy(AgentName::Initializer);
+        allowed(&init, &write(f.repo.join(".agents/skills/entity/SKILL.md")));
+        allowed(&init, &write(f.repo.join(target).join("entity/SKILL.md")));
+        allowed(
+            &init,
+            &bash("mkdir -p .agents/skills/api && echo x > .agents/skills/api/SKILL.md"),
+        );
+        denied(
+            &init,
+            &write(f.repo.join("src/App.ts")),
+            "outside the scope of initializer",
+        );
+    }
+
+    // `skills` at the root with `.agents/skills` and the legacy dir both linked to it.
+    let f = fx();
+    std::fs::create_dir_all(f.repo.join("skills")).unwrap();
+    std::fs::create_dir_all(f.repo.join(".agents")).unwrap();
+    symlink(f.repo.join("skills"), f.repo.join(".agents/skills")).unwrap();
+    std::fs::create_dir_all(f.repo.join(".ostra")).unwrap();
+    symlink(f.repo.join("skills"), f.repo.join(".ostra/skills")).unwrap();
+    allowed(
+        &f.policy(AgentName::Initializer),
+        &write(f.repo.join(".agents/skills/entity/SKILL.md")),
+    );
+
+    // A legacy dir linked to `.agents/skills` does not make `.agents/skills` the legacy dir.
+    let f = fx();
+    std::fs::create_dir_all(f.repo.join(".agents/skills")).unwrap();
+    std::fs::create_dir_all(f.repo.join(".ostra")).unwrap();
+    symlink(f.repo.join(".agents/skills"), f.repo.join(".ostra/skills")).unwrap();
+    allowed(
+        &f.policy(AgentName::Initializer),
+        &write(f.repo.join(".agents/skills/entity/SKILL.md")),
+    );
+}
+
 #[test]
 fn edit_and_apply_patch_are_writes() {
     let f = fx();
@@ -327,10 +374,7 @@ fn bash_scope_per_agent() {
     );
     denied(
         &rev,
-        &bash(format!(
-            "echo bad > {}",
-            shp(f.repo.join("src/App.ts"))
-        )),
+        &bash(format!("echo bad > {}", shp(f.repo.join("src/App.ts")))),
         "never modifies project source",
     );
     denied(
@@ -393,10 +437,7 @@ fn declared_report_path_and_lesson_gate() {
             shp(&report)
         )),
     );
-    allowed(
-        &p,
-        &bash(format!("echo \"## More\" >> {}", shp(&report))),
-    );
+    allowed(&p, &bash(format!("echo \"## More\" >> {}", shp(&report))));
 
     let invented = f.session_dir.join("ostra-implementer-credentials-uri.md");
     let r = denied(&p, &write(&invented), "declared report path");
@@ -1654,10 +1695,7 @@ fn workspace_artifacts_are_read_but_never_written() {
         &p,
         &ToolCall::new("Read", json!({"file_path": file.to_string_lossy()})),
     );
-    allowed(
-        &p,
-        &bash(format!("python3 scripts/load.py {}", shp(&file))),
-    );
+    allowed(&p, &bash(format!("python3 scripts/load.py {}", shp(&file))));
     assert_eq!(guard_of(&p, &write(&file)), "workspace-artifacts");
     assert_eq!(
         guard_of(&p, &bash(format!("cp src/x {}/y.md", shp(&dir)))),
@@ -1754,7 +1792,10 @@ fn urls_and_git_revisions_in_shell_words_are_not_path_forms() {
     allowed(&p, &bash("curl -fsSL https://example.com/x.json"));
     allowed(&p, &bash("git show HEAD:src/a.rs"));
     let read = |raw: &str| ToolCall::new("Read", json!({"file_path": raw}));
-    assert_eq!(guard_of(&p, &read(r"C:\x\notes.txt:hidden")), "windows-path");
+    assert_eq!(
+        guard_of(&p, &read(r"C:\x\notes.txt:hidden")),
+        "windows-path"
+    );
     assert_eq!(guard_of(&p, &read(r"\\localhost\C$\x")), "windows-path");
 }
 
@@ -1828,7 +1869,11 @@ fn powershell_and_cmd_are_opaque_and_hardened() {
     let ps = |c: &str| ToolCall::new("PowerShell", json!({"command": c}));
     let cmd = |c: &str| ToolCall::new("Cmd", json!({"command": c}));
     // Even a plain read is not auto-allowed under the default mode: it asks.
-    assert!(is_ask(&p.check(&ps("Get-ChildItem"))), "{:?}", p.check(&ps("Get-ChildItem")));
+    assert!(
+        is_ask(&p.check(&ps("Get-ChildItem"))),
+        "{:?}",
+        p.check(&ps("Get-ChildItem"))
+    );
     assert!(is_ask(&p.check(&cmd("dir"))));
     // Naming Ostra's own config is refused outright.
     assert_eq!(
@@ -1844,7 +1889,10 @@ fn powershell_and_cmd_are_opaque_and_hardened() {
     assert_eq!(
         guard_of(
             &p,
-            &cmd(&format!("type {}\\.state\\gates.json", shp_win(&f.session_root)))
+            &cmd(&format!(
+                "type {}\\.state\\gates.json",
+                shp_win(&f.session_root)
+            ))
         ),
         "self-protection"
     );

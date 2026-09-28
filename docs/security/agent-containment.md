@@ -78,6 +78,10 @@ Scope stops two classes of mistakes. A research or review agent that "helpfully"
 read would change the project behind the pipeline's back, so the spec or review would describe code that no longer
 exists. An agent that writes outside the repo can damage the user's machine. The guard works on resolved paths, so
 `../../etc/x`, `~/.bashrc`, and a symlinked path are judged by where they land, not by how they are spelled.
+The allowed regions are resolved the same way. A project that keeps its skills in `skills/` or `.claude/skills/`
+and links `.agents/skills` to it lets the initializer write through the link, because both names land in the same
+folder. That folder must be inside the repo: a link that leaves the repo lands outside every agent's region. A
+write to the older `.ostra/skills/` is refused only when it does not also land in `.agents/skills/`.
 
 A second scope rule applies only to the implementer: it may not write any path that looks like a test
 (`*.test.ts`, `tests/`, `*_test.go`, `FooTest.java`, and similar patterns). Tests belong to write-test, which runs
