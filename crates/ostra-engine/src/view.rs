@@ -141,6 +141,7 @@ pub fn stage_label(k: StageKind) -> &'static str {
         Classify => "Classify the request",
         Explore => "Research",
         Sufficiency => "Check research coverage",
+        Track => "Choose the track",
         Spec => "Write the spec",
         OpenQuestions => "Open questions",
         FactCheckSpec => "Fact-check the spec",
@@ -156,6 +157,7 @@ pub fn stage_label(k: StageKind) -> &'static str {
         Handoff => "Prompt handoff",
         Rescue => "Rescue a stuck agent",
         Format => "Format",
+        ImplementationReview => "Review the implementation",
         ClosingGate => "Tests and docs?",
         Epa => "Trace execution paths",
         WriteTest => "Write tests",
@@ -347,6 +349,20 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         c.detail = Some(format!("{} rounds", s.sufficiency_rounds));
         out.push(c);
     }
+    if let Some(track) = s.track
+        && s.category == Some(ostra_core::pipeline::Category::Implement)
+    {
+        let mut c = card(
+            StageKind::Track,
+            "Choose the track".into(),
+            StageStatus::Done,
+        );
+        c.detail = Some(match track {
+            ostra_core::pipeline::Track::Light => "Light: spec and plan skipped".into(),
+            ostra_core::pipeline::Track::Full => "Full: spec, plan, and approvals".into(),
+        });
+        out.push(c);
+    }
     let t = &s.spec;
     if !t.runs.is_empty() || t.running.is_some() {
         let mut c = card(
@@ -535,6 +551,28 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             });
             out.push(c);
         }
+    }
+    for (i, r) in s.feedback.rounds.iter().enumerate() {
+        let mut c = card(
+            StageKind::ImplementationReview,
+            format!("Feedback round {}", i + 1),
+            StageStatus::Done,
+        );
+        c.detail = Some(first(&r.text));
+        out.push(c);
+    }
+    if s.feedback.gate.is_some() || s.feedback.accepted {
+        let mut c = card(
+            StageKind::ImplementationReview,
+            "Review the implementation".into(),
+            if s.feedback.accepted {
+                StageStatus::Done
+            } else {
+                StageStatus::Waiting
+            },
+        );
+        c.gate = s.feedback.gate.clone();
+        out.push(c);
     }
     for (key, t) in &s.project_tracks {
         if t.format.is_none()

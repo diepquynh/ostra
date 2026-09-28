@@ -27,4 +27,20 @@ findings: Array<FactCheckFinding>, } | { "kind": "plan_approval", plan_path: str
 /**
  * The rule "always in this workspace" would add.
  */
-suggestion: string | null, } | { "kind": "harness_failure", execution: ExecutionId, harness: HarnessKind, error: string, } | { "kind": "skill_approval", project: string, skills: Array<SkillProposal>, } | { "kind": "execution_failed", execution: ExecutionId, agent: AgentName, project: string, error: string, } | { "kind": "budget_reached", spent_usd: number, budget_usd: number, };
+suggestion: string | null, } | { "kind": "harness_failure", execution: ExecutionId, harness: HarnessKind, error: string, } | { "kind": "skill_approval", project: string, skills: Array<SkillProposal>, } | { "kind": "execution_failed", execution: ExecutionId, agent: AgentName, project: string, error: string, } | { "kind": "implementation_review", 
+/**
+ * 1 for the first review, then one more after each feedback round is built.
+ */
+round: number, 
+/**
+ * The engine-written file that lists the request, the artifacts, and every round.
+ */
+context_path: string, 
+/**
+ * Implementer reports of every finished phase, oldest first.
+ */
+reports: string[], 
+/**
+ * Phases that ended blocked, with the reason.
+ */
+blocked: Array<string>, } | { "kind": "budget_reached", spent_usd: number, budget_usd: number, };

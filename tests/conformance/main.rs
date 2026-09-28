@@ -5,7 +5,7 @@ use ostra_core::containment::ContainmentSignal;
 use ostra_core::event::*;
 use ostra_core::exec::{ExecutionResult, ExecutionStatus, Usage};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
-use ostra_core::pipeline::{QuestionAnswer, StageKind};
+use ostra_core::pipeline::{QuestionAnswer, StageKind, Track};
 use ostra_core::{AgentName, ExecutorKind};
 use ostra_engine::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use ostra_engine::state::SessionState;
@@ -213,6 +213,11 @@ impl H {
                 explore_submit(i, &[]),
             );
         }
+        h.decide(
+            JudgeKind::Track,
+            None,
+            json!({"track": "full", "reason": "r"}),
+        );
         h
     }
 
@@ -255,6 +260,18 @@ impl H {
             },
         );
         h
+    }
+
+    /// Rule F1: accept the implementation at the review gate.
+    fn accept(&mut self) {
+        let g = self.open_gate("implementation_review");
+        self.answer(
+            &g,
+            GateAnswer::Choice {
+                option: "done".into(),
+                text: None,
+            },
+        );
     }
 
     /// Implement and pass review for one phase.
@@ -379,7 +396,10 @@ fn d2_spec_waits_for_running_explore() {
 
 #[test]
 fn d2_not_covered_goes_to_sufficiency_and_spec_gets_every_doc() {
-    let mut h = H::new(&["p"], SessionOptions::default());
+    let mut h = H::new(&["p"], SessionOptions {
+            track: Some(Track::Full),
+            ..Default::default()
+        });
     h.classify("IMPLEMENT", &["p"]);
     h.run(
         "spawn explore explore#0",
@@ -664,10 +684,14 @@ fn d6_m2_m3_m5_scheduling() {
     );
     h.pass_phase(2);
     h.pass_phase(3);
-    // Rule D8: api's last phase passed, so api formats while web keeps building.
+    // Rule F1: api waits for the implementation review, because feedback can add a phase to it.
+    assert_eq!(h.summaries(), vec!["spawn implementer phase 4 initial"]);
+    h.pass_phase(4);
+    h.accept();
+    // Rule D8: format runs once per project after its last phase.
     assert_eq!(
         h.summaries(),
-        vec!["spawn implementer phase 4 initial", "command format api"]
+        vec!["command format api", "command format web"]
     );
 }
 
@@ -693,6 +717,8 @@ fn d8_t1_no_tests_between_phases_and_format_once() {
         "T1: no EPA between phases"
     );
     h.pass_phase(2);
+    assert_eq!(h.summaries(), vec!["gate implementation_review"]);
+    h.accept();
     assert_eq!(h.summaries(), vec!["command format p"]);
     h.command(CommandPurpose::Format, "p");
     // T3: tests were requested, so the gate asks only about docs.
@@ -732,10 +758,12 @@ fn t4_epa_fans_out_and_write_test_is_serial() {
             tests: true,
             docs: true,
             yolo: false,
+            track: None,
         },
     );
     h.pass_phase(1);
     h.pass_phase(2);
+    h.accept();
     h.command(CommandPurpose::Format, "p");
     // T3: both requested, so there is no gate at all.
     assert_eq!(
@@ -781,6 +809,7 @@ fn a1_an_unapproved_format_command_is_skipped_once() {
     let phases = json!([phase(1, "p", &[], "Required")]);
     let mut h = H::plan_approved(&["p"], phases, SessionOptions::default());
     h.pass_phase(1);
+    h.accept();
     assert_eq!(h.summaries(), vec!["command format p"]);
     // Rule A1: the runner records the skip as a format step with no exit code.
     h.ev(SessionEvent::CommandRan {
@@ -810,6 +839,7 @@ fn t6_closing_gate_is_batched() {
     let mut h = H::plan_approved(&["a", "b"], phases, SessionOptions::default());
     h.pass_phase(1);
     h.pass_phase(2);
+    h.accept();
     h.command(CommandPurpose::Format, "a");
     h.command(CommandPurpose::Format, "b");
     let steps = h.steps();
@@ -832,6 +862,7 @@ fn t6_closing_gate_is_batched() {
 fn t2_yolo_answers_the_closing_gate() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     h.pass_phase(1);
+    h.accept();
     h.command(CommandPurpose::Format, "p");
     h.open_gate("closing_gate");
     h.ev(SessionEvent::YoloSet { enabled: true });
@@ -1011,7 +1042,10 @@ fn amend(h: &mut H, text: &str, files: Vec<ContextFile>, delivery: ContextDelive
 
 #[test]
 fn attached_files_reach_the_agents_as_absolute_paths() {
-    let mut h = H::new(&["p"], SessionOptions::default());
+    let mut h = H::new(&["p"], SessionOptions {
+            track: Some(Track::Full),
+            ..Default::default()
+        });
     if let SessionEvent::SessionCreated { files, .. } = &mut h.events[0].event {
         *files = vec![file("p", "docs/orders.md")];
     }
@@ -1026,7 +1060,10 @@ fn attached_files_reach_the_agents_as_absolute_paths() {
 
 #[test]
 fn uploads_reach_the_agents_as_their_copies_in_the_session() {
-    let mut h = H::new(&["p"], SessionOptions::default());
+    let mut h = H::new(&["p"], SessionOptions {
+            track: Some(Track::Full),
+            ..Default::default()
+        });
     let upload = UploadedFile {
         name: "notes.pdf".into(),
         path: root().join("uploads/notes.pdf"),
@@ -1442,6 +1479,7 @@ fn hard21_open_blocker_blocks_docs() {
             docs: true,
             tests: false,
             yolo: false,
+            track: None,
         },
     );
     h.run("spawn implementer", impl_submit(1, &["src/a.rs"]));
@@ -1782,6 +1820,7 @@ fn budget_pauses_spawns_until_raised() {
         &["p"],
         SessionOptions {
             yolo: true,
+            track: Some(Track::Full),
             ..Default::default()
         },
     );
@@ -1808,7 +1847,10 @@ fn budget_pauses_spawns_until_raised() {
 
 #[test]
 fn budget_stop_ends_the_session() {
-    let mut h = H::new(&["p"], SessionOptions::default());
+    let mut h = H::new(&["p"], SessionOptions {
+            track: Some(Track::Full),
+            ..Default::default()
+        });
     h.ctx.budget_usd = Some(1.0);
     h.classify("IMPLEMENT", &["p"]);
     spend(&mut h, "spawn explore", explore_submit(0, &[]), 2.0);
@@ -1826,7 +1868,10 @@ fn budget_stop_ends_the_session() {
 
 #[test]
 fn no_budget_means_no_limit() {
-    let mut h = H::new(&["p"], SessionOptions::default());
+    let mut h = H::new(&["p"], SessionOptions {
+            track: Some(Track::Full),
+            ..Default::default()
+        });
     h.classify("IMPLEMENT", &["p"]);
     spend(&mut h, "spawn explore", explore_submit(0, &[]), 500.0);
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
@@ -1921,4 +1966,221 @@ fn rule_i1_slices_still_fan_out_beside_existing_skills() {
         ),
     );
     assert_eq!(h.summaries(), vec!["spawn initializer init scout api"]);
+}
+
+// ------------------------------------------------------------------------------------------
+// Tracks: IMPLEMENT is light by default; the Track judge escalates to the full track.
+// ------------------------------------------------------------------------------------------
+
+fn light(projects: &[&str]) -> H {
+    let mut h = H::new(projects, SessionOptions::default());
+    h.classify("IMPLEMENT", projects);
+    for (i, _) in projects.iter().enumerate() {
+        h.run(
+            &format!("spawn explore explore#{i}"),
+            explore_submit(i, &[]),
+        );
+    }
+    h.decide(
+        JudgeKind::Track,
+        None,
+        json!({"track": "light", "reason": "r"}),
+    );
+    h
+}
+
+fn feedback(h: &mut H, text: &str) {
+    let g = h.open_gate("implementation_review");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "feedback".into(),
+            text: Some(text.into()),
+        },
+    );
+}
+
+#[test]
+fn track_is_judged_after_research_and_light_skips_spec_and_plan() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["p"]);
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    assert_eq!(h.summaries(), vec!["judge track"]);
+    h.decide(
+        JudgeKind::Track,
+        None,
+        json!({"track": "light", "reason": "r"}),
+    );
+    assert_eq!(h.summaries(), vec!["spawn implementer phase 1 initial"]);
+    let req = h.spawn_step("spawn implementer");
+    // The light track builds from the research, because there is no spec.
+    assert_eq!(req.inputs.research_docs.len(), 1);
+    assert!(req.inputs.phase.unwrap().file.is_none());
+    let st = h.state();
+    assert!(st.spec.runs.is_empty() && st.stakes.is_none());
+}
+
+#[test]
+fn track_full_runs_the_spec() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["p"]);
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    h.decide(
+        JudgeKind::Track,
+        None,
+        json!({"track": "full", "reason": "a contract changes"}),
+    );
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
+}
+
+#[test]
+fn track_forced_on_the_new_task_form_skips_the_judge() {
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
+            track: Some(Track::Light),
+            ..Default::default()
+        },
+    );
+    h.classify("IMPLEMENT", &["p"]);
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    assert_eq!(h.summaries(), vec!["spawn implementer phase 1 initial"]);
+}
+
+#[test]
+fn track_can_be_overridden_until_a_phase_starts() {
+    let mut h = light(&["p"]);
+    let id = h.state().track_decision.clone().unwrap();
+    assert!(h.state().can_override(&id));
+    h.ev(SessionEvent::DecisionOverridden {
+        id: id.clone(),
+        output: json!({"track": "full", "reason": "user"}),
+        reason: "user".into(),
+    });
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
+    assert!(h.state().phases.is_empty());
+}
+
+// ------------------------------------------------------------------------------------------
+// F1: after every phase finishes, the user reviews the result until they accept it.
+// F2: a revision reads the engine-written session context file.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn f1_feedback_builds_a_reviewed_revision_then_asks_again() {
+    let mut h = light(&["p"]);
+    h.pass_phase(1);
+    assert_eq!(h.summaries(), vec!["gate implementation_review"]);
+    feedback(&mut h, "Show the cancel button only for open orders.");
+    // One project and no spec: nothing to judge, the revision builds directly.
+    assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"]);
+    let req = h.spawn_step("spawn implementer phase 2");
+    assert_eq!(req.inputs.revision, Some(1));
+    assert!(
+        req.inputs
+            .task
+            .as_deref()
+            .unwrap()
+            .contains("only for open orders")
+    );
+    assert_eq!(
+        req.inputs.context_files,
+        vec![root().join("ostra-session-context.md")]
+    );
+    assert_eq!(
+        req.inputs.prior_reports,
+        vec![PathBuf::from(
+            "/ws/.ostra/sessions/s1/p/ostra-implementer-phase-1.md"
+        )]
+    );
+    h.pass_phase(2);
+    let g = h.open_gate("implementation_review");
+    let GatePayload::ImplementationReview { round, reports, .. } = &h.state().gates[&g].payload
+    else {
+        panic!()
+    };
+    assert_eq!((*round, reports.len()), (2, 2));
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "done".into(),
+            text: None,
+        },
+    );
+    // Accepting moves on to the closing stages (Rule D8).
+    assert_eq!(h.summaries(), vec!["command format p"]);
+}
+
+#[test]
+fn f1_feedback_across_projects_is_judged_and_builds_one_revision_per_target() {
+    let mut h = light(&["api", "web"]);
+    h.pass_phase(1);
+    h.pass_phase(2);
+    feedback(&mut h, "Return the reason and show it.");
+    assert_eq!(h.summaries(), vec!["judge feedback 0"]);
+    h.decide(
+        JudgeKind::Feedback,
+        Some("0"),
+        json!({"route": "implementation_detail", "targets": [
+            {"project": "api", "instruction": "Return the reason."},
+            {"project": "web", "instruction": "Show the reason."},
+            {"project": "nope", "instruction": "Dropped: not a project."}
+        ], "reason": "r"}),
+    );
+    // Different projects build in parallel (Rule M2).
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn implementer phase 3 initial",
+            "spawn implementer phase 4 initial"
+        ]
+    );
+    assert_eq!(h.state().phases[&4].info.project, "web");
+}
+
+#[test]
+fn f1_a_requirement_change_goes_into_the_spec_before_the_revision() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    h.pass_phase(1);
+    feedback(&mut h, "Cancelled orders must also refund the shipping fee.");
+    assert_eq!(h.summaries(), vec!["judge feedback 0"]);
+    h.decide(
+        JudgeKind::Feedback,
+        Some("0"),
+        json!({"route": "requirement_change", "targets": [{"project": "p", "instruction": "Refund the shipping fee."}], "reason": "r"}),
+    );
+    // Rule D10: the spec changes first; no revision is built yet.
+    let spec = h.spawn_step("spawn generate-spec spec#2");
+    assert!(spec.inputs.changes[0].contains("shipping fee"));
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    h.run(
+        "spawn fact-check fact-check-spec",
+        fact("PASS", "spec", &[]),
+    );
+    let g = h.open_gate("spec_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    // The approved plan stays; the change builds as a revision phase.
+    assert_eq!(h.summaries(), vec!["spawn implementer phase 2 initial"]);
+    assert_eq!(h.state().plan.runs.len(), 1);
+}
+
+#[test]
+fn f1_yolo_accepts_the_implementation() {
+    let mut h = light(&["p"]);
+    h.pass_phase(1);
+    h.open_gate("implementation_review");
+    h.ev(SessionEvent::YoloSet { enabled: true });
+    assert_eq!(h.summaries(), vec!["yolo-answer"]);
+    let st = h.state();
+    let gate = st.open_gates().next().unwrap().id.clone();
+    assert!(matches!(
+        ostra_engine::judge_input::yolo_plan(&st, &gate),
+        Some(ostra_engine::judge_input::YoloPlan::Fixed { .. })
+    ));
 }

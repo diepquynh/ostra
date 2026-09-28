@@ -1,8 +1,10 @@
 # The pipeline
 
 A request typed into Ostra goes through the same stages a careful team would use: find out how the code works
-today, write down what should change, check that write-up against the code, sequence the work, build it in
-reviewed steps, and then optionally write tests and update the docs. This page follows one request through
+today, build the change in reviewed steps, let the person who asked try it and ask for changes, and then
+optionally write tests and update the docs. A change that needs its requirements settled first also gets a
+written spec, a check of that spec against the code, and a sequenced plan, each approved before anything is
+built. This page follows one request through
 every stage and explains what each stage produces, who does the work, how many things run at once, and what
 happens when a stage goes wrong.
 
@@ -25,13 +27,14 @@ implements a rule cites it in a comment, and every rule has a conformance fixtur
 ## The whole path at a glance
 
 ```
-Intake → Classify* → Explore ×N (parallel) → Sufficiency* ─┐
-┌──────────────────────────────────────────────────────────┘
-→ Spec → Open questions (gate) → Fact-check(spec) ⟲ → Spec approval (gate)
-→ Stakes* ── low: skip plan ─────────────────────────────┐
-         └─ medium/high: Plan → Fact-check(plan) ⟲ → Plan approval (gate)
+Intake → Classify* → Explore ×N (parallel) → Sufficiency* → Track*
+  light: one inline phase per project
+  full:  Spec → Open questions (gate) → Fact-check(spec) ⟲ → Spec approval (gate)
+         → Stakes* ── low: one inline phase per project
+                  └─ medium/high: Plan → Fact-check(plan) ⟲ → Plan approval (gate)
 → Phases (a dependency graph; one at a time per project, parallel across projects;
           each phase: implement ⟷ review loop, then stage)
+→ Implementation review (gate) ⟲ feedback → Feedback* → revision phases
 → Format (once per project)
 → Closing gate (tests? docs?) → EPA ×N (parallel) → Write-test (one phase at a time, reviewed)
 → Module documentation → Completion report*
@@ -48,7 +51,7 @@ route:
 | `RESEARCH` | Explore and sufficiency, then the completion report. |
 | `SPEC` | Research, then the spec and its fact-check. No approval gate, because nothing is built from it. |
 | `PLAN` | Research, spec with approval, plan with approval. Nothing is built. |
-| `IMPLEMENT` | The full path. |
+| `IMPLEMENT` | Research, then the light or the full track, the phases, the implementation review, and the closing stages. |
 | `VERIFY` | One implementer pass per project that runs the project's test command and reports. |
 | `UNIT_TEST` | Straight to the test stage: EPA, write-test, review. No closing gate, because the request asked for tests. |
 | `PROMPT` | Prompt-generation, reviewed only when a changed file is code rather than an instruction file. |
@@ -127,6 +130,24 @@ it has, so a request that keeps opening new questions still moves forward. When 
 to mark an item needed: an extra research pass costs one round, while a missed dependency shows up as a wrong
 spec after the user approved it.
 
+## Track: light or full
+
+After research, an `IMPLEMENT` request asks the Track judge how much of the pipeline it needs. The light track
+is the default. It skips the spec, the fact-check, the plan, and both approvals: the engine creates one inline
+phase per project in scope, queued in order, and each implementer gets `No plan:` with the request and every
+research document. The full track runs the spec flow below, then Stakes, then the plan when stakes are not low.
+
+The judge ([`assets/judges/track.md`](../../assets/judges/track.md)) reads every research document and picks
+`full` only on a finding it can name: a behavior the request leaves open, a contract other code consumes, a
+schema or data change, a change across several modules that must land in order, or a security-sensitive area.
+When the evidence is thin it picks `light`, because the user reviews the built result and can ask for changes
+(next sections), while a spec round costs the user several approvals.
+
+The New task form has a Track selector: Auto asks the judge, Light and Full skip it. The Track decision can be
+overridden from the Decisions tab until the spec or a phase starts; switching to full drops the inline phases,
+and switching to light creates them. The rest of the page follows the full track through the spec and the plan,
+then both tracks through the phases.
+
 ## Spec: what should change
 
 One `generate-spec` agent runs for the whole session, in the primary project. It receives the full request,
@@ -192,14 +213,14 @@ In the spec itself, the Fact-check chapter shows each finding on the element it 
 
 ## Stakes: is a plan worth it?
 
-For `IMPLEMENT`, the Stakes judge reads the approved spec and returns `low`, `medium`, or `high`.
+For `IMPLEMENT` on the full track, the Stakes judge reads the approved spec and returns `low`, `medium`, or `high`.
 
 - `low` skips the plan. The engine creates one inline phase per project in scope, queued in order because
   there is no dependency graph to read (Rule M5), and the implementer works from the spec.
 - `medium` and `high` run the plan stage.
 
-`PLAN` and `IMPLEMENT` always go through the spec first (Rule D1, Hard rule 15). There is no path from research
-straight to a plan.
+`PLAN` and full-track `IMPLEMENT` always go through the spec first (Rule D1, Hard rule 15). There is no path from
+research straight to a plan.
 
 ## Plan: sequencing the work
 
@@ -326,9 +347,51 @@ retry:
 
 ![A phase blocked gate with Retry the phase and a stuck gate for phase 2](../images/console/gate-stuck.png)
 
+## Implementation review: feedback until you accept
+
+When every phase of an `IMPLEMENT` session has finished, passed or blocked, and nothing is running, the engine
+opens the implementation review gate (Rule F1). Nothing after it runs yet: no format, no closing gate, no tests,
+no docs. You try the change and either accept it or describe what to change.
+
+The gate card links the session context file and each implementer report, and lists any blocked phase with its
+reason:
+
+- **Accept the implementation** answers `done`. The session moves on to format, the closing gate, tests, docs,
+  and the completion report.
+- **Send feedback** answers `feedback` with your text and starts a round. A round with no spec and one project
+  in scope becomes one revision phase in that project. Otherwise the Feedback judge
+  ([`assets/judges/feedback.md`](../../assets/judges/feedback.md)) routes the round and writes one instruction
+  per project it changes, so feedback on a backend and frontend pair can build a revision in each.
+
+A revision phase is an inline phase with the next free phase ID and the title "Revision N". It runs the same
+implement and review loop as any phase and is staged when it passes, and the phase scheduler treats it like any
+other phase, so revisions in different projects build in parallel. When the round's phases finish, the gate
+opens again for the next round. Feedback can go on for any number of rounds.
+
+On a full-track session the Feedback judge also decides whether the round changes a requirement. A
+`requirement_change` goes into the spec first (Rule D10): generate-spec revises the spec with the feedback, the
+fact-check runs, and you approve the spec again. The revision phases are created at that approval. The approved
+plan is not written again, because the revision works from the updated spec and the context file. An
+`implementation_detail` builds at once and leaves the spec as approved. With a spec, doubt resolves to
+`requirement_change`, because a spec that disagrees with the code misleads every later stage.
+
+### The session context file
+
+A revision does not continue an earlier agent's conversation. Before a revision spawns, and before the review
+gate opens, the runner writes `ostra-session-context.md` in the session folder from the event log (Rule F2,
+[`crates/ostra-engine/src/context.rs`](../../crates/ostra-engine/src/context.rs)). It lists the request with every
+amendment, the track, the research documents, the spec and plan, every phase with its status, implementer report,
+and review ledger, and every feedback round with the phases that built it. The revision implementer gets it as
+`Context files:`, the earlier reports of its project as `Prior phase reports:`, and the round's instruction as its
+task. Each revision starts with a prompt of the same size however many rounds came before, and reads only the
+files it needs.
+
+Under YOLO the gate is answered `done`, because only you can say what you want changed.
+
 ## Format
 
-After a project's last phase is done, the project's format command runs once (Rule D8). It is a plain command,
+After a project's last phase is done, and for `IMPLEMENT` after you accept the implementation, the project's
+format command runs once (Rule D8). Accepting comes first because a feedback round adds phases to the project. It is a plain command,
 not an agent, and it is not gated. Formatting between phases would put formatting changes into the next
 phase's review.
 

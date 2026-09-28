@@ -332,7 +332,7 @@ execution-path-analyzer = "balanced"
 module-documentation = "advanced"
 prompt-generation = "advanced"
 initializer = "balanced"
-judge = "fast"
+judge = "advanced"
 quick-answer = "balanced"
 
 [routing.model.byPhaseComplexity.implementer]
@@ -437,18 +437,26 @@ restart replays and continues. The artifacts agents write stay files in the sess
 prompts address them by path.
 
 ```
-Intake → Classify* → Explore ×N (parallel, per project or area) → Sufficiency* ─┐
-┌────────────────────────────────────────────────────────────────────────────────┘
-→ Spec → Open questions (gate) → FactCheck(spec) ⟲ → Spec approval (gate)
-→ Stakes* ── low: skip plan ──────────────────────────────────┐
-         └─ medium/high: Plan → FactCheck(plan) ⟲ → Plan approval (gate)
+Intake → Classify* → Explore ×N (parallel, per project or area) → Sufficiency* → Track* ─┐
+┌─────────────────────── light: one inline phase per project ────────────────────────────┤
+│  full: Spec → Open questions (gate) → FactCheck(spec) ⟲ → Spec approval (gate)          │
+│        → Stakes* ── low: skip plan ─────────────────────────────────────────────────────┤
+│                 └─ medium/high: Plan → FactCheck(plan) ⟲ → Plan approval (gate) ────────┤
+└────────────────────────────────────────────────────────────────────────────────────────┘
 → Phases (DAG; per project sequential, across projects parallel; each phase: implement ⟷ review loop, stage)
+→ Implementation review (gate) ⟲ feedback → Feedback* → revision phases (reviewed, staged)
 → Format (per project, once)
 → Closing gate (tests? docs?) → EPA ×N (parallel) → WriteTest (one phase at a time, review loop, stage)
 → Module documentation → Completion report*
 
 * judge call     ⟲ FAIL goes back to the owning agent with the previous findings
 ```
+
+IMPLEMENT runs on one of two tracks. The light track is the default: research, then one inline phase per project
+built from the request and the research documents. The Track judge moves a request to the full track, which
+adds the spec, the plan, and their approvals, only when the research shows the change needs settled
+requirements. The user can force either track from the New task form, or override the judge until the spec or a
+phase starts.
 
 Categories other than IMPLEMENT and PLAN take shorter paths, exactly as `UC/commands/orchestrate/prompt.md`
 Step 1 lists them: RESEARCH (explore only), SPEC (explore, spec), VERIFY (implementer running the test command),
@@ -462,7 +470,10 @@ to `UC/commands/orchestrate/prompt.md`.
 
 | Rule | Engine behavior |
 | --- | --- |
-| D1, Hard 15 | IMPLEMENT and PLAN always pass through Spec. There is no transition from Explore to Plan. With no research document, Spec is not entered. |
+| D1, Hard 15 | PLAN and full-track IMPLEMENT always pass through Spec. There is no transition from Explore to Plan. With no research document, Spec and the light track's phases are not entered. |
+| Track | After research, an IMPLEMENT request with no track forced on the New task form asks the Track judge: `light` unless the research shows an open requirement, a changed contract, a schema or data change, an ordered multi-area change, or a security-sensitive area. Light creates one inline phase per project in scope, queued in order (M5), whose implementer gets `No plan:` and every research document. Full runs the spec flow, then Stakes. Overriding is allowed until the spec or a phase starts. |
+| F1 | When every phase of an IMPLEMENT session is terminal and nothing runs, the engine opens the implementation review gate before format and the closing stages. `done` accepts; `feedback` with text starts a round. A round with no spec and one project in scope builds one revision phase directly; otherwise the Feedback judge routes it and names one target per project it changes. On a session with a spec, a `requirement_change` goes into the spec first (D10) and the revision phases are created when the spec is approved again; the approved plan is not re-run. A revision phase is an inline phase with the next free ID, reviewed and staged like any phase, and the gate opens again after it. Under YOLO the gate is answered `done`. |
+| F2 | Before a revision spawns and before the review gate opens, the runner writes `ostra-session-context.md` in the session root from the fold: the request, the track, the research documents, the spec and plan, every phase with its report and ledger, and every feedback round. A revision implementer gets it as `Context files:`, the project's earlier reports as `Prior phase reports:`, and its round's instruction as the task, so a session takes any number of rounds without a growing conversation. |
 | D2 | Spec is entered only when no explore execution is running and the Sufficiency judge finds no needed `Not covered` item. Spec receives every research document path, oldest run stamp first, including superseded ones. |
 | D3 | Open questions from the spec are asked before any fact-check. Every answer re-runs generate-spec. The engine never edits the spec. |
 | D3a | `Prior findings:` is `none` on the first pass over an artifact and the previous pass's findings verbatim after, or `no findings on the previous pass` when that pass found nothing, so a revision after a clean pass is still a re-pass. The engine adds no other instruction to a re-pass. |
@@ -470,7 +481,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | D4, Hard 16 | The plan execution's parameters are the spec path, projects in scope, workspace root, session dir, and key, plus the earlier master plan and fact-check findings on a re-spawn. The parameter struct has no field for anything else. |
 | D5 | Plan fact-check always uses `citations` and receives the approved spec path. |
 | D6, D7, M2 to M6 | The scheduler reads the Phase Index. A phase is ready when every phase it depends on has completed and passed review. One implement pipeline per project at a time. Ready phases in different projects run in parallel. An unreadable dependency means "depends" (M5). |
-| D8, T1 to T7 | Test and doc stages never run between phases. Format runs once per project after its last phase. The closing gate is asked once per project, batched when several projects arrive together. `Test policy: Skip` phases are listed as uncovered with the plan's rationale. An explicit request in the task replaces the gate (T3). |
+| D8, T1 to T7 | Test and doc stages never run between phases. Format runs once per project after its last phase and, for IMPLEMENT, after the user accepts the implementation (F1), because a feedback round adds phases. The closing gate is asked once per project, batched when several projects arrive together. `Test policy: Skip` phases are listed as uncovered with the plan's rationale. An explicit request in the task replaces the gate (T3). |
 | D9 | A failed phase removes every phase that depends on it from the queue. Independent phases continue. |
 | D10, answer routing | A requirement-level answer at any point after the spec exists re-runs generate-spec, then re-approval, then a plan revision. Both revise in place: generate-spec gets only the answers, changes, and research documents its spec does not reflect yet, and the plan agent edits only the phases the spec's diff reaches. |
 | Hard 4 | The engine reads each report before the next step. For native and submit-tool outputs this is structured data. The research document, the spec, and the plan are typed documents (10.3), and a submit call naming one is refused while it has a check error or disagrees with the submit's counts and phases. |
@@ -492,15 +503,17 @@ to `UC/commands/orchestrate/prompt.md`.
 ### 8.3 Judge calls
 
 These are the only places a model makes an orchestration decision. Each has a short prompt derived from the
-matching part of `orchestrate/prompt.md`, a JSON output schema, and runs on the `judge` route (`fast` by
-default). Each decision is stored as an event with its input summary and its reason, and the UI shows it as
+matching part of `orchestrate/prompt.md`, a JSON output schema, and runs on the `judge` route (`advanced` by
+default, because routing a request or an answer needs the strongest tier). Each decision is stored as an event with its input summary and its reason, and the UI shows it as
 "Ostra chose X because Y" with an override button. For a beginner this is where the pipeline explains itself.
 
 | Judge | Output |
 | --- | --- |
 | Classify | Category, projects in scope, explore tasks (one per project or area), and whether the request already opts into tests or docs. |
 | Sufficiency | For each `Not covered` item across the research documents: needed or not, plus the extra explore task if needed. |
-| Stakes | `low`, `medium`, or `high`, with a reason. `low` skips plan. |
+| Track | `light` or `full`, with a reason. Asked after research for an IMPLEMENT request with no forced track. |
+| Stakes | `low`, `medium`, or `high`, with a reason. `low` skips plan. Full track only. |
+| Feedback | For a round of implementation feedback: `requirement_change` or `implementation_detail`, plus one `{project, instruction}` target per project it changes. |
 | Route answer | For a user answer: requirement change, implementation detail, or stage choice. Doubt resolves to requirement change. |
 | Rescue | For a STUCK report: explore, re-run with a stated fact, or gate. |
 | Resolve review | For a review loop at its cap under YOLO: per-finding fix instructions for one fix-and-verify round, or declare the phase blocked. |

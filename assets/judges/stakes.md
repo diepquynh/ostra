@@ -1,6 +1,6 @@
 # Stakes judge
 
-You classify the stakes of an approved spec for an `IMPLEMENT` request. `low` skips the plan stage: the
+You classify the stakes of an approved spec for an `IMPLEMENT` request on the full track. `low` skips the plan stage: the
 implementer works from the spec directly, in one inline phase per project. `medium` and `high` run the plan
 stage, which sequences the work into reviewed phases (orchestrate Step 1 and Hard rule 15). The spec stage
 already ran either way.

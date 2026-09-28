@@ -9,22 +9,30 @@ use std::fmt::Write;
 use std::path::Path;
 
 const FILE_EXCERPT: usize = 24_000;
+/// Per research document for the Track judge, which reads every document of the session.
+const TRACK_EXCERPT: usize = 12_000;
 
 pub struct ProjectFacts {
     pub key: String,
     pub path: String,
     pub initialized: bool,
     pub stack: Option<String>,
+    /// Module map rows from `project.toml`, as `area (glob)`.
+    pub areas: Vec<String>,
 }
 
 fn excerpt(path: &Path) -> String {
+    excerpt_n(path, FILE_EXCERPT)
+}
+
+fn excerpt_n(path: &Path, max: usize) -> String {
     match std::fs::read_to_string(path) {
-        Ok(t) if t.len() > FILE_EXCERPT => {
-            let mut end = FILE_EXCERPT;
+        Ok(t) if t.len() > max => {
+            let mut end = max;
             while !t.is_char_boundary(end) {
                 end -= 1;
             }
-            format!("{}\n\n(truncated at {FILE_EXCERPT} characters)", &t[..end])
+            format!("{}\n\n(truncated at {max} characters)", &t[..end])
         }
         Ok(t) => t,
         Err(_) => format!("(could not read {})", path.display()),
@@ -65,6 +73,9 @@ pub fn judge_input(
                         " (not initialized: no pipeline task may target it)"
                     }
                 );
+                if !p.areas.is_empty() {
+                    let _ = writeln!(m, "  - Areas: {}", p.areas.join("; "));
+                }
             }
             let summary = format!("Request: {}", first_line(&request));
             (m, summary)
@@ -129,6 +140,76 @@ pub fn judge_input(
             }
             let _ = writeln!(m, "\nProjects in scope: {}", s.scope.join(", "));
             (m, "Approved spec and request".into())
+        }
+        JudgeKind::Track => {
+            let _ = writeln!(m, "# Request\n\n{request}\n");
+            let _ = writeln!(m, "Projects in scope: {}\n", s.scope.join(", "));
+            let _ = writeln!(m, "# Research returned\n");
+            for t in &s.explore {
+                let Some(r) = &t.result else { continue };
+                let _ = writeln!(
+                    m,
+                    "## Task {} ({})\n\nTask: {}\nScope covered: {}\nFindings: {}\nNot covered: {}\n\n{}\n",
+                    t.idx,
+                    t.project,
+                    t.task,
+                    r.scope_covered,
+                    r.findings_summary,
+                    if r.not_covered.is_empty() {
+                        "none".to_string()
+                    } else {
+                        r.not_covered.join("; ")
+                    },
+                    excerpt_n(Path::new(&r.research_path), TRACK_EXCERPT)
+                );
+            }
+            (m, format!("Research for: {}", first_line(&request)))
+        }
+        JudgeKind::Feedback => {
+            let round = subject
+                .and_then(|x| x.parse::<usize>().ok())
+                .and_then(|i| s.feedback.rounds.get(i));
+            let text = round.map(|r| r.text.clone()).unwrap_or_default();
+            let _ = writeln!(m, "# Request\n\n{request}\n");
+            let _ = writeln!(
+                m,
+                "Track: {}\nProjects in scope: {}\n",
+                s.track.map(|t| t.as_str()).unwrap_or("full"),
+                s.scope.join(", ")
+            );
+            match &s.spec.current {
+                Some(spec) => {
+                    let _ = writeln!(
+                        m,
+                        "# Current spec\n\nSummary: {}\nSpec file: {}\n\n{}\n",
+                        spec.summary,
+                        spec.spec_path,
+                        excerpt(Path::new(&spec.spec_path))
+                    );
+                }
+                None => {
+                    let _ = writeln!(
+                        m,
+                        "# No spec\n\nThis session has no spec, so every route builds a revision directly.\n"
+                    );
+                }
+            }
+            let _ = writeln!(m, "# Phases built so far\n");
+            for p in s.phases.values() {
+                let _ = writeln!(
+                    m,
+                    "- Phase {} ({}): {}. Report: {}",
+                    p.info.id,
+                    p.info.project,
+                    p.info.title,
+                    p.implementer_report
+                        .as_ref()
+                        .map(|r| r.display().to_string())
+                        .unwrap_or_else(|| "none".into())
+                );
+            }
+            let _ = writeln!(m, "\n# The user's feedback on the implementation\n\n{text}");
+            (m, format!("Feedback: {}", first_line(&text)))
         }
         JudgeKind::RouteAnswer => {
             let gate = subject.and_then(|g| s.gates.get(&GateId::from(g)));
@@ -324,6 +405,31 @@ fn completion_input(s: &SessionState) -> (String, String) {
     );
     if s.category == Some(Category::QuickAnswer) {
         return (m, "Quick answer".into());
+    }
+    if let (Some(Category::Implement), Some(track)) = (s.category, s.track) {
+        let _ = writeln!(
+            m,
+            "Track: {}{}\n",
+            track.as_str(),
+            if track == ostra_core::pipeline::Track::Light {
+                " (the spec, fact-check, and plan stages did not run)"
+            } else {
+                ""
+            }
+        );
+    }
+    if !s.feedback.rounds.is_empty() {
+        let _ = writeln!(m, "# Feedback rounds after the implementation\n");
+        for (i, r) in s.feedback.rounds.iter().enumerate() {
+            let _ = writeln!(
+                m,
+                "- Round {}: {} (built as phases {:?})",
+                i + 1,
+                first_line(&r.text),
+                r.phases
+            );
+        }
+        m.push('\n');
     }
     let _ = writeln!(m, "# Research\n");
     for t in &s.explore {
@@ -537,6 +643,10 @@ pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
                 "required": ["kind", "option"]
             }),
         },
+        GatePayload::ImplementationReview { .. } => choice(
+            "done",
+            "Under YOLO the implementation is accepted as built, because only the user can say what they want changed.",
+        ),
         GatePayload::ClosingGate { items } => YoloPlan::Fixed {
             answer: GateAnswer::Closing {
                 items: items

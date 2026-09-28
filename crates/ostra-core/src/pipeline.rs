@@ -42,6 +42,26 @@ impl fmt::Display for Category {
     }
 }
 
+/// How much of the pipeline an `IMPLEMENT` request runs. The light track goes from research
+/// straight to reviewed phases; the full track adds the spec, its fact-check, the plan, and the
+/// approvals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum Track {
+    Light,
+    Full,
+}
+
+impl Track {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Track::Light => "light",
+            Track::Full => "full",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
@@ -100,6 +120,7 @@ pub enum StageKind {
     Classify,
     Explore,
     Sufficiency,
+    Track,
     Spec,
     OpenQuestions,
     FactCheckSpec,
@@ -115,6 +136,7 @@ pub enum StageKind {
     Handoff,
     Rescue,
     Format,
+    ImplementationReview,
     ClosingGate,
     Epa,
     WriteTest,
@@ -137,7 +159,7 @@ impl StageKind {
     pub fn lane(self) -> Lane {
         use StageKind::*;
         match self {
-            Intake | Classify | Explore | Sufficiency | QuickAnswer | Detect | Scout => {
+            Intake | Classify | Explore | Sufficiency | Track | QuickAnswer | Detect | Scout => {
                 Lane::Research
             }
             Spec | OpenQuestions | Propose | SkillApproval => Lane::Requirements,
@@ -145,7 +167,7 @@ impl StageKind {
             Stakes | Plan | PlanApproval => Lane::Design,
             Implement | Autofix | Handoff | Rescue | Verify | PromptGen | GenerateSkill
             | GenerateInventory => Lane::Build,
-            Review | Staging | Format => Lane::Review,
+            Review | Staging | Format | ImplementationReview => Lane::Review,
             ClosingGate | Epa | WriteTest | TestReview => Lane::Test,
             ModuleDocs => Lane::Docs,
             Completion => Lane::Done,

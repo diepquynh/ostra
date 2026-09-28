@@ -2,6 +2,7 @@
 //! every gate, judge calls where a decision needs judgment, and the runner that performs steps.
 
 pub mod autofix;
+pub mod context;
 pub mod factory;
 pub mod init;
 pub mod judge;

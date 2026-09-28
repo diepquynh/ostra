@@ -231,7 +231,7 @@ agent.
 Every route key needs a model route. A new workspace is seeded with one for each
 (`WorkspaceSettings::seeded`), taken from Ultracode's inventory profile: research, spec, plan, fact-check,
 module documentation, and prompt generation on `advanced`; review, execution-path analysis, the initializer,
-and quick answers on `balanced`; judges on `fast`.
+and quick answers on `balanced`; judges on `advanced`, because a wrong route costs more than the call.
 
 ### Effort
 
@@ -427,7 +427,7 @@ execution-path-analyzer = "balanced"
 module-documentation = "default"    # the agent.toml default tier
 prompt-generation = "advanced"
 initializer = "balanced"
-judge = "fast"
+judge = "advanced"
 quick-answer = "balanced"
 
 [routing.model.byPhaseComplexity.implementer]

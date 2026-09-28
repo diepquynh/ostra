@@ -60,6 +60,29 @@ pub struct StakesOut {
     pub reason: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrackOut {
+    pub track: ostra_core::pipeline::Track,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// One project a feedback round changes, with the instruction its revision phase gets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedbackTarget {
+    pub project: String,
+    pub instruction: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeedbackOut {
+    pub route: AnswerRoute,
+    #[serde(default)]
+    pub targets: Vec<FeedbackTarget>,
+    #[serde(default)]
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerRoute {
@@ -209,6 +232,27 @@ pub fn output_schema(kind: JudgeKind, answer_schema: Option<Value>) -> Value {
             "type": "object",
             "properties": {"stakes": {"type": "string", "enum": ["low","medium","high"]}, "reason": reason},
             "required": ["stakes", "reason"]
+        }),
+        JudgeKind::Track => json!({
+            "type": "object",
+            "properties": {"track": {"type": "string", "enum": ["light","full"]}, "reason": reason},
+            "required": ["track", "reason"]
+        }),
+        JudgeKind::Feedback => json!({
+            "type": "object",
+            "properties": {
+                "route": {"type": "string", "enum": ["requirement_change","implementation_detail"]},
+                "targets": {"type": "array", "minItems": 1, "items": {
+                    "type": "object",
+                    "properties": {
+                        "project": {"type": "string", "description": "Project key in scope."},
+                        "instruction": {"type": "string", "description": "What this project's revision must change, self-contained."}
+                    },
+                    "required": ["project", "instruction"]
+                }},
+                "reason": reason
+            },
+            "required": ["route", "targets", "reason"]
         }),
         JudgeKind::RouteAnswer => json!({
             "type": "object",

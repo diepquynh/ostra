@@ -69,6 +69,8 @@ fn judge(req: &ChatRequest) -> Value {
     let props = &schema["properties"];
     if props.get("category").is_some() {
         json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "Research the greeting"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code.", "title": "Greeting file"})
+    } else if props.get("track").is_some() {
+        json!({"track": "full", "reason": "Spec it."})
     } else if props.get("stakes").is_some() {
         json!({"stakes": "high", "reason": "Plan it."})
     } else if props.get("report_markdown").is_some() {

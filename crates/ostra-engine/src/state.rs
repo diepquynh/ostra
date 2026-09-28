@@ -2,8 +2,9 @@
 //! the same events always produce the same state, so a restart replays and continues.
 
 use crate::judge::{
-    AnswerRoute, ClassifyOut, OptsIn, RescueAction, RescueOut, ResolveAction, ResolveReviewOut,
-    RouteAnswerOut, StakesOut, SufficiencyOut, clean_title,
+    AnswerRoute, ClassifyOut, FeedbackOut, FeedbackTarget, OptsIn, RescueAction, RescueOut,
+    ResolveAction, ResolveReviewOut, RouteAnswerOut, StakesOut, SufficiencyOut, TrackOut,
+    clean_title,
 };
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
@@ -17,7 +18,9 @@ use ostra_core::exec::{ExecutionResult, ExecutionStatus};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
 use ostra_core::model::Complexity;
 use ostra_core::paths;
-use ostra_core::pipeline::{Category, PhaseInfo, QuestionAnswer, StageKind, Stakes, TestPolicy};
+use ostra_core::pipeline::{
+    Category, PhaseInfo, QuestionAnswer, StageKind, Stakes, TestPolicy, Track,
+};
 use ostra_core::submit::{
     CodeReviewerSubmit, ExploreSubmit, FactCheckSubmit, GenerateSpecSubmit, HandoffInfo,
     ImplementerSubmit, InitializerSubmit, PlanSubmit, QuickAnswerSubmit, ReportSubmit,
@@ -459,6 +462,35 @@ pub struct PhaseRun {
     pub epa: EpaState,
     pub implementer_report: Option<PathBuf>,
     pub blocked_gate: Option<GateId>,
+    /// Set on a phase built from the user's feedback after the implementation.
+    pub revision: Option<Revision>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Revision {
+    /// 1-based feedback round.
+    pub round: u32,
+    pub instruction: String,
+}
+
+/// The review after every phase finished: feedback rounds until the user accepts.
+#[derive(Debug, Clone, Default)]
+pub struct FeedbackTrack {
+    pub rounds: Vec<FeedbackRound>,
+    pub gate: Option<GateId>,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct FeedbackRound {
+    pub text: String,
+    /// `None` until the round is routed, by the Feedback judge or directly.
+    pub route: Option<AnswerRoute>,
+    pub reason: Option<String>,
+    pub targets: Vec<FeedbackTarget>,
+    /// A requirement change waits for the spec to be approved again before it is built.
+    pub awaiting_spec: bool,
+    pub phases: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -663,6 +695,11 @@ pub struct SessionState {
     pub sufficiency_rounds: u32,
     pub spec: ArtifactTrack<GenerateSpecSubmit>,
     pub stakes: Option<(DecisionId, Stakes)>,
+    /// The track of an `IMPLEMENT` request: forced from the New task form or decided by the
+    /// Track judge after research.
+    pub track: Option<Track>,
+    pub track_decision: Option<DecisionId>,
+    pub feedback: FeedbackTrack,
     pub plan: ArtifactTrack<PlanSubmit>,
     pub phases: BTreeMap<u32, PhaseRun>,
     pub superseded_phases: Vec<PhaseRun>,
@@ -786,6 +823,9 @@ impl SessionState {
             sufficiency_rounds: 0,
             spec: ArtifactTrack::new(),
             stakes: None,
+            track: None,
+            track_decision: None,
+            feedback: FeedbackTrack::default(),
             plan: ArtifactTrack::new(),
             phases: BTreeMap::new(),
             superseded_phases: vec![],
@@ -995,6 +1035,7 @@ impl SessionState {
                 self.request = request.clone();
                 self.options = *options;
                 self.yolo = options.yolo;
+                self.track = options.track;
                 self.projects = projects.clone();
                 self.workspace_root = workspace_root.clone();
                 self.session_root = session_root.clone();
@@ -1464,6 +1505,124 @@ impl SessionState {
             }
             _ => {}
         }
+        if let Some(track) = self.track {
+            self.set_track(track);
+        }
+    }
+
+    /// Light track: one inline phase per project, queued in order (Rule M5), built from the
+    /// request and the research. Full track: the spec and plan stages create the phases.
+    fn set_track(&mut self, track: Track) {
+        self.track = Some(track);
+        if self.category != Some(Category::Implement) {
+            return;
+        }
+        self.phases.clear();
+        if track == Track::Light {
+            let scope = self.scope.clone();
+            for (i, key) in scope.iter().enumerate() {
+                let l = WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                self.insert_phase(inline_phase(i as u32 + 1, key, "Implementation", i), l);
+            }
+        }
+    }
+
+    fn add_feedback(&mut self, text: String) {
+        self.feedback.rounds.push(FeedbackRound {
+            text: text.clone(),
+            route: None,
+            reason: None,
+            targets: vec![],
+            awaiting_spec: false,
+            phases: vec![],
+        });
+        // With no spec to change and one project to change, nothing is left to judge.
+        if self.spec.current.is_none() && self.scope.len() == 1 {
+            let i = self.feedback.rounds.len() - 1;
+            let targets = vec![FeedbackTarget {
+                project: self.primary(),
+                instruction: text,
+            }];
+            self.route_feedback(i, AnswerRoute::ImplementationDetail, targets, None);
+        }
+    }
+
+    fn route_feedback(
+        &mut self,
+        i: usize,
+        route: AnswerRoute,
+        targets: Vec<FeedbackTarget>,
+        reason: Option<String>,
+    ) {
+        let text = self.feedback.rounds[i].text.clone();
+        let mut targets: Vec<FeedbackTarget> = targets
+            .into_iter()
+            .filter(|t| self.valid_project(&t.project) && !t.instruction.trim().is_empty())
+            .collect();
+        if targets.is_empty() {
+            targets.push(FeedbackTarget {
+                project: self.primary(),
+                instruction: text.clone(),
+            });
+        }
+        // Rule D10: a requirement change goes into the spec before anything is built from it.
+        let spec_first =
+            route == AnswerRoute::RequirementChange && self.spec.current.is_some();
+        let r = &mut self.feedback.rounds[i];
+        r.route = Some(route);
+        r.reason = reason;
+        r.targets = targets;
+        if spec_first {
+            r.awaiting_spec = true;
+            self.spec
+                .changes
+                .push(format!("The user reviewed the implementation and asked for: {text}"));
+            self.spec.needs_run = true;
+            self.spec.revoke_approval();
+        } else {
+            self.add_revision_phases(i);
+        }
+    }
+
+    fn add_revision_phases(&mut self, i: usize) {
+        let round = i as u32 + 1;
+        let targets = self.feedback.rounds[i].targets.clone();
+        for t in targets {
+            let id = self
+                .phases
+                .keys()
+                .chain(self.superseded_phases.iter().map(|p| &p.info.id))
+                .max()
+                .copied()
+                .unwrap_or(0)
+                + 1;
+            let info = PhaseInfo {
+                id,
+                deliverable: None,
+                project: t.project.clone(),
+                title: format!("Revision {round}"),
+                complexity: Complexity::Low,
+                test_policy: TestPolicy::Required,
+                depends_on: Some(vec![]),
+                file: None,
+                test_rationale: None,
+            };
+            self.insert_phase(
+                info,
+                WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer),
+            );
+            if let Some(p) = self.phases.get_mut(&id) {
+                p.revision = Some(Revision {
+                    round,
+                    instruction: t.instruction,
+                });
+            }
+            self.feedback.rounds[i].phases.push(id);
+        }
+    }
+
+    pub fn session_context_path(&self) -> PathBuf {
+        self.session_root.join(paths::report::session_context())
     }
 
     fn insert_phase(&mut self, info: PhaseInfo, impl_loop: WorkLoop) {
@@ -1477,6 +1636,7 @@ impl SessionState {
                 epa: EpaState::NotStarted,
                 implementer_report: None,
                 blocked_gate: None,
+                revision: None,
             },
         );
     }
@@ -1505,6 +1665,7 @@ impl SessionState {
                     && self.phases.values().all(|p| p.impl_loop.work_count == 0)
             }
             JudgeKind::Stakes => self.plan.runs.is_empty() && !self.any_phase_started(),
+            JudgeKind::Track => self.spec.runs.is_empty() && !self.any_phase_started(),
             JudgeKind::Sufficiency => self.spec.runs.is_empty(),
             _ => false,
         }
@@ -1748,6 +1909,28 @@ impl SessionState {
                         }
                     }
                 }
+            }
+            JudgeKind::Track => {
+                let Ok(out) = serde_json::from_value::<TrackOut>(output.clone()) else {
+                    return;
+                };
+                if overriding && !self.can_override(id) {
+                    return;
+                }
+                self.track_decision = Some(id.clone());
+                self.set_track(out.track);
+            }
+            JudgeKind::Feedback => {
+                let Some(i) = subject.and_then(|s| s.parse::<usize>().ok()) else {
+                    return;
+                };
+                let Ok(out) = serde_json::from_value::<FeedbackOut>(output.clone()) else {
+                    return;
+                };
+                if self.feedback.rounds.get(i).is_none_or(|r| r.route.is_some()) {
+                    return;
+                }
+                self.route_feedback(i, out.route, out.targets, Some(out.reason));
             }
             JudgeKind::Completion => self.completion_decision = Some(id.clone()),
             JudgeKind::YoloAnswer => {}
@@ -2376,6 +2559,7 @@ impl SessionState {
             }
             GatePayload::Permission { .. } => {}
             GatePayload::BudgetReached { .. } => self.budget_gate = Some(id.clone()),
+            GatePayload::ImplementationReview { .. } => self.feedback.gate = Some(id.clone()),
         }
     }
 
@@ -2425,6 +2609,12 @@ impl SessionState {
                         self.spec.approved_version = self.spec.version;
                         if self.plan.invalidated {
                             self.plan.needs_run = true;
+                        }
+                        for i in 0..self.feedback.rounds.len() {
+                            if self.feedback.rounds[i].awaiting_spec {
+                                self.feedback.rounds[i].awaiting_spec = false;
+                                self.add_revision_phases(i);
+                            }
                         }
                     }
                     GateAnswer::Approval {
@@ -2653,6 +2843,16 @@ impl SessionState {
                 }
             }
             GatePayload::Permission { .. } => {}
+            GatePayload::ImplementationReview { .. } => {
+                if self.feedback.gate.as_ref() != Some(id) {
+                    return;
+                }
+                self.feedback.gate = None;
+                match choice {
+                    Some(("feedback", Some(text))) => self.add_feedback(text),
+                    _ => self.feedback.accepted = true,
+                }
+            }
             GatePayload::BudgetReached {
                 spent_usd,
                 budget_usd,

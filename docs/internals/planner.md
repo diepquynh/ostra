@@ -24,7 +24,7 @@ list.
 This matters for three reasons:
 
 - **The rules are in one place.** Every orchestration rule from HANDOVER section 8.2 and the Ultracode
-  orchestrator (Rule D1 "IMPLEMENT always passes through Spec", Rule M2 "one implement pipeline per project",
+  orchestrator (Rule D1 "full-track IMPLEMENT always passes through Spec", Rule M2 "one implement pipeline per project",
   Rule D9 "a failed phase removes its dependents", and the rest) is a branch in this file, with its rule ID in
   a comment next to it. When you want to know why Ostra did something, this is where you read.
 - **Models do not orchestrate.** A model never decides that the spec is good enough to plan from, or that three
@@ -142,7 +142,9 @@ if !s.created || s.is_terminal() || s.paused {
 4. **Explore tasks** spawn whatever the stage, because a rescue can add a research task in the middle of a
    build.
 5. **The category's path.** RESEARCH completes after explore. SPEC adds the spec flow. PLAN adds the plan flow.
-   IMPLEMENT adds the Stakes judge, the plan flow unless stakes are low, the phases, and the closing stages.
+   IMPLEMENT asks the `Track` judge after research. The full track adds the spec flow, the Stakes judge, and
+   the plan flow unless stakes are low; the light track goes to the phases directly. Both then run the phases,
+   the implementation review gate with its feedback rounds (Rule F1), and, once you accept, the closing stages.
    VERIFY, PROMPT, and QUICK CHANGE go straight to phases. UNIT TEST goes to the closing stages.
 6. **Completion** once nothing is running and no gate is open: first the `Completion` judge, then `Complete`
    with the report it wrote.
@@ -258,7 +260,7 @@ answer takes the same path as every other fact.
 
 ## Proving the rules: conformance fixtures
 
-Every rule the planner implements has a fixture in `tests/conformance/main.rs`, which holds 61 of them today.
+Every rule the planner implements has a fixture in `tests/conformance/main.rs`, which holds 76 of them today.
 A fixture builds an event history, folds it, and checks the summaries of the steps the planner returns. Because
 the planner is pure, a fixture runs in microseconds and needs no model, executor, or database.
 

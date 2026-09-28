@@ -1,0 +1,1007 @@
+# Judge routing evals. Each case is a request about Ostra's own source with the route a careful engineer
+# would pick. `crates/ostra-server/tests/judge_evals.rs` builds the session state each judge would see,
+# calls the judge several times per model, and scores the answers. Research documents and specs below are
+# written from the real code, so a judge that reads them closely has what it needs.
+#
+# Workspaces: `one` is Ostra as a single project `ostra`; `split` is `server` (the Rust crates) and `web`
+# (the React console).
+
+# ---------------------------------------------------------------------------------------------------------
+# Classify: category and projects in scope
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "classify-rename-constant"
+judge = "classify"
+workspace = "one"
+request = "Rename the constant `TRACK_EXCERPT` in crates/ostra-engine/src/judge_input.rs to `TRACK_DOC_EXCERPT`."
+expect = { category = ["QUICK_CHANGE"], projects = ["ostra"] }
+
+[[case]]
+id = "classify-factual-question"
+judge = "classify"
+workspace = "one"
+request = "What is the default value of REVIEW_CAP?"
+expect = { category = ["QUICK_ANSWER"] }
+
+[[case]]
+id = "classify-new-setting"
+judge = "classify"
+workspace = "one"
+request = "Add a `limits.max_feedback_rounds` workspace setting. After that many feedback rounds the implementation review gate only offers Accept."
+expect = { category = ["IMPLEMENT"], projects = ["ostra"] }
+
+[[case]]
+id = "classify-unit-tests"
+judge = "classify"
+workspace = "one"
+request = "Write unit tests for `clean_title` in crates/ostra-engine/src/judge.rs covering wrapping quotes, newlines, and the 60 character cut."
+expect = { category = ["UNIT_TEST"] }
+
+[[case]]
+id = "classify-verify"
+judge = "classify"
+workspace = "one"
+request = "Run the conformance fixtures and tell me whether they still pass."
+expect = { category = ["VERIFY"] }
+
+[[case]]
+id = "classify-design-only"
+judge = "classify"
+workspace = "one"
+request = "Design how Ostra could run the Gemini CLI as a harness executor. I want the architecture and the phases, not code yet."
+expect = { category = ["PLAN"] }
+
+[[case]]
+id = "classify-prompt-edit"
+judge = "classify"
+workspace = "one"
+request = "Rewrite assets/judges/track.md so the evidence table has one row per reason and drops the second column."
+expect = { category = ["PROMPT"] }
+
+[[case]]
+id = "classify-research"
+judge = "classify"
+workspace = "one"
+request = "Investigate how the egress proxy decides whether a host an agent connects to is allowed, and write up what you find."
+expect = { category = ["RESEARCH"] }
+
+[[case]]
+id = "classify-requirements-only"
+judge = "classify"
+workspace = "one"
+request = "Write the requirements and acceptance criteria for per-project review caps. Don't plan or build it."
+expect = { category = ["SPEC"] }
+
+[[case]]
+id = "classify-web-label"
+judge = "classify"
+workspace = "split"
+request = "Change the label of the Auto button in the New task form's Track selector to 'Let Ostra pick'."
+note = "A one-string edit in the console: QUICK_CHANGE fits, IMPLEMENT is acceptable; the scope must be web only."
+expect = { category = ["QUICK_CHANGE", "IMPLEMENT"], projects = ["web"] }
+
+[[case]]
+id = "classify-both-projects"
+judge = "classify"
+workspace = "split"
+request = "Add the number of review passes each phase took to the implementation review gate payload, and show it on the gate card."
+expect = { category = ["IMPLEMENT"], projects = ["server", "web"] }
+
+[[case]]
+id = "classify-docs-typo"
+judge = "classify"
+workspace = "one"
+request = "Fix the typo 'recieve' in docs/start/install.md."
+note = "Counter-case for the PROMPT rule: a docs page is not a prompt."
+expect = { category = ["QUICK_CHANGE"] }
+
+[[case]]
+id = "classify-server-only"
+judge = "classify"
+workspace = "split"
+request = "Raise TRACK_EXCERPT in the judge input builder from 12,000 to 16,000 characters."
+note = "Counter-case for the projects rule: nothing in the console changes."
+expect = { category = ["QUICK_CHANGE", "IMPLEMENT"], projects = ["server"] }
+
+# ---------------------------------------------------------------------------------------------------------
+# Track: light unless the research names a reason for the full track
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "track-gate-wording"
+judge = "track"
+workspace = "one"
+request = "Make the implementation review gate's explanation say which review round it is."
+expect = { track = "light" }
+
+[[case.research]]
+project = "ostra"
+task = "Find where the implementation review gate's explanation is written and what reads it."
+scope = "crates/ostra-engine/src/plan.rs, tests/conformance/main.rs, web/src/features/gates/ChoiceGate.tsx"
+findings = "The explanation is one string literal in Planner::implementation_review; the round number is already computed there."
+doc = """
+# Research: implementation review gate explanation
+
+## Where it is written
+`Planner::implementation_review` in `crates/ostra-engine/src/plan.rs` opens the gate with
+`self.gate("Review the implementation", "<explanation>", GatePayload::ImplementationReview { round, .. })`.
+`round` is `f.rounds.len() as u32 + 1`, computed in the same call. The explanation is a fixed string literal.
+
+## What reads it
+- The fold stores the explanation on the `GateOpened` event; nothing parses it.
+- Conformance fixtures match the gate by `Step::summary()`, which is `gate implementation_review`, so no
+  fixture checks the text.
+- The console shows `gate.explanation` verbatim on the card. The payload already carries `round`.
+
+## Change
+Format the round into the string in one place. No type, event, schema, or API shape changes.
+"""
+
+[[case]]
+id = "track-raise-constant"
+judge = "track"
+workspace = "one"
+request = "Raise SUFFICIENCY_ROUNDS from 3 to 4, and update the docs that state the number."
+expect = { track = "light" }
+
+[[case.research]]
+project = "ostra"
+task = "Find every use of SUFFICIENCY_ROUNDS and every place that states its value."
+scope = "crates/ostra-engine, tests, docs"
+findings = "One constant, one planner comparison, three doc sentences; no test pins the value."
+doc = """
+# Research: SUFFICIENCY_ROUNDS
+
+- Defined in `crates/ostra-engine/src/state.rs:42` as `pub const SUFFICIENCY_ROUNDS: u32 = 3;`.
+- Read once, in `Planner::explore_complete` (`plan.rs`): `s.sufficiency_rounds < SUFFICIENCY_ROUNDS`.
+- A search of `tests/` and `crates/*/tests` finds no fixture that asserts the value.
+- Docs stating "three" or 3: `docs/internals/pipeline.md` (the Sufficiency section and the limits table) and
+  `docs/internals/spend-and-limits.md`.
+
+The value is not stored in events, settings, or the API, so existing sessions pick up the new limit on replay
+without a migration.
+"""
+
+[[case]]
+id = "track-new-table"
+judge = "track"
+workspace = "one"
+request = "Store feedback rounds in their own SQLite table so the session list can show a round count without folding events."
+expect = { track = "full" }
+
+[[case.research]]
+project = "ostra"
+task = "Research how the workspace database stores session data and how materialized tables stay in step with the event log."
+scope = "crates/ostra-store/src/workspace.rs, crates/ostra-engine/src/runner.rs, crates/ostra-engine/src/state.rs"
+findings = "The workspace database is migrated by an ordered MIGRATIONS array keyed on user_version; materialized tables are written from the runner's append path."
+not_covered = ["Whether existing sessions need a backfill of the new table from their events"]
+doc = """
+# Research: session storage
+
+## Schema and migrations
+`crates/ostra-store/src/workspace.rs` holds `const MIGRATIONS: &[&str]`, applied in order by `migrate`,
+which reads and bumps `PRAGMA user_version`. Tables include `sessions` (with materialized columns such as
+`status`, `lane`, `stage_label`, `cost_usd`), `events` (the append-only log, keyed by session and seq),
+`executions`, `gates`, and `decisions`.
+
+## Consistency with the log
+`Inner::append` in `runner.rs` stores the event, folds it into `SessionState`, broadcasts, and wakes the
+driver. The materialized rows are written from there. The project rule is that a session's state is the fold
+of its events; a table derived from them must be rebuilt from the log, never written by itself.
+
+## Open points
+A new table means a new migration. Sessions created before it have feedback rounds only in their events, so
+either a backfill runs in the migration or the list shows no count for them. The session list endpoint and the
+`SessionSummary` API type would both change.
+"""
+
+[[case]]
+id = "track-yolo-budget"
+judge = "track"
+workspace = "one"
+request = "Let YOLO raise the session budget by itself when the session is less than a dollar over."
+expect = { track = "full" }
+
+[[case.research]]
+project = "ostra"
+task = "Research how the budget gate works and how YOLO treats it."
+scope = "crates/ostra-engine/src/plan.rs, crates/ostra-engine/src/state.rs, CLAUDE.md"
+findings = "The budget gate is emitted in Planner::push; YOLO explicitly skips BudgetReached gates; the project rules state YOLO never answers a budget gate."
+not_covered = ["How many automatic raises should be allowed per session"]
+doc = """
+# Research: budget gate and YOLO
+
+- `Planner::push` turns any spawn into a `BudgetReached` gate once `spent_usd() >= budget + budget_raised`.
+- `Planner::run` answers every open gate under YOLO except `Permission` and `BudgetReached`, with the comment
+  "A budget is never raised by YOLO: spending more is the user's decision."
+- `CLAUDE.md` pattern 8: "YOLO never answers a budget gate."
+- The fold's `BudgetReached` answer adds the raise to `budget_raised`; a missing amount raises by the budget
+  again.
+
+The request does not say how much one raise adds, whether raises repeat, or whether a total cap applies, and
+the change reverses a stated spend rule.
+"""
+
+[[case]]
+id = "track-ssh-opt-in"
+judge = "track"
+workspace = "one"
+request = "Add a workspace opt-in that lets agents read ~/.ssh/config, for repos that fetch submodules over ssh."
+expect = { track = "full" }
+
+[[case.research]]
+project = "ostra"
+task = "Research how the sandbox and the policy treat ~/.ssh."
+scope = "crates/ostra-sandbox/src/decoy.rs, crates/ostra-policy/src/guards.rs, HANDOVER.md section 8.2 Rule P3"
+findings = "~/.ssh holds decoy credential files; reading a secret path is a Layer 1 denial and a containment signal; three signals pause the session."
+doc = """
+# Research: ~/.ssh inside the sandbox
+
+- `crates/ostra-sandbox/src/decoy.rs` plants decoy keys at `~/.ssh/id_rsa` and `~/.ssh/id_ed25519` where no
+  SSH port is reachable. A process opening one is a containment signal (Rule P3).
+- The `secret-read` guard in `crates/ostra-policy/src/guards.rs` denies reads of credential paths as a Layer 1
+  guard, which no permission, user answer, or YOLO can override.
+- Three signals from one execution pause the session.
+
+An opt-in would add a workspace setting, a validation rule at save, a policy exception inside a Layer 1 guard,
+and a sandbox mount change, on both the bubblewrap and Seatbelt backends.
+"""
+
+[[case]]
+id = "track-cli-flag"
+judge = "track"
+workspace = "one"
+request = "Add a --json flag to `ostra url` that prints {\"url\": \"...\"} instead of the bare URL."
+expect = { track = "light" }
+
+[[case.research]]
+project = "ostra"
+task = "Research the `ostra url` command."
+scope = "crates/ostra-server/src/main.rs, crates/ostra-server/src/auth.rs"
+findings = "`Command::Url` prints the result of auth::request_url(); the CLI is a clap derive; nothing parses its output."
+doc = """
+# Research: `ostra url`
+
+- `crates/ostra-server/src/main.rs` declares the CLI with clap derive. `Command::Url` has no arguments.
+- The handler calls `ostra_server::auth::request_url()?` and prints the URL with `println!`.
+- No script in the repo, test, or doc parses the output; `docs/start/quick-start.md` shows running it.
+
+A `--json` flag is additive: the bare output stays the default.
+"""
+
+[[case]]
+id = "track-payload-contract"
+judge = "track"
+workspace = "split"
+request = "Replace the `blocked: Vec<String>` field of the implementation review gate payload with a list of {phase, project, reason} objects."
+expect = { track = "full" }
+
+[[case.research]]
+project = "server"
+task = "Research the implementation review gate payload and who consumes it."
+scope = "crates/ostra-core/src/event.rs, crates/ostra-engine/src/plan.rs, crates/ostra-store"
+findings = "GatePayload is serialized into stored GateOpened events and exported to TypeScript; changing a field changes both."
+doc = """
+# Research: GatePayload::ImplementationReview
+
+- Defined in `crates/ostra-core/src/event.rs` with `#[ts(export)]`: `round`, `context_path`, `reports`, and
+  `blocked: Vec<String>` ("Phase N: reason").
+- It is part of `SessionEvent::GateOpened`, which the `events` table stores as JSON. Replaying an older session
+  deserializes the stored payload, so a changed field shape must still read the old one.
+- `cargo test -p ostra-core` regenerates `web/src/api/gen/GatePayload.ts`.
+"""
+
+[[case.research]]
+project = "web"
+task = "Research how the console renders the implementation review gate."
+scope = "web/src/features/gates/ChoiceGate.tsx, web/src/lib/gateAnswers.ts"
+findings = "ChoiceGate renders p.blocked as a list of strings."
+doc = """
+# Research: console gate card
+
+`ChoiceGate.tsx` renders `p.blocked.map((b) => <li key={b}>{b}</li>)` for `implementation_review`. The mock
+fixtures in `web/src/api/mock` would need the new shape.
+"""
+
+[[case]]
+id = "track-web-only-layout"
+judge = "track"
+workspace = "split"
+request = "On the implementation review card, show the session context link first and label each report link 'Report: <file name>'."
+expect = { track = "light" }
+
+[[case.research]]
+project = "web"
+task = "Research the implementation review gate card."
+scope = "web/src/features/gates/ChoiceGate.tsx"
+findings = "The card body is one switch arm in ChoiceGate.tsx; links use ArtifactLink with the payload's paths."
+doc = """
+# Research: implementation review card
+
+`body()` in `web/src/features/gates/ChoiceGate.tsx` has an `implementation_review` arm that renders a round
+sentence, the blocked list, and a row of `ArtifactLink`s: the context link first, then one per report labeled
+with the file name. Only this arm changes; the payload already has every path.
+"""
+
+[[case.research]]
+project = "server"
+task = "Check whether the server needs to change for the card layout."
+scope = "crates/ostra-core/src/event.rs, crates/ostra-engine/src/plan.rs"
+findings = "No: the payload already carries context_path and reports."
+doc = """
+# Research: server side
+
+The payload fields `context_path` and `reports` are already sent. Nothing in the server changes.
+"""
+
+# ---------------------------------------------------------------------------------------------------------
+# Feedback: route and target projects of one round of feedback after the build
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "feedback-button-order"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "The Accept button should come after Send feedback, not before."
+expect = { route = "implementation_detail", targets = ["web"] }
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview and filled it in Planner::implementation_review."
+
+[[case.phase]]
+project = "web"
+report = "Rendered the blocked list in the implementation_review arm of ChoiceGate.tsx; buttons come from CHOICES in gateAnswers.ts."
+
+[[case]]
+id = "feedback-both-projects"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "The gate should also show how many review passes each phase took."
+expect = { route = "implementation_detail", targets = ["server", "web"] }
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview and filled it in Planner::implementation_review. Each WorkLoop counts its review passes in `iterations`."
+
+[[case.phase]]
+project = "web"
+report = "Rendered the blocked list in the implementation_review arm of ChoiceGate.tsx."
+
+[[case]]
+id = "feedback-rename-button"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "Rename the 'Send feedback' button to 'Request changes'."
+expect = { route = "implementation_detail", targets = ["web"] }
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview; the answer options are `done` and `feedback`."
+
+[[case.phase]]
+project = "web"
+report = "Button labels for the gate live in CHOICES.implementation_review in web/src/lib/gateAnswers.ts."
+
+[[case]]
+id = "feedback-format-every-revision"
+judge = "feedback"
+workspace = "split"
+track = "full"
+request = "Pause the session after the build so the user can review it before formatting, tests, and docs."
+feedback = "Also run the formatter after every revision phase, not only once at the end."
+expect = { route = "requirement_change", targets = ["server"] }
+spec = """
+# Spec: implementation review
+
+## Requirements
+- R1: When every phase of an IMPLEMENT session has finished, the system shall open an implementation review gate.
+- R2: While the implementation review gate is open, the system shall not run format, the closing gate, tests, or docs.
+- R3: When the user accepts the implementation, the system shall run each project's format command once.
+- R4: When the user sends feedback, the system shall build it as a reviewed revision phase and open the gate again.
+"""
+
+[[case.phase]]
+project = "server"
+report = "Added the gate in Planner::implementation_review; closing_stages runs only after acceptance, so format runs once per project."
+
+[[case.phase]]
+project = "web"
+report = "Added the gate card with Accept and Send feedback."
+
+[[case]]
+id = "feedback-context-order"
+judge = "feedback"
+workspace = "split"
+track = "full"
+request = "Write a session context file that revisions read instead of a conversation."
+feedback = "In the context file, put the feedback rounds at the top. They are what the revision needs most."
+note = "Borderline: R2 is a list, which some models read as an order. The spec settles what the file lists, not its order, so this is a detail; tests the doubt rule."
+expect = { route = "implementation_detail", targets = ["server"] }
+spec = """
+# Spec: session context file
+
+## Requirements
+- R1: Before a revision phase spawns, the system shall write ostra-session-context.md in the session root.
+- R2: The context file shall list the request, the track, the research documents, the spec and plan, every phase with its report and ledger, and every feedback round.
+- R3: A revision implementer shall receive the context file as a context file parameter.
+"""
+
+[[case.phase]]
+project = "server"
+report = "Added crates/ostra-engine/src/context.rs; render() writes sections in the order Request, Route, Research, Spec, Plan, Phases, Feedback rounds."
+
+[[case.phase]]
+project = "web"
+report = "Linked the context file from the gate card."
+
+[[case]]
+id = "feedback-yolo-waits"
+judge = "feedback"
+workspace = "split"
+track = "full"
+request = "Pause the session after the build so the user can review it before formatting, tests, and docs."
+feedback = "Under YOLO, don't accept on my behalf. Wait for me at this gate."
+expect = { route = "requirement_change", targets = ["server"] }
+spec = """
+# Spec: implementation review
+
+## Requirements
+- R1: When every phase of an IMPLEMENT session has finished, the system shall open an implementation review gate.
+- R2: While the implementation review gate is open, the system shall not run format, the closing gate, tests, or docs.
+- R5: While YOLO is on, the system shall answer the implementation review gate with done.
+"""
+
+[[case.phase]]
+project = "server"
+report = "yolo_plan answers ImplementationReview with a fixed `done`."
+
+[[case.phase]]
+project = "web"
+report = "Added the gate card."
+
+[[case]]
+id = "feedback-layout-the-spec-states"
+judge = "feedback"
+workspace = "split"
+track = "full"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "Put the blocked phases below the report links instead of above them."
+note = "Counter-case for the silent-spec rule: R3 states the order, so moving it changes a requirement."
+expect = { route = "requirement_change", targets = ["web"] }
+spec = """
+# Spec: implementation review card
+
+## Requirements
+- R1: When every phase has finished, the system shall open an implementation review gate.
+- R2: The gate shall carry the phases that ended blocked, with their reasons.
+- R3: The gate card shall list the blocked phases above the report links, so a blocked phase is the first thing the user reads.
+"""
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview."
+
+[[case.phase]]
+project = "web"
+report = "The implementation_review arm of ChoiceGate.tsx renders the blocked list, then the report links."
+
+# =========================================================================================================
+# Complex cases: conflicting signals, misleading keywords, mixed requests, several projects, other judges
+# =========================================================================================================
+
+# --- Classify ---------------------------------------------------------------------------------------------
+
+[[case]]
+id = "classify-explain-then-fix"
+judge = "classify"
+workspace = "one"
+request = "Explain why the implementation review gate never opens for a session whose only phase is blocked, and then fix it so the user can still send feedback."
+note = "Starts with 'explain' but asks for a fix: the category that runs more of the pipeline wins."
+expect = { category = ["IMPLEMENT"], projects = ["ostra"] }
+
+[[case]]
+id = "classify-no-change-yet"
+judge = "classify"
+workspace = "one"
+request = "Don't change anything yet. Tell me which conformance fixtures would break if REVIEW_CAP went from 3 to 5, and why."
+note = "Contains 'went from 3 to 5' but forbids a change: an investigation, not a quick change."
+expect = { category = ["RESEARCH", "QUICK_ANSWER"] }
+
+[[case]]
+id = "classify-fixtures-for-a-rule"
+judge = "classify"
+workspace = "one"
+request = "Check whether tests/conformance/main.rs has a fixture for every branch of Rule F1, and write the fixtures that are missing."
+expect = { category = ["UNIT_TEST", "IMPLEMENT"], projects = ["ostra"] }
+
+[[case]]
+id = "classify-three-projects-docs-and-tooltip"
+judge = "classify"
+workspace = "triple"
+request = "Explain the Track selector in two places: the tooltip on each Track button in the New task form, and a short section in the docs site's first-session page."
+note = "Two projects of three; the server does not change."
+expect = { category = ["IMPLEMENT", "QUICK_CHANGE"], projects = ["site", "web"] }
+
+[[case]]
+id = "classify-platform-bug"
+judge = "classify"
+workspace = "one"
+request = "cargo test -p ostra-sandbox fails on macOS with 'sandbox-exec: invalid profile' since the last commit. Find out why and fix it."
+expect = { category = ["IMPLEMENT"], projects = ["ostra"] }
+
+[[case]]
+id = "classify-vietnamese"
+judge = "classify"
+workspace = "split"
+request = "Đổi nhãn nút 'Send feedback' trên thẻ duyệt triển khai thành 'Request changes'."
+note = "Vietnamese: rename the 'Send feedback' button on the implementation review card to 'Request changes'."
+expect = { category = ["QUICK_CHANGE", "IMPLEMENT"], projects = ["web"] }
+
+# --- Track: conflicting signals -----------------------------------------------------------------------------
+
+[[case]]
+id = "track-large-pure-refactor"
+judge = "track"
+workspace = "one"
+request = "Split crates/ostra-engine/src/judge_input.rs into one module per judge under judge_input/, with no behavior change."
+note = "Large diff, one area, no contract change: size alone does not decide."
+expect = { track = "light" }
+
+[[case.research]]
+project = "ostra"
+task = "Map judge_input.rs and everything that imports from it."
+scope = "crates/ostra-engine/src/judge_input.rs and its importers"
+findings = "780 lines: one judge_input() match with an arm per judge, completion_input, yolo_plan, and helpers. Importers use four public names."
+doc = """
+# Research: judge_input.rs
+
+## Shape
+780 lines. `judge_input(s, kind, subject, projects) -> (String, String)` is one `match kind` with an arm per
+judge (Classify, Sufficiency, Stakes, Track, Feedback, RouteAnswer, Rescue, ResolveReview, YoloAnswer,
+Completion). `completion_input`, `yolo_plan` with `YoloPlan`, `ProjectFacts`, and the helpers `excerpt`,
+`excerpt_n`, and `first_line` sit beside it.
+
+## Importers
+- `runner.rs`: `judge_input::judge_input`, `judge_input::yolo_plan`, `YoloPlan`, `ProjectFacts`.
+- `crates/ostra-server/tests/judge_evals.rs`: `judge_input`, `ProjectFacts`.
+- `tests/conformance/main.rs`: `yolo_plan`, `YoloPlan`.
+
+## Change
+Moving each arm into a function in its own module and re-exporting the four public names from
+`judge_input/mod.rs` keeps every importer compiling unchanged. The strings the judges receive stay byte for
+byte the same, and the offline eval test compares them through the same entry point.
+"""
+
+[[case]]
+id = "track-tiny-diff-stored-contract"
+judge = "track"
+workspace = "split"
+request = "Rename the implementation review gate's kind from `implementation_review` to `review_implementation`."
+note = "A one-word diff, but the string is stored in every past session's events and shared with the console."
+expect = { track = "full" }
+
+[[case.research]]
+project = "server"
+task = "Find where the gate kind string comes from and where it is stored."
+scope = "crates/ostra-core/src/event.rs, crates/ostra-store/src/workspace.rs"
+findings = "The kind is the serde tag of GatePayload, written into every stored GateOpened event and the gates table."
+doc = """
+# Research: gate kind string
+
+- `GatePayload` in `crates/ostra-core/src/event.rs` is `#[serde(tag = "kind", rename_all = "snake_case")]`, so
+  the variant `ImplementationReview` serializes as `"kind": "implementation_review"`. `kind_str()` returns the
+  same string, and planner step keys include it.
+- Every `GateOpened` event is stored as JSON in the `events` table, and the `gates` table keeps the kind. A
+  session folded after the rename would fail to deserialize its old events unless the old name is still
+  accepted (`#[serde(alias)]`) or the stored rows are migrated.
+- `cargo test -p ostra-core` regenerates the TypeScript union in `web/src/api/gen/GatePayload.ts`.
+"""
+
+[[case.research]]
+project = "web"
+task = "Find where the console matches on the gate kind."
+scope = "web/src"
+findings = "ChoiceGate.tsx, gateAnswers.ts, and gateAnswers.test.ts match on the string."
+doc = """
+# Research: console uses of the kind
+
+`web/src/features/gates/ChoiceGate.tsx` (two switch arms), `web/src/lib/gateAnswers.ts` (`ANSWER_KIND`,
+`ChoiceGateKind`, `CHOICES`), and `web/src/lib/gateAnswers.test.ts` name `implementation_review`. The console
+shows old sessions too, so it receives whatever the server sends for stored gates.
+"""
+
+[[case]]
+id = "track-open-limit"
+judge = "track"
+workspace = "split"
+request = "Let the user set the review cap per session from the New task form."
+note = "Looks like a form field, but research finds an open rule (YOLO budget, bounds) and a stored-event shape change."
+expect = { track = "full" }
+
+[[case.research]]
+project = "server"
+task = "Research how the review cap is applied and what a per-session value would touch."
+scope = "crates/ostra-engine/src/state.rs, crates/ostra-engine/src/plan.rs, crates/ostra-core/src/event.rs"
+findings = "REVIEW_CAP is a constant used by the fold; YOLO uses its own budget of 10; SessionOptions is stored in SessionCreated."
+not_covered = ["What the cap means under YOLO, whose budget is 10 passes", "Whether a cap of 0 or above 10 is allowed"]
+doc = """
+# Research: review cap
+
+- `REVIEW_CAP = 3` in `state.rs` is read by the fold when a review finishes; the 4th pass becomes a
+  `review_cap` gate. `YOLO_REVIEW_BUDGET = 10` replaces it under YOLO, after which the Resolve judge decides.
+- A per-session value would live in `SessionOptions`, which is stored inside every `SessionCreated` event
+  and exported to TypeScript. Old events lack the field, so it needs a serde default.
+- The fold must read the cap from the log (pattern 1), so the value must be in the event, not in settings.
+
+## Open
+The request does not say whether the user's cap replaces the YOLO budget, stays below it, or is ignored under
+YOLO, or what range is valid. Hard rule 21 already puts BLOCKER loops outside any cap.
+"""
+
+[[case.research]]
+project = "web"
+task = "Research the New task form."
+scope = "web/src/screens/workspace/NewTask.tsx"
+findings = "The form sends options {tests, docs, yolo, track}; a number field would be new."
+doc = """
+# Research: New task form
+
+`NewTask.tsx` keeps `tests`, `docs`, `yolo`, and `track` in state and sends them as `options`. There is no
+number input in the form yet; `@ostra/design` has `Input`.
+"""
+
+[[case]]
+id = "track-additive-field-both-projects"
+judge = "track"
+workspace = "split"
+request = "Show whether a session ran the light or the full track on each row of the session list."
+note = "Touches both projects, but only adds an optional field to an API response; nothing stored changes."
+expect = { track = "light" }
+
+[[case.research]]
+project = "server"
+task = "Research the session list API and where the track is known."
+scope = "crates/ostra-core/src/api.rs, crates/ostra-engine/src/view.rs, crates/ostra-engine/src/state.rs"
+findings = "SessionSummary is built by view::summary from the folded state, which already holds the track."
+doc = """
+# Research: session list
+
+- `SessionSummary` in `crates/ostra-core/src/api.rs` is built by `view::summary(&SessionState, ..)` on every
+  list request. It has no track field.
+- `SessionState::track` already holds the forced or judged track, folded from the log. Adding
+  `track: Option<Track>` to `SessionSummary` is an additive, optional field; older clients ignore it.
+- The `sessions` table materializes some summary columns, but the list endpoint builds summaries from the
+  fold, so no migration is needed.
+"""
+
+[[case.research]]
+project = "web"
+task = "Research the session list rows."
+scope = "web/src/screens/workspace"
+findings = "Rows render SessionSummary fields as chips; one more chip is a local change."
+doc = """
+# Research: session rows
+
+The session list renders each `SessionSummary` as a row with chips for category, status, and cost. Adding a
+chip for the track reads the new optional field and shows nothing when it is absent.
+"""
+
+[[case]]
+id = "track-keyword-policy-display-only"
+judge = "track"
+workspace = "split"
+request = "In the Activity view, show the permission rule that allowed or denied each tool call in its tooltip."
+note = "Mentions permissions, but the rule text is already sent; the change is display only."
+expect = { track = "light" }
+
+[[case.research]]
+project = "server"
+task = "Research what the Activity view receives about each policy decision."
+scope = "crates/ostra-core/src/policy.rs, crates/ostra-core/src/api.rs, crates/ostra-policy"
+findings = "Each ActivityItem already carries the PolicyDecision with the RuleRef that decided it."
+doc = """
+# Research: policy decisions in Activity
+
+Every tool call's `PolicyDecision` (allow, deny, or ask) is stored with its `RuleRef`, the guard or
+permission rule that decided it, and the Activity API already sends it on each item. No guard, permission
+rule, or policy check changes; the request only displays data the console already receives.
+"""
+
+[[case.research]]
+project = "web"
+task = "Research the Activity view's tool call rows."
+scope = "web/src/screens/session"
+findings = "Rows show the tool name and a policy chip; the chip has no tooltip yet."
+doc = """
+# Research: Activity rows
+
+Each tool call row shows a policy chip colored by the decision. The chip takes a `title` prop for a tooltip;
+the rule reference is on the item it renders.
+"""
+
+[[case]]
+id = "track-conflicts-with-a-design-rule"
+judge = "track"
+workspace = "one"
+request = "Skip the code review for revision phases to save money, since the user reviews the result anyway."
+note = "Small diff, but it removes a guarantee the design states; the rule change needs the user's approval."
+expect = { track = "full" }
+
+[[case.research]]
+project = "ostra"
+task = "Research how review is applied to phases and what the design says about skipping it."
+scope = "crates/ostra-engine/src/state.rs, docs/internals/pipeline.md, HANDOVER.md"
+findings = "Revision phases use WorkLoop with review Always; docs say no agent can decide to skip the review; Hard rule 21 BLOCKER handling depends on review running."
+not_covered = ["Whether security BLOCKER findings may go unreviewed in revisions"]
+doc = """
+# Research: review on revision phases
+
+- `add_revision_phases` in `state.rs` inserts each revision with `WorkLoop::new(false, Implementer,
+  Implementer)`, whose review mode is `Always`. `ReviewMode::Never` exists and is used only for
+  `QUICK_CHANGE` and `VERIFY`.
+- `docs/internals/pipeline.md` states: "No agent can decide to skip the review."
+- Hard rule 21: a BLOCKER security finding loops until removed and blocks module documentation. Its only
+  detector is the code reviewer; with no review, a revision could introduce a BLOCKER nobody sees.
+
+The request changes which work is reviewed, and it is silent on security findings.
+"""
+
+# --- Sufficiency: which gaps matter --------------------------------------------------------------------------
+
+[[case]]
+id = "sufficiency-mixed-gaps"
+judge = "sufficiency"
+workspace = "one"
+request = "Add a `limits.max_feedback_rounds` workspace setting. After that many feedback rounds the implementation review gate only offers Accept."
+expect = { needed = ["validates workspace settings at save"], not_needed = ["homepage", "Windows"] }
+
+[[case.research]]
+project = "ostra"
+task = "Research the implementation review gate and how workspace limits are read."
+scope = "crates/ostra-engine/src/plan.rs, crates/ostra-engine/src/state.rs, crates/ostra-core/src/config.rs"
+findings = "The gate opens in Planner::implementation_review; limits live in WorkspaceSettings.limits and reach the planner through PlanCtx."
+not_covered = [
+  "How validate_workspace validates workspace settings at save, and whether a zero or negative limit must be refused",
+  "How the homepage's feature list describes the review gate",
+  "Whether the setting behaves differently on Windows",
+]
+doc = """
+# Research: feedback round limit
+
+- `Planner::implementation_review` opens the gate; the fold counts rounds in `feedback.rounds`.
+- Settings reach the planner only through `PlanCtx` (pattern 7); `budget_usd` is the model to copy.
+- `WorkspaceSettings.limits` holds `max_parallel_executions` and `session_budget_usd`.
+- The settings are validated at save by `validate_workspace` (pattern 7), which this research did not read.
+- The setting is plain data read by pure code, with no OS-specific path.
+"""
+
+[[case]]
+id = "sufficiency-new-technology"
+judge = "sufficiency"
+workspace = "one"
+request = "Add Gemini as a provider for the native executor, using Google's streaming API with tool calls."
+expect = { needed = ["function-calling stream format"], not_needed = ["console theme"] }
+
+[[case.research]]
+project = "ostra"
+task = "Research how providers plug into the native executor."
+scope = "crates/ostra-providers/src"
+findings = "Providers implement the Provider trait (chat with streaming events); Anthropic and OpenAI clients show the pattern."
+not_covered = [
+  "Google's current function-calling stream format and how tool results are sent back",
+  "Whether the console theme needs a Gemini color",
+]
+doc = """
+# Research: providers
+
+`crates/ostra-providers/src/lib.rs` defines `Provider::chat(req, on_event, cancel)`. The Anthropic and OpenAI
+clients translate `ChatRequest` into each API's request and map the streamed events to Ostra's deltas,
+including tool calls. `Providers::for_model` resolves `provider:model`. This research did not fetch Google's
+API documentation; nothing in the repo describes Gemini's stream.
+"""
+
+# --- Stakes: full-track specs --------------------------------------------------------------------------------
+
+[[case]]
+id = "stakes-one-area-one-deliverable"
+judge = "stakes"
+workspace = "one"
+track = "full"
+request = "Make the implementation review gate's explanation say which round it is."
+expect = { stakes = ["low"] }
+spec = """
+# Spec: round number in the review gate
+
+## Deliverables
+- D1: The gate explanation names the round.
+
+## Requirements
+- R1: When the implementation review gate opens, the system shall state the round number in the gate's explanation.
+
+## Contracts
+None change. The payload already carries `round`.
+
+## Data impact
+None.
+
+## Delivery order
+1. D1 in crates/ostra-engine/src/plan.rs.
+"""
+
+[[case]]
+id = "stakes-migration"
+judge = "stakes"
+workspace = "one"
+track = "full"
+request = "Store feedback rounds in their own SQLite table so the session list can show a round count without folding events."
+expect = { stakes = ["high"] }
+spec = """
+# Spec: feedback rounds table
+
+## Deliverables
+- D1: A `feedback_rounds` table and its migration, with a backfill from stored events.
+- D2: The runner writes a row when a round is added.
+- D3: `SessionSummary` gains `feedback_rounds`, shown in the session list.
+
+## Requirements
+- R1: The workspace database migration shall create `feedback_rounds` and fill it from existing sessions' events.
+- R2: When a feedback round is added, the system shall write its row in the same transaction as the event.
+- R3: The session list shall show each session's round count.
+
+## Contracts
+`SessionSummary` gains a field (exported to TypeScript).
+
+## Data impact
+New table; a backfill over every stored session.
+
+## Delivery order
+1. D1, 2. D2, 3. D3.
+"""
+
+[[case]]
+id = "stakes-contract-in-one-project"
+judge = "stakes"
+workspace = "split"
+track = "full"
+request = "Replace the `blocked: Vec<String>` field of the implementation review gate payload with a list of {phase, project, reason} objects."
+expect = { stakes = ["medium", "high"] }
+spec = """
+# Spec: structured blocked phases
+
+## Deliverables
+- D1: `GatePayload::ImplementationReview.blocked` becomes `Vec<BlockedPhase>`, reading the old string form from stored events.
+- D2: The console renders the new shape.
+
+## Requirements
+- R1: The gate payload shall carry each blocked phase as `{phase, project, reason}`.
+- R2: When a stored event has the old string list, the system shall read each string as a reason with no phase.
+- R3: The gate card shall show each blocked phase with its project.
+
+## Contracts
+`GatePayload` changes shape (stored in events, exported to TypeScript).
+
+## Data impact
+No migration; old events are read through a compatible deserializer.
+
+## Delivery order
+1. D1 in server, 2. D2 in web.
+"""
+
+# --- Feedback: mixed, multilingual, three projects, already-agreed --------------------------------------------
+
+[[case]]
+id = "feedback-mixed-detail-and-requirement"
+judge = "feedback"
+workspace = "split"
+track = "full"
+request = "Pause the session after the build so the user can review it before formatting, tests, and docs."
+feedback = "Rename the button to 'Request changes'. Also, a one-line revision shouldn't need a code review."
+note = "One detail plus one requirement change: the mix routes as a requirement change."
+expect = { route = "requirement_change", targets = ["server", "web"] }
+spec = """
+# Spec: implementation review
+
+## Requirements
+- R1: When every phase of an IMPLEMENT session has finished, the system shall open an implementation review gate.
+- R4: When the user sends feedback, the system shall build it as a revision phase that is implemented and reviewed like any phase, and open the gate again.
+"""
+
+[[case.phase]]
+project = "server"
+report = "Revision phases use a WorkLoop with review Always, created in add_revision_phases."
+
+[[case.phase]]
+project = "web"
+report = "Button labels for the gate live in CHOICES.implementation_review in web/src/lib/gateAnswers.ts."
+
+[[case]]
+id = "feedback-already-agreed"
+judge = "feedback"
+workspace = "split"
+track = "full"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "The blocked phases should be above the report links, like the spec says. Right now they're below."
+note = "The spec already states it; the build missed it. Nothing in the spec changes."
+expect = { route = "implementation_detail", targets = ["web"] }
+spec = """
+# Spec: implementation review card
+
+## Requirements
+- R1: When every phase has finished, the system shall open an implementation review gate.
+- R2: The gate shall carry the phases that ended blocked, with their reasons.
+- R3: The gate card shall list the blocked phases above the report links.
+"""
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview."
+
+[[case.phase]]
+project = "web"
+report = "The implementation_review arm of ChoiceGate.tsx renders the report links, then the blocked list."
+
+[[case]]
+id = "feedback-vietnamese"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "Nút Accept nên nằm sau nút Send feedback, và danh sách phase bị chặn nên in đậm."
+note = "Vietnamese: the Accept button should come after Send feedback, and the blocked phase list should be bold."
+expect = { route = "implementation_detail", targets = ["web"] }
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview."
+
+[[case.phase]]
+project = "web"
+report = "Rendered the blocked list in the implementation_review arm of ChoiceGate.tsx; buttons come from CHOICES in gateAnswers.ts."
+
+[[case]]
+id = "feedback-three-projects-docs"
+judge = "feedback"
+workspace = "triple"
+track = "light"
+request = "Add an implementation review gate that lists the phases that ended blocked."
+feedback = "Looks good. Please also explain the new gate in the docs site's gates page, with a screenshot placeholder."
+note = "Docs pages live under ../docs, which the site project's areas cover; server and web do not change."
+expect = { route = "implementation_detail", targets = ["site"] }
+
+[[case.phase]]
+project = "server"
+report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview."
+
+[[case.phase]]
+project = "web"
+report = "Rendered the blocked list in ChoiceGate.tsx."
+
+[[case.phase]]
+project = "site"
+report = "No change was needed in this phase."
+
+[[case]]
+id = "feedback-bug-report"
+judge = "feedback"
+workspace = "split"
+track = "light"
+request = "Add an implementation review gate before format and the closing stages."
+feedback = "I clicked Accept and the board shows the gate answered 'Accept the implementation', but format never ran and the session sits there doing nothing."
+note = "The answer reached the server, so the fault is after it: the fold and planner live in the server."
+expect = { route = "implementation_detail", targets = ["server"] }
+
+[[case.phase]]
+project = "server"
+report = "The fold sets feedback.accepted on a done answer; implementation_review() returns true once accepted, and closing_stages runs after it."
+
+[[case.phase]]
+project = "web"
+report = "Accept sends {kind: choice, option: done}."

@@ -39,6 +39,12 @@ function textField(p: ChoicePayload): TextField | null {
         rows: 1,
         mono: true,
       };
+    case "implementation_review":
+      return {
+        label: "What to change",
+        hint: "Required for feedback. Name the behavior, screen, or file. Ostra builds it as a reviewed revision, then asks again.",
+        rows: 4,
+      };
     default:
       return null;
   }
@@ -136,6 +142,31 @@ function body(p: ChoicePayload): ReactNode {
             </Chip>
           </div>
           <p style={muted}>YOLO never answers this gate, because spending more is your call.</p>
+        </>
+      );
+    case "implementation_review":
+      return (
+        <>
+          <p style={para}>
+            Review {p.round} of the result. Accepting moves on to formatting, tests, docs, and the completion report.
+          </p>
+          {p.blocked.length > 0 && (
+            <ul style={{ margin: 0 }}>
+              {p.blocked.map((b) => (
+                <li key={b}>{b}</li>
+              ))}
+            </ul>
+          )}
+          <div style={row}>
+            <ArtifactLink path={p.context_path} icon="file-text">
+              Open the session context
+            </ArtifactLink>
+            {p.reports.map((r) => (
+              <ArtifactLink key={r} path={r} icon="file-text">
+                {r.split("/").pop()}
+              </ArtifactLink>
+            ))}
+          </div>
         </>
       );
   }

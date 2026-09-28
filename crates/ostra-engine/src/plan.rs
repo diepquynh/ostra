@@ -12,7 +12,9 @@ use ostra_core::exec::ExecutionStatus;
 use ostra_core::ids::{ExecutionId, GateId};
 use ostra_core::model::Complexity;
 use ostra_core::paths::report;
-use ostra_core::pipeline::{Category, PhaseInfo, QuestionAnswer, StageKind, Stakes, TestPolicy};
+use ostra_core::pipeline::{
+    Category, PhaseInfo, QuestionAnswer, StageKind, Stakes, TestPolicy, Track,
+};
 use ostra_core::submit::{ReviewFinding, Severity, Verdict};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,6 +60,12 @@ pub struct SpawnInputs {
     pub ledger_file: Option<PathBuf>,
     pub target_files: Option<String>,
     pub question: Option<String>,
+    /// Earlier implementer reports a revision builds on.
+    pub prior_reports: Vec<PathBuf>,
+    /// Files the agent reads first, such as the session context.
+    pub context_files: Vec<PathBuf>,
+    /// The feedback round a revision phase builds.
+    pub revision: Option<u32>,
     /// Initializer inputs, by spawn label.
     pub init: BTreeMap<String, String>,
     pub init_item: Option<String>,
@@ -225,6 +233,13 @@ fn purpose_summary(p: &ExecPurpose) -> String {
     }
 }
 
+fn revision_task(r: &Revision, request: &str) -> String {
+    format!(
+        "Feedback round {} from the user, after reviewing the implementation:\n{}\n\nThe original request, for context:\n{request}",
+        r.round, r.instruction
+    )
+}
+
 fn gate_owner(p: &GatePayload) -> String {
     match p {
         GatePayload::OpenQuestions { artifact, .. } => artifact.clone(),
@@ -244,6 +259,7 @@ fn gate_owner(p: &GatePayload) -> String {
         GatePayload::SpecApproval { .. }
         | GatePayload::PlanApproval { .. }
         | GatePayload::BudgetReached { .. } => String::new(),
+        GatePayload::ImplementationReview { round, .. } => round.to_string(),
     }
 }
 
@@ -390,23 +406,39 @@ impl<'a> Planner<'a> {
                 }
             }
             Category::Implement => {
-                if !self.explore_complete() || !self.spec_flow(true) {
+                if !self.explore_complete() {
                     return;
                 }
-                let Some((_, stakes)) = s.stakes else {
+                // Light by default: the Track judge escalates to the full track on evidence.
+                let Some(track) = s.track else {
                     self.push(Step::Judge {
-                        judge: JudgeKind::Stakes,
+                        judge: JudgeKind::Track,
                         subject: None,
                     });
                     return;
                 };
-                if stakes != Stakes::Low && !self.plan_flow() {
-                    return;
-                }
-                if s.plan.invalidated || s.spec.needs_run {
-                    return;
+                if track == Track::Full {
+                    if !self.spec_flow(true) {
+                        return;
+                    }
+                    let Some((_, stakes)) = s.stakes else {
+                        self.push(Step::Judge {
+                            judge: JudgeKind::Stakes,
+                            subject: None,
+                        });
+                        return;
+                    };
+                    if stakes != Stakes::Low && !self.plan_flow() {
+                        return;
+                    }
+                    if s.plan.invalidated || s.spec.needs_run {
+                        return;
+                    }
                 }
                 self.phases();
+                if !self.implementation_review() {
+                    return;
+                }
                 self.closing_stages();
                 if self.all_implement_done() {
                     self.completion();
@@ -903,6 +935,22 @@ impl<'a> Planner<'a> {
                 } else {
                     if p.info.file.is_none() {
                         inputs.task = Some(s.full_request());
+                        if s.category == Some(Category::Implement) && s.track == Some(Track::Light)
+                        {
+                            inputs.research_docs = s.research_docs();
+                        }
+                    }
+                    if let Some(r) = &p.revision {
+                        // Rule F2: a revision reads the session context file, not a conversation.
+                        inputs.revision = Some(r.round);
+                        inputs.task = Some(revision_task(r, &s.full_request()));
+                        inputs.context_files = vec![s.session_context_path()];
+                        inputs.prior_reports = s
+                            .phases
+                            .values()
+                            .filter(|q| q.info.project == project && q.info.id != phase)
+                            .filter_map(|q| q.implementer_report.clone())
+                            .collect();
                     }
                     ExecPurpose::Implement { phase, work: kind }
                 }
@@ -932,9 +980,12 @@ impl<'a> Planner<'a> {
                 } else {
                     phase.to_string()
                 };
-                let rationale = l.rationale.clone().unwrap_or_else(|| match &p.info.file {
-                    Some(_) => format!("Phase {phase}: {}", p.info.title),
-                    None => s.full_request(),
+                let rationale = l.rationale.clone().unwrap_or_else(|| {
+                    match (&p.revision, &p.info.file) {
+                        (Some(r), _) => revision_task(r, &s.full_request()),
+                        (None, Some(_)) => format!("Phase {phase}: {}", p.info.title),
+                        (None, None) => s.full_request(),
+                    }
                 });
                 let inputs = SpawnInputs {
                     phase: Some(p.info.clone()),
@@ -1123,6 +1174,64 @@ impl<'a> Planner<'a> {
                 error: error.to_string(),
             },
         );
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Implementation review: feedback rounds until the user accepts (Rule F1)
+    // -------------------------------------------------------------------------------------
+
+    /// Returns true once the user accepted the implementation.
+    fn implementation_review(&mut self) -> bool {
+        let s = self.s;
+        let f = &s.feedback;
+        if f.accepted || s.phases.is_empty() {
+            return true;
+        }
+        if f.gate.is_some() || !self.nothing_running() {
+            return false;
+        }
+        let removed = removed_phases(s);
+        if !s
+            .phases
+            .values()
+            .all(|p| removed.contains(&p.info.id) || p.impl_loop.is_terminal())
+        {
+            return false;
+        }
+        if let Some(i) = f.rounds.iter().position(|r| r.route.is_none()) {
+            self.push(Step::Judge {
+                judge: JudgeKind::Feedback,
+                subject: Some(i.to_string()),
+            });
+            return false;
+        }
+        if f.rounds.iter().any(|r| r.awaiting_spec) {
+            return false;
+        }
+        // Rule F1: every phase finished, so the user reviews the result before the closing stages.
+        let blocked = s
+            .phases
+            .values()
+            .filter_map(|p| match &p.impl_loop.next {
+                LoopNext::Blocked { reason } => Some(format!("Phase {}: {reason}", p.info.id)),
+                _ => None,
+            })
+            .collect();
+        self.gate(
+            "Review the implementation",
+            "Every phase is built and reviewed. Try the change, then describe what to change, or accept it. Accepting moves on to formatting, tests, documentation, and the completion report.",
+            GatePayload::ImplementationReview {
+                round: f.rounds.len() as u32 + 1,
+                context_path: s.session_context_path(),
+                reports: s
+                    .phases
+                    .values()
+                    .filter_map(|p| p.implementer_report.clone())
+                    .collect(),
+                blocked,
+            },
+        );
+        false
     }
 
     // -------------------------------------------------------------------------------------

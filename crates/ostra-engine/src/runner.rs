@@ -461,6 +461,7 @@ impl Engine {
                 serde_json::from_value::<judge::ClassifyOut>(output.clone()).is_ok()
             }
             JudgeKind::Stakes => serde_json::from_value::<judge::StakesOut>(output.clone()).is_ok(),
+            JudgeKind::Track => serde_json::from_value::<judge::TrackOut>(output.clone()).is_ok(),
             JudgeKind::Sufficiency => {
                 serde_json::from_value::<judge::SufficiencyOut>(output.clone()).is_ok()
             }
@@ -1036,7 +1037,8 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
                 | GatePayload::PhaseBlocked { .. }
                 | GatePayload::HarnessFailure { .. }
                 | GatePayload::ExecutionFailed { .. }
-                | GatePayload::BudgetReached { .. },
+                | GatePayload::BudgetReached { .. }
+                | GatePayload::ImplementationReview { .. },
             GateAnswer::Choice { .. }
         ) | (GatePayload::ClosingGate { .. }, GateAnswer::Closing { .. })
             | (
@@ -1075,6 +1077,20 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
         && feedback.as_ref().is_none_or(|f| f.trim().is_empty())
     {
         return Err(EngineError::Invalid("Say what to change.".into()));
+    }
+    if let (GatePayload::ImplementationReview { .. }, GateAnswer::Choice { option, text }) =
+        (payload, answer)
+    {
+        match option.as_str() {
+            "done" => {}
+            "feedback" if text.as_ref().is_some_and(|t| !t.trim().is_empty()) => {}
+            "feedback" => return Err(EngineError::Invalid("Say what to change.".into())),
+            _ => {
+                return Err(EngineError::Invalid(
+                    "Answer done, or feedback with what to change.".into(),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -1442,6 +1458,9 @@ impl Inner {
                 explanation,
                 payload,
             } => {
+                if let GatePayload::ImplementationReview { .. } = &payload {
+                    self.write_session_context(session)?;
+                }
                 self.append(
                     session,
                     SessionEvent::GateOpened {
@@ -1564,15 +1583,26 @@ impl Inner {
             .workspace()
             .projects
             .iter()
-            .map(|p| ProjectFacts {
-                key: p.key.clone(),
-                path: p.path.display().to_string(),
-                initialized: paths::project_inventory(&p.path).exists(),
-                stack: p.stack.clone().or_else(|| {
-                    let profile: ProjectProfile =
-                        load_toml(&paths::project_profile(&p.path)).ok()?;
-                    profile.stack
-                }),
+            .map(|p| {
+                let profile: Option<ProjectProfile> =
+                    load_toml(&paths::project_profile(&p.path)).ok();
+                ProjectFacts {
+                    key: p.key.clone(),
+                    path: p.path.display().to_string(),
+                    initialized: paths::project_inventory(&p.path).exists(),
+                    stack: p
+                        .stack
+                        .clone()
+                        .or_else(|| profile.as_ref().and_then(|x| x.stack.clone())),
+                    areas: profile
+                        .map(|x| {
+                            x.module_map
+                                .into_iter()
+                                .map(|r| format!("{} ({})", r.area, r.glob))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }
             })
             .collect()
     }
@@ -1597,7 +1627,7 @@ impl Inner {
         let route = resolve_route(
             &global,
             &settings,
-            RouteQuery::new(ostra_core::agent::JUDGE_ROUTE, Tier::Fast),
+            RouteQuery::new(ostra_core::agent::JUDGE_ROUTE, Tier::Advanced),
         )
         .map_err(|e| EngineError::Invalid(e.0))?;
         let mut last = String::new();
@@ -1661,6 +1691,9 @@ impl Inner {
                     serde_json::from_value::<judge::SufficiencyOut>(v.clone()).is_ok()
                 }
                 JudgeKind::Stakes => serde_json::from_value::<judge::StakesOut>(v.clone()).is_ok(),
+                JudgeKind::Track => serde_json::from_value::<judge::TrackOut>(v.clone()).is_ok(),
+                JudgeKind::Feedback => serde_json::from_value::<judge::FeedbackOut>(v.clone())
+                    .is_ok_and(|o| !o.targets.is_empty()),
                 JudgeKind::RouteAnswer => {
                     serde_json::from_value::<judge::RouteAnswerOut>(v.clone()).is_ok()
                 }
@@ -1954,6 +1987,15 @@ impl Inner {
         }
     }
 
+    /// Rule F2: the session context file is rewritten from the fold before anything reads it.
+    fn write_session_context(&self, session: &SessionId) -> Result<(), EngineError> {
+        let st = self.snapshot(session)?;
+        let path = st.session_context_path();
+        std::fs::write(&path, crate::context::render(&st)).map_err(|e| {
+            EngineError::Invalid(format!("Could not write {}: {e}", path.display()))
+        })
+    }
+
     async fn perform_spawn(
         self: &Arc<Self>,
         session: &SessionId,
@@ -1963,6 +2005,9 @@ impl Inner {
         let st = self.snapshot(session)?;
         if st.is_terminal() || st.paused {
             return Ok(());
+        }
+        if req.inputs.context_files.contains(&st.session_context_path()) {
+            self.write_session_context(session)?;
         }
         // Rule P2: a run the pause interrupted continues under its own id, where it stopped.
         let paused = req

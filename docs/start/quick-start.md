@@ -78,9 +78,11 @@ Add a --version flag to the CLI that prints the version from Cargo.toml.
 A request this small is likely classified QUICK CHANGE: one implementer pass, no spec or plan, and the
 changed files staged in git. The session board shows which category the Classify judge picked and why.
 
-For a larger request the board walks the full pipeline, and you answer the gates it raises: open questions,
-spec approval, and plan approval when the change is not low-stakes. When the last phase passes review, the
-closing gate asks whether to write tests and docs, and the completion report summarizes what changed. The
+For a larger request the board researches the code and then builds the change in reviewed phases. A change
+the research shows needs settled requirements takes the full track first, and you answer the gates it raises:
+open questions, spec approval, and plan approval when the change is not low-stakes. When the last phase passes
+review, you try the change and send feedback until you accept it. Then the closing gate asks whether to write
+tests and docs, and the completion report summarizes what changed. The
 changed files are staged in git for you to review and commit.
 
 ## 7. Stop the server

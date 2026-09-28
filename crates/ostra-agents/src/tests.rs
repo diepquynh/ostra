@@ -268,6 +268,8 @@ fn judges_and_references_resolve() {
         "classify",
         "sufficiency",
         "stakes",
+        "track",
+        "feedback",
         "route-answer",
         "rescue",
         "resolve-review",

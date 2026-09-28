@@ -65,6 +65,11 @@ export const STAGES: Record<StageKind, StageInfo> = {
     produces: "A decision on each item the research did not cover: needed or not.",
     protects: "A spec written from incomplete research, which invalidates the plan built on it.",
   },
+  track: {
+    label: "Track",
+    produces: "Light or full. The light track builds from the research; the full track writes a spec and a plan first.",
+    protects: "Three approval rounds on a contained change, or none on a change to a contract or a schema.",
+  },
   spec: {
     label: "Spec",
     produces:
@@ -115,6 +120,11 @@ export const STAGES: Record<StageKind, StageInfo> = {
     label: "Review",
     produces: "Findings against the project's rule set and the phase's requirements, plus the review ledger.",
     protects: "Defects that compound across phases, and code that follows every convention but does the wrong thing.",
+  },
+  "implementation-review": {
+    label: "Implementation review",
+    produces: "Your feedback, built as reviewed revision phases, or your acceptance.",
+    protects: "Tests and docs written for a result you have not tried yet.",
   },
   autofix: {
     label: "Auto-fix",

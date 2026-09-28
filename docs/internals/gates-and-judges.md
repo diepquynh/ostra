@@ -48,7 +48,8 @@ the LOW findings, and takes an optional change request:
 | `review_cap` | A review loop used its passes with HIGH or MEDIUM findings open | `another-pass` (optionally with guidance) or leave it blocked |
 | `stuck` | The Rescue judge decided only the user has the missing fact | `fact` with the fact as text, or `block` |
 | `phase_blocked` | A phase ended blocked | `retry` (optionally with instructions) or `leave` |
-| `closing_gate` | A project's phases are done | Tests yes or no, docs yes or no, per project |
+| `implementation_review` | Every phase of an `IMPLEMENT` session finished and nothing runs | `done`, or `feedback` with what to change as text |
+| `closing_gate` | A project's phases are done and, for `IMPLEMENT`, the implementation was accepted | Tests yes or no, docs yes or no, per project |
 | `permission` | A tool call needs approval under the permission rules | Allow once, allow always in this workspace, or deny |
 | `harness_failure` | A harness CLI failed to start or is not signed in | `retry` after signing in, `native` to re-run on the native executor, or abandon |
 | `execution_failed` | An execution failed after its automatic retry | `retry` or `abandon` |
@@ -109,6 +110,16 @@ A stuck gate names the execution and asks for the missing fact. Above it is a ph
 A blocked phase removes its dependents from the queue (Rule D9). The gate asks whether to try again. `retry`
 restores the review budget and runs the fix agent again. With instructions, they go through the Route-answer
 judge; without, the fix agent gets the last review's BLOCKER, HIGH, and MEDIUM findings.
+
+### Implementation review
+
+The review gate sits between the last phase and the closing stages (Rule F1). `done` accepts the implementation
+and lets format, the closing gate, tests, and docs run. `feedback` needs text; it starts a feedback round that
+builds revision phases, and the gate opens again once they finish, as round 2, 3, and so on. The card links the
+session context file the runner writes before it opens (Rule F2) and every implementer report, and lists any
+phase that ended blocked. Under YOLO the fixed answer is `done`. See
+[Implementation review](pipeline.md#implementation-review-feedback-until-you-accept) for how a round is routed and
+built.
 
 ### Closing gate
 
@@ -217,14 +228,16 @@ Judges are the only places a model makes an orchestration decision. Each is a sh
 [`assets/judges/`](../../assets/judges/), an output struct with a JSON schema in
 [`crates/ostra-engine/src/judge.rs`](../../crates/ostra-engine/src/judge.rs), and an input builder in
 `judge_input.rs` that decides exactly what the judge sees. Judges run on the `judge` route, which resolves to the
-`fast` tier by default. Each decision is stored as an event with its input summary and reason, and the board shows
+`advanced` tier by default. Each decision is stored as an event with its input summary and reason, and the board shows
 it as "Ostra chose X because Y".
 
 | Judge | Asked when | Decides | Prompt |
 | --- | --- | --- | --- |
 | Classify | The session starts | Category, projects in scope, research tasks, opt-ins, title | `classify.md` |
 | Sufficiency | Research finished with `Not covered` items | For each item: needed or not, plus a research task when needed | `sufficiency.md` |
-| Stakes | An `IMPLEMENT` spec is approved | `low` (skip the plan), `medium`, or `high` | `stakes.md` |
+| Track | Research for an `IMPLEMENT` request finished and no track was forced | `light` (build from the research) or `full` (spec and plan first) | `track.md` |
+| Stakes | A full-track `IMPLEMENT` spec is approved | `low` (skip the plan), `medium`, or `high` | `stakes.md` |
+| Feedback | A feedback round needs routing: the session has a spec or several projects in scope | `requirement_change` or `implementation_detail`, and one `{project, instruction}` target per project it changes | `feedback.md` |
 | Route answer | A user's free text lands at a phase (stuck fact, blocked retry) | `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
 | Rescue | An agent returned `stuck` | `rerun` with a stated fact, `explore` to find it, or `gate` to ask the user | `rescue.md` |
 | Resolve review | A review loop hit its budget under YOLO | `fix` with per-finding instructions, or `block` | `resolve-review.md` |
@@ -236,7 +249,11 @@ Each prompt tells the judge which way to lean when unsure, and why:
 - **Classify** picks the category that runs more of the pipeline, because a needed stage that was skipped costs a
   wrong result and an unneeded stage costs one round.
 - **Sufficiency** marks an item needed, because a missed dependency shows up as a wrong spec after approval.
+- **Track** resolves to `light`, because the user reviews the built result and can send feedback, while a spec
+  round costs several approvals. It picks `full` only on a research finding it can name.
 - **Stakes** resolves upward, because skipping the plan removes the phase review that catches a wrong sequence.
+- **Feedback** resolves to `requirement_change` when a spec exists, because a spec that disagrees with the code
+  misleads every later stage.
 - **Route answer** resolves to `requirement_change`, because a stale spec corrupts every stage after it.
 - **Rescue** never picks a plain retry, and after two rescues of the same phase with the same diagnostic it picks
   `gate`, because neither rescue changed the failure.
@@ -266,6 +283,7 @@ Some decisions can be overridden from the board, with a replacement answer, whil
 | Judge | Can be overridden until |
 | --- | --- |
 | Classify | The first research task starts and before any phase has done work |
+| Track | The spec has run or any phase has started |
 | Stakes | The plan stage has run or any phase has started |
 | Sufficiency | The spec has run |
 | All others | Never |
@@ -275,12 +293,38 @@ started, or the stakes after phases were built from them, would leave work in th
 should not exist. The fold checks the same condition again when the override event arrives, so a late override
 is ignored even if a client sent it.
 
-Overriding Stakes clears the inline phases a `low` decision created. Overriding Sufficiency removes the research
+Overriding Track to `full` clears the inline phases the light track created; overriding it to `light` creates
+them. Overriding Stakes clears the inline phases a `low` decision created. Overriding Sufficiency removes the research
 tasks the earlier decision added that have not started.
 
 The Decisions tab of a session lists each judge decision with its reason and the input it was based on:
 
 ![The Decisions tab with a Classify decision and a Stakes decision](../images/console/decisions.png)
+
+## Measuring the judges
+
+A conformance fixture proves what the engine does with a judge's answer; it cannot say whether a model gives
+the right answer. The routing evals do that. [`tests/evals/judges.toml`](../../tests/evals/judges.toml) holds
+cases for the Classify, Track, and Feedback judges, each a request about Ostra's own source with the route a
+careful engineer would pick. Track and Feedback cases carry research documents, a spec, and phase reports
+written from the real code, and some are counter-cases that pull the other way, so a prompt change that fixes
+one case and breaks its opposite shows up.
+
+[`crates/ostra-server/tests/judge_evals.rs`](../../crates/ostra-server/tests/judge_evals.rs) folds each case into
+the session state the engine would have when it asks the judge, builds the input with the same `judge_input`,
+and calls the judge several times per model, because one run of a model says little about the next:
+
+```bash
+OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5 OSTRA_EVAL_RUNS=3 \
+  cargo test -p ostra-server --test judge_evals -- --ignored --nocapture
+```
+
+It prints the pass count and the spread of answers per case and model, then accuracy, the number of cases every
+run agreed on, and cost per model, and writes the answers with each judge's reasons to `target/evals/`. The
+live test is ignored by default because it calls paid models; it fails only when calls fail, since a model's
+answers vary from run to run. An offline test in the same file checks that every case still builds its session,
+so a case broken by an engine change fails in the normal suite. `OSTRA_EVAL_CASES` runs the cases whose id
+contains its value.
 
 ## Where to look in the code
 

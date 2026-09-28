@@ -266,6 +266,12 @@ export function decisionChoice(d: DecisionView): string {
         ? `${s} stakes${s === "low" ? ", so the plan stage is skipped" : ", so a phased plan is written"}`
         : "a stakes level";
     }
+    case "track":
+      return str("track") === "full"
+        ? "the full track, so a spec and a plan are written first"
+        : "the light track, so the change is built from the research";
+    case "feedback":
+      return str("route") ? `to route your feedback as ${humanize(str("route")!)}` : "a route for your feedback";
     case "route_answer":
       return str("route") ? `to route your answer as ${humanize(str("route")!)}` : "a route for your answer";
     case "rescue":

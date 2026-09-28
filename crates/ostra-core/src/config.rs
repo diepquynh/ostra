@@ -916,7 +916,7 @@ impl WorkspaceSettings {
             ("module-documentation", "advanced"),
             ("prompt-generation", "advanced"),
             ("initializer", "balanced"),
-            ("judge", "fast"),
+            ("judge", "advanced"),
             ("quick-answer", "balanced"),
         ] {
             by_agent.insert(agent.into(), tier.into());
@@ -1828,7 +1828,7 @@ execution-path-analyzer = "balanced"
 module-documentation = "advanced"
 prompt-generation = "advanced"
 initializer = "balanced"
-judge = "fast"
+judge = "advanced"
 quick-answer = { native = "anthropic:claude-sonnet-5" }
 
 [routing.model.byPhaseComplexity.implementer]

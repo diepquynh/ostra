@@ -136,6 +136,7 @@ describe("answer shapes per gate kind", () => {
       skill_approval: "skills",
       execution_failed: "choice",
       budget_reached: "choice",
+      implementation_review: "choice",
     });
   });
 
@@ -149,6 +150,7 @@ describe("answer shapes per gate kind", () => {
       harness_failure: ["retry", "native"],
       execution_failed: ["retry", "abandon"],
       budget_reached: ["raise", "stop"],
+      implementation_review: ["done", "feedback"],
     });
     for (const [kind, opts] of Object.entries(CHOICES)) {
       expect(
@@ -204,6 +206,16 @@ describe("answer shapes per gate kind", () => {
     });
     expect(parseDollars(" 7 ")).toBe(7);
     expect(parseDollars("0")).toBeNull();
+  });
+
+  it("requires feedback text but accepts the implementation without it", () => {
+    expect(choiceAnswer("implementation_review", "feedback", " ")).toHaveProperty("error");
+    expect(choiceAnswer("implementation_review", "feedback", "Show the reason")).toEqual({
+      answer: { kind: "choice", option: "feedback", text: "Show the reason" },
+    });
+    expect(choiceAnswer("implementation_review", "done", "ignored")).toEqual({
+      answer: { kind: "choice", option: "done", text: null },
+    });
   });
 
   it("summarizes answers with the labels of the buttons that gave them", () => {

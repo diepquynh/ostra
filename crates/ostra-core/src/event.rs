@@ -5,7 +5,7 @@ use crate::agent::{AgentName, InitializerMode};
 use crate::exec::ExecutionResult;
 use crate::executor::{ExecutorKind, HarnessKind};
 use crate::ids::{DecisionId, ExecutionId, GateId};
-use crate::pipeline::{PhaseInfo, Question, QuestionAnswer, StageKind};
+use crate::pipeline::{PhaseInfo, Question, QuestionAnswer, StageKind, Track};
 use crate::policy::{PermissionAnswer, RuleRef, ToolCall};
 use crate::submit::{FactCheckFinding, ReviewFinding};
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,10 @@ pub struct SessionOptions {
     pub tests: bool,
     pub docs: bool,
     pub yolo: bool,
+    /// A track the user forced for an `IMPLEMENT` request. Absent lets the Track judge decide.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub track: Option<Track>,
 }
 
 /// A file or folder the user attached as context: a path relative to one of the workspace's
@@ -90,7 +94,9 @@ pub enum JudgeKind {
     Classify,
     Sufficiency,
     Stakes,
+    Track,
     RouteAnswer,
+    Feedback,
     Rescue,
     ResolveReview,
     YoloAnswer,
@@ -103,6 +109,8 @@ impl JudgeKind {
             JudgeKind::Classify => "classify",
             JudgeKind::Sufficiency => "sufficiency",
             JudgeKind::Stakes => "stakes",
+            JudgeKind::Track => "track",
+            JudgeKind::Feedback => "feedback",
             JudgeKind::RouteAnswer => "route-answer",
             JudgeKind::Rescue => "rescue",
             JudgeKind::ResolveReview => "resolve-review",
@@ -350,6 +358,20 @@ pub enum GatePayload {
         project: String,
         error: String,
     },
+    /// Every phase has finished. Answer `feedback` with the change the user wants as `text`, or
+    /// `done` to accept the implementation and move on to the closing stages.
+    ImplementationReview {
+        /// 1 for the first review, then one more after each feedback round is built.
+        round: u32,
+        /// The engine-written file that lists the request, the artifacts, and every round.
+        #[ts(type = "string")]
+        context_path: PathBuf,
+        /// Implementer reports of every finished phase, oldest first.
+        #[ts(type = "string[]")]
+        reports: Vec<PathBuf>,
+        /// Phases that ended blocked, with the reason.
+        blocked: Vec<String>,
+    },
     /// The session reached its budget. Answer `raise` (with the extra dollars as `text`) or `stop`.
     /// YOLO never answers it, because spending more is the user's decision.
     BudgetReached {
@@ -382,6 +404,7 @@ impl GatePayload {
             GatePayload::SkillApproval { .. } => StageKind::SkillApproval,
             GatePayload::ExecutionFailed { .. } => StageKind::Implement,
             GatePayload::BudgetReached { .. } => StageKind::Intake,
+            GatePayload::ImplementationReview { .. } => StageKind::ImplementationReview,
         }
     }
 
@@ -400,6 +423,7 @@ impl GatePayload {
             GatePayload::SkillApproval { .. } => "skill_approval",
             GatePayload::ExecutionFailed { .. } => "execution_failed",
             GatePayload::BudgetReached { .. } => "budget_reached",
+            GatePayload::ImplementationReview { .. } => "implementation_review",
         }
     }
 

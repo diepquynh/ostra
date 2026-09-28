@@ -9,20 +9,23 @@ use ostra_agents::spawn::*;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, FactTarget, WorkKind};
 use ostra_core::executor::ExecutorKind;
-use ostra_core::pipeline::{Category, PhaseInfo};
+use crate::state::SessionState;
+use ostra_core::pipeline::{Category, Track};
 use std::path::{Path, PathBuf};
 
 pub struct AgentsFactory;
 
-fn work_source(phase: Option<&PhaseInfo>, category: Option<Category>) -> WorkSource {
-    match phase.and_then(|p| p.file.clone()) {
+fn work_source(inputs: &SpawnInputs, s: &SessionState) -> WorkSource {
+    match inputs.phase.as_ref().and_then(|p| p.file.clone()) {
         Some(f) => WorkSource::PhaseFile(f),
         None => WorkSource::NoPlan(
-            match category {
-                Some(Category::Verify) => "A verification request: no code change is planned.",
-                Some(Category::UnitTest) => "The user asked for tests directly, so no plan exists.",
-                Some(Category::Prompt) => "A prompt change: the pipeline has no plan tier for it.",
-                Some(Category::QuickChange) => "A quick change: the request names the whole edit, so research, spec, plan, and review were skipped.",
+            match (inputs.revision, s.category, s.track) {
+                (Some(_), _, _) => "A revision the user asked for after reviewing the implementation. The request below and the session context file describe it.",
+                (_, Some(Category::Verify), _) => "A verification request: no code change is planned.",
+                (_, Some(Category::UnitTest), _) => "The user asked for tests directly, so no plan exists.",
+                (_, Some(Category::Prompt), _) => "A prompt change: the pipeline has no plan tier for it.",
+                (_, Some(Category::QuickChange), _) => "A quick change: the request names the whole edit, so research, spec, plan, and review were skipped.",
+                (_, Some(Category::Implement), Some(Track::Light)) => "The light track: research found a contained change, so the spec and plan stages were skipped. Work from the request and the research documents.",
                 _ => "The stakes judge rated this request low, so the plan tier was skipped.",
             }
             .into(),
@@ -33,6 +36,9 @@ fn work_source(phase: Option<&PhaseInfo>, category: Option<Category>) -> WorkSou
 fn work_extras(inputs: &SpawnInputs) -> Extras {
     let mut e = Extras {
         ledger_file: inputs.ledger_file.clone(),
+        research_docs: inputs.research_docs.clone(),
+        prior_reports: inputs.prior_reports.clone(),
+        context_files: inputs.context_files.clone(),
         ..Default::default()
     };
     match inputs.work {
@@ -153,7 +159,7 @@ impl SpawnFactory for AgentsFactory {
             AgentName::Implementer => Box::new(ImplementerParams {
                 common,
                 report_file: required(i.report_file.clone(), "report file")?,
-                work: work_source(i.phase.as_ref(), s.category),
+                work: work_source(i, s),
                 extra: work_extras(i),
             }),
             AgentName::CodeReviewer => {
@@ -163,7 +169,7 @@ impl SpawnFactory for AgentsFactory {
                     phase: i.phase_value.clone().ok_or("missing phase")?,
                     changed_files: i.changed_files.clone(),
                     change_rationale: i.rationale.clone().unwrap_or_default(),
-                    work: work_source(i.phase.as_ref(), s.category),
+                    work: work_source(i, s),
                     // Staging keeps each review on its own change (Step 2).
                     review_scope: Some("unstaged".into()),
                     context: Some(if tests {
@@ -186,7 +192,7 @@ impl SpawnFactory for AgentsFactory {
                 implementer_report: required(i.implementer_report.clone(), "implementer report")?,
                 epa_report: required(i.epa_report.clone(), "EPA report")?,
                 report_file: required(i.report_file.clone(), "report file")?,
-                work: work_source(i.phase.as_ref(), s.category),
+                work: work_source(i, s),
                 extra: work_extras(i),
             }),
             AgentName::ModuleDocumentation => Box::new(ModuleDocsParams {

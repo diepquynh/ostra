@@ -83,7 +83,7 @@ The first thing that happens is a **judge call**. Classify reads the request and
 
 | Category | Path |
 | --- | --- |
-| IMPLEMENT | The full pipeline: research, spec, fact-check, plan (unless low-stakes), phases, review, closing, tests, docs. |
+| IMPLEMENT | Research, then the light track (phases built from the research) or the full track (spec, fact-check, plan unless low-stakes), then phases, review, your feedback rounds, closing, tests, docs. |
 | PLAN | Research, spec, and plan, then stop. |
 | SPEC | Research and spec. |
 | RESEARCH | Research only. |
@@ -100,6 +100,8 @@ For an IMPLEMENT task you then see:
 
 1. **Explore.** One researcher per project or area runs in parallel and writes a research document. A
    Sufficiency judge reads every "Not covered" item and asks for another explore run if one of them matters.
+   The Track judge then picks the light track, which goes straight to step 8, or the full track, which runs steps
+   2 to 7 first. The New task form's Track selector skips the judge.
 2. **Spec.** The spec agent writes requirements in EARS form ("When X, the system shall Y") with acceptance
    criteria, from every research document. The spec is the contract every later stage checks against.
 3. **Open questions.** If the spec has questions only you can answer, a gate lists them with the recommended
@@ -114,9 +116,11 @@ For an IMPLEMENT task you then see:
 8. **Phases.** Each phase runs an implementer, then a code reviewer, in a loop of at most three rounds.
    Phases that depend on nothing run in parallel across projects, never two at once in one project. After a
    phase passes, its changed files are staged with `git add`.
-9. **Format** runs the project's format command once, after the last phase.
-10. **Closing gate.** Whether to write tests and docs for what changed.
-11. **Tests and docs**, then the **completion report**.
+9. **Implementation review.** When every phase has finished, you try the change. Send feedback and Ostra
+   builds it as a reviewed revision phase, then asks again; accept when it is right.
+10. **Format** runs the project's format command once, after you accept.
+11. **Closing gate.** Whether to write tests and docs for what changed.
+12. **Tests and docs**, then the **completion report**.
 
 [The pipeline](../internals/pipeline.md) explains each stage and the rule behind it, and
 [The planner](../internals/planner.md) how the engine decides what runs next.
@@ -137,6 +141,7 @@ Overview tab and in the status bar. The ones a first session is likely to show:
 | Permission | An agent wants a tool call your permissions do not allow. Allow once, deny, or add the suggested rule for the workspace. |
 | Review cap | A phase's review loop reached three rounds with findings open. Allow one more fix pass, with an optional note to the fix agent, or mark the phase blocked. A blocked phase takes every phase that depends on it out of the queue; independent phases continue. |
 | Stuck | An agent reported it cannot proceed and said what it needs. |
+| Implementation review | Accept the result, or describe what to change. Each change is built and reviewed, then the gate returns. |
 | Closing | Tests and docs for each project. |
 | Budget reached | The session spent its budget. Raise it by an amount, or stop. |
 

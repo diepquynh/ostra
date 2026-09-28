@@ -10,7 +10,7 @@ use ostra_core::model::Tier;
 
 pub fn default_tier(key: &str) -> Tier {
     if key == JUDGE_ROUTE {
-        return Tier::Fast;
+        return Tier::Advanced;
     }
     key.parse()
         .map(|a| ostra_agents::agent_def(a).default_tier)

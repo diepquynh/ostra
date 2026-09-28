@@ -3,4 +3,4 @@
 /**
  * One node kind of the pipeline. Stage instances carry a project key, a phase, and a round.
  */
-export type StageKind = "intake" | "classify" | "explore" | "sufficiency" | "spec" | "open-questions" | "fact-check-spec" | "spec-approval" | "stakes" | "plan" | "fact-check-plan" | "plan-approval" | "implement" | "review" | "autofix" | "staging" | "handoff" | "rescue" | "format" | "closing-gate" | "epa" | "write-test" | "test-review" | "module-docs" | "verify" | "prompt-gen" | "quick-answer" | "completion" | "detect" | "scout" | "propose" | "skill-approval" | "generate-skill" | "generate-inventory";
+export type StageKind = "intake" | "classify" | "explore" | "sufficiency" | "track" | "spec" | "open-questions" | "fact-check-spec" | "spec-approval" | "stakes" | "plan" | "fact-check-plan" | "plan-approval" | "implement" | "review" | "autofix" | "staging" | "handoff" | "rescue" | "format" | "implementation-review" | "closing-gate" | "epa" | "write-test" | "test-review" | "module-docs" | "verify" | "prompt-gen" | "quick-answer" | "completion" | "detect" | "scout" | "propose" | "skill-approval" | "generate-skill" | "generate-inventory";

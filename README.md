@@ -41,6 +41,9 @@ Use Ostra when a change costs more in coordination than in typing:
   workspace, so research, plan, build, and review see all of them at once.
 - **A feature needs a thorough read of the codebase first.** The research and spec stages map the code and
   check the idea against it before any code is written, and the fact-check stage verifies what the spec claims.
+- **You want to try a change and correct it before it is finished.** Most changes take the light track:
+  research, then reviewed phases with no spec or plan. When the build is done the session waits for your
+  feedback, builds each round as a reviewed revision, and writes tests and docs only after you accept.
 - **You are close to a deadline and still need to sleep.** A session keeps working through its stages while
   you are away, and it stops at a gate or a budget limit instead of spending without bound.
 - **You do not want to watch a terminal.** Ostra runs in a browser tab, sends a notification when a gate

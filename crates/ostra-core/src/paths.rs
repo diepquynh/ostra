@@ -391,6 +391,11 @@ pub mod report {
     pub fn unit_test_request() -> String {
         "ostra-unit-test-request.md".into()
     }
+    /// The engine-written session context, in the session root: the request, every artifact
+    /// path, and each feedback round, so a revision reads files instead of a conversation.
+    pub fn session_context() -> String {
+        "ostra-session-context.md".into()
+    }
     /// The review ledger a loop belongs to, from its `Phase:` value (`N`, `N-tests`, or `none`).
     pub fn review_ledger(phase: &str) -> String {
         let v = phase.trim().to_ascii_lowercase();

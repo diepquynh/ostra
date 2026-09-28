@@ -66,6 +66,8 @@ impl Services for Fake {
             || user.contains("# Toggles from the New task form")
         {
             json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "research"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code.", "title": "Greeting"})
+        } else if schema["properties"].get("track").is_some() {
+            json!({"track": "full", "reason": "A contract changes."})
         } else if schema["properties"].get("stakes").is_some() {
             json!({"stakes": "high", "reason": "Touches two layers."})
         } else if schema["properties"].get("report_markdown").is_some() {

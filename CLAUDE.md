@@ -158,6 +158,9 @@ cd tests/browser && npm test                # browser security suite: the consol
 - `crates/ostra-engine/tests/runner.rs` and `recover.rs`: a real `Engine` with fake services.
 - `crates/ostra-server/tests/e2e.rs`: the whole stack with a `ScriptedProvider` playing each agent.
 - Provider live tests are `#[ignore]`d and run with `cargo test -p ostra-providers -- --ignored`.
+- Judge routing evals (`tests/evals/judges.toml`, run by `crates/ostra-server/tests/judge_evals.rs`) are live and
+  `#[ignore]`d: `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5 cargo test -p ostra-server --test judge_evals -- --ignored --nocapture`.
+  Run every case several times per model before judging a prompt change, and add a counter-case with each fix.
 
 ## Live runs cost money
 

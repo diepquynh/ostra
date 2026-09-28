@@ -57,7 +57,7 @@ export const settings: WorkspaceSettings = {
         "module-documentation": "advanced",
         "prompt-generation": "advanced",
         initializer: "balanced",
-        judge: "fast",
+        judge: "advanced",
         "quick-answer": "balanced",
       },
       byPhaseComplexity: {

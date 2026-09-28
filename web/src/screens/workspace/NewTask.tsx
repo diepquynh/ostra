@@ -1,7 +1,7 @@
 import { Banner, Button, Checkbox, Panel } from "@ostra/design";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
-import type { ContextFile, ProjectView, SessionSummary } from "../../api/types";
+import type { ContextFile, ProjectView, SessionSummary, Track } from "../../api/types";
 import { FileTagInput } from "../../features/context/FileTagInput";
 import { useUploads } from "../../features/context/uploads";
 import { isMac, modHint } from "../../lib/keys";
@@ -21,6 +21,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
   const [tests, setTests] = useState(false);
   const [docs, setDocs] = useState(false);
   const [yolo, setYolo] = useState(yoloDefault);
+  const [track, setTrack] = useState<Track | null>(null);
   const [pins, setPins] = useState<string[]>([]);
   const [files, setFiles] = useState<ContextFile[]>([]);
   const uploads = useUploads(ws);
@@ -48,7 +49,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
     try {
       const s = await api.createSession(ws, {
         request: request.trim(),
-        options: { tests, docs, yolo },
+        options: track ? { tests, docs, yolo, track } : { tests, docs, yolo },
         projects: pins,
         files,
         uploads: uploads.ids,
@@ -77,8 +78,9 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
     <Panel title="New task" icon="plus">
       <div className="wp-stack" style={{ gap: 10 }}>
         <div className="wp-muted" style={{ color: "var(--text-secondary)", lineHeight: 1.45 }}>
-          Describe the work. Ostra classifies it, researches the code, writes a spec for your approval, plans phases,
-          builds and reviews each one, and asks before any optional stage.
+          Describe the work. Ostra classifies it, researches the code, and builds and reviews it. A change that needs
+          settled requirements gets a spec and a plan for your approval first. You try the result and send feedback
+          until you accept it.
         </div>
         <FileTagInput
           ref={field}
@@ -114,6 +116,26 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
             checked={yolo}
             onChange={(e) => setYolo(e.target.checked)}
           />
+          <span className="wp-divider" />
+          <span className="wp-muted">Track</span>
+          {([null, "light", "full"] as const).map((t) => (
+            <Button
+              key={t ?? "auto"}
+              size="sm"
+              variant={track === t ? "default" : "ghost"}
+              active={track === t}
+              title={
+                t === null
+                  ? "Ostra picks after research: light unless the change needs a spec and a plan"
+                  : t === "light"
+                    ? "Research, then build and review, with no spec or plan"
+                    : "Spec, fact-check, and plan, each approved by you, before building"
+              }
+              onClick={() => setTrack(t)}
+            >
+              {t === null ? "Auto" : t === "light" ? "Light" : "Full"}
+            </Button>
+          ))}
           {initialized.length > 1 && (
             <>
               <span className="wp-divider" />

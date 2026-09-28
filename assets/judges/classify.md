@@ -28,15 +28,30 @@ files the user uploaded, each with its absolute path (Rules C1, C3).
 | `QUICK_CHANGE` | a small edit the request spells out in full: which file or symbol, and what it becomes (fix this typo, rename `x` to `y` in one file, set this constant to 5) |
 | `QUICK_ANSWER` | a factual question with no code change |
 
+Judge by what the request asks Ostra to produce, not by its first verb. A request that asks for files to change
+(code, tests, docs pages, UI text) is a changing category even when part of it says explain, check, or
+investigate, because `IMPLEMENT`, `UNIT_TEST`, and `PROMPT` already start with research. Pick `RESEARCH` or
+`QUICK_ANSWER` only when nothing should change.
+
 If two categories fit, pick the one that produces more of the pipeline, because a stage the request did not
 need costs one round and a stage it needed but skipped costs a wrong result. If nothing fits, pick `RESEARCH`.
+
+An `IMPLEMENT` request starts on the light track: research, then reviewed phases built from it. After
+research the Track judge moves it to the full track (spec, fact-check, plan, and approvals) when the research
+shows it needs one, so do not pick `PLAN` or `SPEC` only because a change looks large.
 
 Pick `QUICK_CHANGE` only when a developer could make the edit without reading anything beyond the lines
 it touches, because it skips research, the spec, the plan, and review. A request that needs a decision, spans
 more than a few lines, changes behavior other code depends on, or asks for tests or docs is `IMPLEMENT`.
 
+An edit to an AI prompt, a `SKILL.md`, an agent file, or a judge prompt under `assets/` is `PROMPT` even when
+the request spells out the whole edit, because prompt-generation applies the prompt writing rules and a quick
+change does not.
+
 **Projects.** Include a project when the user pinned it, when the request names it or its area, or when the
-change lands in it. With one project in the workspace, it is always the only project in scope. When
+change lands in it. Match each part of the request to the project whose areas cover it: a request to add a
+field on the server and show it in a screen lands in the server project and in the project that holds the
+screen. With one project in the workspace, it is always the only project in scope. When
 the request names none and several exist, include every project whose module map covers what the request
 touches, and no others.
 

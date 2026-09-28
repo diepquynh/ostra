@@ -28,6 +28,7 @@ export const ANSWER_KIND: Record<GateKindName, AnswerKind> = {
   skill_approval: "skills",
   execution_failed: "choice",
   budget_reached: "choice",
+  implementation_review: "choice",
 };
 
 export const OTHER = "__other__";
@@ -98,7 +99,8 @@ export type ChoiceGateKind =
   | "phase_blocked"
   | "harness_failure"
   | "execution_failed"
-  | "budget_reached";
+  | "budget_reached"
+  | "implementation_review";
 
 export type ChoiceOption = {
   /** The option string the engine's fold matches on. */
@@ -147,6 +149,16 @@ export const CHOICES: Record<ChoiceGateKind, ChoiceOption[]> = {
   budget_reached: [
     { option: "raise", label: "Raise the budget", variant: "primary", text: "optional" },
     { option: "stop", label: "Stop the session", variant: "danger", text: "none" },
+  ],
+  implementation_review: [
+    { option: "done", label: "Accept the implementation", variant: "primary", text: "none" },
+    {
+      option: "feedback",
+      label: "Send feedback",
+      variant: "default",
+      text: "required",
+      missing: "Describe what to change first. Ostra builds it as a reviewed revision.",
+    },
   ],
 };
 
