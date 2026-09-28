@@ -32,6 +32,23 @@ development lifecycle, where each stage has a defined output and a gate you answ
 > [its Windows section](docs/security/sandboxing.md#windows) covers what the monitor reacts to and what stays open
 > until Windows has a sandbox.
 
+## When should you use Ostra
+
+Use Ostra when a change costs more in coordination than in typing:
+
+- **Your system has many moving components.** One feature touches several services, libraries, or
+  repositories, and you spend most of the time iterating across them. Ostra works over every project in a
+  workspace, so research, plan, build, and review see all of them at once.
+- **A feature needs a thorough read of the codebase first.** The research and spec stages map the code and
+  check the idea against it before any code is written, and the fact-check stage verifies what the spec claims.
+- **You are close to a deadline and still need to sleep.** A session keeps working through its stages while
+  you are away, and it stops at a gate or a budget limit instead of spending without bound.
+- **You do not want to watch a terminal.** Ostra runs in a browser tab, sends a notification when a gate
+  needs your answer, and keeps the whole history of each session on its board.
+
+For a one-line fix or a quick question, a single agent in a terminal is faster, because the pipeline's
+stages and gates add time that a small change does not need.
+
 ## Build and run
 
 ### Quick start
