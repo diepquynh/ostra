@@ -105,6 +105,9 @@ pub struct Extras {
     pub context_files: Vec<PathBuf>,
     /// Rule J1: what the user said at an earlier gate for this stage, one entry per answer.
     pub user_notes: Vec<String>,
+    /// Rule O2: the key and planned folder of a project this phase must create before anything
+    /// else, because it does not exist yet.
+    pub new_project: Option<String>,
     /// Free-form instructions below the parameters.
     pub task_note: Option<String>,
 }
@@ -206,6 +209,7 @@ impl Block {
         self.paths("Prior phase reports", &e.prior_reports);
         self.paths("Context files", &e.context_files);
         self.list("User notes", &e.user_notes);
+        self.opt("New project", e.new_project.as_deref());
         if let Some(note) = e.task_note.as_deref().filter(|n| !n.trim().is_empty()) {
             let _ = writeln!(self.0, "\n{}", note.trim());
         }
@@ -589,6 +593,47 @@ impl SpawnParams for QuickAnswerParams {
     }
 }
 
+/// Rule O5: the advisor looks at one failed step and says how to continue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AdvisorParams {
+    pub common: Common,
+    /// The agent and mode of the step, such as `initializer generate-inventory`.
+    pub failed_step: String,
+    /// The error, the stuck report, or the engine's finding, verbatim.
+    pub problem: String,
+    /// The failed run's own spawn block.
+    pub step_inputs: String,
+    /// The failed run's submit payload, as JSON, when it made one.
+    pub step_result: Option<String>,
+    /// What the step is for, such as the project context a created project's init works from.
+    pub context: Option<String>,
+    /// Guidance earlier advice gave this step, which did not fix it.
+    pub earlier_guidance: Vec<String>,
+}
+
+impl SpawnParams for AdvisorParams {
+    fn agent(&self) -> AgentName {
+        AgentName::Advisor
+    }
+    fn common(&self) -> &Common {
+        &self.common
+    }
+    fn render(&self) -> String {
+        let mut b = Block::new();
+        b.line("Failed step", &self.failed_step);
+        b.line("Problem", &self.problem);
+        b.line("Step inputs", &self.step_inputs);
+        b.opt("Step result", self.step_result.as_deref());
+        b.opt("Step context", self.context.as_deref());
+        b.list("Earlier guidance", &self.earlier_guidance);
+        b.common(&self.common);
+        b.finish()
+    }
+    fn to_json(&self) -> Value {
+        json(self)
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Initializer modes
 // ---------------------------------------------------------------------------------------------
@@ -596,12 +641,16 @@ impl SpawnParams for QuickAnswerParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InitDetectParams {
     pub common: Common,
+    /// Rule O5: the advisor's instructions after an earlier run of this step failed.
+    pub advisor_guidance: Option<String>,
     pub user_focus: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InitAdoptParams {
     pub common: Common,
+    /// Rule O5: the advisor's instructions after an earlier run of this step failed.
+    pub advisor_guidance: Option<String>,
     pub source_harness: String,
     pub source_runtime_dir: String,
     pub source_skills_dir: String,
@@ -610,6 +659,8 @@ pub struct InitAdoptParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InitScoutParams {
     pub common: Common,
+    /// Rule O5: the advisor's instructions after an earlier run of this step failed.
+    pub advisor_guidance: Option<String>,
     pub slice: String,
     pub slice_paths: Vec<String>,
     pub stack_reference: PathBuf,
@@ -619,6 +670,8 @@ pub struct InitScoutParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InitProposeParams {
     pub common: Common,
+    /// Rule O5: the advisor's instructions after an earlier run of this step failed.
+    pub advisor_guidance: Option<String>,
     pub scout_findings: Vec<PathBuf>,
     pub scout_plan: PathBuf,
 }
@@ -626,6 +679,8 @@ pub struct InitProposeParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InitGenerateSkillParams {
     pub common: Common,
+    /// Rule O5: the advisor's instructions after an earlier run of this step failed.
+    pub advisor_guidance: Option<String>,
     pub skill_name: String,
     /// `creation`, `convention`, or `module-hub`.
     pub skill_kind: String,
@@ -638,6 +693,8 @@ pub struct InitGenerateSkillParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct InitGenerateInventoryParams {
     pub common: Common,
+    /// Rule O5: the advisor's instructions after an earlier run of this step failed.
+    pub advisor_guidance: Option<String>,
     /// JSON array of `{name, kind, component_type, path}`.
     pub generated_skills: String,
     /// JSON array of `{name, kind, component_type, path}`.
@@ -673,6 +730,7 @@ macro_rules! init_impl {
                 let mut $b = Block::new();
                 $b.line("Mode", $mode.as_str());
                 $body
+                $b.opt("Advisor guidance", $s.advisor_guidance.as_deref());
                 $b.common(&$s.common);
                 $b.finish()
             }
@@ -804,6 +862,10 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("projects_in_scope", &["Repos in scope"], Kind::Text),
     ("master_plan", &["Master plan"], Kind::Path),
     ("findings", &["Findings"], Kind::Text),
+    ("failed_step", &["Failed step"], Kind::Text),
+    ("problem", &["Problem"], Kind::Text),
+    ("step_inputs", &["Step inputs"], Kind::Text),
+    ("step_result", &["Step result"], Kind::Text),
 ];
 
 const COMMON: [&str; 4] = ["workspace_root", "repo_root", "session_dir", "repo_key"];
@@ -840,6 +902,7 @@ fn contract(
         AgentName::PromptGeneration => (vec!["task", "target_files", "report_file"], vec![]),
         AgentName::ModuleDocumentation => (vec!["implementer_reports", "report_file"], vec![]),
         AgentName::QuickAnswer => (vec!["question"], vec![]),
+        AgentName::Advisor => (vec!["failed_step", "problem", "step_inputs"], vec![]),
         AgentName::Initializer => {
             let extra: Vec<&'static str> = match mode {
                 Some("detect") => vec![],

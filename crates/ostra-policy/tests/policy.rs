@@ -79,6 +79,7 @@ impl Fx {
             sandbox_decoys: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
+            creates_project: false,
         }
     }
 
@@ -1913,4 +1914,139 @@ fn shp_win(p: impl AsRef<Path>) -> String {
         .to_string_lossy()
         .trim_start_matches(r"\\?\")
         .to_string()
+}
+
+fn project_create() -> ToolCall {
+    ToolCall::new(
+        "ProjectCreate",
+        json!({"key": "notes-mcp", "stack": "rust", "purpose": "An MCP server for the team's notes.",
+               "requirements": ["Rust 2024", "rmcp 3.5 over stdio"]}),
+    )
+}
+
+/// The implementer of a phase the plan puts in `notes-mcp`, which does not exist yet.
+fn creator(f: &Fx) -> ExecContext {
+    let mut ctx = f.ctx(AgentName::Implementer);
+    ctx.project_key = "notes-mcp".into();
+    ctx.repo_root = f.session_dir.clone();
+    ctx.creates_project = true;
+    ctx
+}
+
+// Rule O1: creating a project asks the user in every mode that allows writes, even bypass and an
+// allow rule; a deny rule refuses it, plan mode refuses it, and only YOLO answers it.
+#[test]
+fn project_create_always_asks_unless_yolo() {
+    let f = fx();
+    let call = project_create();
+    for mode in [
+        PermissionMode::Default,
+        PermissionMode::AcceptEdits,
+        PermissionMode::Bypass,
+    ] {
+        let mut ctx = creator(&f);
+        ctx.permission_mode = mode;
+        ctx.permissions.allow = vec!["ProjectCreate".into()];
+        let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+        match p.check(&call) {
+            PolicyDecision::Ask { reason, rule } => {
+                assert_eq!(rule.rule, "manage");
+                assert!(
+                    reason.starts_with("Create project `notes-mcp` (rust)"),
+                    "{reason}"
+                );
+            }
+            other => panic!("{mode:?}: expected an ask, got {other:?}"),
+        }
+        assert_eq!(
+            p.allow_rule_suggestion(&call),
+            None,
+            "no rule stands in for the user"
+        );
+        p.set_yolo(true);
+        match p.check(&call) {
+            PolicyDecision::Allow { rule: Some(r) } => assert_eq!(r.rule, "yolo"),
+            other => panic!("{mode:?} under YOLO: expected allow, got {other:?}"),
+        }
+    }
+    let mut ctx = creator(&f);
+    ctx.permissions.deny = vec!["ProjectCreate".into()];
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    p.set_yolo(true);
+    denied(&p, &call, "permission rule `ProjectCreate`");
+    let mut ctx = creator(&f);
+    ctx.permission_mode = PermissionMode::Plan;
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    denied(&p, &call, "plan mode");
+}
+
+// Rule O2: only the implementer of a phase in a project the plan names as new creates it, only
+// that key, and only with a well-formed call, which is refused before the user is asked.
+#[test]
+fn project_create_is_guarded() {
+    let f = fx();
+    let call = project_create();
+    for agent in [AgentName::GenerateSpec, AgentName::Plan, AgentName::Explore] {
+        let mut ctx = creator(&f);
+        ctx.agent = agent;
+        let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+        p.set_yolo(true);
+        assert_eq!(guard_of(&p, &call), "manage-tools", "{agent}");
+    }
+    let p = f.policy(AgentName::Implementer);
+    p.set_yolo(true);
+    denied(&p, &call, "only the implementer of a phase");
+    let mut ctx = creator(&f);
+    ctx.session_id = None;
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    assert_eq!(guard_of(&p, &call), "manage-tools");
+    let p = ExecutionPolicy::new(creator(&f), PolicyInputs::default());
+    let other = ToolCall::new(
+        "ProjectCreate",
+        json!({"key": "other", "stack": "rust", "purpose": "p", "requirements": ["x"]}),
+    );
+    denied(&p, &other, "Call ProjectCreate with key `notes-mcp`");
+    let bad = ToolCall::new(
+        "ProjectCreate",
+        json!({"key": "Notes", "stack": "rust", "purpose": "p", "requirements": ["x"]}),
+    );
+    denied(&p, &bad, "Use a project key");
+    let outside = ToolCall::new(
+        "ProjectCreate",
+        json!({"key": "notes-mcp", "stack": "rust", "purpose": "p", "requirements": ["x"], "folder": "../elsewhere"}),
+    );
+    denied(&p, &outside, "relative to the workspace root");
+}
+
+// Rule O2: before the project exists, its phase's run writes only in its session dir and temp.
+#[test]
+fn a_run_that_creates_a_project_writes_nothing_else_first() {
+    let f = fx();
+    let p = ExecutionPolicy::new(creator(&f), PolicyInputs::default());
+    assert_eq!(
+        guard_of(&p, &write(f.ws.join("notes-mcp/Cargo.toml"))),
+        "manage-tools"
+    );
+    denied(
+        &p,
+        &write(f.repo.join("src/a.rs")),
+        "Call ProjectCreate for `notes-mcp` first",
+    );
+    let shell = ToolCall::new(
+        "Bash",
+        json!({"command": format!("mkdir -p {}", shp(f.ws.join("notes-mcp")))}),
+    );
+    assert_eq!(guard_of(&p, &shell), "manage-tools");
+    allowed(&p, &write(f.session_dir.join("notes.md")));
+}
+
+#[test]
+fn project_list_is_allowed_for_every_agent() {
+    let f = fx();
+    for agent in [AgentName::GenerateSpec, AgentName::Implementer] {
+        let mut ctx = f.ctx(agent);
+        ctx.permission_mode = PermissionMode::Plan;
+        let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+        allowed(&p, &ToolCall::new("ProjectList", json!({})));
+    }
 }

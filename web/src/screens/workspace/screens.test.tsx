@@ -327,6 +327,55 @@ describe("workspace screen", () => {
   });
 });
 
+describe("settings fix", () => {
+  it("offers the fix Ostra can make for a missing route and applies it", async () => {
+    const detail = await api.workspace(WS);
+    const issue = {
+      path: "routing.model.byAgent.advisor",
+      message: "`advisor` has no model route.",
+    };
+    const fix = { path: issue.path, value: "default", label: "Route `advisor` to its default tier (advanced)" };
+    const broken = { ...detail, validation: [issue], fixes: [fix] };
+    const reload = vi.fn();
+    const call = vi.spyOn(api, "fixSettings").mockResolvedValue({ ...detail, validation: [], fixes: [] });
+    const ctx: ConsoleContextValue = {
+      nav: {
+        ws: WS,
+        activeId: "ws:overview",
+        tabs: [],
+        open: () => {},
+        close: () => {},
+        keep: () => {},
+        href: (id) => id,
+      },
+      shell: {
+        openDock: () => {},
+        closeDock: () => {},
+        taskDraft: null,
+        setTaskDraft: () => {},
+        newWorkspace: () => {},
+        addProject: () => {},
+        runSetup: () => {},
+        browseFiles: () => {},
+        theme: "dark",
+        toggleTheme: () => {},
+      },
+      workspace: { detail: broken, reload },
+    };
+    render(
+      <MemoryRouter>
+        <ConsoleContext.Provider value={ctx}>
+          <WorkspaceScreen ws={WS} />
+        </ConsoleContext.Provider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/Route `advisor` to its default tier/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Fix it" }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith(WS));
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+  });
+});
+
 describe("pending commands notice", () => {
   it("shows on workspace screens, links to Settings, and gives way to the full banner there", async () => {
     const real = api.workspace.bind(api);

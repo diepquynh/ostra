@@ -1,6 +1,6 @@
 # Agents
 
-Ostra splits the pipeline's work among twelve agents. Each one does one job, such as researching a request,
+Ostra splits the pipeline's work among thirteen agents. Each one does one job, such as researching a request,
 writing a spec, reviewing a change, or writing tests. Code decides which agent runs, what it is given, and what
 happens with its result. The agent does the work inside its stage and then hands back a structured answer.
 
@@ -17,9 +17,9 @@ agent definitions from disk and a user cannot swap one out by editing a file.
 | Agent | Stage | Default tier | What it does |
 | --- | --- | --- | --- |
 | `explore` | Research | advanced | Researches one task and writes one research document. It is the only pipeline agent that searches the web, and every external page it relies on is cited by URL and date. It reports findings, never requirements. |
-| `generate-spec` | Spec | advanced | Reads every research document for the request and writes one spec: requirements in EARS notation with Given/When/Then criteria, grouped into ordered deliverables. It states what to build, never how. |
+| `generate-spec` | Spec | advanced | Reads every research document for the request and writes one spec: requirements in EARS notation with Given/When/Then criteria, grouped into ordered deliverables. It states what to build, never how. A new codebase gets a new project key in it, which Ostra creates only after the plan is approved. |
 | `fact-check` | Fact-check | advanced | Checks a spec or a plan for claims that would break the implementer and for external facts that no longer trace to a cited page. It runs after every spec and every plan, and Ostra refuses approval without a recorded `PASS`. |
-| `plan` | Plan | advanced | Turns an approved spec into a master plan plus one file per phase. Each step names an exact path, an action, the skills to load, and a verification command. It reads the spec and nothing else. |
+| `plan` | Plan | advanced | Turns an approved spec into a master plan plus one file per phase. Each step names an exact path, an action, the skills to load, and a verification command. It reads the spec and nothing else. It lists a new project the spec names in `new_projects`. |
 | `implementer` | Build | balanced | Writes the code for one plan phase, one review fix, or one inline change, and verifies each step with the project's build command. It never writes tests. |
 | `code-reviewer` | Review | balanced | Reviews the unstaged changes of one review loop against the project's rule set and the phase's requirements, and runs a security scan whose BLOCKER findings no instruction can override. |
 | `execution-path-analyzer` | Test | balanced | Traces every path through the functions a phase changed (branches, early returns, error paths, boundaries) and writes a report that `write-test` turns into one test per path. |
@@ -27,6 +27,7 @@ agent definitions from disk and a user cannot swap one out by editing a file.
 | `module-documentation` | Docs | advanced | Updates the module-hub area references from what the phases actually changed, and checks every documented name against real source. It runs only when the user asks for documentation. |
 | `prompt-generation` | Build | advanced | Writes or edits instruction files (system prompts, `SKILL.md` skills, agent definitions). It runs for prompt requests and when an implementer hands off prompt authoring. |
 | `initializer` | Project setup | balanced | Bootstraps a project in one of six modes: detect, scout, propose, generate-skill, generate-inventory, and adopt. |
+| `advisor` | Rescue | advanced (high effort) | Reads one failed or stuck step of a created project's init, from its inputs, its outputs, and the project, and submits `retry` with guidance for the step's next run or `escalate` with a reason for the user (rule O5). It is read-only. |
 | `quick-answer` | Side panel | balanced | Answers one question about the workspace from the code, project memory, and fetched pages. It never writes files and never changes pipeline state. |
 
 The tier column is a default. Workspace routing settings pick the model behind each tier and can route an agent
@@ -113,7 +114,7 @@ Up to three sections are prepended to the rendered body (`render_prompt` in `cra
   project by symbol instead of by grep.
 - **A tool vocabulary table**, for harness executors only. It lists, for each capability the agent holds, the
   tool that serves it on this harness, plus how to load skills and call Ostra's own tools there. Ostra's own
-  tools (`report`, `document`, `memory`, `memory_recall`, and the submit tool) reach a harness through Ostra's
+  tools (`report`, `document`, `memory`, `memory_recall`, the `project_*` tools, and the submit tool) reach a harness through Ostra's
   MCP server, so in Claude Code the submit tool for the implementer is `mcp__ostra__submit_implementer`.
 
 ## The spawn block: what an agent is told
@@ -235,6 +236,42 @@ The report at the path the engine named, opened as an artifact of the session:
 
 ![An implementer report with Changes, Verification, and Tests to write](../images/console/report.png)
 
+### A new codebase across three agents
+
+A request that needs a codebase no project holds passes through three agents, and none of them creates the
+project before the user has approved the plan that needs it:
+
+- **generate-spec** (Step 4A of its prompt) gives the codebase a new project key, tags its criteria and
+  deliverables with it, and writes one `Constraint` criterion naming the stack plus one per base requirement the
+  evidence settles. Its first deliverable in that project creates the project skeleton.
+- **plan** puts phases in that key, lists it in `new_projects`, and copies the stack, purpose, and base
+  requirements into the context of the first phase in it.
+- **implementer** is the only agent with the `manage_projects` capability. The implementer of that first phase
+  gets a `New project:` spawn line and its session dir as `Repo root:`, reads the phase file, and calls
+  `ProjectCreate` with those facts and nothing else (rule O2). Ostra stops the run once the project exists,
+  initializes it, and starts the phase again inside it. If the user denies the call, the implementer returns
+  stuck with the refusal as its need.
+
+### What the advisor is given
+
+The engine keeps little context about why a step failed, so the advisor's spawn carries what the step saw and
+did, built by `advisor_request` in [`init.rs`](../../crates/ostra-engine/src/init.rs):
+
+| Line | Content |
+| --- | --- |
+| `Failed step:` | The agent and mode, such as `initializer detect` |
+| `Problem:` | The error, the stuck report as its summary and then what it needs, or the engine's own finding (no slices, no skills, a missing inventory) |
+| `Step inputs:` | The failed run's own spawn block |
+| `Step result:` | The failed run's submit payload as JSON, cut at 8,000 characters, because a step can submit `ok` with a result Ostra cannot use |
+| `Step context:` | What the step is for: the created project's stack, purpose, and base requirements |
+| `Earlier guidance:` | Guidance an earlier round gave this step, which did not fix it |
+
+The advisor also reads the failed agent's own instructions. Ostra writes every agent's prompt, rendered for the
+native executor, to `<data dir>/assets/agents/<agent>.md` next to the stack references, and the advisor's prompt
+tells it to read the part for the failed mode. Most init failures are a step that missed one of its own rules,
+such as the rule for a project with no source yet, and advice that asks a step to break its rules (for example to
+scaffold code during initialization) fails again at a guard. The advisor evals below showed both.
+
 ## The repo brief
 
 Below the spawn block, separated by a `---` line, every execution gets a repo brief
@@ -254,12 +291,15 @@ Each agent gets only the sections it uses:
 | execution-path-analyzer | testing, module map |
 | prompt-generation | skills |
 | initializer | nothing, because it is the agent that creates these facts |
+| advisor | stack, commands, skills, module map |
 
 The reviewer is the only agent that receives the complete rule catalog, because it is the only one that
 grades against it.
 
-After the brief come the project's own instruction files (`CLAUDE.md`, `AGENTS.md`, `AGENT.md`), then the
-workspace artifacts (the folder and up to 40 files, see
+After the brief come the project's own instruction files (`CLAUDE.md`, `AGENTS.md`, `AGENT.md`), then, when the
+session created a project, a "Projects created in this session" section with each one's folder, stack, purpose,
+and base requirements from its `ProjectCreate` call, because such a project has no inventory or profile until
+its init runs. Then come the workspace artifacts (the folder and up to 40 files, see
 [Workspace artifacts](workspaces.md#workspace-artifacts)), and then the workspace's custom instructions: first
 the entry for all agents, then the entry for this agent. A file or artifact an instruction tags with `@` is
 listed under that instruction with its absolute path. If a repo ships
@@ -324,6 +364,7 @@ The returns fall into a few families:
 | `CodeReviewerSubmit` | code-reviewer | findings, `security_block`, ledger path, summary |
 | `ReportSubmit` | execution-path-analyzer, write-test, module-documentation, prompt-generation | status, report path, changed files, summary |
 | `InitializerSubmit` | initializer | status, summary, files, a result object that differs per mode |
+| `AdvisorSubmit` | advisor | `action` (`retry` or `escalate`), guidance for the next run, reason for the user |
 | `QuickAnswerSubmit` | quick-answer | the answer in Markdown, its sources |
 
 Agents that do work which can fail carry a `status` of `ok`, `stuck`, or `handoff`. `stuck` means the agent hit

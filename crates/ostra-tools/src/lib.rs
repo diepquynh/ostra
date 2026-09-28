@@ -7,6 +7,7 @@ mod code;
 mod defs;
 mod doc;
 mod fs;
+mod manage;
 mod mcp;
 mod misc;
 mod search;
@@ -28,6 +29,7 @@ pub use code::CodeNav;
 pub use defs::{
     ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search,
 };
+pub use manage::{Manage, ManageConnector};
 pub use mcp::{McpConnector, McpOpened, McpTools};
 pub use web::webfetch_hosts;
 
@@ -53,6 +55,8 @@ pub struct ToolEnvConfig {
     pub code: Option<Arc<dyn CodeNav>>,
     /// The workspace's MCP server tools for this execution.
     pub mcp: Option<Arc<dyn McpTools>>,
+    /// Management calls to Ostra; `None` for an agent without a management capability.
+    pub manage: Option<Arc<dyn Manage>>,
 }
 
 /// Per-execution tool state: the persistent shell working directory, the files read so far, and
@@ -266,6 +270,7 @@ pub async fn execute(
             "Memory" => misc::memory(env, input).await,
             "MemoryRecall" => misc::memory_recall(env, input).await,
             t if ostra_core::agent::is_code_tool(t) => code::run(env, t, input).await,
+            t if ostra_core::manage::is_manage_tool(t) => manage::run(env, t, input).await,
             t if ostra_core::mcp::is_gateway_tool(t) => {
                 mcp::run(env, t, input, cancel.clone()).await
             }
@@ -338,6 +343,7 @@ pub(crate) mod testutil {
             session_dir: session,
             code: None,
             mcp: None,
+            manage: None,
         })
     }
 

@@ -2,7 +2,7 @@ import type { AgentInfo, AgentName, Capability, Effort, ExecutorKind, Tier } fro
 
 const NATIVE: Record<Tier, string> = {
   fast: "anthropic:claude-haiku-4-5-20251001",
-  balanced: "anthropic:claude-sonnet-5",
+  balanced: "anthropic:claude-sonnet-5-5",
   advanced: "anthropic:claude-opus-5-5",
   frontier: "anthropic:claude-fable-5-1",
 };

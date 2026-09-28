@@ -39,6 +39,8 @@ const KNOWN_TOOLS: &[&str] = &[
     "CodeNeighbors",
     "CodeImpact",
     "CodeMap",
+    "ProjectList",
+    "ProjectCreate",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]

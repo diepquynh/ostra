@@ -22,6 +22,7 @@ pub const SELF_PROTECTION: &str = ostra_core::containment::SELF_PROTECTION;
 pub const GIT_METADATA: &str = ostra_core::containment::GIT_METADATA;
 pub const SECRET_READ: &str = ostra_core::containment::SECRET_READ;
 pub const WORKSPACE_ARTIFACTS: &str = "workspace-artifacts";
+pub const MANAGE_TOOLS: &str = "manage-tools";
 
 /// A refusal: which guard, and the message for the model (correction first).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -431,6 +432,9 @@ pub fn check_write(
     raw: &str,
     pending_lesson: Option<&crate::build::Recovery>,
 ) -> Option<Denial> {
+    if let Some(d) = check_creates_project(ctx, roots, target) {
+        return Some(d);
+    }
     let agent = ctx.agent;
     let base = target
         .file_name()
@@ -577,6 +581,53 @@ pub fn check_write(
         }
     }
     None
+}
+
+/// Rule O2: only the implementer of a phase the approved plan puts in a project that does not
+/// exist yet creates a project, only that one, and only with a well-formed call, so the user is
+/// never asked about one that cannot run. (Ostra; no Ultracode source.)
+pub fn check_manage(ctx: &ExecContext, tool: &str, input: &serde_json::Value) -> Option<Denial> {
+    use ostra_core::manage::{PROJECT_CREATE, ProjectCreateInput};
+    if tool != PROJECT_CREATE {
+        return None;
+    }
+    if !ctx.agent.manages_projects() || !ctx.creates_project || ctx.session_id.is_none() {
+        return Some(deny(
+            MANAGE_TOOLS,
+            format!(
+                "Work in the projects already in scope: {} does not create a project here, because only the implementer of a phase the approved plan puts in a new project creates it.",
+                ctx.agent
+            ),
+        ));
+    }
+    let req = match ProjectCreateInput::parse(input) {
+        Ok(r) => r,
+        Err(e) => return Some(deny(MANAGE_TOOLS, e)),
+    };
+    (req.key != ctx.project_key).then(|| {
+        deny(
+            MANAGE_TOOLS,
+            format!(
+                "Call ProjectCreate with key `{}`, the project your phase is in: `{}` is not it.",
+                ctx.project_key, req.key
+            ),
+        )
+    })
+}
+
+/// Rule O2: a run whose project does not exist yet writes nothing outside its session dir and
+/// temp until it creates that project, because no project root exists to hold its work.
+fn check_creates_project(ctx: &ExecContext, roots: &Roots, path: &Path) -> Option<Denial> {
+    if !ctx.creates_project || roots.in_session(path) || roots.in_temp(path) {
+        return None;
+    }
+    Some(deny(
+        MANAGE_TOOLS,
+        format!(
+            "Call ProjectCreate for `{}` first, then end your run: the project does not exist yet, so nothing is written for this phase until it is created and initialized.",
+            ctx.project_key
+        ),
+    ))
 }
 
 /// The `Document` tool's target: its owner writes it, inside this execution's session dir.

@@ -140,15 +140,27 @@ fn fill_assets_dir(text: &str, dir: &Path) -> String {
 }
 
 /// Write every embedded reference and bundled skill under `dir` (`refs/<name>.md`,
-/// `skills/<name>/...`), rewriting only files whose content changed.
+/// `skills/<name>/...`), and each agent's instructions rendered for the native executor
+/// (`agents/<name>.md`), rewriting only files whose content changed.
 pub fn materialize_assets(dir: &Path) -> Result<Vec<PathBuf>, AgentsError> {
-    let mut written = vec![];
+    let mut files: Vec<(PathBuf, String)> = vec![];
     for name in Assets::iter() {
         if !(name.starts_with("refs/") || name.starts_with("skills/")) {
             continue;
         }
-        let target = dir.join(name.as_ref());
-        let content = fill_assets_dir(&asset_text(&name)?, dir);
+        files.push((
+            dir.join(name.as_ref()),
+            fill_assets_dir(&asset_text(&name)?, dir),
+        ));
+    }
+    // Rule O5: the advisor reads a failed agent's own instructions to see what the step may do
+    // and what it must return.
+    for agent in AgentName::ALL {
+        let path = dir.join("agents").join(format!("{}.md", agent.as_str()));
+        files.push((path, render_prompt_in(agent, ExecutorKind::Native, dir)?));
+    }
+    let mut written = vec![];
+    for (target, content) in files {
         if std::fs::read_to_string(&target).ok().as_deref() == Some(content.as_str()) {
             continue;
         }
@@ -159,6 +171,13 @@ pub fn materialize_assets(dir: &Path) -> Result<Vec<PathBuf>, AgentsError> {
         written.push(target);
     }
     Ok(written)
+}
+
+/// Where [`materialize_assets`] writes an agent's instructions.
+pub fn instructions_path(agent: AgentName) -> PathBuf {
+    assets_dir()
+        .join("agents")
+        .join(format!("{}.md", agent.as_str()))
 }
 
 /// Absolute path of a materialized reference, for `Stack reference:` spawn lines.
@@ -257,9 +276,17 @@ pub fn tool_name(capability: &str, agent: AgentName, executor: ExecutorKind) -> 
 /// The agent prompt rendered with the executor's tool names. Harness executors also get a tool
 /// vocabulary section first, because their tools differ from the names the prompts were tuned on.
 pub fn render_prompt(agent: AgentName, executor: ExecutorKind) -> Result<String, AgentsError> {
+    render_prompt_in(agent, executor, &assets_dir())
+}
+
+fn render_prompt_in(
+    agent: AgentName,
+    executor: ExecutorKind,
+    assets: &Path,
+) -> Result<String, AgentsError> {
     let path = format!("agents/{}/prompt.md", agent.as_str());
     let source = asset_text(&path)?;
-    let ctx = mapping::get().context(agent, executor, &assets_dir());
+    let ctx = mapping::get().context(agent, executor, assets);
     let mut body = render_str(&path, &source, &ctx)?;
     if agent_def(agent).capabilities.contains(&Capability::Code) {
         let guide = render_str("code-tools.md", &asset_text("code-tools.md")?, &ctx)?;

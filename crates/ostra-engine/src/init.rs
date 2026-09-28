@@ -17,20 +17,25 @@ pub const MAX_SCOUTS: usize = 6;
 /// choose them at the approval gate.
 pub const MAX_DEFAULT_GENERATE: usize = 8;
 
+/// Rule O5: advisor rounds per failing step of a created project's init before the user is asked.
+pub const MAX_ADVICE: usize = 2;
+
 /// `Stack reference:` is resolved by the spawn factory from this key to the extracted refs file.
 pub const STACK_REFERENCE_NAME: &str = "stack_reference_name";
 
 fn spawn(
     s: &SessionState,
+    i: &InitTrack,
     mode: InitializerMode,
     item: Option<String>,
-    init: BTreeMap<String, String>,
+    mut init: BTreeMap<String, String>,
 ) -> Step {
-    let project = s
-        .init
-        .as_ref()
-        .map(|i| i.project.clone())
-        .unwrap_or_default();
+    let project = i.project.clone();
+    // Rule O5: a step the advisor looked at runs again with its latest guidance.
+    let key = format!("{mode}:{}", item.clone().unwrap_or_default());
+    if let Some(g) = i.advice.get(&key).and_then(|v| v.last()) {
+        init.insert("Advisor guidance".into(), g.clone());
+    }
     let purpose = ExecPurpose::Init {
         mode,
         item: item.clone(),
@@ -177,11 +182,171 @@ fn skill_entry(propose: &Value, name: &str) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// How an init track ends: the init session completes or fails, while a created project's init
+/// records its end and the pipeline goes on (Rule O4).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    Session,
+    CreatedProject,
+}
+
+impl Ending {
+    /// A step finished but left nothing to build on. `exec` is the step to run again.
+    fn fail(self, project: &str, exec: Option<&ExecutionId>, error: &str) -> Step {
+        match (self, exec) {
+            (Ending::CreatedProject, Some(exec)) => Step::RecordInitProblem {
+                project: project.into(),
+                execution: exec.clone(),
+                error: error.into(),
+            },
+            _ => Step::Fail {
+                error: error.into(),
+            },
+        }
+    }
+}
+
+/// Longest step result the advisor is given; the rest is cut, because the start of a result names
+/// its shape and a long tail rarely changes the diagnosis.
+pub const MAX_STEP_RESULT_CHARS: usize = 8_000;
+
+/// Everything the advisor's spawn carries about one failed step (Rule O5).
+#[derive(Debug, Clone)]
+pub struct AdviceInputs {
+    pub project: String,
+    pub session_dir: std::path::PathBuf,
+    /// The failed execution, which a `retry` runs again.
+    pub execution: ExecutionId,
+    /// The agent and mode, such as `initializer detect`.
+    pub failed_step: String,
+    pub problem: String,
+    /// The failed run's own spawn block.
+    pub step_inputs: String,
+    /// The failed run's submit payload, when it made one.
+    pub step_result: Option<Value>,
+    pub context: String,
+    /// Guidance earlier advice gave this step, oldest first.
+    pub earlier: Vec<String>,
+}
+
+/// The label of a failed step, as the advisor sees it: `initializer scout api`.
+pub fn failed_step_label(agent: AgentName, purpose: &ExecPurpose) -> String {
+    match purpose {
+        ExecPurpose::Init { mode, item } => match item {
+            Some(it) => format!("initializer {mode} {it}"),
+            None => format!("initializer {mode}"),
+        },
+        _ => agent.to_string(),
+    }
+}
+
+/// The advisor's spawn for one failed step. The planner builds it from the session, and the advisor
+/// evals from a scenario, so both give the advisor the same inputs.
+pub fn advisor_request(a: AdviceInputs) -> SpawnRequest {
+    let mut init = BTreeMap::new();
+    init.insert("Failed step".into(), a.failed_step);
+    init.insert("Problem".into(), a.problem);
+    init.insert(
+        "Step inputs".into(),
+        if a.step_inputs.trim().is_empty() {
+            "none recorded".into()
+        } else {
+            a.step_inputs
+        },
+    );
+    if let Some(r) = &a.step_result {
+        let text = serde_json::to_string_pretty(r).unwrap_or_default();
+        let text = if text.chars().count() > MAX_STEP_RESULT_CHARS {
+            let cut: String = text.chars().take(MAX_STEP_RESULT_CHARS).collect();
+            format!("{cut}\n(cut at {MAX_STEP_RESULT_CHARS} characters)")
+        } else {
+            text
+        };
+        init.insert("Step result".into(), text);
+    }
+    init.insert("Step context".into(), a.context);
+    if !a.earlier.is_empty() {
+        init.insert(
+            "Earlier guidance".into(),
+            serde_json::to_string(&a.earlier).unwrap_or_default(),
+        );
+    }
+    let purpose = ExecPurpose::Advise {
+        project: a.project.clone(),
+        execution: a.execution,
+        round: a.earlier.len() as u32 + 1,
+    };
+    SpawnRequest {
+        agent: AgentName::Advisor,
+        stage: crate::state::stage_of(&purpose),
+        purpose,
+        project: a.project,
+        session_dir: a.session_dir,
+        inputs: SpawnInputs {
+            init,
+            ..Default::default()
+        },
+        resumes: None,
+    }
+}
+
+/// Rule O5: the advisor's next look at a failed step of a created project's init.
+fn advise(s: &SessionState, i: &InitTrack, exec: &ExecutionId, err: &str, focus: &str) -> Step {
+    let rec = s.executions.get(exec);
+    let inputs = AdviceInputs {
+        project: i.project.clone(),
+        session_dir: s.project_session_dir(&i.project),
+        execution: exec.clone(),
+        failed_step: rec
+            .map(|r| failed_step_label(r.agent, &r.purpose))
+            .unwrap_or_default(),
+        problem: err.to_string(),
+        step_inputs: rec.map(|r| r.spawn_block.clone()).unwrap_or_default(),
+        step_result: rec
+            .and_then(|r| r.result.as_ref())
+            .and_then(|r| r.submit.clone()),
+        context: focus.to_string(),
+        earlier: i
+            .advice
+            .get(&s.init_step_key(exec))
+            .cloned()
+            .unwrap_or_default(),
+    };
+    Step::Spawn(Box::new(advisor_request(inputs)))
+}
+
 pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let Some(i) = &s.init else { return };
+    plan_track(s, i, s.request.trim(), Ending::Session, push);
+}
+
+/// Rule O4: the init of every project an agent created, seeded from its `ProjectCreate` call.
+pub fn plan_created(s: &SessionState, push: &mut dyn FnMut(Step)) {
+    for c in &s.created_projects {
+        if let Some(i) = s.project_inits.get(&c.key).filter(|i| !i.finished) {
+            let focus = InitTrack::created_focus(c);
+            plan_track(s, i, &focus, Ending::CreatedProject, push);
+        }
+    }
+}
+
+fn plan_track(
+    s: &SessionState,
+    i: &InitTrack,
+    focus: &str,
+    ending: Ending,
+    push: &mut dyn FnMut(Step),
+) {
     let project = i.project.clone();
     if let Some((exec, err)) = &i.failed {
-        if i.failed_gate.is_none() {
+        if i.failed_gate.is_some() || i.advising.is_some() {
+            return;
+        }
+        // Rule O5: the advisor looks at a created project's failed step before the user does.
+        let rounds = i.advice.get(&s.init_step_key(exec)).map_or(0, Vec::len);
+        if ending == Ending::CreatedProject && !i.escalated && rounds < MAX_ADVICE {
+            push(advise(s, i, exec, err, focus));
+        } else {
             push(failed_gate(exec, &project, err));
         }
         return;
@@ -192,10 +357,10 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let Some(detect) = &i.detect_result else {
         if i.detect.is_none() {
             let mut init = BTreeMap::new();
-            if !s.request.trim().is_empty() {
-                init.insert("User focus".into(), s.request.clone());
+            if !focus.is_empty() {
+                init.insert("User focus".into(), focus.to_string());
             }
-            push(spawn(s, InitializerMode::Detect, None, init));
+            push(spawn(s, i, InitializerMode::Detect, None, init));
         }
         return;
     };
@@ -204,10 +369,11 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let slices = slices(detect);
     // Rule I1: no slices is a complete existing skill setup, so propose reconciles it without scouts.
     if slices.is_empty() && existing_skill_count(detect) == 0 {
-        push(Step::Fail {
-            error: "Detect found no slices to scout and no existing skills, so there is nothing to build skills from."
-                .into(),
-        });
+        push(ending.fail(
+            &project,
+            i.detect.as_ref(),
+            "Detect found no slices to scout and no existing skills, so there is nothing to build skills from.",
+        ));
         return;
     }
     let mut scouts_done = true;
@@ -230,7 +396,13 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
                     },
                 );
                 init.insert("Scout plan".into(), scout_plan.clone());
-                push(spawn(s, InitializerMode::Scout, Some(slug.clone()), init));
+                push(spawn(
+                    s,
+                    i,
+                    InitializerMode::Scout,
+                    Some(slug.clone()),
+                    init,
+                ));
             }
         }
     }
@@ -243,7 +415,7 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
             let mut init = BTreeMap::new();
             init.insert("Scout findings".into(), findings);
             init.insert("Scout plan".into(), scout_plan);
-            push(spawn(s, InitializerMode::Propose, None, init));
+            push(spawn(s, i, InitializerMode::Propose, None, init));
         }
         return;
     };
@@ -251,10 +423,11 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
     let Some(decisions) = &i.decisions else {
         let skills = proposals(propose);
         if skills.is_empty() {
-            push(Step::Fail {
-                error: "Scouting found no recurring components, so there are no skills to propose."
-                    .into(),
-            });
+            push(ending.fail(
+                &project,
+                i.propose.as_ref(),
+                "Scouting found no recurring components, so there are no skills to propose.",
+            ));
             return;
         }
         push(Step::OpenGate {
@@ -294,6 +467,7 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
                         init.insert("Scout findings".into(), findings.clone());
                         push(spawn(
                             s,
+                            i,
                             InitializerMode::GenerateSkill,
                             Some(name.clone()),
                             init,
@@ -323,10 +497,14 @@ pub fn plan_init(s: &SessionState, push: &mut dyn FnMut(Step)) {
             );
             init.insert("Proposal".into(), proposal_path);
             init.insert("Scout findings".into(), findings);
-            push(spawn(s, InitializerMode::GenerateInventory, None, init));
+            push(spawn(s, i, InitializerMode::GenerateInventory, None, init));
         }
         return;
     };
+    if ending == Ending::CreatedProject {
+        push(Step::FinishInit { project });
+        return;
+    }
     let md = format!(
         "# Project initialized\n\nOstra wrote `{}` and `{}`.\n\n- Skills generated: {}\n- Skills reused: {}\n\nLater executions in this project load these skills by path and route work through the inventory.\n\nGeneration report: `{}`\n",
         str_at(inventory, "inventory_path"),

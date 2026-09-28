@@ -111,6 +111,10 @@ fn caps(model: &str) -> Caps {
     if is_model(model, "claude-opus-5") {
         return full(true, true);
     }
+    // Sonnet 5.5: no forced tool choice, as with Opus 5.5, and no server-side fallbacks, as with Sonnet 5.
+    if is_model(model, "claude-sonnet-5-5") {
+        return full(false, false);
+    }
     if [
         "claude-fable-5",
         "claude-mythos-5",
@@ -871,6 +875,8 @@ mod tests {
         assert!(!caps("claude-opus-50").forced_tool_choice);
         assert!(caps("claude-opus-5").fallbacks);
         assert!(!caps("claude-sonnet-5").fallbacks);
+        assert!(!caps("claude-sonnet-5-5").forced_tool_choice);
+        assert!(!caps("claude-sonnet-5-5").fallbacks);
     }
 
     #[test]

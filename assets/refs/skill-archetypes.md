@@ -138,6 +138,12 @@ Integration points: {events published/consumed, queues, external services}.
 **Rules:** every routing-table entry points at a real path. Every reference file is grounded in actual source,
 never generated from memory.
 
+**A project with no source yet** (created moments ago, its folder empty): route the planned paths from the
+approved proposal's module map instead, because the build creates them and the implementer needs to know which
+area a new file belongs to. Mark each planned area `(planned)` in its Area Semantics row, take what it contains
+from the proposal and the project's base requirements, and write no reference file for it, because there is no
+source to ground one in.
+
 ---
 
 ## Archetype D: Test skill

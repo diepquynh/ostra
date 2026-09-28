@@ -394,9 +394,11 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     let mcp = crate::mcp::McpGateway::new(registry.clone());
     let mcp_connector: Arc<dyn ostra_tools::McpConnector> =
         Arc::new(crate::mcp::Connector(mcp.clone()));
+    let management = Arc::new(crate::manage::Management::default());
     let native = Arc::new(
         NativeExecutor::new(providers.clone(), skill_resolver(), Some(code_nav.clone()))
-            .with_mcp(mcp_connector.clone()),
+            .with_mcp(mcp_connector.clone())
+            .with_manage(management.clone()),
     );
     let notifier = Arc::new(Notifier::new(
         vapid_keys(&registry)?,
@@ -415,6 +417,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     harness.set_write_sink(touches.clone());
     harness.set_code_nav(code_nav);
     harness.set_mcp(mcp_connector);
+    harness.set_manage(management.clone());
     let shared = Arc::new(Shared {
         global_path,
         global_cache: RwLock::new(global),
@@ -443,6 +446,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         nav: Default::default(),
     });
     code_tools.bind(&app);
+    management.bind(&app);
     // Only sandboxes use the socket, and Windows has neither; unsandboxed harness hooks reach
     // `/internal/*` over loopback HTTP.
     #[cfg(unix)]

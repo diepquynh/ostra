@@ -361,6 +361,7 @@ async fn main() {
                 Default::default()
             },
             sandbox_blocked_ports: vec![],
+            creates_project: false,
         },
         resume: resume_sid.map(|sid| ResumeInfo {
             from: ExecutionId::new(),
@@ -611,6 +612,7 @@ async fn pause_probe(args: &[String]) {
             sandbox_decoys: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
+            creates_project: false,
         },
         resume,
         harness_session_id: sid,
@@ -769,6 +771,7 @@ async fn inspect_probe(args: &[String]) {
             sandbox_decoys: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
+            creates_project: false,
         },
         resume: Some(ResumeInfo {
             from: ExecutionId::new(),

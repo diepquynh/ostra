@@ -83,6 +83,8 @@ pub struct WorkspaceDetail {
     pub providers: Vec<ProviderStatus>,
     /// Problems with the current settings. Saving refuses settings with problems.
     pub validation: Vec<ValidationIssue>,
+    /// Changes Ostra can make on its own for some of those problems (`POST .../settings/fix`).
+    pub fixes: Vec<SettingsFix>,
     /// Every agent's definition from `agent.toml`, with its routes under the current settings.
     pub agents: Vec<AgentInfo>,
     /// Stacks with a seed reference, the values a project's `stack` offers besides detection.
@@ -98,6 +100,16 @@ pub struct WorkspaceDetail {
     /// The network choice and hosts from `[sandbox]` in the global config, which the workspace's
     /// own choice replaces and its hosts add to.
     pub global_sandbox: GlobalSandbox,
+}
+
+/// A settings change that fixes the validation issue at `path` by setting it to `value`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SettingsFix {
+    pub path: String,
+    pub value: String,
+    /// What the fix does, for a button.
+    pub label: String,
 }
 
 /// The parts of the global `[sandbox]` config a workspace's settings build on.

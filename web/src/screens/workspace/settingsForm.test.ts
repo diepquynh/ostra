@@ -35,7 +35,7 @@ describe("settings form round trip", () => {
   it("keeps per-executor tables, concrete models, efforts and fields the form does not know", () => {
     const s: WorkspaceSettings & { extra?: string } = clone();
     s.routing.model.byAgent.plan = { native: "anthropic:claude-opus-5-5", codex: "gpt-5.6-sol" };
-    s.routing.model.byAgent.explore = "anthropic:claude-sonnet-5";
+    s.routing.model.byAgent.explore = "anthropic:claude-sonnet-5-5";
     s.routing.model.byAgent.mystery = "fast";
     s.routing.effort = {
       byAgent: { plan: "high", explore: "low" },
@@ -47,7 +47,7 @@ describe("settings form round trip", () => {
       kind: "per-executor",
       text: "native = anthropic:claude-opus-5-5, codex = gpt-5.6-sol",
     });
-    expect(f.model.explore).toEqual({ kind: "custom", text: "anthropic:claude-sonnet-5" });
+    expect(f.model.explore).toEqual({ kind: "custom", text: "anthropic:claude-sonnet-5-5" });
     expect(fromForm(f, s).settings).toEqual(s);
   });
 

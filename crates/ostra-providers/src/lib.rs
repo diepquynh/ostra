@@ -787,8 +787,8 @@ mod tests {
                 .any(|s| s.name == "anthropic" && s.has_key && s.source == "env:TEST")
         );
         assert!(status.iter().any(|s| s.name == "openai" && !s.has_key));
-        let (p, m) = providers.for_model("anthropic:claude-sonnet-5").unwrap();
-        assert_eq!((p.name(), m.as_str()), ("anthropic", "claude-sonnet-5"));
+        let (p, m) = providers.for_model("anthropic:claude-sonnet-5-5").unwrap();
+        assert_eq!((p.name(), m.as_str()), ("anthropic", "claude-sonnet-5-5"));
         assert!(matches!(
             providers.for_model("openai:gpt-5.6-sol"),
             Err(ProviderError::NoKey(_))

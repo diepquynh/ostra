@@ -89,6 +89,80 @@ pub fn import_entry(
     }
 }
 
+/// Problems with `dest` as the folder of a new project, on field `path`: it must be new or empty,
+/// outside the workspace's `.ostra`, and neither inside nor around another project. Returns
+/// whether the folder already exists.
+pub fn new_folder_issues(
+    settings: &WorkspaceSettings,
+    root: &Path,
+    dest: &Path,
+    issues: &mut Vec<ValidationIssue>,
+) -> bool {
+    let existed = dest.exists();
+    if existed {
+        let empty = dest.is_dir()
+            && std::fs::read_dir(dest).is_ok_and(|mut entries| entries.next().is_none());
+        if !empty {
+            issues.push(field_issue("path", format!("{} already exists and is not empty. Choose another folder, or import it with Add project.", dest.display())));
+        }
+    }
+    if paths::is_inside(&root.join(paths::RUNTIME_DIR), dest) {
+        issues.push(field_issue(
+            "path",
+            "A project cannot live inside the workspace's .ostra directory.".into(),
+        ));
+    }
+    if let Some(other) = settings
+        .projects
+        .iter()
+        .find(|o| paths::is_inside(&o.path, dest) || paths::is_inside(dest, &o.path))
+    {
+        issues.push(field_issue(
+            "path",
+            format!(
+                "{} overlaps project `{}`. Choose another folder.",
+                dest.display(),
+                other.key
+            ),
+        ));
+    }
+    existed
+}
+
+/// Where a `ProjectCreate` call puts its project (Rule O3): `folder` under the workspace root,
+/// with the key and folder checked like the Add project dialog checks them. Returns the folder and
+/// whether it already existed (empty).
+pub fn create_target(
+    settings: &WorkspaceSettings,
+    root: &Path,
+    req: &ostra_core::manage::ProjectCreateInput,
+) -> Result<(PathBuf, bool), Vec<ValidationIssue>> {
+    let mut issues = vec![];
+    key_and_stack(settings, &req.key, Some(&req.stack), &mut issues);
+    let dest = paths::normalize(&root.join(req.folder()));
+    // A symlinked parent would put the folder outside the workspace once the link resolves.
+    let resolved = dest
+        .ancestors()
+        .find(|a| a.exists())
+        .and_then(|a| paths::canonical(a).ok());
+    let root_real = paths::canonical(root).unwrap_or_else(|_| root.to_path_buf());
+    let inside = paths::is_inside(root, &dest)
+        && dest != root
+        && resolved.is_some_and(|r| paths::is_inside(&root_real, &r));
+    if !inside {
+        issues.push(field_issue(
+            "path",
+            "Give a folder inside the workspace root.".into(),
+        ));
+    }
+    let existed = new_folder_issues(settings, root, &dest, &mut issues);
+    if issues.is_empty() {
+        Ok((dest, existed))
+    } else {
+        Err(issues)
+    }
+}
+
 /// The branch `.git/HEAD` names, or the short commit id of a detached HEAD. Reads the file
 /// directly, because a git process per project per workspace read is too slow. A `.git` file
 /// (a worktree or submodule) points at the real git dir.
@@ -219,6 +293,83 @@ mod tests {
             (again[0].path.as_str(), again[0].message.as_str()),
             ("path", "That folder is already imported as `app`.")
         );
+    }
+
+    #[test]
+    fn create_target_stays_in_the_workspace_and_off_other_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ostra_core::paths::canonical(dir.path()).unwrap().join("ws");
+        std::fs::create_dir_all(root.join("api/src")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        let mut settings = WorkspaceSettings::seeded("ws");
+        settings.projects.push(ProjectEntry {
+            key: "api".into(),
+            path: root.join("api"),
+            stack: None,
+            code_provider: None,
+            language_servers: vec![],
+        });
+        let req = |key: &str, folder: Option<&str>| {
+            ostra_core::manage::ProjectCreateInput::parse(&serde_json::json!({
+                "key": key, "stack": "rust", "purpose": "p", "requirements": ["x"], "folder": folder
+            }))
+            .unwrap()
+        };
+        let messages = |r: Result<(PathBuf, bool), Vec<ValidationIssue>>| -> String {
+            r.unwrap_err()
+                .into_iter()
+                .map(|i| i.message)
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(
+            create_target(&settings, &root, &req("mcp", None)).unwrap(),
+            (root.join("mcp"), false)
+        );
+        assert_eq!(
+            create_target(&settings, &root, &req("mcp", Some("empty"))).unwrap(),
+            (root.join("empty"), true),
+            "an empty folder is used"
+        );
+        assert!(
+            messages(create_target(&settings, &root, &req("api", Some("x"))))
+                .contains("already exists")
+        );
+        assert!(
+            messages(create_target(
+                &settings,
+                &root,
+                &req("mcp", Some("api/tools"))
+            ))
+            .contains("overlaps project `api`")
+        );
+        assert!(
+            messages(create_target(&settings, &root, &req("mcp", Some("api"))))
+                .contains("not empty")
+        );
+        assert!(
+            messages(create_target(
+                &settings,
+                &root,
+                &req("mcp", Some(".ostra/x"))
+            ))
+            .contains(".ostra")
+        );
+        #[cfg(unix)]
+        {
+            let outside = dir.path().join("outside");
+            std::fs::create_dir_all(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+            assert!(
+                messages(create_target(
+                    &settings,
+                    &root,
+                    &req("mcp", Some("link/mcp"))
+                ))
+                .contains("inside the workspace root"),
+                "a symlinked parent cannot lead outside"
+            );
+        }
     }
 
     #[test]

@@ -16,7 +16,7 @@ fn provider(base: String) -> Anthropic {
 }
 
 fn request() -> ChatRequest {
-    let mut r = ChatRequest::new("claude-sonnet-5");
+    let mut r = ChatRequest::new("claude-sonnet-5-5");
     r.system = vec![SystemBlock::cached("You are a test.")];
     r.messages = vec![Message::user_text("Read main.rs")];
     r.tools = vec![ToolDef {
@@ -40,7 +40,7 @@ async fn streams_thinking_text_and_tool_use() {
         .unwrap();
 
     assert_eq!(resp.stop, StopReason::ToolUse);
-    assert_eq!(resp.model, "claude-sonnet-5");
+    assert_eq!(resp.model, "claude-sonnet-5-5");
     assert!(
         matches!(&resp.content[0], Block::Thinking { text, signature } if text == "Need to read the file." && signature == "sig-abc")
     );

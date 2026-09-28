@@ -253,7 +253,7 @@ mod tests {
             "anthropic's listing beats a reseller's"
         );
         assert_eq!(c.price("anthropic:claude-opus-5").unwrap().base.input, 5.0);
-        assert_eq!(c.price("claude-sonnet-5-20260901").unwrap().base.input, 2.0);
+        assert_eq!(c.price("claude-sonnet-5-5-20260901").unwrap().base.input, 2.0);
         assert_eq!(c.price("claude-fable-5-1").unwrap().base.cache_read, 0.25);
         assert!(c.price("claude-opus-50").is_none());
         assert!(c.price("unknown").is_none());
@@ -286,6 +286,6 @@ mod tests {
             cache_read_tokens: 1_000_000,
             ..Default::default()
         };
-        assert!((cost("claude-sonnet-5", &u, 1) - (2.0 + 10.0 + 0.2 + 0.01)).abs() < 1e-9);
+        assert!((cost("claude-sonnet-5-5", &u, 1) - (2.0 + 10.0 + 0.2 + 0.01)).abs() < 1e-9);
     }
 }

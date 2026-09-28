@@ -194,6 +194,7 @@ export type * from "./gen/SessionOptions";
 export type * from "./gen/SessionStatus";
 export type * from "./gen/SessionSummary";
 export type * from "./gen/SetArtifactHidden";
+export type * from "./gen/SettingsFix";
 export type * from "./gen/SetYolo";
 export type * from "./gen/SignInSession";
 export type * from "./gen/SkillAdopt";

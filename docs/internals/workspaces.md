@@ -252,6 +252,25 @@ imported, and must not be inside the workspace's `.ostra/` folder. The path is s
 refusal names its field (`key`, `path`, or `stack`). `POST /api/workspaces/<id>/clone` clones a repository
 into `<workspace>/<key>` or a chosen empty folder and then imports it the same way (HANDOVER 6.4).
 
+### Projects an agent creates
+
+A project can also be created from inside a session, when a request needs a codebase no project holds. The
+spec gives it a new key, the plan puts phases in it, and after the user approves the plan, the implementer of
+its first phase calls `ProjectCreate` with a key, a stack, a purpose, and the base requirements. The user
+approves that call from a permission card in every mode but YOLO (rules O1 and O2,
+[Tools](tools.md#project-management-tools)). The folder rules match a clone's, with one more: the folder is
+relative to the workspace root and must stay inside it once symlinks resolve. Concretely, it must be new or
+empty, outside `.ostra/`, and neither inside nor around another project, and the key must be free. The server
+creates the folder, runs `git init` unless the call says not to, and imports it with its stack, as the Add
+project dialog would.
+
+Such a project starts uninitialized, and pipeline sessions normally refuse uninitialized projects. The session
+that created it is the exception: the project joins that session's scope and is initialized inside it before
+any other work runs in it, and the phase that created it then starts over inside it
+([The pipeline](pipeline.md#a-new-codebase)). The
+initializer seeds its skills from the stack and requirements in the call, because the folder has no code yet.
+Other sessions see it as any other project once its init has finished.
+
 `DELETE /api/workspaces/<id>/projects/<key>` removes the project from `[[projects]]` and from the database's
 `projects` table. It deletes nothing on disk: the project folder, its `.ostra/` files, and the session folders
 that mention it stay. Ostra refuses with a 409 while the project has live work, because removing it would
@@ -419,7 +438,7 @@ database for the session, because the command line does not know which workspace
 | --- | --- |
 | Create request validation and registration | [`crates/ostra-workspace/src/create.rs`](../../crates/ostra-workspace/src/create.rs) |
 | `WorkspaceRt`: open, settings, projects, busy check, `retire`, `unregister` | [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs) |
-| Import checks and the project list's git branch | [`crates/ostra-workspace/src/projects.rs`](../../crates/ostra-workspace/src/projects.rs) |
+| Import checks, a created project's folder checks (`create_target`), and the project list's git branch | [`crates/ostra-workspace/src/projects.rs`](../../crates/ostra-workspace/src/projects.rs) |
 | What a workspace asks of the server | [`crates/ostra-workspace/src/host.rs`](../../crates/ostra-workspace/src/host.rs) |
 | The stored console layout | [`crates/ostra-workspace/src/ui_state.rs`](../../crates/ostra-workspace/src/ui_state.rs) |
 | Opening at startup, `attach`, `delete_workspace`, the `WorkspaceHost` implementation | [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |

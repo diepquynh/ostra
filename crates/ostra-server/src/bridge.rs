@@ -53,6 +53,7 @@ struct Registry {
     write_sink: OnceLock<tokio::sync::mpsc::UnboundedSender<Touch>>,
     code: OnceLock<Arc<dyn ostra_tools::CodeNav>>,
     mcp: OnceLock<Arc<dyn ostra_tools::McpConnector>>,
+    manage: OnceLock<Arc<dyn ostra_tools::ManageConnector>>,
 }
 
 pub struct HarnessRuntime {
@@ -123,6 +124,10 @@ impl HarnessRuntime {
 
     pub fn set_mcp(&self, mcp: Arc<dyn ostra_tools::McpConnector>) {
         let _ = self.registry.mcp.set(mcp);
+    }
+
+    pub fn set_manage(&self, manage: Arc<dyn ostra_tools::ManageConnector>) {
+        let _ = self.registry.manage.set(manage);
     }
 
     fn inner(&self, global: &GlobalConfig) -> Arc<HarnessExecutor> {
@@ -208,6 +213,7 @@ impl Executor for Wrapped {
                 skill_resolver: crate::app::skill_resolver(),
                 code: self.registry.code.get().cloned(),
                 mcp,
+                manage: self.registry.manage.get().and_then(|m| m.open(&spec)),
             })
             .with_private_hosts(ostra_tools::webfetch_hosts(&ctx.permissions.allow)),
             host: host.clone(),
@@ -283,6 +289,11 @@ static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>> = LazyLock::
             .iter()
             .map(|(op, native)| (format!("code_{op}"), *native, Capability::Code)),
     );
+    v.extend(
+        ostra_core::manage::PROJECT_TOOLS
+            .iter()
+            .map(|(name, native)| (name.to_string(), *native, Capability::ManageProjects)),
+    );
     v
 });
 
@@ -302,6 +313,10 @@ impl BridgeServices for ServerBridge {
         // Rule M2: a workspace MCP tool reaches the harness only through Ostra's MCP server,
         // which checks and logs the call when it runs it, so the hook passes it unchecked.
         if ostra_core::mcp::is_gateway_tool(&call.tool) && !r.inspect {
+            return PolicyDecision::Allow { rule: None };
+        }
+        // Rule O1: the same holds for a management tool, so its ask reaches the user once.
+        if ostra_core::manage::is_manage_tool(&call.tool) && !r.inspect {
             return PolicyDecision::Allow { rule: None };
         }
         let id = self.call_id();
@@ -431,7 +446,13 @@ impl BridgeServices for ServerBridge {
         let Some(r) = self.get(execution).filter(|r| !r.inspect) else {
             return vec![];
         };
-        let caps: Vec<Capability> = MCP_TOOLS.iter().map(|(_, _, c)| *c).collect();
+        // Every run gets Ostra's own tools, except management tools, which only an execution
+        // whose agent holds the capability is given a handle for.
+        let caps: Vec<Capability> = MCP_TOOLS
+            .iter()
+            .map(|(_, _, c)| *c)
+            .filter(|c| *c != Capability::ManageProjects || r.env.config().manage.is_some())
+            .collect();
         ostra_tools::definitions(&caps)
             .into_iter()
             .chain(ostra_tools::document_tool_definition(r.env.config().agent))
@@ -608,6 +629,7 @@ mod tests {
             sandbox_decoys: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
+            creates_project: false,
         };
         Arc::new(Running {
             policy: ExecutionPolicy::new(ctx.clone(), Default::default()),
@@ -622,6 +644,7 @@ mod tests {
                 skill_resolver: Arc::new(|_: &str| None),
                 code: None,
                 mcp: Some(Arc::new(Echo)),
+                manage: None,
             }),
             host,
             memory_db: ctx.memory_db.clone(),
@@ -681,5 +704,88 @@ mod tests {
             running(dir.path(), &[], true, Arc::new(Host::default())),
         );
         assert!(bridge.mcp_tools(&id).is_empty());
+    }
+
+    #[derive(Default)]
+    struct AskCounter(Mutex<u32>);
+
+    #[async_trait::async_trait]
+    impl ExecutionHost for AskCounter {
+        fn emit(&self, _: ExecutionDelta) {}
+        async fn ask_permission(&self, _: &ToolCall, _: &str, _: &RuleRef) -> PermissionAnswer {
+            *self.0.lock() += 1;
+            PermissionAnswer::AllowOnce
+        }
+    }
+
+    struct FakeManage;
+
+    #[async_trait::async_trait]
+    impl ostra_tools::Manage for FakeManage {
+        async fn call(&self, tool: &str, input: &Value) -> Result<String, String> {
+            Ok(format!("{tool} {}", input["key"].as_str().unwrap_or("")))
+        }
+    }
+
+    // Rules O1 and O2 on a harness: only an agent with a handle sees the project tools, the hook
+    // passes them, and the MCP handler asks the user once before it runs the call.
+    #[tokio::test]
+    async fn project_tools_through_the_shim_ask_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let bridge = ServerBridge {
+            registry: Arc::new(Registry::default()),
+        };
+        let id = ExecutionId::from("x_1");
+        let host = Arc::new(AskCounter::default());
+        let base = running(dir.path(), &[], false, Arc::new(Host::default()));
+        let listed: Vec<String> = {
+            bridge.registry.running.lock().insert(id.clone(), base);
+            bridge.mcp_tools(&id).into_iter().map(|t| t.0).collect()
+        };
+        assert!(
+            !listed.iter().any(|t| t.starts_with("project_")),
+            "{listed:?}"
+        );
+
+        let mut ctx = running(dir.path(), &[], false, Arc::new(Host::default()))
+            .policy
+            .ctx()
+            .clone();
+        ctx.agent = AgentName::Implementer;
+        ctx.session_id = Some("s1".into());
+        ctx.project_key = "mcp".into();
+        ctx.creates_project = true;
+        let r = Arc::new(Running {
+            policy: ExecutionPolicy::new(ctx.clone(), Default::default()),
+            env: ToolEnv::new(ToolEnvConfig {
+                agent: ctx.agent,
+                repo_root: ctx.repo_root.clone(),
+                workspace_root: ctx.workspace_root.clone(),
+                session_dir: ctx.session_dir.clone(),
+                report_file: None,
+                memory_db: ctx.memory_db.clone(),
+                memory_source: "test".into(),
+                skill_resolver: Arc::new(|_: &str| None),
+                code: None,
+                mcp: None,
+                manage: Some(Arc::new(FakeManage)),
+            }),
+            host: host.clone(),
+            memory_db: ctx.memory_db.clone(),
+            repo: ctx.repo_root.clone(),
+            inspect: false,
+        });
+        bridge.registry.running.lock().insert(id.clone(), r);
+        let listed: Vec<String> = bridge.mcp_tools(&id).into_iter().map(|t| t.0).collect();
+        assert!(listed.contains(&"project_create".to_string()), "{listed:?}");
+        assert!(listed.contains(&"project_list".to_string()), "{listed:?}");
+
+        let args = json!({"key": "mcp", "stack": "rust", "purpose": "p", "requirements": ["x"]});
+        let hook = bridge.policy_check(&id, &ToolCall::new("ProjectCreate", args.clone()));
+        assert_eq!(hook, PolicyDecision::Allow { rule: None });
+        assert_eq!(*host.0.lock(), 0, "the hook does not ask");
+        let out = bridge.mcp_call(&id, "project_create", args).await.unwrap();
+        assert_eq!(out, "ProjectCreate mcp");
+        assert_eq!(*host.0.lock(), 1, "the shim asks once");
     }
 }

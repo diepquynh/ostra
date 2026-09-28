@@ -26,7 +26,7 @@ use tokio::io::AsyncReadExt;
 const PREFIX: &str = "git_credential:";
 const CLONE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const PULL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const QUICK_TIMEOUT: Duration = Duration::from_secs(30);
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
 const TAIL_LINES: usize = 12;
 /// GitHub and GitLab accept any user name with a personal access token.
@@ -702,37 +702,9 @@ pub fn clone_plan(
         }
         _ => ostra_core::slug::is_project_key(&key).then(|| w.root.join(&key)),
     };
-    let mut dest_existed = false;
-    if let Some(d) = &dest {
-        if d.exists() {
-            dest_existed = true;
-            let empty = d.is_dir()
-                && std::fs::read_dir(d).is_ok_and(|mut entries| entries.next().is_none());
-            if !empty {
-                issues.push(field_issue("path", format!("{} already exists and is not empty. Choose another folder, or import it with Add project.", d.display())));
-            }
-        }
-        if paths::is_inside(&w.root.join(paths::RUNTIME_DIR), d) {
-            issues.push(field_issue(
-                "path",
-                "A project cannot live inside the workspace's .ostra directory.".into(),
-            ));
-        }
-        if let Some(other) = settings
-            .projects
-            .iter()
-            .find(|o| paths::is_inside(&o.path, d) || paths::is_inside(d, &o.path))
-        {
-            issues.push(field_issue(
-                "path",
-                format!(
-                    "{} overlaps project `{}`. Choose another folder.",
-                    d.display(),
-                    other.key
-                ),
-            ));
-        }
-    }
+    let dest_existed = dest.as_ref().is_some_and(|d| {
+        ostra_workspace::projects::new_folder_issues(&settings, &w.root, d, &mut issues)
+    });
     match dest {
         Some(dest) if issues.is_empty() => Ok(ClonePlan {
             url,
@@ -791,7 +763,7 @@ pub(crate) fn claim<'a>(w: &'a WorkspaceRt, key: &str, dest: &Path) -> Result<Cl
     })
 }
 
-fn clear_failed(dest: &Path, existed: bool) {
+pub(crate) fn clear_failed(dest: &Path, existed: bool) {
     if !existed {
         let _ = std::fs::remove_dir_all(dest);
         return;

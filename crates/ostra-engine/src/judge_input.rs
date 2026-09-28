@@ -69,6 +69,8 @@ pub fn judge_input(
                         .unwrap_or_default(),
                     if p.initialized {
                         ""
+                    } else if s.created_projects.iter().any(|c| c.key == p.key) {
+                        " (created in this session: initialized when the build starts)"
                     } else {
                         " (not initialized: no pipeline task may target it)"
                     }

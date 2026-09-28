@@ -316,6 +316,12 @@ export function describeEvent(e: SessionEvent): string {
       const how = e.delivery === "now" ? "Context sent now" : "Context queued";
       return `${how}: ${truncate(e.text, 80)}${files}`;
     }
+    case "project_created":
+      return `Project ${e.project.key} created (${e.project.stack}) at ${e.project.path}`;
+    case "project_init_finished":
+      return `Project ${e.project} initialized`;
+    case "init_step_failed":
+      return `Init step of ${e.project} failed: ${truncate(e.error, 80)}`;
     case "session_paused":
       return "Session paused";
     case "session_resumed":

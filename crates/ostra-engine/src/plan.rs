@@ -133,6 +133,18 @@ pub enum Step {
         tests: bool,
         reason: String,
     },
+    /// Rule O4: end a created project's init. The runner checks the inventory and profile first,
+    /// and records a failed step instead when either is missing or broken.
+    FinishInit {
+        project: String,
+    },
+    /// Rule O5: record that a step of a created project's init left nothing usable, so the advisor
+    /// looks at it.
+    RecordInitProblem {
+        project: String,
+        execution: ExecutionId,
+        error: String,
+    },
     Complete {
         report_markdown: Option<String>,
     },
@@ -149,6 +161,12 @@ impl Step {
                 "judge:{}:{}",
                 judge.as_str(),
                 subject.clone().unwrap_or_default()
+            ),
+            // Created projects each run an init in one session, so init spawns carry the project.
+            Step::Spawn(s) if matches!(s.purpose, ExecPurpose::Init { .. }) => format!(
+                "spawn:{}:{}",
+                s.project,
+                serde_json::to_string(&s.purpose).unwrap_or_default()
             ),
             Step::Spawn(s) => format!(
                 "spawn:{}",
@@ -168,6 +186,8 @@ impl Step {
                 ..
             } => format!("autofix:{project}:{phase}:{tests}"),
             Step::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
+            Step::FinishInit { project } => format!("finish-init:{project}"),
+            Step::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
         }
@@ -191,6 +211,8 @@ impl Step {
                 if *tests { " tests" } else { "" }
             ),
             Step::AnnounceBlocked { phase, .. } => format!("blocked phase {phase}"),
+            Step::FinishInit { project } => format!("finish-init {project}"),
+            Step::RecordInitProblem { project, .. } => format!("init-problem {project}"),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
         }
@@ -200,6 +222,7 @@ impl Step {
 fn purpose_summary(p: &ExecPurpose) -> String {
     match p {
         ExecPurpose::Explore { task } => format!("explore#{task}"),
+        ExecPurpose::Advise { project, round, .. } => format!("advise {project} #{round}"),
         ExecPurpose::Spec { round } => format!("spec#{round}"),
         ExecPurpose::FactCheck { target, pass } => format!("fact-check-{}#{pass}", target.as_str()),
         ExecPurpose::Plan { round } => format!("plan#{round}"),
@@ -285,6 +308,21 @@ pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step> {
 
 impl<'a> Planner<'a> {
     fn push(&mut self, mut step: Step) {
+        // Rule O4: nothing but its init and the advisor runs in a created project until the init
+        // ends, because every other agent routes its work by the project's inventory and profile.
+        let held = match &step {
+            Step::Spawn(r) => {
+                !matches!(r.agent, AgentName::Initializer | AgentName::Advisor)
+                    && self.s.awaiting_init(&r.project)
+            }
+            Step::Command { project, .. } | Step::Autofix { project, .. } => {
+                self.s.awaiting_init(project)
+            }
+            _ => false,
+        };
+        if held {
+            return;
+        }
         // Rule P2: a spawn that replaces a paused run resumes it.
         if let Step::Spawn(req) = &mut step
             && req.resumes.is_none()
@@ -445,6 +483,8 @@ impl<'a> Planner<'a> {
                         return;
                     }
                 }
+                // Rule O4: a project a phase created is initialized before its phases go on.
+                crate::init::plan_created(self.s, &mut |step| self.out.push(step));
                 self.phases();
                 if !self.implementation_review() {
                     return;
@@ -1515,7 +1555,7 @@ impl<'a> Planner<'a> {
 
     fn completion(&mut self) {
         let s = self.s;
-        if !self.nothing_running() {
+        if !self.nothing_running() || s.project_inits.values().any(|i| !i.finished) {
             return;
         }
         match &s.completion_decision {
@@ -1524,12 +1564,16 @@ impl<'a> Planner<'a> {
                 subject: None,
             }),
             Some(id) => {
-                let md = s.decisions.get(id).and_then(|d| {
-                    d.output
-                        .get("report_markdown")
-                        .and_then(|v| v.as_str())
-                        .map(String::from)
-                });
+                let md = s
+                    .decisions
+                    .get(id)
+                    .and_then(|d| {
+                        d.output
+                            .get("report_markdown")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .map(|md| md + &created_projects_section(s));
                 self.push(Step::Complete {
                     report_markdown: md,
                 });
@@ -1593,6 +1637,25 @@ impl<'a> Planner<'a> {
     fn init_flow(&mut self) {
         crate::init::plan_init(self.s, &mut |step| self.out.push(step));
     }
+}
+
+/// Rule O3: the completion report names every project an agent created and how its init ended.
+fn created_projects_section(s: &SessionState) -> String {
+    if s.created_projects.is_empty() {
+        return String::new();
+    }
+    let rows: Vec<String> = s
+        .created_projects
+        .iter()
+        .map(|p| {
+            let init = match s.project_inits.get(&p.key).and_then(|i| i.note.as_deref()) {
+                Some(note) => format!("not initialized: {note} Initialize it from the project list before its next session."),
+                None => "initialized".into(),
+            };
+            format!("- `{}` at `{}` ({}), {init}", p.key, p.path.display(), p.stack)
+        })
+        .collect();
+    format!("\n\n## Projects created\n\n{}\n", rows.join("\n"))
 }
 
 struct ExploreRef(u32);

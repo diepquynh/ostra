@@ -419,6 +419,9 @@ impl ExecutionPolicy {
             let target = self.roots.resolve(&self.start_cwd(call), raw);
             return guards::check_document(&self.ctx, &self.roots, &target, raw);
         }
+        if ostra_core::manage::is_manage_tool(tool) {
+            return guards::check_manage(&self.ctx, tool, &call.input);
+        }
         if tool.starts_with("submit_") {
             let status = call.str_field("status").unwrap_or("ok");
             if status == "ok"
@@ -639,6 +642,22 @@ impl ExecutionPolicy {
                     _ => PolicyDecision::allow(),
                 }
             }
+            Family::Other if ostra_core::manage::changes_ostra(tool) => {
+                // Rule O1: the user answers every call that changes Ostra, in every permission
+                // mode and whatever the allow rules say. YOLO answers it (see `check`), and a
+                // deny rule still refuses it.
+                let subject = Subject::Tool { tool };
+                match self.rule_decision(&subject, &[]) {
+                    Some(d @ PolicyDecision::Deny { .. }) => d,
+                    _ if mode == PermissionMode::Plan => self.mode_default(&subject, mode),
+                    _ => PolicyDecision::ask(
+                        RuleRef::permission("manage"),
+                        ostra_core::manage::ProjectCreateInput::parse(&call.input)
+                            .map(|r| r.ask_reason())
+                            .unwrap_or_else(|_| capitalize(&describe(&subject))),
+                    ),
+                }
+            }
             Family::Other => {
                 let subject = Subject::Tool { tool };
                 // Harness bookkeeping tools, and calls to Ostra's own MCP server, which checks
@@ -660,6 +679,7 @@ impl ExecutionPolicy {
                     tool,
                     "WebSearch" | "Skill" | "Report" | "Document" | "Memory" | "MemoryRecall"
                 ) || ostra_core::agent::is_code_tool(tool)
+                    || ostra_core::manage::is_manage_tool(tool)
                     || tool.starts_with("submit_")
                     || harness_internal;
                 // Rule M1: a workspace MCP server's tools are allowed unless a rule says
@@ -885,6 +905,8 @@ impl ExecutionPolicy {
                 .str_field("url")
                 .and_then(perms::url_host)
                 .map(|h| format!("WebFetch(domain:{h})")),
+            // Rule O1: no allow rule stands in for the user's answer.
+            Family::Other if ostra_core::manage::changes_ostra(&call.tool) => None,
             Family::Other => Some(call.tool.clone()),
         }
     }

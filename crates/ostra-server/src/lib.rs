@@ -15,6 +15,7 @@ pub mod env;
 pub mod files;
 pub mod git;
 pub mod harness_setup;
+pub mod manage;
 pub mod master_key;
 pub mod mcp;
 pub mod nav;

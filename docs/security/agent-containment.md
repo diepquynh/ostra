@@ -188,6 +188,14 @@ A few guards were added on top of the Ultracode ports during Ostra's security re
   delete them (`guard: workspace-artifacts`), because they belong to the user. A hidden artifact is moved into
   the data dir, so the secret-read guard keeps it from every agent without a list of hidden names
   ([Workspace artifacts](../internals/workspaces.md#workspace-artifacts)).
+- **Management tools** (`guard: manage-tools`, rule O2). Only the implementer of a phase the approved plan puts
+  in a new project may call `ProjectCreate` (`creates_project` in its execution context), only with that
+  phase's project key, and only with a well-formed call: a valid key and stack, a purpose and requirements
+  within their limits, and a folder relative to the workspace root with no `..`. Every other call is refused,
+  because a project changes the workspace for every later session and must follow an approved plan, and the
+  shape is checked here so the user is never asked about a call that cannot run. Until the project exists, the
+  same guard refuses any write by that run outside its session dir and temp, because there is no project yet
+  for its phase to write in.
 - **Read-only session.** When a user reopens an ended harness run to look back over it, every tool call in that
   session is refused with `guard: read-only-session`.
 - **Windows path forms** (`guard: windows-path`). See the next section.
@@ -282,6 +290,9 @@ A few asks exist even though a plain reading of the mode would allow the call:
   of them outlives the session and runs outside the policy the next time someone opens the project.
 - **Git outside the project** asks, because git reads a repository's own config, which can name programs.
   Inside the project, the git-metadata guard already protects `.git/`.
+- **Creating a project** (`ProjectCreate`) asks in every mode, bypass included, and no allow rule can stand in
+  for the answer, so its card offers no "always" rule (rule O1). Only YOLO answers it; a deny rule and plan mode
+  refuse it. A new project changes Ostra itself, not only files, so the user decides each one.
 
 ### Workspace MCP tools
 

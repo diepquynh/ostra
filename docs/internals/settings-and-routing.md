@@ -199,7 +199,7 @@ The global config maps each tier to a model once per executor, because each exec
 
 | Executor | Tier table | Default `fast` / `balanced` / `advanced` / `frontier` |
 | --- | --- | --- |
-| `native` | `[tiers.native]` | `anthropic:claude-haiku-4-5-20251001` / `anthropic:claude-sonnet-5` / `anthropic:claude-opus-5-5` / `anthropic:claude-fable-5-1` |
+| `native` | `[tiers.native]` | `anthropic:claude-haiku-4-5-20251001` / `anthropic:claude-sonnet-5-5` / `anthropic:claude-opus-5-5` / `anthropic:claude-fable-5-1` |
 | `harness:claude` | `[tiers.claude]` | `haiku` / `sonnet` / `opus` / `fable` |
 | `harness:codex` | `[tiers.codex]` | `gpt-5.6-luna` / `gpt-5.6-terra` / `gpt-5.6-sol` / `gpt-5.6-sol` |
 | `harness:grok` | `[tiers.grok]` | `grok-4.5` for every tier |
@@ -230,8 +230,18 @@ agent.
 
 Every route key needs a model route. A new workspace is seeded with one for each
 (`WorkspaceSettings::seeded`), taken from Ultracode's inventory profile: research, spec, plan, fact-check,
-module documentation, and prompt generation on `advanced`; review, execution-path analysis, the initializer,
+module documentation, prompt generation, and the advisor on `advanced`; review, execution-path analysis, the initializer,
 and quick answers on `balanced`; judges on `advanced`, because a wrong route costs more than the call.
+
+A workspace saved before an agent existed has no route for it, so an Ostra update that adds an agent (the
+advisor, for example) leaves that workspace with a validation problem, and the Settings screen refuses to save
+until it is fixed. Ostra does not fill the gap on its own, because the route is the user's choice. It offers
+the fix instead: the workspace detail lists, under `fixes`, a `default` route for each route key that has none
+(`keys_without_route` in `crates/ostra-core/src/config.rs`), and `default` resolves to the agent's own default
+tier. The dashboard's settings banner has a button that applies them through
+`POST /api/workspaces/:ws/settings/fix`, which writes only those routes and leaves any other problem for the
+user. On the Settings screen the same fix is a button next to the problem, and it changes the form, so it is
+saved with the rest of the edits.
 
 ### Effort
 
@@ -281,11 +291,11 @@ high = "balanced"
    `byAgent` entry. Low and medium phases would have gone to Codex.
 2. **Model.** `byPhaseComplexity.implementer.high` says `balanced`, a tier.
 3. **Tier table.** The executor is native, so Ostra reads `[tiers.native].balanced`:
-   `anthropic:claude-sonnet-5`.
+   `anthropic:claude-sonnet-5-5`.
 4. **Check.** A native model must be `anthropic:<model>` or `openai:<model>`. It is.
 5. **Effort.** No effort route, so the implementer's `agent.toml` value for `native` applies: `high`.
 
-The result is a `ResolvedRoute { executor: native, model: "anthropic:claude-sonnet-5", tier: balanced }`.
+The result is a `ResolvedRoute { executor: native, model: "anthropic:claude-sonnet-5-5", tier: balanced }`.
 This is `resolve_route` in [`config.rs`](../../crates/ostra-core/src/config.rs), and the same function runs at
 save time and at spawn time.
 
@@ -379,7 +389,7 @@ base_url_env = "ANTHROPIC_BASE_URL" # for a gateway; unset means api.anthropic.c
 # Tier names used by the workspace resolve here, per executor.
 [tiers.native]
 fast = "anthropic:claude-haiku-4-5-20251001"
-balanced = "anthropic:claude-sonnet-5"
+balanced = "anthropic:claude-sonnet-5-5"
 advanced = "anthropic:claude-opus-5-5"
 frontier = "anthropic:claude-fable-5-1"
 

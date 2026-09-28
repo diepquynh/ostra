@@ -505,6 +505,42 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             out.push(c);
         }
     }
+    // Rule O4: a created project's init shows in the build lane, ahead of its phases.
+    for (key, i) in &s.project_inits {
+        let executions: Vec<ExecutionId> = s
+            .executions
+            .values()
+            .filter(|e| e.project == *key && matches!(e.purpose, P::Init { .. } | P::Advise { .. }))
+            .map(|e| e.id.clone())
+            .collect();
+        let gate = i.approval_gate.clone().or_else(|| i.failed_gate.clone());
+        let detail = i.note.clone().or_else(|| {
+            i.advising
+                .as_ref()
+                .map(|_| "The advisor is looking at a failed step.".into())
+        });
+        let status = if i.finished && i.note.is_some() {
+            StageStatus::Skipped
+        } else if i.finished {
+            StageStatus::Done
+        } else if gate.is_some() {
+            StageStatus::Waiting
+        } else if executions.is_empty() {
+            StageStatus::Pending
+        } else {
+            StageStatus::Running
+        };
+        let mut c = card(
+            StageKind::GenerateInventory,
+            format!("Initialize {key}"),
+            status,
+        );
+        c.project = Some(key.clone());
+        c.executions = executions;
+        c.gate = gate;
+        c.detail = detail;
+        out.push(c);
+    }
     let removed = removed_phases(s);
     for p in s.phases.values() {
         let id = p.info.id;

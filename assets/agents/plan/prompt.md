@@ -127,6 +127,8 @@ checks only for the steps you change.
    `{repo-root}/.ostra/INVENTORY.md`. Store the exact command strings (build/test/testOne/format/lint)
    **per repo key**. You will use each repo's `build` for its steps' and phases' verification. When only one
    repo is in scope, this is a single profile and inventory.
+   A deliverable whose repo key is not in scope is a **new project** the spec introduced: see "New projects"
+   under P8. It has no profile or inventory yet.
 5. If the spec's Open Questions section still lists an unresolved question, carry it forward into your plan's
    `clarifying_questions` verbatim. Do not answer it yourself and do not plan around an assumed
    answer.
@@ -287,6 +289,17 @@ missing something necessary, raise it as a Step 4 clarifying question. Never add
   its `skills` list, rendered as its `## Required Skills` section. The implementer agent loads these once at
   phase start, not per step. Name each skill on the steps that need it; a phase-level `skills` entry is only
   for a skill the whole phase needs that no single step names.
+- **New projects.** A spec deliverable whose repo key is not in scope names a project that does not exist yet.
+  Plan its phases like any other, with that key as `repo` and `{workspace-root}/{key}` as `repo_root`, where
+  `{workspace-root}` is your `Workspace root:` line. List it in `repos` with that root, and list its key in the
+  submit call's `new_projects`, because Ostra accepts a phase in an unknown project only when the plan names it
+  there. The implementer of the first phase in it creates the project before anything else and the user
+  approves that, so write into that phase's `context` the project's stack, a one-sentence purpose, and every
+  base requirement from the spec's `Constraint` criteria for it, verbatim: the implementer passes them to Ostra,
+  and Ostra initializes the project from them before the phase goes on. That first phase builds the skeleton
+  (manifest, entry point, build), and its verification uses the build command the requirements imply, because
+  the project has no profile to take one from. Its steps name no skills: none are installed until Ostra
+  initializes it.
 - **P8: Tag repo and dependencies.** Every phase records its **Repo** (the repo key of the repo it changes,
   taken from its deliverable's row in the Delivery Order table) and its **Depends on** set (the phase IDs it
   needs completed first, in any repo). A phase with no prerequisites has `Depends on: none`. Within one
@@ -560,6 +573,7 @@ the plan's step count, or while `phases` differs from the plan's phases in any f
 | `step_count` | integer | Total steps across every phase. |
 | `requirement_coverage` | `{M} of {M}` | Requirements delivered over requirements in the spec (P11). These MUST be equal. |
 | `clarifying_questions` | list | Every question in the plan's `clarifying_questions`, in question-card form: `id` (`Q1`, ...), `question`, `tag`, `options` (2 to 4 `{label, description}` objects, recommended first), `recommended` (`0`), `multi_select`. Empty when there are none. |
+| `new_projects` | list of repo keys | The key of each new project a phase is in ("New projects" under P8). Empty when every phase is in a repo in scope. |
 
 Each `phases` entry carries the scheduling facts for one phase, matching that phase in the plan document
 exactly (`project` is its `repo`):
@@ -591,7 +605,8 @@ Example input:
   "summary": "Implements the order-cancellation contract across the order data and service layers, then the web client's request and response types that consume it. The service layer phase is High complexity because it changes state-transition rules other flows depend on. Mechanical pre-checks: surviving callers: 2 repointed; target-module imports: clean. External constraints: 3 of 4 carried (E4 not needed: no phase touches the upload path). Ignored inputs: none.",
   "step_count": 12,
   "requirement_coverage": "11 of 11",
-  "clarifying_questions": []
+  "clarifying_questions": [],
+  "new_projects": []
 }
 ```
 

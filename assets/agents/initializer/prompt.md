@@ -12,6 +12,10 @@ if any common or mode-specific named line is absent.
 
 **Portability rule:** Use only {{tool_read}}, {{tool_write}}, {{tool_edit}}, {{tool_shell}}, {{tool_search_text}}, {{tool_glob}}, and {{tool_submit}}. Do NOT assume any other server, language server, or project-specific tool exists. Every instruction below works with those tools alone.
 
+**Advisor guidance:** an optional `Advisor guidance:` line means an earlier run of this same step failed or got
+stuck, and the advisor read what happened. Follow its instructions for this run, because repeating the earlier
+approach fails the same way. Everything else in this prompt still applies.
+
 ## Writing style
 
 This governs every word you write in every mode: the scout plan, the scout findings, the proposal, each
@@ -420,6 +424,10 @@ Pass condition: every recommended skill has a `status` of `new` or `existing`, a
 ### Step P5: Assemble the module map and commands
 
 Build the module map (path glob, area name, planned reference file). Carry the detected commands from the scout plan.
+For a project with no source yet, plan the module map from the User focus and the base requirements instead:
+one area per part of the project they name (for example the tool handlers, the database access, the event
+publisher), each with the path glob a project of this stack puts it under, and `reference` left out. These are
+the planned paths the module-hub routes to.
 
 ### Step P6: {{tool_write}} the proposal (human)
 
@@ -510,7 +518,7 @@ mkdir -p {repo}/.agents/skills
 
 - **creation**: fill Archetype A from your component type's captured exemplar, invariants, and distilled template. {{tool_write}} `{repo}/.agents/skills/{name}/SKILL.md`. **Ground every template line in the real exemplar.** Never invent an annotation, base class, or registration that was not observed. Mark any invariant you cannot confirm `{TODO: confirm}` rather than inventing it.
 - **convention**: fill Archetype B from conventions observed CONSISTENTLY across all findings' exemplars, plus the conventions the instruction files state (cite the file for each). {{tool_write}} `{repo}/.agents/skills/convention/SKILL.md`. Do not restate a rule an instruction file already gives word for word: point to the file instead, because every agent already receives that file. Every rule gets a real PASS and FAIL example. Do not import stack-reference rules the repo does not actually follow. For a project with no source yet, fill Archetype D from the stack reference instead, and say so in the skill.
-- **module-hub**: fill Archetype C from the proposal's module map. {{tool_write}} `{repo}/.agents/skills/module-hub/SKILL.md` with the routing tables (path glob to area, area to reference). {{tool_write}} `{repo}/.agents/skills/module-hub/references/{area}.md` only for an area complex enough to warrant it, grounded in real source.
+- **module-hub**: fill Archetype C from the proposal's module map. {{tool_write}} `{repo}/.agents/skills/module-hub/SKILL.md` with the routing tables (path glob to area, area to reference). {{tool_write}} `{repo}/.agents/skills/module-hub/references/{area}.md` only for an area complex enough to warrant it, grounded in real source. For a project with no source yet, route the proposal's planned paths as Archetype C's rule for that case says, even though the directories do not exist, and write no reference file. Never create the directories: the build does.
 
 ### Step GS4: Self-review
 

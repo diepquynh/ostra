@@ -23,6 +23,7 @@ pub const BRIEF_HEADING: &str = "## Repo brief for ";
 pub const INSTRUCTIONS_HEADING: &str = "## Workspace instructions";
 pub const PROJECT_DOCS_HEADING: &str = "## Project instructions";
 pub const ARTIFACTS_HEADING: &str = "## Workspace artifacts";
+const NEW_PROJECTS_HEADING: &str = "## Projects created in this session";
 
 /// An agent instruction file at the project root and its text.
 #[derive(Debug, Clone)]
@@ -76,6 +77,7 @@ fn sections(agent: AgentName) -> &'static [Section] {
         AgentName::PromptGeneration => &[Skills],
         AgentName::QuickAnswer => &[Stack, Commands, Skills, Modules],
         AgentName::Initializer => &[],
+        AgentName::Advisor => &[Stack, Commands, Skills, Modules],
     }
 }
 
@@ -120,6 +122,8 @@ pub struct BriefInput<'a> {
     /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
     pub project_docs: &'a [ProjectDoc],
     pub artifacts: Option<&'a ArtifactsBrief>,
+    /// Rule O3: projects agents created in this session, with the facts from their `ProjectCreate`.
+    pub new_projects: &'a [ostra_core::manage::CreatedProject],
 }
 
 fn squash(s: &str) -> String {
@@ -408,6 +412,32 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
             "{PROJECT_DOCS_HEADING}\n\nThe project's own agent instruction files. Follow them for work in this \
              project unless they conflict with your own rules above, which win.\n\n{}",
             docs.join("\n\n")
+        ));
+    }
+
+    // Rule O3: a created project has no inventory until its init runs, so its facts come from
+    // the call that created it.
+    if !input.new_projects.is_empty() {
+        let rows: Vec<String> = input
+            .new_projects
+            .iter()
+            .map(|p| {
+                let reqs: Vec<String> = p.requirements.iter().map(|r| format!("  - {r}")).collect();
+                format!(
+                    "- `{}` at `{}`, stack {}: {}\n  Base requirements:\n{}",
+                    p.key,
+                    p.path.display(),
+                    p.stack,
+                    p.purpose,
+                    reqs.join("\n")
+                )
+            })
+            .collect();
+        out.push(format!(
+            "{NEW_PROJECTS_HEADING}\n\nAn agent created these projects in this session, and the user approved each one. Ostra \
+             initializes each one right after it is created, before any other work runs in it. Until then its \
+             folder may be empty and it has no inventory or profile to read, so take its facts from here.\n\n{}",
+            rows.join("\n")
         ));
     }
 

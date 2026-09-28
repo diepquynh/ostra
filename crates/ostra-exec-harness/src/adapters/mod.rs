@@ -113,8 +113,8 @@ pub fn ostra_mcp_tool(name: &str) -> Option<String> {
 }
 
 /// `report` to `Report`, `document` to `Document`, `memory` to `Memory`, `memory_recall` to
-/// `MemoryRecall`, `code_callers` to `CodeCallers`, a workspace server's `github__search` to
-/// `mcp__github__search`; `submit_*` keeps its name.
+/// `MemoryRecall`, `code_callers` to `CodeCallers`, `project_create` to `ProjectCreate`, a
+/// workspace server's `github__search` to `mcp__github__search`; `submit_*` keeps its name.
 pub fn canonical_ostra_tool(bare: &str) -> String {
     if ostra_core::mcp::is_gateway_bare(bare) {
         return ostra_core::mcp::canonical(bare);
@@ -124,6 +124,13 @@ pub fn canonical_ostra_tool(bare: &str) -> String {
         "document" => "Document".into(),
         "memory" => "Memory".into(),
         "memory_recall" => "MemoryRecall".into(),
+        other
+            if let Some((_, native)) = ostra_core::manage::PROJECT_TOOLS
+                .iter()
+                .find(|(n, _)| *n == other) =>
+        {
+            native.to_string()
+        }
         other => bare
             .strip_prefix("code_")
             .and_then(|op| ostra_core::agent::CODE_TOOLS.iter().find(|(o, _)| *o == op))

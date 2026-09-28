@@ -14,6 +14,7 @@ export const ROUTE_KEYS: { key: AgentName | "judge"; role: string }[] = [
   { key: "prompt-generation", role: "Writes prompts, skills, and agent definitions." },
   { key: "initializer", role: "Scouts a project and generates its skills and inventory." },
   { key: "quick-answer", role: "Answers side-panel questions, read-only." },
+  { key: "advisor", role: "Diagnoses a failed or stuck step and says how to continue, read-only." },
   { key: "judge", role: "Makes the engine's judgment calls, such as classifying a request." },
 ];
 

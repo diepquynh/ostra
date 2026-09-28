@@ -301,7 +301,7 @@ function FeedbackCard() {
           <Chip tone="warn">YOLO</Chip>
           <Chip mono>harness:codex</Chip>
           <Chip mono outline>
-            claude-sonnet-5
+            claude-sonnet-5-5
           </Chip>
           <Chip tone="bad" icon="shield-alert">
             security block
@@ -879,7 +879,7 @@ function PipelineCard() {
               onInput={(text) => setLines((ls) => [...ls, ["", "› " + text]])}
               lines={lines}
             />
-            <Terminal height={120} title="claude · claude-sonnet-5" meta="xterm.js slot">
+            <Terminal height={120} title="claude · claude-sonnet-5-5" meta="xterm.js slot">
               <div
                 style={{
                   flex: 1,

@@ -164,6 +164,8 @@ export const httpApi = {
   saveSettings: (ws: string, settings: WorkspaceSettings) =>
     request<WorkspaceDetail>("PATCH", `/api/workspaces/${enc(ws)}`, settings),
   deleteWorkspace: (ws: string) => request<void>("DELETE", `/api/workspaces/${enc(ws)}`),
+  /** Applies the fixes `WorkspaceDetail.fixes` lists to the saved settings. */
+  fixSettings: (ws: string) => request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/settings/fix`),
   validateSettings: (ws: string, settings: WorkspaceSettings) =>
     request<ValidationIssue[]>("POST", `/api/workspaces/${enc(ws)}/validate`, settings),
   /** Approves the commands of one folder file, as `pending_commands` showed them. */

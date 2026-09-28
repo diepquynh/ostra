@@ -97,14 +97,25 @@ function Editor({ ws, detail, onSaved }: { ws: string; detail: WorkspaceDetail; 
         {e.elsewhere.length > 0 && (
           <Banner tone="bad" title="Problems to fix before saving">
             <ul className="wp-issues" style={{ paddingLeft: 16 }}>
-              {e.elsewhere.map((i, n) => (
-                <li key={n}>
-                  <button type="button" className="ms-link" onClick={() => e.go(i.path)}>
-                    <code>{i.path}</code>
-                  </button>
-                  : {i.message}
-                </li>
-              ))}
+              {e.elsewhere.map((i, n) => {
+                const fix = e.fixFor(i);
+                return (
+                  <li key={n}>
+                    <button type="button" className="ms-link" onClick={() => e.go(i.path)}>
+                      <code>{i.path}</code>
+                    </button>
+                    : {i.message}
+                    {fix && (
+                      <>
+                        {" "}
+                        <button type="button" className="ms-link" onClick={() => e.applyFix(fix)}>
+                          {fix.label}
+                        </button>
+                      </>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </Banner>
         )}

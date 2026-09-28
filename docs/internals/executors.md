@@ -394,6 +394,8 @@ It serves:
 - `submit_<agent>`, the only submit tool this agent may call.
 - `report`, `document`, `memory`, and `memory_recall`, as the agent's capabilities allow.
 - `code_outline`, `code_find`, and the rest of the code navigation tools.
+- `project_list` and `project_create`, only to an execution whose agent has the `manage_projects` capability
+  (the implementer), because the shim lists them only when the server gave the execution a management handle.
 - Each workspace MCP server's tools, as `<server>__<tool>`. The CLI sees them as `mcp__ostra__<server>__<tool>`.
 
 A `tools/call` goes through the same policy check as a hook, because the hook bridge lets calls to Ostra's own
@@ -489,6 +491,7 @@ Each agent's `agent.toml` sets `timeout_seconds`, which becomes `timeout_secs` i
 | Agent | Budget |
 | --- | --- |
 | quick-answer | 5 minutes |
+| advisor | 15 minutes |
 | code-reviewer, execution-path-analyzer | 20 minutes |
 | explore, generate-spec, fact-check, plan, module-documentation, prompt-generation | 30 minutes |
 | implementer, write-test, initializer | 40 minutes |

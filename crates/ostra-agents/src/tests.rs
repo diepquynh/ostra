@@ -313,6 +313,16 @@ fn materialize_writes_refs_and_skills_with_the_assets_dir_filled() {
     );
     let archetypes = std::fs::read_to_string(dir.path().join("refs/skill-archetypes.md")).unwrap();
     assert!(archetypes.contains(&dir.path().display().to_string()));
+    // Rule O5: every agent's instructions, rendered with native tool names and this assets dir.
+    for agent in AgentName::ALL {
+        let text =
+            std::fs::read_to_string(dir.path().join(format!("agents/{}.md", agent.as_str())))
+                .unwrap();
+        assert!(!text.contains("{{"), "{agent}: an unrendered token");
+    }
+    let initializer = std::fs::read_to_string(dir.path().join("agents/initializer.md")).unwrap();
+    assert!(initializer.contains("## Mode: DETECT"));
+    assert!(initializer.contains(&format!("{}/refs/", dir.path().display())));
     assert!(
         materialize_assets(dir.path()).unwrap().is_empty(),
         "second run rewrites nothing"
@@ -461,6 +471,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
 fn initializer_modes_render_their_mode_and_required_lines() {
     let detect = InitDetectParams {
         common: common(),
+        advisor_guidance: None,
         user_focus: Some("orders".into()),
     };
     let v = roundtrip(&detect);
@@ -468,6 +479,7 @@ fn initializer_modes_render_their_mode_and_required_lines() {
     assert_eq!(detect.to_json()["mode"], "detect");
     let scout = InitScoutParams {
         common: common(),
+        advisor_guidance: None,
         slice: "orders".into(),
         slice_paths: vec!["src/orders".into()],
         stack_reference: "/data/assets/refs/java-spring.md".into(),
@@ -476,6 +488,7 @@ fn initializer_modes_render_their_mode_and_required_lines() {
     assert_eq!(roundtrip(&scout)["slice_paths"], "src/orders");
     let propose = InitProposeParams {
         common: common(),
+        advisor_guidance: None,
         scout_findings: vec![
             "/s/ostra-findings-a.md".into(),
             "/s/ostra-findings-b.md".into(),
@@ -485,6 +498,7 @@ fn initializer_modes_render_their_mode_and_required_lines() {
     roundtrip(&propose);
     let gs = InitGenerateSkillParams {
         common: common(),
+        advisor_guidance: None,
         skill_name: "entity".into(),
         skill_kind: "creation".into(),
         disposition: "generate".into(),
@@ -494,6 +508,7 @@ fn initializer_modes_render_their_mode_and_required_lines() {
     roundtrip(&gs);
     let gi = InitGenerateInventoryParams {
         common: common(),
+        advisor_guidance: None,
         generated_skills: r#"[{"name":"entity","kind":"creation","component_type":"entity","path":".agents/skills/entity/SKILL.md"}]"#.into(),
         reused_skills: "[]".into(),
         proposal: "/s/ostra-proposal.json".into(),
@@ -502,6 +517,7 @@ fn initializer_modes_render_their_mode_and_required_lines() {
     assert!(roundtrip(&gi)["generated_skills"].starts_with('['));
     let adopt = InitAdoptParams {
         common: common(),
+        advisor_guidance: None,
         source_harness: "claude".into(),
         source_runtime_dir: ".ultracode".into(),
         source_skills_dir: ".claude/skills".into(),
@@ -653,6 +669,7 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
         instructions: &instructions,
         project_docs: &[],
         artifacts: None,
+        new_projects: &[],
     };
     let brief = build_brief(&input).unwrap();
     assert!(brief.starts_with("## Repo brief for implementer"));
@@ -701,6 +718,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         instructions: &[],
         project_docs: &[],
         artifacts: None,
+        new_projects: &[],
     };
     let once = augment("Task: x", &input);
     assert_eq!(augment(&once, &input), once);
@@ -737,6 +755,24 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         artifacts: Some(&artifacts),
         ..init_docs
     };
+    let created = [ostra_core::manage::CreatedProject {
+        key: "mcp".into(),
+        path: "/ws/mcp".into(),
+        stack: "rust".into(),
+        purpose: "An MCP server.".into(),
+        requirements: vec!["Rust 2024".into()],
+        execution: "x_1".into(),
+        agent: AgentName::GenerateSpec,
+    }];
+    let with_new = BriefInput {
+        new_projects: &created,
+        ..init_docs
+    };
+    let brief = build_brief(&with_new).unwrap();
+    assert!(brief.contains("## Projects created in this session"));
+    assert!(brief.contains(
+        "- `mcp` at `/ws/mcp`, stack rust: An MCP server.\n  Base requirements:\n  - Rust 2024"
+    ));
     let brief = build_brief(&with_artifacts).unwrap();
     assert!(brief.contains("## Workspace artifacts"));
     assert!(brief.contains("- `/ws/.ostra/artifacts/guides/style.md` (12 bytes)"));

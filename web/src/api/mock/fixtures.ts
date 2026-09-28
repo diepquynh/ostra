@@ -176,6 +176,7 @@ export const workspaceDetail: WorkspaceDetail = {
     },
   ],
   validation: [],
+  fixes: [],
   agents,
   stacks,
   global_permissions: { allow: [], ask: [], deny: ["Bash(rm -rf /*)"] },
@@ -407,7 +408,7 @@ export const executions: ExecutionView[] = [
     { kind: "implement", phase: 2, work: "initial" },
     {
       executor: "native",
-      model: "anthropic:claude-sonnet-5",
+      model: "anthropic:claude-sonnet-5-5",
     },
   ),
   exec(
@@ -420,7 +421,7 @@ export const executions: ExecutionView[] = [
     null,
     { kind: "review", phase: 2, tests: false, iteration: 2 },
     {
-      model: "anthropic:claude-sonnet-5",
+      model: "anthropic:claude-sonnet-5-5",
       summary: "Bash ./gradlew :order:check, waiting for permission",
     },
   ),
@@ -974,7 +975,7 @@ export const completedDetail: SessionDetail = {
 };
 
 export const activity: ActivityItem[] = [
-  { seq: 1, at: at(45), delta: { kind: "status", message: "Started on anthropic:claude-sonnet-5" } },
+  { seq: 1, at: at(45), delta: { kind: "status", message: "Started on anthropic:claude-sonnet-5-5" } },
   {
     seq: 2,
     at: at(45),

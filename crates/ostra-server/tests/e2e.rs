@@ -1764,7 +1764,7 @@ async fn setup_wizard_creates_a_workspace_in_one_call() {
         [None, None],
         "neither folder is a repository"
     );
-    assert_eq!(ws.agents.len(), 12);
+    assert_eq!(ws.agents.len(), 13);
     let plan = ws
         .agents
         .iter()
@@ -4022,4 +4022,348 @@ async fn workspace_artifacts_are_tagged_hidden_edited_and_deleted() {
         .await
         .unwrap();
     assert_eq!(gone.status(), 200, "a hidden artifact can be deleted too");
+}
+
+/// The scripted model for a request that needs a new codebase: the plan puts its one phase in
+/// `mcp`, a new project, whose implementer creates it; the initializer then initializes it and the
+/// phase starts over inside it. Every other agent plays as in [`respond`].
+fn respond_new_project(req: &ChatRequest) -> Result<ChatResponse, ProviderError> {
+    let tools: Vec<&str> = req.tools.iter().map(|t| t.name.as_str()).collect();
+    let submit = tools
+        .iter()
+        .find(|t| t.starts_with("submit_"))
+        .copied()
+        .unwrap_or_default()
+        .to_string();
+    let text = first_user_text(req);
+    let session = PathBuf::from(label(&text, "Session dir"));
+    let repo = PathBuf::from(label(&text, "Repo root"));
+    let ws = PathBuf::from(label(&text, "Workspace root"));
+    let turn = assistant_turns(req);
+    let spec = session.join("ostra-spec-1.md");
+    let plan = session.join("ostra-plan-1.md");
+    let ok = |result: Value| {
+        tool_use_response(
+            &id(),
+            &submit,
+            json!({"status": "ok", "summary": "s", "files": [], "result": result}),
+        )
+    };
+    let write = |path: PathBuf, content: &str| {
+        tool_use_response(
+            &id(),
+            "Write",
+            json!({"file_path": path, "content": content}),
+        )
+    };
+    Ok(match (submit.as_str(), turn) {
+        ("submit_implementer", 0) if text.contains("New project:") => {
+            assert!(tools.contains(&"ProjectCreate"), "{tools:?}");
+            assert_eq!(repo, session, "the run starts from its session dir");
+            tool_use_response(
+                &id(),
+                "ProjectCreate",
+                json!({"key": "mcp", "stack": "rust", "purpose": "An MCP server that greets.",
+                       "requirements": ["Rust 2024 edition", "Serves MCP over stdio"]}),
+            )
+        }
+        ("submit_implementer", _) if text.contains("New project:") => response(
+            vec![Block::text("Waiting for Ostra to stop this run.")],
+            StopReason::EndTurn,
+        ),
+        ("submit_plan", 0) => tool_use_response(
+            &id(),
+            "Document",
+            json!({"path": plan, "document": {
+                "title": "Greeting", "date": "2026-07-28", "spec": spec, "stakes": "High", "stakes_rationale": "r", "summary": "One phase.",
+                "phases": [{"id": 1, "name": "greeting", "deliverable": "D1", "repo": "mcp", "repo_root": ws.join("mcp"), "complexity": "Low", "test_policy": "Skip",
+                    "test_rationale": "A text file.", "description": "d", "context": "This is the first phase. No prior phases.",
+                    "requirements": [{"id": "R1", "statement": "THE SYSTEM SHALL contain greeting.txt."}],
+                    "steps": [{"id": "1.1", "title": "Write the file", "file": "greeting.txt", "change": "Create", "delivers": ["R1"], "action": "Write hello.", "verify": "true", "size": "Small"}],
+                    "verification": "true"}]
+            }}),
+        ),
+        ("submit_plan", _) => tool_use_response(
+            &id(),
+            &submit,
+            json!({"spec_path": spec, "master_plan_path": plan, "phases": [{"id": 1, "deliverable": "D1", "project": "mcp", "title": "greeting", "complexity": "Low", "test_policy": "Skip", "test_rationale": "A text file.", "depends_on": [], "file": session.join("ostra-plan-1-phase-1.md")}], "stakes": "High", "summary": "One phase.", "step_count": 1, "requirement_coverage": "1 of 1", "new_projects": ["mcp"]}),
+        ),
+        ("submit_initializer", _) => match (label(&text, "Mode").as_str(), turn) {
+            ("detect", _) => {
+                assert!(
+                    text.contains("Stack: rust"),
+                    "the focus carries the call: {text}"
+                );
+                ok(
+                    json!({"scout_plan_path": session.join("scout-plan.md"), "stack": "rust", "reference_name": "_generic",
+                    "slices": [{"descriptor": "root", "slug": "root", "paths": ["."]}], "existing_skills": []}),
+                )
+            }
+            ("scout", _) => ok(json!({"findings_path": session.join("findings-root.md")})),
+            ("propose", _) => ok(
+                json!({"proposal_path": session.join("proposal.md"), "skills": [
+                {"name": "convention", "kind": "convention", "status": "new", "recommend": true, "description": "d"}]}),
+            ),
+            ("generate-skill", 0) => write(
+                repo.join(".agents/skills/convention/SKILL.md"),
+                "# Convention\n",
+            ),
+            ("generate-skill", _) => {
+                ok(json!({"path": repo.join(".agents/skills/convention/SKILL.md")}))
+            }
+            ("generate-inventory", 0) => {
+                write(repo.join(".ostra/INVENTORY.md"), "# mcp Inventory\n")
+            }
+            ("generate-inventory", 1) => write(
+                repo.join(".ostra/project.toml"),
+                "stack = \"rust\"\n\n[commands]\nbuild = \"true\"\n",
+            ),
+            ("generate-inventory", _) => ok(
+                json!({"inventory_path": repo.join(".ostra/INVENTORY.md"), "profile_path": repo.join(".ostra/project.toml"), "report_path": session.join("init-report.md")}),
+            ),
+            (mode, _) => panic!("unexpected initializer mode {mode}"),
+        },
+        _ => return respond(req),
+    })
+}
+
+// Rules O1, O3, O4 end to end: ProjectCreate waits for the user's answer, then the project is
+// created and joins the session, and the build initializes it before its phase runs in it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_approved_project_is_created_initialized_and_built() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, app } = boot(root).await;
+    app.shared.providers.register(
+        "mock",
+        Arc::new(ScriptedProvider::named("mock").with_responder(respond_new_project)),
+    );
+    let app_dir = root.join("app");
+    std::fs::create_dir_all(app_dir.join(".ostra")).unwrap();
+    std::fs::write(app_dir.join(".ostra/INVENTORY.md"), "# app Inventory\n").unwrap();
+    std::fs::write(
+        app_dir.join(".ostra/project.toml"),
+        "[commands]\nbuild = \"true\"\n",
+    )
+    .unwrap();
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "e2e", "root": root.join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    client
+        .post(format!("{base}/api/workspaces/{}/projects", ws.id))
+        .json(&json!({"path": app_dir, "key": "app", "stack": null}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let s: SessionSummary = client
+        .post(format!("{base}/api/workspaces/{}/sessions", ws.id))
+        .json(&json!({"request": "Build a greeting MCP server", "options": {"tests": false, "docs": false, "yolo": false}, "projects": []}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let is_ask = |g: &ostra_core::api::GateView| matches!(&g.payload, ostra_core::event::GatePayload::Permission { call, .. } if call.tool == "ProjectCreate");
+    // Approve the spec and the plan, then answer the ProjectCreate card the build raises.
+    let ask = loop {
+        let d = wait_for(&client, &base, s.id.as_str(), |d| {
+            d.gates.iter().any(|g| g.answer.is_none())
+        })
+        .await;
+        let g = d.gates.iter().find(|g| g.answer.is_none()).unwrap().clone();
+        if is_ask(&g) {
+            break g;
+        }
+        assert!(
+            matches!(
+                g.payload,
+                ostra_core::event::GatePayload::SpecApproval { .. }
+                    | ostra_core::event::GatePayload::PlanApproval { .. }
+            ),
+            "{:?}",
+            g.payload
+        );
+        assert!(
+            !root.join("ws/mcp").exists(),
+            "nothing is created before the build"
+        );
+        client
+            .post(format!("{base}/api/gates/{}/answer", g.id))
+            .json(&json!({"answer": {"kind": "approval", "approved": true}}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+    };
+    assert!(
+        ask.explanation
+            .starts_with("Create project `mcp` (rust) in `mcp/`"),
+        "{}",
+        ask.explanation
+    );
+    let ostra_core::event::GatePayload::Permission {
+        suggestion, agent, ..
+    } = &ask.payload
+    else {
+        unreachable!()
+    };
+    assert_eq!(*agent, ostra_core::AgentName::Implementer);
+    assert_eq!(suggestion, &None, "no allow rule is offered");
+    assert!(
+        !root.join("ws/mcp").exists(),
+        "nothing is created before the answer"
+    );
+    client
+        .post(format!("{base}/api/gates/{}/answer", ask.id))
+        .json(&json!({"answer": {"kind": "permission", "answer": "always-in-workspace"}}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    // YOLO answers the skill approval and the implementation review that follow.
+    client
+        .post(format!("{base}/api/sessions/{}/yolo", s.id))
+        .json(&json!({"enabled": true}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let d = wait_for(&client, &base, s.id.as_str(), |d| {
+        matches!(
+            d.summary.status,
+            SessionStatus::Completed | SessionStatus::Failed
+        )
+    })
+    .await;
+    assert_eq!(d.summary.status, SessionStatus::Completed, "{:#?}", d.gates);
+
+    let mcp = ostra_core::paths::canonical(root.join("ws/mcp")).unwrap();
+    assert!(mcp.join(".git").is_dir(), "git init ran");
+    assert_eq!(
+        std::fs::read_to_string(mcp.join("greeting.txt")).unwrap(),
+        "hello\n",
+        "the phase ran in the new project"
+    );
+    assert!(mcp.join(".ostra/INVENTORY.md").exists());
+    let detail: WorkspaceDetail = client
+        .get(format!("{base}/api/workspaces/{}", ws.id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let project = detail.projects.iter().find(|p| p.key == "mcp").unwrap();
+    assert_eq!(project.path, mcp);
+    assert_eq!(project.stack.as_deref(), Some("rust"));
+    assert_eq!(
+        project.init_status,
+        ostra_core::api::InitStatus::Initialized
+    );
+    assert!(
+        d.summary.projects.contains(&"mcp".to_string()),
+        "{:?}",
+        d.summary.projects
+    );
+
+    let settings = std::fs::read_to_string(root.join("ws/.ostra/workspace.toml")).unwrap();
+    assert!(!settings.contains("\"ProjectCreate\""), "{settings}");
+    let agents: Vec<String> = d.executions.iter().map(|e| e.agent.to_string()).collect();
+    let first_init = agents.iter().position(|a| a == "initializer").unwrap();
+    let implementers: Vec<usize> = agents
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| *a == "implementer")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(implementers.len(), 2, "{agents:?}");
+    assert!(
+        implementers[0] < first_init && first_init < implementers[1],
+        "the creating run, then the init, then the phase: {agents:?}"
+    );
+    let report = d.completion.as_deref().unwrap_or_default();
+    assert!(report.contains("## Projects created"), "{report}");
+    assert!(
+        report.contains("`mcp`") && report.contains("initialized"),
+        "{report}"
+    );
+}
+
+/// A workspace saved before an agent existed has no route for it; the detail offers the fix and
+/// `settings/fix` applies it without touching anything else.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_missing_route_is_fixed_in_one_call() {
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, .. } = boot(root).await;
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "fix", "root": root.join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(ws.fixes.is_empty(), "{:?}", ws.fixes);
+    let toml_path = root.join("ws/.ostra/workspace.toml");
+    let text = std::fs::read_to_string(&toml_path).unwrap();
+    let old: String = text
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("advisor ="))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_ne!(old, text, "the seeded settings route the advisor");
+    std::fs::write(&toml_path, &old).unwrap();
+
+    let detail: WorkspaceDetail = client
+        .get(format!("{base}/api/workspaces/{}", ws.id))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        detail
+            .validation
+            .iter()
+            .any(|i| i.path == "routing.model.byAgent.advisor"),
+        "{:?}",
+        detail.validation
+    );
+    assert_eq!(detail.fixes.len(), 1);
+    assert_eq!(detail.fixes[0].path, "routing.model.byAgent.advisor");
+    assert_eq!(detail.fixes[0].value, "default");
+    assert!(detail.fixes[0].label.contains("advanced"), "{}", detail.fixes[0].label);
+
+    let fixed: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces/{}/settings/fix", ws.id))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(fixed.validation.is_empty(), "{:?}", fixed.validation);
+    assert!(fixed.fixes.is_empty());
+    let saved = std::fs::read_to_string(&toml_path).unwrap();
+    assert!(saved.contains("advisor = \"default\""), "{saved}");
 }

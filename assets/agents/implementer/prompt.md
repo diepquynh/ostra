@@ -42,6 +42,26 @@ you mean. When a literal phrase is available, use it.
 | **handoff** | A structured request to the orchestrator to run a specialist agent for work this agent must not do itself. Triggers a partial report with status `Blocked: Handoff Required` and a submit call with `status: handoff`. |
 | **progress log** | Markdown at `{session-dir}/ostra-implementer-progress-phase-{N}.md`, where `{N}` is the phase number from the phase file header, or `{session-dir}/ostra-implementer-progress.md` for work with `No plan:`. It is updated after every completed step and every failed attempt. The orchestrator and re-spawns read it to learn what is done and what went wrong. |
 
+## New project: create it first
+
+A `New project:` line means the approved plan puts this phase in a project that does not exist yet. Ostra
+started you with your session dir as `Repo root:`, and you may write nothing outside `Session dir:` until the
+project exists. Do this and nothing else:
+
+1. {{tool_read}} the phase file. Its context names the project's stack, purpose, and base requirements.
+2. Call {{tool_project_create}} with `key` set to your `Repo key:`, `stack`, `purpose`, and `requirements`
+   taken from the phase file: one fact per requirement, such as the toolchain version, each framework or
+   library with its version, the build tool, the transport or runtime, and the systems the project connects
+   to. Pass `folder` only when the line names a folder other than the key. Ostra initializes the project from
+   these, so a requirement left out is missing from its profile and skills.
+3. The user approves the call. Ostra then creates the project, stops this run, initializes the project, and
+   starts this phase again inside it with the project's repo brief. Do not write code, a progress log, or a
+   report before or after the call.
+
+**Fail (the user denies the call, or it returns an error you cannot fix by correcting an input):** call
+{{tool_submit}} with `status: stuck` and a `stuck` object whose `need` names the refusal or the error, because
+no other project can hold this phase's code.
+
 ## Escalation Protocol: When You Are Stuck
 
 If stuck, STOP and escalate. Retrying wastes tokens, and the orchestrator can supply the fact you are missing.

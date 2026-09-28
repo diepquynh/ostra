@@ -252,8 +252,8 @@ agent can read the toolchain, system headers, and the repo's dependencies withou
   write them (Rule W1).
 - **The user's own caches**: `~/.cargo`, `~/.npm`, `~/.cache`, and `~/Library/Caches` stay read-only, because
   the user's builds on the host run what those caches hold.
-- `<data dir>/assets`, revealed read-only inside the hidden data dir, because agents read skills and references
-  from it.
+- `<data dir>/assets`, revealed read-only inside the hidden data dir, because agents read skills, references, and
+  (the advisor) other agents' rendered instructions from it.
 
 A protected file that does not exist yet still needs to stay uncreatable: otherwise an agent could create
 `.git/hooks/pre-commit` or `~/.zshenv` where there was none. On bubblewrap, Ostra creates a placeholder on the

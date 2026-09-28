@@ -10,4 +10,9 @@ stakes: string, summary: string, step_count: number,
 /**
  * `{M} of {M}`.
  */
-requirement_coverage: string, clarifying_questions: Array<Question>, };
+requirement_coverage: string, clarifying_questions: Array<Question>, 
+/**
+ * Rule O2: keys of projects the plan puts phases in that do not exist yet. The implementer of
+ * the first such phase creates each one.
+ */
+new_projects: Array<string>, };

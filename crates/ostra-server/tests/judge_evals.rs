@@ -1,7 +1,7 @@
 //! Judge routing evals over `tests/evals/judges.toml`. Live and paid, so ignored by default:
 //!
 //! ```text
-//! OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5 OSTRA_EVAL_RUNS=3 \
+//! OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 OSTRA_EVAL_RUNS=3 \
 //!   cargo test -p ostra-server --test judge_evals -- --ignored --nocapture
 //! ```
 //!

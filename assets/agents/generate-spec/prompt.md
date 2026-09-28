@@ -122,7 +122,9 @@ fact-check re-pass then re-verifies text that did not change.
    Whatever you do not carry into the spec is lost to the rest of the pipeline.
 4. **For each repo in scope**, read `{repo-root}/.ostra/project.toml` and
    `{repo-root}/.ostra/INVENTORY.md`. You need the Module/Area Map to name the area each deliverable
-   touches. You do NOT need the commands. The spec carries no build commands.
+   touches. You do NOT need the commands. The spec carries no build commands. A project created in this
+   session has neither file yet: take its stack, purpose, and base requirements from the brief's
+   "Projects created in this session" section instead.
 5. If user answers are given, integrate them. An answer resolves the research documents' `Q{n}` questions and
    is authoritative over anything those documents assumed. Record the resolved value in the requirement it
    settles.
@@ -299,6 +301,33 @@ the criterion. Record its grounding as `no precedent` and add an open question a
 still applies.
 
 ## Step 4: Group criteria into deliverables
+
+### 4A: A new codebase
+
+Before you group, decide whether the request needs a codebase that no repo in scope holds: a new service,
+library, CLI, or server that the request, the research documents, or a user answer places in its own folder.
+When it does, give that codebase a new project key and tag its criteria and deliverables with it, instead of
+putting the code inside a repo in scope or raising an open question about where it should live. Nothing is
+created now: the implementer of its first phase creates the project after the user approves the plan, and the
+user approves the creation itself, so a spec or plan the user rejects leaves nothing behind.
+
+1. Choose a key: lowercase letters, digits, and dashes, named like the workspace's other projects. {{tool_glob}}
+   the `Workspace root:` for a folder of that name and choose another key if one exists.
+2. Tag the new project's criteria and deliverables with the key (K5, S5). Its first deliverable in the delivery
+   order creates the project skeleton: manifest, entry point, and a build that succeeds, because every later
+   deliverable in it builds on that.
+3. Write one `Constraint` criterion stating that `{key}` is a new, standalone project and naming its stack, and
+   one `Constraint` criterion per base requirement the research documents or the user's answers settle: the
+   language and toolchain version, each framework or library with the version an evidence row pins, the build
+   tool, the transport or runtime, and each system it connects to and how. Ground each one (K4). The
+   implementer passes these to Ostra when it creates the project, and Ostra initializes the project from them.
+4. The new project has no profile or inventory, so name its areas from the requirements, and state in
+   `current_behavior` that it does not exist yet.
+
+Do not introduce a new project for work that fits a repo in scope, such as a new module, package, or script
+inside an existing codebase.
+
+### 4B: Group the criteria
 
 Group the criteria into the smallest number of deliverables that satisfies every rule below. A deliverable is a
 **section of the one spec file**. Grouping decides the delivery order and the contract boundaries, never the

@@ -75,6 +75,20 @@ export function MHome({ ws }: { ws: string }) {
             Settings
           </button>{" "}
           before starting work, because an agent whose route does not resolve cannot start.
+          {detail.fixes.length > 0 && (
+            <>
+              {" "}
+              <button
+                type="button"
+                className="mh-inline-link"
+                onClick={() => {
+                  api.fixSettings(ws).then(reload, () => open("ws:settings"));
+                }}
+              >
+                Fix {detail.fixes.length === 1 ? "it" : `${detail.fixes.length}`} now
+              </button>
+            </>
+          )}
         </Banner>
       )}
       {uninitialized.length > 0 && (

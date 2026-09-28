@@ -66,6 +66,8 @@ A `Step` is one unit of work the runner knows how to perform:
 | `Command` | Runs the project's format command or `git add` on a phase's changed files, and appends `CommandRan`. |
 | `Autofix` | Applies review findings whose fix text is exact (`Change \`x\` to \`y\` on line N`), and appends `AutofixApplied`. |
 | `AnnounceBlocked` | Appends `PhaseBlocked`, which also sends a push notification. |
+| `FinishInit` | Ends the init of a project the session created (rule O4): checks that `INVENTORY.md` and a valid `project.toml` exist, then marks the project initialized and appends `ProjectInitFinished`. When a file is missing or invalid it appends `InitStepFailed` against the generate-inventory run instead, so the advisor looks at it (rule O5). |
+| `RecordInitProblem` | Appends `InitStepFailed` for an init step that finished but left nothing to build on, such as a detect with no slices, so the advisor looks at it (rule O5). |
 | `Complete` | Writes the completion report to the session folder and appends `SessionCompleted`. |
 | `Fail` | Appends `SessionFailed`. |
 
@@ -103,7 +105,8 @@ pub fn key(&self) -> String {
 
 A spawn's key is its purpose, for example `{"kind":"review","phase":2,"tests":false,"iteration":1}`. Two
 requests for the same review pass of the same phase have the same key, while the second review pass has a
-different one. The runner keeps a set of in-flight keys per session and skips any step whose key is already
+different one. An initializer spawn's key also names its project, because a session that created two projects
+runs two inits whose detect steps have the same purpose. The runner keeps a set of in-flight keys per session and skips any step whose key is already
 there. The key leaves the set only when the step's work has finished and been appended, at which point the
 state has changed and the planner no longer asks for it.
 
@@ -118,6 +121,10 @@ branches of the planner that reach the same conclusion produce one step.
   executions reaches the budget plus whatever you raised it by, a spawn becomes a `BudgetReached` gate instead.
   Running executions finish; nothing new starts. YOLO never answers this gate, because spending more is your
   decision.
+- **A created project waits for its init (rule O4).** Every spawn in a project the session created, except
+  the init's own initializer and advisor runs, is dropped while that project's init has not ended, and so are
+  its format, staging, and autofix steps. Research in it waits too. Work in other projects does not. The planner
+  asks again on its next pass, so a held step starts once the init ends.
 - **Resume after pause (Rule P2).** When the session has a paused run for the same purpose, the spawn is marked
   to resume it, so the runner continues that execution instead of starting a new one.
 

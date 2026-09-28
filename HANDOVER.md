@@ -161,9 +161,11 @@ Every execution's first message carries the project's own agent instruction file
 `CLAUDE.md`, `AGENTS.md`, and `AGENT.md` at the project root, matched in any letter case, each cut at 12,000
 characters, with a link or identical copy of a file already included left out.
 
-A new project is created by the user outside Ostra, then imported. The init flow then works from whatever code
-exists. For an empty folder, the stack chosen in project settings seeds skills from `refs/<stack>.md` in the
-convention-seeded mode `UC/refs/skill-archetypes.md` (Archetype D) already describes.
+A new project is created by the user outside Ostra and imported, or created during a session's build with
+`ProjectCreate`, when the approved plan puts phases in a codebase no project holds (section 10.7). The init flow works from
+whatever code exists. For an empty folder, the stack chosen in project settings, or given in the
+`ProjectCreate` call, seeds skills from `refs/<stack>.md` in the convention-seeded mode
+`UC/refs/skill-archetypes.md` (Archetype D) already describes.
 
 ### 6.4 Cloning and pulling from git
 
@@ -247,7 +249,7 @@ api_key_env = "OPENAI_API_KEY"
 # Tier to model, per executor. Native entries are provider:model.
 [tiers.native]
 fast     = "anthropic:claude-haiku-4-5-20251001"
-balanced = "anthropic:claude-sonnet-5"
+balanced = "anthropic:claude-sonnet-5-5"
 advanced = "anthropic:claude-opus-5-5"
 frontier = "anthropic:claude-fable-5-1"
 
@@ -471,7 +473,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | Rule | Engine behavior |
 | --- | --- |
 | D1, Hard 15 | PLAN and full-track IMPLEMENT always pass through Spec. There is no transition from Explore to Plan. With no research document, Spec and the light track's phases are not entered. |
-| Track | After research, an IMPLEMENT request with no track forced on the New task form asks the Track judge: `light` unless the research shows an open requirement, a changed contract, a schema or data change, an ordered multi-area change, or a security-sensitive area. Light creates one inline phase per project in scope, queued in order (M5), whose implementer gets `No plan:` and every research document. Full runs the spec flow, then Stakes. Overriding is allowed until the spec or a phase starts. |
+| Track | After research, an IMPLEMENT request with no track forced on the New task form asks the Track judge: `light` unless the research shows an open requirement, a changed contract, a schema or data change, an ordered multi-area change, a security-sensitive area, or a need for a new codebase (only an approved plan can put phases in a project that does not exist yet, Rule O2). Light creates one inline phase per project in scope, queued in order (M5), whose implementer gets `No plan:` and every research document. Full runs the spec flow, then Stakes. Overriding is allowed until the spec or a phase starts. |
 | F1 | When every phase of an IMPLEMENT session is terminal and nothing runs, the engine opens the implementation review gate before format and the closing stages. `done` accepts; `feedback` with text starts a round. The Feedback judge routes every round and names one target per project it changes; before Rule J1 a round with no spec and one project in scope was built directly, and such recorded rounds still fold that way. On a session with a spec, a `requirement_change` goes into the spec first (D10) and the revision phases are created when the spec is approved again; the approved plan is not re-run. A revision phase is an inline phase with the next free ID, reviewed and staged like any phase, and the gate opens again after it. Under YOLO the gate is answered `done`. |
 | F2 | Before a revision spawns and before the review gate opens, the runner writes `ostra-session-context.md` in the session root from the fold: the request, the track, the research documents, the spec and plan, every phase with its report and ledger, and every feedback round. A revision implementer gets it as `Context files:`, the project's earlier reports as `Prior phase reports:`, and its round's instruction as the task, so a session takes any number of rounds without a growing conversation. |
 | D2 | Spec is entered only when no explore execution is running and the Sufficiency judge finds no needed `Not covered` item. Spec receives every research document path, oldest run stamp first, including superseded ones. |
@@ -562,6 +564,7 @@ type, because a harness executor must see that harness's tool names.
 | prompt-generation | advanced | Changed instruction files plus its report. |
 | initializer | balanced (generate-skill on advanced) | Per mode, as in `UC/agents/initializer/prompt.md`. |
 | quick-answer | balanced | New. Side-panel answers, read-only. Section 12.3. |
+| advisor | advanced (high effort) | New. Submit call `{action, guidance, reason}`: retry a failed step with guidance, or escalate to the user. Read-only. Section 10.7, Rule O5. |
 
 ### 9.2 Porting checklist for the prompts
 
@@ -626,7 +629,7 @@ into it.
 | Leaf only | The harness's own subagent tool is disabled for the run. Every Ostra agent is a leaf. |
 | Final reply | The tool vocabulary tells the agent to reply with only `Done!` after its submit call, because Ostra reads the submit payload and any other text costs output tokens. Checked live: Claude Code, Codex, and Antigravity comply; Grok Build 4.5 may still summarize after a resume. |
 | Guards and permissions | Ostra writes a per-execution hook config pointing every PreToolUse and PostToolUse event at `ostra hook --execution <id>`, a subcommand of the same binary. It forwards the payload to `/internal/policy` with an execution token and prints the harness's response shape. One Rust policy engine then serves all harnesses. A permission ask waits for the browser answer. |
-| Ostra tools | `ostra mcp-stdio --execution <id>` serves `report`, `memory`, `memory_recall`, the `submit_*` tools, and the workspace MCP servers' tools (10.6) over stdio. Stdio, because it is the one MCP registration shape Ultracode verified on all four harnesses (`UC/docs/hub.md`, "Why a stdio shim"). |
+| Ostra tools | `ostra mcp-stdio --execution <id>` serves `report`, `memory`, `memory_recall`, the `submit_*` tools, the project tools for an execution that holds a management handle (10.7), and the workspace MCP servers' tools (10.6) over stdio. Stdio, because it is the one MCP registration shape Ultracode verified on all four harnesses (`UC/docs/hub.md`, "Why a stdio shim"). |
 | Completion | Detected from the harness's stop event through the hook bridge, and confirmed from its transcript. Needs verifying per harness (section 18). |
 | Session id | Claude Code and Grok accept a chosen `--session-id`, so Ostra picks it up front. Codex and Antigravity cannot choose one (`UC/README.md`), so Ostra captures it from the first output event or the transcript. |
 | Cost | Read from the harness's own session file. While the execution runs, a file watcher (`notify`) on the file's directory reads each appended line once and reports usage live; the whole file is read again for the final result. Hooks are not used for this, because they exist to enforce policy. Claude Code (`~/.claude/projects/*/<id>.jsonl`) repeats a message's usage on each of its lines, so usage counts once per message id, priced per message model with 5-minute and 1-hour cache writes apart. Codex (`rollout-*.jsonl`) reports running totals whose input includes cached input, priced per increase with the current turn's model. Grok Build (`sessions/<cwd>/<id>/updates.jsonl`) states each turn's cost in `costUsdTicks`, 10^10 per dollar. Antigravity's transcript records no usage, so its executions show no cost. |
@@ -658,8 +661,8 @@ owns every session. Push channels and wake commands disappear.
 ### 10.3 Tools
 
 Native tool names match Claude Code's, because the prompts are tuned to them: `Read`, `Write`, `Edit`, `Bash`,
-`Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, plus `Report`, `Document`, `Memory`, `MemoryRecall`, and the
-`submit_*` tools.
+`Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, plus `Report`, `Document`, `Memory`, `MemoryRecall`, the
+management tools `ProjectList` and `ProjectCreate` (section 10.7), and the `submit_*` tools.
 
 - `Edit` requires the file to have been read in this execution, and its old string must match exactly once.
 - `Grep` and `Glob` use the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`, `globset`).
@@ -705,6 +708,7 @@ Every tool call from every executor goes through two layers in order.
 | Report path | For agents given `Report file:`, an `ostra-*` file in the session dir must be that exact path. Any mechanism may write it. | `report-policy.js` |
 | Lesson gate | A report is refused while a verified failure-to-recovery transition has no recorded lesson, unless the report tool is called with a stated reason. | `report-policy.js`, `report.js` |
 | Build streak | Counted per execution. At 2 failures, recalled lessons are appended to the tool result. At 3, a warning. At 5, build and test commands are refused and the agent is told to return `STUCK:`. | `build-streak*.js`, `build-signal.js` |
+| Management tools | Only the implementer of a phase the approved plan puts in a new project calls `ProjectCreate`, only for that project, and only with a well-formed call. Until the project exists, that run writes nothing outside its session dir and temp (Rule O2). | Ostra (no Ultracode source) |
 | Tool self-protection | Ostra's binary, assets, config, and databases are read-only to agents. Inline interpreter code that writes files, spawns processes, or names engine state is refused. | `plugin-policy.js` |
 
 **Layer 2, permissions**, in Claude Code's model:
@@ -728,7 +732,8 @@ tickets.
 
 YOLO means the orchestrator decides everything. With YOLO on for a session:
 
-- **Permissions:** every ask is allowed. The session behaves as `bypass`.
+- **Permissions:** every ask is allowed, including a management tool's (Rule O1). The session behaves as
+  `bypass`.
 - **Questions:** every gate is answered by the YOLO judge, with no wait: open questions (recommended option
   unless the research says otherwise), spec and plan approval, the closing gate, the review cap, STUCK
   rescues, and harness re-routing.
@@ -777,6 +782,76 @@ Rules:
 - **M2.** A harness reaches a workspace tool only through Ostra's MCP server, so the hook bridge passes the
   call unchecked and the MCP handler checks, asks, runs, and logs it once. Checking at both points would ask
   the user twice.
+
+### 10.7 Management tools
+
+Management tools are calls an agent makes to Ostra itself rather than to the files it works on. Both
+executors reach them the same way: the native loop runs them in process, and harnesses get them from Ostra's MCP
+server as `project_list` and `project_create`, next to `report`. The server implements them
+(`ostra-server/src/manage.rs`) behind the `Manage` trait of `ostra-tools`, because the tools crate knows no
+workspace or engine. An execution gets a handle only when its agent has the `manage_projects` capability,
+which only the implementer declares.
+
+The first toolset manages projects, for requests that create a new codebase: without it the user had to
+create and import the folder by hand, or the spec put a new service inside an existing repository.
+
+| Tool | Input | Effect |
+| --- | --- | --- |
+| `ProjectList` | none | The workspace root, then each project's key, folder, stack, init status, and whether it is in this session's scope. |
+| `ProjectCreate` | `key`, `stack`, `purpose`, `requirements` (1 to 20 base requirements, one fact each), optional `folder` (relative to the workspace root, default the key) and `git_init` (default true) | Creates the folder inside the workspace, runs `git init`, registers the project with its stack, and adds it to the session. |
+
+The flow for a request that needs a new codebase:
+
+1. The Track judge sends it to the full track. The spec gives the new codebase a new project key and records
+   its stack and base requirements as `Constraint` criteria. Nothing is created.
+2. The plan puts phases in that key, lists it in its submit call's `new_projects`, and writes the stack,
+   purpose, and base requirements into the first such phase's context. An approved plan's phase in an unknown
+   project is accepted only when `new_projects` names it; any other is blocked as before.
+3. After the user approves the plan, the build reaches the first phase in the new project. Its implementer
+   starts from its session dir with a `New project:` line and calls `ProjectCreate` with the facts from the
+   phase file. The user approves the card.
+4. Ostra creates the project, stops that run, and initializes the project inside the session. Then the phase
+   starts over inside the new project, with its repo brief.
+
+Rules:
+
+- **O1.** A management tool that changes Ostra (`ProjectCreate`) asks the user in every permission mode,
+  bypass included, and no allow rule stands in for the answer, so the card offers no "always" rule. Only YOLO
+  answers it. A deny rule still refuses it, and plan mode refuses it. The card shows the key, stack, folder, and
+  purpose, because the user approves the project from them. `ProjectList` is allowed everywhere. On a harness
+  the hook passes the call and Ostra's MCP handler asks once, as Rule M2 does for workspace tools.
+- **O2.** A project is created only after the user approved the plan that needs it: only the implementer of a
+  phase the approved plan puts in a project named in `new_projects` calls `ProjectCreate`, and only with that
+  project's key (`creates_project` in its execution context). The guard also checks the call's shape (key and
+  stack rules of the Add project dialog, purpose and requirement sizes, a relative folder) before the user is
+  asked. Until the project exists, that run writes nothing outside its session dir and temp: its repo root is
+  its session dir, so its sandbox can write nowhere else, and the guard refuses other targets. After the answer the server refuses a folder that exists and is not empty, lies
+  outside the workspace (a symlinked parent included), in `.ostra`, or inside or around another project, a key
+  already taken, and a run or session that has ended.
+- **O3.** A created project joins the session's projects and scope through a `ProjectCreated` event that
+  carries every fact of the call, because the fold cannot read workspace settings. It stays in scope if the
+  request is classified again. Every later spawn's brief lists it with its stack, purpose, and requirements,
+  and the completion report names it with how its init ended. Pipeline sessions still start only on
+  initialized projects; a created project is the one exception, inside the session that created it.
+- **O4.** Initializing a created project is part of the implementation: the event stops the run that created
+  it (interrupt `ProjectCreated`), and the init flow of section 8.4 runs for it inside the session, with a
+  `User focus:` built from the `ProjectCreate` call. Nothing but that init and its advisor runs in the project
+  until the init ends: its phases, reviews, tests, research, docs, format, staging, and autofix wait, and the
+  session does not complete before that. Work in other projects does not wait. For a project with no source yet, propose plans the module map from the base
+  requirements and the module-hub routes to those planned paths, marked planned (Archetype C), so the phases
+  put new files in the right areas. The init ends with a
+  `ProjectInitFinished` event, appended after the runner checks that `INVENTORY.md` and a valid
+  `project.toml` exist; the stopped phase then starts over with fresh work in the new project. If the user
+  abandons the init at its failure gate, the project's phases run without it, the session does not fail, and
+  the completion report tells the user to initialize it.
+- **O5.** A failed or stuck step of a created project's init goes to the advisor before the user: an
+  execution that fails or returns `stuck`, a result the init cannot use (no slices, no skills), or a missing or
+  invalid inventory or profile (an `InitStepFailed` event). The advisor, an agent on the advanced tier with
+  high effort by default, reads the step's inputs, its submit payload (`Step result:`), the files, the project,
+  and the failed agent's own instructions (`<data dir>/assets/agents/<agent>.md`, rendered for native), and
+  submits `retry` with guidance or `escalate` with a reason. Its evals are `tests/evals/advisor.toml`. A retry runs the step again with the guidance on its `Advisor guidance:` line.
+  At most `MAX_ADVICE` (2) retries per step; after that, or on an escalation, the step's failure gate opens
+  for the user, with the advisor's reason. The advisor is read-only and routed like any agent (`advisor`).
 
 ## 11. Sessions and resume
 
@@ -1040,11 +1115,13 @@ GET/POST        /api/workspaces                           list; create in one ca
                                                           permissions, yolo, routing_preset, notifications)
 POST            /api/workspaces/validate                  the same body; every issue, writes nothing
 GET/PATCH/DELETE /api/workspaces/:ws                      detail (projects, harnesses, agents, stacks, global
-                                                          permissions, validation); settings (validated);
+                                                          permissions, validation, fixes); settings (validated);
                                                           delete unregisters and removes workspace.toml and
                                                           workspace.db, keeps projects and session folders;
                                                           409 while a session, execution, or clone runs
 POST            /api/workspaces/:ws/validate              settings issues without saving
+POST            /api/workspaces/:ws/settings/fix          apply the detail's `fixes` (a `default` route for an agent
+                                                          with none) without validating the rest
 GET/PATCH       /api/workspaces/:ws/ui                    console layout; PATCH merges top-level fields, 64 KB cap
 POST/DELETE     /api/workspaces/:ws/projects[/:key]       import (like /add-dir); 422 issues on key, path, stack;
                                                           remove

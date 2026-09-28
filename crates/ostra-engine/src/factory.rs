@@ -161,7 +161,17 @@ impl SpawnFactory for AgentsFactory {
                 common,
                 report_file: required(i.report_file.clone(), "report file")?,
                 work: work_source(i, s),
-                extra: work_extras(i),
+                extra: Extras {
+                    // Rule O2: the phase's project does not exist yet.
+                    new_project: s.project_to_create(&req.project).map(|folder| {
+                        format!(
+                            "`{}` does not exist yet. Create it with ProjectCreate before anything else, in folder `{}`.",
+                            req.project,
+                            folder.display()
+                        )
+                    }),
+                    ..work_extras(i)
+                },
             }),
             AgentName::CodeReviewer => {
                 let tests = matches!(req.purpose, ExecPurpose::Review { tests: true, .. });
@@ -222,6 +232,19 @@ impl SpawnFactory for AgentsFactory {
                 report_file: required(i.report_file.clone(), "report file")?,
                 extra: Extras::default(),
             }),
+            AgentName::Advisor => Box::new(AdvisorParams {
+                common,
+                failed_step: init_str(i, "Failed step")?,
+                problem: init_str(i, "Problem")?,
+                step_inputs: init_str(i, "Step inputs")?,
+                step_result: i.init.get("Step result").cloned(),
+                context: i.init.get("Step context").cloned(),
+                earlier_guidance: i
+                    .init
+                    .get("Earlier guidance")
+                    .and_then(|g| serde_json::from_str(g).ok())
+                    .unwrap_or_default(),
+            }),
             AgentName::QuickAnswer => Box::new(QuickAnswerParams {
                 common,
                 question: i.question.clone().ok_or("missing question")?,
@@ -239,16 +262,19 @@ impl SpawnFactory for AgentsFactory {
                 match mode {
                     InitializerMode::Detect => Box::new(InitDetectParams {
                         common,
+                        advisor_guidance: i.init.get("Advisor guidance").cloned(),
                         user_focus: i.init.get("User focus").cloned(),
                     }),
                     InitializerMode::Adopt => Box::new(InitAdoptParams {
                         common,
+                        advisor_guidance: i.init.get("Advisor guidance").cloned(),
                         source_harness: "ultracode".into(),
                         source_runtime_dir: ".ultracode".into(),
                         source_skills_dir: ".ultracode/skills".into(),
                     }),
                     InitializerMode::Scout => Box::new(InitScoutParams {
                         common,
+                        advisor_guidance: i.init.get("Advisor guidance").cloned(),
                         slice: init_str(i, "Slice")?,
                         slice_paths: init_str(i, "Slice paths")?
                             .lines()
@@ -262,11 +288,13 @@ impl SpawnFactory for AgentsFactory {
                     }),
                     InitializerMode::Propose => Box::new(InitProposeParams {
                         common,
+                        advisor_guidance: i.init.get("Advisor guidance").cloned(),
                         scout_findings: init_list(i, "Scout findings"),
                         scout_plan: PathBuf::from(init_str(i, "Scout plan")?),
                     }),
                     InitializerMode::GenerateSkill => Box::new(InitGenerateSkillParams {
                         common,
+                        advisor_guidance: i.init.get("Advisor guidance").cloned(),
                         skill_name: init_str(i, "Skill name")?,
                         skill_kind: init_str(i, "Skill kind")?,
                         disposition: init_str(i, "Disposition")?,
@@ -275,6 +303,7 @@ impl SpawnFactory for AgentsFactory {
                     }),
                     InitializerMode::GenerateInventory => Box::new(InitGenerateInventoryParams {
                         common,
+                        advisor_guidance: i.init.get("Advisor guidance").cloned(),
                         generated_skills: init_str(i, "Generated skills")?,
                         reused_skills: init_str(i, "Reused skills")?,
                         proposal: PathBuf::from(init_str(i, "Proposal")?),
@@ -309,6 +338,7 @@ impl SpawnFactory for AgentsFactory {
                 instructions: &instructions,
                 project_docs: env.project_docs,
                 artifacts: artifacts.as_ref(),
+                new_projects: &s.created_projects,
             },
         );
         let system_prompt =

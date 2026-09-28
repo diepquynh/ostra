@@ -161,13 +161,16 @@ cd tests/browser && npm test                # browser security suite: the consol
 - Judge routing evals (`tests/evals/judges.toml`, run by `crates/ostra-server/tests/judge_evals.rs`) are live and
   `#[ignore]`d: `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5 cargo test -p ostra-server --test judge_evals -- --ignored --nocapture`.
   Run every case several times per model before judging a prompt change, and add a counter-case with each fix.
+- Advisor evals (`tests/evals/advisor.toml`, run by `crates/ostra-server/tests/advisor_evals.rs`) run the real
+  advisor agent on failed init steps laid out on disk, 5 runs per model by default, and grade each decision:
+  `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 cargo test -p ostra-server --test advisor_evals -- --ignored --nocapture`.
 
 ## Live runs cost money
 
 Running Ostra against a real repo, and especially against this repo, starts many top-tier executions.
 
 - Use a scratch setup: `OSTRA_CONFIG=/tmp/x/config.toml OSTRA_DATA_DIR=/tmp/x/data`, cheap tiers
-  (`advanced = "anthropic:claude-sonnet-5"`), a small `session_budget_usd`, and a tiny scratch repo.
+  (`advanced = "anthropic:claude-sonnet-5-5"`), a small `session_budget_usd`, and a tiny scratch repo.
 - Never run init or a session against this repository without the user's go-ahead and a budget.
 - Stop a runaway session from its board or `POST /api/sessions/<id>/stop`. With the server down, run
   `ostra stop <session-id>` before starting it again; otherwise recovery re-runs every interrupted execution.

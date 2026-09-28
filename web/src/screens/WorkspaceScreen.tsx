@@ -1,4 +1,6 @@
 import { Banner, Button } from "@ostra/design";
+import { useState } from "react";
+import { api } from "../api";
 import { useSessionSummaries } from "../lib/live";
 import { useNav, useShell, useWorkspace } from "../lib/nav";
 import { NewTask } from "./workspace/NewTask";
@@ -19,6 +21,20 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
   const { open } = useNav();
   const { addProject } = useShell();
   const sessions = useSessionSummaries(ws);
+  const [fixing, setFixing] = useState(false);
+  const [fixError, setFixError] = useState<string | null>(null);
+  const fixAll = async () => {
+    setFixing(true);
+    setFixError(null);
+    try {
+      await api.fixSettings(ws);
+      reload();
+    } catch (e) {
+      setFixError((e as Error).message);
+    } finally {
+      setFixing(false);
+    }
+  };
 
   if (!detail)
     return (
@@ -43,13 +59,28 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
         <Banner
           tone="bad"
           actions={
-            <Button size="sm" onClick={() => open("ws:settings")}>
-              Open settings
-            </Button>
+            <>
+              {detail.fixes.length > 0 && (
+                <Button size="sm" variant="primary" icon="wrench" onClick={fixAll} disabled={fixing}>
+                  {fixing ? "Fixing…" : detail.fixes.length === 1 ? "Fix it" : `Fix ${detail.fixes.length}`}
+                </Button>
+              )}
+              <Button size="sm" onClick={() => open("ws:settings")}>
+                Open settings
+              </Button>
+            </>
           }
         >
           Settings have {detail.validation.length} problem{detail.validation.length === 1 ? "" : "s"}. Fix them in
           Settings before starting work, because an agent whose route does not resolve cannot start.
+          {detail.fixes.length > 0 && (
+            <>
+              {" "}
+              Ostra can fix {detail.fixes.length === detail.validation.length ? "them" : "some"} now:{" "}
+              {detail.fixes.map((f) => f.label).join("; ")}.
+            </>
+          )}
+          {fixError && <> {fixError}</>}
         </Banner>
       )}
       {count === 0 && (

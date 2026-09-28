@@ -3,8 +3,8 @@
 /**
  * A tool call in canonical form. `tool` is a native tool name (`Read`, `Write`, `Edit`, `Bash`,
  * `Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, `Report`, `Memory`, `MemoryRecall`,
- * `submit_<agent>`), or `ApplyPatch` for Codex patches, or `Other:<name>` for a harness tool
- * with no canonical equivalent.
+ * `ProjectList`, `ProjectCreate`, `submit_<agent>`), or `ApplyPatch` for Codex patches, or
+ * `Other:<name>` for a harness tool with no canonical equivalent.
  *
  * Canonical input shapes:
  * - `Read {file_path, offset?, limit?}`
@@ -17,6 +17,7 @@
  * - `WebSearch {query}`, `WebFetch {url, prompt?}`
  * - `Report {content, reason?}`
  * - `Memory {area, lesson, source}`, `MemoryRecall {query, area?, limit?}`
+ * - `ProjectList {}`, `ProjectCreate {key, stack, purpose, requirements, folder?, git_init?}`
  * - `ApplyPatch {patch}` (Codex `*** Begin Patch` format)
  */
 export type ToolCall = { tool: string, input: unknown, };

@@ -127,7 +127,7 @@ const SERVICE_AFTER = `  public Order cancel(OrderId id, Actor by) {
 /** A completed native implementer run with every kind of item the Activity stream shows. */
 const implementerPhase2 = new Script(t0)
   .status(
-    "Started on native · anthropic:claude-sonnet-5 · phase file ostra-plan-20260922-100500-order-cancel-phase-2-service.md",
+    "Started on native · anthropic:claude-sonnet-5-5 · phase file ostra-plan-20260922-100500-order-cancel-phase-2-service.md",
   )
   .think(
     "Phase 2 wires the cancel endpoint. R2 says a shipped order must return 409 with cannot_cancel, and the phase names OrderStateMachine for every status change. Load the controller skill, then read the controller and the service.",

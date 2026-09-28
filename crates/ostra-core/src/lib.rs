@@ -14,6 +14,7 @@ pub mod exec;
 pub mod executor;
 pub mod git;
 pub mod ids;
+pub mod manage;
 pub mod mcp;
 pub mod model;
 pub mod outline;

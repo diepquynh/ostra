@@ -314,7 +314,7 @@ impl Default for GlobalConfig {
             "native".into(),
             TierTable::of(
                 "anthropic:claude-haiku-4-5-20251001",
-                "anthropic:claude-sonnet-5",
+                "anthropic:claude-sonnet-5-5",
                 "anthropic:claude-opus-5-5",
                 "anthropic:claude-fable-5-1",
             ),
@@ -918,6 +918,7 @@ impl WorkspaceSettings {
             ("initializer", "balanced"),
             ("judge", "advanced"),
             ("quick-answer", "balanced"),
+            ("advisor", "advanced"),
         ] {
             by_agent.insert(agent.into(), tier.into());
         }
@@ -1088,6 +1089,27 @@ fn model_choice<'w>(
         .get(key)
         .and_then(|m| m.get(&complexity))
         .or_else(|| ws.routing.model.by_agent.get(key))
+}
+
+/// Route keys with no model route on some complexity. Each is a validation error that `default`
+/// fixes, because every agent has a default tier; it happens when a new agent ships and a
+/// workspace saved before it has no entry for it.
+pub fn keys_without_route(ws: &WorkspaceSettings) -> Vec<&'static str> {
+    route_keys()
+        .into_iter()
+        .filter(|key| {
+            let by_complexity = AgentName::ALL
+                .iter()
+                .any(|a| a.as_str() == *key && a.routes_by_complexity());
+            if by_complexity {
+                Complexity::ALL
+                    .iter()
+                    .any(|c| model_choice(ws, key, Some(*c)).is_none())
+            } else {
+                model_choice(ws, key, None).is_none()
+            }
+        })
+        .collect()
 }
 
 pub fn resolve_route(
@@ -1729,6 +1751,25 @@ pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigError
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn a_key_with_no_route_is_found_for_the_fix() {
+        let mut ws = WorkspaceSettings::seeded("x");
+        assert!(keys_without_route(&ws).is_empty(), "seeded settings route every agent");
+        ws.routing.model.by_agent.remove("advisor");
+        assert_eq!(keys_without_route(&ws), ["advisor"]);
+        ws.routing.model.by_phase_complexity.remove("implementer");
+        assert_eq!(
+            keys_without_route(&ws),
+            ["implementer", "advisor"],
+            "an agent routed by complexity needs every complexity"
+        );
+        ws.routing
+            .model
+            .by_agent
+            .insert("implementer".into(), "default".into());
+        assert_eq!(keys_without_route(&ws), ["advisor"], "byAgent covers every complexity");
+    }
     #[test]
     fn the_sandbox_is_required_unless_a_workspace_or_the_global_config_says_otherwise() {
         // The default is `required` where a backend exists and `auto` on Windows, which has none
@@ -1829,7 +1870,7 @@ module-documentation = "advanced"
 prompt-generation = "advanced"
 initializer = "balanced"
 judge = "advanced"
-quick-answer = { native = "anthropic:claude-sonnet-5" }
+quick-answer = { native = "anthropic:claude-sonnet-5-5" }
 
 [routing.model.byPhaseComplexity.implementer]
 low = "fast"
@@ -1877,11 +1918,11 @@ deny = ["Bash(git push *)"]
         )
         .unwrap();
         assert_eq!(high.executor, ExecutorKind::Native);
-        assert_eq!(high.model, "anthropic:claude-sonnet-5");
+        assert_eq!(high.model, "anthropic:claude-sonnet-5-5");
         let wt = resolve_route(&g, &ws, RouteQuery::new("write-test", Tier::Balanced)).unwrap();
         assert_eq!(wt.executor, ExecutorKind::Harness(HarnessKind::Codex));
         let qa = resolve_route(&g, &ws, RouteQuery::new("quick-answer", Tier::Balanced)).unwrap();
-        assert_eq!(qa.model, "anthropic:claude-sonnet-5");
+        assert_eq!(qa.model, "anthropic:claude-sonnet-5-5");
         assert_eq!(ws.instructions_for(AgentName::Implementer).len(), 2);
     }
 

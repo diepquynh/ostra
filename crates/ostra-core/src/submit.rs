@@ -188,6 +188,10 @@ pub struct PlanSubmit {
     pub requirement_coverage: String,
     #[serde(default)]
     pub clarifying_questions: Vec<Question>,
+    /// Rule O2: keys of projects the plan puts phases in that do not exist yet. The implementer of
+    /// the first such phase creates each one.
+    #[serde(default)]
+    pub new_projects: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -303,6 +307,28 @@ pub struct InitializerSubmit {
     pub stuck: Option<StuckInfo>,
 }
 
+/// What the advisor tells the engine to do with a failed step (Rule O5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AdviceAction {
+    /// Run the step again with `guidance`.
+    Retry,
+    /// Ask the user, because the fix needs a decision or a fact no agent has.
+    Escalate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct AdvisorSubmit {
+    pub action: AdviceAction,
+    /// For `retry`: what the step's next run must do differently, as instructions to that agent.
+    #[serde(default)]
+    pub guidance: String,
+    /// Why the step failed and why this action, for the user.
+    pub reason: String,
+}
+
 /// JSON schema for an agent's submit tool input.
 pub fn submit_schema(agent: AgentName) -> serde_json::Value {
     let schema = match agent {
@@ -318,6 +344,7 @@ pub fn submit_schema(agent: AgentName) -> serde_json::Value {
         | AgentName::PromptGeneration => schemars::schema_for!(ReportSubmit),
         AgentName::Initializer => schemars::schema_for!(InitializerSubmit),
         AgentName::QuickAnswer => schemars::schema_for!(QuickAnswerSubmit),
+        AgentName::Advisor => schemars::schema_for!(AdvisorSubmit),
     };
     serde_json::to_value(schema).unwrap_or(serde_json::Value::Null)
 }
@@ -361,6 +388,17 @@ pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<()
         | AgentName::PromptGeneration => check::<ReportSubmit>(input),
         AgentName::Initializer => check::<InitializerSubmit>(input),
         AgentName::QuickAnswer => check::<QuickAnswerSubmit>(input),
+        AgentName::Advisor => {
+            let a: AdvisorSubmit =
+                serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+            if a.action == AdviceAction::Retry && a.guidance.trim().is_empty() {
+                return Err(
+                    "give `guidance` for a retry: what the step's next run must do differently"
+                        .into(),
+                );
+            }
+            Ok(())
+        }
     }
 }
 

@@ -517,7 +517,7 @@ mod tests {
         let p = tmp.path().join("t.jsonl");
         let line = |id: &str, out: u64| {
             format!(
-                r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-sonnet-5","content":[],"usage":{{"input_tokens":0,"output_tokens":{out}}}}}}}"#
+                r#"{{"type":"assistant","message":{{"id":"{id}","model":"claude-sonnet-5-5","content":[],"usage":{{"input_tokens":0,"output_tokens":{out}}}}}}}"#
             )
         };
         std::fs::write(&p, format!("{}\n", line("a", 1_000_000))).unwrap();

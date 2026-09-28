@@ -85,7 +85,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = cache_path(tmp.path());
         let good =
-            r#"{"anthropic":{"models":{"claude-sonnet-5":{"cost":{"input":2,"output":10}}}}}"#;
+            r#"{"anthropic":{"models":{"claude-sonnet-5-5":{"cost":{"input":2,"output":10}}}}}"#;
         let app = axum::Router::new()
             .route("/good", axum::routing::get(move || async move { good }))
             .route("/bad", axum::routing::get(|| async { "{}" }));

@@ -129,7 +129,7 @@ mod tests {
         let file = tmp.path().join("s.jsonl");
         let line = |id: &str| {
             format!(
-                "{{\"type\":\"assistant\",\"message\":{{\"id\":\"{id}\",\"model\":\"claude-sonnet-5\",\"content\":[],\"usage\":{{\"input_tokens\":0,\"output_tokens\":100}}}}}}\n"
+                "{{\"type\":\"assistant\",\"message\":{{\"id\":\"{id}\",\"model\":\"claude-sonnet-5-5\",\"content\":[],\"usage\":{{\"input_tokens\":0,\"output_tokens\":100}}}}}}\n"
             )
         };
         std::fs::write(&file, line("a")).unwrap();

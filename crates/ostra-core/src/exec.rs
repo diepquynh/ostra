@@ -110,6 +110,10 @@ pub struct ExecContext {
     /// The workspace's blocked loopback ports for macOS.
     #[serde(default)]
     pub sandbox_blocked_ports: Vec<u16>,
+    /// Rule O2: this run's phase is in `project_key`, a project the plan named that does not exist
+    /// yet, so it runs from the workspace root and must create that project first.
+    #[serde(default)]
+    pub creates_project: bool,
 }
 
 impl ExecContext {

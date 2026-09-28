@@ -301,8 +301,8 @@ function ModelPicker({
           aria-label={`${label}, ${value.kind === "custom" ? "model" : "per executor"}`}
           placeholder={
             value.kind === "custom"
-              ? "anthropic:claude-sonnet-5"
-              : "native = anthropic:claude-sonnet-5, codex = gpt-5.6-terra"
+              ? "anthropic:claude-sonnet-5-5"
+              : "native = anthropic:claude-sonnet-5-5, codex = gpt-5.6-terra"
           }
           value={value.text}
           error={error}

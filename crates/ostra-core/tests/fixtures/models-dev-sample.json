@@ -23,9 +23,9 @@
      "cache_write": 6.25
     }
    },
-   "claude-sonnet-5": {
-    "id": "claude-sonnet-5",
-    "name": "Claude Sonnet 5",
+   "claude-sonnet-5-5": {
+    "id": "claude-sonnet-5-5",
+    "name": "Claude Sonnet 5.5",
     "cost": {
      "input": 2,
      "output": 10,

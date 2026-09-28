@@ -316,6 +316,7 @@ pub fn router(app: Arc<App>) -> axum::Router {
                 .delete(delete_workspace),
         )
         .route("/api/workspaces/{ws}/validate", post(validate_workspace))
+        .route("/api/workspaces/{ws}/settings/fix", post(fix_settings))
         .route("/api/workspaces/{ws}/approve", post(approve_commands))
         .route("/api/workspaces/{ws}/projects", post(import_project))
         .route("/api/workspaces/{ws}/clone", post(clone_project))
@@ -883,6 +884,16 @@ async fn patch_workspace(
             .registry
             .rename_workspace(&w.id, &settings.name)?;
     }
+    Ok(Json(w.detail()))
+}
+
+/// Apply the fixes the workspace detail lists, such as a route for an agent added since the
+/// settings were saved.
+async fn fix_settings(State(app): AppState, Path(id): Path<String>) -> Res<WorkspaceDetail> {
+    let w = ws(&app, &id)?;
+    w.apply_fixes()
+        .map_err(|e| ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    crate::git::workspace_updated(&app, &w);
     Ok(Json(w.detail()))
 }
 

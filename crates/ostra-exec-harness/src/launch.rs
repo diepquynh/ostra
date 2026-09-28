@@ -784,6 +784,7 @@ pub(crate) mod tests {
                 sandbox_decoys: vec![],
                 sandbox_loopback: Default::default(),
                 sandbox_blocked_ports: vec![],
+                creates_project: false,
             },
             resume: None,
             harness_session_id: None,

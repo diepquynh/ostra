@@ -735,6 +735,30 @@ pub struct InitTrack {
     pub failed: Option<(ExecutionId, String)>,
     pub failed_gate: Option<GateId>,
     pub retries: BTreeMap<String, u32>,
+    /// Rule O4: a created project's init ended. `note` says why it ended without initializing.
+    pub finished: bool,
+    pub note: Option<String>,
+    /// Rule O5: advice rounds per step (`{mode}:{item}`), and every guidance given, oldest first.
+    pub advice: BTreeMap<String, Vec<String>>,
+    /// The advisor run looking at the current failure.
+    pub advising: Option<ExecutionId>,
+    /// The advisor asked for the user, or could not help, so the failure goes to the user's gate.
+    pub escalated: bool,
+}
+
+impl InitTrack {
+    /// The spawn's `User focus:` for a project an agent created, from its `ProjectCreate` call.
+    pub fn created_focus(p: &ostra_core::manage::CreatedProject) -> String {
+        let reqs: Vec<String> = p.requirements.iter().map(|r| format!("- {r}")).collect();
+        format!(
+            "A new project `{}`, created in this session by the {}. Its folder is empty, so initialize it from the stack and requirements here.\n\nStack: {}\nPurpose: {}\nBase requirements:\n{}",
+            p.key,
+            p.agent,
+            p.stack,
+            p.purpose,
+            reqs.join("\n")
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -761,6 +785,9 @@ pub enum Interrupt {
     Pause,
     /// Context was sent now; the execution re-runs from its spawn block (Rule C2).
     Context,
+    /// Rule O4: the run created its phase's project, which is initialized before the phase starts
+    /// again inside it.
+    ProjectCreated,
 }
 
 impl Interrupt {
@@ -768,6 +795,9 @@ impl Interrupt {
         match self {
             Interrupt::Pause => "The session was paused.",
             Interrupt::Context => "Interrupted to deliver the context the user added.",
+            Interrupt::ProjectCreated => {
+                "Stopped after creating the project, which Ostra initializes before this phase starts again in it."
+            }
         }
     }
 }
@@ -840,6 +870,12 @@ pub struct SessionState {
     pub project_tracks: BTreeMap<String, ProjectTrack>,
     pub quick: QuickTrack,
     pub init: Option<InitTrack>,
+    /// Rule O3: projects agents created in this session, in creation order.
+    pub created_projects: Vec<ostra_core::manage::CreatedProject>,
+    /// Rule O4: the init of each created project, run when the build starts.
+    pub project_inits: BTreeMap<String, InitTrack>,
+    /// Rule O4: runs stopped because they created their phase's project, whose phase starts over.
+    pub restart_fresh: BTreeSet<ExecutionId>,
     /// Agents re-routed to native after a harness failure.
     pub native_fallback: BTreeSet<AgentName>,
     pub prompt_gens: u32,
@@ -900,6 +936,7 @@ fn purpose_loop(purpose: &ExecPurpose) -> Option<(u32, bool)> {
 
 pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
     match purpose {
+        ExecPurpose::Advise { .. } => StageKind::Rescue,
         ExecPurpose::Explore { .. } => StageKind::Explore,
         ExecPurpose::Spec { .. } => StageKind::Spec,
         ExecPurpose::FactCheck {
@@ -970,6 +1007,9 @@ impl SessionState {
             project_tracks: BTreeMap::new(),
             quick: QuickTrack::default(),
             init: None,
+            created_projects: vec![],
+            project_inits: BTreeMap::new(),
+            restart_fresh: BTreeSet::new(),
             native_fallback: BTreeSet::new(),
             prompt_gens: 0,
             budget_raised: 0.0,
@@ -1188,6 +1228,52 @@ impl SessionState {
                     });
                 }
             }
+            SessionEvent::ProjectCreated { project } => {
+                // Rule O3: the project joins the session's projects and scope uninitialized.
+                if !self.valid_project(&project.key) {
+                    self.projects.push(ProjectRef {
+                        key: project.key.clone(),
+                        path: project.path.clone(),
+                    });
+                }
+                if !self.scope.contains(&project.key) {
+                    self.scope.push(project.key.clone());
+                }
+                self.project_inits.insert(
+                    project.key.clone(),
+                    InitTrack {
+                        project: project.key.clone(),
+                        ..Default::default()
+                    },
+                );
+                self.created_projects.push(project.clone());
+                // Rule O4: the run that created it stops, and its phase starts again in the new
+                // project once the init ends.
+                if self
+                    .executions
+                    .get(&project.execution)
+                    .is_some_and(|r| r.result.is_none())
+                {
+                    self.interrupting
+                        .insert(project.execution.clone(), Interrupt::ProjectCreated);
+                }
+            }
+            SessionEvent::ProjectInitFinished { project } => {
+                if let Some(i) = self.project_inits.get_mut(project) {
+                    i.finished = true;
+                    i.note = None;
+                }
+            }
+            SessionEvent::InitStepFailed {
+                project,
+                execution,
+                error,
+            } => {
+                if let Some(i) = self.project_inits.get_mut(project) {
+                    clear_init_result(i, execution);
+                    i.failed = Some((execution.clone(), error.clone()));
+                }
+            }
             SessionEvent::RequestAmended {
                 text,
                 files,
@@ -1329,11 +1415,13 @@ impl SessionState {
                 rec.result = Some(result.clone());
                 rec.ended_at = Some(at);
                 let rec = rec.clone();
-                if self.interrupting.remove(id) == Some(Interrupt::Pause)
-                    && result.status == ExecutionStatus::Interrupted
-                {
+                let why = self.interrupting.remove(id);
+                if why == Some(Interrupt::Pause) && result.status == ExecutionStatus::Interrupted {
                     self.resume_from
                         .insert(purpose_key(&rec.purpose), id.clone());
+                }
+                if why == Some(Interrupt::ProjectCreated) {
+                    self.restart_fresh.insert(id.clone());
                 }
                 self.on_finished(&rec, result);
             }
@@ -1503,6 +1591,60 @@ impl SessionState {
             gate: None,
         });
         idx
+    }
+
+    /// Why `execution` cannot add project `key` to this session now (Rule O2).
+    pub fn project_creation_refusal(&self, execution: &ExecutionId, key: &str) -> Option<String> {
+        if !matches!(self.kind, SessionKind::Pipeline) {
+            return Some("Create projects only from a pipeline session.".into());
+        }
+        if self.is_terminal() {
+            return Some("This session has ended, so it takes no new project.".into());
+        }
+        if !self
+            .executions
+            .get(execution)
+            .is_some_and(|r| r.result.is_none())
+        {
+            return Some("The run that asked for this project has ended.".into());
+        }
+        if self.valid_project(key) {
+            return Some(format!(
+                "Work in `{key}` as it is: that project is already in this session."
+            ));
+        }
+        if self.project_to_create(key).is_none() {
+            return Some(format!(
+                "Create only a project the approved plan names as new: `{key}` is not one."
+            ));
+        }
+        let phase_project = self
+            .executions
+            .get(execution)
+            .and_then(|r| r.loop_key)
+            .and_then(|(phase, _)| self.phases.get(&phase))
+            .map(|p| p.info.project.as_str());
+        if phase_project != Some(key) {
+            return Some(format!(
+                "Create `{key}` only from a phase the plan puts in it."
+            ));
+        }
+        None
+    }
+
+    /// Rule O2: the planned folder of `key` when the approved plan names it as a new project and
+    /// it does not exist in this session yet.
+    pub fn project_to_create(&self, key: &str) -> Option<PathBuf> {
+        let plan = self.plan.current.as_ref()?;
+        (plan.new_projects.iter().any(|k| k == key)
+            && ostra_core::slug::is_project_key(key)
+            && !self.valid_project(key))
+        .then(|| self.workspace_root.join(key))
+    }
+
+    /// Rule O4: a created project whose init has not ended, so its phases wait.
+    pub fn awaiting_init(&self, project: &str) -> bool {
+        self.project_inits.get(project).is_some_and(|i| !i.finished)
     }
 
     fn valid_project(&self, key: &str) -> bool {
@@ -1903,6 +2045,12 @@ impl SessionState {
             && let Some(p) = self.projects.first()
         {
             scope.push(p.key.clone());
+        }
+        // Rule O3: a created project stays in scope when the request is classified again.
+        for c in &self.created_projects {
+            if !scope.contains(&c.key) {
+                scope.push(c.key.clone());
+            }
         }
         self.scope = scope;
         self.opts_in = out.opts_in;
@@ -2504,6 +2652,11 @@ impl SessionState {
                 self.quick.running = true;
             }
             ExecPurpose::Init { mode, item } => self.init_started(id, *mode, item.clone()),
+            ExecPurpose::Advise { project, .. } => {
+                if let Some(i) = self.project_inits.get_mut(project) {
+                    i.advising = Some(id.clone());
+                }
+            }
             ExecPurpose::PromptGen { handoff_for: None } if !resumed => self.prompt_gens += 1,
             _ => {}
         }
@@ -2686,6 +2839,9 @@ impl SessionState {
             ExecPurpose::Init { mode, item } => {
                 self.init_finished(&rec.id, *mode, item.clone(), status, result, error)
             }
+            ExecPurpose::Advise {
+                project, execution, ..
+            } => self.advice_finished(project, execution, status, result, error),
             _ => {}
         }
         if let Some(key) = rec.loop_key {
@@ -2695,6 +2851,7 @@ impl SessionState {
 
     fn loop_finished(&mut self, key: (u32, bool), rec: &ExecRecord, result: &ExecutionResult) {
         let yolo = self.yolo;
+        let fresh = self.restart_fresh.remove(&rec.id);
         let project = self
             .phases
             .get(&key.0)
@@ -2751,6 +2908,14 @@ impl SessionState {
         l.running = None;
         let in_flight = l.in_flight.take().unwrap_or(LoopNext::Idle);
 
+        if status == ExecutionStatus::Interrupted && fresh {
+            // Rule O4: the phase starts over inside the project the run created.
+            l.next = LoopNext::Work {
+                kind: WorkKind::Initial,
+                instructions: None,
+            };
+            return;
+        }
         if status == ExecutionStatus::Interrupted {
             // Re-run with the same spawn block (HANDOVER 11.2).
             l.next = match in_flight {
@@ -2992,7 +3157,7 @@ impl SessionState {
                 }
             }
             ExecPurpose::Init { .. } => {
-                if let Some(i) = self.init.as_mut() {
+                if let Some(i) = self.init_track_mut(&rec.project) {
                     i.failed_gate = Some(gate.clone());
                 }
             }
@@ -3046,8 +3211,8 @@ impl SessionState {
                         .closing_gate = Some(id.clone());
                 }
             }
-            GatePayload::SkillApproval { .. } => {
-                if let Some(i) = self.init.as_mut() {
+            GatePayload::SkillApproval { project, .. } => {
+                if let Some(i) = self.init_track_mut(project) {
                     i.approval_gate = Some(id.clone());
                 }
             }
@@ -3380,8 +3545,10 @@ impl SessionState {
                 let retry = matches!(choice, Some(("retry" | "native", _)));
                 self.exec_gate_answered(execution, retry);
             }
-            GatePayload::SkillApproval { .. } => {
-                if let (Some(i), GateAnswer::Skills { decisions }) = (self.init.as_mut(), answer) {
+            GatePayload::SkillApproval { project, .. } => {
+                if let (Some(i), GateAnswer::Skills { decisions }) =
+                    (self.init_track_mut(project), answer)
+                {
                     i.approval_gate = None;
                     i.decisions = Some(
                         decisions
@@ -3512,14 +3679,23 @@ impl SessionState {
                 }
             }
             ExecPurpose::Init { .. } => {
+                let embedded = self.project_inits.contains_key(&rec.project);
                 let mut abandoned = false;
-                if let Some(i) = self.init.as_mut() {
+                if let Some(i) = self.init_track_mut(&rec.project) {
                     i.failed_gate = None;
                     if retry {
+                        i.escalated = false;
                         let key = i.failed.take();
                         if let Some((exec, _)) = key {
                             reset_init_item(i, &exec);
                         }
+                    } else if embedded {
+                        // Rule O4: abandoning a created project's init lets its phases run
+                        // without it, because the rest of the session still needs them.
+                        i.finished = true;
+                        i.note = Some(
+                            "The user abandoned the init after an initializer step failed.".into(),
+                        );
                     } else {
                         abandoned = true;
                     }
@@ -3570,7 +3746,8 @@ impl SessionState {
                 file: Some(PathBuf::from(&p.file)),
                 test_rationale: p.test_rationale.clone(),
             };
-            let valid = self.valid_project(&info.project);
+            let valid = self.valid_project(&info.project)
+                || self.project_to_create(&info.project).is_some();
             self.insert_phase(
                 info,
                 WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer),
@@ -3592,6 +3769,22 @@ impl SessionState {
     // Init flow
     // -----------------------------------------------------------------------------------------
 
+    /// The init track an initializer execution belongs to: the init session's own, or a created
+    /// project's (Rule O4).
+    fn init_track_mut(&mut self, project: &str) -> Option<&mut InitTrack> {
+        if self.init.as_ref().is_some_and(|i| i.project == project) {
+            return self.init.as_mut();
+        }
+        self.project_inits.get_mut(project)
+    }
+
+    fn exec_project(&self, id: &ExecutionId) -> String {
+        self.executions
+            .get(id)
+            .map(|r| r.project.clone())
+            .unwrap_or_default()
+    }
+
     fn init_started(
         &mut self,
         id: &ExecutionId,
@@ -3599,7 +3792,10 @@ impl SessionState {
         item: Option<String>,
     ) {
         use ostra_core::InitializerMode as M;
-        let Some(i) = self.init.as_mut() else { return };
+        let project = self.exec_project(id);
+        let Some(i) = self.init_track_mut(&project) else {
+            return;
+        };
         match mode {
             M::Detect => i.detect = Some(id.clone()),
             M::Adopt => i.adopt = Some(id.clone()),
@@ -3635,7 +3831,10 @@ impl SessionState {
     ) {
         use ostra_core::InitializerMode as M;
         let parsed: Option<InitializerSubmit> = parse(&result.submit);
-        let Some(i) = self.init.as_mut() else { return };
+        let project = self.exec_project(id);
+        let Some(i) = self.init_track_mut(&project) else {
+            return;
+        };
         let ok = status == ExecutionStatus::Ok
             && parsed
                 .as_ref()
@@ -3653,11 +3852,7 @@ impl SessionState {
             } else {
                 let msg = match parsed {
                     Some(p) if p.status == SubmitStatus::Stuck => {
-                        format!(
-                            "{}: {}",
-                            p.summary,
-                            p.stuck.map(|s| s.need).unwrap_or_default()
-                        )
+                        stuck_problem(&p.summary, &p.stuck.map(|s| s.need).unwrap_or_default())
                     }
                     _ => missing_submit(status, &error, result),
                 };
@@ -3684,6 +3879,76 @@ impl SessionState {
                 if let Some(x) = list.iter_mut().find(|x| x.exec.as_ref() == Some(id)) {
                     x.result = Some(value);
                 }
+            }
+        }
+    }
+}
+
+impl SessionState {
+    /// Rule O5: the step key an initializer execution's advice is counted under.
+    pub fn init_step_key(&self, exec: &ExecutionId) -> String {
+        match self.executions.get(exec).map(|r| &r.purpose) {
+            Some(ExecPurpose::Init { mode, item }) => {
+                format!("{mode}:{}", item.clone().unwrap_or_default())
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn advice_finished(
+        &mut self,
+        project: &str,
+        failed: &ExecutionId,
+        status: ExecutionStatus,
+        result: &ExecutionResult,
+        error: String,
+    ) {
+        let key = self.init_step_key(failed);
+        let parsed: Option<ostra_core::submit::AdvisorSubmit> = parse(&result.submit);
+        let Some(i) = self.project_inits.get_mut(project) else {
+            return;
+        };
+        i.advising = None;
+        if status == ExecutionStatus::Interrupted {
+            return;
+        }
+        match parsed {
+            Some(a)
+                if status == ExecutionStatus::Ok
+                    && a.action == ostra_core::submit::AdviceAction::Retry =>
+            {
+                i.advice.entry(key).or_default().push(a.guidance);
+                clear_init_result(i, failed);
+                reset_init_item(i, failed);
+                i.failed = None;
+            }
+            other => {
+                i.escalated = true;
+                let why = match other {
+                    Some(a) => format!("Advisor: {}", a.reason),
+                    None => format!("The advisor could not help: {error}"),
+                };
+                if let Some((_, msg)) = i.failed.as_mut() {
+                    msg.push_str("\n\n");
+                    msg.push_str(&why);
+                }
+            }
+        }
+    }
+}
+
+/// Drop the result of the step `exec` ran, so the step runs again.
+fn clear_init_result(i: &mut InitTrack, exec: &ExecutionId) {
+    if i.detect.as_ref() == Some(exec) {
+        i.detect_result = None;
+    } else if i.propose.as_ref() == Some(exec) {
+        i.propose_result = None;
+    } else if i.inventory.as_ref() == Some(exec) {
+        i.inventory_result = None;
+    } else {
+        for x in i.scouts.iter_mut().chain(i.generates.iter_mut()) {
+            if x.exec.as_ref() == Some(exec) {
+                x.result = None;
             }
         }
     }
@@ -3783,6 +4048,17 @@ fn fact_finished<T>(
                 t.failed = Some(failed_msg);
             }
         }
+    }
+}
+
+/// What a stuck init step's failure says: its summary, then the fact or decision it needs.
+pub fn stuck_problem(summary: &str, need: &str) -> String {
+    let summary = summary.trim().trim_end_matches('.');
+    let need = need.trim();
+    if need.is_empty() {
+        format!("{summary}.")
+    } else {
+        format!("{summary}. It needs: {need}")
     }
 }
 

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 /// Template token names and the mapping key each resolves through.
-const TOKENS: [(&str, &str); 22] = [
+const TOKENS: [(&str, &str); 24] = [
     ("tool_read", "read"),
     ("tool_write", "write"),
     ("tool_edit", "edit"),
@@ -29,6 +29,8 @@ const TOKENS: [(&str, &str); 22] = [
     ("tool_code_neighbors", "code:neighbors"),
     ("tool_code_impact", "code:impact"),
     ("tool_code_map", "code:map"),
+    ("tool_project_list", "manage_projects:list"),
+    ("tool_project_create", "manage_projects:create"),
     ("tool_submit", "submit"),
 ];
 
@@ -63,6 +65,7 @@ fn capability_key(c: Capability) -> &'static str {
         Capability::Memory => "memory",
         Capability::MemoryRecall => "memory_recall",
         Capability::Code => "code",
+        Capability::ManageProjects => "manage_projects",
     }
 }
 
@@ -128,10 +131,21 @@ impl Mapping {
         let mut keys: Vec<&str> = caps.iter().map(|c| capability_key(*c)).collect();
         keys.push("submit");
         for key in &keys {
-            let tool = if *key == "code" {
-                let all: Vec<String> = ostra_core::agent::CODE_TOOLS
+            let ops: Vec<&str> = match *key {
+                "code" => ostra_core::agent::CODE_TOOLS
                     .iter()
-                    .filter_map(|(op, _)| self.tool(&format!("code:{op}"), executor, agent))
+                    .map(|(op, _)| *op)
+                    .collect(),
+                "manage_projects" => ostra_core::manage::PROJECT_TOOLS
+                    .iter()
+                    .map(|(name, _)| name.trim_start_matches("project_"))
+                    .collect(),
+                _ => vec![],
+            };
+            let tool = if !ops.is_empty() {
+                let all: Vec<String> = ops
+                    .iter()
+                    .filter_map(|op| self.tool(&format!("{key}:{op}"), executor, agent))
                     .collect();
                 (!all.is_empty()).then(|| all.join(", "))
             } else {

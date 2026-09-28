@@ -17,6 +17,19 @@ pub fn default_tier(key: &str) -> Tier {
         .unwrap_or(Tier::Balanced)
 }
 
+/// The fixes Ostra can apply on its own: an agent with no model route gets `default`, which
+/// resolves to its default tier.
+pub fn settings_fixes(settings: &WorkspaceSettings) -> Vec<ostra_core::api::SettingsFix> {
+    ostra_core::config::keys_without_route(settings)
+        .into_iter()
+        .map(|key| ostra_core::api::SettingsFix {
+            path: format!("routing.model.byAgent.{key}"),
+            value: "default".into(),
+            label: format!("Route `{key}` to its default tier ({})", default_tier(key)),
+        })
+        .collect()
+}
+
 /// Settings validation: routes, harness availability, keys, projects, sandbox entries, and
 /// permission rules.
 pub fn validate_settings(

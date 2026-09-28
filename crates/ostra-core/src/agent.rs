@@ -20,10 +20,12 @@ pub enum AgentName {
     PromptGeneration,
     Initializer,
     QuickAnswer,
+    /// Rule O5: diagnoses a failed or stuck step and tells the engine how to continue.
+    Advisor,
 }
 
 impl AgentName {
-    pub const ALL: [AgentName; 12] = [
+    pub const ALL: [AgentName; 13] = [
         AgentName::Explore,
         AgentName::GenerateSpec,
         AgentName::FactCheck,
@@ -36,6 +38,7 @@ impl AgentName {
         AgentName::PromptGeneration,
         AgentName::Initializer,
         AgentName::QuickAnswer,
+        AgentName::Advisor,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -52,6 +55,7 @@ impl AgentName {
             AgentName::PromptGeneration => "prompt-generation",
             AgentName::Initializer => "initializer",
             AgentName::QuickAnswer => "quick-answer",
+            AgentName::Advisor => "advisor",
         }
     }
 
@@ -84,7 +88,13 @@ impl AgentName {
                 | AgentName::Plan
                 | AgentName::CodeReviewer
                 | AgentName::ExecutionPathAnalyzer
+                | AgentName::Advisor
         )
+    }
+
+    /// Rule O2: the agent that creates a project, because only an approved plan's phase starts one.
+    pub fn manages_projects(self) -> bool {
+        matches!(self, AgentName::Implementer)
     }
 
     /// Agents whose model tier is routed by the phase's `**Complexity:**` line.
@@ -175,6 +185,8 @@ pub enum Capability {
     MemoryRecall,
     /// The code navigation tools over the project's index and dependency graph ([`CODE_TOOLS`]).
     Code,
+    /// The project management tools ([`crate::manage::PROJECT_TOOLS`]).
+    ManageProjects,
 }
 
 /// The code navigation tools: the operation (`code_{op}` over MCP) and the native tool name.
@@ -211,6 +223,7 @@ impl Capability {
             Capability::Memory => "Memory",
             Capability::MemoryRecall => "MemoryRecall",
             Capability::Code => CODE_TOOLS[0].1,
+            Capability::ManageProjects => crate::manage::PROJECT_TOOLS[0].1,
         }
     }
 

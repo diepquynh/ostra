@@ -1368,7 +1368,7 @@ fn hard4_missing_submit_is_a_failure() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (id, _) = h.start("spawn implementer");
     h.finish(&id, ExecutionStatus::Ok, None);
-    assert_eq!(h.summaries(), vec!["gate execution_failed"]);
+    assert_eq!(mcp_steps(&h), vec!["gate execution_failed"]);
 }
 
 #[test]
@@ -2636,4 +2636,342 @@ fn j1_an_answer_split_into_parts_keeps_every_note() {
     assert_eq!(st.notes_for(ostra_engine::judge::NoteStage::Tests), vec!["Use a temp file."]);
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
     assert!(rerun.inputs.instructions.unwrap().contains("OSTRA_ENV_FILE"), "delivered, because one part is");
+}
+
+// ------------------------------------------------------------------------------------------
+// O2: only the implementer of a phase the approved plan puts in a new project creates it.
+// O3: the created project joins the session's projects and scope uninitialized.
+// O4: it is initialized inside the session before anything else runs in it.
+// O5: the advisor looks at a failed init step before the user does.
+// ------------------------------------------------------------------------------------------
+
+fn created(key: &str, execution: &ExecutionId) -> SessionEvent {
+    SessionEvent::ProjectCreated {
+        project: ostra_core::manage::CreatedProject {
+            key: key.into(),
+            path: PathBuf::from(format!("/ws/{key}")),
+            stack: "rust".into(),
+            purpose: "An MCP server for the team's notes.".into(),
+            requirements: vec!["Rust 2024".into(), "rmcp 3.5 over stdio".into()],
+            execution: execution.clone(),
+            agent: AgentName::Implementer,
+        },
+    }
+}
+
+/// The plan puts phase 1 in `p` and phase 2 in `mcp`, a new project, independent of each other.
+fn planned_new_project() -> H {
+    let mut h = H::spec_approved(&["p"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    let mut submit = plan_submit(json!([
+        phase(1, "p", &[], "Skip"),
+        phase(2, "mcp", &[], "Skip")
+    ]));
+    submit["new_projects"] = json!(["mcp"]);
+    h.run("spawn plan", submit);
+    h.run(
+        "spawn fact-check fact-check-plan",
+        fact("PASS", "plan", &[]),
+    );
+    let g = h.open_gate("plan_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    h
+}
+
+/// Phase 2's implementer creates `mcp` and is stopped for the init.
+fn created_by_phase() -> H {
+    let mut h = planned_new_project();
+    let (imp, _) = h.start("spawn implementer phase 2 initial");
+    assert_eq!(h.state().project_creation_refusal(&imp, "mcp"), None);
+    h.ev(created("mcp", &imp));
+    assert!(
+        h.state().interrupting.contains_key(&imp),
+        "the run that created it stops"
+    );
+    h.finish(&imp, ExecutionStatus::Interrupted, None);
+    h
+}
+
+/// The next steps other than phase 1's, which runs in `p` and never waits for `mcp` (Rule O4).
+fn mcp_steps(h: &H) -> Vec<String> {
+    h.summaries()
+        .into_iter()
+        .filter(|s| !s.contains("phase 1"))
+        .collect()
+}
+
+fn init_ok(v: Value) -> Value {
+    json!({"status": "ok", "summary": "s", "files": [], "result": v})
+}
+
+#[test]
+fn rule_o2_a_phase_may_target_a_project_the_plan_names_as_new() {
+    let h = planned_new_project();
+    let st = h.state();
+    assert_eq!(st.project_to_create("mcp"), Some(PathBuf::from("/ws/mcp")));
+    assert_eq!(
+        st.project_to_create("p"),
+        None,
+        "an existing project is not new"
+    );
+    let steps = h.summaries();
+    assert!(
+        steps.contains(&"spawn implementer phase 2 initial".to_string()),
+        "{steps:?}"
+    );
+    let imp = h.spawn_step("spawn implementer phase 2 initial");
+    assert_eq!(imp.project, "mcp");
+}
+
+#[test]
+fn rule_o2_an_unnamed_unknown_project_stays_blocked() {
+    let mut h = H::spec_approved(&["p"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    h.run(
+        "spawn plan",
+        plan_submit(json!([phase(1, "typo", &[], "Skip")])),
+    );
+    h.run(
+        "spawn fact-check fact-check-plan",
+        fact("PASS", "plan", &[]),
+    );
+    let g = h.open_gate("plan_approval");
+    h.answer(
+        &g,
+        GateAnswer::Approval {
+            approved: true,
+            feedback: None,
+        },
+    );
+    assert!(!h.summaries().iter().any(|s| s.contains("implementer")));
+}
+
+#[test]
+fn rule_o2_only_the_phase_in_the_new_project_may_create_it() {
+    let mut h = planned_new_project();
+    let (other, _) = h.start("spawn implementer phase 1 initial");
+    let st = h.state();
+    assert!(st.project_creation_refusal(&other, "mcp").is_some());
+    assert!(st.project_creation_refusal(&other, "p").is_some());
+}
+
+#[test]
+fn rule_o3_a_created_project_joins_the_session_scope() {
+    let h = created_by_phase();
+    let st = h.state();
+    assert_eq!(st.scope, vec!["p", "mcp"]);
+    assert_eq!(st.project_path("mcp"), Some(PathBuf::from("/ws/mcp")));
+    assert_eq!(st.project_to_create("mcp"), None, "it exists now");
+    assert!(st.awaiting_init("mcp"));
+}
+
+#[test]
+fn rule_o4_the_init_runs_before_anything_else_in_the_new_project() {
+    let mut h = created_by_phase();
+    let steps = h.summaries();
+    assert!(
+        steps.contains(&"spawn initializer init detect".to_string()),
+        "{steps:?}"
+    );
+    assert!(
+        !steps.iter().any(|s| s.contains("phase 2")),
+        "phase 2 waits for the init: {steps:?}"
+    );
+    let detect = h.spawn_step("spawn initializer init detect");
+    assert_eq!(detect.project, "mcp");
+    let focus = &detect.inputs.init["User focus"];
+    assert!(
+        focus.contains("Stack: rust") && focus.contains("- rmcp 3.5 over stdio"),
+        "{focus}"
+    );
+
+    h.run(
+        "spawn initializer init detect",
+        detect_submit(
+            json!([{"descriptor": "root", "slug": "root", "paths": ["."]}]),
+            json!([]),
+        ),
+    );
+    h.run(
+        "spawn initializer init scout root",
+        init_ok(json!({"findings_path": "/f.md"})),
+    );
+    h.run(
+        "spawn initializer init propose",
+        init_ok(json!({"proposal_path": "/p.md", "skills": [
+            {"name": "convention", "kind": "convention", "status": "new", "recommend": true, "description": "d"}
+        ]})),
+    );
+    let g = h.open_gate("skill_approval");
+    h.answer(
+        &g,
+        GateAnswer::Skills {
+            decisions: vec![SkillDecision {
+                name: "convention".into(),
+                disposition: "generate".into(),
+            }],
+        },
+    );
+    h.run(
+        "spawn initializer init generate-skill convention",
+        init_ok(json!({"path": "/ws/mcp/.agents/skills/convention/SKILL.md"})),
+    );
+    h.run(
+        "spawn initializer init generate-inventory",
+        init_ok(json!({"inventory_path": "i", "profile_path": "p", "report_path": "r"})),
+    );
+    assert!(
+        h.summaries().contains(&"finish-init mcp".to_string()),
+        "{:?}",
+        h.summaries()
+    );
+    assert!(!h.summaries().iter().any(|s| s.contains("phase 2")));
+    h.ev(SessionEvent::ProjectInitFinished {
+        project: "mcp".into(),
+    });
+    let imp = h.spawn_step("spawn implementer phase 2 initial");
+    assert_eq!(
+        imp.project, "mcp",
+        "the phase starts over inside the new project"
+    );
+}
+
+#[test]
+fn rule_o4_research_in_a_created_project_waits_for_its_init() {
+    let mut h = created_by_phase();
+    h.ev(SessionEvent::DecisionMade {
+        id: DecisionId::new(),
+        judge: JudgeKind::Sufficiency,
+        subject: Some("late".into()),
+        input_summary: String::new(),
+        output: json!({"items": [{"item": "x", "needed": true, "reason": "r", "task": {"project": "mcp", "task": "Look at it."}}]}),
+        reason: "r".into(),
+    });
+    assert!(
+        !h.summaries().iter().any(|s| s.starts_with("spawn explore")),
+        "{:?}",
+        h.summaries()
+    );
+}
+
+#[test]
+fn rule_o5_the_advisor_looks_at_a_failed_init_step_first() {
+    let mut h = created_by_phase();
+    let (detect, _) = h.start("spawn initializer init detect");
+    h.finish(
+        &detect,
+        ExecutionStatus::Stuck,
+        Some(json!({"status": "stuck", "summary": "No source", "files": [], "result": {}, "stuck": {"step": "1", "attempted": "a", "diagnostic": "no files", "ruled_out": [], "need": "a stack"}})),
+    );
+    assert_eq!(mcp_steps(&h), vec!["spawn advisor advise mcp #1"]);
+    let advice = h.spawn_step("spawn advisor");
+    assert_eq!(advice.inputs.init["Failed step"], "initializer detect");
+    assert!(advice.inputs.init["Problem"].contains("a stack"));
+    assert!(
+        advice.inputs.init["Step result"].contains("\"diagnostic\": \"no files\""),
+        "the advisor sees what the step returned"
+    );
+    h.run(
+        "spawn advisor",
+        json!({"action": "retry", "guidance": "Plan one slice over the root and seed from the rust reference.", "reason": "The folder is empty."}),
+    );
+    let again = h.spawn_step("spawn initializer init detect");
+    assert_eq!(
+        again.inputs.init["Advisor guidance"],
+        "Plan one slice over the root and seed from the rust reference."
+    );
+}
+
+#[test]
+fn rule_o5_an_escalation_or_used_up_advice_asks_the_user() {
+    let mut h = created_by_phase();
+    let fail = |h: &mut H| {
+        let (id, _) = h.start("spawn initializer init detect");
+        h.finish(&id, ExecutionStatus::Denied, None);
+    };
+    fail(&mut h);
+    h.run(
+        "spawn advisor",
+        json!({"action": "escalate", "guidance": "", "reason": "It needs a credential."}),
+    );
+    assert_eq!(mcp_steps(&h), vec!["gate execution_failed"]);
+    let g = h.open_gate("execution_failed");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "retry".into(),
+            text: None,
+        },
+    );
+    for round in 1..=ostra_engine::init::MAX_ADVICE {
+        fail(&mut h);
+        h.run(
+            &format!("spawn advisor advise mcp #{round}"),
+            json!({"action": "retry", "guidance": format!("try {round}"), "reason": "r"}),
+        );
+    }
+    fail(&mut h);
+    assert_eq!(
+        mcp_steps(&h),
+        vec!["gate execution_failed"],
+        "advice is used up"
+    );
+}
+
+#[test]
+fn rule_o5_a_missing_inventory_goes_to_the_advisor() {
+    let mut h = created_by_phase();
+    let (detect, _) = h.start("spawn initializer init detect");
+    h.finish(
+        &detect,
+        ExecutionStatus::Ok,
+        Some(detect_submit(json!([]), json!([]))),
+    );
+    assert_eq!(mcp_steps(&h), vec!["init-problem mcp"]);
+    h.ev(SessionEvent::InitStepFailed {
+        project: "mcp".into(),
+        execution: detect.clone(),
+        error: "Detect found nothing.".into(),
+    });
+    assert_eq!(mcp_steps(&h), vec!["spawn advisor advise mcp #1"]);
+}
+
+#[test]
+fn rule_o4_abandoning_a_created_project_init_does_not_fail_the_session() {
+    let mut h = created_by_phase();
+    let (id, _) = h.start("spawn initializer init detect");
+    h.finish(&id, ExecutionStatus::Denied, None);
+    h.run(
+        "spawn advisor",
+        json!({"action": "escalate", "guidance": "", "reason": "r"}),
+    );
+    let g = h.open_gate("execution_failed");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "abandon".into(),
+            text: None,
+        },
+    );
+    let st = h.state();
+    assert!(st.failed.is_none());
+    assert!(!st.awaiting_init("mcp"));
+    assert!(
+        h.summaries()
+            .contains(&"spawn implementer phase 2 initial".to_string())
+    );
 }

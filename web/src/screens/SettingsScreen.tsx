@@ -59,6 +59,8 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
     discard,
     save,
     issues,
+    fixFor,
+    applyFix,
   } = useSettingsEditor(ws, detail, onSaved);
   return (
     <Page
@@ -101,14 +103,25 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
       {elsewhere.length > 0 && (
         <Banner tone="bad" title="Problems to fix before saving">
           <ul className="wp-issues" style={{ paddingLeft: 16 }}>
-            {elsewhere.map((i, n) => (
-              <li key={n}>
-                <button type="button" onClick={() => go(i.path)} style={linkButton} title="Show this field">
-                  <code>{i.path}</code>
-                </button>
-                : {i.message}
-              </li>
-            ))}
+            {elsewhere.map((i, n) => {
+              const fix = fixFor(i);
+              return (
+                <li key={n}>
+                  <button type="button" onClick={() => go(i.path)} style={linkButton} title="Show this field">
+                    <code>{i.path}</code>
+                  </button>
+                  : {i.message}
+                  {fix && (
+                    <>
+                      {" "}
+                      <Button size="sm" icon="wrench" onClick={() => applyFix(fix)}>
+                        {fix.label}
+                      </Button>
+                    </>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </Banner>
       )}

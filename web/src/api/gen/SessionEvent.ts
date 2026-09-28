@@ -5,6 +5,7 @@ import type { CommandPurpose } from "./CommandPurpose";
 import type { ContainmentSignal } from "./ContainmentSignal";
 import type { ContextDelivery } from "./ContextDelivery";
 import type { ContextFile } from "./ContextFile";
+import type { CreatedProject } from "./CreatedProject";
 import type { DecisionId } from "./DecisionId";
 import type { ExecPurpose } from "./ExecPurpose";
 import type { ExecutionId } from "./ExecutionId";
@@ -29,7 +30,7 @@ files: Array<ContextFile>,
 /**
  * Files the user uploaded with the request (Rule C3).
  */
-uploads: Array<UploadedFile>, } | { "type": "request_amended", text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, } | { "type": "session_paused" } | { "type": "session_resumed" } | { "type": "containment_signal", execution: ExecutionId, signal: ContainmentSignal, } | { "type": "yolo_set", enabled: boolean, } | { "type": "decision_made", id: DecisionId, judge: JudgeKind, 
+uploads: Array<UploadedFile>, } | { "type": "request_amended", text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, } | { "type": "project_created", project: CreatedProject, } | { "type": "project_init_finished", project: string, } | { "type": "init_step_failed", project: string, execution: ExecutionId, error: string, } | { "type": "session_paused" } | { "type": "session_resumed" } | { "type": "containment_signal", execution: ExecutionId, signal: ContainmentSignal, } | { "type": "yolo_set", enabled: boolean, } | { "type": "decision_made", id: DecisionId, judge: JudgeKind, 
 /**
  * What the decision is about: a gate id, an execution id, a phase.
  */

@@ -52,6 +52,7 @@ There are about twenty event kinds. Grouped by what they record:
 | Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished` | Agent, purpose, stage, executor, model, the full spawn parameters and rendered spawn block, and later the result with its submit payload, token usage, and cost. `ExecutionResumed` reopens an execution the pause interrupted (Rule P2), so one execution can have several results in the log; the last one counts, and it includes what the earlier parts spent. |
 | Gates | `GateOpened`, `GateAnswered` | A question the pipeline asks, and its answer with its source: `user`, `yolo`, or `engine`. |
 | Engine work | `CommandStarted`, `CommandRan`, `AutofixApplied` | Format and `git add` commands with their exit code and output tail; review findings the engine applied itself. |
+| Projects | `ProjectCreated`, `ProjectInitFinished`, `InitStepFailed` | A project an implementer created with `ProjectCreate`, with every fact of the call (rule O3); the successful end of its init inside the session (rule O4); an init step whose result the engine found unusable, such as no slices or a missing inventory, which the advisor looks at next (rule O5). |
 | Outcomes | `SecurityBlock`, `PhaseBlocked`, `Note` | A BLOCKER finding (Hard rule 21), a phase that cannot continue, and free-text notes such as "A step failed". |
 
 Two fields do more work than they appear to. `ExecutionStarted.purpose` (an `ExecPurpose` such as
@@ -117,7 +118,10 @@ and the fold reads it from the event, not the file:
 let autofix_ids: BTreeSet<String> = rec.params.get(AUTO_FIXABLE_PARAM) ...
 ```
 
-The same reasoning applies elsewhere. A session's projects and their paths are copied into `SessionCreated`. An
+The same reasoning applies elsewhere. A session's projects and their paths are copied into `SessionCreated`.
+A project created mid-session arrives the same way: `ProjectCreated` carries its key, path, stack, purpose,
+base requirements, and the execution that created it, because the fold cannot read `workspace.toml` to learn
+that the project exists, and the init that runs later builds its `User focus:` from those recorded facts. An
 attached file's absolute location is computed from those recorded paths. Uploads are moved into the session
 folder and their names, paths, and sizes are recorded in the event, so a later change to the workspace does not
 change what an old session saw.

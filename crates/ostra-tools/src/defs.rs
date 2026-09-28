@@ -123,6 +123,24 @@ Usage:
 - area narrows recall to a module and its sub-scopes. Lessons from other areas that match the query fill the remaining slots.
 - limit defaults to 8.";
 
+const PROJECT_LIST: &str = "Lists the projects in this workspace: each key, folder, stack, whether it is initialized, and whether it is in this session's scope.
+
+Usage:
+- Call it before ProjectCreate, so the key and folder you choose are not taken and you do not create a project the workspace already holds.
+- The result also names the workspace root, which a new project's folder is relative to.";
+
+const PROJECT_CREATE: &str = "Creates a new, empty project in this workspace and adds it to this session, for a request that needs a codebase no project holds.
+
+Usage:
+- The user approves every call from a card that shows what you pass, unless the session runs under YOLO. Write purpose and requirements for that reader.
+- key is the project key, lowercase letters, digits, and dashes. Tag the new project's deliverables with it.
+- stack is the language and main framework in a few words, such as `rust` or `typescript-node`.
+- purpose says in one to three sentences what the codebase is for.
+- requirements lists the base requirements every later agent builds from, one fact per entry: language and toolchain version, frameworks and libraries with versions, build tool, runtime or transport, the systems it connects to, and where it runs. Take each one from the research documents or the user's answers.
+- folder is relative to the workspace root and defaults to the key. It must be new or empty, and outside every other project.
+- git_init defaults to true, which runs `git init` in the new folder.
+- If the user denies the call, put the work in a project already in scope, and say so in your document.";
+
 const PATH_NOTE: &str =
     "Paths are relative to the project root; an absolute path inside the project works too.";
 
@@ -427,6 +445,28 @@ fn memory_recall_def() -> ToolDefinition {
     )
 }
 
+fn project_defs() -> Vec<ToolDefinition> {
+    vec![
+        def(
+            "ProjectList",
+            PROJECT_LIST,
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        ),
+        def(
+            "ProjectCreate",
+            PROJECT_CREATE,
+            json!({"type": "object", "properties": {
+                "key": {"type": "string", "description": "Project key: lowercase letters, digits, and dashes, starting with a letter or digit"},
+                "stack": {"type": "string", "description": "Language and main framework, such as `rust`"},
+                "purpose": {"type": "string", "description": "What the codebase is for, in one to three sentences"},
+                "requirements": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": ostra_core::manage::MAX_REQUIREMENTS, "description": "Base requirements, one fact per entry"},
+                "folder": {"type": "string", "description": "Folder relative to the workspace root. Defaults to the key"},
+                "git_init": {"type": "boolean", "description": "Run `git init` in the new folder. Defaults to true"}
+            }, "required": ["key", "stack", "purpose", "requirements"], "additionalProperties": false}),
+        ),
+    ]
+}
+
 /// The `Document` tool for an agent that writes a typed document, with that document's schema.
 pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition> {
     let kind = ostra_core::doc::DocKind::for_agent(agent)?;
@@ -480,12 +520,13 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
             Capability::Memory => vec![memory_def()],
             Capability::MemoryRecall => vec![memory_recall_def()],
             Capability::Code => code_defs(),
+            Capability::ManageProjects => project_defs(),
             Capability::WebSearch => vec![],
         })
         .collect()
 }
 
-const EVERY: [Capability; 14] = [
+const EVERY: [Capability; 15] = [
     Capability::Read,
     Capability::Write,
     Capability::Edit,
@@ -500,6 +541,7 @@ const EVERY: [Capability; 14] = [
     Capability::Memory,
     Capability::MemoryRecall,
     Capability::Code,
+    Capability::ManageProjects,
 ];
 
 /// The input schema of a local tool as `agent` sees it.
@@ -564,6 +606,7 @@ mod tests {
             Capability::Report,
             Capability::Memory,
             Capability::MemoryRecall,
+            Capability::ManageProjects,
         ] {
             let d = definitions(&[c]);
             assert_eq!(d[0].name, c.native_tool());
@@ -585,6 +628,7 @@ mod tests {
             Capability::Report,
             Capability::Memory,
             Capability::MemoryRecall,
+            Capability::ManageProjects,
         ];
         for d in definitions(&caps) {
             assert!(

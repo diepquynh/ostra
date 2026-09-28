@@ -40,6 +40,7 @@ fn ctx(root: &Path) -> ExecContext {
         sandbox_decoys: vec![],
         sandbox_loopback: Default::default(),
         sandbox_blocked_ports: vec![],
+        creates_project: false,
     }
 }
 

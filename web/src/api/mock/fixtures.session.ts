@@ -76,7 +76,7 @@ function execution(session: string, x: ExecSpec): ExecutionView {
     stage: x.stage,
     project: x.project,
     executor: "native",
-    model: "anthropic:claude-sonnet-5",
+    model: "anthropic:claude-sonnet-5-5",
     status: x.status,
     started_at: at(x.start),
     ended_at: x.end === null ? null : at(x.end),

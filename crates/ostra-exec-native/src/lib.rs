@@ -17,7 +17,7 @@ use ostra_providers::{
     ServerTools, StopReason, StreamEvent, SystemBlock, ToolChoice, ToolDef,
 };
 use ostra_store::MemoryStore;
-use ostra_tools::{CodeNav, McpConnector, SkillResolver, ToolEnv, ToolEnvConfig};
+use ostra_tools::{CodeNav, ManageConnector, McpConnector, SkillResolver, ToolEnv, ToolEnvConfig};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::sync::Arc;
@@ -42,6 +42,7 @@ pub struct NativeExecutor {
     skill_resolver: SkillResolver,
     code: Option<Arc<dyn CodeNav>>,
     mcp: Option<Arc<dyn McpConnector>>,
+    manage: Option<Arc<dyn ManageConnector>>,
 }
 
 impl NativeExecutor {
@@ -55,11 +56,17 @@ impl NativeExecutor {
             skill_resolver,
             code,
             mcp: None,
+            manage: None,
         }
     }
 
     pub fn with_mcp(mut self, mcp: Arc<dyn McpConnector>) -> Self {
         self.mcp = Some(mcp);
+        self
+    }
+
+    pub fn with_manage(mut self, manage: Arc<dyn ManageConnector>) -> Self {
+        self.manage = Some(manage);
         self
     }
 }
@@ -81,6 +88,7 @@ impl Executor for NativeExecutor {
             skill_resolver: self.skill_resolver.clone(),
             code: self.code.clone(),
             mcp: self.mcp.clone(),
+            manage: self.manage.clone(),
             host: host.clone(),
             usage: usage.clone(),
             cancel: inner.clone(),
@@ -120,6 +128,7 @@ struct Run {
     skill_resolver: SkillResolver,
     code: Option<Arc<dyn CodeNav>>,
     mcp: Option<Arc<dyn McpConnector>>,
+    manage: Option<Arc<dyn ManageConnector>>,
     host: Arc<dyn ExecutionHost>,
     usage: Arc<Mutex<Usage>>,
     cancel: CancellationToken,
@@ -368,6 +377,7 @@ impl Run {
             skill_resolver: self.skill_resolver.clone(),
             code: self.code.clone(),
             mcp: mcp.clone(),
+            manage: self.manage.as_ref().and_then(|m| m.open(spec)),
         })
         .with_private_hosts(ostra_tools::webfetch_hosts(&ctx.permissions.allow))
         .with_scrub_env(mcp_secret_vars(ctx));

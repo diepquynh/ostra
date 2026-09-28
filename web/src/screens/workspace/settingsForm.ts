@@ -100,7 +100,7 @@ export function formatPerExecutor(table: Record<string, string>): string {
 }
 
 const PER_EXECUTOR_HELP =
-  "Write each entry as executor = model, for example native = anthropic:claude-sonnet-5, codex = gpt-5.6-terra.";
+  "Write each entry as executor = model, for example native = anthropic:claude-sonnet-5-5, codex = gpt-5.6-terra.";
 
 export function parsePerExecutor(text: string): { value: Record<string, string> | null; error: string | null } {
   const parts = text
@@ -136,7 +136,7 @@ export function fieldToModel(f: ModelField): { value: ModelChoice | undefined; e
     case "custom":
       return f.text.trim()
         ? { value: f.text.trim(), error: null }
-        : { value: undefined, error: "Enter a model, such as anthropic:claude-sonnet-5 or gpt-5.6-terra." };
+        : { value: undefined, error: "Enter a model, such as anthropic:claude-sonnet-5-5 or gpt-5.6-terra." };
     case "per-executor": {
       const { value, error } = parsePerExecutor(f.text);
       return { value: value ?? undefined, error };

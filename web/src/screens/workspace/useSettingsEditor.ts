@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, HttpError } from "../../api";
-import type { ValidationIssue, WorkspaceDetail } from "../../api/types";
+import type { SettingsFix, ValidationIssue, WorkspaceDetail } from "../../api/types";
 import { flash, useAfterPaint, useAnchor } from "./Page";
 import type { SectionProps } from "./SettingsSections";
 import {
@@ -8,6 +8,7 @@ import {
   fieldIds,
   fromForm,
   mapIssues,
+  modelToField,
   type SettingsForm,
   type SettingsTab,
   settingKeyOf,
@@ -165,6 +166,18 @@ export function useSettingsEditor(ws: string, detail: WorkspaceDetail, onSaved: 
     ...map.unmatched.filter((i) => tabOf(i.path) === tab),
   ];
 
+  // A fix Ostra offers for an issue, applied to the form so the user saves it with the rest.
+  const fixFor = useCallback(
+    (issue: ValidationIssue): SettingsFix | undefined => detail.fixes.find((f) => f.path === issue.path),
+    [detail.fixes],
+  );
+  const applyFix = (fix: SettingsFix) => {
+    const key = fix.path.replace(/^routing\.model\.byAgent\./, "");
+    update((f) => {
+      f.model[key] = modelToField(fix.value);
+    });
+  };
+
   const props: SectionProps = { form, update, issues: issuesFor };
   return {
     base,
@@ -185,5 +198,7 @@ export function useSettingsEditor(ws: string, detail: WorkspaceDetail, onSaved: 
     go,
     discard,
     save,
+    fixFor,
+    applyFix,
   };
 }

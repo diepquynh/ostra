@@ -139,8 +139,10 @@ research document. The full track runs the spec flow below, then Stakes, then th
 
 The judge ([`assets/judges/track.md`](../../assets/judges/track.md)) reads every research document and picks
 `full` only on a finding it can name: a behavior the request leaves open, a contract other code consumes, a
-schema or data change, a change across several modules that must land in order, or a security-sensitive area.
-When the evidence is thin it picks `light`, because the user reviews the built result and can ask for changes
+schema or data change, a change across several modules that must land in order, a security-sensitive area, or
+a need for a new codebase that no project in scope holds. The last one sends the request to the full track
+because only an approved plan can put phases in a project that does not exist yet (rule O2), and the light
+track builds only in projects that already exist. When the evidence is thin it picks `light`, because the user reviews the built result and can ask for changes
 (next sections), while a spec round costs the user several approvals.
 
 The New task form has a Track selector: Auto asks the judge, Light and Full skip it. The Track decision can be
@@ -162,6 +164,15 @@ The spec renders from its typed document. Each requirement shows its EARS type, 
 covers, and its Given/When/Then acceptance criteria:
 
 ![The Requirements chapter of a spec with EARS requirements and acceptance criteria](../images/console/spec-requirements.png)
+
+### A new codebase
+
+A request sometimes needs a codebase of its own: a new MCP server, CLI, or service that sits beside the
+existing projects. The spec does not create it. Before it groups deliverables, generate-spec gives the new
+codebase a new project key, tags its criteria and deliverables with that key, and records the project's stack
+and every base requirement the research or the user's answers settle as `Constraint` criteria. Nothing exists on
+disk yet, so a spec the user rejects leaves nothing behind. The plan and the build take it from there, as the
+next sections describe.
 
 ### Open questions before any fact-check
 
@@ -234,6 +245,13 @@ the skills it needs from the repository's inventory, and Ostra fills a phase's R
 of its steps (Rules P6, P7). The Document tool refuses a plan that names a skill not installed in its repo,
 because the implementer loads only the skills its phase file lists.
 
+A spec deliverable whose repo key is not in scope names a new project. The plan puts its phases in that key,
+with `{workspace root}/{key}` as the phase's repo root, lists the key in its submit call's `new_projects`, and
+copies the project's stack, a one-sentence purpose, and the base requirements from the spec's `Constraint`
+criteria into the context of the first phase in it. When the plan is approved, a phase in a project the session
+does not hold is accepted only when `new_projects` names that key (`SessionState::project_to_create`); any
+other stays blocked, as a phase in an unknown project always was.
+
 The plan then goes through the same loop as the spec: clarifying questions, a fact-check that always uses
 `citations` and receives the approved spec (Rule D5), the recurring-FAIL limit, and approval.
 
@@ -271,6 +289,45 @@ Once the plan is approved, its Phase Index becomes the build queue. The schedule
 When a phase ends blocked, every phase that depends on it, directly or through other phases, is removed from
 the queue, and independent phases keep going (Rule D9). The removal is computed fresh on every planner pass by
 `removed_phases`.
+
+A phase in a new project creates the project first (rule O2). Its implementer runs with `creates_project`
+set in its execution context, its session dir as `Repo root:`, and a `New project:` spawn line naming the key
+and folder. It reads the phase file and calls `ProjectCreate` with the stack, purpose, and requirements written
+there, and it may write nothing outside its session dir and temp until the project exists. The call asks the
+user ([Tools](tools.md#project-management-tools)), so the permission card is where the user approves the new
+project. If the user denies it, the implementer returns stuck, and the phase follows the usual stuck path.
+
+Once the server creates the project, a `ProjectCreated` event adds it to the session's projects and scope
+(rule O3) and stops that implementer (interrupt `ProjectCreated`). The project is the one uninitialized
+project a pipeline session may target, and only in the session that created it. It stays in scope if the
+request is classified again. Every later spawn's repo brief lists it under "Projects created in this session"
+with the stack, purpose, and requirements from the call.
+
+The project is then initialized inside the session, as part of the build (rule O4). The init flow at the end of
+this page runs for it with a `User focus:` built from the `ProjectCreate` call: the key, stack, purpose, and base
+requirements, and a note that the folder is empty. The initializer seeds skills from the stack reference,
+because there is no code to learn from yet. Propose plans the module map from the base requirements (one area per
+part of the project they name), and the module-hub routes to those planned paths, marked planned, with no
+reference files, which Archetype C allows only for a project with no source yet. The phases then put each new
+file in its area, and the implementer knows where one belongs before any directory exists. Until the init ends, nothing but the init and its advisor runs in
+that project: its phases, reviews, tests, research, docs, format, staging, and autofix wait, because every other
+agent routes its work by the project's inventory and profile. Work in other projects does not wait. The board
+shows the init as one "Initialize `<key>`" card in the Build lane, ahead of the phases.
+
+The init ends with a `ProjectInitFinished` event. The runner appends it after it checks that the initializer
+wrote `.ostra/INVENTORY.md` and a valid `.ostra/project.toml`, and marks the project initialized. The stopped
+phase then starts over with initial work inside the new project, with the project's own repo brief.
+
+A step of that init that fails goes to the advisor before the user (rule O5). That covers an initializer run
+that fails or returns `stuck`, a result the init cannot use (detect found no slices, propose found no skills),
+and an inventory or profile that is missing or invalid at the end. The last two the engine finds itself and
+records as an `InitStepFailed` event. The advisor, a read-only agent on the advanced tier with high effort,
+reads the failed step's spawn block, the problem, the project, and any earlier guidance, and submits either
+`retry` with guidance or `escalate` with a reason. A retry runs the step again with an `Advisor guidance:`
+line. After two retries of one step (`MAX_ADVICE`), or on an escalation, the step's failure gate opens for the
+user, carrying the advisor's reason. Retrying there starts the step again. Abandoning it ends the init with a
+note, and the project's phases then run without it; the session does not fail, because the rest of the work
+still needs them.
 
 The Phase graph on the session board shows each phase by step, with its project, complexity, test policy, and
 state:
@@ -438,6 +495,10 @@ the report. It lists what was built, each phase and its outcome, what the fact-c
 every stage that did not run and how to run it later (Rule T7), every blocked phase with its findings and
 ledger path, and under YOLO a "Decided for you" list. The engine then marks the session complete.
 
+The report never comes before every created project's init has ended. The engine appends a "Projects created"
+section to it, listing each project the session created, its folder and stack, and whether it was initialized;
+one that was not tells the user to initialize it from the project list before its next session.
+
 A completion report names the stages that did not run and how to run them, and lists what YOLO decided:
 
 ![A completion report with Stages not run and Decided for you](../images/console/completion.png)
@@ -494,7 +555,8 @@ The last assertion is Rule D2: one explore is still running, so nothing new star
 
 ## The init flow
 
-Setting up a project is a session of its own kind with a shorter pipeline (HANDOVER 8.4):
+Setting up a project is a session of its own kind with a shorter pipeline (HANDOVER 8.4). The same flow also
+runs inside a pipeline session for a project that session created, as described under Phases:
 
 ```
 detect → scout ×N (parallel, max 6) → propose → skill approval (gate)

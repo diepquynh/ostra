@@ -208,6 +208,12 @@ pub enum ExecPurpose {
     Inspect {
         of: ExecutionId,
     },
+    /// Rule O5: the advisor's `round`-th look at `execution`, a failed step of project `project`.
+    Advise {
+        project: String,
+        execution: ExecutionId,
+        round: u32,
+    },
 }
 
 impl ExecPurpose {
@@ -250,6 +256,7 @@ impl ExecPurpose {
             ExecPurpose::Verify { phase } => format!("Phase {phase} · verification"),
             ExecPurpose::QuickAnswer => "Answer".into(),
             ExecPurpose::Inspect { .. } => "Read-only session".into(),
+            ExecPurpose::Advise { project, .. } => format!("Advice for {project}"),
             ExecPurpose::Init { mode, item: i } => match mode {
                 InitializerMode::Detect => "Detect the stack".into(),
                 InitializerMode::Adopt => "Adopt a bootstrap".into(),
@@ -557,6 +564,21 @@ pub enum SessionEvent {
         uploads: Vec<UploadedFile>,
         #[serde(default)]
         delivery: ContextDelivery,
+    },
+    /// Rule O3: an agent created a project with `ProjectCreate`, and it joined the session.
+    ProjectCreated {
+        project: crate::manage::CreatedProject,
+    },
+    /// Rule O4: a created project's init wrote a usable inventory and profile.
+    ProjectInitFinished {
+        project: String,
+    },
+    /// Rule O5: a step of a created project's init left no usable result, found by the engine
+    /// rather than by the step itself. `execution` is the step to run again.
+    InitStepFailed {
+        project: String,
+        execution: ExecutionId,
+        error: String,
     },
     /// The user paused the session (Rule P1).
     SessionPaused,

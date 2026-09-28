@@ -305,6 +305,7 @@ export const mockApi: Api = {
   },
   validateSettings: (_ws, next) => delay(wf.validate(next)),
   approveCommands: () => delay({ ...f.workspaceDetail, settings }),
+  fixSettings: () => delay({ ...f.workspaceDetail, settings }),
   mcpStatus: () =>
     delay(
       settings.mcp_servers.map((m) => wf.mockMcpStatus(m, mcpSignedIn)),

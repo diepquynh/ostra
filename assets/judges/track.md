@@ -21,6 +21,7 @@ The light track is the default. Pick `full` only when the research shows one of 
 | A schema, a data migration, or stored data changes. | A wrong migration is expensive to undo, so the plan sequences it and the user approves it. |
 | The change spans several modules or areas that must land in a set order. | The plan orders the phases and the review checks each one. |
 | Security, authentication, permissions, payments, or data deletion is involved. | The user approves the requirements before code touches them. |
+| The request needs a new codebase that no project in scope holds, such as a new service, library, CLI, or server in its own folder. | Only an approved plan can put phases in a project that does not exist yet (Rule O2), and the light track builds only in projects that already exist. |
 
 A contract changes when an existing name, field, or shape changes that stored data or a consumer outside this
 session relies on. An optional field added to a response, built on both sides in this session and read by

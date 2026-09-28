@@ -54,7 +54,7 @@ the LOW findings, and takes an optional change request:
 | `permission` | A tool call needs approval under the permission rules | Allow once, allow always in this workspace, or deny |
 | `harness_failure` | A harness CLI failed to start or is not signed in | `retry` after signing in, `native` to re-run on the native executor, or abandon |
 | `execution_failed` | An execution failed after its automatic retry | `retry` or `abandon` |
-| `skill_approval` | The init flow proposed skills | Per skill: generate, regenerate, reuse, or drop |
+| `skill_approval` | The init flow proposed skills, in an init session or in the build of a project the session created | Per skill: generate, regenerate, reuse, or drop |
 | `budget_reached` | The session spent its budget | `raise` (with the extra dollars as text) or `stop` |
 
 ### Open questions
@@ -145,6 +145,19 @@ rule "always in this workspace" would add (for example `Bash(cargo test *)` or `
 
 ![A permission gate for a Bash command with Allow once, Always in this workspace, and Deny](../images/console/permission-gate.png)
 
+`ProjectCreate`, the call the implementer of a phase in a planned new project makes to create it, opens this
+gate in every permission mode, bypass included, unless the session runs under YOLO, whose policy allows the call
+without a gate (rule O1). Its reason names the key, stack, folder, and purpose, so the card is where the user
+decides whether the new project should exist. It carries no suggested rule, and
+answering "always in this workspace" adds none, because no allow rule may stand in for the user's answer to a
+call that changes Ostra. Nothing is created on disk until the answer.
+
+In a session that created a project, the build runs that project's init, so its `skill_approval` and
+`execution_failed` gates open in the pipeline session itself. A failed init step reaches the user only after
+the advisor agent has tried: it may send the step back with guidance up to two times, and when it cannot help or
+escalates, the `execution_failed` gate opens with its reason (rule O5). Abandoning the step there does not fail
+the session: the init ends with a note, and the project's phases run without it (rule O4).
+
 The execution shows the same ask above its activity while the call waits:
 
 ![A code reviewer run paused on a permission ask](../images/console/reviewer-ask.png)
@@ -188,7 +201,7 @@ stated reason, a call to the YOLO-answer judge with a JSON schema for that gate'
 | `execution_failed` | Fixed: `retry`, until the same agent has failed three times; then `abandon`. |
 | `harness_failure` | Fixed: `native`. |
 | `skill_approval` | Fixed: the proposal's default dispositions. |
-| `permission` | Answered inside the execution: the session behaves as `bypass`, so the ask never waits. |
+| `permission` | Answered inside the execution: the session behaves as `bypass`, so the ask never waits. This includes `ProjectCreate`, which asks in every mode without YOLO. |
 | `budget_reached` | None. The gate stays open for the user. |
 
 The judge's answer is not trusted blindly. `yolo_answer_from_judge` turns it into a gate answer and enforces what
@@ -392,7 +405,7 @@ the session state the engine would have when it asks the judge, builds the input
 and calls the judge several times per model, because one run of a model says little about the next:
 
 ```bash
-OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5 OSTRA_EVAL_RUNS=3 \
+OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 OSTRA_EVAL_RUNS=3 \
   cargo test -p ostra-server --test judge_evals -- --ignored --nocapture
 ```
 
@@ -402,6 +415,34 @@ live test is ignored by default because it calls paid models; it fails only when
 answers vary from run to run. An offline test in the same file checks that every case still builds its session,
 so a case broken by an engine change fails in the normal suite. `OSTRA_EVAL_CASES` runs the cases whose id
 contains its value.
+
+## Measuring the advisor
+
+The advisor (rule O5) is an agent, not a judge: it reads files before it decides, so its evals run the real
+agent loop. [`tests/evals/advisor.toml`](../../tests/evals/advisor.toml) holds failed steps of a created
+project's init, each with the files the engine would leave on disk, the decision a careful engineer would make,
+what actually caused the failure, and a rubric. Several come in pairs with the same problem text and opposite
+answers: a detect step that returned zero slices because the folder is empty, against one that planned the slice
+but submitted it under the wrong key; a private registry that a creation skill cannot do without, against the
+same registry that a convention skill does not need.
+
+[`crates/ostra-server/tests/advisor_evals.rs`](../../crates/ostra-server/tests/advisor_evals.rs) lays each case
+out under the target dir (never `/tmp`, which the sandbox replaces), renders the failed step's spawn block with
+the spawn factory, builds the advisor's spawn with the same `advisor_request` the planner uses, and runs the
+advisor in the native loop with the policy and the sandbox. It answers every permission ask with a refusal, as a
+user who is away would. A run passes when the action matches, the advisor's text names each required fact, and a
+grader model (`OSTRA_EVAL_GRADER`, Opus by default) finds every rubric point met:
+
+```bash
+OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 OSTRA_EVAL_RUNS=5 \
+  cargo test -p ostra-server --test advisor_evals -- --ignored --nocapture
+```
+
+Runs go out run by run, alternating models and cases, so the ones in flight together are spread out. The report
+in `target/evals/` holds each run's guidance, reason, grader verdict, tool calls, refused asks, and cost, and each
+scenario folder keeps the `first-message.md` the advisor read. An offline test checks that every case lays out
+and builds its spawn with the problem text the engine would write, so a case an engine change breaks fails in
+the normal suite.
 
 ## Where to look in the code
 

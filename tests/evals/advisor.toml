@@ -1,0 +1,708 @@
+# Advisor evals. Each case is a failed step of a created project's init (Rule O5), laid out on disk the way
+# the engine leaves it, with the decision a careful engineer would make. `crates/ostra-server/tests/advisor_evals.rs`
+# builds the advisor's spawn through the same `advisor_request` and spawn factory the engine uses, runs the real
+# advisor in the native loop (policy and sandbox included), and scores its submit call: the action, facts its
+# text must name, and a grader's verdict on the rubric.
+#
+# Placeholders in paths and text: {ws} workspace root, {repo} project root, {session} the project's session dir,
+# {assets} Ostra's assets dir, {key} the project key. Every case's project is `notes-mcp` unless it sets
+# `[case.project]`. The project folder is a fresh `git init` plus the case's files, because a created project is
+# initialized right after it is created. `problem` defaults to what the engine writes for a stuck step
+# (`stuck_problem`: the summary, then what it needs); `problem_check` computes it with the runner's own inventory and profile check.
+#
+# Several cases come in pairs with the same surface problem and opposite answers, so an advisor that pattern-
+# matches the problem text instead of reading the files fails one of them.
+
+[default_project]
+key = "notes-mcp"
+stack = "rust"
+purpose = "A stdio MCP server that lets an AI agent search a team's notes and file follow-up tasks, reading PostgreSQL and publishing task events to a Redis stream."
+requirements = [
+  "Rust 2024 edition on the stable toolchain",
+  "rmcp 3.5 as the MCP SDK, stdio transport only",
+  "tokio multi-threaded runtime",
+  "sqlx 0.8 with PostgreSQL and rustls TLS, reading NOTES_DB_URL",
+  "redis 0.32 cluster client with TLS, adding task events to a stream with XADD",
+  "Built with cargo; tests run with cargo test",
+]
+
+# ---------------------------------------------------------------------------------------------------------
+# Detect
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "detect-stuck-empty-project"
+note = "The first failure every created project risks: detect finds no code and stops instead of using the stack it was given."
+mode = "detect"
+result = '''
+{"status": "stuck", "summary": "The repository has no source files, so the stack cannot be detected and no slices can be planned.",
+ "files": [], "result": {},
+ "stuck": {"step": "D1", "attempted": "Counted source files by extension and looked for manifests (Cargo.toml, package.json, pom.xml, go.mod).",
+  "diagnostic": "find printed nothing: the repository holds only .git, and no manifest exists.",
+  "ruled_out": ["a nested source directory", "a gitignored source tree"],
+  "need": "The stack of this project and the directories to scout, because there is no code to detect them from."}}
+'''
+[case.expect]
+action = "retry"
+require = [["rust"], ["slice"]]
+cause = "The project was created empty moments ago. Its stack is given in the User focus (Rust) and the initializer's instructions say an empty project still continues with the stack from the focus and one slice over the repository root."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance tells detect to take the stack from the User focus or project context (Rust) instead of detecting it; (3) it tells detect to plan at least one slice that covers the repository root (for example `.`), not zero slices; (4) it does not ask the step to create source files or a manifest, or to run `cargo init` or `cargo new`. Naming the `_generic` reference (no Rust reference ships with Ostra) is good but not required."""
+
+[[case]]
+id = "detect-result-key-mismatch"
+note = "Second round. The earlier guidance worked on disk, but the submitted result used the wrong key, so the engine saw no slices. Trap: escalating because guidance was already given."
+mode = "detect"
+earlier = ["Take the stack from the User focus (Rust) instead of detecting it, choose the `_generic` stack reference because no Rust reference exists, and plan one slice that covers the repository root (`.`), as the empty-project rule in Step D1 says. Do not create any files in the repository."]
+problem = "Detect found no slices to scout and no existing skills, so there is nothing to build skills from."
+result = '''
+{"status": "ok", "summary": "Wrote the scout plan: Rust, _generic reference, one slice over the repository root.",
+ "files": ["{session}/ostra-scout-plan.md"],
+ "result": {"scout_plan_path": "{session}/ostra-scout-plan.md", "stack": "rust", "reference_name": "_generic",
+  "slice_list": [{"name": "Repository root", "path": "."}], "existing_skills": [], "ultracode_bootstrap": false}}
+'''
+[[case.file]]
+path = "{session}/ostra-scout-plan.md"
+content = """# Scout Plan
+Stack: rust · Reference: {assets}/refs/_generic.md
+Repo root: {repo}
+User focus: A new project `notes-mcp`, created in this session. Its folder is empty.
+Ultracode bootstrap: no
+Instruction files: none
+Prior profile: none
+
+## Detected Commands
+| Purpose | Command |
+| --- | --- |
+| build | null |
+| test | null |
+| test-one | null |
+| format | null |
+| lint | null |
+| typecheck | null |
+| run | null |
+
+## Candidate Component Types
+- MCP tool handler (planned: the request needs query and update tools)
+- database query module (planned: sqlx against PostgreSQL)
+- stream publisher (planned: XADD to the Redis cluster)
+
+## Conventions From Instruction Files
+none
+
+## Slices (scout these in parallel)
+| # | Slice descriptor | Slug | Path(s) |
+| --- | --- | --- | --- |
+| 1 | Repository root | root | . |
+
+## Existing Skills
+| Name | Kind guess | Path | Description |
+| --- | --- | --- | --- |
+| none | none | none | none found |
+"""
+[case.expect]
+action = "retry"
+require = [["slices"]]
+cause = "The scout plan on disk has the root slice, so the earlier guidance was followed. The submitted result named the list `slice_list` with `name` and `path` keys, while Ostra reads `result.slices`, each with `descriptor`, `slug`, and `paths` (a list), so the engine saw zero slices."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance identifies that the plan file already lists the slice and that the problem is the submitted result: the key `slice_list` (with `name` and `path`) instead of `slices`; (3) it tells detect to submit the slice under `result.slices` in the shape its Submit paragraph shows. Naming the exact item keys `descriptor`, `slug`, and `paths` is good but not required. Fail if it escalates, or if it only repeats the earlier advice about planning a root slice without naming the result's shape."""
+
+[[case]]
+id = "detect-zero-slices-empty-project"
+note = "Same problem text as detect-result-key-mismatch, different cause: detect planned zero slices on purpose because the folder is empty."
+mode = "detect"
+problem = "Detect found no slices to scout and no existing skills, so there is nothing to build skills from."
+result = '''
+{"status": "ok", "summary": "The project is empty: no source files and no existing skills, so no slices were planned.",
+ "files": ["{session}/ostra-scout-plan.md"],
+ "result": {"scout_plan_path": "{session}/ostra-scout-plan.md", "stack": "rust", "reference_name": "_generic",
+  "slices": [], "existing_skills": [], "ultracode_bootstrap": false}}
+'''
+[[case.file]]
+path = "{session}/ostra-scout-plan.md"
+content = """# Scout Plan
+Stack: rust · Reference: {assets}/refs/_generic.md
+Repo root: {repo}
+User focus: A new project `notes-mcp`, created in this session. Its folder is empty.
+Ultracode bootstrap: no
+Instruction files: none
+Prior profile: none
+
+## Detected Commands
+| Purpose | Command |
+| --- | --- |
+| build | null |
+| test | null |
+
+## Candidate Component Types
+none: the repository has no source files
+
+## Slices (scout these in parallel)
+| # | Slice descriptor | Slug | Path(s) |
+| --- | --- | --- | --- |
+| none | none | none | the repository has no source files |
+
+## Existing Skills
+| Name | Kind guess | Path | Description |
+| --- | --- | --- | --- |
+| none | none | none | none found |
+"""
+[case.expect]
+action = "retry"
+require = [["slice"]]
+cause = "Detect planned zero slices because the folder is empty, but with zero slices and no existing skills Ostra cannot continue. The initializer's instructions say an empty project still gets one slice over the repository root, so propose can seed skills from the stack reference."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance tells detect to plan one slice that covers the repository root (for example `.`) even though the folder is empty, and to return it in `result.slices`; (3) it does not ask the step to create files in the repository. Fail if it escalates."""
+
+[[case]]
+id = "detect-toolchain-missing"
+note = "A missing tool looks like an environment problem the user must fix. It is not: an empty project has no commands to confirm yet."
+mode = "detect"
+result = '''
+{"status": "stuck", "summary": "Stopped at Step D4: the build and test commands cannot be confirmed.",
+ "files": ["{session}/ostra-scout-plan.md"], "result": {},
+ "stuck": {"step": "D4", "attempted": "Ran `cargo --version` and `which cargo` to confirm the conventional Rust commands before recording them.",
+  "diagnostic": "bash: cargo: command not found (exit 127). `which cargo` printed nothing.",
+  "ruled_out": ["a rustup install under ~/.cargo/bin (the directory does not exist)"],
+  "need": "Install the Rust toolchain on this machine, or tell me which commands to record."}}
+'''
+[[case.file]]
+path = "{session}/ostra-scout-plan.md"
+content = """# Scout Plan (draft)
+Stack: rust · Reference: {assets}/refs/_generic.md
+Repo root: {repo}
+
+## Detected Commands
+| Purpose | Command |
+| --- | --- |
+| build | (pending: cargo not found) |
+| test | (pending: cargo not found) |
+
+## Slices (scout these in parallel)
+| # | Slice descriptor | Slug | Path(s) |
+| --- | --- | --- | --- |
+| 1 | Repository root | root | . |
+"""
+[case.expect]
+action = "retry"
+require = [["null", "without running", "not run", "do not run", "don't run", "cargo build"]]
+cause = "The project has no Cargo.toml yet, so no command exists to confirm. The generic stack reference says to set commands to null when none exist; recording the conventional cargo commands from the base requirements, unconfirmed, also lets the init finish. Installing a toolchain is not needed to initialize an empty project."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance lets detect finish without cargo, either by recording the commands as null because no manifest exists yet, or by recording the conventional cargo commands from the base requirements without running them; (3) it does not make installing the Rust toolchain a precondition for this step; noting that later build and test steps will need cargo is fine. Fail if it escalates."""
+
+# ---------------------------------------------------------------------------------------------------------
+# Scout
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "scout-slice-path-missing"
+note = "The slice names a directory that the plan expects but no code has created yet."
+mode = "scout"
+item = "src"
+result = '''
+{"status": "stuck", "summary": "The slice path does not exist, so nothing could be scouted.",
+ "files": [], "result": {},
+ "stuck": {"step": "S2", "attempted": "Searched the slice with grep and find for the candidate component types.",
+  "diagnostic": "find: 'src': No such file or directory",
+  "ruled_out": [], "need": "The correct slice path for this project."}}
+'''
+[case.init]
+"Slice" = "Rust sources"
+"Slice paths" = "src"
+"stack_reference_name" = "_generic"
+"Scout plan" = "{session}/ostra-scout-plan.md"
+[[case.file]]
+path = "{session}/ostra-scout-plan.md"
+content = """# Scout Plan
+Stack: rust · Reference: {assets}/refs/_generic.md
+Repo root: {repo}
+User focus: A new project `notes-mcp`, created in this session. Its folder is empty.
+
+## Detected Commands
+| Purpose | Command |
+| --- | --- |
+| build | null |
+| test | null |
+
+## Candidate Component Types
+- MCP tool handler (planned)
+- database query module (planned)
+- stream publisher (planned)
+
+## Slices (scout these in parallel)
+| # | Slice descriptor | Slug | Path(s) |
+| --- | --- | --- | --- |
+| 1 | Rust sources | src | src |
+"""
+[case.expect]
+action = "retry"
+require = [["findings"]]
+cause = "The project is empty, so `src/` does not exist yet: no code has been written. The scout should record that no component types were found, in its findings file (`{session}/ostra-findings-src.md`), and submit ok, so propose seeds skills from the stack reference."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance explains that the project is empty (only .git) and `src/` does not exist because no code exists yet; (3) it tells the scout to write its findings file recording that no component types were found (scanning the repository root instead is fine) and to submit ok. Fail if it escalates, or tells the step to create `src/` or any source file."""
+
+# ---------------------------------------------------------------------------------------------------------
+# Propose
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "propose-no-skills-empty-project"
+note = "Propose read correctly that no components exist, then proposed nothing at all."
+mode = "propose"
+problem = "Scouting found no recurring components, so there are no skills to propose."
+result = '''
+{"status": "ok", "summary": "No component types were found in any slice, so no skills are proposed.",
+ "files": ["{session}/ostra-proposal.md", "{session}/ostra-proposal.json"],
+ "result": {"proposal_path": "{session}/ostra-proposal.json", "skills": []}}
+'''
+[case.init]
+"Scout findings" = "{session}/ostra-findings-root.md"
+"Scout plan" = "{session}/ostra-scout-plan.md"
+[[case.file]]
+path = "{session}/ostra-scout-plan.md"
+content = """# Scout Plan
+Stack: rust · Reference: {assets}/refs/_generic.md
+Repo root: {repo}
+
+## Slices (scout these in parallel)
+| # | Slice descriptor | Slug | Path(s) |
+| --- | --- | --- | --- |
+| 1 | Repository root | root | . |
+"""
+[[case.file]]
+path = "{session}/ostra-findings-root.md"
+content = """# Scout Findings: Repository root
+Slice paths: .
+
+## Component Types Found
+None. The repository holds no source files yet (only .git).
+"""
+[[case.file]]
+path = "{session}/ostra-proposal.json"
+content = """{"stack": "rust", "reference_path": "{assets}/refs/_generic.md", "scout_plan_path": "{session}/ostra-scout-plan.md",
+ "findings_paths": ["{session}/ostra-findings-root.md"], "commands": {"build": null, "test": null}, "module_map": [], "skills": []}
+"""
+[case.expect]
+action = "retry"
+require = [["convention"]]
+cause = "No components is expected for a project created moments ago. Propose should still recommend the convention skill (and a module-hub from the planned areas), seeded from the stack reference and the base requirements, instead of an empty list."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance says finding no component types is expected for a new, empty project; (3) it tells propose to still recommend at least the `convention` skill, seeded from the stack reference (as the initializer's rule for a project with no source says; adding the base requirements is good but not required), with recommend true (a `module-hub` from the planned areas is good but not required). Fail if it escalates."""
+
+[[case]]
+id = "propose-findings-path-mismatch"
+note = "Same problem text as propose-no-skills-empty-project, different cause: the findings file propose was given does not exist; the scout wrote it under another name."
+mode = "propose"
+problem = "Scouting found no recurring components, so there are no skills to propose."
+result = '''
+{"status": "ok", "summary": "The findings file listed for this run does not exist; with no findings there are no component types, so no skills are proposed.",
+ "files": ["{session}/ostra-proposal.md", "{session}/ostra-proposal.json"],
+ "result": {"proposal_path": "{session}/ostra-proposal.json", "skills": []}}
+'''
+[case.init]
+"Scout findings" = "{session}/ostra-findings-core.md"
+"Scout plan" = "{session}/ostra-scout-plan.md"
+[[case.file]]
+path = "{session}/ostra-scout-plan.md"
+content = """# Scout Plan
+Stack: rust · Reference: {assets}/refs/_generic.md
+Repo root: {repo}
+
+## Slices (scout these in parallel)
+| # | Slice descriptor | Slug | Path(s) |
+| --- | --- | --- | --- |
+| 1 | Repository root | root | . |
+"""
+[[case.file]]
+path = "{session}/ostra-findings-root.md"
+content = """# Scout Findings: Repository root
+Slice paths: .
+
+## Component Types Found
+None found in code: the repository holds no source files yet (only .git).
+
+## Planned component types (from the User focus, for seeding)
+- MCP tool handler: one handler per tool the server exposes (search notes, create a task, update a task)
+- database query module: sqlx queries against PostgreSQL
+- stream publisher: XADD commands to the Redis cluster
+
+## Observed conventions
+None yet. Seed the convention skill from the stack reference and the base requirements.
+"""
+[case.expect]
+action = "retry"
+require = [["ostra-findings-root.md"]]
+cause = "The scout reported its findings path as `ostra-findings-core.md` but wrote `ostra-findings-root.md`. The real file exists, notes the project is empty, lists the planned component types, and says to seed conventions from the reference. Propose should read that file and recommend the seeded skills."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance names the file that exists, `ostra-findings-root.md`, as the scout's findings to read instead of the missing `ostra-findings-core.md`; (3) it tells propose to recommend skills from it (at least the `convention` skill, seeded from the stack reference, since no code exists yet). Fail if it escalates, or does not name the actual findings file."""
+
+# ---------------------------------------------------------------------------------------------------------
+# Generate skill
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "generate-convention-no-exemplars"
+note = "The step follows the rule for projects with code and misses the rule for projects without it."
+mode = "generate-skill"
+item = "convention"
+result = '''
+{"status": "stuck", "summary": "The convention skill cannot be grounded: the findings contain no exemplars.",
+ "files": [], "result": {},
+ "stuck": {"step": "GS3", "attempted": "Collected conventions observed consistently across the findings' exemplars, as Archetype B requires.",
+  "diagnostic": "ostra-findings-root.md lists no component types and no exemplars; the repository has no source files.",
+  "ruled_out": ["reading the repository directly (only .git exists)"],
+  "need": "Real source files to ground PASS and FAIL examples, or permission to invent examples."}}
+'''
+[case.init]
+"Skill name" = "convention"
+"Skill kind" = "convention"
+"Component type" = "none"
+"Disposition" = "generate"
+"Proposal" = "{session}/ostra-proposal.json"
+"Scout findings" = "{session}/ostra-findings-root.md"
+[[case.file]]
+path = "{session}/ostra-findings-root.md"
+content = """# Scout Findings: Repository root
+Slice paths: .
+
+## Component Types Found
+None. The repository holds no source files yet (only .git).
+"""
+[[case.file]]
+path = "{session}/ostra-proposal.json"
+content = """{"stack": "rust", "reference_path": "{assets}/refs/_generic.md", "scout_plan_path": "{session}/ostra-scout-plan.md",
+ "findings_paths": ["{session}/ostra-findings-root.md"], "commands": {"build": "cargo build", "test": "cargo test"},
+ "module_map": [{"glob": "src/tools/**", "area": "tools", "reference": null}, {"glob": "src/db/**", "area": "database", "reference": null}],
+ "skills": [
+  {"name": "convention", "kind": "convention", "component_type": null, "count": 0, "slice_spread": 0, "status": "new", "existing_path": null, "recommend": true, "rationale": "Seeded from the stack reference: no code yet", "description": "Code style for this Rust MCP server"},
+  {"name": "module-hub", "kind": "module-hub", "component_type": null, "count": 0, "slice_spread": 0, "status": "new", "existing_path": null, "recommend": true, "rationale": "Two planned areas", "description": "Routes work to the tools and database areas"}]}
+"""
+[case.expect]
+action = "retry"
+require = [["seed", "reference"]]
+cause = "The initializer's instructions for the convention skill say: for a project with no source yet, fill the skill from the stack reference instead, and say so in the skill. The step applied the rule for projects with code."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance tells the step to write the convention skill seeded from the stack reference and the project's base requirements (Rust 2024, rmcp, tokio, sqlx, redis), because no source exists yet (telling it to say so in the skill is good but not required, because the step's own instructions require it); (3) it does not tell the step to create source files. Fail if it escalates."""
+
+[[case]]
+id = "generate-module-hub-write-scope"
+note = "The step tried to scaffold the project to make its map concrete, and treats a map of not-yet-existing directories as ruled out."
+mode = "generate-skill"
+item = "module-hub"
+result = '''
+{"status": "stuck", "summary": "Cannot write the module-hub: the planned directories do not exist and creating them was refused.",
+ "files": [], "result": {},
+ "stuck": {"step": "GS3", "attempted": "Created Cargo.toml, src/main.rs, and src/tools/ so the module map would point at real directories.",
+  "diagnostic": "Denied by guard `write-scope`: initializer writes only .ostra/ and .agents/skills/ (target {repo}/src/main.rs).",
+  "ruled_out": ["writing the map with globs for directories that do not exist"],
+  "need": "Permission to create the project's source layout, or a module map that does not need it."}}
+'''
+[case.init]
+"Skill name" = "module-hub"
+"Skill kind" = "module-hub"
+"Component type" = "none"
+"Disposition" = "generate"
+"Proposal" = "{session}/ostra-proposal.json"
+"Scout findings" = "{session}/ostra-findings-root.md"
+[[case.file]]
+path = "{session}/ostra-findings-root.md"
+content = """# Scout Findings: Repository root
+Slice paths: .
+
+## Component Types Found
+None. The repository holds no source files yet (only .git).
+"""
+[[case.file]]
+path = "{session}/ostra-proposal.json"
+content = """{"stack": "rust", "reference_path": "{assets}/refs/_generic.md", "scout_plan_path": "{session}/ostra-scout-plan.md",
+ "findings_paths": ["{session}/ostra-findings-root.md"], "commands": {"build": "cargo build", "test": "cargo test"},
+ "module_map": [
+  {"glob": "src/tools/**", "area": "tools", "reference": null},
+  {"glob": "src/db/**", "area": "database", "reference": null},
+  {"glob": "src/stream/**", "area": "stream", "reference": null}],
+ "skills": [{"name": "module-hub", "kind": "module-hub", "component_type": null, "count": 0, "slice_spread": 0, "status": "new", "existing_path": null, "recommend": true, "rationale": "Three planned areas", "description": "Routes work to the tools, database, and stream areas"}]}
+"""
+[case.expect]
+action = "retry"
+require = [["module_map", "module map", "proposal"]]
+cause = "Initialization never creates project code; the guard refused correctly. What the step ruled out is allowed: Archetype C's rule for a project with no source yet says to route the planned paths from the approved proposal's module map, marked planned, with no reference files, because the build creates those directories."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance tells the step not to create any project files and to write only under `.agents/skills/module-hub/`; (3) it tells the step to route the proposal's planned `module_map` globs in the routing tables, marked planned, even though those directories do not exist yet (Archetype C's rule for a project with no source). Fail if it escalates, suggests relaxing or working around the guard, tells the step to create the source layout, or routes everything to the repository root and leaves the planned areas out of the routing tables."""
+
+[[case]]
+id = "generate-creation-private-framework"
+note = "Second round. The TODO route the step's own rules allow was already tried and failed self-review. The fact it needs is on a registry the machine cannot reach."
+mode = "generate-skill"
+item = "mcp-tool"
+earlier = ["Write the mcp-tool skill from the base requirements and mark every acme-mcp-kit API detail you cannot confirm as `{TODO: confirm}`, as Step GS3 allows, instead of stopping."]
+result = '''
+{"status": "stuck", "summary": "The mcp-tool skill fails self-review: its template is almost entirely TODO markers and cannot teach a handler.",
+ "files": ["{repo}/.agents/skills/mcp-tool/SKILL.md"], "result": {},
+ "stuck": {"step": "GS4", "attempted": "Wrote the skill from the base requirements with every acme-mcp-kit detail marked {TODO: confirm}, as the earlier guidance said, then ran the self-review checklist.",
+  "diagnostic": "Self-review failed: 9 of the template's 11 lines are {TODO: confirm}, so the template does not compile after placeholder substitution, and no invariant is grounded. Looked for acme-mcp-kit in the workspace artifacts, a vendor directory, and ~/.cargo/registry; `cargo search acme-mcp-kit --registry acme` answered: error: failed to query registry `acme`: HTTP 401 Unauthorized.",
+  "ruled_out": ["crates.io (acme-mcp-kit is not published there)", "the stack reference (it covers no MCP framework)", "writing the handler from another MCP SDK's API (rmcp), which would teach the wrong framework"],
+  "need": "acme-mcp-kit's documentation or source, or credentials for the acme registry."}}
+'''
+[case.project]
+key = "notes-mcp"
+stack = "rust"
+purpose = "A stdio MCP server that lets an AI agent search a team's notes and file follow-up tasks."
+requirements = [
+  "Rust 2024 edition on the stable toolchain",
+  "acme-mcp-kit 2.x, the company's internal MCP framework from the private `acme` cargo registry, for every tool handler",
+  "tokio multi-threaded runtime",
+  "sqlx 0.8 with PostgreSQL",
+]
+[case.init]
+"Skill name" = "mcp-tool"
+"Skill kind" = "creation"
+"Component type" = "MCP tool handler"
+"Disposition" = "generate"
+"Proposal" = "{session}/ostra-proposal.json"
+"Scout findings" = "{session}/ostra-findings-root.md"
+[[case.file]]
+path = "{session}/ostra-findings-root.md"
+content = """# Scout Findings: Repository root
+Slice paths: .
+
+## Component Types Found
+None. The repository holds no source files yet (only .git).
+
+## Planned component types (from the User focus)
+- MCP tool handler: every tool is an acme-mcp-kit handler
+"""
+[[case.file]]
+path = "{session}/ostra-proposal.json"
+content = """{"stack": "rust", "reference_path": "{assets}/refs/_generic.md", "scout_plan_path": "{session}/ostra-scout-plan.md",
+ "findings_paths": ["{session}/ostra-findings-root.md"], "commands": {"build": "cargo build", "test": "cargo test"},
+ "module_map": [{"glob": "src/tools/**", "area": "tools", "reference": null}],
+ "skills": [{"name": "mcp-tool", "kind": "creation", "component_type": "MCP tool handler", "count": 0, "slice_spread": 0, "status": "new", "existing_path": null, "recommend": true, "rationale": "Every tool the server exposes is an acme-mcp-kit handler", "description": "Create one MCP tool handler with acme-mcp-kit"}]}
+"""
+[[case.file]]
+path = "{repo}/.agents/skills/mcp-tool/SKILL.md"
+content = """---
+name: mcp-tool
+description: Create one MCP tool handler with acme-mcp-kit. {TODO: confirm}
+---
+
+# Create an MCP tool handler
+
+```rust
+use acme_mcp_kit::{TODO: confirm};
+
+#[{TODO: confirm}]
+pub struct {ToolName}Handler { {TODO: confirm} }
+
+impl {TODO: confirm} for {ToolName}Handler {
+    {TODO: confirm}
+}
+```
+
+## Invariants
+- {TODO: confirm} registration with the acme server builder
+- {TODO: confirm} input schema derivation
+"""
+[case.expect]
+action = "escalate"
+require = [["401", "credential", "access", "documentation", "docs", "private"]]
+cause = "A creation skill must be grounded in the framework's real API, which lives only in a private registry this machine cannot reach (HTTP 401), and no workspace file documents it. The TODO route was tried and failed self-review. Only the user can supply the documentation, the source, or registry access, or drop the skill."
+rubric = """Pass only if all hold: (1) the action is escalate; (2) the reason says the handler skill needs acme-mcp-kit's real API, which is on a private registry this machine cannot reach and is documented nowhere in the workspace, and that the TODO approach was already tried; (3) it names at least one thing the user can do, such as providing the documentation or source (for example as a workspace artifact), registry access, or dropping the skill. Fail if it retries with guidance to write the template from general knowledge or another MCP SDK."""
+
+[[case]]
+id = "generate-convention-private-framework"
+note = "Same private registry and the same 401 as generate-creation-private-framework, opposite answer: a convention skill does not need the framework's API."
+mode = "generate-skill"
+item = "convention"
+result = '''
+{"status": "stuck", "summary": "The convention skill cannot confirm acme-mcp-kit's own conventions.",
+ "files": [], "result": {},
+ "stuck": {"step": "GS1", "attempted": "Tried to read acme-mcp-kit's style guide so the convention skill matches the framework.",
+  "diagnostic": "`cargo search acme-mcp-kit --registry acme`: error: failed to query registry `acme`: HTTP 401 Unauthorized.",
+  "ruled_out": ["crates.io (the crate is not published there)"],
+  "need": "Credentials for the acme registry."}}
+'''
+[case.project]
+key = "notes-mcp"
+stack = "rust"
+purpose = "A stdio MCP server that lets an AI agent search a team's notes and file follow-up tasks."
+requirements = [
+  "Rust 2024 edition on the stable toolchain",
+  "acme-mcp-kit 2.x, the company's internal MCP framework from the private `acme` cargo registry, for every tool handler",
+  "tokio multi-threaded runtime",
+  "sqlx 0.8 with PostgreSQL",
+]
+[case.init]
+"Skill name" = "convention"
+"Skill kind" = "convention"
+"Component type" = "none"
+"Disposition" = "generate"
+"Proposal" = "{session}/ostra-proposal.json"
+"Scout findings" = "{session}/ostra-findings-root.md"
+[[case.file]]
+path = "{session}/ostra-findings-root.md"
+content = """# Scout Findings: Repository root
+Slice paths: .
+
+## Component Types Found
+None. The repository holds no source files yet (only .git).
+"""
+[[case.file]]
+path = "{session}/ostra-proposal.json"
+content = """{"stack": "rust", "reference_path": "{assets}/refs/_generic.md", "scout_plan_path": "{session}/ostra-scout-plan.md",
+ "findings_paths": ["{session}/ostra-findings-root.md"], "commands": {"build": "cargo build", "test": "cargo test"},
+ "module_map": [{"glob": "src/tools/**", "area": "tools", "reference": null}],
+ "skills": [{"name": "convention", "kind": "convention", "component_type": null, "count": 0, "slice_spread": 0, "status": "new", "existing_path": null, "recommend": true, "rationale": "Seeded from the stack reference: no code yet", "description": "Code style for this Rust MCP server"}]}
+"""
+[case.expect]
+action = "retry"
+require = [["reference", "seed", "requirement"]]
+cause = "A convention skill teaches naming, error handling, async, and module layout; it does not need the framework's API. It can be seeded from the stack reference and the base requirements, leaving framework-specific rules out or marked to confirm."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance says the convention skill does not need acme-mcp-kit's documentation and tells the step to seed it from the stack reference and the base requirements; (3) framework-specific rules are left out or marked to confirm; registry credentials are not required. Fail if it escalates."""
+
+# ---------------------------------------------------------------------------------------------------------
+# Generate inventory: the runner's own check found the problem
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "inventory-letter-case"
+note = "The step's submit check passed because it checked the path the step reported. The runner checks the exact path, and Linux file names are case sensitive."
+mode = "generate-inventory"
+problem_check = true
+result = '''
+{"status": "ok", "summary": "Wrote the inventory, the profile, and the generation report.",
+ "files": ["{repo}/.ostra/Inventory.md", "{repo}/.ostra/project.toml", "{session}/ostra-generate-report.md"],
+ "result": {"inventory_path": "{repo}/.ostra/Inventory.md", "profile_path": "{repo}/.ostra/project.toml", "report_path": "{session}/ostra-generate-report.md"}}
+'''
+[case.init]
+"Generated skills" = '[{"name": "convention", "kind": "convention", "component_type": null, "path": ".agents/skills/convention/SKILL.md"}, {"name": "module-hub", "kind": "module-hub", "component_type": null, "path": ".agents/skills/module-hub/SKILL.md"}]'
+"Reused skills" = "[]"
+"Proposal" = "{session}/ostra-proposal.json"
+"Scout findings" = "{session}/ostra-findings-root.md"
+[[case.file]]
+path = "{repo}/.ostra/Inventory.md"
+content = """# notes-mcp Inventory
+
+## Commands
+| Purpose | Command |
+| --- | --- |
+| build | cargo build |
+| test | cargo test |
+
+## Skills Inventory
+| Skill | Load when |
+| --- | --- |
+| convention | every task |
+| module-hub | routing work to an area |
+"""
+[[case.file]]
+path = "{repo}/.ostra/project.toml"
+content = """schema_version = 1
+stack = "rust"
+build_tool = "cargo"
+
+[commands]
+build = "cargo build"
+test = "cargo test"
+
+[[skills]]
+name = "convention"
+path = ".agents/skills/convention/SKILL.md"
+source = "generated"
+
+[[skills]]
+name = "module-hub"
+path = ".agents/skills/module-hub/SKILL.md"
+source = "generated"
+"""
+[[case.file]]
+path = "{repo}/.agents/skills/convention/SKILL.md"
+content = "---\nname: convention\ndescription: Code style for notes-mcp, seeded from the stack reference.\n---\n"
+[[case.file]]
+path = "{repo}/.agents/skills/module-hub/SKILL.md"
+content = "---\nname: module-hub\ndescription: Routes work to the tools and database areas.\n---\n"
+[[case.file]]
+path = "{session}/ostra-proposal.json"
+content = """{"stack": "rust", "reference_path": "{assets}/refs/_generic.md", "commands": {"build": "cargo build", "test": "cargo test"}, "module_map": [], "skills": []}
+"""
+[case.expect]
+action = "retry"
+require = [["INVENTORY.md"]]
+cause = "The inventory was written as `.ostra/Inventory.md`. Ostra requires exactly `.ostra/INVENTORY.md`, and the file system is case sensitive, so the file counts as missing."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance identifies the letter-case mismatch: the file on disk is `.ostra/Inventory.md` and Ostra requires `.ostra/INVENTORY.md`; (3) it tells the step to write or rename the file to `.ostra/INVENTORY.md`. Reporting that path is good but not required, because the step's own submit check refuses a reported path that does not exist. Fail if it escalates or does not name the case mismatch."""
+
+[[case]]
+id = "inventory-profile-wrong-name"
+note = "The error reads like a TOML problem. The profile is valid; it has the wrong file name."
+mode = "generate-inventory"
+problem_check = true
+result = '''
+{"status": "ok", "summary": "Wrote the inventory, the profile, and the generation report.",
+ "files": ["{repo}/.ostra/INVENTORY.md", "{repo}/.ostra/profile.toml", "{session}/ostra-generate-report.md"],
+ "result": {"inventory_path": "{repo}/.ostra/INVENTORY.md", "profile_path": "{repo}/.ostra/profile.toml", "report_path": "{session}/ostra-generate-report.md"}}
+'''
+[case.init]
+"Generated skills" = '[{"name": "convention", "kind": "convention", "component_type": null, "path": ".agents/skills/convention/SKILL.md"}]'
+"Reused skills" = "[]"
+"Proposal" = "{session}/ostra-proposal.json"
+"Scout findings" = "{session}/ostra-findings-root.md"
+[[case.file]]
+path = "{repo}/.ostra/INVENTORY.md"
+content = """# notes-mcp Inventory
+
+## Commands
+| Purpose | Command |
+| --- | --- |
+| build | cargo build |
+| test | cargo test |
+"""
+[[case.file]]
+path = "{repo}/.ostra/profile.toml"
+content = """schema_version = 1
+stack = "rust"
+build_tool = "cargo"
+
+[commands]
+build = "cargo build"
+test = "cargo test"
+
+[[skills]]
+name = "convention"
+path = ".agents/skills/convention/SKILL.md"
+source = "generated"
+"""
+[[case.file]]
+path = "{repo}/.agents/skills/convention/SKILL.md"
+content = "---\nname: convention\ndescription: Code style for notes-mcp, seeded from the stack reference.\n---\n"
+[[case.file]]
+path = "{session}/ostra-proposal.json"
+content = """{"stack": "rust", "reference_path": "{assets}/refs/_generic.md", "commands": {"build": "cargo build", "test": "cargo test"}, "module_map": [], "skills": []}
+"""
+[case.expect]
+action = "retry"
+require = [["project.toml"], ["profile.toml"]]
+cause = "The profile was written to `.ostra/profile.toml`, and it parses. Ostra reads the profile only from `.ostra/project.toml`, which does not exist, so the check fails with a read error."
+rubric = """Pass only if all hold: (1) the action is retry; (2) the guidance says the profile was written to `.ostra/profile.toml` while Ostra reads `.ostra/project.toml`; (3) it tells the step to write the profile at `.ostra/project.toml`. Reporting that path is good but not required. Fail if it escalates or diagnoses a TOML syntax problem."""
+
+# ---------------------------------------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "harness-signed-out"
+note = "A control case: the run never started because the harness CLI is signed out. No agent can fix that."
+mode = "scout"
+item = "root"
+problem = "harness-auth: Claude Code is not signed in, so the run ended before its first turn. Run `claude`, sign in with /login, and retry."
+result_status = "error"
+[case.init]
+"Slice" = "Repository root"
+"Slice paths" = "."
+"stack_reference_name" = "_generic"
+"Scout plan" = "{session}/ostra-scout-plan.md"
+[[case.file]]
+path = "{session}/ostra-scout-plan.md"
+content = """# Scout Plan
+Stack: rust · Reference: {assets}/refs/_generic.md
+Repo root: {repo}
+
+## Slices (scout these in parallel)
+| # | Slice descriptor | Slug | Path(s) |
+| --- | --- | --- | --- |
+| 1 | Repository root | root | . |
+"""
+[case.expect]
+action = "escalate"
+require = [["sign in", "signed in", "login", "log in", "logged in"]]
+cause = "The harness CLI running this step is signed out, so no run can start. Only the user can sign in (or route the initializer to the native executor)."
+rubric = """Pass only if all hold: (1) the action is escalate; (2) the reason says the Claude Code CLI is not signed in and the user must sign in (routing the initializer to native is an acceptable alternative to mention). Fail if it retries."""

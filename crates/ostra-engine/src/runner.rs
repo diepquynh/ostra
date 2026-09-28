@@ -256,6 +256,26 @@ impl Engine {
         )
     }
 
+    /// Rule O3: record a project an agent created once the workspace holds it, so it joins the
+    /// session's projects and scope.
+    pub fn add_created_project(
+        &self,
+        session: &SessionId,
+        project: ostra_core::manage::CreatedProject,
+    ) -> Result<(), EngineError> {
+        let st = self.state(session)?;
+        if let Some(why) = st.project_creation_refusal(&project.execution, &project.key) {
+            return Err(EngineError::Invalid(why));
+        }
+        std::fs::create_dir_all(st.project_session_dir(&project.key))
+            .map_err(|e| EngineError::Invalid(e.to_string()))?;
+        self.inner
+            .append(session, SessionEvent::ProjectCreated { project })?;
+        // Rule O4: stop the run that created it; its phase starts again after the init.
+        self.inner.interrupt(session, Interrupt::ProjectCreated)?;
+        Ok(())
+    }
+
     fn start_session(
         &self,
         kind: SessionKind,
@@ -761,6 +781,7 @@ impl Engine {
             sandbox_decoys: settings.sandbox_decoys.clone(),
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
+            creates_project: false,
         };
         self.inner.db.insert_execution(&NewExecution {
             id: new.clone(),
@@ -1024,6 +1045,16 @@ pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usi
     Ok(running.len())
 }
 
+/// Why an init left the project without a usable inventory or profile.
+fn init_problem(root: &Path) -> Option<String> {
+    if !paths::project_inventory(root).exists() {
+        return Some("the initializer did not write .ostra/INVENTORY.md".into());
+    }
+    ostra_core::config::load_toml_required::<ProjectProfile>(&paths::project_profile(root))
+        .err()
+        .map(|e| format!("the generated .ostra/project.toml is not valid: {e}"))
+}
+
 fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError> {
     let ok = matches!(
         (payload, answer),
@@ -1133,6 +1164,8 @@ pub fn suggest_rule(call: &ToolCall, repo_root: &Path) -> Option<String> {
             let host = url.split("://").nth(1)?.split(['/', ':', '?']).next()?;
             Some(format!("WebFetch(domain:{host})"))
         }
+        // Rule O1: no allow rule stands in for the user's answer.
+        other if ostra_core::manage::changes_ostra(other) => None,
         other => Some(other.to_string()),
     }
 }
@@ -1539,16 +1572,7 @@ impl Inner {
                     // Later executions route by these two files, so a broken one fails the init
                     // here rather than silently giving every agent an empty profile.
                     let root = st.project_path(project).unwrap_or_default();
-                    let problem = if !paths::project_inventory(&root).exists() {
-                        Some("the initializer did not write .ostra/INVENTORY.md".to_string())
-                    } else {
-                        ostra_core::config::load_toml_required::<ProjectProfile>(
-                            &paths::project_profile(&root),
-                        )
-                        .err()
-                        .map(|e| format!("the generated .ostra/project.toml is not valid: {e}"))
-                    };
-                    if let Some(p) = problem {
+                    if let Some(p) = init_problem(&root) {
                         self.append(
                             session,
                             SessionEvent::SessionFailed {
@@ -1578,6 +1602,50 @@ impl Inner {
             }
             Step::Fail { error } => {
                 self.append(session, SessionEvent::SessionFailed { error })?;
+                Ok(())
+            }
+            Step::FinishInit { project } => {
+                let st = self.snapshot(session)?;
+                let root = st.project_path(&project).unwrap_or_default();
+                let inventory = st
+                    .project_inits
+                    .get(&project)
+                    .and_then(|i| i.inventory.clone());
+                match (init_problem(&root), inventory) {
+                    (Some(p), Some(execution)) => {
+                        self.append(
+                            session,
+                            SessionEvent::InitStepFailed {
+                                project,
+                                execution,
+                                error: format!("The init did not finish: {p}."),
+                            },
+                        )?;
+                    }
+                    _ => {
+                        let _ = self.db.set_project_init_status(
+                            &project,
+                            ostra_core::api::InitStatus::Initialized,
+                        );
+                        let _ = self.tx.send(EngineNotice::ProjectsChanged);
+                        self.append(session, SessionEvent::ProjectInitFinished { project })?;
+                    }
+                }
+                Ok(())
+            }
+            Step::RecordInitProblem {
+                project,
+                execution,
+                error,
+            } => {
+                self.append(
+                    session,
+                    SessionEvent::InitStepFailed {
+                        project,
+                        execution,
+                        error,
+                    },
+                )?;
                 Ok(())
             }
         }
@@ -2075,9 +2143,17 @@ impl Inner {
                 format!("The {} executor is not available.", route.executor),
             );
         };
-        let repo_root = st
-            .project_path(&req.project)
-            .unwrap_or_else(|| self.workspace_root.clone());
+        // Rule O2: a phase in a project that does not exist yet runs from its session dir, so its
+        // sandbox can write nowhere else until it creates the project.
+        let creates_project =
+            req.agent == AgentName::Implementer && st.project_to_create(&req.project).is_some();
+        let repo_root = if creates_project {
+            let _ = std::fs::create_dir_all(&req.session_dir);
+            req.session_dir.clone()
+        } else {
+            st.project_path(&req.project)
+                .unwrap_or_else(|| self.workspace_root.clone())
+        };
         let profile: Option<ProjectProfile> = load_toml(&paths::project_profile(&repo_root)).ok();
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
         let project_docs = ostra_agents::brief::project_docs(&repo_root);
@@ -2177,6 +2253,7 @@ impl Inner {
             sandbox_decoys: settings.sandbox_decoys.clone(),
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
+            creates_project,
         };
         let usage_base = if paused.is_some() {
             self.append(session, SessionEvent::ExecutionResumed { id: id.clone() })?;
@@ -2361,6 +2438,7 @@ impl Inner {
             sandbox_decoys: settings.sandbox_decoys.clone(),
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
+            creates_project: false,
         };
         self.db.insert_execution(&NewExecution {
             id: id.clone(),

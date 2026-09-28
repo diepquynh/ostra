@@ -42,6 +42,7 @@ capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill"
 | `memory` | `Memory` | `mcp__ostra__memory` | `memory` | `memory` | `memory` |
 | `memory_recall` | `MemoryRecall` | `mcp__ostra__memory_recall` | `memory_recall` | `memory_recall` | `memory_recall` |
 | `code` | `CodeOutline`, `CodeFind`, ... | `mcp__ostra__code_*` | `code_*` | `code_*` | `code_*` |
+| `manage_projects` | `ProjectList`, `ProjectCreate` | `mcp__ostra__project_list`, `mcp__ostra__project_create` | `project_*` | `project_*` | `project_*` |
 
 The table is `assets/tool-mapping.toml`. The prompt renderer reads it and writes each agent's prompt with the
 tool names of the executor it runs on, so an implementer on Codex is told to edit with `apply_patch` and an
@@ -55,7 +56,8 @@ Two consequences follow from the table:
   each CLI's call back into the canonical shape before the policy sees it, so `apply_patch` is judged as writes
   to the files the patch touches.
 - **Ostra's own tools come from Ostra everywhere.** `Report`, `Document`, `Memory`, `MemoryRecall`, the code
-  navigation tools, the submit tool, and the workspace MCP tools are Ostra's code on every executor. The native
+  navigation tools, the project management tools, the submit tool, and the workspace MCP tools are Ostra's code
+  on every executor. The native
   loop calls them directly. A harness reaches them through the `ostra` MCP server.
 
 Capabilities are the upper bound. A reviewer has no `write` capability, so it has no `Write` tool at all, on any
@@ -69,7 +71,7 @@ executor. The policy then narrows further what the tools an agent has may touch.
 | generate-spec | read, shell, search_text, glob, web_search, web_fetch, document, code |
 | fact-check | read, write, shell, search_text, glob, web_search, web_fetch, code |
 | plan | read, shell, search_text, glob, document, code |
-| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code |
+| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects |
 | write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code |
 | code-reviewer | read, shell, search_text, glob, code |
 | execution-path-analyzer | read, shell, write, search_text, glob, report, code |
@@ -77,6 +79,7 @@ executor. The policy then narrows further what the tools an agent has may touch.
 | prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code |
 | initializer | read, write, edit, shell, search_text, glob, code |
 | quick-answer | read, search_text, glob, web_search, web_fetch, memory_recall, code |
+| advisor | read, shell, search_text, glob, web_search, web_fetch, memory_recall |
 
 Every agent also gets its own `submit_<agent>` tool and the workspace's MCP tools. [Agents](agents.md) covers
 what each agent is for.
@@ -92,10 +95,11 @@ The permission layer sorts tools into families, and the family decides which rul
 | Bash | `Bash` | The command is parsed with tree-sitter-bash and each simple command is matched separately, so `npm test && curl evil` does not pass on `Bash(npm test *)`. A command Ostra cannot parse, or one that uses shell syntax it does not model, asks, and plan mode refuses it. |
 | Other (opaque shells) | `PowerShell`, `Cmd` (Windows only) | Not parsed. Refused when the text names Ostra's own files, engine state, or a credential store; otherwise matched against `PowerShell(...)` and `Cmd(...)` rules, then the mode, which never allows one unasked. |
 | WebFetch | `WebFetch` | Matched against `WebFetch(domain:...)` rules. With no rule, it asks, except in bypass mode. |
-| Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, the code tools, `submit_*`, workspace MCP tools | Ostra's own tools are allowed. `Skill` with a `path` is judged as a Read of that file. Workspace MCP tools are allowed unless a rule says otherwise, and plan mode allows only those their server marks read-only (rule M1). |
+| Other (changes Ostra) | `ProjectCreate` | Always asks, in every mode including bypass, and no allow rule stands in for the answer (rule O1). A `deny` rule refuses it, plan mode refuses it, and only YOLO answers the ask. |
+| Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, `ProjectList`, the code tools, `submit_*`, workspace MCP tools | Ostra's own tools are allowed. `Skill` with a `path` is judged as a Read of that file. Workspace MCP tools are allowed unless a rule says otherwise, and plan mode allows only those their server marks read-only (rule M1). |
 
-The guards (write scope, state ownership, the report path, the lesson gate, the build streak, self-protection)
-run before this, on every family. They are on [Agent containment](../security/agent-containment.md).
+The guards (write scope, state ownership, the report path, the lesson gate, the build streak, self-protection,
+and the management tools guard) run before this, on every family. They are on [Agent containment](../security/agent-containment.md).
 
 The Permissions tab of Settings sets the mode, the sandbox (its mode, network choice, allowed hosts, and decoy
 files), and the allow, ask, and deny rules, and shows the global rules read-only:
@@ -387,6 +391,70 @@ Each agent has exactly one: `submit_<agent>`, whose schema is that agent's struc
 It is the last call of every run, and the engine reads only its payload. It is described with the executors, because
 it ends the run rather than doing work: [The submit call](executors.md#the-submit-call).
 
+## Project management tools
+
+Management tools are calls an agent makes to Ostra itself rather than to the files it works on. The first
+toolset manages projects, for a request that needs a codebase no project holds, such as a new service that
+would otherwise have to live inside an existing repository. Only the implementer has the `manage_projects`
+capability, and the guard narrows that to one run: the implementer of a phase the approved plan puts in a
+project that does not exist yet. A project is therefore created only after the user approved the plan that
+needs it, so a spec or plan the user rejects leaves nothing on disk.
+
+### ProjectList
+
+`ProjectList` takes no input. It returns the workspace root, which a new project's folder is relative to, and
+each project's key, folder, stack, init status, and whether it is in this session's scope. It is read-only, so
+every mode allows it.
+
+### ProjectCreate
+
+`ProjectCreate` takes:
+
+| Input | Meaning |
+| --- | --- |
+| `key` | The project key, with the Add project dialog's rule: lowercase letters, digits, and dashes, starting with a letter or digit. |
+| `stack` | The language and main framework in a few words, such as `rust`. One line, at most 64 characters. |
+| `purpose` | What the codebase is for, at most 800 characters. The user approves the project from it. |
+| `requirements` | 1 to 20 base requirements, one fact each and at most 400 characters: toolchain version, libraries with versions, build tool, transport, the systems it connects to. |
+| `folder` | Optional, relative to the workspace root with no `..`. Defaults to the key. |
+| `git_init` | Optional, default true: run `git init` in the new folder. |
+
+The implementer takes these from its phase file, where the plan copied them from the spec's `Constraint`
+criteria. A call passes three checks before anything changes on disk:
+
+1. **The guard (rule O2).** The `manage-tools` guard allows the call only from an execution whose context has
+   `creates_project` set, which the runner sets only for the implementer of a phase in a project the approved
+   plan lists in `new_projects` and the session does not hold yet. The key must be that phase's project key.
+   The guard also refuses a malformed input: a bad key or stack, an empty or oversized purpose, no requirements
+   or too many, or a folder that is absolute or climbs with `..`. Checking here means the user is never asked
+   about a call that cannot run. Until the project exists, the same run may write nothing outside its session
+   dir and temp, because its `Repo root:` is its session dir and there is no project yet to write in.
+2. **The permission (rule O1).** The call asks the user, in every permission mode including bypass, because
+   creating a project changes Ostra, not only files. The card reads like
+   ``Create project `notes-mcp` (rust) in `notes-mcp/` of the workspace: ...``, cut at 250 characters because
+   Grok clips ask reasons. It offers no "always" rule, and answering "always in this workspace" adds none,
+   because no allow rule may stand in for the answer. Only YOLO answers the ask; a `deny` rule on
+   `ProjectCreate` still refuses it, and plan mode refuses it.
+3. **The server's checks.** After the answer, the server (`crates/ostra-server/src/manage.rs`) refuses a key
+   the workspace already has, and a folder that exists and is not empty, lies outside the workspace root (a
+   symlinked parent is resolved first), lies in `.ostra`, or is inside or around another project. It also
+   refuses when the session has ended, when it is not a pipeline session, when the run that asked has ended,
+   or when the key is already in the session.
+
+Then the server creates the folder, runs `git init` when asked (with the same no-exec git settings as a clone),
+registers the project in `workspace.toml` with its stack, and appends a `ProjectCreated` event to the session.
+A failed `git init` or registration removes what it created. The event stops the implementer that asked, and
+the phase starts over inside the new project once its init has run. What happens next is in
+[The pipeline](pipeline.md#a-new-codebase).
+
+### How both executors reach them
+
+The tools crate knows no workspace or engine, so it defines a `Manage` trait and the server implements it. When
+an execution opens, the server hands it a handle bound to its workspace, session, and execution, and only when
+its agent has the `manage_projects` capability and runs in a session. The native loop runs the call through that
+handle in process. A harness sees `project_list` and `project_create` on Ostra's MCP server, which lists them only
+for an execution that holds the handle, and checks, asks, and runs each call once, like `report`.
+
 ## Workspace MCP tools
 
 The MCP servers listed in a workspace's `mcp_servers` reach every agent on every executor, because Ostra is the only MCP
@@ -409,6 +477,7 @@ becomes JSON, and results are cut at 100 KiB. [MCP servers](mcp.md) covers trans
 | WebFetch | `crates/ostra-tools/src/web.rs` |
 | Skill, Report, Memory, MemoryRecall | `crates/ostra-tools/src/misc.rs` |
 | Document | `crates/ostra-tools/src/doc.rs` |
+| ProjectList, ProjectCreate: input rules, the handle, the server side | `crates/ostra-core/src/manage.rs`, `crates/ostra-tools/src/manage.rs`, `crates/ostra-server/src/manage.rs` |
 | Capability to tool name per executor | `assets/tool-mapping.toml` |
 | Tool families for permissions | `crates/ostra-policy/src/perms.rs` |
 

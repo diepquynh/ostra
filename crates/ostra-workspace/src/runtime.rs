@@ -164,6 +164,26 @@ impl WorkspaceRt {
         issues
     }
 
+    /// Apply every fix [`crate::settings::settings_fixes`] finds in the saved settings, without
+    /// validating the rest, because an unrelated problem must not block a fix. Returns how many.
+    pub fn apply_fixes(&self) -> Result<usize, ConfigError> {
+        let mut settings = self.settings();
+        let fixes = crate::settings::settings_fixes(&settings);
+        for f in &fixes {
+            if let Some(key) = f.path.strip_prefix("routing.model.byAgent.") {
+                settings
+                    .routing
+                    .model
+                    .by_agent
+                    .insert(key.to_string(), f.value.as_str().into());
+            }
+        }
+        if !fixes.is_empty() {
+            self.write_settings(&settings)?;
+        }
+        Ok(fixes.len())
+    }
+
     pub fn save_settings(&self, settings: &WorkspaceSettings) -> Result<(), Vec<ValidationIssue>> {
         let issues = self.validate(settings);
         if !issues.is_empty() {
@@ -381,6 +401,7 @@ impl WorkspaceRt {
             harnesses: self.host.harnesses(),
             providers: self.host.providers(),
             validation,
+            fixes: crate::settings::settings_fixes(&settings),
             agents: agent_infos(&global, &settings),
             stacks: ostra_agents::stack_names(),
             global_permissions: global.permissions.clone(),

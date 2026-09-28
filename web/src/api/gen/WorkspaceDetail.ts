@@ -7,6 +7,7 @@ import type { PermissionRules } from "./PermissionRules";
 import type { ProjectView } from "./ProjectView";
 import type { ProviderStatus } from "./ProviderStatus";
 import type { SandboxStatus } from "./SandboxStatus";
+import type { SettingsFix } from "./SettingsFix";
 import type { ValidationIssue } from "./ValidationIssue";
 import type { WorkspaceId } from "./WorkspaceId";
 import type { WorkspaceSettings } from "./WorkspaceSettings";
@@ -16,6 +17,10 @@ export type WorkspaceDetail = { id: WorkspaceId, root: string, settings: Workspa
  * Problems with the current settings. Saving refuses settings with problems.
  */
 validation: Array<ValidationIssue>, 
+/**
+ * Changes Ostra can make on its own for some of those problems (`POST .../settings/fix`).
+ */
+fixes: Array<SettingsFix>, 
 /**
  * Every agent's definition from `agent.toml`, with its routes under the current settings.
  */

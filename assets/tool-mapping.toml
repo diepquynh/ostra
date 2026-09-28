@@ -1,6 +1,6 @@
 # Capability to tool name, per executor table (native, claude, codex, grok, agy).
 # Native names follow Claude Code's, because the
-# prompts are tuned to them. Ostra's own tools (report, document, memory, memory_recall, submit) come from the `ostra`
+# prompts are tuned to them. Ostra's own tools (report, document, memory, memory_recall, project_*, submit) come from the `ostra`
 # MCP server on harness executors. `{agent}` in a submit name is the agent's snake_case name.
 # A value that is not a bare tool name is prose, rendered into the prompt as written.
 
@@ -102,6 +102,13 @@ codex = "code_{op}"
 grok = "code_{op}"
 agy = "code_{op}"
 
+[capabilities.manage_projects]
+native = "Project{Op}"
+claude = "mcp__ostra__project_{op}"
+codex = "project_{op}"
+grok = "project_{op}"
+agy = "project_{op}"
+
 [capabilities.submit]
 native = "submit_{agent}"
 claude = "mcp__ostra__submit_{agent}"
@@ -144,13 +151,13 @@ The `mcp__ostra__*` tools come from Ostra's `ostra` MCP server, registered for t
 that name. If one is not in your tool list yet, load it with ToolSearch (`select:mcp__ostra__<tool>`) and then \
 call it, because the server connects after the session starts and its tools arrive deferred."""
 codex = """
-`report`, `document`, `memory`, `memory_recall`, the `code_*` tools, and your `submit_*` tool are MCP tools from Ostra's `ostra` server, not \
+`report`, `document`, `memory`, `memory_recall`, the `code_*` tools, the `project_*` tools, and your `submit_*` tool are MCP tools from Ostra's `ostra` server, not \
 Codex capabilities. Call each by exactly that name."""
 grok = """
-`report`, `document`, `memory`, `memory_recall`, the `code_*` tools, and your `submit_*` tool come from Ostra's `ostra` MCP server. If one is \
+`report`, `document`, `memory`, `memory_recall`, the `code_*` tools, the `project_*` tools, and your `submit_*` tool come from Ostra's `ostra` MCP server. If one is \
 not in your tool list, find it with search_tool (it appears as `ostra__<tool>`) and invoke it with use_tool."""
 agy = """
-`report`, `document`, `memory`, `memory_recall`, the `code_*` tools, and your `submit_*` tool come from Ostra's `ostra` MCP server. Call each \
+`report`, `document`, `memory`, `memory_recall`, the `code_*` tools, the `project_*` tools, and your `submit_*` tool come from Ostra's `ostra` MCP server. Call each \
 by exactly that name."""
 
 [strategies.write]

@@ -142,6 +142,7 @@ fn spec(
             sandbox_decoys: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
+            creates_project: false,
         },
         resume: None,
         harness_session_id: None,
@@ -653,7 +654,7 @@ async fn missing_provider_is_a_clear_error() {
         PermissionMode::Default,
         vec![Capability::Read],
     );
-    s.route.model = "anthropic:claude-sonnet-5".into();
+    s.route.model = "anthropic:claude-sonnet-5-5".into();
     let exec = NativeExecutor::new(Arc::new(Providers::empty()), Arc::new(|_: &str| None), None);
     let r = exec
         .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
