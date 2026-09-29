@@ -108,6 +108,7 @@ const use = (i: number, o: number, cache: number, cost: number, calls: number, b
   cost_usd: cost,
   tool_calls: calls,
   build_ms: build,
+  context_tokens: 0,
 });
 
 const SERVICE_BEFORE = `  public Order cancel(OrderId id, Actor by) {

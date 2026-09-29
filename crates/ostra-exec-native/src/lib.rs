@@ -30,11 +30,15 @@ use std::time::Duration;
 pub const MAX_TURNS: usize = 400;
 /// "Continue" turns allowed after the model hits its output limit without a tool call.
 pub const MAX_TOKEN_CONTINUES: usize = 3;
-/// Transcript size in characters above which old tool results are cleared. Anthropic clears
-/// server-side; for other providers the loop keeps the newest [`KEEP_TOOL_RESULTS`] itself.
-/// 300 000 characters is about 75 000 tokens, well below every supported context window.
-pub const CLEAR_THRESHOLD_CHARS: usize = 300_000;
-pub const KEEP_TOOL_RESULTS: usize = 12;
+/// Share of the model's context window at which the loop compacts the conversation.
+pub const COMPACT_AT: f64 = 0.95;
+/// Context window assumed for a model the models.dev catalog does not list.
+pub const DEFAULT_CONTEXT_WINDOW: u64 = 200_000;
+/// After a compaction that returned no summary, the next try waits until the context grows by
+/// this share of the window, because each try sends the whole conversation.
+const COMPACT_RETRY_GROWTH: f64 = 0.02;
+const COMPACT_INSTRUCTIONS: &str = "Summarize this conversation so that you can continue the task from the summary alone, because every earlier message is replaced by it. Keep the task and every requirement from the first message; the files you read and the facts from them you still need; every file you created or changed and how; the decisions you made and why; commands that failed and their errors; what is left to do; and the exact next step. Keep paths, identifiers, and error messages verbatim. Do not call tools. Answer with the summary text only.";
+const AFTER_COMPACTION: &str = "The conversation was compacted into the summary above because the context was nearly full. Continue the task from the next step it names. Earlier tool results are gone, so read a file again when you need its content.";
 /// Emitted Activity output is truncated to this size; the model gets the full output.
 pub const EMIT_LIMIT: usize = 8 * 1024;
 /// How long a cancelled or timed-out run may take to kill its tools before returning.
@@ -193,8 +197,9 @@ fn truncate(s: &str, n: usize) -> String {
     format!("{}\n... ({} more bytes)", &s[..end], s.len() - end)
 }
 
-fn transcript_chars(messages: &[Message]) -> usize {
-    messages
+/// Rough token count of messages not yet measured by a response, at four characters a token.
+fn estimate_tokens(messages: &[Message]) -> u64 {
+    let chars: usize = messages
         .iter()
         .flat_map(|m| m.content.iter())
         .map(|b| match b {
@@ -204,8 +209,17 @@ fn transcript_chars(messages: &[Message]) -> usize {
             Block::ToolResult { content, .. } => content.len(),
             Block::RedactedThinking { data } => data.len(),
             Block::Opaque { value, .. } => value.to_string().len(),
+            Block::Compaction { summary, value, .. } => {
+                summary.len() + value.as_ref().map_or(0, |v| v.to_string().len())
+            }
         })
-        .sum()
+        .sum();
+    chars as u64 / 4
+}
+
+/// The prompt tokens of a response plus its output: the size the next request starts from.
+fn context_of(u: &Usage) -> u64 {
+    u.input_tokens + u.cache_read_tokens + u.cache_write_tokens + u.output_tokens
 }
 
 /// Read-only tools whose calls in one turn may run concurrently.
@@ -256,6 +270,8 @@ impl Coalescer {
     }
 }
 
+const COMPACTION_RECORD: &str = "compaction";
+
 fn content_json(content: &[Block]) -> Value {
     serde_json::to_value(content).unwrap_or(Value::Null)
 }
@@ -277,13 +293,20 @@ pub fn rebuild_transcript(transcript: &[(String, Value)], note: Option<&str>) ->
 }
 
 /// The stored messages, with adjacent messages of one role merged, because a resume that stopped
-/// after a user turn stores its note as a message of its own.
+/// after a user turn stores its note as a message of its own. A `compaction` record holds the
+/// window that replaced every message before it.
 fn stored_messages(transcript: &[(String, Value)]) -> Vec<Message> {
     let mut out: Vec<Message> = vec![];
     for (role, content) in transcript {
         let role = match role.as_str() {
             "assistant" => Role::Assistant,
             "user" => Role::User,
+            COMPACTION_RECORD => {
+                if let Ok(window) = serde_json::from_value::<Vec<Message>>(content.clone()) {
+                    out = window;
+                }
+                continue;
+            }
             _ => continue,
         };
         let Ok(content) = serde_json::from_value::<Vec<Block>>(content.clone()) else {
@@ -498,24 +521,60 @@ impl Run {
         let mut final_text = String::new();
         let mut reminded = false;
         let mut continues = 0;
+        let window = ostra_core::pricing::context_window(&spec.route.model)
+            .unwrap_or(DEFAULT_CONTEXT_WINDOW);
+        // The last response's context, and how many messages it covered.
+        let (mut measured, mut measured_len) = (0u64, 0usize);
+        let mut failed_compaction_at: Option<u64> = None;
         for _ in 0..MAX_TURNS {
             if self.cancel.is_cancelled() {
                 let mut r = ExecutionResult::with_status(ExecutionStatus::Cancelled);
                 r.usage = *self.usage.lock();
                 return r;
             }
-            let long = transcript_chars(&messages) > CLEAR_THRESHOLD_CHARS;
-            if long && provider.name() != "anthropic" {
-                ostra_providers::clear_old_tool_results(&mut messages, KEEP_TOOL_RESULTS);
-            }
             let mut req = ChatRequest::new(model.clone());
             req.system = vec![SystemBlock::cached(spec.system_prompt.clone())];
-            req.messages = messages.clone();
             req.tools = tools.clone();
             req.server_tools = server_tools;
             req.effort = spec.effort;
             req.tool_choice = ToolChoice::Auto;
-            req.clear_old_tool_results = long && provider.name() == "anthropic";
+
+            let next = measured + estimate_tokens(&messages[measured_len.min(messages.len())..]);
+            let retry_ok = failed_compaction_at.is_none_or(|at| {
+                next as f64 >= at as f64 + COMPACT_RETRY_GROWTH * window as f64
+            });
+            // A user turn last means no tool call is open, as compaction requires.
+            if next as f64 >= COMPACT_AT * window as f64
+                && retry_ok
+                && messages.last().is_some_and(|m| m.role == Role::User)
+            {
+                let mut ask = req.clone();
+                ask.messages = messages.clone();
+                match self.compact(provider.as_ref(), ask, next, window).await {
+                    Ok(Some(mut compacted)) => {
+                        append_turn(&mut compacted, Message::user_text(AFTER_COMPACTION));
+                        self.host.record_message(
+                            COMPACTION_RECORD,
+                            &serde_json::to_value(&compacted).unwrap_or(Value::Null),
+                        );
+                        messages = compacted;
+                        failed_compaction_at = None;
+                    }
+                    Ok(None) => failed_compaction_at = Some(next),
+                    Err(ProviderError::Cancelled) => {
+                        let mut r = ExecutionResult::with_status(ExecutionStatus::Cancelled);
+                        r.usage = *self.usage.lock();
+                        return r;
+                    }
+                    Err(e) => {
+                        self.host.emit(ExecutionDelta::Status {
+                            message: format!("Compaction failed, so the run continues without it: {e}"),
+                        });
+                        failed_compaction_at = Some(next);
+                    }
+                }
+            }
+            req.messages = messages.clone();
 
             let resp = match self.chat(provider.as_ref(), req, &coalescer).await {
                 Ok(r) => r,
@@ -526,7 +585,9 @@ impl Run {
                 }
                 Err(e) => return self.fail(format!("The model call failed: {e}")),
             };
-            self.add_usage(&resp.usage);
+            let mut usage = resp.usage;
+            usage.context_tokens = context_of(&usage);
+            self.add_usage(&usage);
             let text = resp.text();
             if !text.trim().is_empty() {
                 final_text = text.clone();
@@ -534,6 +595,7 @@ impl Run {
             let assistant = Message::assistant(resp.content.clone());
             self.record(&assistant);
             messages.push(assistant);
+            (measured, measured_len) = (usage.context_tokens, messages.len());
 
             let has_tools = !resp.tool_uses().is_empty();
             match &resp.stop {
@@ -606,6 +668,32 @@ impl Run {
         self.fail(format!(
             "The run passed {MAX_TURNS} model turns without calling {submit_name}."
         ))
+    }
+
+    /// Ask the provider to compact `req.messages`. `None` when no summary came back.
+    async fn compact(
+        &self,
+        provider: &dyn Provider,
+        req: ChatRequest,
+        tokens: u64,
+        window: u64,
+    ) -> Result<Option<Vec<Message>>, ProviderError> {
+        self.host.emit(ExecutionDelta::Status {
+            message: format!(
+                "Compacting the conversation: about {tokens} of {window} context tokens used."
+            ),
+        });
+        let out = provider
+            .compact(req, COMPACT_INSTRUCTIONS, self.cancel.clone())
+            .await?;
+        self.add_usage(&out.usage);
+        self.host.emit(ExecutionDelta::Status {
+            message: match out.messages {
+                Some(_) => "Compacted the conversation into a summary.".into(),
+                None => "Compaction returned no summary, so the run continues without it.".into(),
+            },
+        });
+        Ok(out.messages)
     }
 
     async fn chat(

@@ -12,4 +12,9 @@ cache_write_1h_tokens: number, cost_usd: number, tool_calls: number,
 /**
  * Wall time spent in build and test commands, for the build-loop metric.
  */
-build_ms: number, };
+build_ms: number, 
+/**
+ * Size of the latest request's context: its prompt plus its output, which the next request
+ * sends again. The latest value, not a sum.
+ */
+context_tokens: number, };

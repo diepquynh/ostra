@@ -20,6 +20,10 @@ impl Recorded {
         }
     }
 
+    pub fn json(body: &serde_json::Value) -> Self {
+        Recorded::error(200, &body.to_string())
+    }
+
     pub fn error(status: u16, body: &str) -> Self {
         Recorded {
             status,

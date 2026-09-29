@@ -87,8 +87,6 @@ pub struct ChatRequest {
     pub max_tokens: u32,
     pub effort: Effort,
     pub tool_choice: ToolChoice,
-    /// Ask the provider to clear old tool results before the context fills.
-    pub clear_old_tool_results: bool,
     /// On models with server-side refusal fallbacks, let the provider re-run a declined request
     /// on its recommended fallback model.
     pub refusal_fallback: bool,
@@ -105,7 +103,6 @@ impl ChatRequest {
             max_tokens: 32_000,
             effort: Effort::High,
             tool_choice: ToolChoice::Auto,
-            clear_old_tool_results: false,
             refusal_fallback: true,
         }
     }
@@ -175,6 +172,13 @@ pub enum Block {
     Opaque {
         provider: String,
         value: serde_json::Value,
+    },
+    /// Earlier turns compacted into one block. `value` is the provider's signed or encrypted form,
+    /// sent back verbatim to that provider; any other provider gets `summary` as text.
+    Compaction {
+        provider: String,
+        summary: String,
+        value: Option<serde_json::Value>,
     },
 }
 
@@ -330,6 +334,14 @@ impl ProviderError {
 
 pub type EventSink<'a> = &'a (dyn Fn(StreamEvent) + Send + Sync);
 
+/// The result of a compaction request. `messages` replace every message the request carried;
+/// `None` means no summary came back, and the conversation can continue as it is.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Compacted {
+    pub messages: Option<Vec<Message>>,
+    pub usage: Usage,
+}
+
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
     fn name(&self) -> &str;
@@ -346,6 +358,53 @@ pub trait Provider: Send + Sync {
         on_event: EventSink<'_>,
         cancel: CancellationToken,
     ) -> Result<ChatResponse, ProviderError>;
+
+    /// Compact `req.messages`, which must end on a user turn with no tool call left open.
+    /// `instructions` tell the summarizer what to keep; providers whose compaction takes no
+    /// instructions ignore them.
+    async fn compact(
+        &self,
+        req: ChatRequest,
+        instructions: &str,
+        cancel: CancellationToken,
+    ) -> Result<Compacted, ProviderError> {
+        compact_on_client(self, req, instructions, cancel).await
+    }
+}
+
+/// Compaction for providers without a server-side form: the same request plus the instructions
+/// as a last user turn, so the cached prefix is reused, and the text answer becomes the summary.
+pub async fn compact_on_client<P: Provider + ?Sized>(
+    provider: &P,
+    mut req: ChatRequest,
+    instructions: &str,
+    cancel: CancellationToken,
+) -> Result<Compacted, ProviderError> {
+    let ask = Block::text(instructions);
+    match req.messages.last_mut() {
+        Some(last) if last.role == Role::User => last.content.push(ask),
+        _ => req.messages.push(Message {
+            role: Role::User,
+            content: vec![ask],
+        }),
+    }
+    req.tool_choice = ToolChoice::None;
+    let resp = provider.chat(req, &|_| {}, cancel).await?;
+    let summary = resp.text();
+    let messages = (resp.stop == StopReason::EndTurn && !summary.trim().is_empty()).then(|| {
+        vec![Message {
+            role: Role::User,
+            content: vec![Block::Compaction {
+                provider: String::new(),
+                summary,
+                value: None,
+            }],
+        }]
+    });
+    Ok(Compacted {
+        messages,
+        usage: resp.usage,
+    })
 }
 
 /// An API key. Its `Debug` and `Display` never print the value.
@@ -723,33 +782,6 @@ pub async fn structured_cancellable(
     ))
 }
 
-/// Replace the content of all but the newest `keep` tool results with a short marker. Used by
-/// the agent loop for providers without server-side context editing.
-pub fn clear_old_tool_results(messages: &mut [Message], keep: usize) -> usize {
-    let mut positions = vec![];
-    for (mi, m) in messages.iter().enumerate() {
-        for (bi, b) in m.content.iter().enumerate() {
-            if matches!(b, Block::ToolResult { .. }) {
-                positions.push((mi, bi));
-            }
-        }
-    }
-    let cut = positions.len().saturating_sub(keep);
-    let mut cleared = 0;
-    for &(mi, bi) in &positions[..cut] {
-        if let Block::ToolResult { content, .. } = &mut messages[mi].content[bi]
-            && content != CLEARED_MARKER
-        {
-            *content = CLEARED_MARKER.to_string();
-            cleared += 1;
-        }
-    }
-    cleared
-}
-
-pub const CLEARED_MARKER: &str =
-    "[Old tool result cleared to save context. Re-run the tool if you need it again.]";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -880,20 +912,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn clears_old_results() {
-        let mut msgs = vec![
-            Message::tool_results(vec![Block::tool_result("a", "one", false)]),
-            Message::tool_results(vec![
-                Block::tool_result("b", "two", false),
-                Block::tool_result("c", "three", false),
-            ]),
+    #[tokio::test]
+    async fn compacts_on_the_client_with_the_same_prefix() {
+        let p = ScriptedProvider::new();
+        p.push_text("The user wants X. Next: run the tests.");
+        let mut req = ChatRequest::new("m");
+        req.messages = vec![
+            Message::user_text("do X"),
+            Message::assistant(vec![Block::ToolUse {
+                id: "t1".into(),
+                name: "Read".into(),
+                input: serde_json::json!({}),
+            }]),
+            Message::tool_results(vec![Block::tool_result("t1", "file", false)]),
         ];
-        assert_eq!(clear_old_tool_results(&mut msgs, 1), 2);
-        assert_eq!(clear_old_tool_results(&mut msgs, 1), 0);
-        assert!(
-            matches!(&msgs[1].content[1], Block::ToolResult { content, .. } if content == "three")
-        );
+        let out = p
+            .compact(req.clone(), "Summarize.", CancellationToken::new())
+            .await
+            .unwrap();
+        let sent = &p.requests()[0];
+        assert_eq!(sent.messages[..2], req.messages[..2], "the cached prefix is unchanged");
+        assert_eq!(sent.messages[2].content.last(), Some(&Block::text("Summarize.")));
+        assert_eq!(sent.tool_choice, ToolChoice::None);
+        let messages = out.messages.expect("a summary");
+        assert!(matches!(
+            &messages[..],
+            [Message { role: Role::User, content }]
+                if matches!(&content[..], [Block::Compaction { summary, value: None, .. }]
+                    if summary.starts_with("The user wants X"))
+        ));
+
+        p.push(mock::response(vec![], StopReason::MaxTokens));
+        let out = p.compact(req, "Summarize.", CancellationToken::new()).await.unwrap();
+        assert!(out.messages.is_none(), "a cut-off summary is not used");
     }
 
     #[tokio::test]

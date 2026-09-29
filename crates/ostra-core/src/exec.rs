@@ -50,6 +50,9 @@ pub struct Usage {
     pub tool_calls: u64,
     /// Wall time spent in build and test commands, for the build-loop metric.
     pub build_ms: u64,
+    /// Size of the latest request's context: its prompt plus its output, which the next request
+    /// sends again. The latest value, not a sum.
+    pub context_tokens: u64,
 }
 
 impl Usage {
@@ -62,6 +65,9 @@ impl Usage {
         self.cost_usd += other.cost_usd;
         self.tool_calls += other.tool_calls;
         self.build_ms += other.build_ms;
+        if other.context_tokens > 0 {
+            self.context_tokens = other.context_tokens;
+        }
     }
 }
 

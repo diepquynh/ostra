@@ -89,6 +89,7 @@ function execution(session: string, x: ExecSpec): ExecutionView {
       cost_usd: x.cost,
       tool_calls: 18,
       build_ms: 0,
+      context_tokens: 0,
     },
     report_path: null,
     native_session_id: null,

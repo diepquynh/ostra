@@ -609,8 +609,9 @@ implementations.
   1-hour TTL, because an execution's turns can sit more than five minutes apart (a long build, a permission ask).
 - Reasoning effort maps from `agent.toml` to each provider's effort or thinking setting.
 - `timeout_seconds` is a hard budget per execution. Cancel is immediate.
-- Long executions clear old tool results before the context fills. The implementer's progress log is what lets
-  a re-run resume, as in Ultracode.
+- Long executions compact the conversation once the next request would fill 95% of the model's context window
+  (from models.dev): Anthropic on-demand compaction, OpenAI `/responses/compact`, or a client-side summary where
+  neither exists. The implementer's progress log is what lets a re-run resume, as in Ultracode.
 - Tokens, cache reads, and cost are recorded per execution. Prices come from the models.dev catalog
   (`https://models.dev/api.json`), cached as `models-dev.json` in the data dir and refreshed daily, with a
   first-party listing preferred over resellers and context tiers applied per request. models.dev lists only the

@@ -13,6 +13,7 @@ const row = (key: string, cost: number, extra: Partial<CostRow["usage"]> = {}, n
     cost_usd: cost,
     tool_calls: 10,
     build_ms: 0,
+    context_tokens: 0,
     ...extra,
   };
   return {

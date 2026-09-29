@@ -201,10 +201,43 @@ between `ok`, `stuck`, and `handoff`.
 
 ### Long runs
 
-An implementer can run for hundreds of turns. Once the conversation passes 300,000 characters (about 75,000
-tokens), old tool results are cleared. On Anthropic the API clears them server-side. On other providers the loop
-keeps the 12 newest tool results and replaces the rest. The implementer's progress log is what makes this safe:
-it records what has been done, so the agent does not need its old tool output to know where it is.
+An implementer can run for hundreds of turns, so a conversation can outgrow the model's context window. The
+loop compacts it before that happens: once the next request would fill 95% of the window, it asks the provider
+to summarize the conversation, replaces every message with the result, and continues. The context window comes
+from the models.dev catalog (1,000,000 tokens for current Opus and Sonnet models, 200,000 for Haiku 4.5), and a
+model the catalog does not list is assumed to have 200,000.
+
+The loop knows the size of the next request without counting tokens itself. Each response reports its prompt
+tokens (input, cache reads, and cache writes), and the next request resends that prompt plus the response, so
+their sum is where the next request starts. Tool results added since then are estimated at four characters a
+token. The latest size is kept as `context_tokens` in the execution's usage.
+
+Compaction runs only when the last message is a user turn, because a provider refuses to summarize while a tool
+call still waits for its result. How the summary is made depends on the provider:
+
+| Provider | How it compacts | What replaces the conversation |
+| --- | --- | --- |
+| Anthropic, on models with on-demand compaction (Opus 4.6 and later, Sonnet 4.6 and later, Fable, Mythos) | The same request with `compaction: {type: "summarize"}` and Ostra's summarization instructions, beta `compact-2026-09-04` | The signed `compaction` block, sent back verbatim first in every later request |
+| OpenAI | `POST /v1/responses/compact` with the conversation and the system prompt | The returned window: the messages it kept and an encrypted `compaction` item |
+| Anthropic Haiku 4.5 and older models, or any endpoint that rejects the server-side form | The same request with the instructions as a last user turn and tools turned off, so the cached prefix still applies | The summary text, as a user message |
+
+The instructions ask for the task and its requirements, the facts still needed from files read, every file
+changed, decisions and their reasons, failed commands, what is left, and the exact next step, with paths and
+errors kept verbatim. After the summary the loop adds one user turn: the context was compacted, continue from
+the next step, and read a file again when its content is needed. A compaction starts a new prompt cache, because
+every message after the system prompt and tools changes, and that is the reason it waits until the window is
+nearly full. Summarizing costs one request over the whole conversation, which is added to the execution's usage.
+
+The new window is stored in the transcript as one `compaction` record. Reading a transcript back starts from the
+latest such record, so a resumed run, a plan revision round, or a consult continues from the summary instead of
+the full history. If no summary comes back (the summary was cut off, the model refused, or the request failed),
+the run continues without it and tries again only after the context grows by 2% of the window, because each try
+sends the whole conversation.
+
+Earlier versions cleared old tool results instead, through Anthropic's `clear_tool_uses` context edit. That edit
+changes the conversation near its start on every turn, so each request missed the prompt cache after the first
+cleared result and wrote the rest of the conversation to the cache again. One plan revision spent about $6 of $7
+on those writes. Compaction changes the conversation once, then the cache holds again.
 
 ### Provider errors
 
@@ -242,7 +275,8 @@ the agent works. Prices come from the models.dev catalog, cached in the data dir
 1-hour cache writes are priced at twice the input rate, because models.dev lists only the 5-minute write price.
 [Spend and limits](spend-and-limits.md) explains how these numbers turn into the session budget.
 Wall time spent in build and test commands is tracked separately as `build_ms`, which feeds the build-loop
-metric.
+metric. `context_tokens` is the size of the latest request's context, not a sum, so it shows how close a run is to
+compaction.
 
 ## Harness executors
 
@@ -536,6 +570,7 @@ recovery can resume them (see [The event log](event-log.md)).
 | The traits and result types | `crates/ostra-core/src/exec.rs` |
 | The native loop | `crates/ostra-exec-native/src/lib.rs` |
 | Retries | `crates/ostra-providers/src/retry.rs` |
+| Compaction per provider | `crates/ostra-providers/src/lib.rs` (`Provider::compact`), `anthropic.rs`, `openai.rs` |
 | Harness start, supervise, and end | `crates/ostra-exec-harness/src/executor.rs` |
 | Per-CLI command lines and config | `crates/ostra-exec-harness/src/launch.rs` |
 | Hook bridge and MCP shim | `crates/ostra-exec-harness/src/bridge.rs` |

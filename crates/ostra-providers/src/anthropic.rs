@@ -2,8 +2,9 @@
 
 use crate::retry::{self, RetryPolicy, error_from_response, network_error};
 use crate::{
-    ApiKey, Block, ChatRequest, ChatResponse, EventSink, Message, Provider, ProviderError, Role,
-    ServerTools, StopReason, StreamEvent, ToolChoice, pricing, sse,
+    ApiKey, Block, ChatRequest, ChatResponse, Compacted, EventSink, Message, Provider,
+    ProviderError, Role, ServerTools, StopReason, StreamEvent, ToolChoice, compact_on_client,
+    pricing, sse,
 };
 use futures::StreamExt;
 use ostra_core::Effort;
@@ -14,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
-const CONTEXT_MANAGEMENT_BETA: &str = "context-management-2025-06-27";
+const COMPACT_BETA: &str = "compact-2026-09-04";
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
 /// Key set on a tool-use input whose streamed JSON did not parse. The agent loop answers such a
 /// call with an error result instead of running the tool.
@@ -83,6 +84,8 @@ struct Caps {
     effort: EffortSupport,
     forced_tool_choice: bool,
     fallbacks: bool,
+    /// On-demand compaction (`compaction: {type: "summarize"}`).
+    compaction: bool,
 }
 
 fn is_model(model: &str, id: &str) -> bool {
@@ -101,6 +104,7 @@ fn caps(model: &str) -> Caps {
         effort: EffortSupport::Full,
         forced_tool_choice: forced,
         fallbacks,
+        compaction: true,
     };
     if is_model(model, "claude-fable-5-1")
         || is_model(model, "claude-mythos-5-1")
@@ -139,6 +143,7 @@ fn caps(model: &str) -> Caps {
             effort: EffortSupport::Basic,
             forced_tool_choice: true,
             fallbacks: false,
+            compaction: false,
         };
     }
     let older = [
@@ -155,6 +160,7 @@ fn caps(model: &str) -> Caps {
             effort: EffortSupport::None,
             forced_tool_choice: true,
             fallbacks: false,
+            compaction: false,
         };
     }
     // Unknown, presumably newer models: the surface every current model accepts.
@@ -212,6 +218,13 @@ fn block_json(block: &Block) -> Option<Value> {
         }
         Block::Opaque { provider, value } if provider == "anthropic" => value.clone(),
         Block::Opaque { .. } => return None,
+        Block::Compaction {
+            provider,
+            value: Some(value),
+            ..
+        } if provider == "anthropic" => value.clone(),
+        Block::Compaction { summary, .. } if summary.is_empty() => return None,
+        Block::Compaction { summary, .. } => json!({"type": "text", "text": summary}),
     })
 }
 
@@ -350,13 +363,28 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
     if let Some(effort) = effort_str(req.effort, caps.effort) {
         body["output_config"] = json!({"effort": effort});
     }
-    if req.clear_old_tool_results {
-        body["context_management"] = json!({"edits": [{"type": "clear_tool_uses_20250919"}]});
-        betas.push(CONTEXT_MANAGEMENT_BETA);
+    if req.messages.iter().flat_map(|m| &m.content).any(is_signed_compaction) {
+        betas.push(COMPACT_BETA);
     }
     if req.refusal_fallback && caps.fallbacks {
         body["fallbacks"] = json!("default");
         betas.push(FALLBACK_BETA);
+    }
+    (body, betas)
+}
+
+fn is_signed_compaction(b: &Block) -> bool {
+    matches!(b, Block::Compaction { provider, value: Some(_), .. } if provider == "anthropic")
+}
+
+/// A request that asks for a summary of `req.messages` in place of a reply.
+pub(crate) fn compaction_body(req: &ChatRequest, instructions: &str) -> (Value, Vec<&'static str>) {
+    let mut req = req.clone();
+    req.tool_choice = ToolChoice::Auto;
+    let (mut body, mut betas) = request_body(&req);
+    body["compaction"] = json!({"type": "summarize", "instructions": instructions});
+    if !betas.contains(&COMPACT_BETA) {
+        betas.push(COMPACT_BETA);
     }
     (body, betas)
 }
@@ -381,6 +409,8 @@ enum Partial {
         value: Value,
         json: String,
     },
+    /// Arrives whole in `content_block_start`.
+    Compaction(Value),
     Fallback,
     Other(Value),
 }
@@ -389,6 +419,7 @@ enum Partial {
 struct Accumulator {
     blocks: Vec<(usize, Option<Partial>, Option<Block>)>,
     usage: Usage,
+    compaction_usage: Usage,
     web_searches: u64,
     model: String,
     stop: Option<String>,
@@ -439,7 +470,33 @@ fn read_usage(u: &Value, usage: &mut Usage, web_searches: &mut u64) {
     }
 }
 
+/// A compaction request reports zero at the top level and bills its summarization call in
+/// `usage.iterations`.
+fn read_compaction_usage(u: &Value) -> Option<Usage> {
+    let iterations = u.get("iterations")?.as_array()?;
+    let mut usage = Usage::default();
+    for i in iterations.iter().filter(|i| i["type"] == "compaction") {
+        let get = |k: &str| i.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        usage.input_tokens += get("input_tokens");
+        usage.output_tokens += get("output_tokens");
+        usage.cache_read_tokens += get("cache_read_input_tokens");
+        usage.cache_write_tokens += get("cache_creation_input_tokens");
+        usage.cache_write_1h_tokens += i
+            .pointer("/cache_creation/ephemeral_1h_input_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+    }
+    Some(usage)
+}
+
 impl Accumulator {
+    fn read_usage(&mut self, u: &Value) {
+        read_usage(u, &mut self.usage, &mut self.web_searches);
+        if let Some(c) = read_compaction_usage(u) {
+            self.compaction_usage = c;
+        }
+    }
+
     fn slot(&mut self, index: usize) -> Option<&mut (usize, Option<Partial>, Option<Block>)> {
         self.blocks.iter_mut().find(|(i, _, _)| *i == index)
     }
@@ -461,7 +518,7 @@ impl Accumulator {
                         .unwrap_or_default()
                         .to_string();
                     if let Some(u) = m.get("usage") {
-                        read_usage(u, &mut self.usage, &mut self.web_searches);
+                        self.read_usage(u);
                     }
                 }
             }
@@ -503,6 +560,7 @@ impl Accumulator {
                         json: String::new(),
                     },
                     "fallback" => Partial::Fallback,
+                    "compaction" => Partial::Compaction(cb.clone()),
                     _ => Partial::Other(cb.clone()),
                 };
                 self.blocks.push((index, Some(partial), None));
@@ -583,6 +641,15 @@ impl Accumulator {
                             value,
                         })
                     }
+                    Some(Partial::Compaction(value)) => Some(Block::Compaction {
+                        provider: "anthropic".into(),
+                        summary: value
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        value: Some(value),
+                    }),
                     Some(Partial::Fallback) => Some(Block::Opaque {
                         provider: "anthropic".into(),
                         value: json!({"type": "fallback"}),
@@ -606,7 +673,7 @@ impl Accumulator {
                     self.refusal_category = Some(cat.to_string());
                 }
                 if let Some(u) = ev.get("usage") {
-                    read_usage(u, &mut self.usage, &mut self.web_searches);
+                    self.read_usage(u);
                 }
             }
             "message_stop" => self.done = true,
@@ -663,6 +730,7 @@ impl Accumulator {
             self.model
         };
         let mut usage = self.usage;
+        usage.add(&self.compaction_usage);
         usage.cost_usd = pricing::cost(&model, &usage, self.web_searches);
         ChatResponse {
             content,
@@ -742,9 +810,50 @@ impl Provider for Anthropic {
         cancel: CancellationToken,
     ) -> Result<ChatResponse, ProviderError> {
         let (body, betas) = request_body(&req);
+        self.send(&body, &betas, &req.model, on_event, &cancel).await
+    }
+
+    async fn compact(
+        &self,
+        req: ChatRequest,
+        instructions: &str,
+        cancel: CancellationToken,
+    ) -> Result<Compacted, ProviderError> {
+        if !caps(&req.model).compaction {
+            return compact_on_client(self, req, instructions, cancel).await;
+        }
+        let (body, betas) = compaction_body(&req, instructions);
+        let resp = match self.send(&body, &betas, &req.model, &|_| {}, &cancel).await {
+            // A model this build takes for newer may not offer on-demand compaction.
+            Err(ProviderError::InvalidRequest { .. }) => {
+                return compact_on_client(self, req, instructions, cancel).await;
+            }
+            r => r?,
+        };
+        let block = resp
+            .content
+            .into_iter()
+            .find(is_signed_compaction)
+            .filter(|_| resp.stop == StopReason::Other("compaction".into()));
+        Ok(Compacted {
+            messages: block.map(|b| vec![Message::assistant(vec![b])]),
+            usage: resp.usage,
+        })
+    }
+}
+
+impl Anthropic {
+    async fn send(
+        &self,
+        body: &Value,
+        betas: &[&str],
+        model: &str,
+        on_event: EventSink<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<ChatResponse, ProviderError> {
         let started = AtomicBool::new(false);
         let url = format!("{}/v1/messages", self.base_url);
-        retry::run(self.retry, &cancel, &started, || async {
+        retry::run(self.retry, cancel, &started, || async {
             let mut builder = self.client.post(&url);
             builder = if self.key.is_bearer() {
                 builder.bearer_auth(self.key.expose())
@@ -758,7 +867,7 @@ impl Provider for Anthropic {
             if !betas.is_empty() {
                 builder = builder.header("anthropic-beta", betas.join(","));
             }
-            let resp = builder.json(&body).send().await.map_err(network_error)?;
+            let resp = builder.json(body).send().await.map_err(network_error)?;
             if !resp.status().is_success() {
                 return Err(error_from_response(resp).await);
             }
@@ -775,7 +884,7 @@ impl Provider for Anthropic {
                     "stream ended before message_stop".into(),
                 ));
             }
-            Ok(acc.finish(&req.model))
+            Ok(acc.finish(model))
         })
         .await
     }
@@ -880,9 +989,8 @@ mod tests {
     }
 
     #[test]
-    fn context_management_and_messages() {
+    fn messages_shape() {
         let mut r = req("claude-sonnet-5");
-        r.clear_old_tool_results = true;
         r.messages = vec![
             Message::user_text("q"),
             Message::assistant(vec![
@@ -904,11 +1012,8 @@ mod tests {
             Message::tool_results(vec![Block::tool_result("1", "boom", true)]),
         ];
         let (b, betas) = request_body(&r);
-        assert_eq!(betas, vec![CONTEXT_MANAGEMENT_BETA]);
-        assert_eq!(
-            b["context_management"]["edits"][0]["type"],
-            "clear_tool_uses_20250919"
-        );
+        assert!(betas.is_empty());
+        assert!(b.get("context_management").is_none());
         let asst = &b["messages"][1]["content"];
         assert_eq!(asst.as_array().unwrap().len(), 2);
         assert_eq!(asst[0]["signature"], "s");
@@ -969,5 +1074,86 @@ mod tests {
             (usage.cache_write_tokens, usage.cache_write_1h_tokens),
             (3000, 1000)
         );
+    }
+
+    fn compaction(provider: &str, summary: &str, value: Option<Value>) -> Block {
+        Block::Compaction {
+            provider: provider.into(),
+            summary: summary.into(),
+            value,
+        }
+    }
+
+    #[test]
+    fn compaction_request_asks_for_a_summary() {
+        let mut r = req("claude-opus-5-5");
+        r.tool_choice = ToolChoice::Tool("x".into());
+        let (b, betas) = compaction_body(&r, "Keep the paths.");
+        assert_eq!(
+            b["compaction"],
+            json!({"type": "summarize", "instructions": "Keep the paths."})
+        );
+        assert_eq!(b["tool_choice"]["type"], "auto");
+        assert!(betas.contains(&COMPACT_BETA));
+        assert!(caps("claude-sonnet-4-6").compaction);
+        assert!(!caps("claude-haiku-4-5").compaction);
+        assert!(!caps("claude-opus-4-5").compaction);
+    }
+
+    #[test]
+    fn compaction_blocks_go_back_signed_or_as_text() {
+        let signed = json!({"type": "compaction", "content": "sum", "signature": "sig"});
+        let mut r = req("claude-opus-5-5");
+        r.messages = vec![
+            Message::assistant(vec![compaction("anthropic", "sum", Some(signed.clone()))]),
+            Message::user_text("go on"),
+        ];
+        let (b, betas) = request_body(&r);
+        assert_eq!(b["messages"][0]["content"][0], signed);
+        assert!(betas.contains(&COMPACT_BETA));
+
+        r.messages = vec![Message {
+            role: Role::User,
+            content: vec![
+                compaction("", "client summary", None),
+                compaction("openai", "", Some(json!({"type": "compaction"}))),
+                Block::text("go on"),
+            ],
+        }];
+        let (b, betas) = request_body(&r);
+        let content = b["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2, "an unreadable foreign block is dropped");
+        assert_eq!(content[0], json!({"type": "text", "text": "client summary"}));
+        assert!(!betas.contains(&COMPACT_BETA));
+    }
+
+    #[test]
+    fn reads_a_streamed_compaction_and_its_usage() {
+        crate::pricing::install_test_prices();
+        let block = json!({"type": "compaction", "content": "sum", "signature": "sig"});
+        let events = [
+            json!({"type": "message_start", "message": {"model": "claude-opus-5-5", "usage": {"input_tokens": 0, "output_tokens": 0}}}),
+            json!({"type": "content_block_start", "index": 0, "content_block": block}),
+            json!({"type": "content_block_stop", "index": 0}),
+            json!({"type": "message_delta", "delta": {"stop_reason": "compaction"}, "usage": {
+                "input_tokens": 0, "output_tokens": 0,
+                "iterations": [{"type": "compaction", "input_tokens": 144, "output_tokens": 276, "cache_read_input_tokens": 1000}],
+            }}),
+            json!({"type": "message_stop"}),
+        ];
+        let mut acc = Accumulator::default();
+        let started = AtomicBool::new(false);
+        for ev in &events {
+            acc.apply(ev, &|_| {}, &started).unwrap();
+        }
+        let resp = acc.finish("claude-opus-5-5");
+        assert_eq!(resp.stop, StopReason::Other("compaction".into()));
+        assert_eq!(resp.content, vec![compaction("anthropic", "sum", Some(block))]);
+        assert_eq!(
+            (resp.usage.input_tokens, resp.usage.output_tokens, resp.usage.cache_read_tokens),
+            (144, 276, 1000),
+            "counted once, although usage arrives twice"
+        );
+        assert!(resp.usage.cost_usd > 0.0);
     }
 }

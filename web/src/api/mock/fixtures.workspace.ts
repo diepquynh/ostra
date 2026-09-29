@@ -81,6 +81,7 @@ const usage = (runs: number, cost: number, calls: number, buildMs = 0): Usage =>
   cost_usd: cost,
   tool_calls: calls * runs,
   build_ms: buildMs,
+  context_tokens: 0,
 });
 
 const row = (key: string, executions: number, cost: number, calls: number, buildMs = 0): CostRow => {

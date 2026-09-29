@@ -858,3 +858,107 @@ async fn a_run_that_owes_an_answer_is_reminded_to_reply_and_cannot_submit() {
     let (denied, is_err) = &tool_results(&reqs[2])[0];
     assert!(*is_err && denied.contains("reply-first"), "{denied}");
 }
+
+fn read_near_full(f: &Fixture, context: u64) -> ChatResponse {
+    let mut r = response(
+        vec![Block::ToolUse {
+            id: format!("r{context}"),
+            name: "Read".into(),
+            input: json!({"file_path": f.repo.join("main.txt").display().to_string()}),
+        }],
+        StopReason::ToolUse,
+    );
+    r.usage.cache_read_tokens = context;
+    r
+}
+
+fn quick(f: &Fixture) -> ExecutionSpec {
+    let mut s = spec(
+        f,
+        AgentName::QuickAnswer,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
+    s.ctx.report_file = None;
+    s
+}
+
+fn is_compaction_ask(req: &ChatRequest) -> bool {
+    req.tool_choice == ToolChoice::None
+}
+
+#[tokio::test]
+async fn compacts_near_the_context_window_and_continues_from_the_summary() {
+    let f = fixture();
+    let p = ScriptedProvider::new();
+    // 95% of the 200k window assumed for an unlisted model.
+    p.push(read_near_full(&f, 190_000));
+    p.push_text("Summary: main.txt says hello. Next: answer.");
+    p.push_tool_use("submit_quick_answer", json!({"answer": "hello"}));
+    let (exec, p) = executor(p);
+    let host = Arc::new(FakeHost::default());
+    let r = exec.run(quick(&f), host.clone(), CancellationToken::new()).await;
+    assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
+    assert_eq!(r.usage.context_tokens, 190_000);
+
+    let reqs = p.requests();
+    assert_eq!(reqs.len(), 3);
+    assert!(is_compaction_ask(&reqs[1]));
+    assert_eq!(reqs[1].messages.len(), 3, "the whole conversation is summarized");
+    assert_eq!(
+        reqs[1].messages[2].content.last(),
+        Some(&Block::text(COMPACT_INSTRUCTIONS))
+    );
+    let after = &reqs[2].messages;
+    assert_eq!(after.len(), 1, "the summary replaces the conversation");
+    assert!(matches!(&after[0].content[..], [Block::Compaction { summary, .. }, Block::Text { text }]
+        if summary.starts_with("Summary:") && text == AFTER_COMPACTION));
+
+    let recorded = host.messages.lock().clone();
+    let (role, window) = recorded
+        .iter()
+        .find(|(role, _)| role == COMPACTION_RECORD)
+        .expect("the window is stored");
+    assert_eq!(role, COMPACTION_RECORD);
+    assert_eq!(
+        stored_messages(&recorded)[..1],
+        after[..],
+        "a resume starts from the window"
+    );
+    assert!(window.is_array());
+}
+
+#[tokio::test]
+async fn a_compaction_without_summary_is_not_retried_every_turn() {
+    let f = fixture();
+    let p = ScriptedProvider::new();
+    p.push(read_near_full(&f, 190_000));
+    p.push(response(vec![], StopReason::MaxTokens));
+    p.push(read_near_full(&f, 191_000));
+    p.push_tool_use("submit_quick_answer", json!({"answer": "hello"}));
+    let (exec, p) = executor(p);
+    let r = exec
+        .run(quick(&f), Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
+    assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
+    let asks = p.requests().iter().filter(|r| is_compaction_ask(r)).count();
+    assert_eq!(asks, 1);
+}
+
+#[test]
+fn a_stored_compaction_replaces_the_messages_before_it() {
+    let window = json!([{"role": "user", "content": [
+        {"type": "compaction", "provider": "", "summary": "S", "value": null},
+        {"type": "text", "text": "Continue."},
+    ]}]);
+    let transcript = vec![
+        ("user".to_string(), json!([{"type": "text", "text": "Task."}])),
+        ("assistant".to_string(), json!([{"type": "text", "text": "Working."}])),
+        (COMPACTION_RECORD.to_string(), window),
+        ("assistant".to_string(), json!([{"type": "text", "text": "After."}])),
+    ];
+    let m = stored_messages(&transcript);
+    assert_eq!(m.len(), 2);
+    assert!(matches!(&m[0].content[0], Block::Compaction { summary, .. } if summary == "S"));
+    assert_eq!(m[1].content, vec![Block::text("After.")]);
+}

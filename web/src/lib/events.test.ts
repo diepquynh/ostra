@@ -50,6 +50,7 @@ describe("activity folding", () => {
             cost_usd: 0.1,
             tool_calls: 1,
             build_ms: 0,
+            context_tokens: 0,
           },
         },
       },

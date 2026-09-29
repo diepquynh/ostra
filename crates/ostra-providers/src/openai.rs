@@ -3,8 +3,9 @@
 
 use crate::retry::{self, RetryPolicy, error_from_response, network_error};
 use crate::{
-    ApiKey, Block, ChatRequest, ChatResponse, EventSink, Message, Provider, ProviderError, Role,
-    ServerTools, StopReason, StreamEvent, ToolChoice, pricing, sse,
+    ApiKey, Block, ChatRequest, ChatResponse, Compacted, EventSink, Message, Provider,
+    ProviderError, Role, ServerTools, StopReason, StreamEvent, ToolChoice, compact_on_client,
+    pricing, sse,
 };
 use futures::StreamExt;
 use ostra_core::exec::Usage;
@@ -106,11 +107,73 @@ fn input_items(messages: &[Message]) -> Vec<Value> {
                     }
                     items.push(item);
                 }
+                (
+                    _,
+                    Block::Compaction {
+                        provider,
+                        value: Some(value),
+                        ..
+                    },
+                ) if provider == "openai" => items.push(value.clone()),
+                (_, Block::Compaction { summary, .. }) if !summary.is_empty() => {
+                    items.push(json!({
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": summary}],
+                    }))
+                }
                 _ => {}
             }
         }
     }
     items
+}
+
+/// The window `/v1/responses/compact` returns, as messages: kept messages stay as text and the
+/// encrypted compaction item is passed back verbatim.
+fn compacted_messages(output: &[Value]) -> Vec<Message> {
+    let mut out: Vec<Message> = vec![];
+    for item in output {
+        let (role, block) = match item["type"].as_str().unwrap_or("") {
+            "message" => {
+                let role = if item["role"] == "assistant" {
+                    Role::Assistant
+                } else {
+                    Role::User
+                };
+                let text = item
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("");
+                (role, Block::Text { text })
+            }
+            "compaction" => (
+                Role::User,
+                Block::Compaction {
+                    provider: "openai".into(),
+                    summary: String::new(),
+                    value: Some(json!({
+                        "type": "compaction",
+                        "id": item["id"],
+                        "encrypted_content": item["encrypted_content"],
+                    })),
+                },
+            ),
+            _ => continue,
+        };
+        match out.last_mut() {
+            Some(last) if last.role == role => last.content.push(block),
+            _ => out.push(Message {
+                role,
+                content: vec![block],
+            }),
+        }
+    }
+    out
 }
 
 pub(crate) fn request_body(req: &ChatRequest) -> Value {
@@ -445,6 +508,57 @@ impl Provider for OpenAi {
             Ok(acc.finish(&req.model))
         })
         .await
+    }
+
+    async fn compact(
+        &self,
+        req: ChatRequest,
+        instructions: &str,
+        cancel: CancellationToken,
+    ) -> Result<Compacted, ProviderError> {
+        let chat = request_body(&req);
+        let mut body = json!({"model": req.model, "input": chat["input"]});
+        if let Some(system) = chat.get("instructions") {
+            body["instructions"] = system.clone();
+        }
+        let url = format!("{}/v1/responses/compact", self.base_url);
+        let started = AtomicBool::new(false);
+        let result = retry::run(self.retry, &cancel, &started, || async {
+            let resp = self
+                .client
+                .post(&url)
+                .bearer_auth(self.key.expose())
+                .json(&body)
+                .send()
+                .await
+                .map_err(network_error)?;
+            if !resp.status().is_success() {
+                return Err(error_from_response(resp).await);
+            }
+            resp.json::<Value>()
+                .await
+                .map_err(|e| ProviderError::Decode(e.to_string()))
+        })
+        .await;
+        let value = match result {
+            // A compatible gateway may not offer the endpoint.
+            Err(ProviderError::InvalidRequest { .. }) => {
+                return compact_on_client(self, req, instructions, cancel).await;
+            }
+            r => r?,
+        };
+        let output = value["output"].as_array().cloned().unwrap_or_default();
+        let messages = compacted_messages(&output);
+        let has_block = messages
+            .iter()
+            .flat_map(|m| &m.content)
+            .any(|b| matches!(b, Block::Compaction { .. }));
+        let mut usage = read_usage(&value["usage"]);
+        usage.cost_usd = pricing::cost(&req.model, &usage, 0);
+        Ok(Compacted {
+            messages: has_block.then_some(messages),
+            usage,
+        })
     }
 }
 

@@ -173,3 +173,66 @@ async fn live_smoke() {
         .unwrap();
     assert!(resp.text().to_lowercase().contains("ready"));
 }
+
+#[tokio::test]
+async fn compacts_through_the_compact_endpoint() {
+    let window = json!({
+        "id": "resp_1",
+        "object": "response.compaction",
+        "output": [
+            {"id": "msg_0", "type": "message", "role": "user",
+             "content": [{"type": "input_text", "text": "Read a.rs"}]},
+            {"id": "cmp_1", "type": "compaction", "encrypted_content": "gAAAA-cmp"},
+        ],
+        "usage": {"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 800},
+                  "output_tokens": 200},
+    });
+    let (base, captured) = serve(vec![
+        Recorded::json(&window),
+        Recorded::sse(&fixture("openai_text.sse")),
+    ])
+    .await;
+    let p = provider(base);
+    let mut req = request("gpt-5.6-terra");
+    req.system = vec![ostra_providers::SystemBlock::new("be brief")];
+    let out = p
+        .compact(req, "ignored", CancellationToken::new())
+        .await
+        .unwrap();
+    let messages = out.messages.expect("a compacted window");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].content[0], Block::text("Read a.rs"));
+    let item = json!({"type": "compaction", "id": "cmp_1", "encrypted_content": "gAAAA-cmp"});
+    assert!(matches!(&messages[0].content[1], Block::Compaction { provider, value: Some(v), .. }
+        if provider == "openai" && *v == item));
+    assert_eq!((out.usage.input_tokens, out.usage.cache_read_tokens), (200, 800));
+
+    // The item goes back verbatim on the next request.
+    let mut next = request("gpt-5.6-terra");
+    next.messages = messages;
+    next.messages.push(Message::user_text("go on"));
+    p.chat(next, &|_| {}, CancellationToken::new()).await.unwrap();
+    let cap = captured.lock().unwrap();
+    assert!(cap[0].head.starts_with("POST /v1/responses/compact"));
+    assert_eq!(cap[0].body["instructions"], "be brief");
+    assert!(cap[0].body.get("tools").is_none());
+    assert_eq!(cap[1].body["input"][1], item);
+}
+
+#[tokio::test]
+async fn compacts_on_the_client_when_the_endpoint_is_missing() {
+    let (base, captured) = serve(vec![
+        Recorded::error(404, r#"{"error":{"message":"not found"}}"#),
+        Recorded::sse(&fixture("openai_text.sse")),
+    ])
+    .await;
+    let out = provider(base)
+        .compact(request("gpt-5.6-terra"), "Summarize.", CancellationToken::new())
+        .await
+        .unwrap();
+    let messages = out.messages.expect("a client summary");
+    assert!(matches!(&messages[0].content[0], Block::Compaction { value: None, summary, .. }
+        if !summary.is_empty()));
+    let cap = captured.lock().unwrap();
+    assert!(cap[1].head.starts_with("POST /v1/responses "));
+}

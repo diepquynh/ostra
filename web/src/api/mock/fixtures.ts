@@ -32,6 +32,7 @@ const usage = (i: number, cost: number): Usage => ({
   cost_usd: cost,
   tool_calls: 14 * i,
   build_ms: 4200 * i,
+  context_tokens: 0,
 });
 
 export const settings: WorkspaceSettings = {

@@ -62,6 +62,12 @@ struct RawProvider {
 #[derive(Deserialize)]
 struct RawModel {
     cost: Option<RawCost>,
+    limit: Option<RawLimit>,
+}
+
+#[derive(Deserialize)]
+struct RawLimit {
+    context: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -114,10 +120,13 @@ fn rates(
     }
 }
 
-/// Prices by provider and model id.
+type ByProvider<T> = HashMap<String, HashMap<String, T>>;
+
+/// Prices and context windows by provider and model id.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Catalog {
-    providers: HashMap<String, HashMap<String, Pricing>>,
+    providers: ByProvider<Pricing>,
+    windows: ByProvider<u64>,
 }
 
 impl Catalog {
@@ -125,6 +134,18 @@ impl Catalog {
     /// out.
     pub fn from_models_dev(json: &str) -> Result<Catalog, serde_json::Error> {
         let raw: HashMap<String, RawProvider> = serde_json::from_str(json)?;
+        let windows = raw
+            .iter()
+            .map(|(provider, p)| {
+                let models = p
+                    .models
+                    .iter()
+                    .filter_map(|(id, m)| Some((id.clone(), m.limit.as_ref()?.context?)))
+                    .filter(|(_, w)| *w > 0)
+                    .collect();
+                (provider.clone(), models)
+            })
+            .collect();
         let providers = raw
             .into_iter()
             .map(|(provider, p)| {
@@ -159,7 +180,7 @@ impl Catalog {
                 (provider, models)
             })
             .collect();
-        Ok(Catalog { providers })
+        Ok(Catalog { providers, windows })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -170,31 +191,40 @@ impl Catalog {
     /// first-party listing wins over resellers, and a dated snapshot (`claude-haiku-4-5-20251001`)
     /// falls back to its base id.
     pub fn price(&self, model: &str) -> Option<&Pricing> {
-        let (hint, id) = match model.split_once(':') {
-            Some((p, id)) => (Some(p), id),
-            None => (None, model),
-        };
-        let first_party = hint.into_iter().chain(FIRST_PARTY.iter().copied());
-        let exact = |p: &str| self.providers.get(p).and_then(|m| m.get(id));
-        if let Some(p) = first_party.clone().find_map(exact) {
-            return Some(p);
-        }
-        // Longest matching prefix wins, so `claude-opus-5-5-x` is not priced as `claude-opus-5`.
-        let prefixed = first_party
-            .filter_map(|p| self.providers.get(p))
-            .flat_map(|m| m.iter())
-            .filter(|(base, _)| {
-                id.strip_prefix(base.as_str())
-                    .is_some_and(|rest| rest.starts_with('-'))
-            })
-            .max_by_key(|(base, _)| base.len())
-            .map(|(_, p)| p);
-        prefixed.or_else(|| {
-            let mut names: Vec<&String> = self.providers.keys().collect();
-            names.sort();
-            names.into_iter().find_map(|p| self.providers[p].get(id))
-        })
+        lookup(&self.providers, model)
     }
+
+    /// Context window in tokens, resolved like [`Catalog::price`].
+    pub fn context_window(&self, model: &str) -> Option<u64> {
+        lookup(&self.windows, model).copied()
+    }
+}
+
+fn lookup<'a, T>(providers: &'a ByProvider<T>, model: &str) -> Option<&'a T> {
+    let (hint, id) = match model.split_once(':') {
+        Some((p, id)) => (Some(p), id),
+        None => (None, model),
+    };
+    let first_party = hint.into_iter().chain(FIRST_PARTY.iter().copied());
+    let exact = |p: &str| providers.get(p).and_then(|m| m.get(id));
+    if let Some(p) = first_party.clone().find_map(exact) {
+        return Some(p);
+    }
+    // Longest matching prefix wins, so `claude-opus-5-5-x` is not priced as `claude-opus-5`.
+    let prefixed = first_party
+        .filter_map(|p| providers.get(p))
+        .flat_map(|m| m.iter())
+        .filter(|(base, _)| {
+            id.strip_prefix(base.as_str())
+                .is_some_and(|rest| rest.starts_with('-'))
+        })
+        .max_by_key(|(base, _)| base.len())
+        .map(|(_, p)| p);
+    prefixed.or_else(|| {
+        let mut names: Vec<&String> = providers.keys().collect();
+        names.sort();
+        names.into_iter().find_map(|p| providers[p].get(id))
+    })
 }
 
 static CATALOG: RwLock<Option<Arc<Catalog>>> = RwLock::new(None);
@@ -210,6 +240,10 @@ pub fn catalog() -> Option<Arc<Catalog>> {
 
 pub fn price(model: &str) -> Option<Pricing> {
     catalog().and_then(|c| c.price(model).cloned())
+}
+
+pub fn context_window(model: &str) -> Option<u64> {
+    catalog().and_then(|c| c.context_window(model))
 }
 
 /// Install a sample of real models.dev entries, for tests in any crate.
@@ -257,6 +291,15 @@ mod tests {
         assert_eq!(c.price("claude-fable-5-1").unwrap().base.cache_read, 0.25);
         assert!(c.price("claude-opus-50").is_none());
         assert!(c.price("unknown").is_none());
+    }
+
+    #[test]
+    fn looks_up_context_windows_like_prices() {
+        let c = sample();
+        assert_eq!(c.context_window("anthropic:claude-opus-5-5"), Some(1_000_000));
+        assert_eq!(c.context_window("claude-haiku-4-5-20251001"), Some(200_000));
+        assert_eq!(c.context_window("openai:gpt-5.6-sol"), Some(1_050_000));
+        assert_eq!(c.context_window("unknown"), None);
     }
 
     #[test]
