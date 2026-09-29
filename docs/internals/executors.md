@@ -268,6 +268,14 @@ result recorded like a submit's, and the answer later resumes it in place with t
 round or a consult run continues another execution's conversation, so it copies that transcript and adds the new
 spawn block as the note.
 
+Known weakness: a continued conversation loses the prompt cache when its effort changed. Effort is resolved fresh
+for each execution from the agent's default and the workspace's `routing.effort` settings, and it is sent as the
+top-level `output_config.effort`. The provider invalidates the cached messages when that value differs from the
+earlier requests, so the whole replayed transcript is written to the cache again at full write price. This happens
+when you edit the effort settings between two runs of one conversation, for example between spec rounds. In one
+session a spec round that made a single tool call cost $1.73, because it rewrote about 200,000 tokens of the
+previous round's transcript. The executor does not record the effort a run used, so a continuation cannot keep it.
+
 ### Cost
 
 Each response's usage is added to a running total and emitted at once, so the cost in the header moves while
