@@ -24,7 +24,7 @@ pub use live::{LiveExecution, LiveRegistry};
 pub use outcome::{AUTH_PREFIX, LAUNCH_PREFIX};
 pub use protocol::{HookEvent, McpRequest, McpResponse, PolicyRequest, PolicyResponse};
 pub use pty::{PtyRegistry, PtySession};
-pub use services::BridgeServices;
+pub use services::{BridgeServices, McpOut};
 pub use setup::{
     all_harness_status, ensure_agy_integration, harness_status, install_dirs, install_script, installer_tool,
     login_command,

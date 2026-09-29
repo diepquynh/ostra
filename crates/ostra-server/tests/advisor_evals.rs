@@ -292,6 +292,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
             ..Default::default()
         },
         resumes: None,
+        continues: None,
     };
     let step_block = AgentsFactory
         .build(&step, &env)
@@ -496,6 +497,8 @@ async fn run_one(
         sandbox_loopback: Default::default(),
         sandbox_blocked_ports: vec![],
         creates_project: false,
+        answer_only: false,
+        owes_reply: false,
     };
     let spec = ExecutionSpec {
         id: ctx.execution_id.clone(),

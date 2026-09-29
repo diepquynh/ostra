@@ -17,7 +17,10 @@ use ostra_providers::{
     ServerTools, StopReason, StreamEvent, SystemBlock, ToolChoice, ToolDef,
 };
 use ostra_store::MemoryStore;
-use ostra_tools::{CodeNav, ManageConnector, McpConnector, SkillResolver, ToolEnv, ToolEnvConfig};
+use ostra_core::coord::RunEnd;
+use ostra_tools::{
+    CodeNav, CoordConnector, ManageConnector, McpConnector, SkillResolver, ToolEnv, ToolEnvConfig,
+};
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::sync::Arc;
@@ -43,6 +46,7 @@ pub struct NativeExecutor {
     code: Option<Arc<dyn CodeNav>>,
     mcp: Option<Arc<dyn McpConnector>>,
     manage: Option<Arc<dyn ManageConnector>>,
+    coord: Option<Arc<dyn CoordConnector>>,
 }
 
 impl NativeExecutor {
@@ -57,6 +61,7 @@ impl NativeExecutor {
             code,
             mcp: None,
             manage: None,
+            coord: None,
         }
     }
 
@@ -67,6 +72,11 @@ impl NativeExecutor {
 
     pub fn with_manage(mut self, manage: Arc<dyn ManageConnector>) -> Self {
         self.manage = Some(manage);
+        self
+    }
+
+    pub fn with_coord(mut self, coord: Arc<dyn CoordConnector>) -> Self {
+        self.coord = Some(coord);
         self
     }
 }
@@ -89,6 +99,7 @@ impl Executor for NativeExecutor {
             code: self.code.clone(),
             mcp: self.mcp.clone(),
             manage: self.manage.clone(),
+            coord: self.coord.clone(),
             host: host.clone(),
             usage: usage.clone(),
             cancel: inner.clone(),
@@ -129,6 +140,7 @@ struct Run {
     code: Option<Arc<dyn CodeNav>>,
     mcp: Option<Arc<dyn McpConnector>>,
     manage: Option<Arc<dyn ManageConnector>>,
+    coord: Option<Arc<dyn CoordConnector>>,
     host: Arc<dyn ExecutionHost>,
     usage: Arc<Mutex<Usage>>,
     cancel: CancellationToken,
@@ -166,7 +178,10 @@ fn policy_inputs(ctx: &ExecContext) -> PolicyInputs {
     }
 }
 
-/// Hosts named exactly by `WebFetch(domain:<host>)` allow rules.
+fn input_message(input: &Value) -> &str {
+    input.get("message").and_then(Value::as_str).unwrap_or_default()
+}
+
 fn truncate(s: &str, n: usize) -> String {
     if s.len() <= n {
         return s.to_string();
@@ -378,6 +393,7 @@ impl Run {
             code: self.code.clone(),
             mcp: mcp.clone(),
             manage: self.manage.as_ref().and_then(|m| m.open(spec)),
+            coord: self.coord.as_ref().and_then(|c| c.open(spec)),
         })
         .with_private_hosts(ostra_tools::webfetch_hosts(&ctx.permissions.allow))
         .with_scrub_env(mcp_secret_vars(ctx));
@@ -556,9 +572,13 @@ impl Run {
                     return r;
                 }
                 reminded = true;
-                let m = Message::user_text(format!(
-                    "Call {submit_name} now with your result. The engine reads only that call, so a result given in text is lost."
-                ));
+                let m = Message::user_text(if spec.ctx.owes_reply {
+                    ostra_core::coord::reply_instruction(ostra_core::coord::SUBAGENT_REPLY)
+                } else {
+                    format!(
+                        "Call {submit_name} now with your result. The engine reads only that call, so a result given in text is lost."
+                    )
+                });
                 self.record(&m);
                 messages.push(m);
                 continue;
@@ -676,6 +696,30 @@ impl Run {
                     results[i + k] = Some(out);
                 }
                 i = j;
+            } else if ostra_core::coord::is_coord_tool(name) {
+                let (block, end) = self.coord_tool(id, name, input, policy, env).await;
+                results[i] = Some(block);
+                i += 1;
+                // Rule H2: a run that asked waits, and a consult run that answered ends.
+                let status = match end {
+                    RunEnd::Continue => continue,
+                    RunEnd::Wait => ExecutionStatus::Waiting,
+                    RunEnd::Finish => ExecutionStatus::Ok,
+                };
+                for (j, (oid, _, _)) in calls.iter().enumerate() {
+                    if results[j].is_none() {
+                        results[j] = Some(Block::tool_result(
+                            oid.clone(),
+                            "Not run: the run stopped to wait for another subagent.",
+                            true,
+                        ));
+                    }
+                }
+                return TurnEnd::Submitted {
+                    results: results.into_iter().flatten().collect(),
+                    submit: ostra_core::coord::end_payload(name, input_message(input)),
+                    status,
+                };
             } else {
                 results[i] = Some(self.tool(id, name, input, policy, env).await);
                 i += 1;
@@ -762,6 +806,28 @@ impl Run {
         policy: &ExecutionPolicy,
         env: &ToolEnv,
     ) -> Block {
+        self.tool_end(id, name, input, policy, env).await.0
+    }
+
+    async fn coord_tool(
+        &self,
+        id: &str,
+        name: &str,
+        input: &Value,
+        policy: &ExecutionPolicy,
+        env: &ToolEnv,
+    ) -> (Block, RunEnd) {
+        self.tool_end(id, name, input, policy, env).await
+    }
+
+    async fn tool_end(
+        &self,
+        id: &str,
+        name: &str,
+        input: &Value,
+        policy: &ExecutionPolicy,
+        env: &ToolEnv,
+    ) -> (Block, RunEnd) {
         // The policy checks, the user approves, and the tool runs this one call, so relative
         // paths and the Bash working directory mean the same target in all three.
         let call = env.canonical_call(&ToolCall::new(name, input.clone()));
@@ -777,7 +843,7 @@ impl Run {
                 is_error: true,
                 duration_ms: 0,
             });
-            Block::tool_result(id, text, true)
+            (Block::tool_result(id, text, true), RunEnd::Continue)
         };
         if let Some(raw) = input.get("__invalid_json") {
             return err(format!(
@@ -895,7 +961,8 @@ impl Run {
             is_error: out.is_error,
             duration_ms: out.duration_ms,
         });
-        Block::tool_result(id, text, out.is_error)
+        let end = if out.is_error { RunEnd::Continue } else { out.end };
+        (Block::tool_result(id, text, out.is_error), end)
     }
 }
 

@@ -68,6 +68,7 @@ A `Step` is one unit of work the runner knows how to perform:
 | `AnnounceBlocked` | Appends `PhaseBlocked`, which also sends a push notification. |
 | `FinishInit` | Ends the init of a project the session created (rule O4): checks that `INVENTORY.md` and a valid `project.toml` exist, then marks the project initialized and appends `ProjectInitFinished`. When a file is missing or invalid it appends `InitStepFailed` against the generate-inventory run instead, so the advisor looks at it (rule O5). |
 | `RecordInitProblem` | Appends `InitStepFailed` for an init step that finished but left nothing to build on, such as a detect with no slices, so the advisor looks at it (rule O5). |
+| `Deliver` | Hands a question or an answer to a harness run that waits for it with its process alive (Rule H2): appends `MessageDelivered` and passes the message to the waiting executor, which types it into the terminal. |
 | `Complete` | Writes the completion report to the session folder and appends `SessionCompleted`. |
 | `Fail` | Appends `SessionFailed`. |
 
@@ -127,6 +128,16 @@ branches of the planner that reach the same conclusion produce one step.
   asks again on its next pass, so a held step starts once the init ends.
 - **Resume after pause (Rule P2).** When the session has a paused run for the same purpose, the spawn is marked
   to resume it, so the runner continues that execution instead of starting a new one.
+- **A run that waits for an answer (Rule H2).** A native run that asked another subagent ended with status
+  `waiting`, which its stage sees as a paused run. Its stage's next spawn is dropped until the answer or a
+  question for it is ready, and then marked to resume it in place; the runner uses the message as the resume note.
+- **Pair loops continue conversations (Rules H5 to H7).** A fact-check round, a re-pass, a fix, and a re-review
+  are marked to continue the conversation of the run before them, from `SessionState::continuation`, unless a
+  rule says to start fresh. A spawn that continues a conversation with a live run is dropped until that run ends,
+  so a conversation never has two live runs.
+
+After the stage logic, a coordination pass adds a consult spawn for each question to a subagent that ended its run,
+and a `Deliver` step for each harness run whose message is ready.
 
 And at the top of `run`, before any stage logic:
 
@@ -236,7 +247,9 @@ A few consequences of this shape:
 
 `limits.max_parallel_executions` in workspace settings caps how many executions run at once across the whole
 workspace. `perform_spawn` takes a slot before it does anything else and holds it for the life of the execution;
-dropping the slot frees it and wakes waiters. The planner can ask for six scouts at once, and the runner will start
+dropping the slot frees it and wakes waiters. The one exception is a harness run that waits for another
+subagent's answer: it gives its slot back while it waits and takes one again before it continues (Rule H2),
+because otherwise a single slot would deadlock the asker and the helper it waits for. The planner can ask for six scouts at once, and the runner will start
 them as slots free up. This is why fan-out stages keep their own caps too (`init::MAX_SCOUTS` is 6): the slot
 limiter bounds concurrency, and the caps bound the total.
 

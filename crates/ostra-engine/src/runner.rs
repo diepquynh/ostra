@@ -22,7 +22,7 @@ use ostra_core::event::{
 };
 use ostra_core::exec::{
     CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
-    ExecutionStatus, ResumeInfo, Usage,
+    ExecutionStatus, ResumeInfo, Usage, Wake,
 };
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
@@ -94,6 +94,14 @@ struct Inner {
     /// Executions holding a slot under `limits.max_parallel_executions`.
     slots: Mutex<usize>,
     slot_free: Notify,
+    /// Rule H2: messages for harness runs that wait with their process alive.
+    mail: Mutex<HashMap<ExecutionId, Mail>>,
+}
+
+#[derive(Default)]
+struct Mail {
+    waiter: Option<oneshot::Sender<Wake>>,
+    pending: Option<Wake>,
 }
 
 /// A held execution slot; dropping it frees the slot.
@@ -142,6 +150,7 @@ impl Engine {
                 resume_hints: Mutex::new(HashMap::new()),
                 slots: Mutex::new(0),
                 slot_free: Notify::new(),
+                mail: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -170,8 +179,10 @@ impl Engine {
             let live = self.inner.load(&summary.id)?;
             let (running, stale_gates, terminal) = {
                 let st = lock(&live.state);
-                let running: Vec<ExecutionId> =
-                    st.running_executions().map(|r| r.id.clone()).collect();
+                let running: Vec<(ExecutionId, bool)> = st
+                    .running_executions()
+                    .map(|r| (r.id.clone(), st.open_ask_of(&r.id).is_some()))
+                    .collect();
                 let stale: Vec<GateId> = st
                     .open_gates()
                     .filter(|g| matches!(g.payload, GatePayload::Permission { .. }))
@@ -179,9 +190,16 @@ impl Engine {
                     .collect();
                 (running, stale, st.is_terminal())
             };
-            for id in running {
-                let mut result = ExecutionResult::with_status(ExecutionStatus::Interrupted);
-                result.error = Some("The server restarted while this execution ran.".into());
+            for (id, waiting) in running {
+                // Rule H2: a harness run that waited with its process alive still waits, and its
+                // answer resumes the harness session.
+                let mut result = if waiting {
+                    ExecutionResult::with_status(ExecutionStatus::Waiting)
+                } else {
+                    let mut r = ExecutionResult::with_status(ExecutionStatus::Interrupted);
+                    r.error = Some("The server restarted while this execution ran.".into());
+                    r
+                };
                 // Keep what the execution already spent; the usage deltas were stored as it ran.
                 if let Ok(Some(view)) = self.inner.db.get_execution(&id) {
                     result.usage = view.usage;
@@ -254,6 +272,50 @@ impl Engine {
             &[],
             &[],
         )
+    }
+
+    /// Rules H2 to H4: one coordination tool call from a running execution. `Err` is a tool
+    /// error shown to the model.
+    pub fn coordinate(
+        &self,
+        session: &SessionId,
+        execution: &ExecutionId,
+        tool: &str,
+        input: &Value,
+    ) -> Result<ostra_core::coord::CoordReply, String> {
+        use ostra_core::coord::{RunEnd, SUBAGENT_ASK, SUBAGENT_LIST, SUBAGENT_REPLY};
+        let st = self.state(session).map_err(|e| e.to_string())?;
+        let harness = st
+            .executions
+            .get(execution)
+            .is_some_and(|r| matches!(r.executor, ExecutorKind::Harness(_)));
+        let reply = crate::coord::reply;
+        match tool {
+            SUBAGENT_LIST => Ok(reply(st.subagent_list(execution), RunEnd::Continue)),
+            SUBAGENT_ASK => {
+                let (event, who) = st.ask_event(execution, input)?;
+                self.inner
+                    .append(session, event)
+                    .map_err(|e| e.to_string())?;
+                Ok(reply(
+                    ostra_core::coord::waiting_text(&who, harness),
+                    RunEnd::Wait,
+                ))
+            }
+            SUBAGENT_REPLY => {
+                let (event, end) = st.reply_event(execution, input)?;
+                self.inner
+                    .append(session, event)
+                    .map_err(|e| e.to_string())?;
+                let text = match (end, harness) {
+                    (RunEnd::Wait, true) => "Answer sent. End your turn now and reply with only `Waiting`: you wait for the answer to your own question again.",
+                    (RunEnd::Wait, false) => "Answer sent. This run waits for the answer to your own question again.",
+                    _ => "Answer sent. This run is complete: end your turn now, without further tool calls.",
+                };
+                Ok(reply(text.into(), end))
+            }
+            other => Err(format!("Unknown tool `{other}`.")),
+        }
     }
 
     /// Rule O3: record a project an agent created once the workspace holds it, so it joins the
@@ -782,6 +844,8 @@ impl Engine {
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         };
         self.inner.db.insert_execution(&NewExecution {
             id: new.clone(),
@@ -806,6 +870,7 @@ impl Engine {
             execution: new.clone(),
             repo_root: Some(repo_root),
             usage_base: Usage::default(),
+            slot: Mutex::new(None),
         });
         let spec = ExecutionSpec {
             id: new.clone(),
@@ -1511,6 +1576,35 @@ impl Inner {
                 Ok(())
             }
             Step::YoloAnswer { gate } => self.perform_yolo(session, gate).await,
+            Step::Deliver {
+                execution,
+                ask,
+                kind,
+            } => {
+                let st = self.snapshot(session)?;
+                let Some(d) = st
+                    .next_delivery(&execution)
+                    .filter(|d| d.ask == ask && d.kind == kind)
+                else {
+                    return Ok(());
+                };
+                self.append(
+                    session,
+                    SessionEvent::MessageDelivered {
+                        ask,
+                        to: execution.clone(),
+                        kind,
+                    },
+                )?;
+                self.deliver_mail(
+                    &execution,
+                    Wake {
+                        note: d.note,
+                        owes_reply: kind == ostra_core::coord::DeliveryKind::Question,
+                    },
+                );
+                Ok(())
+            }
             Step::Command {
                 purpose,
                 project,
@@ -2037,6 +2131,20 @@ impl Inner {
 
     /// Wait for a slot under the workspace's parallelism limit, re-read each time so a settings
     /// change applies to waiting spawns.
+    /// Rule H2: hand a message to a harness run that waits for it, now or when it starts waiting.
+    fn deliver_mail(&self, execution: &ExecutionId, note: Wake) {
+        let mut mail = lock(&self.mail);
+        let m = mail.entry(execution.clone()).or_default();
+        match m.waiter.take() {
+            Some(tx) => {
+                if let Err(note) = tx.send(note) {
+                    m.pending = Some(note);
+                }
+            }
+            None => m.pending = Some(note),
+        }
+    }
+
     async fn acquire_slot(self: &Arc<Self>) -> Slot {
         loop {
             let limit = self
@@ -2072,7 +2180,7 @@ impl Inner {
         session: &SessionId,
         req: SpawnRequest,
     ) -> Result<(), EngineError> {
-        let _slot = self.acquire_slot().await;
+        let slot = self.acquire_slot().await;
         let st = self.snapshot(session)?;
         if st.is_terminal() || st.paused {
             return Ok(());
@@ -2087,11 +2195,33 @@ impl Inner {
             .and_then(|from| st.executions.get(from))
             .filter(|rec| {
                 rec.agent == req.agent
-                    && rec
-                        .result
-                        .as_ref()
-                        .is_some_and(|r| r.status == ExecutionStatus::Interrupted)
+                    && rec.result.as_ref().is_some_and(|r| {
+                        matches!(
+                            r.status,
+                            ExecutionStatus::Interrupted | ExecutionStatus::Waiting
+                        )
+                    })
             });
+        // Rule H2: a waiting run wakes only with its message.
+        let wake = match paused {
+            Some(rec)
+                if rec
+                    .result
+                    .as_ref()
+                    .is_some_and(|r| r.status == ExecutionStatus::Waiting) =>
+            {
+                match st.next_delivery(&rec.id) {
+                    Some(d) => Some(d),
+                    None => return Ok(()),
+                }
+            }
+            _ => None,
+        };
+        // Rules H3 and H5: a new run that continues another run's conversation.
+        let continued = match paused {
+            None => req.continues.as_ref().and_then(|h| st.executions.get(h)),
+            Some(_) => None,
+        };
         let global = self.services.global();
         let settings = self.services.workspace();
         let factory = self.services.factory();
@@ -2130,7 +2260,7 @@ impl Inner {
         };
         // The conversation continues on the executor and model it started on, which also keeps
         // the prompt cache.
-        if let Some(rec) = paused {
+        if let Some(rec) = paused.or(continued) {
             route.executor = rec.executor;
             route.model = rec.model.clone();
         }
@@ -2216,12 +2346,36 @@ impl Inner {
                         .result
                         .as_ref()
                         .and_then(|r| r.native_session_id.clone()),
-                    note: Some(PAUSE_RESUME_NOTE.into()),
+                    note: Some(
+                        wake.as_ref()
+                            .map(|d| d.note.clone())
+                            .unwrap_or_else(|| PAUSE_RESUME_NOTE.into()),
+                    ),
                     inspect: false,
                 }),
                 rec.report_path.clone(),
             ),
-            None => (ExecutionId::new(), hint, built.report_file.clone()),
+            None => (
+                ExecutionId::new(),
+                hint.or_else(|| {
+                    continued.map(|rec| ResumeInfo {
+                        from: rec.id.clone(),
+                        native_session_id: rec
+                            .result
+                            .as_ref()
+                            .and_then(|r| r.native_session_id.clone()),
+                        note: Some(match req.purpose {
+                            ExecPurpose::Consult { .. } => crate::coord::consult_note(
+                                &built.spawn_block,
+                                crate::coord::reply_tool(route.executor),
+                            ),
+                            _ => crate::coord::continuation_note(&built.spawn_block),
+                        }),
+                        inspect: false,
+                    })
+                }),
+                built.report_file.clone(),
+            ),
         };
         let ctx = ExecContext {
             execution_id: id.clone(),
@@ -2254,8 +2408,23 @@ impl Inner {
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
             creates_project,
+            answer_only: matches!(req.purpose, ExecPurpose::Consult { .. }),
+            owes_reply: matches!(req.purpose, ExecPurpose::Consult { .. })
+                || wake
+                    .as_ref()
+                    .is_some_and(|d| d.kind == ostra_core::coord::DeliveryKind::Question),
         };
         let usage_base = if paused.is_some() {
+            if let Some(d) = &wake {
+                self.append(
+                    session,
+                    SessionEvent::MessageDelivered {
+                        ask: d.ask.clone(),
+                        to: id.clone(),
+                        kind: d.kind,
+                    },
+                )?;
+            }
             self.append(session, SessionEvent::ExecutionResumed { id: id.clone() })?;
             self.db.reopen_execution(&id)?.usage
         } else {
@@ -2307,6 +2476,7 @@ impl Inner {
             execution: id.clone(),
             repo_root: Some(repo_root.clone()),
             usage_base,
+            slot: Mutex::new(Some(slot)),
         });
         if paused.is_some() {
             host.emit(ExecutionDelta::Status {
@@ -2340,6 +2510,7 @@ impl Inner {
         };
         let mut result = executor.run(spec, host.clone(), token).await;
         lock(&self.execs).remove(&id);
+        lock(&self.mail).remove(&id);
         let mut usage = usage_base;
         usage.add(&result.usage);
         result.usage = usage;
@@ -2383,6 +2554,7 @@ impl Inner {
                 },
             )?;
         }
+        drop(lock(&host.slot).take());
         Ok(())
     }
 
@@ -2439,6 +2611,8 @@ impl Inner {
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         };
         self.db.insert_execution(&NewExecution {
             id: id.clone(),
@@ -2462,6 +2636,7 @@ impl Inner {
             execution: id.clone(),
             repo_root: Some(repo_root.to_path_buf()),
             usage_base: Usage::default(),
+            slot: Mutex::new(None),
         });
         let spec = ExecutionSpec {
             id: id.clone(),
@@ -2550,6 +2725,8 @@ pub struct EngineHost {
     repo_root: Option<PathBuf>,
     /// What the execution spent before a resume (Rule P2); executors count from zero.
     usage_base: Usage,
+    /// The execution slot this run holds, freed while it waits for a message (Rule H2).
+    slot: Mutex<Option<Slot>>,
 }
 
 impl EngineHost {
@@ -2740,6 +2917,25 @@ impl ExecutionHost for EngineHost {
         self.session
             .as_ref()
             .is_some_and(|s| self.inner.sessions_yolo(s))
+    }
+
+    async fn wait_for_wake(&self) -> Option<Wake> {
+        let rx = {
+            let mut mail = lock(&self.inner.mail);
+            let m = mail.entry(self.execution.clone()).or_default();
+            if let Some(note) = m.pending.take() {
+                return Some(note);
+            }
+            let (tx, rx) = oneshot::channel();
+            m.waiter = Some(tx);
+            rx
+        };
+        // Rule H2: a waiting run holds no slot, so the run it waits for can start.
+        drop(lock(&self.slot).take());
+        let note = rx.await.ok();
+        let slot = self.inner.acquire_slot().await;
+        *lock(&self.slot) = Some(slot);
+        note
     }
 }
 

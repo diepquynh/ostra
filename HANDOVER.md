@@ -662,7 +662,8 @@ owns every session. Push channels and wake commands disappear.
 
 Native tool names match Claude Code's, because the prompts are tuned to them: `Read`, `Write`, `Edit`, `Bash`,
 `Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, plus `Report`, `Document`, `Memory`, `MemoryRecall`, the
-management tools `ProjectList` and `ProjectCreate` (section 10.7), and the `submit_*` tools.
+management tools `ProjectList` and `ProjectCreate` (section 10.7), the subagent tools `SubagentList`,
+`SubagentAsk`, and `SubagentReply` (section 10.8), and the `submit_*` tools.
 
 - `Edit` requires the file to have been read in this execution, and its old string must match exactly once.
 - `Grep` and `Glob` use the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`, `globset`).
@@ -853,6 +854,71 @@ Rules:
   At most `MAX_ADVICE` (2) retries per step; after that, or on an escalation, the step's failure gate opens
   for the user, with the advisor's reason. The advisor is read-only and routed like any agent (`advisor`).
 
+### 10.8 Subagent coordination
+
+Agents talk to each other directly instead of only through reports, because an agent that reads another's
+report cold loses the context the writer had, and neither agent nor judge can see inside the other's
+conversation. Every run keeps its conversation, so a subagent that is asked something, or woken to fix its
+own work, continues from its message history, which also keeps the prompt cache warm.
+
+A **subagent ID** names one conversation. It is the id of the conversation's first execution, and every run
+that continues that conversation keeps it: a run resumed in place, and a new run that continues it
+(`resumes`). The pipeline still holds every gate; coordination changes how a run gets its input, never
+whether a stage passed.
+
+| Tool | Input | Effect |
+| --- | --- | --- |
+| `SubagentList` | none | This run's own subagent ID, then every subagent of the session: ID, agent, label, status, what it waits on, its report. Marks the subagents this run works with (author and checker, implementer and reviewer). |
+| `SubagentAsk` | `message`, and `agent` or `subagent_id`, optional `project` | Asks a new helper (`agent`, only `explore`) or an existing subagent. The asking run waits for the answer. |
+| `SubagentReply` | `message` | Answers the question that woke this run. |
+
+On harnesses they come from Ostra's MCP server as `subagent_list`, `subagent_ask`, and `subagent_reply`.
+Agents with the `coordinate` capability get them: explore, generate-spec, fact-check, plan, implementer,
+code-reviewer, write-test.
+
+Rules:
+
+- **H1.** A subagent ID resolves to the subagent's latest run. Only subagents of the same session are
+  reachable.
+- **H2.** Asking waits. A native run ends with status `waiting`, and when the answer arrives Ostra resumes it
+  in place from its stored messages, with the answer as the new user turn. A harness run keeps its process:
+  Ostra frees its execution slot while it waits, types the answer into its terminal when it arrives, and does
+  not count the wait against its timeout. After a server restart a harness run that waited is recorded as
+  `waiting`, and its answer resumes the harness session. Coordination tools never ask the user, because they change no file.
+- **H3.** Where a question goes. To `agent: explore`, Ostra starts a helper research task from the message
+  (an ask-bound explore that does not hold the research stage). Its submit is the answer: the findings summary
+  and the research document, which joins the session's research documents. To a subagent ID: a subagent that
+  waits on the asker (its helper, or the subagent it asked) is woken in place with the question and answers
+  with `SubagentReply`, then waits again. A subagent whose last run ended `ok` answers in a consult run that
+  continues its conversation, may not write files, and ends with `SubagentReply`. A subagent that is running,
+  or waits on someone else, gets the question when it becomes free. A subagent that fails, or ends a run
+  without replying, answers with that failure, so no asker waits forever. A run that owes an answer (a consult run,
+  or a run woken with a question) is refused its submit until it replies, and every reminder it gets names
+  `SubagentReply`, not its submit tool: the native loop's reminder after a turn without a tool call, a harness's
+  turned-back Stop, and the typed nudge of a quiet session.
+- **H4.** Asks are bounded, because each can start a run. A run may start at most `MAX_HELPERS_PER_RUN` (3)
+  helpers and a session at most `MAX_SESSION_ASKS` (24) asks. A helper and a consult run may not start
+  helpers; a consult run, and a run that owes a reply, may not ask. Every helper and consult run goes through
+  the slot limiter and the budget guard.
+- **H5.** The pipeline's pair loops continue conversations instead of starting cold. After a spec or plan
+  fact-check fails, the author is woken with the findings; the next fact-check pass continues the checker.
+  After a review with findings, the fix continues the phase's last worker when the fix agent is the same
+  agent; the next review continues the reviewer. A rescue and a resume after a handoff continue the worker
+  too. The continued run's new turn is a fixed header plus the new spawn block, which carries only what the
+  run needs next (findings, answers, prior findings). Pass or fail, caps, and gates are unchanged.
+- **H6.** A pair loop starts a fresh run instead when the previous run did not end `ok` with a submit, the
+  agent was moved to another executor, a harness run left no session id, the user amended the request since
+  the previous run started, or the conversation already has `MAX_CONVERSATION_RUNS` (6) runs. A continued run
+  stays on its conversation's executor and model.
+- **H7.** A conversation has at most one live run: a continuation or a consult waits while another run of the
+  same subagent is live.
+- **H8.** Every coordination step is an event: `AgentAsked` when a run asks, `AgentReplied` when a run
+  answers, and `MessageDelivered` when Ostra hands a question or an answer to a run that waits. A helper or
+  consult run gets its question as its spawn, so its `ExecutionStarted` is the delivery. The fold derives the
+  helper's answer and every failure answer from the log. Text the user added while a run waited is appended to
+  the message that wakes it.
+- **H9.** A session does not complete while a question is open or a subagent waits.
+
 ## 11. Sessions and resume
 
 ### 11.1 Tables (`workspace.db`)
@@ -862,7 +928,7 @@ Rules:
 | `projects` | key, path, init status. |
 | `sessions` | id, request, category, state, projects in scope, YOLO flag, created and updated times. |
 | `events` | session id, sequence, type, payload JSON, time. Append-only, and the source of truth. |
-| `executions` | id, session, stage, agent, executor, model, spawn parameters, status (`running`, `ok`, `stuck`, `handoff`, `error`, `denied`, `interrupted`), native session id, report path, token and cost totals, start and end. |
+| `executions` | id, session, stage, agent, executor, model, spawn parameters, status (`running`, `ok`, `stuck`, `handoff`, `waiting`, `error`, `denied`, `interrupted`), native session id, report path, token and cost totals, start and end. |
 | `messages` | Native execution transcripts, for resume and for the Activity view. |
 | `gates` | Open and answered gates, answer source (`user` or `yolo`), answer payload. |
 | `decisions` | Judge calls: kind, input summary, output, reason, overridden flag. |
@@ -874,7 +940,9 @@ Memory stays in each project's `.ostra/memory/knowledge.sqlite3`, using `UC/mcp/
 
 - **Server restart:** replay events. Executions left `running` become `interrupted`, and the engine re-runs
   each with the same spawn block. The implementer resumes from its progress log.
-- **Native execution:** continue from `messages`.
+- **Native execution:** continue from `messages`. A run that waits for another subagent's answer (Rule H2) is
+  resumed the same way when the answer arrives, and a pair-loop round continues the previous run's messages
+  (Rule H5).
 - **Harness execution:** open the harness's resume command with the stored native session id in a new PTY.
 - **Pause:** the user can pause a session, for example when a provider quota runs out, and continue it later
   (Rules P1 and P2). Ostra also pauses it on its own after three containment signals from one execution

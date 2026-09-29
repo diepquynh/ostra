@@ -4,6 +4,7 @@
 
 mod bash;
 mod code;
+mod coord;
 mod defs;
 mod doc;
 mod fs;
@@ -29,6 +30,7 @@ pub use code::CodeNav;
 pub use defs::{
     ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search,
 };
+pub use coord::{CoordConnector, Coordinate};
 pub use manage::{Manage, ManageConnector};
 pub use mcp::{McpConnector, McpOpened, McpTools};
 pub use web::webfetch_hosts;
@@ -57,6 +59,8 @@ pub struct ToolEnvConfig {
     pub mcp: Option<Arc<dyn McpTools>>,
     /// Management calls to Ostra; `None` for an agent without a management capability.
     pub manage: Option<Arc<dyn Manage>>,
+    /// Coordination calls to other subagents; `None` for an agent without the capability.
+    pub coord: Option<Arc<dyn Coordinate>>,
 }
 
 /// Per-execution tool state: the persistent shell working directory, the files read so far, and
@@ -75,7 +79,7 @@ pub struct ToolEnv {
     sandbox: Option<(ostra_sandbox::Backend, ostra_sandbox::Profile)>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolOutput {
     pub text: String,
     pub is_error: bool,
@@ -83,6 +87,21 @@ pub struct ToolOutput {
     pub duration_ms: u64,
     /// Unified diff of a Write or Edit, for the Activity view.
     pub diff: Option<String>,
+    /// Rule H2: a coordination call that makes the run wait or end.
+    pub end: ostra_core::coord::RunEnd,
+}
+
+impl Default for ToolOutput {
+    fn default() -> Self {
+        ToolOutput {
+            text: String::new(),
+            is_error: false,
+            exit_code: None,
+            duration_ms: 0,
+            diff: None,
+            end: ostra_core::coord::RunEnd::Continue,
+        }
+    }
 }
 
 impl ToolOutput {
@@ -271,6 +290,7 @@ pub async fn execute(
             "MemoryRecall" => misc::memory_recall(env, input).await,
             t if ostra_core::agent::is_code_tool(t) => code::run(env, t, input).await,
             t if ostra_core::manage::is_manage_tool(t) => manage::run(env, t, input).await,
+            t if ostra_core::coord::is_coord_tool(t) => coord::run(env, t, input).await,
             t if ostra_core::mcp::is_gateway_tool(t) => {
                 mcp::run(env, t, input, cancel.clone()).await
             }
@@ -344,6 +364,7 @@ pub(crate) mod testutil {
             code: None,
             mcp: None,
             manage: None,
+            coord: None,
         })
     }
 

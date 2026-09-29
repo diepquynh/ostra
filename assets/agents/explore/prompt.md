@@ -278,7 +278,7 @@ research pass for every item that is. An item you leave out is never researched.
 2. Read-only on project files. The only file you write is the one research document in the session dir, and you
    write it only through {{tool_document}}.
 3. No implementation. Gather and document only. Findings state what IS, never how to build what is asked for.
-4. No delegation, no subprocesses. Do your own work and submit the result.
+4. No delegation, no subprocesses. Do your own work and submit the result. Ask other agents only through the subagent tools, as the subagent coordination section describes.
 5. Every finding references a real file or symbol, or, for anything outside this repo, a retrieved source with
    its URL and version or date. Document what THIS codebase does and what the documentation says, never what
    you recall.

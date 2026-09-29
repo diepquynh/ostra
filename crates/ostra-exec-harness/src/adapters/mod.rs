@@ -127,6 +127,7 @@ pub fn canonical_ostra_tool(bare: &str) -> String {
         other
             if let Some((_, native)) = ostra_core::manage::PROJECT_TOOLS
                 .iter()
+                .chain(ostra_core::coord::COORD_TOOLS.iter())
                 .find(|(n, _)| *n == other) =>
         {
             native.to_string()

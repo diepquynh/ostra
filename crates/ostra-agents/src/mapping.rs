@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 /// Template token names and the mapping key each resolves through.
-const TOKENS: [(&str, &str); 24] = [
+const TOKENS: [(&str, &str); 27] = [
     ("tool_read", "read"),
     ("tool_write", "write"),
     ("tool_edit", "edit"),
@@ -31,6 +31,9 @@ const TOKENS: [(&str, &str); 24] = [
     ("tool_code_map", "code:map"),
     ("tool_project_list", "manage_projects:list"),
     ("tool_project_create", "manage_projects:create"),
+    ("tool_subagent_list", "coordinate:list"),
+    ("tool_subagent_ask", "coordinate:ask"),
+    ("tool_subagent_reply", "coordinate:reply"),
     ("tool_submit", "submit"),
 ];
 
@@ -66,6 +69,7 @@ fn capability_key(c: Capability) -> &'static str {
         Capability::MemoryRecall => "memory_recall",
         Capability::Code => "code",
         Capability::ManageProjects => "manage_projects",
+        Capability::Coordinate => "coordinate",
     }
 }
 
@@ -140,6 +144,10 @@ impl Mapping {
                     .iter()
                     .map(|(name, _)| name.trim_start_matches("project_"))
                     .collect(),
+                "coordinate" => ostra_core::coord::COORD_TOOLS
+                    .iter()
+                    .map(|(name, _)| name.trim_start_matches("subagent_"))
+                    .collect(),
                 _ => vec![],
             };
             let tool = if !ops.is_empty() {
@@ -171,8 +179,9 @@ impl Mapping {
             }
         }
         out.push_str(
-            "Do not start subagents or delegate to another agent: every Ostra agent is a leaf, and Ostra \
-             schedules all other work itself.\n",
+            "Do not start this harness's own subagents or delegate through its own tools: Ostra schedules the \
+             work, and the only way to reach another agent is Ostra's subagent tools when your tool table lists \
+             them.\n",
         );
         if let Some(submit) = self.tool("submit", executor, agent) {
             out.push_str(&format!(

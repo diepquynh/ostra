@@ -141,6 +141,29 @@ Usage:
 - git_init defaults to true, which runs `git init` in the new folder.
 - If the user denies the call, put the work in a project already in scope, and say so in your document.";
 
+const SUBAGENT_LIST: &str = "Lists the subagents of this session: your own subagent ID, then each subagent's ID, agent, label, status, what it waits on, and its report.
+
+Usage:
+- Call it before SubagentAsk to find the subagent that knows the answer: the author of the document you check, the checker of your document, the implementer or reviewer of your phase, or the researcher of an area. Subagents you work with are marked.
+- A subagent ID stays the same across every run of that subagent's conversation.";
+
+const SUBAGENT_ASK: &str = "Asks another agent a question and waits for the answer, then continues this run from where it stopped with the answer as the next message.
+
+Usage:
+- Give agent to start a new helper: `explore` researches the question and writes a research document, and its findings are the answer. Give subagent_id to ask an existing subagent from SubagentList, which answers from its own conversation.
+- Ask only for what you cannot find yourself with your own tools in a few calls, because every question starts or wakes a run and costs a model call.
+- Write message so it stands on its own: what you need, why, and the file paths it concerns. The receiver does not see your conversation.
+- project names the project a helper works in. It defaults to your own project.
+- Nothing else runs in this run until the answer arrives, so make every other call you need first.
+- A run may start at most 3 helpers, and a session has a limit on questions.";
+
+const SUBAGENT_REPLY: &str = "Answers the question another subagent asked you, which is the message that woke this run.
+
+Usage:
+- Call it once with the complete answer: the facts, the file paths and line numbers, and what you are unsure of. The asker continues from your message alone.
+- After the call, end your turn. A consult run ends; a run that was waiting goes back to waiting.
+- In a consult run, change no file: answer from your conversation and what you read.";
+
 const PATH_NOTE: &str =
     "Paths are relative to the project root; an absolute path inside the project works too.";
 
@@ -467,6 +490,33 @@ fn project_defs() -> Vec<ToolDefinition> {
     ]
 }
 
+fn coord_defs() -> Vec<ToolDefinition> {
+    vec![
+        def(
+            "SubagentList",
+            SUBAGENT_LIST,
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        ),
+        def(
+            "SubagentAsk",
+            SUBAGENT_ASK,
+            json!({"type": "object", "properties": {
+                "message": {"type": "string", "description": "The question, standing on its own, with the file paths it concerns"},
+                "agent": {"type": "string", "enum": ostra_core::coord::HELPER_AGENTS.iter().map(|a| a.as_str()).collect::<Vec<_>>(), "description": "Start a new helper of this agent"},
+                "subagent_id": {"type": "string", "description": "Ask this existing subagent, by the ID SubagentList shows"},
+                "project": {"type": "string", "description": "Project key a helper works in. Defaults to yours"}
+            }, "required": ["message"], "additionalProperties": false}),
+        ),
+        def(
+            "SubagentReply",
+            SUBAGENT_REPLY,
+            json!({"type": "object", "properties": {
+                "message": {"type": "string", "description": "The complete answer"}
+            }, "required": ["message"], "additionalProperties": false}),
+        ),
+    ]
+}
+
 /// The `Document` tool for an agent that writes a typed document, with that document's schema.
 pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition> {
     let kind = ostra_core::doc::DocKind::for_agent(agent)?;
@@ -521,12 +571,13 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
             Capability::MemoryRecall => vec![memory_recall_def()],
             Capability::Code => code_defs(),
             Capability::ManageProjects => project_defs(),
+            Capability::Coordinate => coord_defs(),
             Capability::WebSearch => vec![],
         })
         .collect()
 }
 
-const EVERY: [Capability; 15] = [
+const EVERY: [Capability; 16] = [
     Capability::Read,
     Capability::Write,
     Capability::Edit,
@@ -542,6 +593,7 @@ const EVERY: [Capability; 15] = [
     Capability::MemoryRecall,
     Capability::Code,
     Capability::ManageProjects,
+    Capability::Coordinate,
 ];
 
 /// The input schema of a local tool as `agent` sees it.

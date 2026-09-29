@@ -8,6 +8,7 @@ pub mod artifacts;
 pub mod code;
 pub mod config;
 pub mod containment;
+pub mod coord;
 pub mod doc;
 pub mod event;
 pub mod exec;
@@ -29,5 +30,5 @@ pub mod submit;
 
 pub use agent::{AgentName, Capability, InitializerMode};
 pub use executor::{ExecutorKind, HarnessKind};
-pub use ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
+pub use ids::{DecisionId, ExecutionId, GateId, MessageId, SessionId, WorkspaceId};
 pub use model::{Complexity, Effort, Tier};

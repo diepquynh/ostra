@@ -115,6 +115,12 @@ impl SpawnFactory for AgentsFactory {
             repo_key: req.project.clone(),
         };
         let params: Box<dyn SpawnParams> = match req.agent {
+            agent if matches!(req.purpose, ExecPurpose::Consult { .. }) => Box::new(ConsultParams {
+                common,
+                agent,
+                asked_by: i.task.clone().ok_or("missing asker")?,
+                question: i.question.clone().ok_or("missing question")?,
+            }),
             AgentName::Explore => Box::new(ExploreParams {
                 common,
                 task: i.task.clone().ok_or("missing task")?,

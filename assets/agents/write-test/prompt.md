@@ -363,7 +363,7 @@ lesson you used in your report.
 11. **No done without passing verification.** Do not write the report until final verification passes.
 12. **Escalate when stuck.** On a repeated compile failure, an unrecognized test API, unclear EPA instructions,
     or a discovered source bug: STOP and escalate.
-13. **Leaf agent.** No delegation, no subprocesses, no spawning agents. Do your own work and submit the result.
+13. **No delegation.** No subprocesses, no spawning agents. Do your own work and submit the result. Ask other agents only through the subagent tools, as the subagent coordination section describes.
 
 ## Anti-patterns
 

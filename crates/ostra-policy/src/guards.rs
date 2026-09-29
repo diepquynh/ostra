@@ -586,6 +586,26 @@ pub fn check_write(
 /// Rule O2: only the implementer of a phase the approved plan puts in a project that does not
 /// exist yet creates a project, only that one, and only with a well-formed call, so the user is
 /// never asked about one that cannot run. (Ostra; no Ultracode source.)
+pub const ANSWER_ONLY: &str = "answer-only";
+
+/// Rule H3: a consult run answers from its conversation and changes nothing.
+pub fn answer_only_denial() -> Denial {
+    deny(
+        ANSWER_ONLY,
+        "Answer with SubagentReply and change no file: this run only answers another subagent's question. Name the change in your answer instead.".into(),
+    )
+}
+
+pub const REPLY_FIRST: &str = "reply-first";
+
+/// Rule H3: a run that was given a question answers it before it submits.
+pub fn reply_first_denial() -> Denial {
+    deny(
+        REPLY_FIRST,
+        "Call SubagentReply with your answer instead: another subagent asked you a question and waits for it, so this run submits nothing until you reply.".into(),
+    )
+}
+
 pub fn check_manage(ctx: &ExecContext, tool: &str, input: &serde_json::Value) -> Option<Denial> {
     use ostra_core::manage::{PROJECT_CREATE, ProjectCreateInput};
     if tool != PROJECT_CREATE {

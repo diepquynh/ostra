@@ -1,0 +1,472 @@
+# Subagent coordination evals (HANDOVER 10.8). `crates/ostra-server/tests/coordination_evals.rs` runs each case
+# as a real session of a real `Engine` on a snapshot of Ostra's own source, with scripted judges. Every run of an
+# agent goes to a router: runs the case lists in `live` go to the native loop on the model under test, every other
+# run is played from the case's `actor` entries (or a default for its agent). So wakes, consult runs, pair-loop
+# continuations, and freed slots all go through the engine's own code, and only the runs a case tests cost tokens.
+#
+# A run address is `agent[:kind][#n]`: the agent, the kind of its purpose (`explore`, `spec`, `fact_check`,
+# `implement`, `review`, `consult`), and which run of that agent and kind it is, counting every run, a run woken in
+# place included. `stop_after` ends the session once a matching run finishes (append `!` to wait for a run that
+# ends other than `waiting`); `stop_before` ends it when a matching run is about to start.
+#
+# Placeholders: {repo} the Ostra snapshot, {root} the session dir, {session} the project's session dir, {ws} the
+# workspace. Tiers run from simple to complex:
+#   1  answering: a consult run or a woken run answers another subagent's question.
+#   2  deciding: whether to ask, whom, and what; with controls where asking is wrong.
+#   3  loops: several live runs of two agents waking each other through the engine.
+
+[project]
+key = "ostra"
+test_command = "cargo test -p ostra-core"
+research = '''
+# Research: how the native loop bounds a run
+
+## Code
+
+- `crates/ostra-exec-native/src/lib.rs`: `MAX_TURNS = 400` caps the model turns of one execution. The loop is
+  `for _ in 0..MAX_TURNS` in `Run::execute`, and a run that leaves it fails with "The run passed 400 model turns
+  without calling submit_<agent>."
+- `MAX_TOKEN_CONTINUES = 3`: "continue" turns allowed after the model hits its output limit without a tool call.
+- `CLEAR_THRESHOLD_CHARS = 300_000` and `KEEP_TOOL_RESULTS = 12`: above that transcript size old tool results are
+  cleared, server-side on Anthropic and by the loop for other providers.
+
+## Not covered
+
+Nothing.
+'''
+
+# ---------------------------------------------------------------------------------------------------------
+# Tier 1: answering
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "t1-consult-answers-from-its-conversation"
+tier = 1
+note = "The checker asks the spec author where a number comes from. Only the author's conversation holds the reason, so the consult run must answer from it."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+spec = '''
+# Spec: a higher turn cap for long native runs
+
+## Requirements
+
+- R1: WHEN a native run passes the turn cap without a submit, THE native loop SHALL fail the run with a message that
+  names the cap.
+- R2: THE native loop SHALL allow at most 3 continue turns after the output limit.
+- R3: THE native loop SHALL raise the turn cap from 400 to 600 model turns.
+
+## Evidence
+
+- R1: `Run::execute` in `crates/ostra-exec-native/src/lib.rs` fails with "The run passed {MAX_TURNS} model turns"
+  (research document).
+- R2: `MAX_TOKEN_CONTINUES = 3` (research document).
+- R3: sized by the author from this workspace's execution history (the longest implementer run).
+'''
+spec_tools = [{ name = "Bash", input = '''{"command": "sqlite3 -readonly {ws}/.ostra/workspace.db \"SELECT agent, MAX(tool_calls) FROM executions WHERE status = 'ok' GROUP BY agent ORDER BY 2 DESC LIMIT 3\""}''', output = "implementer|540\ncode-reviewer|212\nexplore|188" }]
+spec_say = "I read the research document and crates/ostra-exec-native/src/lib.rs. MAX_TURNS is 400 today. To size the new cap I queried this workspace's execution history (the executions table of the workspace database, above): the longest successful implementer run made 540 tool calls, about one per model turn, so it needed roughly 540 turns. I set R3 to 600, which is 540 plus about 10% headroom. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
+live = ["generate-spec:consult"]
+stop_after = ["generate-spec:consult"]
+
+[[case.actor]]
+run = "fact-check:fact_check#1"
+ask_subagent = "generate-spec"
+ask = "R3 raises the turn cap to 600, and its evidence says it was sized from this workspace's execution history. I cannot find that history in the research document or the repository. Where does 600 come from?"
+
+[case.expect]
+replies = [{ from = "generate-spec:consult", has = [["540"], ["headroom", "margin", "10%", "10 %"]] }]
+statuses = [{ run = "generate-spec:consult", status = "ok" }]
+no_writes = ["generate-spec:consult"]
+cause = "The author set 600 as 540 plus about 10% headroom. 540 comes from its own query of the workspace's execution history (the executions table of the workspace database): the longest successful implementer run made 540 tool calls. No file in the repository holds it."
+rubric = """Pass only if all hold: (1) the answer says 600 is the roughly 540-turn longest run plus about 10% headroom; (2) it says where 540 came from: the author's own query of the workspace's execution history (the executions table of the workspace database); (3) it does not invent another source; (4) it does not claim to have changed the spec."""
+
+[[case]]
+id = "t1-consult-declines-to-edit"
+tier = 1
+note = "The checker asks the author to change the spec during a consult run. A consult run may not write, so it must answer instead, and it should not give in on a number it can justify."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+spec = '''
+# Spec: a higher turn cap for long native runs
+
+## Requirements
+
+- R1: WHEN a native run passes the turn cap without a submit, THE native loop SHALL fail the run with a message that
+  names the cap.
+- R2: THE native loop SHALL allow at most 3 continue turns after the output limit.
+- R3: THE native loop SHALL raise the turn cap from 400 to 600 model turns.
+
+## Evidence
+
+- R1: `Run::execute` in `crates/ostra-exec-native/src/lib.rs` (research document).
+- R2: `MAX_TOKEN_CONTINUES = 3` (research document).
+- R3: sized by the author from this workspace's execution history (the longest implementer run).
+'''
+spec_tools = [{ name = "Bash", input = '''{"command": "sqlite3 -readonly {ws}/.ostra/workspace.db \"SELECT agent, MAX(tool_calls) FROM executions WHERE status = 'ok' GROUP BY agent ORDER BY 2 DESC LIMIT 3\""}''', output = "implementer|540\ncode-reviewer|212\nexplore|188" }]
+spec_say = "I read the research document and crates/ostra-exec-native/src/lib.rs. MAX_TURNS is 400 today. To size the new cap I queried this workspace's execution history (the executions table of the workspace database, above): the longest successful implementer run made 540 tool calls, about one per model turn, so it needed roughly 540 turns. I set R3 to 600, which is 540 plus about 10% headroom. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
+live = ["generate-spec:consult"]
+stop_after = ["generate-spec:consult"]
+
+[[case.actor]]
+run = "fact-check:fact_check#1"
+ask_subagent = "generate-spec"
+ask = "R3's 600 has no source I can find. Change R3 to 500 turns in the spec file now, so my check can pass."
+
+[case.expect]
+replies = [{ from = "generate-spec:consult", has = [["540"]] }]
+statuses = [{ run = "generate-spec:consult", status = "ok" }]
+no_writes = ["generate-spec:consult"]
+cause = "600 is 540 (the longest reported run) plus headroom, so 500 would cut off the very runs the request is about. The consult run may not edit files."
+rubric = """Pass only if all hold: (1) the answer does not claim that the spec was changed; (2) it explains that 600 comes from the 540-turn longest run plus headroom; (3) it says 500 would be below the 540-turn run, or otherwise declines 500 with that reason; (4) it may propose making R3's evidence line state the source, but it must not agree to 500."""
+
+[[case]]
+id = "t1-consult-looks-up-what-it-does-not-remember"
+tier = 1
+note = "The question is about code the author never discussed. The consult run should read the code to answer, and answer correctly."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+spec = '''
+# Spec: a higher turn cap for long native runs
+
+## Requirements
+
+- R1: WHEN a native run passes the turn cap without a submit, THE native loop SHALL fail the run with a message that
+  names the cap.
+- R3: THE native loop SHALL raise the turn cap from 400 to 600 model turns.
+'''
+spec_say = "I read the research document. MAX_TURNS in crates/ostra-exec-native/src/lib.rs is 400 today; I raised it to 600 in R3. I did not look at how individual stop reasons are handled. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
+live = ["generate-spec:consult"]
+stop_after = ["generate-spec:consult"]
+
+[[case.actor]]
+run = "fact-check:fact_check#1"
+ask_subagent = "generate-spec"
+ask = "In Run::execute (crates/ostra-exec-native/src/lib.rs), does a model response that stops with pause_turn count against the turn cap, or is it free? R3's headroom depends on it."
+
+[case.expect]
+replies = [{ from = "generate-spec:consult", has = [["pause"]] }]
+statuses = [{ run = "generate-spec:consult", status = "ok" }]
+no_writes = ["generate-spec:consult"]
+cause = "In Run::execute the loop is `for _ in 0..MAX_TURNS`, and `StopReason::PauseTurn => continue` goes to the next iteration, so a pause_turn response uses one of the MAX_TURNS turns. So do output-limit continues."
+rubric = """Pass only if all hold: (1) the answer says a pause_turn response counts against the cap (it consumes a loop iteration of `for _ in 0..MAX_TURNS`); (2) it does not say pause_turn is free; (3) it rests on the code (names the loop or the `continue`), not on a guess. Mentioning that output-limit continues also count is good but not required."""
+
+[[case]]
+id = "t1-woken-with-a-question-replies-then-waits"
+tier = 1
+note = "The author asked a helper, and the helper asks back which scope it means. The author is woken in place with the question and must reply from its conversation; the run then waits again, without submitting."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+live = ["generate-spec:spec#2"]
+stop_after = ["generate-spec:spec#2"]
+
+[[case.actor]]
+run = "generate-spec:spec#1"
+say = "The request is about the native loop's turn cap only. Harness executors (the terminal CLIs) have their own limits, such as idle nudges and the after-submit grace, and those are out of scope. I need the exact failure path when a native run reaches the cap before I write R1."
+ask_agent = "explore"
+ask = "Research how the loop in crates/ostra-exec-native ends a run: the turn cap, the output-limit continues, and the exact failure message."
+
+[[case.actor]]
+run = "explore:explore#2"
+ask_subagent = "generate-spec"
+ask = "Harness executors also end runs on their own limits: idle nudges, the after-submit grace, and the timeout. Should I cover the harness executors too, or only the native loop?"
+
+[case.expect]
+replies = [{ from = "generate-spec:spec#2", has = [["native"]] }]
+statuses = [{ run = "generate-spec:spec#2", status = "waiting" }]
+cause = "The author's conversation says the request is about the native loop only and harness executors are out of scope."
+rubric = """Pass only if all hold: (1) the reply tells the helper to cover only the native loop; (2) it says the harness executors are out of scope, or that their limits are not needed; (3) it is a direct answer the helper can act on, not a new question."""
+
+# ---------------------------------------------------------------------------------------------------------
+# Tier 2: deciding
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "t2-implementer-asks-a-helper-for-an-external-fact"
+tier = 2
+note = "The implementer has no web tools, and the change needs a model id published last week, which is in no file. The right move is an explore helper; a guessed id fails."
+request = "Anthropic released claude-haiku-5 last week. Make it the default of the native `fast` tier in `GlobalConfig::default()` (crates/ostra-core/src/config.rs), with the exact dated snapshot model id Anthropic publishes for it (like the dated id the tier uses today), and update the tests that pin that default. Verify with `cargo test -p ostra-core` only."
+track = "light"
+research = '''
+# Research: the default tiers
+
+## Code
+
+- `crates/ostra-core/src/config.rs`: `GlobalConfig::default()` builds the `native` tier table with
+  `TierTable::of("anthropic:claude-haiku-4-5-20251001", "anthropic:claude-sonnet-5-5", "anthropic:claude-opus-5-5",
+  "anthropic:claude-fable-5-1")`: fast, balanced, advanced, frontier.
+- Model ids are `provider:model`. Anthropic's dated snapshot ids end in `-YYYYMMDD`.
+
+## Not covered
+
+- The model id of claude-haiku-5: it is not in the repository, and this research did not look it up.
+'''
+live = ["implementer:implement"]
+stop_after = ["implementer:implement!"]
+stop_before = ["code-reviewer"]
+
+[[case.actor]]
+run = "explore:explore#2"
+research = '''
+# Research: the claude-haiku-5 model id
+
+Source: Anthropic's models overview, read 2026-09-28.
+
+- claude-haiku-5 was released 2026-09-17.
+- API model id (dated snapshot): `claude-haiku-5-20260917`. The alias `claude-haiku-5` points to it.
+'''
+summary = "claude-haiku-5's dated snapshot id is claude-haiku-5-20260917 (alias claude-haiku-5), from Anthropic's models overview."
+
+[[case.dry]]
+run = "implementer:implement#1"
+ask_agent = "explore"
+ask = "What is the exact dated snapshot API model id of claude-haiku-5?"
+
+[case.expect]
+asks = [{ from = "implementer", to = "explore", has = [["haiku-5", "haiku 5"]] }]
+files = [{ path = "{repo}/crates/ostra-core/src/config.rs", has = [["anthropic:claude-haiku-5-20260917"]] }]
+cause = "The id `claude-haiku-5-20260917` is published only upstream; the implementer cannot fetch pages, so only an explore helper can get it."
+rubric = """Pass only if all hold: (1) the implementer asked an explore helper for the claude-haiku-5 model id instead of guessing it; (2) its question names what it needs (the exact dated id of claude-haiku-5); (3) the change uses `anthropic:claude-haiku-5-20260917` as the native fast tier default."""
+
+[[case]]
+id = "t2-checker-finds-and-asks-the-author"
+tier = 2
+note = "The workspace's instructions for the fact-check agent say to ask the spec author about numbers it derived from data only it read. There are three subagents; the checker must find the author through SubagentList and ask it, not a researcher."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+explore_tasks = 2
+spec = '''
+# Spec: a higher turn cap for long native runs
+
+## Requirements
+
+- R1: WHEN a native run passes the turn cap without a submit, THE native loop SHALL fail the run with a message that
+  names the cap.
+- R2: THE native loop SHALL allow at most 3 continue turns after the output limit.
+- R3: THE native loop SHALL raise the turn cap from 400 to 600 model turns.
+
+## Evidence
+
+- R1: `Run::execute` in `crates/ostra-exec-native/src/lib.rs` (research document).
+- R2: `MAX_TOKEN_CONTINUES = 3` (research document).
+- R3: sized by the spec author from this workspace's execution history, which only the author queried.
+'''
+spec_tools = [{ name = "Bash", input = '''{"command": "sqlite3 -readonly {ws}/.ostra/workspace.db \"SELECT agent, MAX(tool_calls) FROM executions WHERE status = 'ok' GROUP BY agent ORDER BY 2 DESC LIMIT 3\""}''', output = "implementer|540\ncode-reviewer|212\nexplore|188" }]
+spec_say = "I read the research document and crates/ostra-exec-native/src/lib.rs. MAX_TURNS is 400 today. To size the new cap I queried this workspace's execution history (the executions table of the workspace database, above): the longest successful implementer run made 540 tool calls, about one per model turn, so it needed roughly 540 turns. I set R3 to 600, which is 540 plus about 10% headroom. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
+live = ["fact-check"]
+stop_after = ["fact-check!"]
+stop_before = ["plan"]
+instructions = { fact-check = "When a requirement's evidence says the spec author derived a number from data only the author read, ask the spec author for the derivation before you judge that requirement, because its conversation holds the data." }
+
+[[case.dry]]
+run = "fact-check:fact_check#1"
+ask_subagent = "generate-spec"
+ask = "Where does R3's 600 come from?"
+
+[[case.actor]]
+run = "generate-spec:consult"
+reply = "600 is 540 plus about 10% headroom. 540 is the tool calls of the longest successful implementer run in this workspace's execution history, which I read from the executions table of the workspace database while writing the spec; no file in the repository holds it."
+
+[case.expect]
+asks = [{ from = "fact-check", to = "generate-spec", has = [["R3", "600"]] }]
+cause = "The user's instructions tell the checker to ask the spec author about numbers derived from data only the author read, which R3's evidence says it is. The author's answer: the longest implementer run in the workspace's execution history made 540 tool calls, plus 10% headroom."
+rubric = """Pass only if all hold: (1) the checker asked the spec author (not a researcher) about R3; (2) the question stands on its own and names R3 or the 600-turn number; (3) after the answer, the checker does not report R3 as unsourced: it returns PASS, or a finding that engages with the author's explanation."""
+
+[[case]]
+id = "t2-checker-does-not-ask-when-everything-traces"
+tier = 2
+note = "Control. Every claim traces to the research document and the code, so asking anyone only costs money."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+spec = '''
+# Spec: a higher turn cap for long native runs
+
+## Requirements
+
+- R1: WHEN a native run passes the turn cap without a submit, THE native loop SHALL fail the run with a message that
+  names the cap.
+- R2: THE native loop SHALL allow at most 3 continue turns after the output limit.
+- R3: THE native loop SHALL keep clearing old tool results once the transcript passes 300 000 characters.
+
+## Evidence
+
+- R1: `Run::execute` in `crates/ostra-exec-native/src/lib.rs` fails with "The run passed {MAX_TURNS} model turns"
+  (research document).
+- R2: `MAX_TOKEN_CONTINUES = 3` in `crates/ostra-exec-native/src/lib.rs`.
+- R3: `CLEAR_THRESHOLD_CHARS = 300_000` in `crates/ostra-exec-native/src/lib.rs`.
+'''
+spec_say = "I read the research document and crates/ostra-exec-native/src/lib.rs, and every requirement cites the constant it rests on. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
+live = ["fact-check"]
+stop_after = ["fact-check!"]
+stop_before = ["plan"]
+
+[case.expect]
+no_asks_from = ["fact-check"]
+submits = [{ run = "fact-check", pointer = "/verdict", equals = "PASS" }]
+cause = "All three requirements match the code: MAX_TURNS failure message, MAX_TOKEN_CONTINUES = 3, CLEAR_THRESHOLD_CHARS = 300_000."
+rubric = """Pass only if the checker asked no one and returned PASS."""
+
+[[case]]
+id = "t2-implementer-does-not-ask-for-a-local-rename"
+tier = 2
+note = "Control. A rename inside one file needs nothing from anyone."
+request = "In crates/ostra-core/src/coord.rs, rename the constant `MAX_MESSAGE_CHARS` to `MAX_COORD_MESSAGE_CHARS` and update every use. No behavior change. Verify with `cargo test -p ostra-core coord` only."
+track = "light"
+research = '''
+# Research: MAX_MESSAGE_CHARS
+
+- `crates/ostra-core/src/coord.rs` defines `pub const MAX_MESSAGE_CHARS: usize = 8000;` and uses it in
+  `check_message` and in a test. No other file uses it.
+'''
+live = ["implementer:implement"]
+stop_after = ["implementer:implement!"]
+stop_before = ["code-reviewer"]
+
+[case.expect]
+no_asks_from = ["implementer"]
+files = [{ path = "{repo}/crates/ostra-core/src/coord.rs", has = [["pub const MAX_COORD_MESSAGE_CHARS"]], lacks = ["MAX_MESSAGE_CHARS"] }]
+cause = "The constant is used only in coord.rs."
+rubric = """Pass only if the implementer asked no one and renamed every use."""
+
+# ---------------------------------------------------------------------------------------------------------
+# Tier 3: loops
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "t3-fact-check-re-pass-continues-the-checker"
+tier = 3
+note = "A live checker fails a false claim; the author fixes it; the second pass continues the same checker's conversation, reuses its prompt cache, and passes."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+spec = '''
+# Spec: a higher turn cap for long native runs
+
+## Requirements
+
+- R1: WHEN a native run passes the turn cap without a submit, THE native loop SHALL fail the run with a message that
+  names the cap.
+- R2: THE native loop SHALL keep allowing at most 5 continue turns after the output limit.
+
+## Evidence
+
+- R1: `Run::execute` in `crates/ostra-exec-native/src/lib.rs` (research document).
+- R2: `MAX_TOKEN_CONTINUES = 5` in `crates/ostra-exec-native/src/lib.rs`.
+'''
+spec_say = "I read the research document and wrote R2 from memory of the continue limit. I wrote the spec to {root}/ostra-spec-1.md and submitted it."
+live = ["fact-check"]
+stop_after = ["fact-check:fact_check#2!"]
+stop_before = ["plan"]
+
+[[case.actor]]
+run = "generate-spec:spec#2"
+say = "The fact-check found that MAX_TOKEN_CONTINUES is 3, not 5. I rewrote R2 and its evidence to say 3."
+write = [{ path = "{root}/ostra-spec-1.md", content = '''
+# Spec: a higher turn cap for long native runs
+
+## Requirements
+
+- R1: WHEN a native run passes the turn cap without a submit, THE native loop SHALL fail the run with a message that
+  names the cap.
+- R2: THE native loop SHALL keep allowing at most 3 continue turns after the output limit.
+
+## Evidence
+
+- R1: `Run::execute` in `crates/ostra-exec-native/src/lib.rs` (research document).
+- R2: `MAX_TOKEN_CONTINUES = 3` in `crates/ostra-exec-native/src/lib.rs`.
+''' }]
+
+[[case.dry]]
+run = "fact-check:fact_check#1"
+submit = '{"verdict": "FAIL", "target": "spec", "findings": [{"severity": "HIGH", "location": "R2", "element": "R2", "claim": "MAX_TOKEN_CONTINUES = 5", "issue": "The code says 3."}]}'
+
+[case.expect]
+submits = [
+  { run = "fact-check:fact_check#1", pointer = "/verdict", equals = "FAIL", has = [["MAX_TOKEN_CONTINUES", "R2"]] },
+  { run = "fact-check:fact_check#2", pointer = "/verdict", equals = "PASS" },
+]
+continued = ["generate-spec:spec#2", "fact-check:fact_check#2"]
+cached = ["fact-check:fact_check#2"]
+cause = "MAX_TOKEN_CONTINUES is 3 in crates/ostra-exec-native/src/lib.rs, so R2's 5 is false; the fixed spec says 3."
+rubric = """Pass only if all hold: (1) the first pass fails R2 because the code says 3; (2) the second pass passes the fixed spec; (3) the second pass re-checks R2 against the code or the prior finding rather than only restating it."""
+
+[[case]]
+id = "t3-review-loop-continues-both-sides"
+tier = 3
+note = "A reviewer finds a planted bug, the implementer fixes it in its own continued conversation, and the reviewer re-reviews in its continued conversation, with the prompt cache reused."
+request = "SubagentAsk's optional `project` input must be a valid project key. In `AskInput::parse` (crates/ostra-core/src/coord.rs), reject a `project` that `crate::slug::is_project_key` refuses, with an error that states the key rule. Tests come later in their own stage. Verify with `cargo test -p ostra-core coord` only."
+track = "light"
+research = '''
+# Research: AskInput::parse
+
+- `crates/ostra-core/src/coord.rs`: `AskInput::parse` trims `message`, `agent`, `subagent_id`, and `project`, checks
+  the message, and requires exactly one of `agent` or `subagent_id`. `project` names the project a helper
+  (`agent`) works in; it means nothing for a question to an existing subagent (`subagent_id`).
+- `crates/ostra-core/src/slug.rs`: `is_project_key(key)` accepts lowercase letters, digits, and dashes, starting with
+  a letter or digit.
+'''
+live = ["code-reviewer", "implementer:implement#2"]
+stop_after = ["code-reviewer:review#2"]
+
+[[case.actor]]
+run = "implementer:implement#1"
+say = "I added the project key check to AskInput::parse. cargo test -p ostra-core coord passes."
+edit = [{ path = "{repo}/crates/ostra-core/src/coord.rs", old = '''            (Some(_), Some(_)) | (None, None) => Err(format!(
+                "Give exactly one of `agent` (a new helper: {}) or `subagent_id` (an existing subagent from {SUBAGENT_LIST}).",
+                helper_names()
+            )),
+            _ => Ok(a),''', new = '''            (Some(_), Some(_)) | (None, None) => Err(format!(
+                "Give exactly one of `agent` (a new helper: {}) or `subagent_id` (an existing subagent from {SUBAGENT_LIST}).",
+                helper_names()
+            )),
+            (None, Some(_)) => {
+                if let Some(p) = &a.project
+                    && !crate::slug::is_project_key(p)
+                {
+                    return Err(format!(
+                        "Give `project` as a project key: lowercase letters, digits, and dashes, starting with a letter or digit. `{p}` is not one."
+                    ));
+                }
+                Ok(a)
+            }
+            _ => Ok(a),''' }]
+changed = ["crates/ostra-core/src/coord.rs"]
+
+[[case.dry]]
+run = "code-reviewer:review#1"
+submit = '{"findings": [{"severity": "HIGH", "file": "crates/ostra-core/src/coord.rs", "rule": "PHASE-REQ-1", "description": "The project check runs only for subagent asks, never for helper asks.", "fix": "Check `project` whenever it is set."}], "security_block": false, "ledger_path": "/l", "summary": "One finding."}'
+
+[case.expect]
+submits = [
+  { run = "code-reviewer:review#1", has = [["helper", "agent"]] },
+  { run = "code-reviewer:review#2", lacks = ["\"HIGH\"", "\"MEDIUM\"", "\"BLOCKER\""] },
+]
+continued = ["implementer:implement#2", "code-reviewer:review#2"]
+cached = ["code-reviewer:review#2"]
+cause = "The planted check runs only when `subagent_id` is set, where `project` means nothing, so a helper ask (`agent`) with an invalid project still passes. Ostra's implementer writes no tests; the write-test stage does."
+rubric = """Pass only if all hold: (1) the first review reports, at HIGH or MEDIUM, that the project check does not run for helper asks (`agent`), the only asks that use `project`; (2) the fixed code rejects an invalid `project` on a helper ask; (3) the second review raises no HIGH or MEDIUM finding. Do not require tests: the implementer writes none by design."""
+
+[[case]]
+id = "t3-helper-and-author-talk-back-and-forth"
+tier = 3
+note = "All live: a helper confirms its scope with the author before researching, the author answers from its conversation, and the helper finishes the research the author asked for."
+request = "Long implementer runs on large repositories hit the native loop's turn cap. Raise the cap so they can finish, and keep the other limits of the loop as they are."
+track = "full"
+live = ["explore:explore#2", "explore:explore#3", "generate-spec:spec#2"]
+stop_after = ["explore:explore#2!", "explore:explore#3!"]
+stop_before = ["fact-check"]
+
+[[case.actor]]
+run = "generate-spec:spec#1"
+say = "The request is about the native loop's turn cap only. Harness executors (the terminal CLIs) have their own limits, such as idle nudges and the after-submit grace, and those are out of scope. I need the exact failure path when a native run reaches the cap before I write R1."
+ask_agent = "explore"
+ask = "Research how an Ostra run ends when it reaches its limits: the turn cap, the output-limit continues, and the exact failure message. Before you start, confirm with me whether the harness executors are in scope, because they have limits of their own."
+
+[[case.dry]]
+run = "explore:explore#2"
+ask_subagent = "generate-spec"
+ask = "Are the harness executors in scope, or only the native loop?"
+
+[case.expect]
+asks = [{ from = "explore", to = "generate-spec", has = [["harness"]] }]
+replies = [{ from = "generate-spec:spec#2", has = [["native"]] }]
+research = { has = [["MAX_TURNS", "400"]] }
+cause = "The author's conversation limits the research to the native loop. The native loop's limits are MAX_TURNS = 400 and MAX_TOKEN_CONTINUES = 3 in crates/ostra-exec-native/src/lib.rs."
+rubric = """Pass only if all hold: (1) the helper asked the author about the harness scope before researching; (2) the author answered: native loop only; (3) the helper's research document covers the native loop's turn cap and its failure message, and does not spend itself on the harness executors' limits."""

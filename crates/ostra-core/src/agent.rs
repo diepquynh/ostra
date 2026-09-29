@@ -187,6 +187,8 @@ pub enum Capability {
     Code,
     /// The project management tools ([`crate::manage::PROJECT_TOOLS`]).
     ManageProjects,
+    /// The subagent coordination tools ([`crate::coord::COORD_TOOLS`]).
+    Coordinate,
 }
 
 /// The code navigation tools: the operation (`code_{op}` over MCP) and the native tool name.
@@ -224,6 +226,7 @@ impl Capability {
             Capability::MemoryRecall => "MemoryRecall",
             Capability::Code => CODE_TOOLS[0].1,
             Capability::ManageProjects => crate::manage::PROJECT_TOOLS[0].1,
+            Capability::Coordinate => crate::coord::COORD_TOOLS[0].1,
         }
     }
 

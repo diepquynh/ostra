@@ -15,6 +15,7 @@ const TONES: Record<StatusKind, Record<string, Tone>> = {
     ok: "ok",
     stuck: "warn",
     handoff: "info",
+    waiting: "info",
     error: "bad",
     denied: "bad",
     interrupted: "warn",

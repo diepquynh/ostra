@@ -52,3 +52,4 @@ id_type!(SessionId, "s_");
 id_type!(ExecutionId, "x_");
 id_type!(GateId, "g_");
 id_type!(DecisionId, "d_");
+id_type!(MessageId, "m_");

@@ -322,6 +322,14 @@ export function describeEvent(e: SessionEvent): string {
       return `Project ${e.project} initialized`;
     case "init_step_failed":
       return `Init step of ${e.project} failed: ${truncate(e.error, 80)}`;
+    case "agent_asked":
+      return e.target.kind === "agent"
+        ? `${e.from} asked a ${e.target.agent} helper: ${truncate(e.message, 80)}`
+        : `${e.from} asked ${e.target.id}: ${truncate(e.message, 80)}`;
+    case "agent_replied":
+      return `${e.from} answered: ${truncate(e.message, 80)}`;
+    case "message_delivered":
+      return `${e.kind === "question" ? "Question" : "Answer"} delivered to ${e.to}`;
     case "session_paused":
       return "Session paused";
     case "session_resumed":

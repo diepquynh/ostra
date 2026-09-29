@@ -54,6 +54,7 @@ struct Registry {
     code: OnceLock<Arc<dyn ostra_tools::CodeNav>>,
     mcp: OnceLock<Arc<dyn ostra_tools::McpConnector>>,
     manage: OnceLock<Arc<dyn ostra_tools::ManageConnector>>,
+    coord: OnceLock<Arc<dyn ostra_tools::CoordConnector>>,
 }
 
 pub struct HarnessRuntime {
@@ -128,6 +129,10 @@ impl HarnessRuntime {
 
     pub fn set_manage(&self, manage: Arc<dyn ostra_tools::ManageConnector>) {
         let _ = self.registry.manage.set(manage);
+    }
+
+    pub fn set_coord(&self, coord: Arc<dyn ostra_tools::CoordConnector>) {
+        let _ = self.registry.coord.set(coord);
     }
 
     fn inner(&self, global: &GlobalConfig) -> Arc<HarnessExecutor> {
@@ -214,6 +219,7 @@ impl Executor for Wrapped {
                 code: self.registry.code.get().cloned(),
                 mcp,
                 manage: self.registry.manage.get().and_then(|m| m.open(&spec)),
+                coord: self.registry.coord.get().and_then(|c| c.open(&spec)),
             })
             .with_private_hosts(ostra_tools::webfetch_hosts(&ctx.permissions.allow)),
             host: host.clone(),
@@ -293,6 +299,11 @@ static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>> = LazyLock::
         ostra_core::manage::PROJECT_TOOLS
             .iter()
             .map(|(name, native)| (name.to_string(), *native, Capability::ManageProjects)),
+    );
+    v.extend(
+        ostra_core::coord::COORD_TOOLS
+            .iter()
+            .map(|(name, native)| (name.to_string(), *native, Capability::Coordinate)),
     );
     v
 });
@@ -391,7 +402,7 @@ impl BridgeServices for ServerBridge {
         execution: &ExecutionId,
         tool: &str,
         args: Value,
-    ) -> Result<String, String> {
+    ) -> Result<ostra_exec_harness::McpOut, String> {
         let r = self
             .get(execution)
             .ok_or("This execution is not running in Ostra.")?;
@@ -439,7 +450,14 @@ impl BridgeServices for ServerBridge {
             text.push_str("\n\n");
             text.push_str(&n);
         }
-        if out.is_error { Err(text) } else { Ok(text) }
+        if out.is_error {
+            Err(text)
+        } else {
+            Ok(ostra_exec_harness::McpOut {
+                text,
+                end: out.end,
+            })
+        }
     }
 
     fn mcp_tools(&self, execution: &ExecutionId) -> Vec<(String, String, Value)> {
@@ -452,6 +470,7 @@ impl BridgeServices for ServerBridge {
             .iter()
             .map(|(_, _, c)| *c)
             .filter(|c| *c != Capability::ManageProjects || r.env.config().manage.is_some())
+            .filter(|c| *c != Capability::Coordinate || r.env.config().coord.is_some())
             .collect();
         ostra_tools::definitions(&caps)
             .into_iter()
@@ -630,6 +649,8 @@ mod tests {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         };
         Arc::new(Running {
             policy: ExecutionPolicy::new(ctx.clone(), Default::default()),
@@ -645,6 +666,7 @@ mod tests {
                 code: None,
                 mcp: Some(Arc::new(Echo)),
                 manage: None,
+                coord: None,
             }),
             host,
             memory_db: ctx.memory_db.clone(),
@@ -677,7 +699,7 @@ mod tests {
         let out = bridge
             .mcp_call(&id, "fake__echo", json!({"text": "hi"}))
             .await;
-        assert_eq!(out.unwrap(), "echo: hi");
+        assert_eq!(out.unwrap().text, "echo: hi");
         let logged = host.0.lock().clone();
         let calls: Vec<&str> = logged
             .iter()
@@ -769,6 +791,7 @@ mod tests {
                 code: None,
                 mcp: None,
                 manage: Some(Arc::new(FakeManage)),
+                coord: None,
             }),
             host: host.clone(),
             memory_db: ctx.memory_db.clone(),
@@ -785,7 +808,7 @@ mod tests {
         assert_eq!(hook, PolicyDecision::Allow { rule: None });
         assert_eq!(*host.0.lock(), 0, "the hook does not ask");
         let out = bridge.mcp_call(&id, "project_create", args).await.unwrap();
-        assert_eq!(out, "ProjectCreate mcp");
+        assert_eq!(out.text, "ProjectCreate mcp");
         assert_eq!(*host.0.lock(), 1, "the shim asks once");
     }
 }

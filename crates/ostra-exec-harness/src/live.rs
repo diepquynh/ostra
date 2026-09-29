@@ -23,6 +23,8 @@ pub struct LiveExecution {
     changed: Notify,
     /// A read-only reopened session: no submit is expected, so a Stop is never turned back.
     inspect: AtomicBool,
+    /// Rule H3: the run was given a question and answers it with `subagent_reply` first.
+    owes_reply: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,8 @@ pub struct LiveState {
     pub last_activity: Instant,
     pub last_message: Option<String>,
     pub tool_calls: u64,
+    /// Rule H2: the run asked another subagent and waits for Ostra to type the answer in.
+    pub waiting: bool,
 }
 
 /// What the bridge should answer to a Stop event.
@@ -57,6 +61,26 @@ impl LiveExecution {
 
     pub fn set_inspect(&self) {
         self.inspect.store(true, Ordering::SeqCst);
+    }
+
+    pub fn set_owes_reply(&self, owes: bool) {
+        self.owes_reply.store(owes, Ordering::SeqCst);
+    }
+
+    pub fn owes_reply(&self) -> bool {
+        self.owes_reply.load(Ordering::SeqCst)
+    }
+
+    /// What a run that tries to end without its result is told: reply first when it owes an
+    /// answer (Rule H3), else submit.
+    pub fn nudge(&self) -> String {
+        if self.owes_reply() {
+            ostra_core::coord::reply_instruction(ostra_core::coord::reply_tool(
+                ostra_core::ExecutorKind::Harness(self.harness),
+            ))
+        } else {
+            missing_submit_instruction(self.agent)
+        }
     }
 
     pub fn snapshot(&self) -> LiveState {
@@ -108,6 +132,11 @@ impl LiveExecution {
         true
     }
 
+    pub fn set_waiting(&self, waiting: bool) {
+        self.state.lock().waiting = waiting;
+        self.changed.notify_waiters();
+    }
+
     pub fn has_submit(&self) -> bool {
         self.state.lock().submit.is_some()
     }
@@ -121,14 +150,21 @@ impl LiveExecution {
         {
             s.last_message = last_message;
         }
-        let verdict = if self.inspect.load(Ordering::SeqCst) {
+        let verdict = if self.inspect.load(Ordering::SeqCst) || s.waiting {
             StopVerdict::Allow
         } else if s.submit.is_some() {
             s.stopped_after_submit = true;
             StopVerdict::Allow
         } else if s.stops_without_submit < MAX_STOP_NUDGES {
             s.stops_without_submit += 1;
-            StopVerdict::Block(missing_submit_instruction(self.agent))
+            let nudge = if self.owes_reply.load(Ordering::SeqCst) {
+                ostra_core::coord::reply_instruction(ostra_core::coord::reply_tool(
+                    ostra_core::ExecutorKind::Harness(self.harness),
+                ))
+            } else {
+                missing_submit_instruction(self.agent)
+            };
+            StopVerdict::Block(nudge)
         } else {
             s.gave_up = true;
             StopVerdict::Allow
@@ -190,9 +226,11 @@ impl LiveRegistry {
                 last_activity: Instant::now(),
                 last_message: None,
                 tool_calls: 0,
+                waiting: false,
             }),
             changed: Notify::new(),
             inspect: AtomicBool::new(false),
+            owes_reply: AtomicBool::new(false),
         });
         self.map.lock().insert(id, live.clone());
         live
@@ -251,6 +289,31 @@ mod tests {
 
         reg.remove(&id);
         assert!(reg.authorize(&id, &token).is_none());
+    }
+
+    #[test]
+    fn a_waiting_run_ends_its_turn_without_a_submit() {
+        let reg = LiveRegistry::new();
+        let live = reg.register(ExecutionId::new(), AgentName::GenerateSpec, HarnessKind::Claude);
+        live.set_waiting(true);
+        assert_eq!(live.on_stop(None), StopVerdict::Allow);
+        let s = live.snapshot();
+        assert!(s.waiting && !s.gave_up && s.stops_without_submit == 0);
+        live.set_waiting(false);
+        assert!(matches!(live.on_stop(None), StopVerdict::Block(_)));
+    }
+
+    #[test]
+    fn a_run_that_owes_an_answer_is_told_to_reply() {
+        let reg = LiveRegistry::new();
+        let live = reg.register(ExecutionId::new(), AgentName::GenerateSpec, HarnessKind::Claude);
+        live.set_owes_reply(true);
+        assert!(
+            matches!(live.on_stop(None), StopVerdict::Block(ref m) if m.contains("mcp__ostra__subagent_reply"))
+        );
+        assert!(live.nudge().contains("mcp__ostra__subagent_reply"));
+        live.set_owes_reply(false);
+        assert!(live.nudge().contains("submit_generate_spec"));
     }
 
     #[test]

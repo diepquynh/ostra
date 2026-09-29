@@ -10,7 +10,8 @@ use ostra_core::event::{
     WorkKind,
 };
 use ostra_core::exec::ExecutionStatus;
-use ostra_core::ids::{ExecutionId, GateId};
+use ostra_core::coord::DeliveryKind;
+use ostra_core::ids::{ExecutionId, GateId, MessageId};
 use ostra_core::model::Complexity;
 use ostra_core::paths::report;
 use ostra_core::pipeline::{
@@ -84,6 +85,8 @@ pub struct SpawnRequest {
     pub session_dir: PathBuf,
     pub inputs: SpawnInputs,
     pub resumes: Option<ExecutionId>,
+    /// Rules H3 and H5: a new run that continues this run's conversation.
+    pub continues: Option<ExecutionId>,
 }
 
 impl SpawnRequest {
@@ -145,6 +148,12 @@ pub enum Step {
         execution: ExecutionId,
         error: String,
     },
+    /// Rule H2: hand a message to a harness run that waits with its process alive.
+    Deliver {
+        execution: ExecutionId,
+        ask: MessageId,
+        kind: DeliveryKind,
+    },
     Complete {
         report_markdown: Option<String>,
     },
@@ -188,6 +197,7 @@ impl Step {
             Step::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
             Step::FinishInit { project } => format!("finish-init:{project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
+            Step::Deliver { ask, kind, .. } => format!("deliver:{ask}:{kind:?}"),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
         }
@@ -200,7 +210,13 @@ impl Step {
                 Some(s) => format!("judge {} {s}", judge.as_str()),
                 None => format!("judge {}", judge.as_str()),
             },
-            Step::Spawn(s) => format!("spawn {} {}", s.agent, purpose_summary(&s.purpose)),
+            Step::Spawn(s) => format!(
+                "spawn {} {}{}",
+                s.agent,
+                purpose_summary(&s.purpose),
+                if s.continues.is_some() { " (continues)" } else { "" }
+            ),
+            Step::Deliver { kind, .. } => format!("deliver {kind:?}").to_lowercase(),
             Step::OpenGate { payload, .. } => format!("gate {}", payload.kind_str()),
             Step::YoloAnswer { .. } => "yolo-answer".into(),
             Step::Command {
@@ -223,6 +239,7 @@ fn purpose_summary(p: &ExecPurpose) -> String {
     match p {
         ExecPurpose::Explore { task } => format!("explore#{task}"),
         ExecPurpose::Advise { project, round, .. } => format!("advise {project} #{round}"),
+        ExecPurpose::Consult { .. } => "consult".into(),
         ExecPurpose::Spec { round } => format!("spec#{round}"),
         ExecPurpose::FactCheck { target, pass } => format!("fact-check-{}#{pass}", target.as_str()),
         ExecPurpose::Plan { round } => format!("plan#{round}"),
@@ -323,11 +340,29 @@ impl<'a> Planner<'a> {
         if held {
             return;
         }
-        // Rule P2: a spawn that replaces a paused run resumes it.
-        if let Step::Spawn(req) = &mut step
-            && req.resumes.is_none()
-        {
-            req.resumes = self.s.resume_from.get(&purpose_key(&req.purpose)).cloned();
+        if let Step::Spawn(req) = &mut step {
+            let key = purpose_key(&req.purpose);
+            // Rule H2: a run that waits for a message holds its stage, and the message wakes it in
+            // place.
+            match self.s.wake_for_key(&key) {
+                Some(None) => return,
+                Some(Some(exec)) => req.resumes = Some(exec),
+                // Rule P2: a spawn that replaces a paused run resumes it.
+                None if req.resumes.is_none() => {
+                    req.resumes = self.s.resume_from.get(&key).cloned()
+                }
+                None => {}
+            }
+            // Rules H5 and H6: a pair loop continues the conversation of the run before it.
+            if req.resumes.is_none() && req.continues.is_none() {
+                req.continues = self.s.continuation(req.agent, &req.purpose);
+            }
+            // Rule H7: one live run per conversation.
+            if let Some(head) = &req.continues
+                && self.s.conversation_busy(head)
+            {
+                return;
+            }
         }
         // Budget guard: once the session has spent its budget, no new execution starts until
         // the user raises it. Running executions finish.
@@ -379,6 +414,7 @@ impl<'a> Planner<'a> {
             session_dir,
             inputs,
             resumes: None,
+            continues: None,
         })));
     }
 
@@ -396,6 +432,68 @@ impl<'a> Planner<'a> {
     }
 
     fn run(&mut self) {
+        self.flows();
+        self.coordination();
+    }
+
+    /// Rules H2 and H3: consult runs for questions to subagents that ended their run, and
+    /// messages for harness runs that wait with their process alive. Native runs that wait are
+    /// woken through their stage's spawn (see `push`).
+    fn coordination(&mut self) {
+        let s = self.s;
+        if !s.created || s.is_terminal() || s.paused {
+            return;
+        }
+        for ask in s.asks.values() {
+            if ask.answerer.is_some() || ask.answer.is_some() || !s.is_waiting(&ask.from) {
+                continue;
+            }
+            let crate::coord::Route::Consult(head) = s.route(ask) else {
+                continue;
+            };
+            let root = s.subagent_of(&head);
+            let taken = self.out.iter().any(|st| {
+                matches!(st, Step::Spawn(r) if r.continues.as_ref().is_some_and(|c| s.subagent_of(c) == root))
+            });
+            let Some(rec) = s.executions.get(&head) else {
+                continue;
+            };
+            if taken {
+                continue;
+            }
+            let inputs = SpawnInputs {
+                question: Some(ask.message.clone()),
+                task: Some(s.subagent_of(&ask.from).to_string()),
+                ..Default::default()
+            };
+            self.push(Step::Spawn(Box::new(SpawnRequest {
+                agent: rec.agent,
+                purpose: ExecPurpose::Consult {
+                    subagent: root,
+                    ask: ask.id.clone(),
+                },
+                stage: rec.stage,
+                project: rec.project.clone(),
+                session_dir: s.session_dir_of(rec),
+                inputs,
+                resumes: None,
+                continues: Some(head.clone()),
+            })));
+        }
+        for rec in s.running_executions() {
+            if matches!(rec.executor, ostra_core::ExecutorKind::Harness(_))
+                && let Some(d) = s.next_delivery(&rec.id)
+            {
+                self.push(Step::Deliver {
+                    execution: rec.id.clone(),
+                    ask: d.ask,
+                    kind: d.kind,
+                });
+            }
+        }
+    }
+
+    fn flows(&mut self) {
         let s = self.s;
         // Rule P1: a paused session starts nothing, not even a YOLO answer.
         if !s.created || s.is_terminal() || s.paused {
@@ -538,9 +636,14 @@ impl<'a> Planner<'a> {
                     s.project_session_dir(&t.project),
                     inputs,
                 );
-            } else if let (Some(err), None, Some(exec), false) =
-                (&t.failed, &t.gate, &t.exec, t.abandoned)
-            {
+            } else if let (Some(err), None, Some(exec), false, false) = (
+                &t.failed,
+                &t.gate,
+                &t.exec,
+                t.abandoned,
+                // Rule H3: a helper's failure is its asker's answer, not a gate.
+                matches!(t.origin, ExploreOrigin::Ask { .. }),
+            ) {
                 self.exec_failed_gate(exec, AgentName::Explore, &t.project, err);
             }
         }
@@ -1555,7 +1658,11 @@ impl<'a> Planner<'a> {
 
     fn completion(&mut self) {
         let s = self.s;
-        if !self.nothing_running() || s.project_inits.values().any(|i| !i.finished) {
+        // Rule H9: nothing completes while a subagent waits for an answer.
+        if !self.nothing_running()
+            || s.project_inits.values().any(|i| !i.finished)
+            || s.coordination_open()
+        {
             return;
         }
         match &s.completion_decision {

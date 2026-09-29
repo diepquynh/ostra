@@ -140,7 +140,22 @@ fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabula
     )
     .unwrap();
     assert!(claude.contains("mcp__ostra__submit_code_reviewer"));
-    assert!(claude.contains("Do not start subagents"));
+    assert!(claude.contains("Do not start this harness's own subagents"));
+}
+
+#[test]
+fn coordination_guide_names_the_tools_per_executor() {
+    let native = render_prompt(AgentName::GenerateSpec, ExecutorKind::Native).unwrap();
+    assert!(native.contains("## Subagent coordination"));
+    assert!(native.contains("`SubagentAsk`") && native.contains("`SubagentReply`"));
+    let claude = render_prompt(AgentName::FactCheck, ExecutorKind::Harness(HarnessKind::Claude)).unwrap();
+    assert!(claude.contains("`mcp__ostra__subagent_ask`"));
+    assert!(claude.contains("| coordinate | mcp__ostra__subagent_list, mcp__ostra__subagent_ask, mcp__ostra__subagent_reply |"));
+    let codex = render_prompt(AgentName::Implementer, ExecutorKind::Harness(HarnessKind::Codex)).unwrap();
+    assert!(codex.contains("`subagent_reply`"));
+    // Agents outside the pipeline's pairs get no coordination tools.
+    let advisor = render_prompt(AgentName::Advisor, ExecutorKind::Native).unwrap();
+    assert!(!advisor.contains("Subagent coordination"));
 }
 
 #[test]

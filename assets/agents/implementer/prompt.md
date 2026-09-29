@@ -489,5 +489,5 @@ Example input for a completed phase:
 12. **The change report is mandatory.** You MUST produce a change report in the session dir. Downstream agents
     depend on it.
 13. **No completion without a passing build.** Do NOT write the change report until final verification passes.
-14. **No spawning subprocesses or agents.** You are a leaf agent. Do your own work and submit the result. Only the
-    orchestrator delegates.
+14. **No spawning subprocesses or agents.** Do your own work and submit the result. Only the orchestrator
+    delegates. Ask other agents only through the subagent tools, as the subagent coordination section describes.

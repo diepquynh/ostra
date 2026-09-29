@@ -80,6 +80,8 @@ impl Fx {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         }
     }
 
@@ -2049,4 +2051,50 @@ fn project_list_is_allowed_for_every_agent() {
         let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
         allowed(&p, &ToolCall::new("ProjectList", json!({})));
     }
+}
+
+#[test]
+fn h3_a_consult_run_answers_and_writes_nothing() {
+    let f = fx();
+    let mut ctx = f.ctx(AgentName::Implementer);
+    ctx.answer_only = true;
+    ctx.permission_mode = PermissionMode::Default;
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    let reason = denied(&p, &write(f.repo.join("src/a.rs")), "SubagentReply");
+    assert!(reason.starts_with("Answer with SubagentReply"), "{reason}");
+    denied(&p, &bash(format!("echo x > {}", shp(f.repo.join("a.txt")))), "change no file");
+    denied(&p, &ToolCall::new("Report", json!({"content": "x"})), "change no file");
+    allowed(&p, &ToolCall::new("Read", json!({"file_path": f.repo.join("src/a.rs").to_string_lossy()})));
+    allowed(&p, &ToolCall::new("SubagentReply", json!({"message": "m"})));
+}
+
+#[test]
+fn h2_coordination_tools_never_ask_the_user() {
+    let f = fx();
+    let mut ctx = f.ctx(AgentName::GenerateSpec);
+    ctx.permission_mode = PermissionMode::Plan;
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    for tool in ["SubagentList", "SubagentAsk", "SubagentReply"] {
+        allowed(&p, &ToolCall::new(tool, json!({"message": "m"})));
+    }
+}
+
+#[test]
+fn h3_a_run_that_owes_an_answer_replies_before_it_submits() {
+    let f = fx();
+    let mut ctx = f.ctx(AgentName::GenerateSpec);
+    ctx.owes_reply = true;
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    let reason = denied(
+        &p,
+        &ToolCall::new("submit_generate_spec", json!({"spec_path": "/x"})),
+        "SubagentReply",
+    );
+    assert!(reason.starts_with("Call SubagentReply"), "{reason}");
+    allowed(&p, &ToolCall::new("SubagentReply", json!({"message": "m"})));
+    let free = f.policy(AgentName::GenerateSpec);
+    assert!(!matches!(
+        free.check(&ToolCall::new("submit_generate_spec", json!({}))),
+        PolicyDecision::Deny { rule, .. } if rule.rule == "reply-first"
+    ));
 }

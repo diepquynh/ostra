@@ -339,6 +339,37 @@ pub struct QuickAnswerParams {
     pub session_artifacts: Vec<PathBuf>,
 }
 
+/// Rule H3: a question another subagent asks, answered in a consult run that continues the
+/// answering subagent's conversation. It reaches the run as its resume message, not a first spawn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConsultParams {
+    pub common: Common,
+    /// The answering subagent's agent.
+    pub agent: AgentName,
+    /// The asking subagent's ID.
+    pub asked_by: String,
+    pub question: String,
+}
+
+impl SpawnParams for ConsultParams {
+    fn agent(&self) -> AgentName {
+        self.agent
+    }
+    fn common(&self) -> &Common {
+        &self.common
+    }
+    fn render(&self) -> String {
+        let mut b = Block::new();
+        b.line("Asked by", &self.asked_by);
+        b.line("Question", &self.question);
+        b.common(&self.common);
+        b.finish()
+    }
+    fn to_json(&self) -> Value {
+        json(self)
+    }
+}
+
 impl SpawnParams for ExploreParams {
     fn agent(&self) -> AgentName {
         AgentName::Explore

@@ -42,6 +42,7 @@ export const EXEC_TONE: Record<ExecutionStatus, Tone> = {
   stuck: "warn",
   handoff: "warn",
   interrupted: "warn",
+  waiting: "info",
   cancelled: "neutral",
   denied: "bad",
   error: "bad",

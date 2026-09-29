@@ -1,7 +1,7 @@
 description = "Reviews the unstaged working-tree changes of one review loop against the project's Review Rule Set and the phase file's requirements, and submits structured findings. Also runs a non-waivable security scan on every changed file, raising BLOCKER findings no instruction can override. Runs after an implementer or write-test execution. Read-only on project source."
 default_tier = "balanced"
 timeout_seconds = 1200
-capabilities = ["read", "shell", "search_text", "glob", "code"]
+capabilities = ["read", "shell", "search_text", "glob", "code", "coordinate"]
 
 [effort]
 native = "high"

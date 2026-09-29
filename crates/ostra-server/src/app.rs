@@ -395,10 +395,12 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     let mcp_connector: Arc<dyn ostra_tools::McpConnector> =
         Arc::new(crate::mcp::Connector(mcp.clone()));
     let management = Arc::new(crate::manage::Management::default());
+    let coordination = Arc::new(crate::coord::Coordination::default());
     let native = Arc::new(
         NativeExecutor::new(providers.clone(), skill_resolver(), Some(code_nav.clone()))
             .with_mcp(mcp_connector.clone())
-            .with_manage(management.clone()),
+            .with_manage(management.clone())
+            .with_coord(coordination.clone()),
     );
     let notifier = Arc::new(Notifier::new(
         vapid_keys(&registry)?,
@@ -418,6 +420,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     harness.set_code_nav(code_nav);
     harness.set_mcp(mcp_connector);
     harness.set_manage(management.clone());
+    harness.set_coord(coordination.clone());
     let shared = Arc::new(Shared {
         global_path,
         global_cache: RwLock::new(global),
@@ -447,6 +450,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
     });
     code_tools.bind(&app);
     management.bind(&app);
+    coordination.bind(&app);
     // Only sandboxes use the socket, and Windows has neither; unsandboxed harness hooks reach
     // `/internal/*` over loopback HTTP.
     #[cfg(unix)]

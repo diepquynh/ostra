@@ -175,7 +175,9 @@ workspace it:
 2. Finds every execution the fold still thinks is running. The process that ran it is gone, so Ostra appends
    `ExecutionFinished` with status `interrupted` and the error "The server restarted while this execution ran."
    The usage the execution reported while it ran was stored as it streamed, so the interrupted result keeps
-   what it spent. Your cost figure does not drop after a restart.
+   what it spent. Your cost figure does not drop after a restart. A harness run that was waiting for another
+   subagent's answer with its process alive is recorded as `waiting` instead, so the answer later resumes its
+   harness session rather than re-running it (Rule H2).
 3. Finds every open permission gate. The execution that asked is gone, so the engine answers it with deny,
    source `engine`, and says why.
 4. Starts the session's driver again if the session has not ended.
@@ -240,6 +242,19 @@ Pausing is also events, which is why a paused session survives a restart paused.
 The difference between a restart and a pause shows in the result. A restart re-runs a step with a note to check
 the progress log, because the old process and its conversation are gone. A pause resumes the same conversation,
 because Ostra stopped it on purpose and saved it.
+
+## Questions between subagents
+
+Subagent coordination (HANDOVER 10.8) is also events. `AgentAsked` records a question: who asked, the target (a
+new helper of an agent, or a subagent ID), and the text. `AgentReplied` records an answer. `MessageDelivered`
+records that Ostra handed a question or an answer to a run that waits. A run that asks and then ends records
+`ExecutionFinished` with status `waiting`.
+
+The fold derives the rest. A helper's answer is its explore submit. A subagent that fails before it answers, or a
+run that ends without replying to the question it was given, answers with that failure. Which run waits for
+which message is a function of these events and the execution results, so a replay rebuilds it, and the planner
+reads it to decide what to wake. [Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other)
+walks through the flow.
 
 ## The tables beside the log
 

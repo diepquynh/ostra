@@ -67,13 +67,13 @@ executor. The policy then narrows further what the tools an agent has may touch.
 
 | Agent | Capabilities |
 | --- | --- |
-| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document, code |
-| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document, code |
-| fact-check | read, write, shell, search_text, glob, web_search, web_fetch, code |
-| plan | read, shell, search_text, glob, document, code |
-| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects |
-| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code |
-| code-reviewer | read, shell, search_text, glob, code |
+| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document, code, coordinate |
+| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document, code, coordinate |
+| fact-check | read, write, shell, search_text, glob, web_search, web_fetch, code, coordinate |
+| plan | read, shell, search_text, glob, document, code, coordinate |
+| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate |
+| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate |
+| code-reviewer | read, shell, search_text, glob, code, coordinate |
 | execution-path-analyzer | read, shell, write, search_text, glob, report, code |
 | module-documentation | read, edit, write, shell, search_text, glob, report, code |
 | prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code |
@@ -384,6 +384,14 @@ They exist because an outline costs a fraction of a file read, and a caller list
 text search cannot tell apart from another definition with the same name. On a harness they are `code_outline`,
 `code_find`, and so on, served by the `ostra` MCP server. [The code index](code-index.md) describes how the index is
 built.
+
+### Subagent tools
+
+`SubagentList`, `SubagentAsk`, and `SubagentReply` let an agent with the `coordinate` capability ask a helper or
+another subagent a question and wait for the answer, then continue from its own conversation. On a harness they are
+`subagent_list`, `subagent_ask`, and `subagent_reply`. The permission layer allows them in every mode, because they
+change no file. An ask ends the native run with status `waiting`, or makes a harness run wait with its process
+alive; [Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other) covers the whole flow.
 
 ### The submit tool
 

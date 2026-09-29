@@ -10,6 +10,7 @@ export type ExecutionRunStatus =
   | "ok"
   | "stuck"
   | "handoff"
+  | "waiting"
   | "error"
   | "denied"
   | "interrupted"
@@ -43,6 +44,7 @@ const DOT: Record<ExecutionRunStatus, Tone> = {
   stuck: "warn",
   interrupted: "warn",
   handoff: "info",
+  waiting: "info",
   error: "bad",
   denied: "bad",
   cancelled: "neutral",

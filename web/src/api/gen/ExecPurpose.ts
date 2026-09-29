@@ -2,9 +2,10 @@
 import type { ExecutionId } from "./ExecutionId";
 import type { FactTarget } from "./FactTarget";
 import type { InitializerMode } from "./InitializerMode";
+import type { MessageId } from "./MessageId";
 import type { WorkKind } from "./WorkKind";
 
 /**
  * What an execution was for. The engine's fold keys on this.
  */
-export type ExecPurpose = { "kind": "explore", task: number, } | { "kind": "spec", round: number, } | { "kind": "fact_check", target: FactTarget, pass: number, } | { "kind": "plan", round: number, } | { "kind": "implement", phase: number, work: WorkKind, } | { "kind": "review", phase: number, tests: boolean, iteration: number, } | { "kind": "epa", phase: number, } | { "kind": "write_test", phase: number, work: WorkKind, } | { "kind": "module_docs", project: string, } | { "kind": "prompt_gen", handoff_for: ExecutionId | null, } | { "kind": "verify", phase: number, } | { "kind": "quick_answer" } | { "kind": "init", mode: InitializerMode, item: string | null, } | { "kind": "inspect", of: ExecutionId, } | { "kind": "advise", project: string, execution: ExecutionId, round: number, };
+export type ExecPurpose = { "kind": "explore", task: number, } | { "kind": "spec", round: number, } | { "kind": "fact_check", target: FactTarget, pass: number, } | { "kind": "plan", round: number, } | { "kind": "implement", phase: number, work: WorkKind, } | { "kind": "review", phase: number, tests: boolean, iteration: number, } | { "kind": "epa", phase: number, } | { "kind": "write_test", phase: number, work: WorkKind, } | { "kind": "module_docs", project: string, } | { "kind": "prompt_gen", handoff_for: ExecutionId | null, } | { "kind": "verify", phase: number, } | { "kind": "quick_answer" } | { "kind": "init", mode: InitializerMode, item: string | null, } | { "kind": "inspect", of: ExecutionId, } | { "kind": "advise", project: string, execution: ExecutionId, round: number, } | { "kind": "consult", subagent: ExecutionId, ask: MessageId, };

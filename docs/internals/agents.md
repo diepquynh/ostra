@@ -426,6 +426,154 @@ There are two narrow exceptions, and both are fallbacks, never a decision:
 - If an agent reports `stuck` without a diagnostic, the final text becomes the diagnostic shown in the rescue
   prompt. The routing decision still comes from the submitted `status`.
 
+## Subagents that talk to each other
+
+Reports carry results from one stage to the next, but a report read cold loses what its writer knew: why a
+requirement is worded the way it is, which files the implementer already ruled out, what a finding refers to.
+Re-reading everything costs tokens, and a judge cannot fill the gap either, because it never saw the inside of
+either conversation. So agents can also reach each other directly, and every agent keeps its conversation so
+that it can be woken again. HANDOVER section 10.8 holds the rules (H1 to H9).
+
+### A subagent ID names a conversation
+
+Each execution is one run of a model. A **subagent** is a conversation that may span several runs, and its
+subagent ID is the id of the conversation's first execution. A run keeps the ID of the conversation it continues,
+whether it continues in place (the same execution resumed) or as a new execution whose `resumes` field names the
+run before it. The fold keeps a map from each execution to its subagent (`SessionState::subagents`), and the
+subagent's **head** is its latest run. Asking a subagent means asking its head.
+
+### The three tools
+
+Seven agents have the `coordinate` capability: explore, generate-spec, fact-check, plan, implementer,
+code-reviewer, and write-test. It gives them three tools, and a prompt section (`assets/coordination.md`) that
+says when to use them:
+
+| Tool | What it does |
+| --- | --- |
+| `SubagentList` | Your own subagent ID and every subagent of the session, with its agent, status, report, and what it waits on. The subagents you work with are marked, such as "the author of the document you check" for a fact-checker. |
+| `SubagentAsk` | Ask a question. With `agent: "explore"` Ostra starts a helper research task from it. With `subagent_id` it goes to an existing subagent. |
+| `SubagentReply` | Answer the question that woke this run. |
+
+The tools never ask you for permission in any mode, because they change no file; a deny rule can still refuse
+them. The engine checks each call against the fold and records it as an event before the tool returns
+(`Engine::coordinate`, the checks in `crates/ostra-engine/src/coord.rs`).
+
+### Asking waits
+
+A run that asks stops working until the answer arrives. How it waits depends on the executor:
+
+- **Native.** The loop ends the run with status `waiting`, like a submit ends it. The fold treats the run's stage
+  as paused and the planner holds its next spawn. When the answer is ready, that held spawn resumes the same
+  execution in place, and the loop replays the stored messages with the answer as the new user turn. The prefix
+  is the same, so the provider's prompt cache still covers it.
+- **Harness.** The CLI process stays alive. The MCP call returns an instruction to end the turn and reply only
+  `Waiting`, and the executor then waits for the engine's message instead of supervising for a submit. While it
+  waits it gives back its execution slot, a Stop without a submit is let through, and the time does not count
+  against its timeout. When the answer arrives, Ostra types it into the terminal as if you had, and the model
+  continues from there. If the server restarts during the wait, recovery records the run as `waiting` rather than
+  interrupted, and the answer later resumes the harness session from its stored session id.
+
+Freeing the slot matters: with `max_parallel_executions = 1`, an asker that kept its slot would wait forever for a
+helper that can never start.
+
+### Where a question goes
+
+A question to `explore` becomes a research task like the ones classification starts, tagged with the question
+(`ExploreOrigin::Ask`). It does not hold the research stage, because only the asker waits for it. Its submit is
+the answer: the findings summary, the research document's path, and what it did not cover. The document also
+joins the session's research documents, so later stages read it too. If the helper fails, its failure is the
+answer, and no failure gate opens.
+
+A question to a subagent goes wherever that subagent can answer:
+
+1. **It waits on the asker**, for example the spec author waiting on the helper that now asks it back: the
+   subagent is woken in place with the question and answers with `SubagentReply`. Then it goes back to waiting for
+   its own answer. This is how two agents talk back and forth.
+2. **Its last run ended `ok`** (or `stuck` or `handoff`): Ostra starts a **consult run**, a new execution that
+   continues the subagent's conversation with the question as its new turn. A consult run may not write files;
+   the policy refuses writes with "Answer with SubagentReply and change no file". It ends when it replies.
+3. **It is running, or waits on someone else**: the question waits until the subagent is free.
+4. **It failed** (error, denied, cancelled): the asker is woken with that failure, so no run waits forever. A
+   run that was given a question and ends without replying answers with the same kind of message.
+
+A run that owes an answer, a consult run or a run woken with a question, replies before anything else ends it.
+The guard refuses its submit call with "Call SubagentReply with your answer instead", and each reminder names the
+reply tool rather than the submit tool: the native loop's reminder after a turn with no tool call, a harness's
+turned-back Stop, and the nudge Ostra types into a quiet terminal. A harness learns it owes an answer from the
+wake itself, because the question arrives after its process started. The coordination evals found the need for
+this: a consult run that ended its turn in text was reminded to call its agent's submit tool, so it never replied.
+
+### The pair loops continue conversations
+
+The pipeline's loops between two agents use the same mechanism, driven by the engine instead of a tool call,
+because the engine holds the gates. When a fact-check fails, the next spec or plan round continues the author's
+conversation; the next fact-check pass continues the checker's. When a review has findings, the fix continues
+the phase's last worker, and the re-review continues the reviewer. A rescue after `stuck` and a resume after a
+handoff continue the worker too. The fold decides this (`SessionState::continuation`), and the planner marks the
+spawn: fixtures show it as `spawn generate-spec spec#2 (continues)`.
+
+A continued run's new turn is a fixed header followed by the new spawn block, which carries what the round needs:
+the findings, the answers, the prior findings of a re-pass. Pass or fail, the review cap, and the recurring
+fact-check gate work exactly as before; only the input changes. The run stays on the executor and model its
+conversation started on.
+
+A loop starts a fresh run instead when continuing would be wrong or impossible: the previous run did not end `ok`
+with a submit, the agent was moved to another executor after a harness failure, a harness run left no session id
+to resume, you amended the request after the previous run started, or the conversation already holds six runs
+(`MAX_CONVERSATION_RUNS`), because a long conversation costs more per turn than a fresh start. A conversation
+never has two live runs: a continuation or consult waits while another run of the same subagent is live.
+
+### Limits
+
+Every question can start a run, so asks are bounded. A run may start at most three helpers
+(`MAX_HELPERS_PER_RUN`) and a session at most 24 questions (`MAX_SESSION_ASKS`). A helper may not start helpers,
+a consult run may not ask, and a run that owes an answer must reply before it asks. Helpers and consult runs go
+through the slot limiter and the budget guard like every other spawn, and a session does not complete while a
+question is open.
+
+### What the log records
+
+Each step is an event: `AgentAsked` when a run asks, `AgentReplied` when a run answers, and `MessageDelivered`
+when Ostra hands a question or an answer to a run that waits. A helper or consult run gets its question as its
+spawn, so its `ExecutionStarted` is the delivery. The fold derives everything else from these, including the
+helper's answer and every failure answer, so a replay rebuilds exactly who waits for what.
+
+### Measuring coordination
+
+Conformance fixtures prove where the engine routes a question; they cannot say whether a model asks the right
+subagent, answers from its conversation, or holds back when asking is not needed. The coordination evals do that.
+[`tests/evals/coordination.toml`](../../tests/evals/coordination.toml) holds cases in three tiers, all set in
+Ostra's own source:
+
+1. **Answering.** A consult run explains a number only its conversation holds, declines to edit the spec it is
+   asked to change, and reads code it never discussed to answer correctly. A spec author woken by its helper's
+   question replies from its conversation and goes back to waiting.
+2. **Deciding.** An implementer, which has no web tools, needs a model id published last week and should ask an
+   explore helper instead of guessing it. A fact-checker finds the spec author among three subagents and asks it.
+   Two controls, a fully traceable spec and a one-file rename, must ask no one.
+3. **Loops.** A live fact-checker fails a false claim and its second pass continues its conversation; a live
+   reviewer finds a planted bug, the live implementer fixes it in its own continued conversation, and the reviewer
+   re-reviews; a live helper confirms its scope with the live author before it researches.
+
+[`crates/ostra-server/tests/coordination_evals.rs`](../../crates/ostra-server/tests/coordination_evals.rs) runs
+each case as a real session of a real `Engine`, on a git clone of a snapshot of Ostra's working tree that leaves
+out the eval itself, so no agent can read the expected answers. Judges are scripted. A router executor sends each
+run the case lists as live to the native loop on the model under test, with the policy, the sandbox, a code index
+of the snapshot, and coordination tools wired to that engine, and plays every other run from the case: what an
+author said, the file it wrote, the question a checker asked. So every wake, consult run, continuation, and freed
+slot goes through the engine's own code, and only the runs under test cost tokens.
+
+A run passes when every code check holds (who asked whom and what, the replies, statuses, submits, files,
+continuations, cache reads) and a grader model finds the rubric met, reading a record of every run's tool calls,
+every question and answer, the live submits, and the diff. The report gives pass rates per tier and model, cost,
+and the share of live input tokens read from the prompt cache. A session whose live run died on a provider error
+runs again, up to twice, and is reported apart from the pass rates. An offline test replays every case with
+stand-ins for its live runs and checks that each live run is reached, the session stops where the case says, and
+every expected continuation continues its conversation, so a broken case fails in the normal suite.
+
+The harness side of rule H2, a CLI waiting with its process alive and the answer typed into its terminal, is
+checked live by `harness_probe wake`: the agent asks twice, and must submit both answers.
+
 ## Where to look in the code
 
 | What | Where |
@@ -438,6 +586,10 @@ There are two narrow exceptions, and both are fallbacks, never a decision:
 | Planner inputs to spawn structs | `crates/ostra-engine/src/factory.rs` |
 | Submit schemas and `validate_submit` | `crates/ostra-core/src/submit.rs` |
 | Submit document checks | `crates/ostra-core/src/doc/check.rs` |
+| Subagent coordination: tool inputs and limits | `crates/ostra-core/src/coord.rs` |
+| Coordination in the fold: routes, deliveries, continuations | `crates/ostra-engine/src/coord.rs` |
+| The coordination prompt section | `assets/coordination.md` |
+| Coordination evals | `tests/evals/coordination.toml`, `crates/ostra-server/tests/coordination_evals.rs` |
 | Report file names | `crates/ostra-core/src/paths.rs` (`report`) |
 | Submit handling, native | `crates/ostra-exec-native/src/lib.rs` |
 | Submit handling, harness | `crates/ostra-exec-harness/src/bridge.rs`, `live.rs` |

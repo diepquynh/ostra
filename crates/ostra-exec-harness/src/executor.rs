@@ -6,7 +6,7 @@
 //! quiet session with no submit is nudged by typing into the terminal.
 
 use crate::launch::{self, LaunchInput};
-use crate::live::{LiveExecution, LiveRegistry, missing_submit_instruction};
+use crate::live::{LiveExecution, LiveRegistry};
 use crate::outcome::{self, End, LAUNCH_PREFIX};
 use crate::pty::{DEFAULT_COLS, DEFAULT_ROWS, PtyRegistry, PtySession};
 use crate::term_log::TermLog;
@@ -391,7 +391,7 @@ impl HarnessExecutor {
         let idle_nudge = self.config().idle_nudge;
         let started = Instant::now();
         let budget = spec.timeout_secs.max(30);
-        let deadline = started + Duration::from_secs(budget);
+        let mut deadline = started + Duration::from_secs(budget);
         let (mut trust_steps, mut nudges) = (0u32, 0u32);
         let mut submit_seen_at: Option<Instant> = None;
         let mut reported_session: Option<String> = None;
@@ -425,6 +425,28 @@ impl HarnessExecutor {
                 if s.stopped_after_submit || agy_quiet || at.elapsed() >= AFTER_SUBMIT_GRACE {
                     return End::Submitted;
                 }
+                continue;
+            }
+            if !inspect && s.waiting {
+                // Rule H2: the process stays up; the wait does not count against the timeout.
+                let waited = Instant::now();
+                let note = tokio::select! {
+                    _ = cancel.cancelled() => return End::Cancelled,
+                    info = pty.wait_exit() => {
+                        return if live.has_submit() { End::Submitted } else { End::Exited(info.code, started.elapsed()) };
+                    }
+                    note = host.wait_for_wake() => note,
+                };
+                deadline += waited.elapsed();
+                live.set_waiting(false);
+                let Some(wake) = note else {
+                    return End::Fatal("Ostra has no message to wake this run with.".into());
+                };
+                live.set_owes_reply(wake.owes_reply);
+                let _ = pty.type_line(&wake.note).await;
+                host.emit(ExecutionDelta::Status {
+                    message: "Typed the message that woke this run into its terminal.".into(),
+                });
                 continue;
             }
             if !inspect && s.gave_up {
@@ -490,7 +512,7 @@ impl HarnessExecutor {
                 }
                 nudges += 1;
                 live.touch();
-                let _ = pty.type_line(&missing_submit_instruction(spec.agent)).await;
+                let _ = pty.type_line(&live.nudge()).await;
                 host.emit(ExecutionDelta::Status {
                     message: "The session went quiet; Ostra reminded it to submit.".into(),
                 });
@@ -511,6 +533,7 @@ impl Executor for HarnessExecutor {
             return ExecutionResult::error("the harness executor was given a native route");
         };
         let live = self.live.register(spec.id.clone(), spec.agent, harness);
+        live.set_owes_reply(spec.ctx.owes_reply);
         if spec.resume.as_ref().is_some_and(|r| r.inspect) {
             live.set_inspect();
         }

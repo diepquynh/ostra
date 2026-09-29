@@ -61,6 +61,10 @@ pub enum ExploreOrigin {
         phase: u32,
         tests: bool,
     },
+    /// Rule H3: a helper a subagent started with `SubagentAsk`; only the asker waits for it.
+    Ask {
+        ask: ostra_core::ids::MessageId,
+    },
 }
 
 impl ExploreOrigin {
@@ -68,7 +72,7 @@ impl ExploreOrigin {
     pub fn loop_bound(&self) -> bool {
         matches!(
             self,
-            ExploreOrigin::Rescue { .. } | ExploreOrigin::LoopAnswer { .. }
+            ExploreOrigin::Rescue { .. } | ExploreOrigin::LoopAnswer { .. } | ExploreOrigin::Ask { .. }
         )
     }
 }
@@ -904,6 +908,12 @@ pub struct SessionState {
     pub interrupting: BTreeMap<ExecutionId, Interrupt>,
     /// Paused executions to resume, by [`purpose_key`] (Rule P2).
     pub resume_from: BTreeMap<String, ExecutionId>,
+    /// Rule H2: native runs that ended waiting for a message, by [`purpose_key`].
+    pub waiting_keys: BTreeMap<String, ExecutionId>,
+    /// Rule H8: questions between subagents, in the order they were asked.
+    pub asks: BTreeMap<ostra_core::ids::MessageId, crate::coord::Ask>,
+    /// Rule H1: each execution's subagent ID, for runs that continue another's conversation.
+    pub subagents: BTreeMap<ExecutionId, ExecutionId>,
     pub last_seq: i64,
     /// The session's short label: from the Classify decision, or fixed for an init session.
     pub title: Option<String>,
@@ -937,6 +947,7 @@ fn purpose_loop(purpose: &ExecPurpose) -> Option<(u32, bool)> {
 pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
     match purpose {
         ExecPurpose::Advise { .. } => StageKind::Rescue,
+        ExecPurpose::Consult { .. } => StageKind::Handoff,
         ExecPurpose::Explore { .. } => StageKind::Explore,
         ExecPurpose::Spec { .. } => StageKind::Spec,
         ExecPurpose::FactCheck {
@@ -1028,6 +1039,9 @@ impl SessionState {
             contained: None,
             interrupting: BTreeMap::new(),
             resume_from: BTreeMap::new(),
+            waiting_keys: BTreeMap::new(),
+            asks: BTreeMap::new(),
+            subagents: BTreeMap::new(),
             last_seq: 0,
             title: None,
         }
@@ -1387,12 +1401,20 @@ impl SessionState {
                     },
                 );
                 self.resume_from.remove(&purpose_key(purpose));
+                if let Some(from) = resumes {
+                    let root = self.subagent_of(from);
+                    self.subagents.insert(id.clone(), root);
+                }
                 if self.paused {
                     // Started in the window before the pause reached the runner.
                     self.interrupting.insert(id.clone(), Interrupt::Pause);
                 }
                 self.on_started(id, purpose, loop_key, false);
+                self.coord_started(id, purpose);
             }
+            SessionEvent::AgentAsked { .. }
+            | SessionEvent::AgentReplied { .. }
+            | SessionEvent::MessageDelivered { .. } => self.on_coord_event(&stored.event, at),
             SessionEvent::ExecutionResumed { id } => {
                 let Some(rec) = self.executions.get_mut(id) else {
                     return;
@@ -1401,6 +1423,7 @@ impl SessionState {
                 rec.ended_at = None;
                 let (purpose, loop_key) = (rec.purpose.clone(), rec.loop_key);
                 self.resume_from.remove(&purpose_key(&purpose));
+                self.waiting_keys.retain(|_, x| x != id);
                 // Rule P3: continuing is the user's "this was fine", so the count starts again.
                 self.signals.remove(id);
                 if self.paused {
@@ -1423,7 +1446,20 @@ impl SessionState {
                 if why == Some(Interrupt::ProjectCreated) {
                     self.restart_fresh.insert(id.clone());
                 }
-                self.on_finished(&rec, result);
+                if result.status == ExecutionStatus::Waiting {
+                    // Rule H2: the stage sees a paused run, and the planner holds its spawn until
+                    // a message wakes this run in place.
+                    self.waiting_keys
+                        .insert(SessionState::waiting_key(&rec), id.clone());
+                    let paused = ExecutionResult {
+                        status: ExecutionStatus::Interrupted,
+                        ..result.clone()
+                    };
+                    self.on_finished(&rec, &paused);
+                } else {
+                    self.on_finished(&rec, result);
+                }
+                self.coord_finished(&rec, result);
             }
             SessionEvent::GateOpened {
                 id,
@@ -1574,7 +1610,7 @@ impl SessionState {
         }
     }
 
-    fn push_explore(&mut self, project: String, task: String, origin: ExploreOrigin) -> u32 {
+    pub(crate) fn push_explore(&mut self, project: String, task: String, origin: ExploreOrigin) -> u32 {
         let idx = self.explore.len() as u32;
         self.explore.push(ExploreTask {
             idx,

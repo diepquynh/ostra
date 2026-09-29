@@ -230,6 +230,11 @@ records only the new turn, and the request it sends starts with the same message
 the provider's prompt cache still covers that prefix while the cache lives. A run resumed from a different
 execution, such as a retry after a failure, copies the whole rebuilt transcript into its own.
 
+The same two paths serve subagent coordination. A `SubagentAsk` ends the run with status `waiting`, its tool
+result recorded like a submit's, and the answer later resumes it in place with the answer as the note. A pair-loop
+round or a consult run continues another execution's conversation, so it copies that transcript and adds the new
+spawn block as the note.
+
 ### Cost
 
 Each response's usage is added to a running total and emitted at once, so the cost in the header moves while
@@ -423,6 +428,11 @@ half second. On each pass it checks the following:
   - "unknown model" or "failed to construct executor" ends the run as a launch failure.
 - **Quiet.** A session with no hook event and no terminal output for 4 minutes is nudged: Ostra types the
   submit instruction into the terminal, as if you had. After two nudges it ends the run as an error.
+- **Waiting.** After a `subagent_ask` or a `subagent_reply` that goes back to waiting, the loop stops supervising
+  and waits for the engine's message. A message that is a question marks the run as owing an answer, so its
+  turned-back Stops and typed nudges name `subagent_reply` and its submit is refused until it replies. It frees the run's execution slot while it waits, a Stop without a submit is
+  let through, and the wait is added to the deadline. The message is typed into the terminal, and supervising
+  resumes. A `subagent_reply` from a consult run is recorded like a submit and ends the run.
 - **The budget.** Past `timeout_secs`, the run ends.
 
 The terminal itself is a `vt100` screen model kept in the server (`pty.rs`). A browser that attaches in the

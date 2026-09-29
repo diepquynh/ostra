@@ -10,6 +10,7 @@ pub mod bridge;
 pub mod code;
 pub mod code_watch;
 pub mod commands;
+pub mod coord;
 pub mod credentials;
 pub mod env;
 pub mod files;

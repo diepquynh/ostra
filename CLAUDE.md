@@ -164,6 +164,12 @@ cd tests/browser && npm test                # browser security suite: the consol
 - Advisor evals (`tests/evals/advisor.toml`, run by `crates/ostra-server/tests/advisor_evals.rs`) run the real
   advisor agent on failed init steps laid out on disk, 5 runs per model by default, and grade each decision:
   `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 cargo test -p ostra-server --test advisor_evals -- --ignored --nocapture`.
+- Coordination evals (`tests/evals/coordination.toml`, run by `crates/ostra-server/tests/coordination_evals.rs`) run real
+  sessions on a snapshot of this repository with scripted judges; only the runs a case lists go live. Tiers 1 to 3
+  (`OSTRA_EVAL_TIERS`), 3 runs per model by default:
+  `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 cargo test -p ostra-server --test coordination_evals -- --ignored --nocapture`.
+  Its offline test replays every case with stand-ins, so run the normal suite after editing a case. The harness wait is
+  checked live with `harness_probe wake <harness> <model> <dir>` (`crates/ostra-exec-harness/examples/`).
 
 ## Live runs cost money
 

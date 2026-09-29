@@ -4,7 +4,8 @@
 use crate::agent::{AgentName, InitializerMode};
 use crate::exec::ExecutionResult;
 use crate::executor::{ExecutorKind, HarnessKind};
-use crate::ids::{DecisionId, ExecutionId, GateId};
+use crate::coord::{AskTarget, DeliveryKind};
+use crate::ids::{DecisionId, ExecutionId, GateId, MessageId};
 use crate::pipeline::{PhaseInfo, Question, QuestionAnswer, StageKind, Track};
 use crate::policy::{PermissionAnswer, RuleRef, ToolCall};
 use crate::submit::{FactCheckFinding, ReviewFinding};
@@ -214,6 +215,11 @@ pub enum ExecPurpose {
         execution: ExecutionId,
         round: u32,
     },
+    /// Rule H3: subagent `subagent` answers question `ask` in a run that continues its conversation.
+    Consult {
+        subagent: ExecutionId,
+        ask: MessageId,
+    },
 }
 
 impl ExecPurpose {
@@ -257,6 +263,7 @@ impl ExecPurpose {
             ExecPurpose::QuickAnswer => "Answer".into(),
             ExecPurpose::Inspect { .. } => "Read-only session".into(),
             ExecPurpose::Advise { project, .. } => format!("Advice for {project}"),
+            ExecPurpose::Consult { .. } => "Answer".into(),
             ExecPurpose::Init { mode, item: i } => match mode {
                 InitializerMode::Detect => "Detect the stack".into(),
                 InitializerMode::Adopt => "Adopt a bootstrap".into(),
@@ -631,6 +638,25 @@ pub enum SessionEvent {
     /// conversation, Activity, and usage.
     ExecutionResumed {
         id: ExecutionId,
+    },
+    /// Rule H8: a run asked a helper or another subagent, and waits for the answer.
+    AgentAsked {
+        id: MessageId,
+        from: ExecutionId,
+        target: AskTarget,
+        message: String,
+    },
+    /// Rule H8: a run answered question `ask`.
+    AgentReplied {
+        ask: MessageId,
+        from: ExecutionId,
+        message: String,
+    },
+    /// Rule H8: Ostra handed the question or the answer of `ask` to run `to`.
+    MessageDelivered {
+        ask: MessageId,
+        to: ExecutionId,
+        kind: DeliveryKind,
     },
     ExecutionFinished {
         id: ExecutionId,

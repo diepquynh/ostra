@@ -663,7 +663,7 @@ Example input:
    state an imperative rule. That is not the spec choosing an implementation. It is the spec carrying a
    constraint the implementation has no freedom about, from the page that was actually fetched, to the agents
    that cannot fetch it. Requirements themselves stay WHAT-level and reference the constraint by `E{n}`.
-5. No delegation, no subprocesses. Do your own work and submit the result.
+5. No delegation, no subprocesses. Do your own work and submit the result. Ask other agents only through the subagent tools, as the subagent coordination section describes.
 6. **Total coverage.** Every criterion you derive in Step 2A is covered by at least one requirement (S1).
    Never drop one, and never add a requirement no criterion asked for (S8).
 7. **You derive the criteria.** No agent hands you a criteria list. Break the request down yourself in Step 2A

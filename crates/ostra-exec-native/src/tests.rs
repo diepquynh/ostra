@@ -143,6 +143,8 @@ fn spec(
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         },
         resume: None,
         harness_session_id: None,
@@ -764,4 +766,95 @@ fn webfetch_hosts_takes_exact_domain_rules() {
         ostra_tools::webfetch_hosts(&rules),
         vec!["localhost", "10.0.0.5"]
     );
+}
+
+/// Answers coordination calls the way the engine does: an ask waits, a reply ends a consult.
+struct FakeCoord;
+
+#[async_trait::async_trait]
+impl ostra_tools::Coordinate for FakeCoord {
+    async fn call(
+        &self,
+        tool: &str,
+        _input: &Value,
+    ) -> Result<ostra_core::coord::CoordReply, String> {
+        let end = match tool {
+            "SubagentAsk" => RunEnd::Wait,
+            "SubagentReply" => RunEnd::Finish,
+            _ => RunEnd::Continue,
+        };
+        Ok(ostra_core::coord::CoordReply {
+            text: format!("{tool} done"),
+            end,
+        })
+    }
+}
+
+struct FakeCoordConnector;
+
+impl CoordConnector for FakeCoordConnector {
+    fn open(&self, _spec: &ExecutionSpec) -> Option<Arc<dyn ostra_tools::Coordinate>> {
+        Some(Arc::new(FakeCoord))
+    }
+}
+
+#[tokio::test]
+async fn an_ask_ends_the_run_waiting_and_a_consult_reply_ends_it_ok() {
+    let f = fixture();
+    let caps = vec![Capability::Read, Capability::Coordinate];
+    let p = ScriptedProvider::new();
+    p.push_tool_use("SubagentList", json!({}));
+    p.push_tool_use("SubagentAsk", json!({"message": "why?", "agent": "explore"}));
+    let (exec, p) = executor(p);
+    let exec = exec.with_coord(Arc::new(FakeCoordConnector));
+    let s = spec(&f, AgentName::GenerateSpec, PermissionMode::Default, caps.clone());
+    let host = Arc::new(FakeHost::default());
+    let r = exec.run(s, host.clone(), CancellationToken::new()).await;
+    assert_eq!(r.status, ExecutionStatus::Waiting, "{:?}", r.error);
+    assert_eq!(r.submit.unwrap()["coordination"], "SubagentAsk");
+    assert_eq!(p.requests().len(), 2, "the run stops at the ask, with no model call after it");
+    let last = host.messages.lock().last().cloned().unwrap();
+    assert!(last.1.to_string().contains("SubagentAsk done"), "the ask's result is recorded");
+
+    let p = ScriptedProvider::new();
+    p.push_tool_use("SubagentReply", json!({"message": "because"}));
+    let (exec, _) = executor(p);
+    let exec = exec.with_coord(Arc::new(FakeCoordConnector));
+    let s = spec(&f, AgentName::GenerateSpec, PermissionMode::Default, caps);
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
+    assert_eq!(r.status, ExecutionStatus::Ok);
+    assert_eq!(r.submit.unwrap()["message"], "because");
+}
+
+#[tokio::test]
+async fn a_run_that_owes_an_answer_is_reminded_to_reply_and_cannot_submit() {
+    let f = fixture();
+    let p = ScriptedProvider::new();
+    p.push(response(vec![Block::text("I think the answer is 42.")], StopReason::EndTurn));
+    p.push_tool_use("submit_generate_spec", json!({"spec_path": "/x", "open_questions": [], "external_evidence_rows": 0, "deliverables": 1, "requirements": 1, "summary": "s"}));
+    p.push_tool_use("SubagentReply", json!({"message": "42"}));
+    let (exec, p) = executor(p);
+    let exec = exec.with_coord(Arc::new(FakeCoordConnector));
+    let mut s = spec(
+        &f,
+        AgentName::GenerateSpec,
+        PermissionMode::Default,
+        vec![Capability::Read, Capability::Coordinate],
+    );
+    s.ctx.owes_reply = true;
+    let r = exec
+        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+        .await;
+    assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
+    assert_eq!(r.submit.unwrap()["coordination"], "SubagentReply");
+    let reqs = p.requests();
+    let reminder = reqs[1].messages.last().unwrap();
+    assert!(
+        matches!(&reminder.content[0], Block::Text { text } if text.contains("SubagentReply")),
+        "the reminder names the reply tool: {reminder:?}"
+    );
+    let (denied, is_err) = &tool_results(&reqs[2])[0];
+    assert!(*is_err && denied.contains("reply-first"), "{denied}");
 }

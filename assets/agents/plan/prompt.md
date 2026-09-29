@@ -616,7 +616,7 @@ Example input:
 2. Read-only on project files. The only files you create are the master plan and phase files in the session
    dir, and you write them only through {{tool_document}}.
 3. No code in plans. Prose requirements only. Defer all patterns and templates to the skills you name.
-4. No delegation, no subprocesses. Do your own planning and submit the result.
+4. No delegation, no subprocesses. Do your own planning and submit the result. Ask other agents only through the subagent tools, as the subagent coordination section describes.
 5. Codebase-grounded steps: every path is verified or derived from real structure. Never guess a path.
 6. **The spec file is the only requirements source.** Never plan from a research document, never re-derive a
    requirement the spec states, and never contradict one. If the prompt names such a document, ignore it and

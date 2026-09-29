@@ -59,6 +59,10 @@ What holds a slot and what does not:
 
 - **Holds a slot:** every agent execution a session spawns, on any executor, native or harness. The limit is
   per workspace, so two sessions in the same workspace share it.
+- **Gives its slot back while it waits:** a harness run that asked another subagent a question and waits with its
+  process alive (Rule H2). It takes a slot again before the answer is typed in. A native run that asks ends
+  instead, so it holds nothing while it waits. Without this, a limit of one would leave the asker holding the only
+  slot and the helper it waits for unable to start.
 - **Does not hold a slot:** judge calls, which are single structured requests the engine makes between steps,
   and side-panel quick answers, which run outside any session. Both are short and run on the `fast` or
   `balanced` tier by default.
@@ -221,6 +225,14 @@ slot limiter comes into play. The init flow has two:
 
 Each generated skill runs on the `advanced` tier, so the second cap bounds the most expensive part of init.
 Under YOLO the proposal's defaults are used as they are, so the cap holds there too.
+
+Questions between subagents can start runs too, so they have caps of their own (Rule H4). One run may start at
+most three explore helpers (`coord::MAX_HELPERS_PER_RUN`), and a session may ask at most 24 questions
+(`coord::MAX_SESSION_ASKS`). A helper cannot start helpers, which keeps the fan-out one level deep. Helpers and the
+consult runs that answer a question go through the slot limiter and the budget guard like every other spawn. A
+pair loop that continues a conversation is not a new fan-out, but a conversation that reaches six runs
+(`coord::MAX_CONVERSATION_RUNS`) starts fresh, because every turn of a long conversation re-sends its whole
+history.
 
 The engine has other loop limits that bound spend: a cap on review passes per implement loop, one automatic retry after
 an error, three sufficiency rounds for research, and a guard that refuses build commands after five failing

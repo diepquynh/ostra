@@ -52,6 +52,7 @@ fn spawn(
             ..Default::default()
         },
         resumes: None,
+        continues: None,
     }))
 }
 
@@ -287,6 +288,7 @@ pub fn advisor_request(a: AdviceInputs) -> SpawnRequest {
             ..Default::default()
         },
         resumes: None,
+        continues: None,
     }
 }
 

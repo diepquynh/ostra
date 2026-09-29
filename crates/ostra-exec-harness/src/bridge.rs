@@ -6,6 +6,7 @@ use crate::adapters::{self, Decision, PreParse};
 use crate::live::{LiveExecution, LiveRegistry, StopVerdict};
 use crate::protocol::*;
 use crate::services::BridgeServices;
+use ostra_core::coord::RunEnd;
 use ostra_core::policy::{PolicyDecision, RuleRef, ToolCall};
 use ostra_core::submit::{submit_description, submit_schema, validate_submit};
 use ostra_core::{ExecutionId, HarnessKind};
@@ -219,6 +220,12 @@ impl HarnessBridge {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let mut args = params.get("arguments").cloned().unwrap_or(json!({}));
         if name == live.agent.submit_tool_name() {
+            // Rule H3: a run woken with a question replies before it submits.
+            if live.owes_reply() {
+                return tool_error(&ostra_core::coord::reply_instruction(
+                    ostra_core::coord::reply_tool(ostra_core::ExecutorKind::Harness(live.harness)),
+                ));
+            }
             ostra_core::args::coerce_json_strings(&mut args, &submit_schema(live.agent));
             if let Err(message) = validate_submit(live.agent, &args) {
                 return tool_error(&format!(
@@ -248,8 +255,22 @@ impl HarnessBridge {
         if let Decision::Deny { reason } = self.decide(live, &call).await {
             return tool_error(&reason);
         }
-        match self.services.mcp_call(&live.id, name, args).await {
-            Ok(text) => tool_text(&text),
+        match self.services.mcp_call(&live.id, name, args.clone()).await {
+            Ok(out) => {
+                match out.end {
+                    RunEnd::Continue => {}
+                    // Rule H2: the process stays up and the answer is typed in when it arrives.
+                    RunEnd::Wait => {
+                        live.set_owes_reply(false);
+                        live.set_waiting(true);
+                    }
+                    RunEnd::Finish => {
+                        let message = args.get("message").and_then(Value::as_str).unwrap_or_default();
+                        live.record_submit(ostra_core::coord::end_payload(&call.tool, message));
+                    }
+                }
+                tool_text(&out.text)
+            }
             Err(text) => tool_error(&text),
         }
     }
@@ -555,8 +576,8 @@ mod tests {
                 vec![]
             }
         }
-        async fn mcp_call(&self, _: &ExecutionId, tool: &str, _: Value) -> Result<String, String> {
-            Ok(format!("ran {tool}"))
+        async fn mcp_call(&self, _: &ExecutionId, tool: &str, _: Value) -> Result<crate::McpOut, String> {
+            Ok(crate::McpOut::text(format!("ran {tool}")))
         }
         fn mcp_tools(&self, _: &ExecutionId) -> Vec<(String, String, Value)> {
             vec![(

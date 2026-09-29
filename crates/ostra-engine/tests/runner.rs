@@ -24,7 +24,7 @@ use std::time::Duration;
 
 struct Fake {
     ws: WorkspaceSettings,
-    executor: Arc<Scripted>,
+    executor: Arc<dyn Executor>,
     notices: Mutex<Vec<Notice>>,
 }
 
@@ -49,7 +49,7 @@ impl Services for Fake {
         self.ws.clone()
     }
     fn executor(&self, kind: ExecutorKind) -> Option<Arc<dyn Executor>> {
-        (kind == ExecutorKind::Native).then(|| self.executor.clone() as Arc<dyn Executor>)
+        (kind == ExecutorKind::Native).then(|| self.executor.clone())
     }
     fn factory(&self) -> Arc<dyn SpawnFactory> {
         Arc::new(AgentsFactory)
@@ -421,4 +421,135 @@ async fn init_session_start_and_end_notify_project_changes() {
         }
     }
     assert_eq!(changes, 2);
+}
+
+/// Rules H2 and H5: the first spec run asks an explore helper and waits; the first fact-check
+/// fails, so the author and then the checker continue their conversations.
+struct Coordinating {
+    inner: Scripted,
+    engine: std::sync::OnceLock<Engine>,
+    log: Mutex<Vec<(AgentName, ostra_core::ids::ExecutionId, Option<ostra_core::exec::ResumeInfo>)>>,
+}
+
+#[async_trait]
+impl Executor for Coordinating {
+    async fn run(
+        &self,
+        spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        cancel: CancellationToken,
+    ) -> ExecutionResult {
+        let seen = {
+            let mut log = self.log.lock().unwrap();
+            let seen = log.iter().filter(|(a, _, _)| *a == spec.agent).count();
+            log.push((spec.agent, spec.id.clone(), spec.resume.clone()));
+            seen
+        };
+        match (spec.agent, seen) {
+            (AgentName::GenerateSpec, 0) => {
+                let engine = self.engine.get().unwrap();
+                let session = spec.ctx.session_id.clone().unwrap();
+                let reply = engine
+                    .coordinate(
+                        &session,
+                        &spec.id,
+                        ostra_core::coord::SUBAGENT_ASK,
+                        &json!({"message": "How are greetings localized?", "agent": "explore"}),
+                    )
+                    .unwrap();
+                assert_eq!(reply.end, ostra_core::coord::RunEnd::Wait);
+                let mut r = ExecutionResult::with_status(ExecutionStatus::Waiting);
+                r.submit = Some(ostra_core::coord::end_payload("SubagentAsk", "q"));
+                r
+            }
+            (AgentName::FactCheck, 0) => ExecutionResult {
+                status: ExecutionStatus::Ok,
+                submit: Some(json!({"verdict": "FAIL", "target": "spec", "findings": [{"severity": "HIGH", "location": "R1", "claim": "c", "issue": "R1 names a missing file"}]})),
+                final_text: String::new(),
+                usage: Usage::default(),
+                native_session_id: None,
+                error: None,
+            },
+            _ => self.inner.run(spec, host, cancel).await,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = project(dir.path());
+    let ws_root = dir.path().join("ws");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    let mut ws = WorkspaceSettings::seeded("t");
+    ws.limits.max_parallel_executions = 1;
+    ws.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app.clone(),
+        stack: None,
+        code_provider: None,
+        language_servers: vec![],
+    });
+    let exec = Arc::new(Coordinating {
+        inner: Scripted {
+            root: app.clone(),
+            runs: Mutex::new(vec![]),
+        },
+        engine: std::sync::OnceLock::new(),
+        log: Mutex::new(vec![]),
+    });
+    let services = Arc::new(Fake {
+        ws,
+        executor: exec.clone(),
+        notices: Mutex::new(vec![]),
+    });
+    let db = WorkspaceDb::open_in_memory().unwrap();
+    let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
+    let _ = exec.engine.set(engine.clone());
+    let mut rx = engine.subscribe();
+    let summary = engine
+        .create_session(CreateSession {
+            request: "Add a greeting".into(),
+            options: SessionOptions {
+                yolo: true,
+                ..Default::default()
+            },
+            projects: vec![],
+            files: vec![],
+            uploads: vec![],
+        })
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !engine.state(&summary.id).unwrap().is_terminal() {
+        assert!(tokio::time::Instant::now() < deadline, "timed out: {:#?}", exec.log.lock().unwrap());
+        let _ = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
+    }
+    let st = engine.state(&summary.id).unwrap();
+    assert!(st.failed.is_none(), "failed: {:?}", st.failed);
+    let log = exec.log.lock().unwrap().clone();
+    let of = |agent: AgentName| -> Vec<_> { log.iter().filter(|(a, _, _)| *a == agent).cloned().collect() };
+    let specs = of(AgentName::GenerateSpec);
+    assert_eq!(specs.len(), 3, "{specs:#?}");
+    let (_, first, none) = &specs[0];
+    assert!(none.is_none());
+    // H2: woken in place with the helper's answer, even with a single execution slot.
+    let (_, woken, resume) = &specs[1];
+    assert_eq!(woken, first);
+    let resume = resume.as_ref().unwrap();
+    assert_eq!(&resume.from, first);
+    assert!(resume.note.as_ref().unwrap().contains("ostra-research-1.md"), "{resume:?}");
+    // H5: the fact-check failed, so the author continues its conversation in a new run.
+    let (_, revised, resume) = &specs[2];
+    assert_ne!(revised, first);
+    let resume = resume.as_ref().unwrap();
+    assert_eq!(&resume.from, first);
+    let note = resume.note.as_ref().unwrap();
+    assert!(note.contains("continues your conversation") && note.contains("R1 names a missing file"), "{note}");
+    let checks = of(AgentName::FactCheck);
+    assert_eq!(checks[1].2.as_ref().unwrap().from, checks[0].1, "the checker continues too");
+    assert_eq!(st.subagent_of(revised), *first);
+    let events = engine.db().events(&summary.id).unwrap();
+    assert!(events.iter().any(|e| matches!(e.event, SessionEvent::AgentAsked { .. })));
+    assert!(events.iter().any(|e| matches!(e.event, SessionEvent::MessageDelivered { .. })));
+    assert_eq!(of(AgentName::Explore).len(), 2, "the classify explore and the helper");
 }

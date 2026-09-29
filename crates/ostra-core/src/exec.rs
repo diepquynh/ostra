@@ -21,6 +21,8 @@ pub enum ExecutionStatus {
     Ok,
     Stuck,
     Handoff,
+    /// Rule H2: the run asked another subagent and waits for the answer.
+    Waiting,
     Error,
     Denied,
     Interrupted,
@@ -114,6 +116,13 @@ pub struct ExecContext {
     /// yet, so it runs from the workspace root and must create that project first.
     #[serde(default)]
     pub creates_project: bool,
+    /// Rule H3: a consult run answers a question and writes no file.
+    #[serde(default)]
+    pub answer_only: bool,
+    /// Rule H3: the run starts with a question from another subagent, so it answers with
+    /// `SubagentReply` and submits nothing before that.
+    #[serde(default)]
+    pub owes_reply: bool,
 }
 
 impl ExecContext {
@@ -261,6 +270,14 @@ pub enum ExecutionDelta {
     },
 }
 
+/// The message that wakes a waiting run (Rule H2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Wake {
+    pub note: String,
+    /// The message is a question the run must answer with `SubagentReply` (Rule H3).
+    pub owes_reply: bool,
+}
+
 /// Callbacks an executor uses while it runs. Implemented by the engine.
 #[async_trait::async_trait]
 pub trait ExecutionHost: Send + Sync {
@@ -285,6 +302,12 @@ pub trait ExecutionHost: Send + Sync {
     /// Whether the session is under YOLO right now (it can be toggled mid-execution).
     fn yolo(&self) -> bool {
         false
+    }
+
+    /// Rule H2: a harness run that asked another subagent waits here, with its execution slot
+    /// freed, until Ostra has the message that wakes it. `None` means no message will come.
+    async fn wait_for_wake(&self) -> Option<Wake> {
+        None
     }
 }
 

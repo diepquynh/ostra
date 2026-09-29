@@ -221,7 +221,8 @@ pub fn agy_tools(caps: &[Capability]) -> Vec<&'static str> {
             | Capability::Memory
             | Capability::MemoryRecall
             | Capability::Code
-            | Capability::ManageProjects => {}
+            | Capability::ManageProjects
+            | Capability::Coordinate => {}
         }
     }
     out

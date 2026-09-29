@@ -24,6 +24,7 @@ export const RUN_TONE: Record<ExecutionStatus, Tone> = {
   error: "bad",
   denied: "bad",
   interrupted: "warn",
+  waiting: "info",
   cancelled: "neutral",
 };
 

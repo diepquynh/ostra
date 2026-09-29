@@ -7,6 +7,10 @@
 //! does them: it cancels the run during a slow step, then resumes the harness session with the note
 //! "Continue the workflow." and checks the task finishes.
 //!
+//! `harness_probe wake <harness> <model> <scratch-dir>` checks the subagent wait (Rule H2): the agent asks twice with
+//! `subagent_ask`, the process stays alive while it waits, the answer is typed into its terminal after a delay, and
+//! the agent must submit both answers.
+//!
 //! With `PROBE_CODE` set, the repo gets a small Rust project, the bridge serves the real code
 //! navigation tools over an index of it, and the agent is asked to call `code_implementations`.
 
@@ -33,7 +37,8 @@ impl Log {
     }
 }
 
-struct Services(Arc<Log>, Option<Code>);
+/// The log, the code index for `PROBE_CODE`, and whether the subagent tools are served (`wake`).
+struct Services(Arc<Log>, Option<Code>, bool);
 
 /// The code navigation tools over the probe repo, served the way the server's bridge serves them.
 struct Code {
@@ -106,10 +111,22 @@ impl BridgeServices for Services {
         self.0.line(json!({"observe": call, "outcome": outcome}));
         vec![]
     }
-    async fn mcp_call(&self, _: &ExecutionId, tool: &str, args: Value) -> Result<String, String> {
+    async fn mcp_call(
+        &self,
+        _: &ExecutionId,
+        tool: &str,
+        args: Value,
+    ) -> Result<ostra_exec_harness::McpOut, String> {
         self.0.line(json!({"mcp_call": tool, "args": args}));
+        // Rule H2: an ask makes the run wait with its process alive, as the engine's answer does.
+        if self.2 && tool == "subagent_ask" {
+            return Ok(ostra_exec_harness::McpOut {
+                text: ostra_core::coord::waiting_text("the explore helper", true),
+                end: ostra_core::coord::RunEnd::Wait,
+            });
+        }
         let Some(code) = &self.1 else {
-            return Ok("ok".into());
+            return Ok(ostra_exec_harness::McpOut::text("ok"));
         };
         let native = ostra_core::agent::CODE_TOOLS
             .iter()
@@ -120,9 +137,20 @@ impl BridgeServices for Services {
             ostra_code::tools::run(ix, native, &args)
         });
         self.0.line(json!({"mcp_result": out}));
-        out
+        out.map(ostra_exec_harness::McpOut::text)
     }
     fn mcp_tools(&self, _: &ExecutionId) -> Vec<(String, String, Value)> {
+        if self.2 {
+            return ostra_tools::definitions(&[Capability::Coordinate])
+                .into_iter()
+                .filter_map(|d| {
+                    ostra_core::coord::COORD_TOOLS
+                        .iter()
+                        .find(|(_, n)| *n == d.name)
+                        .map(|(name, _)| (name.to_string(), d.description, d.input_schema))
+                })
+                .collect();
+        }
         if self.1.is_none() {
             return vec![];
         }
@@ -201,6 +229,7 @@ async fn main() {
         Some("run") | Some("resume") => {}
         Some("pause") => return pause_probe(&args).await,
         Some("inspect") => return inspect_probe(&args).await,
+        Some("wake") => return wake_probe(&args).await,
         _ => {
             eprintln!("usage: harness_probe run <harness> <model> <scratch-dir> [timeout-secs]");
             std::process::exit(2);
@@ -244,7 +273,7 @@ async fn main() {
         harden_setup(&repo, log.clone());
     }
     let live = LiveRegistry::new();
-    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), code)), live.clone());
+    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), code, false)), live.clone());
     let app = App {
         bridge,
         log: log.clone(),
@@ -362,6 +391,8 @@ async fn main() {
             },
             sandbox_blocked_ports: vec![],
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         },
         resume: resume_sid.map(|sid| ResumeInfo {
             from: ExecutionId::new(),
@@ -534,7 +565,7 @@ async fn pause_probe(args: &[String]) {
         std::fs::File::create(dir.join(format!("{harness}-pause-events.jsonl"))).unwrap(),
     )));
     let live = LiveRegistry::new();
-    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), None)), live.clone());
+    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), None, false)), live.clone());
     let app = App {
         bridge,
         log: log.clone(),
@@ -613,6 +644,8 @@ async fn pause_probe(args: &[String]) {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         },
         resume,
         harness_session_id: sid,
@@ -712,7 +745,7 @@ async fn inspect_probe(args: &[String]) {
         std::fs::File::create(dir.join(format!("{harness}-inspect-events.jsonl"))).unwrap(),
     )));
     let live = LiveRegistry::new();
-    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), None)), live.clone());
+    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), None, false)), live.clone());
     let app = App {
         bridge,
         log: log.clone(),
@@ -772,6 +805,8 @@ async fn inspect_probe(args: &[String]) {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
+            answer_only: false,
+            owes_reply: false,
         },
         resume: Some(ResumeInfo {
             from: ExecutionId::new(),
@@ -804,4 +839,171 @@ async fn inspect_probe(args: &[String]) {
         "---- screen before typing ----\n{before}\n---- screen after the question ----\n{after}"
     );
     println!("status={:?} denied_tool_calls={checks}", result.status);
+}
+
+/// Answers each wait of the wake probe after a delay, the way the engine hands over a helper's answer.
+struct WakeHost {
+    log: Arc<Log>,
+    notes: Mutex<Vec<String>>,
+    waits: Mutex<Vec<(std::time::Instant, f64)>>,
+    started: std::time::Instant,
+}
+
+#[async_trait::async_trait]
+impl ExecutionHost for WakeHost {
+    fn emit(&self, delta: ExecutionDelta) {
+        eprintln!("delta: {delta:?}");
+        self.log.line(json!({"delta": delta}));
+    }
+    async fn ask_permission(&self, _: &ToolCall, _: &str, _: &RuleRef) -> PermissionAnswer {
+        PermissionAnswer::AllowOnce
+    }
+    async fn wait_for_wake(&self) -> Option<Wake> {
+        let at = self.started.elapsed().as_secs_f64();
+        eprintln!("probe: the run waits ({at:.0}s in)");
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        self.waits.lock().unwrap().push((std::time::Instant::now(), at));
+        let note = {
+            let mut n = self.notes.lock().unwrap();
+            (!n.is_empty()).then(|| n.remove(0))
+        };
+        self.log.line(json!({"wake": note}));
+        note.map(|note| Wake {
+            note,
+            owes_reply: false,
+        })
+    }
+}
+
+async fn wake_probe(args: &[String]) {
+    let harness: HarnessKind = args[1].parse().unwrap();
+    let model = args[2].clone();
+    let dir = PathBuf::from(&args[3]);
+    let repo = dir.join("repo");
+    let session_root = dir.join("ws/.ostra/sessions/s_probe");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::create_dir_all(&session_root).unwrap();
+    let log = Arc::new(Log(Mutex::new(
+        std::fs::File::create(dir.join(format!("{harness}-wake-events.jsonl"))).unwrap(),
+    )));
+    let live = LiveRegistry::new();
+    let bridge = HarnessBridge::new(Arc::new(Services(log.clone(), None, true)), live.clone());
+    let app = App {
+        bridge,
+        log: log.clone(),
+    };
+    let router = Router::new()
+        .route("/internal/policy", post(policy))
+        .route("/internal/mcp", post(mcp))
+        .with_state(app);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let mut cfg = HarnessExecutorConfig::new(
+        GlobalConfig::default(),
+        std::env::current_exe().unwrap(),
+        url,
+    );
+    cfg.idle_nudge = std::time::Duration::from_secs(90);
+    let exec = HarnessExecutor::new(cfg, live, PtyRegistry::new());
+    let agent = AgentName::QuickAnswer;
+    let ask = if harness == HarnessKind::Claude {
+        "mcp__ostra__subagent_ask"
+    } else {
+        "subagent_ask"
+    };
+    let submit = if harness == HarnessKind::Claude {
+        format!("mcp__ostra__{}", agent.submit_tool_name())
+    } else {
+        agent.submit_tool_name()
+    };
+    let id = ExecutionId::new();
+    let spec = ExecutionSpec {
+        id: id.clone(),
+        agent,
+        route: ResolvedRoute {
+            executor: ExecutorKind::Harness(harness),
+            model,
+            tier: None,
+        },
+        effort: Effort::Low,
+        system_prompt: format!(
+            "You are an Ostra probe agent. Follow the user's steps exactly and do nothing else.\n\nThe `mcp__ostra__*` tools come from Ostra's `ostra` MCP server. If one is not in your tool list yet, load it with ToolSearch (`select:mcp__ostra__<tool>`) and then call it.\n\nWhen you call `{ask}`, Ostra answers later: end your turn as the tool result says, and the answer arrives as the next message. When the task is finished and you have called `{submit}`, reply with only `Done!`."
+        ),
+        first_message: format!(
+            "Do exactly these steps in order and nothing more:\n1. Call `{ask}` with agent \"explore\" and message \"What is the release codename?\"\n2. When its answer arrives, call `{ask}` with agent \"explore\" and message \"What is the release date?\"\n3. When that answer arrives, call `{submit}` with answer set to the codename and the date, and sources [\"explore helper\"]."
+        ),
+        capabilities: vec![Capability::Read, Capability::Coordinate],
+        submit_schema: ostra_core::submit::submit_schema(agent),
+        timeout_secs: 300,
+        ctx: ExecContext {
+            execution_id: id.clone(),
+            session_id: None,
+            agent,
+            initializer_mode: None,
+            executor: ExecutorKind::Harness(harness),
+            workspace_root: dir.join("ws"),
+            repo_root: repo.clone(),
+            project_key: "probe".into(),
+            session_dir: session_root.clone(),
+            session_root: session_root.clone(),
+            report_file: None,
+            phase: None,
+            yolo: false,
+            permission_mode: PermissionMode::Default,
+            permissions: PermissionRules::default(),
+            protected_paths: vec![],
+            memory_db: dir.join("memory.sqlite3"),
+            sandbox_mode: None,
+            sandbox_network: None,
+            sandbox_allowed_hosts: vec![],
+            sandbox_decoys: vec![],
+            sandbox_loopback: Default::default(),
+            sandbox_blocked_ports: vec![],
+            creates_project: false,
+            answer_only: false,
+            owes_reply: false,
+        },
+        resume: None,
+        harness_session_id: None,
+    };
+    let answer = |q: &str, a: &str| {
+        format!(
+            "The answer from the explore helper to your question arrived. Continue your task from here.\n\nYour question: {q}\n\nAnswer:\n{a}"
+        )
+    };
+    let host = Arc::new(WakeHost {
+        log: log.clone(),
+        notes: Mutex::new(vec![
+            answer(
+                "What is the release codename?",
+                "The release codename is BLUE-HERON-7.",
+            ),
+            answer("What is the release date?", "The release date is 2026-10-14."),
+        ]),
+        waits: Mutex::new(vec![]),
+        started: std::time::Instant::now(),
+    });
+    let transcript = ostra_core::paths::terminal_transcript(&spec.ctx.session_root, id.as_str());
+    let result = exec.run(spec, host.clone(), CancellationToken::new()).await;
+    let _ = std::fs::copy(transcript, dir.join(format!("{harness}-wake-terminal.bin")));
+    println!("{}", serde_json::to_string_pretty(&result).unwrap());
+    let text = result
+        .submit
+        .as_ref()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let waits = host.waits.lock().unwrap().len();
+    let ok = result.status == ExecutionStatus::Ok
+        && text.contains("BLUE-HERON-7")
+        && text.contains("2026-10-14")
+        && waits == 2;
+    println!(
+        "WAKE-PROBE {}: status {:?}, waits {waits}, submit {text}",
+        if ok { "PASS" } else { "FAIL" },
+        result.status
+    );
+    if !ok {
+        std::process::exit(1);
+    }
 }
