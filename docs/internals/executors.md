@@ -82,17 +82,20 @@ why both executors chase an agent that stops without calling it.
 ### What streams while it runs
 
 `ExecutionHost::emit` takes an `ExecutionDelta`, and the engine stores and broadcasts each one to the Activity
-view. The deltas are the same for both executors:
+view. The deltas are the same for both executors, except `turn`:
 
 - `text` and `thinking`: model output, buffered into readable chunks.
 - `tool_call`, `policy`, `tool_result`: one tool call, the decision the policy made on it, and what came back.
 - `tool_output`: live output of a running shell command, so you can watch a long build scroll.
 - `usage`: a running total of tokens and cost.
+- `turn`: the tokens and cost of one model response, not a total, and the IDs of the tool calls it made. Only
+  the native executor sends it.
 - `status`: a one-line note, such as "Bash runs without a sandbox" or "The session went quiet; Ostra reminded
   it to submit."
 - `native_session_id`: the harness CLI's own session id, once it is known.
 
-Because both executors emit the same deltas, the Activity view does not have a native mode and a harness mode.
+Because both executors emit the same deltas, the Activity view does not have a native mode and a harness mode;
+a harness run simply shows no per-response costs.
 A harness run also has a Terminal tab with its raw screen, which the native executor has no equivalent for.
 
 ## The native executor

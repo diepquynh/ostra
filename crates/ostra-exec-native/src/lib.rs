@@ -372,7 +372,11 @@ impl Run {
             .record_message(role_str(m.role), &content_json(&m.content));
     }
 
-    fn add_usage(&self, u: &Usage) {
+    fn add_usage(&self, u: &Usage, call_ids: Vec<String>) {
+        self.host.emit(ExecutionDelta::Turn {
+            usage: *u,
+            call_ids,
+        });
         let snapshot = {
             let mut total = self.usage.lock();
             total.add(u);
@@ -587,7 +591,12 @@ impl Run {
             };
             let mut usage = resp.usage;
             usage.context_tokens = context_of(&usage);
-            self.add_usage(&usage);
+            let call_ids = resp
+                .tool_uses()
+                .into_iter()
+                .map(|(id, _, _)| id.to_string())
+                .collect();
+            self.add_usage(&usage, call_ids);
             let text = resp.text();
             if !text.trim().is_empty() {
                 final_text = text.clone();
@@ -686,7 +695,7 @@ impl Run {
         let out = provider
             .compact(req, COMPACT_INSTRUCTIONS, self.cancel.clone())
             .await?;
-        self.add_usage(&out.usage);
+        self.add_usage(&out.usage, vec![]);
         self.host.emit(ExecutionDelta::Status {
             message: match out.messages {
                 Some(_) => "Compacted the conversation into a summary.".into(),

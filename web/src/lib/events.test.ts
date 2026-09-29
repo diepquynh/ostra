@@ -55,9 +55,43 @@ describe("activity folding", () => {
         },
       },
     ]);
-    expect(s.entries).toEqual([{ kind: "thinking", seq: 1, text: "ab" }]);
+    expect(s.entries).toEqual([{ kind: "thinking", seq: 1, text: "ab", turn: null }]);
     expect(s.nativeSessionId).toBe("abc");
     expect(s.usage?.cost_usd).toBe(0.1);
+  });
+
+  it("attaches each native response's cost to its thinking and splits it across its tool calls", () => {
+    const usage = (cost_usd: number) => ({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      cache_write_1h_tokens: 0,
+      cost_usd,
+      tool_calls: 0,
+      build_ms: 0,
+      context_tokens: 0,
+    });
+    const read = { tool: "Read", input: { file_path: "a" } };
+    const s = foldActivity([
+      { seq: 1, at: "", delta: { kind: "thinking", text: "first" } },
+      { seq: 2, at: "", delta: { kind: "turn", usage: usage(0.4), call_ids: ["a", "b"] } },
+      { seq: 3, at: "", delta: { kind: "tool_call", call_id: "a", call: read } },
+      { seq: 4, at: "", delta: { kind: "tool_call", call_id: "b", call: read } },
+      { seq: 5, at: "", delta: { kind: "thinking", text: "second" } },
+      { seq: 6, at: "", delta: { kind: "turn", usage: usage(0.1), call_ids: [] } },
+      { seq: 7, at: "", delta: { kind: "thinking", text: "third" } },
+      { seq: 8, at: "", delta: { kind: "turn", usage: usage(0.3), call_ids: [] } },
+      { seq: 9, at: "", delta: { kind: "turn", usage: usage(0.2), call_ids: [] } },
+    ]);
+    expect(s.entries).toMatchObject([
+      { kind: "thinking", text: "first", turn: { cost: 0.4, calls: 2 } },
+      { kind: "tool", callId: "a", cost: 0.2 },
+      { kind: "tool", callId: "b", cost: 0.2 },
+      { kind: "thinking", text: "second", turn: { cost: 0.1, calls: 0 } },
+      { kind: "thinking", text: "third", turn: { cost: 0.3, calls: 0 } },
+      { kind: "turn", turn: { cost: 0.2, calls: 0 } },
+    ]);
   });
 
   it("summarizes tool calls", () => {

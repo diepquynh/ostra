@@ -2,11 +2,17 @@ import { DiffView, StatusDot, ToolCall } from "@ostra/design";
 import { useLayoutEffect, useRef } from "react";
 import type { ToolCall as Call } from "../../api/types";
 import { Markdown } from "../../components/Markdown";
-import { type ActivityEntry, type ToolEntry, toolSummary } from "../../lib/events";
+import { type ActivityEntry, type ToolEntry, type TurnCost, toolSummary } from "../../lib/events";
 import { formatDuration, truncate } from "../../lib/format";
 import { diffStat, policyInfo, toolDiff } from "./model";
 
 const MAX_OUTPUT = 20000;
+
+/** Per-response costs are often under a cent, so they keep more digits than session totals. */
+export const formatTurnCost = (usd: number) => `$${usd.toFixed(usd < 0.01 ? 4 : 3)}`;
+
+const turnLabel = (t: TurnCost) =>
+  `${formatTurnCost(t.cost)} response${t.calls > 0 ? `, ${t.calls} tool call${t.calls === 1 ? "" : "s"}` : ""}`;
 
 const inputOf = (call: Call) => (call.input ?? {}) as Record<string, unknown>;
 
@@ -44,14 +50,14 @@ export function ActivityTool({ entry, summarize }: { entry: ToolEntry; summarize
     diff && entry.call.tool !== "ApplyPatch" ? `${summarize(entry.call)}  ${diffStat(diff)}` : summarize(entry.call);
   const policy = policyInfo(entry.policy);
   const state = !entry.done ? "running" : entry.isError ? "error" : "done";
+  const duration = [
+    entry.durationMs !== null ? formatDuration(entry.durationMs) : null,
+    entry.cost !== null ? `~${formatTurnCost(entry.cost)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <ToolCall
-      tool={entry.call.tool}
-      summary={summary}
-      state={state}
-      duration={entry.durationMs !== null ? formatDuration(entry.durationMs) : undefined}
-      policy={policy}
-    >
+    <ToolCall tool={entry.call.tool} summary={summary} state={state} duration={duration || undefined} policy={policy}>
       <ToolBody entry={entry} />
     </ToolCall>
   );
@@ -64,10 +70,12 @@ export function ActivityItem({ entry, summarize }: { entry: ActivityEntry; summa
     case "thinking":
       return (
         <details className="ex-thinking">
-          <summary>Thinking summary</summary>
+          <summary>Thinking summary{entry.turn && ` · ${turnLabel(entry.turn)}`}</summary>
           <div>{entry.text}</div>
         </details>
       );
+    case "turn":
+      return <div className="ex-status">Model response: {turnLabel(entry.turn)}</div>;
     case "text":
       return <Markdown text={entry.text} className="ex-text" />;
     case "tool":

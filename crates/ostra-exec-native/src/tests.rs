@@ -963,3 +963,42 @@ fn a_stored_compaction_replaces_the_messages_before_it() {
     assert!(matches!(&m[0].content[0], Block::Compaction { summary, .. } if summary == "S"));
     assert_eq!(m[1].content, vec![Block::text("After.")]);
 }
+
+#[tokio::test]
+async fn each_response_reports_its_own_cost_before_its_tool_calls() {
+    let f = fixture();
+    let p = ScriptedProvider::new();
+    let mut first = read_near_full(&f, 10);
+    first.usage.cost_usd = 0.25;
+    p.push(first);
+    let mut second = response(
+        vec![Block::ToolUse {
+            id: "s1".into(),
+            name: "submit_quick_answer".into(),
+            input: json!({"answer": "hello"}),
+        }],
+        StopReason::ToolUse,
+    );
+    second.usage.cost_usd = 0.5;
+    p.push(second);
+    let (exec, _) = executor(p);
+    let host = Arc::new(FakeHost::default());
+    let r = exec.run(quick(&f), host.clone(), CancellationToken::new()).await;
+    assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
+    assert_eq!(r.usage.cost_usd, 0.75);
+
+    let d = host.deltas.lock();
+    let turns: Vec<(f64, Vec<String>)> = d
+        .iter()
+        .filter_map(|d| match d {
+            ExecutionDelta::Turn { usage, call_ids } => Some((usage.cost_usd, call_ids.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(turns, vec![(0.25, vec!["r10".into()]), (0.5, vec!["s1".into()])]);
+    let at = |pred: &dyn Fn(&ExecutionDelta) -> bool| d.iter().position(pred).unwrap();
+    assert!(
+        at(&|d| matches!(d, ExecutionDelta::Turn { .. }))
+            < at(&|d| matches!(d, ExecutionDelta::ToolCall { call_id, .. } if call_id == "r10"))
+    );
+}

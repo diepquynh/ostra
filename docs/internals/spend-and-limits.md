@@ -114,7 +114,11 @@ confirm prices are in place.
 ### Native and harness executions
 
 - **Native executions** get usage from each provider response, and the provider client prices every response
-  as it arrives.
+  as it arrives. Each response's own cost is also written to the Activity feed as a `turn` delta, emitted after
+  the response's thinking and before its tool calls run. The execution screen shows it on that response's
+  thinking summary, and gives each tool call the response made an equal share of it, marked with `~` because
+  a response is billed as a whole: its prompt, thinking, and every call it wrote. A response with no thinking
+  and no calls, such as a compaction, gets a line of its own.
 - **Harness executions** get usage from the CLI's own transcript, which Ostra follows while the CLI runs:
   - Claude Code writes usage per assistant message. Ostra keeps the last usage seen for each message id, so a
     message streamed in parts is counted once.

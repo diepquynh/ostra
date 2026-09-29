@@ -29,12 +29,18 @@ export type ToolEntry = {
   isError: boolean;
   durationMs: number | null;
   done: boolean;
+  /** An even share of the cost of the native model response that made this call. */
+  cost: number | null;
 };
+
+/** Cost of one native model response, and how many tool calls it made. */
+export type TurnCost = { cost: number; calls: number };
 
 export type ActivityEntry =
   | { kind: "text"; seq: number; text: string }
-  | { kind: "thinking"; seq: number; text: string }
+  | { kind: "thinking"; seq: number; text: string; turn: TurnCost | null }
   | { kind: "status"; seq: number; message: string }
+  | { kind: "turn"; seq: number; turn: TurnCost }
   | ToolEntry;
 
 export type ActivityState = {
@@ -42,9 +48,20 @@ export type ActivityState = {
   lastSeq: number;
   usage: Usage | null;
   nativeSessionId: string | null;
+  /** Index of the first entry of the current model response. */
+  turnStart: number;
+  /** Tool calls of the latest response that have not arrived yet, with their share of its cost. */
+  pending: { ids: string[]; share: number };
 };
 
-export const emptyActivity = (): ActivityState => ({ entries: [], lastSeq: 0, usage: null, nativeSessionId: null });
+export const emptyActivity = (): ActivityState => ({
+  entries: [],
+  lastSeq: 0,
+  usage: null,
+  nativeSessionId: null,
+  turnStart: 0,
+  pending: { ids: [], share: 0 },
+});
 
 /**
  * Apply one delta. Consecutive text or thinking deltas merge into one block, tool calls collect
@@ -68,14 +85,16 @@ export function applyDelta(state: ActivityState, seq: number, delta: ExecutionDe
   };
   let usage = state.usage;
   let nativeSessionId = state.nativeSessionId;
+  let { turnStart, pending } = state;
+  const inTurn = last !== undefined && entries.length - 1 >= turnStart;
   switch (delta.kind) {
     case "text":
-      if (last && last.kind === "text") entries[entries.length - 1] = { ...last, text: last.text + delta.text };
+      if (inTurn && last.kind === "text") entries[entries.length - 1] = { ...last, text: last.text + delta.text };
       else entries.push({ kind: "text", seq, text: delta.text });
       break;
     case "thinking":
-      if (last && last.kind === "thinking") entries[entries.length - 1] = { ...last, text: last.text + delta.text };
-      else entries.push({ kind: "thinking", seq, text: delta.text });
+      if (inTurn && last.kind === "thinking") entries[entries.length - 1] = { ...last, text: last.text + delta.text };
+      else entries.push({ kind: "thinking", seq, text: delta.text, turn: null });
       break;
     case "status":
       entries.push({ kind: "status", seq, message: delta.message });
@@ -92,6 +111,7 @@ export function applyDelta(state: ActivityState, seq: number, delta: ExecutionDe
         isError: false,
         durationMs: null,
         done: false,
+        cost: pending.ids.includes(delta.call_id) ? pending.share : null,
       });
       break;
     case "policy":
@@ -112,11 +132,26 @@ export function applyDelta(state: ActivityState, seq: number, delta: ExecutionDe
     case "usage":
       usage = delta.usage;
       break;
+    case "turn": {
+      const turn = { cost: delta.usage.cost_usd, calls: delta.call_ids.length };
+      let thinking = false;
+      for (let i = entries.length - 1; i >= turnStart && !thinking; i--) {
+        const e = entries[i];
+        if (e.kind === "thinking") {
+          entries[i] = { ...e, turn };
+          thinking = true;
+        }
+      }
+      if (!thinking && turn.calls === 0) entries.push({ kind: "turn", seq, turn });
+      pending = { ids: delta.call_ids, share: turn.calls > 0 ? turn.cost / turn.calls : 0 };
+      turnStart = entries.length;
+      break;
+    }
     case "native_session_id":
       nativeSessionId = delta.id;
       break;
   }
-  return { entries, lastSeq: seq, usage, nativeSessionId };
+  return { entries, lastSeq: seq, usage, nativeSessionId, turnStart, pending };
 }
 
 export function foldActivity(items: ActivityItem[], start: ActivityState = emptyActivity()): ActivityState {

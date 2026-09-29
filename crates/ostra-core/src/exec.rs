@@ -258,6 +258,12 @@ pub enum ExecutionDelta {
     Usage {
         usage: Usage,
     },
+    /// One model response of a native run: its own usage and cost, not the running total, and
+    /// the tool calls it made. Emitted after the response's thinking and text, before its calls.
+    Turn {
+        usage: Usage,
+        call_ids: Vec<String>,
+    },
     Status {
         message: String,
     },
