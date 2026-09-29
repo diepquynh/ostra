@@ -8,6 +8,7 @@ import type { ProjectView } from "./ProjectView";
 import type { ProviderStatus } from "./ProviderStatus";
 import type { SandboxStatus } from "./SandboxStatus";
 import type { SettingsFix } from "./SettingsFix";
+import type { ToolEnforcement } from "./ToolEnforcement";
 import type { ValidationIssue } from "./ValidationIssue";
 import type { WorkspaceId } from "./WorkspaceId";
 import type { WorkspaceSettings } from "./WorkspaceSettings";
@@ -47,4 +48,8 @@ sandbox: SandboxStatus,
  * The network choice and hosts from `[sandbox]` in the global config, which the workspace's
  * own choice replaces and its hosts add to.
  */
-global_sandbox: GlobalSandbox, };
+global_sandbox: GlobalSandbox, 
+/**
+ * `tool_enforcement` from the global config, which the workspace's own value replaces.
+ */
+global_tool_enforcement: ToolEnforcement, };

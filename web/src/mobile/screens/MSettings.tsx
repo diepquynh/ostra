@@ -159,6 +159,7 @@ function Editor({ ws, detail, onSaved }: { ws: string; detail: WorkspaceDetail; 
             sandbox={detail.sandbox}
             savedSandbox={detail.settings.sandbox_mode}
             globalSandbox={detail.global_sandbox}
+            globalEnforcement={detail.global_tool_enforcement}
           />
         )}
         {tab === "instructions" && (

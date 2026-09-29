@@ -11,6 +11,7 @@ import type {
   PermissionMode,
   SandboxMode,
   SandboxNetwork,
+  ToolEnforcement,
   ValidationIssue,
   WorkspaceSettings,
 } from "../../api/types";
@@ -68,6 +69,8 @@ export type SettingsForm = {
   instructionsAgents: Record<string, string>;
   yolo: boolean;
   mode: PermissionMode;
+  /** `""` follows the global `tool_enforcement`. */
+  enforcement: ToolEnforcement | "";
   /** `""` follows the global `[sandbox] mode`. */
   sandbox: SandboxMode | "";
   /** `""` follows the global `[sandbox] network`. */
@@ -337,6 +340,7 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
     instructionsAgents: { ...s.instructions.agents },
     yolo: s.yolo.default,
     mode: s.permissions.mode,
+    enforcement: s.tool_enforcement ?? "",
     sandbox: s.sandbox_mode ?? "",
     network: s.sandbox_network ?? "",
     allowedHosts: lines(s.sandbox_allowed_hosts),
@@ -428,6 +432,7 @@ export function fromForm(
 
   s.yolo.default = form.yolo;
   s.permissions.mode = form.mode;
+  s.tool_enforcement = form.enforcement || null;
   s.sandbox_mode = form.sandbox || null;
   s.sandbox_network = form.network || null;
   s.sandbox_allowed_hosts = unlines(form.allowedHosts);
@@ -492,7 +497,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
 export function tabOf(path: string): SettingsTab {
   const head = path.split(/[.[]/)[0];
   if (head === "mcp_servers") return "mcp";
-  if (head.startsWith("sandbox_")) return "permissions";
+  if (head.startsWith("sandbox_") || head === "tool_enforcement") return "permissions";
   if (
     head === "projects" ||
     head === "routing" ||
@@ -517,7 +522,7 @@ export function fieldIds(form: SettingsForm): string[] {
   ];
   ids.push("permissions.mode", "permissions.allow", "permissions.ask", "permissions.deny");
   ids.push("sandbox_mode", "sandbox_network", "sandbox_allowed_hosts", "sandbox_decoys");
-  ids.push("sandbox_loopback", "sandbox_blocked_ports");
+  ids.push("sandbox_loopback", "sandbox_blocked_ports", "tool_enforcement");
   form.projects.forEach((_, i) => ids.push(`projects[${i}]`));
   ids.push("mcp_servers");
   form.mcp.forEach((_, i) => {

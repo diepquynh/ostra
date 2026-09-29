@@ -74,6 +74,7 @@ impl Fx {
             protected_paths: vec![self.bin.clone(), self.config.clone()],
             memory_db: self.repo.join(".ostra/memory/knowledge.sqlite3"),
             sandbox_mode: None,
+            enforce_tool_calls: true,
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
@@ -2097,4 +2098,108 @@ fn h3_a_run_that_owes_an_answer_replies_before_it_submits() {
         free.check(&ToolCall::new("submit_generate_spec", json!({}))),
         PolicyDecision::Deny { rule, .. } if rule.rule == "reply-first"
     ));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tool enforcement disabled (Rule G1)
+// ---------------------------------------------------------------------------------------------
+
+impl Fx {
+    fn relaxed(&self, agent: AgentName) -> ExecutionPolicy {
+        let ctx = ExecContext {
+            enforce_tool_calls: false,
+            ..self.ctx(agent)
+        };
+        ExecutionPolicy::new(ctx, PolicyInputs::default())
+    }
+}
+
+#[test]
+fn without_tool_enforcement_write_scope_report_path_and_self_protection_are_off() {
+    let f = fx();
+    let config = shp(&f.config);
+    let script = format!(
+        "python3 - <<'EOF'\nfor p in ['{0}/a.py', '{0}/b.py']:\n    open(p, 'w').write('x')\nEOF",
+        shp(f.repo.join("src"))
+    );
+    let inline = format!(
+        "python3 -c \"import subprocess; open('{}', 'w').write('x')\"",
+        shp(f.repo.join("src/a.py"))
+    );
+
+    let strict = f.policy(AgentName::Implementer);
+    assert_eq!(guard_of(&strict, &bash(&script)), "self-protection");
+    assert_eq!(guard_of(&strict, &bash(&inline)), "self-protection");
+
+    let p = f.relaxed(AgentName::Implementer);
+    allowed(&p, &bash(&script));
+    allowed(&p, &bash(&inline));
+    allowed(&p, &write(f.repo.join("../outside.txt")));
+    allowed(&p, &write(&f.config));
+    allowed(&p, &bash(format!("sed -i 's/deny/allow/' {config}")));
+    allowed(&p, &bash("ostra --version"));
+
+    let reviewer = f.relaxed(AgentName::CodeReviewer);
+    allowed(&reviewer, &write(f.repo.join("src/main.rs")));
+    allowed(
+        &f.relaxed(AgentName::QuickAnswer),
+        &write(f.repo.join("src/main.rs")),
+    );
+    allowed(
+        &f.relaxed(AgentName::Plan),
+        &document(f.repo.join("ostra-plan-x.md")),
+    );
+
+    let mut ctx = f.ctx(AgentName::Implementer);
+    ctx.enforce_tool_calls = false;
+    ctx.report_file = Some(f.session_dir.join("ostra-implementer-phase-1.md"));
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    allowed(&p, &write(f.session_dir.join("ostra-implementer-other.md")));
+}
+
+#[test]
+fn without_tool_enforcement_ownership_secrets_git_and_tests_still_hold() {
+    let f = fx();
+    let p = f.relaxed(AgentName::Implementer);
+    let state = f.session_root.join(".state/gates.json");
+
+    assert_eq!(
+        guard_of(&p, &write(f.repo.join("tests/api_test.go"))),
+        "no-tests-from-implementer"
+    );
+    assert_eq!(
+        guard_of(&p, &write(f.repo.join(".git/hooks/pre-commit"))),
+        "git-metadata"
+    );
+    assert_eq!(guard_of(&p, &write(&state)), "state-ownership");
+    assert_eq!(
+        guard_of(&p, &write(f.ws.join("workspace.db"))),
+        "state-ownership"
+    );
+    assert_eq!(
+        guard_of(
+            &p,
+            &bash(format!(
+                "python3 -c \"open('{}', 'w').write('x')\"",
+                shp(&state)
+            ))
+        ),
+        "state-ownership"
+    );
+    assert_eq!(
+        guard_of(&p, &bash(format!("sed -i 's/a/b/' {}", shp(&state)))),
+        "state-ownership"
+    );
+    assert_eq!(
+        guard_of(&p, &write(f.session_dir.join("ostra-spec-x.md"))),
+        "artifact-ownership"
+    );
+    let registry = ostra_core::paths::data_dir().join("registry.db");
+    assert_eq!(
+        guard_of(
+            &p,
+            &ToolCall::new("Read", json!({"file_path": registry.to_string_lossy()}))
+        ),
+        "secret-read"
+    );
 }

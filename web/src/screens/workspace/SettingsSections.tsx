@@ -8,6 +8,7 @@ import type {
   PermissionRules,
   SandboxMode,
   SandboxStatus,
+  ToolEnforcement,
   ValidationIssue,
 } from "../../api/types";
 import {
@@ -19,6 +20,7 @@ import {
   runsUnsandboxed,
   SANDBOX_MODES,
   SANDBOX_NETWORKS,
+  TOOL_ENFORCEMENT,
   takesHosts,
   UNSANDBOXED_EFFECTS,
 } from "../../content/agents";
@@ -752,25 +754,28 @@ export function PermissionsSection({
   sandbox,
   savedSandbox,
   globalSandbox,
+  globalEnforcement,
 }: SectionProps & {
   global: PermissionRules;
   sandbox: SandboxStatus;
   savedSandbox: SandboxMode | null;
   globalSandbox: GlobalSandbox;
+  globalEnforcement: ToolEnforcement;
 }) {
   // The chosen mode before it is saved: off never sandboxes, auto only where a sandbox works.
   const unsandboxed =
     form.sandbox === "off" ||
     (form.sandbox === "auto" && !sandbox.available) ||
     (form.sandbox === (savedSandbox ?? "") && runsUnsandboxed(sandbox));
+  const enforcementLabel = (v: ToolEnforcement) => TOOL_ENFORCEMENT.find((c) => c.value === v)?.label ?? v;
   const globalCount = global.allow.length + global.ask.length + global.deny.length;
   return (
     <>
       <p className="wp-lead">
-        Two layers check every tool call. Guards come first and nothing overrides them: write scopes, state ownership,
-        the build streak limit. Then your permissions: a mode plus rules such as <code>Bash(npm run test *)</code>,{" "}
-        <code>Edit(src/**)</code>, or <code>WebFetch(domain:docs.rs)</code>. Each part of a chained command is checked
-        on its own.
+        Two layers check every tool call. Guards come first and no permission or YOLO overrides them: state ownership,
+        the build streak limit, and, with tool enforcement enabled, write scopes. Then your permissions: a mode plus
+        rules such as <code>Bash(npm run test *)</code>, <code>Edit(src/**)</code>, or{" "}
+        <code>WebFetch(domain:docs.rs)</code>. Each part of a chained command is checked on its own.
       </p>
       <div className="wp-grid-2">
         <Anchor id="permissions.mode">
@@ -788,6 +793,24 @@ export function PermissionsSection({
                 />
               ))}
               <FieldIssues issues={issues("permissions.mode")} />
+            </div>
+          </Panel>
+        </Anchor>
+        <Anchor id="tool_enforcement">
+          <Panel title="Tool enforcement" subtitle="for this workspace, in place of the global choice">
+            <div className="wp-stack" style={{ gap: 10 }}>
+              {TOOL_ENFORCEMENT.map((m) => (
+                <Checkbox
+                  key={m.value || "global"}
+                  radio
+                  name="tool-enforcement"
+                  checked={form.enforcement === m.value}
+                  onChange={() => update((f) => void (f.enforcement = m.value))}
+                  label={m.value === "" ? `${m.label} (${enforcementLabel(globalEnforcement)})` : m.label}
+                  description={m.help}
+                />
+              ))}
+              <FieldIssues issues={issues("tool_enforcement")} />
             </div>
           </Panel>
         </Anchor>

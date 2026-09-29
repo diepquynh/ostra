@@ -81,6 +81,7 @@ export const settings: WorkspaceSettings = {
   notifications: { push: true },
   limits: { max_parallel_executions: 3, session_budget_usd: 25 },
   sandbox_mode: null,
+  tool_enforcement: null,
   sandbox_network: null,
   sandbox_allowed_hosts: [],
   sandbox_decoys: [],
@@ -200,6 +201,7 @@ export const workspaceDetail: WorkspaceDetail = {
     ],
   },
   global_sandbox: { network: "allowlist", allowed_hosts: ["mirror.corp.example"] },
+  global_tool_enforcement: "disabled",
 };
 
 export const phases: PhaseInfo[] = [

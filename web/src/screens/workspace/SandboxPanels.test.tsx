@@ -39,6 +39,7 @@ function mount({
         sandbox={sandbox}
         savedSandbox={null}
         globalSandbox={globalSandbox}
+        globalEnforcement="disabled"
       />
     );
   }
@@ -123,5 +124,21 @@ describe("network panel", () => {
   it("shows no loopback choice where each sandbox has a loopback of its own", () => {
     mount();
     expect(screen.queryByLabelText(/^Blocked loopback ports/)).toBeNull();
+  });
+});
+
+describe("tool enforcement panel", () => {
+  it("follows the global setting by default and saves the workspace's own choice", () => {
+    const out = mount();
+    const global = screen.getByLabelText(/^Use the global setting \(Disabled\)/) as HTMLInputElement;
+    expect(global.checked).toBe(true);
+    expect(fromForm(out.form as SettingsForm, settings).settings.tool_enforcement).toBeNull();
+    fireEvent.click(screen.getByLabelText(/^Enabled/));
+    expect(fromForm(out.form as SettingsForm, settings).settings.tool_enforcement).toBe("enabled");
+  });
+
+  it("shows a saved workspace choice", () => {
+    mount({ saved: { tool_enforcement: "disabled" } });
+    expect((screen.getByLabelText(/^Disabled/) as HTMLInputElement).checked).toBe(true);
   });
 });

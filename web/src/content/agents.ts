@@ -1,4 +1,11 @@
-import type { AgentName, PermissionMode, SandboxMode, SandboxNetwork, SandboxStatus } from "../api/types";
+import type {
+  AgentName,
+  PermissionMode,
+  SandboxMode,
+  SandboxNetwork,
+  SandboxStatus,
+  ToolEnforcement,
+} from "../api/types";
 
 /** Every route key in `routing.model.byAgent`, with a one-line role. */
 export const ROUTE_KEYS: { key: AgentName | "judge"; role: string }[] = [
@@ -23,6 +30,21 @@ export const COMPLEXITY_AGENTS = ["implementer", "write-test"] as const;
 
 /** Route keys that always run on the native executor. */
 export const NATIVE_ONLY = new Set(["judge", "quick-answer"]);
+
+/** Workspace tool enforcement choices. `""` follows the global `tool_enforcement`, which defaults to disabled. */
+export const TOOL_ENFORCEMENT: { value: ToolEnforcement | ""; label: string; help: string }[] = [
+  { value: "", label: "Use the global setting", help: "Follows tool_enforcement in the global config." },
+  {
+    value: "disabled",
+    label: "Disabled",
+    help: "Agents may reach files by any route, such as one script that edits several files, which saves tool calls. Write scope, the report path, and self-protection are off. Ownership, secret, git, and test guards still refuse, and the sandbox still bounds every command. Choose it for capable models.",
+  },
+  {
+    value: "enabled",
+    label: "Enabled",
+    help: "Every guard runs, which protects the pipeline from a weaker model that writes outside its scope or misnames its report. It costs more tool calls: each refused call is spent, and a model that keeps reaching for a script retries until it uses one edit per call.",
+  },
+];
 
 /** Workspace sandbox choices. `""` follows the global `[sandbox] mode`; its default is required on Linux and macOS and auto on Windows, which has no sandbox backend yet. */
 export const SANDBOX_MODES: { mode: SandboxMode | ""; label: string; help: string }[] = [

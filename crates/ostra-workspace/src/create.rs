@@ -87,14 +87,15 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
         .as_deref()
         .map(load_toml_required::<WorkspaceSettings>)
     {
-        // Rule A2: a folder file's mode, YOLO, spend limits, and sandbox settings are ignored;
-        // only the request sets them.
+        // Rule A2: a folder file's mode, YOLO, spend limits, tool enforcement, and sandbox
+        // settings are ignored; only the request sets them.
         Some(Ok(mut s)) => {
             adopted = true;
             s.permissions.mode = PermissionMode::default();
             s.yolo.default = false;
             s.limits = Default::default();
             s.sandbox_mode = None;
+            s.tool_enforcement = None;
             s.sandbox_network = None;
             s.sandbox_allowed_hosts.clear();
             s.sandbox_decoys.clear();

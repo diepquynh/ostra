@@ -67,6 +67,9 @@ pub struct Roots {
     pub report_file: Option<PathBuf>,
     /// The workspace's visible artifacts, which agents read and never write (Rule W1).
     pub artifacts: PathBuf,
+    /// Rule G1: tool enforcement is on, so write scope, the report path, and self-protection
+    /// apply.
+    pub strict: bool,
 }
 
 impl Roots {
@@ -110,6 +113,7 @@ impl Roots {
             } else {
                 canon(&ostra_core::artifacts::dir(ws))
             },
+            strict: ctx.enforce_tool_calls,
         }
     }
 
@@ -448,7 +452,7 @@ pub fn check_write(
     }
 
     // Tool self-protection (plugin-policy.js checkPluginWrite).
-    if roots.is_protected(target) {
+    if roots.strict && roots.is_protected(target) {
         return Some(deny(
             SELF_PROTECTION,
             format!(
@@ -566,6 +570,10 @@ pub fn check_write(
             .any(|o| o.pattern.is_match(&base) && o.owners.contains(&agent))
     {
         if target != declared.as_path() {
+            // Rule G1: without tool enforcement any `ostra-*` name is allowed.
+            if !roots.strict {
+                return None;
+            }
             return Some(deny(
                 REPORT_PATH,
                 format!(
@@ -674,7 +682,7 @@ pub fn check_document(
             ));
         }
     }
-    if !inside(&roots.session_dir, target) {
+    if roots.strict && !inside(&roots.session_dir, target) {
         return Some(deny(
             WRITE_SCOPE,
             format!(
@@ -697,14 +705,6 @@ fn capitalize(s: &str) -> String {
 
 fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial> {
     let agent = ctx.agent;
-    if agent == AgentName::QuickAnswer {
-        return Some(deny(
-            WRITE_SCOPE,
-            format!(
-                "Put your answer in your submit call instead of writing \"{raw}\": quick-answer is read-only."
-            ),
-        ));
-    }
     let in_session = roots.in_session(target);
     if agent == AgentName::Implementer
         && !in_session
@@ -717,6 +717,18 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
                 "Leave test files to write-test: \"{raw}\" is a test file or directory path, and the implementer never \
                  writes or fixes tests (implementer Constraint 6). Tests run only after the user asks for them at the \
                  closing gate."
+            ),
+        ));
+    }
+    // Rule G1: the rest is write scope, which applies only with tool enforcement.
+    if !roots.strict {
+        return None;
+    }
+    if agent == AgentName::QuickAnswer {
+        return Some(deny(
+            WRITE_SCOPE,
+            format!(
+                "Put your answer in your submit call instead of writing \"{raw}\": quick-answer is read-only."
             ),
         ));
     }
@@ -1023,7 +1035,7 @@ pub fn check_opaque_shell(roots: &Roots, raw: &str, start: &Path) -> Option<Deni
         if roots.is_secret(&p) {
             return check_read(roots, &p, value);
         }
-        if roots.is_protected(&p) || roots.is_engine_state(&p) {
+        if roots.is_engine_state(&p) || (roots.strict && roots.is_protected(&p)) {
             return Some(deny(
                 SELF_PROTECTION,
                 format!(
@@ -1047,7 +1059,7 @@ pub fn check_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denia
             let word = cmd.words[idx].text();
             let runs_ostra = bash::basename(word) == "ostra"
                 || (word.contains('/') && roots.is_protected(&roots.resolve(&base, word)));
-            if runs_ostra {
+            if runs_ostra && roots.strict {
                 return Some(deny(
                     SELF_PROTECTION,
                     "Do not run Ostra's own binary from a tool call: it is what enforces the pipeline, so running it \
@@ -1071,7 +1083,8 @@ pub fn check_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denia
                     ),
                 ));
             }
-            if WRITE_API.is_match(&code) || PY_OPEN_WRITE.is_match(&code) {
+            // Rule G1: without tool enforcement a script may write and spawn; the sandbox bounds it.
+            if roots.strict && (WRITE_API.is_match(&code) || PY_OPEN_WRITE.is_match(&code)) {
                 return Some(deny(
                     SELF_PROTECTION,
                     format!(
@@ -1081,7 +1094,7 @@ pub fn check_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denia
                     ),
                 ));
             }
-            if SPAWN_API.is_match(&code) {
+            if roots.strict && SPAWN_API.is_match(&code) {
                 return Some(deny(
                     SELF_PROTECTION,
                     format!(
@@ -1121,7 +1134,7 @@ pub fn check_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denia
                     ),
                 ));
             }
-            if roots.is_protected(&p) {
+            if roots.strict && roots.is_protected(&p) {
                 let name = cmd.effective_name().unwrap_or_default();
                 return Some(deny(
                     SELF_PROTECTION,

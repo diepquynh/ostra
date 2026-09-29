@@ -236,6 +236,9 @@ artifact opens it in the file editor, as tab `file:_artifacts:<path>`, because t
 ```toml
 # ~/.config/ostra/config.toml
 
+# Rule G1: "disabled" (default) or "enabled". See section 10.4.
+tool_enforcement = "disabled"
+
 [providers.anthropic]
 api_key_env = "ANTHROPIC_API_KEY"
 
@@ -422,7 +425,7 @@ edit, so Ostra does not run what they name until the user approved that exact co
   Workspaces registered before approvals existed have their files approved once, at the first start.
 - Rule A2: the permission mode and YOLO live in the registry per workspace, never in a folder file. A folder
   file's `permissions.mode` and `yolo` are ignored, and Ostra no longer writes them there. The same holds for
-  spend limits, the sandbox mode, the sandbox network choice (`sandbox_network`, in place of the global
+  spend limits, tool enforcement (Rule G1), the sandbox mode, the sandbox network choice (`sandbox_network`, in place of the global
   `[sandbox] network`), the sandbox's extra allowed hosts (`sandbox_allowed_hosts`), which add to the
   global `[sandbox] allowed_hosts` and never remove a global or built-in host, and the workspace's own decoy
   files (`sandbox_decoys`, `~/` paths, at most 32), which add to the built-in decoys and never remove one,
@@ -701,6 +704,18 @@ Every tool call from every executor goes through two layers in order.
 **Layer 1, guards:** No permission, no user answer, and no YOLO setting overrides these. Each is a port.
 
 | Guard | Rule | Source |
+**Rule G1, tool enforcement:** the `tool_enforcement` setting (global key, replaced by a workspace value kept in
+the registry under Rule A2) decides whether the guards that check where a call reads and writes run. It is
+`disabled` by default, because capable models reach files by routes those guards cannot read, such as one
+script that edits several files, and the guards refuse that outright. Disabled turns off write scope, the report
+path, and self-protection (writes to Ostra's binary, config, and `workspace.toml`, running `ostra`, and inline
+interpreter code that writes or spawns). It keeps no tests from implementer, state ownership (including inline
+code that names engine state), artifact ownership, workspace artifacts, the Document tool, git metadata, secret
+reads, Windows paths, the lesson gate, the build streak, management tools, the coordination gates, Layer 2, and
+the sandbox. `enabled` runs every guard in the table below, which protects the pipeline from weaker models at the
+cost of more tool calls, since each refused call is spent and retried. The workspace value is set on the
+Permissions tab.
+
 | --- | --- | --- |
 | Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. initializer writes only `.ostra/` and `.agents/skills/`. module-documentation writes only the module-hub skill's `references/` (under `.agents/skills/` or `.ostra/skills/`). Everything else stays inside its `Repo root:`. | `scope-policy.js` |
 | No tests from implementer | implementer may not write a path matching the test patterns. | `scope-policy.js` |

@@ -3,7 +3,8 @@
 An Ostra session runs many agents that edit code, run shell commands, and fetch pages, and some of them run
 inside CLIs that Ostra did not write. This page explains how Ostra keeps every one of those agents inside the
 pipeline's rules, whichever model or executor it runs on. It covers the policy engine that sees every tool call,
-the guards that nothing can switch off, the permission model on top of them, how shell commands are read, and
+the guards that no permission or YOLO setting can override, the tool enforcement setting that decides which of
+them check where a call reads and writes, the permission model on top of them, how shell commands are read, and
 what YOLO mode does and does not change.
 
 The code lives in one crate, [`ostra-policy`](../../crates/ostra-policy/src/lib.rs). It has no knowledge of
@@ -62,7 +63,43 @@ override a guard. A guard that YOLO or an "always allow" rule could switch off w
 Each guard is a port of an Ultracode hook, and the source file is named in the comment above its code in
 [`guards.rs`](../../crates/ostra-policy/src/guards.rs).
 
+### Tool enforcement
+
+The `tool_enforcement` setting (Rule G1) decides whether Layer 1 also checks *where* a tool call reads and writes.
+It is `disabled` by default. Capable models often take a route the location checks cannot follow: one Python
+script that edits five files saves four round trips, but its paths are invisible to a guard that reads the paths
+a tool call names, so with enforcement on Ostra refuses it outright and the model falls back to one edit per call.
+
+| Guard | Disabled (default) | Enabled |
+| --- | --- | --- |
+| Write scope, including quick-answer's read-only rule and the `Document` tool's session-dir rule | off | on |
+| Report path | off | on |
+| Self-protection: writes to Ostra's binary, config, and `workspace.toml`, running `ostra`, and inline interpreter code that writes files or spawns processes | off | on |
+| No tests from implementer, state ownership, artifact ownership, workspace artifacts, `Document` tool, git metadata, secret reads, Windows paths | on | on |
+| Lesson gate, build streak, management tools, and the subagent coordination gates | on | on |
+
+The choice is a trade between protection and tool calls. `enabled` protects the pipeline from a weaker model
+that writes outside its scope, edits Ostra's own files, or misnames its report. It costs more tool calls, because
+every refused call is spent and a model that keeps reaching for a script retries until it settles on one edit per
+call. `disabled` suits capable models, which rarely make those mistakes and use the saved round trips.
+
+With enforcement disabled the remaining guards still refuse what would corrupt the pipeline's records or leak a
+credential. Inline code that names pipeline state (`.state/`, `workspace.db`, a review ledger) is still refused,
+and the workspace and registry databases stay unwritable through state ownership. Layer 2 permissions apply in
+both modes, and so does the [sandbox](sandboxing.md), which is what bounds a script whose paths the policy cannot
+see: it keeps writes inside the workspace, the repo, and the session dirs, keeps Ostra's state files read-only, and
+hides Ostra's data and config dirs.
+
+The global value is `tool_enforcement` at the top of `config.toml`. A workspace may replace it with its own
+`tool_enforcement`, which is kept in the registry and never in `workspace.toml` (Rule A2), because a repository
+must not be able to turn off guards its user turned on. The Permissions tab of workspace Settings sets it. Each
+execution resolves the value when it starts
+(`WorkspaceSettings::enforces_tool_calls`) and carries it in its context as `enforce_tool_calls`, so a change
+applies to the next execution, not to one already running.
+
 ### Write scope
+
+This guard applies only with tool enforcement enabled.
 
 Each agent has a region of the disk it may write, and a write outside that region is refused.
 
@@ -111,6 +148,9 @@ JSON document, so a direct edit would be overwritten on the next render and woul
 
 ### Report path
 
+This guard applies only with tool enforcement enabled; the lesson gate on the declared report applies in both
+modes.
+
 Many agents are given a `Report file:` in their spawn block, and the next stage reads that exact path. For those
 agents, any `ostra-*` file they write in the session tree must be the declared path. An agent that writes
 `ostra-review-final.md` when it was told `ostra-review-phase-2.md` has produced a report that nobody will read.
@@ -155,6 +195,9 @@ The guard exists because an agent looping on the same compiler error spends mone
 the user or with a judge, instead of paying for a sixth and seventh identical try.
 
 ### Self-protection
+
+The parts of this guard listed under [tool enforcement](#tool-enforcement) apply only with it enabled. The
+refusal of inline code that names pipeline state applies in both modes.
 
 Agents may read Ostra's files but never change them, and may not run Ostra's binary. Protected paths are the
 `ostra` binary, its assets, the global config, `workspace.toml`, and the workspace and registry databases with their
@@ -365,8 +408,9 @@ not parse:
 - **Refused when the text names what no agent touches.** Layer 1 scans the raw command (`check_opaque_shell` in
   [`guards.rs`](../../crates/ostra-policy/src/guards.rs)) for pipeline state names (`ostra-review-ledger.md`,
   `workspace.db`, and the rest), and resolves every path in it, in drive and backslash form as well as with `/`.
-  A path into Ostra's data dir or a credential store is refused as a secret read, and a path to Ostra's binary,
-  config, databases, or engine state is refused as self-protection, in every mode, YOLO included.
+  A path into Ostra's data dir or a credential store is refused as a secret read, and a path to engine state is
+  refused as self-protection, in every mode, YOLO included. With tool enforcement enabled, a path to Ostra's
+  binary, config, or databases is refused too.
 - **The same process hardening.** The configured credential variables and every `OSTRA_*` variable are removed
   from the child, the working dir persists between calls, and the whole process tree is killed when the call ends
   or times out.
@@ -585,6 +629,7 @@ YOLO can be turned on or off during a session. The policy reads the session's cu
 | --- | --- |
 | `check`, layer 2, the read-only command set, the observer | [`crates/ostra-policy/src/policy.rs`](../../crates/ostra-policy/src/policy.rs) |
 | Every guard and its denial text | [`crates/ostra-policy/src/guards.rs`](../../crates/ostra-policy/src/guards.rs) |
+| Tool enforcement setting and its resolution | `ToolEnforcement` and `WorkspaceSettings::enforces_tool_calls` in [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs), `Roots::strict` in [`guards.rs`](../../crates/ostra-policy/src/guards.rs) |
 | Shell parsing and write targets | [`crates/ostra-policy/src/bash.rs`](../../crates/ostra-policy/src/bash.rs) |
 | Build signal and streak thresholds | [`crates/ostra-policy/src/build.rs`](../../crates/ostra-policy/src/build.rs) |
 | Permission rule syntax and matching | [`crates/ostra-policy/src/perms.rs`](../../crates/ostra-policy/src/perms.rs) |

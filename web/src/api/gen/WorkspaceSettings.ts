@@ -8,6 +8,7 @@ import type { ProjectEntry } from "./ProjectEntry";
 import type { Routing } from "./Routing";
 import type { SandboxMode } from "./SandboxMode";
 import type { SandboxNetwork } from "./SandboxNetwork";
+import type { ToolEnforcement } from "./ToolEnforcement";
 import type { WorkspacePermissions } from "./WorkspacePermissions";
 import type { YoloSettings } from "./YoloSettings";
 
@@ -17,6 +18,11 @@ export type WorkspaceSettings = { name: string, projects: Array<ProjectEntry>, r
  * global one. Kept in the registry, never in `workspace.toml`.
  */
 sandbox_mode: SandboxMode | null, 
+/**
+ * Tool enforcement for this workspace in place of the global `tool_enforcement`. `None`
+ * follows the global one. Kept in the registry, never in `workspace.toml`.
+ */
+tool_enforcement: ToolEnforcement | null, 
 /**
  * Network choice for this workspace in place of the global `[sandbox] network`. `None`
  * follows the global one. Kept in the registry, never in `workspace.toml`.

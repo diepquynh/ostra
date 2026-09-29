@@ -103,6 +103,10 @@ pub struct ExecContext {
     /// The workspace's sandbox mode in place of the global one, when it sets one.
     #[serde(default)]
     pub sandbox_mode: Option<SandboxMode>,
+    /// Rule G1: Layer 1 checks where tool calls read and write. Resolved from the workspace and
+    /// global `tool_enforcement` when the execution starts.
+    #[serde(default)]
+    pub enforce_tool_calls: bool,
     /// The workspace's network choice in place of the global one, when it sets one.
     #[serde(default)]
     pub sandbox_network: Option<crate::config::SandboxNetwork>,

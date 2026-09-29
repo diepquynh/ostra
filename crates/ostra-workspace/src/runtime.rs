@@ -413,6 +413,7 @@ impl WorkspaceRt {
                 network: global.sandbox.network,
                 allowed_hosts: global.sandbox.allowed_hosts.clone(),
             },
+            global_tool_enforcement: global.tool_enforcement,
             settings: browser_view(settings),
         }
     }

@@ -99,7 +99,8 @@ The permission layer sorts tools into families, and the family decides which rul
 | Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, `ProjectList`, the code tools, `submit_*`, workspace MCP tools | Ostra's own tools are allowed. `Skill` with a `path` is judged as a Read of that file. Workspace MCP tools are allowed unless a rule says otherwise, and plan mode allows only those their server marks read-only (rule M1). |
 
 The guards (write scope, state ownership, the report path, the lesson gate, the build streak, self-protection,
-and the management tools guard) run before this, on every family. They are on [Agent containment](../security/agent-containment.md).
+and the management tools guard) run before this, on every family. Write scope, the report path, and most of
+self-protection run only with tool enforcement enabled. They are on [Agent containment](../security/agent-containment.md).
 
 The Permissions tab of Settings sets the mode, the sandbox (its mode, network choice, allowed hosts, and decoy
 files), and the allow, ask, and deny rules, and shows the global rules read-only:

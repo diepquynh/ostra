@@ -218,6 +218,7 @@ export type * from "./gen/SymbolKind";
 export type * from "./gen/Tier";
 export type * from "./gen/TokenClass";
 export type * from "./gen/ToolCall";
+export type * from "./gen/ToolEnforcement";
 export type * from "./gen/Track";
 export type * from "./gen/UiTab";
 export type * from "./gen/UploadedFile";

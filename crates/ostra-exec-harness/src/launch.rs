@@ -779,6 +779,7 @@ pub(crate) mod tests {
                 protected_paths: vec![],
                 memory_db: root.join("repo/.ostra/memory/knowledge.sqlite3"),
                 sandbox_mode: None,
+                enforce_tool_calls: false,
                 sandbox_network: None,
                 sandbox_allowed_hosts: vec![],
                 sandbox_decoys: vec![],

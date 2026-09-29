@@ -100,6 +100,8 @@ pub struct WorkspaceDetail {
     /// The network choice and hosts from `[sandbox]` in the global config, which the workspace's
     /// own choice replaces and its hosts add to.
     pub global_sandbox: GlobalSandbox,
+    /// `tool_enforcement` from the global config, which the workspace's own value replaces.
+    pub global_tool_enforcement: crate::config::ToolEnforcement,
 }
 
 /// A settings change that fixes the validation issue at `path` by setting it to `value`.

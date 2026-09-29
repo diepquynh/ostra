@@ -210,8 +210,8 @@ then applies the same checks it applies to a human answer.
 
 YOLO changes who answers, never what must be true:
 
-- Layer 1 guards (write scope, state ownership, report path, lesson gate, build streak, self-protection) still
-  deny.
+- Layer 1 guards (state ownership, lesson gate, build streak, and, with tool enforcement enabled, write scope,
+  report path, and self-protection) still deny.
 - The user's explicit deny rules still apply.
 - Approval still requires a fact-check PASS.
 - BLOCKER security findings are still removed before the session can complete.

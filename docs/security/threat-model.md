@@ -42,8 +42,8 @@ write outside the project, install a program in your shell profile, or leak data
 that the browser would fetch.
 
 Ostra does not rely on the model refusing. Every tool call passes the execution policy, whose first layer
-(write scope, state ownership, report path, secret paths, self-protection) cannot be switched off by a
-permission rule, a user, or YOLO mode. Underneath the policy, agent commands run in a kernel sandbox where the
+(state ownership, secret paths, git metadata, and, with tool enforcement enabled, write scope, report path, and
+self-protection) cannot be overridden by a permission rule, a user's answer, or YOLO mode. Underneath the policy, agent commands run in a kernel sandbox where the
 host is read-only, Ostra's data directory and your credential stores are not visible, and shell startup files
 stay read-only. When one execution keeps reaching for secrets, Ostra's own files, `.git/`, or local network
 addresses, Ostra pauses the session and asks you, YOLO included. The browser renders agent text under a CSP that

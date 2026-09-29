@@ -19,6 +19,8 @@ use ts_rs::TS;
 #[serde(default)]
 #[ts(export)]
 pub struct GlobalConfig {
+    /// Whether Layer 1 checks where tool calls read and write. See [`ToolEnforcement`].
+    pub tool_enforcement: ToolEnforcement,
     pub providers: BTreeMap<String, ProviderConfig>,
     /// Tier to model, per executor table (`native`, `claude`, `codex`, `grok`, `agy`).
     pub tiers: BTreeMap<String, TierTable>,
@@ -128,6 +130,20 @@ pub struct ServerConfig {
     /// browser that does not resolve `*.localhost`. The session cookie then reaches every other
     /// port on this machine too, because cookies are not scoped to a port.
     pub use_ip_host: bool,
+}
+
+/// Rule G1: whether Layer 1 checks where tool calls read and write. `disabled` lets an agent
+/// reach files by any route, such as one script that edits several files; the secret-read,
+/// git-metadata, state-ownership, artifact-ownership, and no-tests guards, the workflow gates,
+/// the permission rules, and the sandbox still apply. `enabled` adds write scope, the report
+/// path, self-protection, and the shell and interpreter checks behind them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum ToolEnforcement {
+    #[default]
+    Disabled,
+    Enabled,
 }
 
 /// Whether agent commands run inside the sandbox.
@@ -351,6 +367,7 @@ impl Default for GlobalConfig {
             );
         }
         GlobalConfig {
+            tool_enforcement: ToolEnforcement::default(),
             providers,
             tiers,
             harness,
@@ -501,6 +518,9 @@ pub struct WorkspaceSettings {
     /// Sandbox mode for this workspace in place of the global `[sandbox] mode`. `None` follows the
     /// global one. Kept in the registry, never in `workspace.toml`.
     pub sandbox_mode: Option<SandboxMode>,
+    /// Tool enforcement for this workspace in place of the global `tool_enforcement`. `None`
+    /// follows the global one. Kept in the registry, never in `workspace.toml`.
+    pub tool_enforcement: Option<ToolEnforcement>,
     /// Network choice for this workspace in place of the global `[sandbox] network`. `None`
     /// follows the global one. Kept in the registry, never in `workspace.toml`.
     pub sandbox_network: Option<SandboxNetwork>,
@@ -877,6 +897,10 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "Sandbox mode for agent commands, in place of the global one",
     ),
     (
+        "tool_enforcement",
+        "Whether guards check where tool calls read and write, in place of the global choice",
+    ),
+    (
         "sandbox_network",
         "What sandboxed commands may reach, in place of the global choice",
     ),
@@ -949,6 +973,7 @@ impl WorkspaceSettings {
             notifications: NotificationSettings::default(),
             limits: Limits::default(),
             sandbox_mode: None,
+            tool_enforcement: None,
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
@@ -956,6 +981,11 @@ impl WorkspaceSettings {
             sandbox_blocked_ports: vec![],
             mcp_servers: vec![],
         }
+    }
+
+    /// Rule G1: the workspace's tool enforcement, or the global one when it sets none.
+    pub fn enforces_tool_calls(&self, global: &GlobalConfig) -> bool {
+        self.tool_enforcement.unwrap_or(global.tool_enforcement) == ToolEnforcement::Enabled
     }
 
     /// The sandbox settings this workspace keeps in the registry.

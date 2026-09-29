@@ -137,6 +137,7 @@ fn spec(
             protected_paths: vec![],
             memory_db: f.repo.join(".ostra/memory/knowledge.sqlite3"),
             sandbox_mode: None,
+            enforce_tool_calls: true,
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],

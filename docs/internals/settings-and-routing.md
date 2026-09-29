@@ -12,7 +12,7 @@ Settings come from three files and one database. Each has a different owner and 
 
 | Where | Path | Written by | Holds |
 | --- | --- | --- | --- |
-| Global config | `$OSTRA_CONFIG`, else `config.toml` in the OS config folder (`~/.config/ostra/` on Linux, `~/Library/Application Support/ostra/` on macOS) | You, by hand | Provider credential sources, the tier tables, harness commands, machine-wide permission rules, the server's bind address and port, the sandbox |
+| Global config | `$OSTRA_CONFIG`, else `config.toml` in the OS config folder (`~/.config/ostra/` on Linux, `~/Library/Application Support/ostra/` on macOS) | You, by hand | Provider credential sources, the tier tables, harness commands, machine-wide permission rules, tool enforcement, the server's bind address and port, the sandbox |
 | Workspace settings | `<workspace>/.ostra/workspace.toml` | The Settings screen, or you | Projects, routing, custom instructions, permission rules, notifications, MCP servers |
 | Project profile | `<project>/.ostra/project.toml` | The init flow, then you | The project's stack, its build, test, and format commands, the module map, skills, and review rules |
 | Registry | `registry.db` in the data folder (`$OSTRA_DATA_DIR`, else `~/.local/share/ostra/` on Linux) | Ostra | Per workspace: the permission mode, the YOLO default, the spend limits, the sandbox mode, network choice, and extra allowed hosts, and the approvals of folder-file commands. Machine-wide: provider keys and base URLs saved from the browser |
@@ -28,21 +28,23 @@ raise your budget, turn off your sandbox, switch you to YOLO, or start a program
 Two rules close that gap.
 
 **Rule A2: control settings live in the registry.** The permission mode, the YOLO default, the spend limits,
-and the workspace's sandbox mode, network choice, extra allowed hosts, decoy files, and macOS loopback settings are read from the registry
+the workspace's tool enforcement, and the workspace's sandbox mode, network choice, extra allowed hosts, decoy files, and macOS loopback settings are read from the registry
 and never from `workspace.toml`. The overlay that
 enforces it is short enough to quote
 ([`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs)):
 
 ```rust
-// Rule A2: the permission mode, YOLO, spend limits, and the sandbox mode, network, hosts, decoys,
-// and loopback choice come from the registry, never from a folder file, because a repository could
-// otherwise lift its own budget, open its own sandbox, or plant decoys that pause every session.
+// Rule A2: the permission mode, YOLO, spend limits, tool enforcement, and the sandbox mode,
+// network, hosts, decoys, and loopback choice come from the registry, never from a folder file,
+// because a repository could otherwise lift its own budget, turn off its own guards, open its own
+// sandbox, or plant decoys that pause every session.
 pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
     let a = access(registry, root);
     s.permissions.mode = a.mode;
     s.yolo.default = a.yolo;
     s.limits = a.limits.unwrap_or_default();
     s.sandbox_mode = a.sandbox_mode;
+    s.tool_enforcement = a.tool_enforcement;
     s.sandbox_network = a.sandbox_network;
     s.sandbox_allowed_hosts = a.sandbox_allowed_hosts;
     s.sandbox_decoys = a.sandbox_decoys;
@@ -51,7 +53,7 @@ pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
 }
 ```
 
-A `[limits]` table, a `yolo` table, a `sandbox_mode`, `sandbox_network`, `sandbox_allowed_hosts`, `sandbox_decoys`, `sandbox_loopback`, or `sandbox_blocked_ports` key, or a `permissions.mode` key written into
+A `[limits]` table, a `yolo` table, a `tool_enforcement`, `sandbox_mode`, `sandbox_network`, `sandbox_allowed_hosts`, `sandbox_decoys`, `sandbox_loopback`, or `sandbox_blocked_ports` key, or a `permissions.mode` key written into
 `workspace.toml` by hand is ignored, and Ostra removes them the next time it saves the file. Change them on
 the Settings screen.
 
@@ -74,8 +76,10 @@ keeps it waiting, so saving cannot approve commands you were not shown. See
 [the threat model](../security/threat-model.md) for the wider picture.
 
 The General tab edits two of the controls Rule A2 keeps in the registry, YOLO and the limits. The Permissions tab
-holds the rest: the permission mode, and the sandbox's mode, network choice, allowed hosts, and decoy files. The
-General tab:
+holds the rest: the permission mode, and the sandbox's mode, network choice, allowed hosts, and decoy files. It also
+sets the workspace's tool enforcement: enabled, disabled, or the global `tool_enforcement` key, whose value the
+option names (`global_tool_enforcement` in the workspace response). See
+[tool enforcement](../security/agent-containment.md#tool-enforcement) for what it turns on. The General tab:
 
 ![The General settings tab with the workspace name, YOLO, limits, and Delete workspace](../images/console/settings-general.png)
 

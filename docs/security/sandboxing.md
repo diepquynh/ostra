@@ -182,7 +182,9 @@ tool call that names one, Grep and Glob skip them when they walk, and the sandbo
 therefore also a path a shell command cannot reach by walking the disk.
 
 The sandbox does not replace the policy. Write scope, state ownership, the report path, and the other guards
-depend on which agent is running and which stage it is in, and the sandbox profile knows neither. The profile's
+depend on which agent is running and which stage it is in, and the sandbox profile knows neither. With
+[tool enforcement](agent-containment.md#tool-enforcement) disabled, the default, the sandbox is what bounds a
+script whose paths the policy cannot read. The profile's
 job is narrower: keep every process Ostra starts inside the workspace, away from the user's secrets and session,
 and unable to leave anything behind that runs later.
 
@@ -1031,7 +1033,8 @@ These limits follow from the design, and the sections above give the reasons:
 - **Paths that are not on the hidden list.** A secret in an unusual place, such as a token file in the repo or a
   key in `~/Documents`, is readable unless `extra_hidden` names it.
 - **What the agent is allowed to change.** The sandbox lets an agent write the whole workspace. Stage-level limits
-  (a reviewer that must not edit code, a builder confined to its paths) are the policy's write scope.
+  (a reviewer that must not edit code, a builder confined to its paths) are the policy's write scope, which
+  applies only with tool enforcement enabled.
 - **Decoys on macOS** count only on an admin account and only for files that exist (see
   [decoys on macOS](#decoys-on-macos)).
 - **Decoys are a tripwire, not a wall.** The decoy list is in this page, so an agent that has read it can avoid

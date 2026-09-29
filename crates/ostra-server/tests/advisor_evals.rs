@@ -491,6 +491,7 @@ async fn run_one(
         ],
         memory_db: paths::project_memory_db(&sc.repo),
         sandbox_mode: None,
+        enforce_tool_calls: false,
         sandbox_network: None,
         sandbox_allowed_hosts: vec![],
         sandbox_decoys: vec![],

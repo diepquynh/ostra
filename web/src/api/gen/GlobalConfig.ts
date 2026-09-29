@@ -5,8 +5,13 @@ import type { ProviderConfig } from "./ProviderConfig";
 import type { SandboxConfig } from "./SandboxConfig";
 import type { ServerConfig } from "./ServerConfig";
 import type { TierTable } from "./TierTable";
+import type { ToolEnforcement } from "./ToolEnforcement";
 
-export type GlobalConfig = { providers: { [key in string]: ProviderConfig }, 
+export type GlobalConfig = { 
+/**
+ * Whether Layer 1 checks where tool calls read and write. See [`ToolEnforcement`].
+ */
+tool_enforcement: ToolEnforcement, providers: { [key in string]: ProviderConfig }, 
 /**
  * Tier to model, per executor table (`native`, `claude`, `codex`, `grok`, `agy`).
  */
