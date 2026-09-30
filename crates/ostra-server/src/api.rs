@@ -444,6 +444,11 @@ pub fn router(app: Arc<App>) -> axum::Router {
             post(artifact_hidden),
         )
         .route("/api/workspaces/{ws}/artifacts/move", post(artifact_move))
+        .route("/api/workspaces/{ws}/docs", get(books_list))
+        .route(
+            "/api/workspaces/{ws}/docs/{book}",
+            get(book_get).delete(book_delete),
+        )
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/fs/list", get(fs_list))
         .route("/api/environment", get(environment))
@@ -1475,6 +1480,60 @@ async fn artifact_delete(
     crate::artifacts::delete(&w, &q.path)?;
     files::announce_git(&app, &w.id, ostra_core::artifacts::TAG_ROOT);
     Ok(Json(crate::artifacts::list(&w)))
+}
+
+fn book_param(book: &str) -> Result<&str, ApiErr> {
+    if ostra_core::book::is_book_id(book) {
+        Ok(book)
+    } else {
+        Err(ApiErr::new(
+            StatusCode::BAD_REQUEST,
+            "Name a book by its ID from the book list: lowercase letters, digits, dashes, and underscores.",
+        ))
+    }
+}
+
+async fn books_list(
+    State(app): AppState,
+    Path(id): Path<String>,
+) -> Res<Vec<ostra_core::book::BookSummary>> {
+    Ok(Json(ostra_core::book::list(&ws(&app, &id)?.root)))
+}
+
+async fn book_get(
+    State(app): AppState,
+    Path((id, book)): Path<(String, String)>,
+) -> Res<ostra_core::book::Book> {
+    let w = ws(&app, &id)?;
+    ostra_core::book::read(&w.root, book_param(&book)?)
+        .map(Json)
+        .ok_or_else(|| ApiErr::new(StatusCode::NOT_FOUND, "No such book in this workspace."))
+}
+
+async fn book_delete(
+    State(app): AppState,
+    Path((id, book)): Path<(String, String)>,
+) -> Res<Vec<ostra_core::book::BookSummary>> {
+    let w = ws(&app, &id)?;
+    let book = book_param(&book)?;
+    let dir = ostra_core::book::book_dir(&w.root, book);
+    if !dir.join("book.json").is_file() {
+        return Err(ApiErr::new(StatusCode::NOT_FOUND, "No such book in this workspace."));
+    }
+    // Rule W4: no session starts between the check and the removal.
+    let Ok(_work) = w.work.try_write() else {
+        return Err(ApiErr::new(
+            StatusCode::CONFLICT,
+            "Try again in a moment, because work is starting in this workspace.",
+        ));
+    };
+    ostra_core::book::remove(&w.root, book).map_err(|e| {
+        ApiErr::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("The book could not be deleted: {e}"),
+        )
+    })?;
+    Ok(Json(ostra_core::book::list(&w.root)))
 }
 
 async fn workspace_artifact_download(

@@ -39,6 +39,22 @@ request = "Write unit tests for `clean_title` in crates/ostra-engine/src/judge.r
 expect = { category = ["TEST"] }
 
 [[case]]
+id = "classify-docs"
+judge = "classify"
+workspace = "one"
+request = "Write documentation for how a session moves through the pipeline: the planner, the fold, and the runner, with diagrams of each flow."
+note = "A documentation book about existing code, with no code change, is DOCS."
+expect = { category = ["DOCS"], projects = ["ostra"] }
+
+[[case]]
+id = "classify-docs-page-edit"
+judge = "classify"
+workspace = "one"
+request = "Update docs/internals/pipeline.md so its test stage section describes the analyzer fan-out."
+note = "Counter-case to classify-docs: editing a docs page inside a project changes project files, so it is IMPLEMENT, not DOCS."
+expect = { category = ["IMPLEMENT", "QUICK_CHANGE"], projects = ["ostra"] }
+
+[[case]]
 id = "classify-e2e-tests"
 judge = "classify"
 workspace = "one"
@@ -537,6 +553,14 @@ workspace = "triple"
 request = "Explain the Track selector in two places: the tooltip on each Track button in the New task form, and a short section in the docs site's first-session page."
 note = "Two projects of three; the server does not change."
 expect = { category = ["IMPLEMENT", "QUICK_CHANGE"], projects = ["site", "web"] }
+
+[[case]]
+id = "classify-three-projects-ui-needs-server-field"
+judge = "classify"
+workspace = "triple"
+request = "Show how much of the session budget is left in the session header. The server does not send that number yet, so add it to the session view it returns."
+note = "Counter-case to classify-three-projects-docs-and-tooltip: here the server changes as well, so it stays in scope."
+expect = { category = ["IMPLEMENT"], projects = ["server", "web"] }
 
 [[case]]
 id = "classify-platform-bug"

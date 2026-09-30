@@ -49,8 +49,8 @@ such as "run another pass" with `another-pass` or "retry" with `retry`, settle n
 says so outright: judge the rest of the answer, because the engine applies the choice itself.
 
 `stages` names the later stages that also receive `note`: `implement` (the implementer), `tests` (the
-path analyzer and the test writer), `docs` (the module documentation agent, which writes the area reference
-files agents read, never a page, README, or docs site that people read). A change to a page people read is
+path analyzer and the test writer), `docs` (the documentation writers, which write the workspace documentation
+book, never a page, README, or docs site inside a project). A change to a page people read is
 code to build, so it is `deliver`. A `deliver` item may name stages
 too, when part of the answer is also an instruction for later. Name only the stages the user's words address:
 an instruction about writing or running tests is `tests`, never `implement`, and `implement` is only for how the

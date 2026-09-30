@@ -379,8 +379,13 @@ pub mod report {
     pub fn write_test(phase: &str) -> String {
         format!("ostra-write-test-phase-{phase}.md")
     }
-    pub fn module_docs() -> String {
-        "ostra-module-docs.md".into()
+    /// The engine-written stub a docs writer gets when no implementer ran (category DOCS).
+    pub fn docs_request() -> String {
+        "ostra-docs-request.md".into()
+    }
+    /// The book's parts from this session, written by the engine for the architecture agent.
+    pub fn docs_parts() -> String {
+        "ostra-docs-parts.json".into()
     }
     pub fn prompt_gen(n: u32) -> String {
         format!("ostra-prompt-gen-{n}.md")

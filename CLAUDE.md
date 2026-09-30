@@ -170,6 +170,10 @@ cd tests/browser && npm test                # browser security suite: the consol
   `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 cargo test -p ostra-server --test coordination_evals -- --ignored --nocapture`.
   Its offline test replays every case with stand-ins, so run the normal suite after editing a case. The harness wait is
   checked live with `harness_probe wake <harness> <model> <dir>` (`crates/ostra-exec-harness/examples/`).
+- Book retrieval eval (`tests/evals/book_retrieval/`, run by `crates/ostra-core/tests/book_retrieval.rs`) is offline
+  and runs with the normal suite: 221 questions about Ostra against `book.json`, a book an Opus docs run wrote about a
+  snapshot of this repository, graded by `labels/` (the sections that state each answer) with floors on hit@1, hit@5,
+  and MRR. `OSTRA_EVAL_REPORT=1 ... -- --nocapture` prints every miss. A new `book.json` needs new labels.
 - Test stage evals (`tests/evals/test_stage.toml`, run by `crates/ostra-server/tests/test_stage_evals.rs`) run the live
   analyzer, write-test, or both in real sessions on the small projects in `tests/evals/test_stage/`, and grade write-test
   by planted mutants its tests must catch. Tiers 1 to 3, 3 runs per model by default (Opus, Sonnet, and Haiku):

@@ -47,7 +47,6 @@ Generated: {YYYY-MM-DD} · Stack: {language}/{framework} · Machine profile: `.o
 | Skill                | Kind        | Path                                     | Load when (component / file type)           |
 | -------------------- | ----------- | ---------------------------------------- | ------------------------------------------- |
 | `convention`         | convention  | `.agents/skills/convention/SKILL.md`     | Always. Auto-load for any code edit.        |
-| `module-hub`         | module-hub  | `.agents/skills/module-hub/SKILL.md`     | Locating which area/module a path belongs to.|
 | `{component-skill}`  | creation    | `.agents/skills/{component-skill}/SKILL.md` | Creating or modifying a {component type}. |
 
 ## Skill Application Mapping
@@ -58,9 +57,9 @@ Generated: {YYYY-MM-DD} · Stack: {language}/{framework} · Machine profile: `.o
 
 ## Module / Area Map
 
-| Path glob                | Area        | Reference                                   |
-| ------------------------ | ----------- | ------------------------------------------- |
-| `{glob}`                 | {area name} | `.agents/skills/module-hub/references/{x}.md` or `none` |
+| Path glob                | Area        |
+| ------------------------ | ----------- |
+| `{glob}`                 | {area name} |
 
 ## Review Rule Set
 
@@ -119,7 +118,6 @@ note = "Starts PostgreSQL through Testcontainers, so Docker must be running."
 [[module_map]]
 glob = "src/**"
 area = "app"
-# reference omitted: this area has no reference file yet
 
 [[skills]]
 name = "convention"
@@ -153,7 +151,7 @@ auto_fixable = true
 ```
 
 **Rules:**
-- TOML has no null. Omit any key whose value would be null (`reference`, `component_type`, a command), and
+- TOML has no null. Omit any key whose value would be null (`component_type`, a command), and
   never write `null`, because Ostra cannot parse a file that contains it and the init fails.
 - `schema_version` is the number `1`, never a string.
 - `stack` is one string that names the stack in your own words: the language, then the main framework, in

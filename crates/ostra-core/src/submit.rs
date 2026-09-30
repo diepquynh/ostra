@@ -338,10 +338,11 @@ pub fn submit_schema(agent: AgentName) -> serde_json::Value {
         AgentName::Plan => schemars::schema_for!(PlanSubmit),
         AgentName::Implementer => schemars::schema_for!(ImplementerSubmit),
         AgentName::CodeReviewer => schemars::schema_for!(CodeReviewerSubmit),
-        AgentName::ExecutionPathAnalyzer
-        | AgentName::WriteTest
-        | AgentName::ModuleDocumentation
-        | AgentName::PromptGeneration => schemars::schema_for!(ReportSubmit),
+        AgentName::ExecutionPathAnalyzer | AgentName::WriteTest | AgentName::PromptGeneration => {
+            schemars::schema_for!(ReportSubmit)
+        }
+        AgentName::Documentation => schemars::schema_for!(crate::book::DocumentationSubmit),
+        AgentName::SystemArchitecture => schemars::schema_for!(crate::book::ArchitectureSubmit),
         AgentName::Initializer => schemars::schema_for!(InitializerSubmit),
         AgentName::QuickAnswer => schemars::schema_for!(QuickAnswerSubmit),
         AgentName::Advisor => schemars::schema_for!(AdvisorSubmit),
@@ -360,6 +361,13 @@ pub fn submit_description(agent: AgentName) -> String {
 
 /// Validate a submit payload for an agent. Returns the parsed value or a message for the model.
 pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String> {
+    fn issues(list: Vec<String>) -> Result<(), String> {
+        if list.is_empty() {
+            Ok(())
+        } else {
+            Err(list.join("\n"))
+        }
+    }
     fn check<T: serde::de::DeserializeOwned>(v: &serde_json::Value) -> Result<(), String> {
         serde_json::from_value::<T>(v.clone())
             .map(|_| ())
@@ -382,10 +390,19 @@ pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<()
             }
             Ok(())
         }
-        AgentName::ExecutionPathAnalyzer
-        | AgentName::WriteTest
-        | AgentName::ModuleDocumentation
-        | AgentName::PromptGeneration => check::<ReportSubmit>(input),
+        AgentName::ExecutionPathAnalyzer | AgentName::WriteTest | AgentName::PromptGeneration => {
+            check::<ReportSubmit>(input)
+        }
+        AgentName::Documentation => {
+            let d: crate::book::DocumentationSubmit =
+                serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+            issues(crate::book::check_documentation(&d))
+        }
+        AgentName::SystemArchitecture => {
+            let a: crate::book::ArchitectureSubmit =
+                serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+            issues(crate::book::check_architecture(&a))
+        }
         AgentName::Initializer => check::<InitializerSubmit>(input),
         AgentName::QuickAnswer => check::<QuickAnswerSubmit>(input),
         AgentName::Advisor => {

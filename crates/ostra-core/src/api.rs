@@ -723,6 +723,11 @@ pub struct CreateSession {
     /// Staged uploads (`UploadRef::id`) to keep in the session.
     #[serde(default)]
     pub uploads: Vec<String>,
+    /// Rule B6: an existing documentation book for the session's docs. Absent names the book
+    /// after the documented projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub docs_book: Option<String>,
 }
 
 /// A file uploaded to the workspace's staging area, waiting for a session or an addition to
@@ -1886,7 +1891,7 @@ pub struct SkillDoc {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SkillSave {
-    /// `convention`, `module-hub`, `creation`, `test`, or `other`.
+    /// `convention`, `creation`, `test`, or `other`.
     pub kind: String,
     pub component_type: Option<String>,
     pub content: String,

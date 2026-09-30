@@ -228,7 +228,7 @@ fn context_of(u: &Usage) -> u64 {
 fn is_concurrent(name: &str) -> bool {
     matches!(
         name,
-        "Read" | "Grep" | "Glob" | "WebFetch" | "MemoryRecall" | "Skill"
+        "Read" | "Grep" | "Glob" | "WebFetch" | "MemoryRecall" | "DocsSearch" | "Skill"
     ) || ostra_core::agent::is_code_tool(name)
 }
 

@@ -8,6 +8,7 @@ use crate::judge::{
 };
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
+use ostra_core::book::{ArchitectureSubmit, DocumentationSubmit};
 use ostra_core::containment::{ContainmentSignal, PAUSE_AFTER};
 use ostra_core::event::{
     AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, FactTarget,
@@ -632,11 +633,12 @@ pub struct FeedbackRound {
     pub phases: Vec<u32>,
 }
 
+/// A docs-stage execution: a project's part of the book, or the book's architecture.
 #[derive(Debug, Clone, PartialEq)]
-pub enum DocsState {
+pub enum StageRun<T> {
     NotStarted,
     Running(ExecutionId),
-    Done(Option<PathBuf>),
+    Done(Box<T>),
     Failed {
         exec: ExecutionId,
         error: String,
@@ -644,6 +646,32 @@ pub enum DocsState {
         retries: u32,
     },
     Abandoned,
+}
+
+impl<T> StageRun<T> {
+    pub fn is_settled(&self) -> bool {
+        matches!(self, StageRun::Done(_) | StageRun::Abandoned)
+    }
+}
+
+pub type DocsState = StageRun<DocumentationSubmit>;
+pub type ArchitectureState = StageRun<ArchitectureSubmit>;
+
+/// Rule B5: the book write that ends the docs stage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BookWrite {
+    pub book: String,
+    pub projects: Vec<String>,
+    pub error: Option<String>,
+}
+
+/// Rule B9: how a project's part is split among writers, from `DocsPlanned`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocsPlan {
+    /// Empty for one writer.
+    pub areas: Vec<ostra_core::book::DocsArea>,
+    pub existing: Option<Vec<String>>,
+    pub touched: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -654,7 +682,12 @@ pub struct ProjectTrack {
     pub running: Option<(CommandPurpose, String)>,
     pub closing_gate: Option<GateId>,
     pub closing: Option<(bool, bool)>,
+    /// The one writer of a part that is not split into areas.
     pub docs: DocsState,
+    /// `None` until the docs stage is planned. A log from before Rule B9 has none and one writer.
+    pub docs_plan: Option<DocsPlan>,
+    /// Rule B9: the writer of each area this session rewrites, by area ID.
+    pub area_docs: BTreeMap<String, DocsState>,
 }
 
 impl Default for ProjectTrack {
@@ -665,7 +698,59 @@ impl Default for ProjectTrack {
             closing_gate: None,
             closing: None,
             docs: DocsState::NotStarted,
+            docs_plan: None,
+            area_docs: BTreeMap::new(),
         }
+    }
+}
+
+impl ProjectTrack {
+    /// Rule B9: the planned areas, when the part is split.
+    pub fn docs_areas(&self) -> Option<&[ostra_core::book::DocsArea]> {
+        self.docs_plan
+            .as_ref()
+            .map(|p| p.areas.as_slice())
+            .filter(|a| !a.is_empty())
+    }
+
+    /// The writer state an execution for `area` folds into.
+    pub fn docs_mut(&mut self, area: Option<&str>) -> &mut DocsState {
+        match area {
+            Some(a) => self.area_docs.entry(a.to_string()).or_insert(DocsState::NotStarted),
+            None => &mut self.docs,
+        }
+    }
+
+    /// The project's docs as one run: the writer of an unsplit part, or for a split part, running
+    /// while any area runs, failed while one waits on its failure, and done once every rewritten
+    /// area settled with at least one written or an area kept from the book, with the rewritten
+    /// areas combined.
+    pub fn docs_aggregate(&self) -> DocsState {
+        let Some(areas) = self.docs_areas() else {
+            return self.docs.clone();
+        };
+        let states: Vec<&DocsState> = self.area_docs.values().collect();
+        if let Some(r) = states.iter().find(|s| matches!(s, DocsState::Running(_))) {
+            return (*r).clone();
+        }
+        if let Some(f) = states.iter().find(|s| matches!(s, DocsState::Failed { .. })) {
+            return (*f).clone();
+        }
+        if states.iter().any(|s| matches!(s, DocsState::NotStarted)) {
+            return DocsState::NotStarted;
+        }
+        let written: Vec<(&ostra_core::book::DocsArea, &DocumentationSubmit)> = areas
+            .iter()
+            .filter_map(|a| match self.area_docs.get(&a.id) {
+                Some(DocsState::Done(d)) => Some((a, &**d)),
+                _ => None,
+            })
+            .collect();
+        let kept = areas.iter().any(|a| !self.area_docs.contains_key(&a.id));
+        if written.is_empty() && !kept {
+            return DocsState::Abandoned;
+        }
+        DocsState::Done(Box::new(ostra_core::book::combine_areas(&written)))
     }
 }
 
@@ -879,6 +964,12 @@ pub struct SessionState {
     pub phases: BTreeMap<u32, PhaseRun>,
     pub superseded_phases: Vec<PhaseRun>,
     pub project_tracks: BTreeMap<String, ProjectTrack>,
+    /// Rule B6: the book the user picked on the New task form.
+    pub docs_book: Option<String>,
+    /// Rule B4: the architecture of a book of two or more projects.
+    pub architecture: ArchitectureState,
+    /// Rule B5: set once the engine wrote the session's documentation.
+    pub book_written: Option<BookWrite>,
     pub quick: QuickTrack,
     pub init: Option<InitTrack>,
     /// Rule O3: projects agents created in this session, in creation order.
@@ -926,6 +1017,32 @@ pub struct SessionState {
     pub title: Option<String>,
 }
 
+/// A docs-stage run ends done only with a submit the engine can read, because the book is built
+/// from it.
+fn stage_run<T>(
+    status: ExecutionStatus,
+    submit: Option<T>,
+    exec: &ExecutionId,
+    error: String,
+) -> StageRun<T> {
+    match (status, submit) {
+        (ExecutionStatus::Ok, Some(t)) => StageRun::Done(Box::new(t)),
+        (ExecutionStatus::Interrupted, _) => StageRun::NotStarted,
+        (ExecutionStatus::Ok, None) => StageRun::Failed {
+            exec: exec.clone(),
+            error: "The run ended without a readable submit call, so there is nothing to put in the book.".into(),
+            gate: None,
+            retries: 1,
+        },
+        _ => StageRun::Failed {
+            exec: exec.clone(),
+            error,
+            gate: None,
+            retries: 1,
+        },
+    }
+}
+
 fn parse<T: serde::de::DeserializeOwned>(v: &Option<Value>) -> Option<T> {
     v.as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -971,7 +1088,8 @@ pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
         ExecPurpose::Review { tests: true, .. } => StageKind::TestReview,
         ExecPurpose::Epa { .. } => StageKind::Epa,
         ExecPurpose::WriteTest { .. } => StageKind::WriteTest,
-        ExecPurpose::ModuleDocs { .. } => StageKind::ModuleDocs,
+        ExecPurpose::Docs { .. } => StageKind::Documentation,
+        ExecPurpose::Architecture => StageKind::Architecture,
         ExecPurpose::PromptGen {
             handoff_for: Some(_),
         } => StageKind::Handoff,
@@ -1024,6 +1142,9 @@ impl SessionState {
             phases: BTreeMap::new(),
             superseded_phases: vec![],
             project_tracks: BTreeMap::new(),
+            docs_book: None,
+            architecture: ArchitectureState::NotStarted,
+            book_written: None,
             quick: QuickTrack::default(),
             init: None,
             created_projects: vec![],
@@ -1194,6 +1315,84 @@ impl SessionState {
         self.options.docs || self.opts_in.docs
     }
 
+    /// Whether a project's closing stages include docs, recorded or implied by an explicit
+    /// request for both tests and docs (Rule T3).
+    pub fn project_docs_on(&self, key: &str) -> bool {
+        self.project_tracks
+            .get(key)
+            .and_then(|t| t.closing)
+            .map(|c| c.1)
+            .unwrap_or(self.tests_requested() && self.docs_requested())
+    }
+
+    /// Projects whose part of the book this session writes, sorted.
+    pub fn docs_projects(&self) -> Vec<String> {
+        self.project_tracks
+            .keys()
+            .filter(|k| {
+                self.project_docs_on(k)
+                    && self
+                        .phases
+                        .values()
+                        .any(|p| &p.info.project == *k && p.impl_loop.is_done())
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Rule B6: what this session adds to its book, from the docs-stage submits in the log.
+    pub fn book_update(&self) -> ostra_core::book::BookUpdate {
+        let parts = self
+            .project_tracks
+            .iter()
+            .filter_map(|(k, t)| match t.docs_aggregate() {
+                DocsState::Done(d) => Some((k.clone(), *d)),
+                _ => None,
+            })
+            .collect();
+        // Rule B9: every planned area, with the submit this session wrote or `None` to keep it.
+        let areas = self
+            .project_tracks
+            .iter()
+            .filter(|(_, t)| matches!(t.docs_aggregate(), DocsState::Done(_)))
+            .filter_map(|(k, t)| {
+                let planned = t.docs_areas()?;
+                Some((
+                    k.clone(),
+                    planned
+                        .iter()
+                        .map(|a| {
+                            let sub = match t.area_docs.get(&a.id) {
+                                Some(DocsState::Done(d)) => Some((**d).clone()),
+                                _ => None,
+                            };
+                            (a.clone(), sub)
+                        })
+                        .collect(),
+                ))
+            })
+            .collect();
+        let (architecture, glossary) = match &self.architecture {
+            ArchitectureState::Done(a) => (a.architecture.clone(), a.glossary.clone()),
+            _ => (None, vec![]),
+        };
+        ostra_core::book::BookUpdate {
+            session: self.id.to_string(),
+            parts,
+            areas,
+            architecture,
+            glossary,
+        }
+    }
+
+    /// Rule B6: the picked book, or the one named after the documented projects.
+    pub fn book_id(&self) -> String {
+        self.docs_book
+            .clone()
+            .filter(|b| ostra_core::book::is_book_id(b))
+            .unwrap_or_else(|| ostra_core::book::book_id(&self.docs_projects()))
+    }
+
     pub fn ledger_path(&self, project: &str, phase: u32, tests: bool) -> PathBuf {
         let value = if tests {
             format!("{phase}-tests")
@@ -1251,9 +1450,11 @@ impl SessionState {
                 files,
                 uploads,
                 pinned,
+                docs_book,
             } => {
                 self.created = true;
                 self.pinned = pinned.clone();
+                self.docs_book = docs_book.clone();
                 self.files = files.clone();
                 self.uploads = uploads.clone();
                 self.created_at = at;
@@ -1549,6 +1750,41 @@ impl SessionState {
                     .entry(project.clone())
                     .or_default()
                     .running = Some((*purpose, command.clone()));
+            }
+            SessionEvent::DocsPlanned {
+                project,
+                areas,
+                existing,
+                touched,
+            } => {
+                // Rule B9: a DOCS request, a part the book does not record by these areas, or a
+                // first split rewrites every area; after a build, only the areas the work touched.
+                let every = self.category == Some(Category::Docs)
+                    || existing
+                        .as_ref()
+                        .is_none_or(|e| !areas.iter().all(|a| e.contains(&a.id)));
+                let t = self.project_tracks.entry(project.clone()).or_default();
+                t.area_docs = areas
+                    .iter()
+                    .filter(|a| every || touched.contains(&a.id))
+                    .map(|a| (a.id.clone(), DocsState::NotStarted))
+                    .collect();
+                t.docs_plan = Some(DocsPlan {
+                    areas: areas.clone(),
+                    existing: existing.clone(),
+                    touched: touched.clone(),
+                });
+            }
+            SessionEvent::BookWritten {
+                book,
+                projects,
+                error,
+            } => {
+                self.book_written = Some(BookWrite {
+                    book: book.clone(),
+                    projects: projects.clone(),
+                    error: error.clone(),
+                });
             }
             SessionEvent::CommandRan {
                 purpose,
@@ -2228,6 +2464,28 @@ impl SessionState {
                     self.insert_phase(inline_phase(id, key, "Verification", i), l);
                 }
             }
+            Category::Docs => {
+                for (i, key) in scope.iter().enumerate() {
+                    let id = i as u32 + 1;
+                    let mut l =
+                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                    l.next = LoopNext::Done;
+                    let report = self
+                        .project_session_dir(key)
+                        .join(paths::report::docs_request());
+                    self.insert_phase(
+                        inline_phase(id, key, "Documentation requested by the user", i),
+                        l,
+                    );
+                    if let Some(p) = self.phases.get_mut(&id) {
+                        p.implementer_report = Some(report);
+                        p.info.depends_on = Some(vec![]);
+                    }
+                    self.project_tracks.entry(key.clone()).or_default().closing =
+                        Some((false, true));
+                    self.project_tracks.entry(key.clone()).or_default().format = Some(None);
+                }
+            }
             Category::Test => {
                 for (i, key) in scope.iter().enumerate() {
                     let id = i as u32 + 1;
@@ -2784,9 +3042,15 @@ impl SessionState {
                     p.epa = EpaState::Running(id.clone());
                 }
             }
-            ExecPurpose::ModuleDocs { project } => {
-                self.project_tracks.entry(project.clone()).or_default().docs =
-                    DocsState::Running(id.clone());
+            ExecPurpose::Docs { project, area } => {
+                *self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_mut(area.as_deref()) = DocsState::Running(id.clone());
+            }
+            ExecPurpose::Architecture => {
+                self.architecture = ArchitectureState::Running(id.clone());
             }
             ExecPurpose::QuickAnswer => {
                 self.quick.exec = Some(id.clone());
@@ -2947,18 +3211,22 @@ impl SessionState {
                     };
                 }
             }
-            ExecPurpose::ModuleDocs { project } => {
+            ExecPurpose::Docs { project, area } => {
                 let t = self.project_tracks.entry(project.clone()).or_default();
-                t.docs = match status {
-                    ExecutionStatus::Ok => DocsState::Done(rec.report_path.clone()),
-                    ExecutionStatus::Interrupted => DocsState::NotStarted,
-                    _ => DocsState::Failed {
-                        exec: rec.id.clone(),
-                        error,
-                        gate: None,
-                        retries: 1,
-                    },
-                };
+                *t.docs_mut(area.as_deref()) = stage_run(
+                    status,
+                    parse::<DocumentationSubmit>(&result.submit),
+                    &rec.id,
+                    error,
+                );
+            }
+            ExecPurpose::Architecture => {
+                self.architecture = stage_run(
+                    status,
+                    parse::<ArchitectureSubmit>(&result.submit),
+                    &rec.id,
+                    error,
+                );
             }
             ExecPurpose::QuickAnswer => {
                 self.quick.running = false;
@@ -3284,10 +3552,18 @@ impl SessionState {
                     *g = Some(gate.clone());
                 }
             }
-            ExecPurpose::ModuleDocs { project } => {
-                if let DocsState::Failed { gate: g, .. } =
-                    &mut self.project_tracks.entry(project.clone()).or_default().docs
+            ExecPurpose::Docs { project, area } => {
+                if let DocsState::Failed { gate: g, .. } = self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_mut(area.as_deref())
                 {
+                    *g = Some(gate.clone());
+                }
+            }
+            ExecPurpose::Architecture => {
+                if let ArchitectureState::Failed { gate: g, .. } = &mut self.architecture {
                     *g = Some(gate.clone());
                 }
             }
@@ -3800,11 +4076,22 @@ impl SessionState {
                     };
                 }
             }
-            ExecPurpose::ModuleDocs { project } => {
-                self.project_tracks.entry(project.clone()).or_default().docs = if retry {
+            ExecPurpose::Docs { project, area } => {
+                *self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_mut(area.as_deref()) = if retry {
                     DocsState::NotStarted
                 } else {
                     DocsState::Abandoned
+                };
+            }
+            ExecPurpose::Architecture => {
+                self.architecture = if retry {
+                    ArchitectureState::NotStarted
+                } else {
+                    ArchitectureState::Abandoned
                 };
             }
             ExecPurpose::QuickAnswer => {

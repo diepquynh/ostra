@@ -104,6 +104,8 @@ test("docs screenshots load from the site's own bundle", async ({ page, state, g
   await page.goto(`${state.site}/docs/#pipeline`);
   const imgs = page.locator("article img");
   await expect(imgs.first()).toBeVisible();
+  // Screenshots load lazily, so the first one loads only once it is in view.
+  await imgs.first().scrollIntoViewIfNeeded();
   await expect.poll(() => imgs.first().evaluate((e) => (e as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   const srcs = await imgs.evaluateAll((els) => els.map((e) => (e as HTMLImageElement).src));
   expect(srcs.length).toBeGreaterThan(1);

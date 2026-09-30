@@ -163,7 +163,7 @@ agent that has not submitted after 400 turns is looping.
 ### Tool dispatch
 
 The model often asks for several tools in one turn. The loop runs them in order, with one exception: a run of
-consecutive read-only calls (`Read`, `Grep`, `Glob`, `WebFetch`, `MemoryRecall`, `Skill`, and the code
+consecutive read-only calls (`Read`, `Grep`, `Glob`, `WebFetch`, `MemoryRecall`, `DocsSearch`, `Skill`, and the code
 navigation tools) runs concurrently. Writes and shell commands always run one at a time and in the order the
 model gave, because the second call may depend on the first.
 
@@ -442,7 +442,7 @@ with no tools, so a global registration stays inert.
 It serves:
 
 - `submit_<agent>`, the only submit tool this agent may call.
-- `report`, `document`, `memory`, and `memory_recall`, as the agent's capabilities allow.
+- `report`, `document`, `memory`, `memory_recall`, and `docs_search`, as the agent's capabilities allow.
 - `code_outline`, `code_find`, and the rest of the code navigation tools.
 - `project_list` and `project_create`, only to an execution whose agent has the `manage_projects` capability
   (the implementer), because the shim lists them only when the server gave the execution a management handle.
@@ -548,8 +548,8 @@ Each agent's `agent.toml` sets `timeout_seconds`, which becomes `timeout_secs` i
 | quick-answer | 5 minutes |
 | advisor | 15 minutes |
 | code-reviewer, execution-path-analyzer | 20 minutes |
-| explore, generate-spec, fact-check, plan, module-documentation, prompt-generation | 30 minutes |
-| implementer, write-test, initializer | 40 minutes |
+| explore, generate-spec, fact-check, plan, system-architecture, prompt-generation | 30 minutes |
+| implementer, write-test, initializer, documentation | 40 minutes |
 
 The budget is a hard limit on wall time, including time spent waiting on a permission card. The native executor
 enforces it with a `tokio::select!` around the whole run. The harness executor checks it in the supervise loop,

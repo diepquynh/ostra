@@ -275,10 +275,11 @@ impl Profile {
                 .read_only_dir(&paths::session_state_dir(&ctx.session_root));
         }
         if !ctx.workspace_root.as_os_str().is_empty() {
-            // Rule W1: agents read workspace artifacts and never write them.
+            // Rules W1 and B5: agents read workspace artifacts and books and never write them.
             p = p
                 .workspace_state(&ctx.workspace_root)
-                .read_only_dir(&ostra_core::artifacts::dir(&ctx.workspace_root));
+                .read_only_dir(&ostra_core::artifacts::dir(&ctx.workspace_root))
+                .read_only_dir(&ostra_core::book::dir(&ctx.workspace_root));
         }
         for f in db_files(&ctx.memory_db) {
             p = p.read_only(&f);

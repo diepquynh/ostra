@@ -397,6 +397,14 @@ export function describeEvent(e: SessionEvent): string {
       return `Gate answered by ${e.source}`;
     case "command_started":
       return `${humanize(e.purpose)} started in ${e.project}: ${truncate(e.command, 80)}`;
+    case "docs_planned":
+      return e.areas.length
+        ? `Documentation for ${e.project} split into ${e.areas.length} areas`
+        : `Documentation for ${e.project} planned with one writer`;
+    case "book_written":
+      return e.error
+        ? `Book ${e.book} not written: ${truncate(e.error, 80)}`
+        : `Book ${e.book} written for ${e.projects.join(", ")}`;
     case "command_ran":
       return `${humanize(e.purpose)} in ${e.project}: exit ${e.exit_code ?? "unknown"}`;
     case "autofix_applied":

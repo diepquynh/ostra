@@ -114,6 +114,7 @@ async fn recovery_keeps_usage_and_reruns() {
             projects: vec![],
             files: vec![],
             uploads: vec![],
+            docs_book: None,
         })
         .unwrap();
     let running = || first.state(&s.id).unwrap().running_executions().count();
@@ -207,6 +208,7 @@ async fn offline_stop_prevents_rerun_on_recovery() {
             projects: vec![],
             files: vec![],
             uploads: vec![],
+            docs_book: None,
         })
         .unwrap();
     for _ in 0..100 {

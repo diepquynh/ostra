@@ -224,24 +224,17 @@ fn write_scope_per_agent() {
         "outside the scope of initializer",
     );
 
-    let docs = f.policy(AgentName::ModuleDocumentation);
-    allowed(
-        &docs,
-        &write(f.repo.join(".ostra/skills/module-hub/references/auth.md")),
-    );
-    allowed(
-        &docs,
-        &write(f.repo.join(".agents/skills/module-hub/references/auth.md")),
-    );
+    // Rule B1: a docs writer returns the book in its submit call and writes no project file.
+    let docs = f.policy(AgentName::Documentation);
     denied(
         &docs,
-        &write(f.repo.join(".ostra/skills/convention/SKILL.md")),
-        "outside the scope",
+        &write(f.repo.join(".agents/skills/convention/SKILL.md")),
+        "never modifies project source",
     );
     denied(
         &docs,
         &write(f.repo.join("src/App.ts")),
-        "outside the scope",
+        "never modifies project source",
     );
 
     let imp = f.policy(AgentName::Implementer);
@@ -1028,6 +1021,7 @@ fn default_mode() {
         &ToolCall::new("Read", json!({"file_path": "/etc/hosts"})),
     );
     allowed(&p, &ToolCall::new("MemoryRecall", json!({"query": "x"})));
+    allowed(&p, &ToolCall::new("DocsSearch", json!({"query": "x"})));
     allowed(&p, &ToolCall::new("CodeCallers", json!({"symbol": "x"})));
     allowed(
         &p,
@@ -1709,6 +1703,29 @@ fn workspace_artifacts_are_read_but_never_written() {
         guard_of(&p, &bash(format!("rm {}", shp(&file)))),
         "workspace-artifacts"
     );
+}
+
+#[test]
+fn workspace_books_are_read_but_never_written() {
+    // Rule B5.
+    let f = fx();
+    let dir = ostra_core::book::book_dir(&f.ws, "api_web");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("index.md"), "# Book\n").unwrap();
+    let file = dir.join("index.md");
+    for agent in [AgentName::Implementer, AgentName::Documentation] {
+        let p = f.policy(agent);
+        allowed(
+            &p,
+            &ToolCall::new("Read", json!({"file_path": file.to_string_lossy()})),
+        );
+        assert_eq!(guard_of(&p, &write(&file)), "workspace-docs", "{agent}");
+        assert_eq!(
+            guard_of(&p, &bash(format!("rm {}", shp(&file)))),
+            "workspace-docs",
+            "{agent}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

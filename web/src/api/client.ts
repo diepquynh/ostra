@@ -1,4 +1,6 @@
 import type { ApproveCommands } from "./gen/ApproveCommands";
+import type { Book } from "./gen/Book";
+import type { BookSummary } from "./gen/BookSummary";
 import type { CodeDeps } from "./gen/CodeDeps";
 import type { CodeExternalFile } from "./gen/CodeExternalFile";
 import type { CodeFile } from "./gen/CodeFile";
@@ -269,6 +271,10 @@ export const httpApi = {
     request<void>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/memory${q({ id })}`),
 
   skills: (ws: string) => request<ProjectSkills[]>("GET", `/api/workspaces/${enc(ws)}/skills`),
+  books: (ws: string) => request<BookSummary[]>("GET", `/api/workspaces/${enc(ws)}/docs`),
+  book: (ws: string, id: string) => request<Book>("GET", `/api/workspaces/${enc(ws)}/docs/${enc(id)}`),
+  deleteBook: (ws: string, id: string) =>
+    request<BookSummary[]>("DELETE", `/api/workspaces/${enc(ws)}/docs/${enc(id)}`),
   skill: (ws: string, key: string, name: string) =>
     request<SkillDoc>("GET", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/skills/${enc(name)}`),
   harnessSkill: (ws: string, key: string, path: string) =>

@@ -289,6 +289,7 @@ static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>> = LazyLock::
             "MemoryRecall",
             Capability::MemoryRecall,
         ),
+        ("docs_search".into(), "DocsSearch", Capability::DocsSearch),
     ];
     v.extend(
         ostra_core::agent::CODE_TOOLS

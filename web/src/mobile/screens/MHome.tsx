@@ -469,7 +469,7 @@ function NewTaskSection({ ws, onStarted }: { ws: string; onStarted: () => void }
           )}
           <div className="mh-options">
             <Switch label="Write tests" checked={tests} onChange={(e) => setTests(e.target.checked)} />
-            <Switch label="Update docs" checked={docs} onChange={(e) => setDocs(e.target.checked)} />
+            <Switch label="Write docs" checked={docs} onChange={(e) => setDocs(e.target.checked)} />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Switch label="YOLO" tone="warn" checked={yolo} onChange={(e) => setYolo(e.target.checked)} />

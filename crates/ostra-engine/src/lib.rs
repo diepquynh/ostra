@@ -3,6 +3,7 @@
 
 pub mod autofix;
 pub mod context;
+pub mod docs_areas;
 pub mod coord;
 pub mod factory;
 pub mod init;

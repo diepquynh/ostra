@@ -35,6 +35,7 @@ export function MenuSheet({ ws, wsName, theme, spend, open, onClose, onSearch, o
     { icon: "package", label: "Artifacts", hint: "workspace files", onTap: () => open(`project:${ARTIFACTS_ROOT}`) },
     { icon: "coins", label: "Cost", hint: spend ? `${spend} this week` : undefined, onTap: () => open("ws:cost") },
     { icon: "book-open", label: "Skills", hint: "every project", onTap: () => open("ws:skills") },
+    { icon: "book-check", label: "Documentation", hint: "books", onTap: () => open("ws:docs") },
     { icon: "brain", label: "Memory", hint: "lessons", onTap: () => open("ws:memory") },
     { icon: "settings", label: "Settings", onTap: () => open("ws:settings") },
     { icon: "search", label: "Search", onTap: onSearch },

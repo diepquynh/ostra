@@ -288,6 +288,7 @@ pub async fn execute(
             "Document" => doc::document(env, input).await,
             "Memory" => misc::memory(env, input).await,
             "MemoryRecall" => misc::memory_recall(env, input).await,
+            "DocsSearch" => misc::docs_search(env, input).await,
             t if ostra_core::agent::is_code_tool(t) => code::run(env, t, input).await,
             t if ostra_core::manage::is_manage_tool(t) => manage::run(env, t, input).await,
             t if ostra_core::coord::is_coord_tool(t) => coord::run(env, t, input).await,

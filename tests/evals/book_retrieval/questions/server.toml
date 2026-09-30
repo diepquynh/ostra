@@ -1,0 +1,310 @@
+# Retrieval questions about the server, code navigation, MCP client, Web Push, and a few console behaviors.
+# Written from the source, not from docs/ or a book.
+
+# ---- lexical ----
+
+[[case]]
+id = "server-001"
+kind = "lexical"
+question = "What does the guard middleware in api.rs check on every request under /api before the handler runs?"
+gold = ["crates/ostra-server/src/api.rs"]
+
+[[case]]
+id = "server-002"
+kind = "lexical"
+question = "How long do COOKIE_TTL_SECS and the one-time token TTL last in auth.rs?"
+gold = ["crates/ostra-server/src/auth.rs"]
+
+[[case]]
+id = "server-003"
+kind = "lexical"
+question = "What do MAX_TERM_INPUT and TERM_QUEUE limit on the /ws socket?"
+gold = ["crates/ostra-server/src/ws.rs"]
+
+[[case]]
+id = "server-004"
+kind = "lexical"
+question = "Which OSTRA_MASTER_KEY_FILE behavior does master_key.rs implement when the variable is set?"
+gold = ["crates/ostra-server/src/master_key.rs"]
+
+[[case]]
+id = "server-005"
+kind = "lexical"
+question = "Which folders does HARNESS_DIRS list for skills that can be adopted into a project?"
+gold = ["crates/ostra-server/src/skills.rs"]
+
+[[case]]
+id = "server-006"
+kind = "lexical"
+question = "What does OSTRA_MODELS_DEV_URL change, and how often is the models.dev price cache refreshed?"
+gold = ["crates/ostra-server/src/prices.rs"]
+
+[[case]]
+id = "server-007"
+kind = "lexical"
+question = "What are the IDLE and MAX_SERVERS limits of the language server pool?"
+gold = ["crates/ostra-code/src/lsp/mod.rs"]
+
+[[case]]
+id = "server-008"
+kind = "lexical"
+question = "Which MCP protocol versions does SUPPORTED_VERSIONS accept, and what is PROTOCOL_VERSION?"
+gold = ["crates/ostra-mcp/src/lib.rs"]
+
+[[case]]
+id = "server-009"
+kind = "lexical"
+question = "Why is MAX_PLAINTEXT 3993 bytes in the Web Push encryption?"
+gold = ["crates/ostra-notify/src/lib.rs"]
+
+[[case]]
+id = "server-010"
+kind = "lexical"
+question = "What does `ostra stop <session>` do when the server is not running, and when does it refuse?"
+gold = ["crates/ostra-server/src/app.rs", "crates/ostra-server/src/main.rs"]
+
+# ---- paraphrase ----
+
+[[case]]
+id = "server-011"
+kind = "paraphrase"
+question = "How does the server stop a web page on another site from calling its API?"
+gold = ["crates/ostra-server/src/api.rs"]
+
+[[case]]
+id = "server-012"
+kind = "paraphrase"
+question = "What happens when someone opens the app at the loopback IP address instead of its private host name?"
+gold = ["crates/ostra-server/src/api.rs", "crates/ostra-server/src/auth.rs"]
+
+[[case]]
+id = "server-013"
+kind = "paraphrase"
+question = "How many wrong sign-in link attempts can a remote machine make before it has to wait, and are local attempts limited too?"
+gold = ["crates/ostra-server/src/auth.rs"]
+
+[[case]]
+id = "server-014"
+kind = "paraphrase"
+question = "When a sign-in is revoked from the command line, how soon does an open browser tab lose its live connection?"
+gold = ["crates/ostra-server/src/ws.rs", "crates/ostra-server/src/auth.rs"]
+
+[[case]]
+id = "server-015"
+kind = "paraphrase"
+question = "Which content security policy does the server send, and why are remote images blocked?"
+gold = ["crates/ostra-server/src/api.rs"]
+
+[[case]]
+id = "server-016"
+kind = "paraphrase"
+question = "Why does a browser route that ends in a file name like main.rs still load the app instead of returning not found?"
+gold = ["crates/ostra-server/src/assets.rs"]
+
+[[case]]
+id = "server-017"
+kind = "paraphrase"
+question = "Where is the key that encrypts saved provider keys kept when there is no OS keychain?"
+gold = ["crates/ostra-server/src/master_key.rs"]
+
+[[case]]
+id = "server-018"
+kind = "paraphrase"
+question = "How are saved git tokens handed to git during a clone without writing them into the repository config?"
+gold = ["crates/ostra-server/src/git.rs"]
+
+[[case]]
+id = "server-019"
+kind = "paraphrase"
+question = "If two saved git credentials match the same remote, which one is used?"
+gold = ["crates/ostra-server/src/git.rs"]
+
+[[case]]
+id = "server-020"
+kind = "paraphrase"
+question = "When does the gateway reconnect to an external tool server after its settings change?"
+gold = ["crates/ostra-server/src/mcp.rs"]
+
+[[case]]
+id = "server-021"
+kind = "paraphrase"
+question = "What error does a user see when a tool server's config refers to an environment variable holding a provider key?"
+gold = ["crates/ostra-server/src/mcp.rs"]
+
+[[case]]
+id = "server-022"
+kind = "paraphrase"
+question = "How does the file tree notice edits made in the user's own editor or by a checkout, and how are bursts of changes grouped?"
+gold = ["crates/ostra-server/src/code_watch.rs"]
+
+[[case]]
+id = "server-023"
+kind = "paraphrase"
+question = "What stops a save from the browser editor from overwriting a file that changed on disk after the edit began?"
+gold = ["crates/ostra-server/src/files/mod.rs"]
+
+[[case]]
+id = "server-024"
+kind = "paraphrase"
+question = "How does the workspace search rank results across sessions, artifacts, files, projects, and lessons?"
+gold = ["crates/ostra-server/src/nav/search.rs"]
+
+[[case]]
+id = "server-025"
+kind = "paraphrase"
+question = "How often does the sessions tree in the sidebar get rebuilt and pushed after engine activity?"
+gold = ["crates/ostra-server/src/nav/mod.rs"]
+
+[[case]]
+id = "server-026"
+kind = "paraphrase"
+question = "What happens to a phone's notification subscription when the push service says it no longer exists?"
+gold = ["crates/ostra-server/src/services.rs"]
+
+[[case]]
+id = "server-027"
+kind = "paraphrase"
+question = "How does the symbol index decide which files to analyze again after a change, without reading every file?"
+gold = ["crates/ostra-code/src/index.rs"]
+
+[[case]]
+id = "server-028"
+kind = "paraphrase"
+question = "When looking for where a mentioned name is defined, in what order are places searched?"
+gold = ["crates/ostra-code/src/graph.rs"]
+
+[[case]]
+id = "server-029"
+kind = "paraphrase"
+question = "How does find-usages keep two unrelated classes' methods with the same name apart?"
+gold = ["crates/ostra-code/src/usage.rs"]
+
+[[case]]
+id = "server-030"
+kind = "paraphrase"
+question = "What happens when a project's own navigation program crashes or prints something invalid?"
+gold = ["crates/ostra-code/src/provider.rs"]
+
+# ---- conceptual ----
+
+[[case]]
+id = "server-031"
+kind = "conceptual"
+question = "Why do the harness callback endpoints refuse requests that carry an Origin or Sec-Fetch-Site header even from a local peer?"
+gold = ["crates/ostra-server/src/api.rs"]
+
+[[case]]
+id = "server-032"
+kind = "conceptual"
+question = "Why is the app's sign-in cookie not set on 127.0.0.1?"
+gold = ["crates/ostra-server/src/api.rs", "crates/ostra-server/src/auth.rs"]
+
+[[case]]
+id = "server-033"
+kind = "conceptual"
+question = "Why are sign-in tokens and cookies stored hashed in the registry instead of kept in memory only?"
+gold = ["crates/ostra-server/src/auth.rs"]
+
+[[case]]
+id = "server-034"
+kind = "conceptual"
+question = "Why does the API refuse a request whose fetch destination is an image, script, or frame?"
+gold = ["crates/ostra-server/src/api.rs"]
+
+[[case]]
+id = "server-035"
+kind = "conceptual"
+question = "What invariant keeps hidden workspace artifacts unreadable by agents when a file is moved or a folder is hidden?"
+gold = ["crates/ostra-server/src/artifacts.rs"]
+
+[[case]]
+id = "server-036"
+kind = "conceptual"
+question = "Why must a git command from the Git dock wait for sessions working in the project?"
+gold = ["crates/ostra-server/src/repo.rs"]
+
+[[case]]
+id = "server-037"
+kind = "conceptual"
+question = "Why do the Files dock's git status calls avoid taking optional locks?"
+gold = ["crates/ostra-server/src/files/git.rs"]
+
+[[case]]
+id = "server-038"
+kind = "conceptual"
+question = "Why does the code index store the names each file mentions but never the file text?"
+gold = ["crates/ostra-code/src/index.rs"]
+
+[[case]]
+id = "server-039"
+kind = "conceptual"
+question = "What does the tokenizer do with text in a language it does not understand, and why can it never fail?"
+gold = ["crates/ostra-code/src/lex.rs"]
+
+[[case]]
+id = "server-040"
+kind = "conceptual"
+question = "Why do OAuth sign-ins for remote tool servers refuse plain http endpoints, and which exception is allowed?"
+gold = ["crates/ostra-mcp/src/oauth.rs"]
+
+[[case]]
+id = "server-041"
+kind = "conceptual"
+question = "Why does the MCP HTTP client refuse to follow a redirect to another host?"
+gold = ["crates/ostra-mcp/src/lib.rs", "crates/ostra-mcp/src/http.rs"]
+
+[[case]]
+id = "server-042"
+kind = "conceptual"
+question = "What assumption about columns does the conversion between language server positions and Ostra's positions rely on?"
+gold = ["crates/ostra-code/src/lsp/convert.rs"]
+
+# ---- cross ----
+
+[[case]]
+id = "server-043"
+kind = "cross"
+question = "How does a harness's tool call reach the policy check in the server, and how is the caller authenticated?"
+gold = ["crates/ostra-server/src/bridge.rs", "crates/ostra-exec-harness/src/protocol.rs", "crates/ostra-exec-harness/src/bridge.rs"]
+
+[[case]]
+id = "server-044"
+kind = "cross"
+question = "How is an engine notice turned into an encrypted Web Push message on a subscribed browser?"
+gold = ["crates/ostra-server/src/services.rs", "crates/ostra-notify/src/lib.rs", "crates/ostra-store/src/registry.rs"]
+
+[[case]]
+id = "server-045"
+kind = "cross"
+question = "Which provider answers a Files view request first: the project's own program, a language server, or the built-in index, and where is that order chosen?"
+gold = ["crates/ostra-server/src/code.rs", "crates/ostra-code/src/provider.rs", "crates/ostra-code/src/lsp/mod.rs"]
+
+[[case]]
+id = "server-046"
+kind = "cross"
+question = "How are saved credentials encrypted at rest, and what happens to ones that were stored before encryption existed?"
+gold = ["crates/ostra-server/src/master_key.rs", "crates/ostra-store/src/registry.rs", "crates/ostra-store/src/secrets.rs"]
+
+[[case]]
+id = "server-047"
+kind = "cross"
+question = "How does the browser turn the link the ostra command printed into a signed-in session, and why does it wait while the page is prerendering?"
+gold = ["web/src/auth.ts", "crates/ostra-server/src/auth.rs"]
+
+[[case]]
+id = "server-048"
+kind = "cross"
+question = "When the editor asks for completions twice quickly, what happens to the first request on the browser and on the server?"
+gold = ["web/src/api/socket.ts", "crates/ostra-server/src/ws.rs"]
+
+[[case]]
+id = "server-049"
+kind = "paraphrase"
+question = "How large can a tool server's call result be before Ostra cuts it, and how is non-text content turned into text?"
+gold = ["crates/ostra-mcp/src/content.rs"]
+
+[[case]]
+id = "server-050"
+kind = "paraphrase"
+question = "Which tool calls does the execution activity view collapse into a one-line summary?"
+gold = ["web/src/screens/execution/ActivityStream.tsx"]

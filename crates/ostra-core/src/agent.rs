@@ -16,7 +16,12 @@ pub enum AgentName {
     CodeReviewer,
     ExecutionPathAnalyzer,
     WriteTest,
-    ModuleDocumentation,
+    /// Rule B1: writes one project's part of the documentation book. Logs written before books
+    /// say `module-documentation`.
+    #[serde(alias = "module-documentation")]
+    Documentation,
+    /// Rule B4: writes the architecture of a book that covers two or more projects.
+    SystemArchitecture,
     PromptGeneration,
     Initializer,
     QuickAnswer,
@@ -25,7 +30,7 @@ pub enum AgentName {
 }
 
 impl AgentName {
-    pub const ALL: [AgentName; 13] = [
+    pub const ALL: [AgentName; 14] = [
         AgentName::Explore,
         AgentName::GenerateSpec,
         AgentName::FactCheck,
@@ -34,7 +39,8 @@ impl AgentName {
         AgentName::CodeReviewer,
         AgentName::ExecutionPathAnalyzer,
         AgentName::WriteTest,
-        AgentName::ModuleDocumentation,
+        AgentName::Documentation,
+        AgentName::SystemArchitecture,
         AgentName::PromptGeneration,
         AgentName::Initializer,
         AgentName::QuickAnswer,
@@ -51,7 +57,8 @@ impl AgentName {
             AgentName::CodeReviewer => "code-reviewer",
             AgentName::ExecutionPathAnalyzer => "execution-path-analyzer",
             AgentName::WriteTest => "write-test",
-            AgentName::ModuleDocumentation => "module-documentation",
+            AgentName::Documentation => "documentation",
+            AgentName::SystemArchitecture => "system-architecture",
             AgentName::PromptGeneration => "prompt-generation",
             AgentName::Initializer => "initializer",
             AgentName::QuickAnswer => "quick-answer",
@@ -89,6 +96,8 @@ impl AgentName {
                 | AgentName::CodeReviewer
                 | AgentName::ExecutionPathAnalyzer
                 | AgentName::Advisor
+                | AgentName::Documentation
+                | AgentName::SystemArchitecture
         )
     }
 
@@ -116,6 +125,10 @@ impl FromStr for AgentName {
             .trim()
             .trim_start_matches("ostra:")
             .trim_start_matches("ultracode:");
+        // Execution rows stored before books name the retired agent.
+        if bare == "module-documentation" {
+            return Ok(AgentName::Documentation);
+        }
         AgentName::ALL
             .into_iter()
             .find(|a| a.as_str() == bare)
@@ -125,6 +138,10 @@ impl FromStr for AgentName {
 
 /// The routing key `judge` sits beside the agent names in `routing.model.byAgent`.
 pub const JUDGE_ROUTE: &str = "judge";
+
+/// Agent names a workspace saved before the agent was replaced. Settings may still carry them,
+/// and validation ignores them instead of refusing the file.
+pub const RETIRED_AGENTS: [&str; 1] = ["module-documentation"];
 
 /// Every key that must have a model route in workspace settings.
 pub fn route_keys() -> Vec<&'static str> {
@@ -183,6 +200,8 @@ pub enum Capability {
     Document,
     Memory,
     MemoryRecall,
+    /// Search over the workspace's documentation books (Rule B8).
+    DocsSearch,
     /// The code navigation tools over the project's index and dependency graph ([`CODE_TOOLS`]).
     Code,
     /// The project management tools ([`crate::manage::PROJECT_TOOLS`]).
@@ -224,6 +243,7 @@ impl Capability {
             Capability::Document => "Document",
             Capability::Memory => "Memory",
             Capability::MemoryRecall => "MemoryRecall",
+            Capability::DocsSearch => "DocsSearch",
             Capability::Code => CODE_TOOLS[0].1,
             Capability::ManageProjects => crate::manage::PROJECT_TOOLS[0].1,
             Capability::Coordinate => crate::coord::COORD_TOOLS[0].1,

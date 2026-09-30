@@ -159,7 +159,7 @@ A session is one request through the pipeline. Most of what it produces stays wi
 - `.ostra/INVENTORY.md` and `.ostra/project.toml`: the stack, commands, module map, and review rules the
   initializer wrote and the user may edit. They feed the repo brief at the top of every execution's first
   message.
-- Skills in `.agents/skills/`, including the convention and module-hub skills.
+- Skills in `.agents/skills/`, including the convention skill.
 - The project's own instruction files (`CLAUDE.md`, `AGENTS.md`, `AGENT.md`), which go into every execution's
   first message after the repo brief.
 

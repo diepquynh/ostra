@@ -24,7 +24,8 @@ agent definitions from disk and a user cannot swap one out by editing a file.
 | `code-reviewer` | Review | balanced | Reviews the unstaged changes of one review loop against the project's rule set and the phase's requirements, and runs a security scan whose BLOCKER findings no instruction can override. |
 | `execution-path-analyzer` | Test | balanced | Plans how a phase is verified. It traces every path through the functions the phase changed (branches, early returns, error paths, boundaries), the system flows that reach them (from a route, a CLI command, a screen, a job, or a consumer of a changed contract), and the existing tests that cover them, and gives each check a test level from the project's test types. `write-test` turns each path and flow into one test. |
 | `write-test` | Test | balanced | Verifies the phase: writes unit, integration, and end-to-end tests at the levels the analyzer assigned, following the project's test skills, then runs them and the existing suites the analyzer listed as regression. It writes only test code. |
-| `module-documentation` | Docs | advanced | Updates the module-hub area references from what the phases actually changed, and checks every documented name against real source. It runs only when the user asks for documentation. |
+| `documentation` | Docs | advanced | Writes one project's part of the workspace documentation book: an overview, sections of one unit of work each (purpose, boundaries, assumptions, business flow, small Mermaid diagrams, tables, separation of concerns, code references), and glossary terms, all checked against real source. It returns the part in its submit call and writes no file. It runs only when the user asks for documentation. |
+| `system-architecture` | Docs | advanced | Writes how the projects of a book of two or more projects work together: components and what each owns, links with protocol and payload, failure and recovery, and scaling, with one flowchart. It returns them in its submit call and writes no file. |
 | `prompt-generation` | Build | advanced | Writes or edits instruction files (system prompts, `SKILL.md` skills, agent definitions). It runs for prompt requests and when an implementer hands off prompt authoring. |
 | `initializer` | Project setup | balanced | Bootstraps a project in one of six modes: detect, scout, propose, generate-skill, generate-inventory, and adopt. |
 | `advisor` | Rescue | advanced (high effort) | Reads one failed or stuck step of a created project's init, from its inputs, its outputs, and the project, and submits `retry` with guidance for the step's next run or `escalate` with a reason for the user (rule O5). It is read-only. |
@@ -114,7 +115,7 @@ Up to three sections are prepended to the rendered body (`render_prompt` in `cra
   project by symbol instead of by grep.
 - **A tool vocabulary table**, for harness executors only. It lists, for each capability the agent holds, the
   tool that serves it on this harness, plus how to load skills and call Ostra's own tools there. Ostra's own
-  tools (`report`, `document`, `memory`, `memory_recall`, the `project_*` tools, and the submit tool) reach a harness through Ostra's
+  tools (`report`, `document`, `memory`, `memory_recall`, `docs_search`, the `project_*` tools, and the submit tool) reach a harness through Ostra's
   MCP server, so in Claude Code the submit tool for the implementer is `mcp__ostra__submit_implementer`.
 
 ## The spawn block: what an agent is told
@@ -217,7 +218,7 @@ passes the path in as `Report file:`:
 | `ostra-epa-phase-N.md` | execution-path-analyzer |
 | `ostra-write-test-phase-N.md` | write-test |
 | `ostra-review-ledger-phase-N.md`, `-phase-N-tests.md` | code-reviewer, then the fix agent |
-| `ostra-module-docs.md` | module-documentation |
+| `ostra-docs-request.md` | the runner, for a `DOCS` request, in place of an implementer report |
 | `ostra-prompt-gen-N.md` | prompt-generation |
 
 All of them live in the session directory for that project. There are three reasons for this:
@@ -292,6 +293,8 @@ Each agent gets only the sections it uses:
 | prompt-generation | skills |
 | initializer | nothing, because it is the agent that creates these facts |
 | advisor | stack, commands, skills, module map |
+| documentation | stack, commands, module map |
+| system-architecture | stack, module map |
 
 The reviewer is the only agent that receives the complete rule catalog, because it is the only one that
 grades against it.
@@ -362,7 +365,9 @@ The returns fall into a few families:
 | `PlanSubmit` | plan | master plan path, phases with project, complexity, test policy, and dependencies |
 | `ImplementerSubmit` | implementer | status, report path, changed files, summary, stuck or handoff details |
 | `CodeReviewerSubmit` | code-reviewer | findings, `security_block`, ledger path, summary |
-| `ReportSubmit` | execution-path-analyzer, write-test, module-documentation, prompt-generation | status, report path, changed files, summary |
+| `ReportSubmit` | execution-path-analyzer, write-test, prompt-generation | status, report path, changed files, summary |
+| `DocumentationSubmit` | documentation | status, summary, overview, sections with sub-sections, glossary |
+| `ArchitectureSubmit` | system-architecture | status, summary, the architecture (overview, diagram, components, links, failure and recovery, scalability), glossary |
 | `InitializerSubmit` | initializer | status, summary, files, a result object that differs per mode |
 | `AdvisorSubmit` | advisor | `action` (`retry` or `escalate`), guidance for the next run, reason for the user |
 | `QuickAnswerSubmit` | quick-answer | the answer in Markdown, its sources |

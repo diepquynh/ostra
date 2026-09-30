@@ -314,11 +314,39 @@ pub struct WriteTestParams {
     pub extra: Extras,
 }
 
+/// Rule B1: one project's part of the documentation book.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ModuleDocsParams {
+pub struct DocumentationParams {
     pub common: Common,
     pub implementer_reports: Vec<PathBuf>,
-    pub report_file: PathBuf,
+    /// The book's current `book.json`, when the book exists.
+    pub existing_book: Option<PathBuf>,
+    /// Rule B9: the area of a large project this writer covers.
+    pub area: Option<DocsAreaScope>,
+    pub extra: Extras,
+}
+
+/// Rule B9: what one area writer covers, and the other areas of its project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DocsAreaScope {
+    pub id: String,
+    pub title: String,
+    /// Module-map globs, project-relative.
+    pub paths: Vec<String>,
+    /// Also every file no other area's paths match.
+    pub rest: bool,
+    /// Every other area of the project: title and paths.
+    pub others: Vec<(String, Vec<String>)>,
+}
+
+/// Rule B4: the architecture of a book of two or more projects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArchitectureParams {
+    pub common: Common,
+    /// The parts this session's writers returned, as JSON the engine wrote.
+    pub book_parts: PathBuf,
+    pub projects: Vec<(String, PathBuf)>,
+    pub existing_book: Option<PathBuf>,
     pub extra: Extras,
 }
 
@@ -557,9 +585,9 @@ impl SpawnParams for WriteTestParams {
     }
 }
 
-impl SpawnParams for ModuleDocsParams {
+impl SpawnParams for DocumentationParams {
     fn agent(&self) -> AgentName {
-        AgentName::ModuleDocumentation
+        AgentName::Documentation
     }
     fn common(&self) -> &Common {
         &self.common
@@ -567,7 +595,28 @@ impl SpawnParams for ModuleDocsParams {
     fn render(&self) -> String {
         let mut b = Block::new();
         b.paths("Implementer reports", &self.implementer_reports);
-        b.path("Report file", &self.report_file);
+        b.opt_path("Existing book", self.existing_book.as_deref());
+        if let Some(a) = &self.area {
+            b.line("Area", &format!("{} ({})", a.title, a.id));
+            let mut paths = a.paths.join(", ");
+            if a.rest {
+                let every = "every file no other area covers";
+                paths = if paths.is_empty() { every.into() } else { format!("{paths}, and {every}") };
+            }
+            b.line("Area paths", &paths);
+            let others: Vec<String> = a
+                .others
+                .iter()
+                .map(|(t, p)| {
+                    if p.is_empty() {
+                        format!("{t} (the files no area names)")
+                    } else {
+                        format!("{t} ({})", p.join(", "))
+                    }
+                })
+                .collect();
+            b.line("Other areas", &others.join("; "));
+        }
         b.common(&self.common);
         b.extras(&self.extra);
         b.finish()
@@ -575,8 +624,26 @@ impl SpawnParams for ModuleDocsParams {
     fn to_json(&self) -> Value {
         json(self)
     }
-    fn report_file(&self) -> Option<&Path> {
-        Some(&self.report_file)
+}
+
+impl SpawnParams for ArchitectureParams {
+    fn agent(&self) -> AgentName {
+        AgentName::SystemArchitecture
+    }
+    fn common(&self) -> &Common {
+        &self.common
+    }
+    fn render(&self) -> String {
+        let mut b = Block::new();
+        b.path("Book parts", &self.book_parts);
+        b.scope(&self.projects);
+        b.opt_path("Existing book", self.existing_book.as_deref());
+        b.common(&self.common);
+        b.extras(&self.extra);
+        b.finish()
+    }
+    fn to_json(&self) -> Value {
+        json(self)
     }
 }
 
@@ -713,7 +780,7 @@ pub struct InitGenerateSkillParams {
     /// Rule O5: the advisor's instructions after an earlier run of this step failed.
     pub advisor_guidance: Option<String>,
     pub skill_name: String,
-    /// `creation`, `convention`, or `module-hub`.
+    /// `creation`, `convention`, or `test`.
     pub skill_kind: String,
     /// `generate` or `regenerate`.
     pub disposition: String,
@@ -886,6 +953,11 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("implementer_report", &["Implementer report"], Kind::Path),
     ("implementer_reports", &["Implementer reports"], Kind::Text),
     ("epa_report", &["EPA report"], Kind::Path),
+    ("existing_book", &["Existing book"], Kind::Path),
+    ("area", &["Area"], Kind::Text),
+    ("area_paths", &["Area paths"], Kind::Text),
+    ("other_areas", &["Other areas"], Kind::Text),
+    ("book_parts", &["Book parts"], Kind::Path),
     ("changed_files", &["Changed files"], Kind::Text),
     ("change_rationale", &["Change rationale"], Kind::Text),
     ("target_files", &["Target files", "Target file"], Kind::Text),
@@ -931,7 +1003,8 @@ fn contract(
             one_of_work,
         ),
         AgentName::PromptGeneration => (vec!["task", "target_files", "report_file"], vec![]),
-        AgentName::ModuleDocumentation => (vec!["implementer_reports", "report_file"], vec![]),
+        AgentName::Documentation => (vec!["implementer_reports"], vec![]),
+        AgentName::SystemArchitecture => (vec!["book_parts", "projects_in_scope"], vec![]),
         AgentName::QuickAnswer => (vec!["question"], vec![]),
         AgentName::Advisor => (vec!["failed_step", "problem", "step_inputs"], vec![]),
         AgentName::Initializer => {

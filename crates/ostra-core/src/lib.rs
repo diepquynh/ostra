@@ -5,6 +5,8 @@ pub mod agent;
 pub mod api;
 pub mod args;
 pub mod artifacts;
+pub mod book;
+pub mod book_search;
 pub mod code;
 pub mod config;
 pub mod containment;

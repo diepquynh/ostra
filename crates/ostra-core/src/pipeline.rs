@@ -16,6 +16,8 @@ pub enum Category {
     /// The test stage alone on existing code. Logs written before the rename say `UNIT_TEST`.
     #[serde(alias = "UNIT_TEST")]
     Test,
+    /// The docs stage alone on existing code: a documentation book, no code change.
+    Docs,
     Prompt,
     /// A small edit the request fully describes: one implementer pass on the native executor.
     QuickChange,
@@ -31,6 +33,7 @@ impl Category {
             Category::Implement => "IMPLEMENT",
             Category::Verify => "VERIFY",
             Category::Test => "TEST",
+            Category::Docs => "DOCS",
             Category::Prompt => "PROMPT",
             Category::QuickChange => "QUICK_CHANGE",
             Category::QuickAnswer => "QUICK_ANSWER",
@@ -143,7 +146,11 @@ pub enum StageKind {
     Epa,
     WriteTest,
     TestReview,
-    ModuleDocs,
+    /// Logs and databases written before books say `module-docs`.
+    #[serde(alias = "module-docs")]
+    Documentation,
+    Architecture,
+    BookWrite,
     Verify,
     PromptGen,
     QuickAnswer,
@@ -171,7 +178,7 @@ impl StageKind {
             | GenerateInventory => Lane::Build,
             Review | Staging | Format | ImplementationReview => Lane::Review,
             ClosingGate | Epa | WriteTest | TestReview => Lane::Test,
-            ModuleDocs => Lane::Docs,
+            Documentation | Architecture | BookWrite => Lane::Docs,
             Completion => Lane::Done,
         }
     }

@@ -15,6 +15,7 @@ import type {
   WorkspaceUiState,
 } from "../types";
 import * as f from "./fixtures";
+import { MOCK_BOOK, summaryOf } from "./fixtures.books";
 import * as fx from "./fixtures.execution";
 import { mockCreateWorkspace, mockValidateCreate, mockValidateImport } from "./fixtures.projects";
 import { eventsFor, gateSessions } from "./fixtures.session";
@@ -36,6 +37,8 @@ import {
   mockTree,
   mockUploadArtifact,
 } from "./projectFiles";
+
+let books = [MOCK_BOOK];
 
 const delay = <T>(value: T, ms = 80): Promise<T> =>
   new Promise((resolve) => setTimeout(() => resolve(structuredClone(value)), ms));
@@ -517,6 +520,17 @@ export const mockApi: Api = {
     return delay(undefined);
   },
   skills: () => delay(mockSkills()),
+  books: () => delay(books.map(summaryOf)),
+  book: (_ws, id) =>
+    attempt(() => {
+      const b = books.find((x) => x.id === id);
+      if (!b) throw new Error("No such book in this workspace.");
+      return b;
+    }),
+  deleteBook: (_ws, id) => {
+    books = books.filter((b) => b.id !== id);
+    return delay(books.map(summaryOf));
+  },
   skill: async (_ws, key, name) => delay(skillDoc(key, name)),
   harnessSkill: async (_ws, key, path) => delay(skillDoc(key, path)),
   saveSkill: (_ws, key, name, body) => {

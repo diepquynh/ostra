@@ -42,7 +42,7 @@ method without a unit test") as a gap to fill from this convention, not an exist
 ## Test component catalog
 
 For each test type: **find** (grep, `--include='*.java'`), **capture** invariants from ONE real exemplar,
-generate the named **skill** (Archetype D). Propose ONE shared convention skill `unit-test-common` (JUnit 5 +
+generate the named **skill** (Archetype C). Propose ONE shared convention skill `unit-test-common` (JUnit 5 +
 `@DisplayName` behavior naming, one behavior per `@Test`, static imports, Arrange-Act-Assert / Given-When-Then,
 mock collaborators, no Spring context in a unit test). Every test skill below applies it first.
 

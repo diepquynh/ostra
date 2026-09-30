@@ -1,0 +1,362 @@
+# Retrieval questions for ostra-core, ostra-store, ostra-agents, ostra-workspace, and assets/.
+# Written from the source, not the docs.
+
+[[case]]
+id = "core-001"
+kind = "paraphrase"
+question = "Where does a lesson an agent records end up, and how is it found again later?"
+gold = ["crates/ostra-store/src/memory.rs"]
+
+[[case]]
+id = "core-002"
+kind = "lexical"
+question = "What does resolve_route do when a route value is `default`?"
+gold = ["crates/ostra-core/src/config.rs"]
+
+[[case]]
+id = "core-003"
+kind = "lexical"
+question = "What are the defaults of max_parallel_executions and session_budget_usd in Limits?"
+gold = ["crates/ostra-core/src/config.rs"]
+
+[[case]]
+id = "core-004"
+kind = "conceptual"
+question = "Why is a route that points at a missing tier reported when settings are saved instead of when an agent starts?"
+gold = ["crates/ostra-core/src/config.rs", "crates/ostra-workspace/src/settings.rs"]
+
+[[case]]
+id = "core-005"
+kind = "paraphrase"
+question = "When a workspace was saved before a new agent existed, how does the app repair the missing model choice for that agent without the user editing the file?"
+gold = ["crates/ostra-workspace/src/settings.rs", "crates/ostra-workspace/src/runtime.rs"]
+
+[[case]]
+id = "core-006"
+kind = "lexical"
+question = "Which table in workspace.db holds the append-only session log, and how is the next sequence number assigned in append_event?"
+gold = ["crates/ostra-store/src/workspace.rs"]
+
+[[case]]
+id = "core-007"
+kind = "paraphrase"
+question = "How are saved API keys protected on disk, and can an encrypted value copied into another row still be read?"
+gold = ["crates/ostra-store/src/secrets.rs", "crates/ostra-store/src/registry.rs"]
+
+[[case]]
+id = "core-008"
+kind = "conceptual"
+question = "What happens to credentials that were written in plain text by an older version once encryption is turned on, and how is leftover plaintext in the write-ahead log removed?"
+gold = ["crates/ostra-store/src/registry.rs"]
+
+[[case]]
+id = "core-009"
+kind = "paraphrase"
+question = "If a repository arrives with a settings file that names a program to run, when is that program allowed to start?"
+gold = ["crates/ostra-workspace/src/trust.rs"]
+
+[[case]]
+id = "core-010"
+kind = "conceptual"
+question = "Why are the permission mode and the autonomous answering switch never read from files inside the workspace folder?"
+gold = ["crates/ostra-workspace/src/trust.rs", "crates/ostra-workspace/src/runtime.rs"]
+
+[[case]]
+id = "core-011"
+kind = "cross"
+question = "How do literal secret header values of an MCP server in workspace settings get moved out of the file, and where do they live afterwards?"
+gold = ["crates/ostra-workspace/src/trust.rs", "crates/ostra-store/src/registry.rs", "crates/ostra-core/src/mcp.rs"]
+
+[[case]]
+id = "core-012"
+kind = "lexical"
+question = "What is the bare name format for an external MCP tool, and what is MAX_BARE_NAME protecting against?"
+gold = ["crates/ostra-core/src/mcp.rs"]
+
+[[case]]
+id = "core-013"
+kind = "paraphrase"
+question = "How does a tool from a connected issue-tracker server get named differently for a harness CLI versus the built-in agent loop?"
+gold = ["crates/ostra-core/src/mcp.rs"]
+
+[[case]]
+id = "core-014"
+kind = "paraphrase"
+question = "How is the cost of a model call computed, and what happens to cost before the price list has been downloaded?"
+gold = ["crates/ostra-core/src/pricing.rs"]
+
+[[case]]
+id = "core-015"
+kind = "conceptual"
+question = "When a provider reports a dated model snapshot id that the price catalog does not list, how is a price still found, and which listing wins when resellers publish other prices?"
+gold = ["crates/ostra-core/src/pricing.rs"]
+
+[[case]]
+id = "core-016"
+kind = "paraphrase"
+question = "Do long prompts get charged at a different rate than short ones for the same model?"
+gold = ["crates/ostra-core/src/pricing.rs"]
+
+[[case]]
+id = "core-017"
+kind = "lexical"
+question = "What does PAUSE_AFTER in containment.rs control, and which guard denials count as signals?"
+gold = ["crates/ostra-core/src/containment.rs"]
+
+[[case]]
+id = "core-018"
+kind = "conceptual"
+question = "Why does a refused connection to a public host not count as an attempt to escape the sandbox?"
+gold = ["crates/ostra-core/src/containment.rs"]
+
+[[case]]
+id = "core-019"
+kind = "cross"
+question = "When an agent opens a fake credential file planted as bait, what does the system record and when does the task stop?"
+gold = ["crates/ostra-core/src/containment.rs", "crates/ostra-engine/src/runner.rs"]
+
+[[case]]
+id = "core-020"
+kind = "paraphrase"
+question = "Which files under the user's home folder are off limits to every agent, and which program is still allowed to see its own login file?"
+gold = ["crates/ostra-core/src/paths.rs"]
+
+[[case]]
+id = "core-021"
+kind = "lexical"
+question = "What are SKILLS_DIR and LEGACY_SKILLS_DIR, and which one does Ostra write new skills to?"
+gold = ["crates/ostra-core/src/paths.rs"]
+
+[[case]]
+id = "core-022"
+kind = "conceptual"
+question = "Why are all derived file locations for sessions and projects computed in one place instead of by each reader and writer?"
+gold = ["crates/ostra-core/src/paths.rs"]
+
+[[case]]
+id = "core-023"
+kind = "paraphrase"
+question = "On Windows, how is a shell path like /c/Users/me turned into a path the guards can compare against?"
+gold = ["crates/ostra-core/src/paths.rs"]
+
+[[case]]
+id = "core-024"
+kind = "paraphrase"
+question = "How is the private data folder protected so other users on the machine cannot read the database and its journal files?"
+gold = ["crates/ostra-core/src/paths.rs"]
+
+[[case]]
+id = "core-025"
+kind = "lexical"
+question = "What do NO_EXEC and AGENT_CONFIG in git.rs turn off, and why are hooks kept for agent commits?"
+gold = ["crates/ostra-core/src/git.rs"]
+
+[[case]]
+id = "core-026"
+kind = "conceptual"
+question = "Why can't a repository's own git configuration choose programs to run while the app lists files or shows a diff, and what about large-file storage filters?"
+gold = ["crates/ostra-core/src/git.rs"]
+
+[[case]]
+id = "core-027"
+kind = "paraphrase"
+question = "How does stopping a command also stop every process it started, on both Unix and Windows?"
+gold = ["crates/ostra-core/src/proctree.rs"]
+
+[[case]]
+id = "core-028"
+kind = "conceptual"
+question = "Why must a Windows child process be placed in its job before it runs its first instruction?"
+gold = ["crates/ostra-core/src/proctree.rs"]
+
+[[case]]
+id = "core-029"
+kind = "paraphrase"
+question = "Which bash does a shell command run under on Windows, and why not the first one found on the search path?"
+gold = ["crates/ostra-core/src/shells.rs"]
+
+[[case]]
+id = "core-030"
+kind = "paraphrase"
+question = "How can a user hide a folder of workspace reference files from agents, and do files added to that folder later stay hidden?"
+gold = ["crates/ostra-core/src/artifacts.rs"]
+
+[[case]]
+id = "core-031"
+kind = "lexical"
+question = "What are the limits MAX_ARTIFACT_BYTES and MAX_ARTIFACTS, and how many artifacts does the brief list?"
+gold = ["crates/ostra-core/src/artifacts.rs"]
+
+[[case]]
+id = "core-032"
+kind = "cross"
+question = "How do the workspace's shared reference files get mentioned in the first message an agent receives?"
+gold = ["crates/ostra-agents/src/brief.rs", "crates/ostra-core/src/artifacts.rs", "crates/ostra-engine/src/factory.rs"]
+
+[[case]]
+id = "core-033"
+kind = "paraphrase"
+question = "Why might an agent's brief leave out the module map entirely, and how is the map narrowed to the parts a task mentions?"
+gold = ["crates/ostra-agents/src/brief.rs"]
+
+[[case]]
+id = "core-034"
+kind = "paraphrase"
+question = "Which sections of the project brief does a reviewer receive compared to the agent that writes tests?"
+gold = ["crates/ostra-agents/src/brief.rs"]
+
+[[case]]
+id = "core-035"
+kind = "cross"
+question = "How does a prompt template turn a generic tool placeholder into the tool name the chosen CLI actually uses?"
+gold = ["crates/ostra-agents/src/mapping.rs", "assets/tool-mapping.toml", "crates/ostra-agents/src/lib.rs"]
+
+[[case]]
+id = "core-036"
+kind = "conceptual"
+question = "Why does a harness executor's prompt start with an extra section listing which tool serves each capability?"
+gold = ["crates/ostra-agents/src/lib.rs", "crates/ostra-agents/src/mapping.rs"]
+
+[[case]]
+id = "core-037"
+kind = "lexical"
+question = "What does parse_block validate, and how does a required spawn parameter differ from an optional one in spawn.rs?"
+gold = ["crates/ostra-agents/src/spawn.rs"]
+
+[[case]]
+id = "core-038"
+kind = "paraphrase"
+question = "Which four lines does every agent's start-up parameter block carry, and what replaced the old primary repo root line?"
+gold = ["crates/ostra-agents/src/spawn.rs"]
+
+[[case]]
+id = "core-039"
+kind = "conceptual"
+question = "What guarantees that a missing agent definition or a malformed agent settings file is caught before release rather than at runtime?"
+gold = ["crates/ostra-agents/src/lib.rs", "crates/ostra-agents/src/tests.rs"]
+
+[[case]]
+id = "core-040"
+kind = "paraphrase"
+question = "Where are the bundled references and skills written on disk so that agents can read them, and when is a file rewritten?"
+gold = ["crates/ostra-agents/src/lib.rs"]
+
+[[case]]
+id = "core-041"
+kind = "cross"
+question = "Which reasoning effort does an agent run with on a given CLI, and how can a workspace override it per phase difficulty?"
+gold = ["crates/ostra-core/src/config.rs", "crates/ostra-agents/src/lib.rs"]
+
+[[case]]
+id = "core-042"
+kind = "paraphrase"
+question = "How does the engine know what an agent concluded without reading its final chat message?"
+gold = ["crates/ostra-core/src/submit.rs"]
+
+[[case]]
+id = "core-043"
+kind = "lexical"
+question = "What fields does ReviewFinding carry, and what format must a fix take for an auto-fixable rule?"
+gold = ["crates/ostra-core/src/submit.rs"]
+
+[[case]]
+id = "core-044"
+kind = "conceptual"
+question = "When does a fact-check result count as passing, and which severities block it?"
+gold = ["crates/ostra-core/src/submit.rs"]
+
+[[case]]
+id = "core-045"
+kind = "paraphrase"
+question = "What kinds of pauses waiting on the user exist in a session, and which one does autonomous mode never answer?"
+gold = ["crates/ostra-core/src/event.rs"]
+
+[[case]]
+id = "core-046"
+kind = "conceptual"
+question = "The numbering of multiple-choice answers in a question card must agree with the browser. What depends on that order and what breaks if they differ?"
+gold = ["crates/ostra-core/src/pipeline.rs", "web/src/lib/gateAnswers.ts"]
+
+[[case]]
+id = "core-047"
+kind = "cross"
+question = "How does a documentation book get its folder name from the projects it covers, and how do two sessions writing the same book avoid losing each other's parts?"
+gold = ["crates/ostra-core/src/book.rs", "crates/ostra-engine/src/runner.rs"]
+
+[[case]]
+id = "core-048"
+kind = "cross"
+question = "When an agent asks to create a brand new project mid-task, how are the key and folder checked, and why must every fact about it be stored in the event?"
+gold = ["crates/ostra-core/src/manage.rs", "crates/ostra-workspace/src/projects.rs"]
+
+[[case]]
+id = "core-049"
+kind = "cross"
+question = "How many helper agents may one run start through questions to other agents, and how many questions may a whole session ask?"
+gold = ["crates/ostra-core/src/coord.rs", "crates/ostra-engine/src/state.rs"]
+
+[[case]]
+id = "core-050"
+kind = "paraphrase"
+question = "Why can the current git branch of every project be shown quickly without starting git, and what if the project is a worktree?"
+gold = ["crates/ostra-workspace/src/projects.rs"]
+
+[[case]]
+id = "core-051"
+kind = "paraphrase"
+question = "What must be true of a folder chosen for a new project inside a workspace?"
+gold = ["crates/ostra-workspace/src/projects.rs"]
+
+[[case]]
+id = "core-052"
+kind = "paraphrase"
+question = "When a workspace is deleted, what is removed from disk and what stays?"
+gold = ["crates/ostra-workspace/src/runtime.rs"]
+
+[[case]]
+id = "core-053"
+kind = "conceptual"
+question = "What prevents new work from starting in a project while it is being removed from the workspace?"
+gold = ["crates/ostra-workspace/src/runtime.rs"]
+
+[[case]]
+id = "core-054"
+kind = "paraphrase"
+question = "When a folder already has a workspace settings file but lost its registration, how does creating the workspace again treat the old file?"
+gold = ["crates/ostra-workspace/src/create.rs"]
+
+[[case]]
+id = "core-055"
+kind = "lexical"
+question = "How does kv_replace keep two callers from both winning the same registry update?"
+gold = ["crates/ostra-store/src/registry.rs"]
+
+[[case]]
+id = "core-056"
+kind = "paraphrase"
+question = "How does the search box find past sessions and workspace files from partial words?"
+gold = ["crates/ostra-store/src/workspace.rs"]
+
+[[case]]
+id = "core-057"
+kind = "conceptual"
+question = "Why does the lesson store open a new database connection on every call instead of sharing one?"
+gold = ["crates/ostra-store/src/memory.rs"]
+
+[[case]]
+id = "core-058"
+kind = "paraphrase"
+question = "When a weaker model sends a list argument as a quoted JSON string, how is it repaired before the tool checks it?"
+gold = ["crates/ostra-core/src/args.rs"]
+
+[[case]]
+id = "core-059"
+kind = "conceptual"
+question = "What does turning off tool enforcement still protect, and what does it stop checking?"
+gold = ["crates/ostra-core/src/config.rs"]
+
+[[case]]
+id = "core-060"
+kind = "paraphrase"
+question = "On Windows with no sandbox backend, what happens when an agent command would otherwise have to run sandboxed?"
+gold = ["crates/ostra-core/src/config.rs"]

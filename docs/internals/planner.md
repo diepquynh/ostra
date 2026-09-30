@@ -63,6 +63,8 @@ A `Step` is one unit of work the runner knows how to perform:
 | `Spawn` | Resolves the agent's route (executor, model, effort), builds the typed spawn block, waits for an execution slot, runs the executor, and appends `ExecutionStarted` and later `ExecutionFinished`. |
 | `OpenGate` | Appends `GateOpened`. The session then waits for you, or for YOLO. |
 | `YoloAnswer` | Under YOLO, answers an open gate with a fixed answer or the YOLO judge, and appends `GateAnswered` with source `yolo` and the judge's reason. |
+| `PlanDocs` | Measures a project's tracked source by module-map area, groups the areas into writer areas, and appends `DocsPlanned` with the areas, the areas the book's current part records, and the areas this session's changes touched (rule B9). |
+| `WriteBook` | Merges the session's documentation parts and architecture into the workspace book and writes its files under `.ostra/docs/<book>/`, then appends `BookWritten` (rule B5). |
 | `Command` | Runs the project's format command or `git add` on a phase's changed files, and appends `CommandRan`. |
 | `Autofix` | Applies review findings whose fix text is exact (`Change \`x\` to \`y\` on line N`), and appends `AutofixApplied`. |
 | `AnnounceBlocked` | Appends `PhaseBlocked`, which also sends a push notification. |

@@ -206,15 +206,23 @@ are all text that someone other than you may have written. The console treats al
 - **Browser storage holds no secrets.** No transcript, token, or key is written to localStorage,
   sessionStorage, IndexedDB, or Cache Storage.
 
-The docs you are reading use their own renderer ([`site/src/docs/Markdown.tsx`](../../site/src/docs/Markdown.tsx)),
+The docs you are reading use their own renderer ([`design/src/docs/Markdown.tsx`](../../design/src/docs/Markdown.tsx)),
 which walks the Markdown syntax tree and builds each element itself. Raw HTML is dropped except for `<br>`, and a
 link with a scheme other than `http`, `https`, or `mailto` renders as plain text. An image loads only when its
 path resolves to a file in `docs/images`, which the build bundles into the site, so every image comes from the
 site's own origin. Any other image renders as a link labelled with its alt text. A fenced `mermaid` block is drawn as SVG
-([`site/src/docs/Diagram.tsx`](../../site/src/docs/Diagram.tsx)). Mermaid loads only on a page that has one and runs
+([`design/src/docs/Diagram.tsx`](../../design/src/docs/Diagram.tsx)). Mermaid loads only on a page that has one and runs
 in strict mode, which ignores click callbacks. Labels are SVG text, never HTML, so a label cannot carry an image or
 markup, and the links a `click` line makes are unwrapped, so a diagram cannot leave the page. A diagram's own
 directives and frontmatter cannot turn either setting back on. A block that does not parse shows its source.
+
+The console's documentation books use the same renderer, moved into the design system
+(`design/src/docs/`) so the site and the console share one implementation.
+A book reaches it as structured JSON, and the console escapes every field before it becomes Markdown. A book has
+no bundled images, so every image in it renders as a link. An exported book is a single HTML file with no script:
+the diagrams are the SVG the browser already drew, the export strips scripts, frames, forms, event handlers, and
+links or images to another origin, and the file's meta policy (`default-src 'none'; style-src 'unsafe-inline';
+img-src data:`) lets it load nothing.
 
 ## The browser security suite
 
@@ -244,6 +252,7 @@ violation on the app's origin, and on any unexpected dialog, popup, or navigatio
 | `storage` | localStorage, sessionStorage, IndexedDB, and Cache Storage after a full session |
 | `shortcuts` | The web app manifest and its icons load from the app origin under the server's policy, and a shortcut recorded in Settings stays in this workspace's localStorage entry and runs |
 | `site` | The homepage and docs served as a static host serves them, a docs page full of attack strings, search with hostile input, the console screenshot loading only same-origin files, and cross-origin messages to it |
+| `books` | A documentation book with attack strings in every field: the Docs list, every page of the reader, its Mermaid diagrams, search, and the exported HTML file, which must carry no script and render under its own meta policy |
 
 Any new browser surface, whether a console screen or a site page, gets a spec here and the same policy as the
 server.

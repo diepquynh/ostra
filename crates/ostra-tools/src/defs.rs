@@ -123,6 +123,15 @@ Usage:
 - area narrows recall to a module and its sub-scopes. Lessons from other areas that match the query fill the remaining slots.
 - limit defaults to 8.";
 
+const DOCS_SEARCH: &str = "Searches the documentation books Ostra's docs stage wrote about this workspace's projects, and returns the best-matching sections with only the passages that matched.
+
+Usage:
+- Call it before you read code to learn an area: what a part owns, its assumptions, its flows, and where its code lives.
+- Write query as the question you want answered, and include names you know: types, functions, file paths, or domain terms.
+- Each hit names the section's Markdown file. Read that file when you need the whole section.
+- A book describes the code when it was written, so check a passage against the code before you rely on it.
+- project narrows the search to one project's part. limit defaults to 5.";
+
 const PROJECT_LIST: &str = "Lists the projects in this workspace: each key, folder, stack, whether it is initialized, and whether it is in this session's scope.
 
 Usage:
@@ -468,6 +477,18 @@ fn memory_recall_def() -> ToolDefinition {
     )
 }
 
+fn docs_search_def() -> ToolDefinition {
+    def(
+        "DocsSearch",
+        DOCS_SEARCH,
+        json!({"type": "object", "properties": {
+            "query": {"type": "string", "description": "The question, with any names you know"},
+            "project": {"type": "string", "description": "A project key, to search only its part of the books"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Maximum sections to return. Defaults to 5"}
+        }, "required": ["query"], "additionalProperties": false}),
+    )
+}
+
 fn project_defs() -> Vec<ToolDefinition> {
     vec![
         def(
@@ -569,6 +590,7 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
             Capability::Document => vec![],
             Capability::Memory => vec![memory_def()],
             Capability::MemoryRecall => vec![memory_recall_def()],
+            Capability::DocsSearch => vec![docs_search_def()],
             Capability::Code => code_defs(),
             Capability::ManageProjects => project_defs(),
             Capability::Coordinate => coord_defs(),
@@ -577,7 +599,7 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
         .collect()
 }
 
-const EVERY: [Capability; 16] = [
+const EVERY: [Capability; 17] = [
     Capability::Read,
     Capability::Write,
     Capability::Edit,
@@ -591,6 +613,7 @@ const EVERY: [Capability; 16] = [
     Capability::Document,
     Capability::Memory,
     Capability::MemoryRecall,
+    Capability::DocsSearch,
     Capability::Code,
     Capability::ManageProjects,
     Capability::Coordinate,

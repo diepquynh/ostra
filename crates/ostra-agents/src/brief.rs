@@ -23,6 +23,9 @@ pub const BRIEF_HEADING: &str = "## Repo brief for ";
 pub const INSTRUCTIONS_HEADING: &str = "## Workspace instructions";
 pub const PROJECT_DOCS_HEADING: &str = "## Project instructions";
 pub const ARTIFACTS_HEADING: &str = "## Workspace artifacts";
+pub const BOOKS_HEADING: &str = "## Workspace documentation";
+/// Books the brief names; the rest are found with Glob in the folder.
+pub const MAX_BRIEF_BOOKS: usize = 20;
 const NEW_PROJECTS_HEADING: &str = "## Projects created in this session";
 
 /// An agent instruction file at the project root and its text.
@@ -72,7 +75,8 @@ fn sections(agent: AgentName) -> &'static [Section] {
         AgentName::Explore => &[Stack, Skills, Modules],
         AgentName::Plan => &[Stack, Commands, Skills, Modules],
         AgentName::GenerateSpec => &[Stack, Modules],
-        AgentName::ModuleDocumentation => &[Commands, Skills, Modules],
+        AgentName::Documentation => &[Stack, Commands, Modules],
+        AgentName::SystemArchitecture => &[Stack, Modules],
         AgentName::FactCheck => &[Stack, Modules],
         AgentName::PromptGeneration => &[Skills],
         AgentName::QuickAnswer => &[Stack, Commands, Skills, Modules],
@@ -108,6 +112,27 @@ impl ArtifactsBrief {
     }
 }
 
+/// The workspace's documentation books (Rule B5), read when the spawn is built.
+#[derive(Debug, Clone, Default)]
+pub struct BooksBrief {
+    pub dir: PathBuf,
+    pub books: Vec<ostra_core::book::BookSummary>,
+    /// The agent's name for the docs search tool, when it has the capability (Rule B8).
+    pub search_tool: Option<String>,
+}
+
+impl BooksBrief {
+    /// The books of the workspace at `workspace`, or `None` when it has none.
+    pub fn read(workspace: &Path) -> Option<BooksBrief> {
+        let books = ostra_core::book::list(workspace);
+        (!books.is_empty()).then(|| BooksBrief {
+            dir: ostra_core::book::dir(workspace),
+            books,
+            search_tool: None,
+        })
+    }
+}
+
 /// What the brief is built from.
 pub struct BriefInput<'a> {
     pub agent: AgentName,
@@ -122,6 +147,7 @@ pub struct BriefInput<'a> {
     /// The project's `CLAUDE.md`, `AGENTS.md`, and `AGENT.md`.
     pub project_docs: &'a [ProjectDoc],
     pub artifacts: Option<&'a ArtifactsBrief>,
+    pub books: Option<&'a BooksBrief>,
     /// Rule O3: projects agents created in this session, with the facts from their `ProjectCreate`.
     pub new_projects: &'a [ostra_core::manage::CreatedProject],
 }
@@ -195,7 +221,7 @@ fn skill_rows(
         .iter()
         .filter(|s| !s.path.is_empty())
         .filter(|s| {
-            if s.kind == "convention" || s.kind == "module-hub" {
+            if s.kind == "convention" {
                 return true;
             }
             match agent {
@@ -204,7 +230,6 @@ fn skill_rows(
                     hay.contains("test") || hay.contains("spec")
                 }
                 AgentName::CodeReviewer => s.kind == "convention",
-                AgentName::ModuleDocumentation => s.kind == "module-hub",
                 _ => true,
             }
         })
@@ -360,12 +385,7 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
             let rows: Vec<String> =
                 relevant_modules(&profile.module_map, &scope_hints(input.prompt))
                     .into_iter()
-                    .map(|r| match &r.reference {
-                        Some(reference) => {
-                            format!("- `{}`: {} (reference: {reference})", r.glob, r.area)
-                        }
-                        None => format!("- `{}`: {}", r.glob, r.area),
-                    })
+                    .map(|r| format!("- `{}`: {}", r.glob, r.area))
                     .collect();
             if !rows.is_empty() {
                 body.push(format!(
@@ -465,6 +485,46 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         ));
     }
 
+    // Rule B5: every agent can read the books; only the engine writes them.
+    if let Some(b) = input.books {
+        let dir = b.dir.display();
+        let mut rows: Vec<String> = b
+            .books
+            .iter()
+            .take(MAX_BRIEF_BOOKS)
+            .map(|k| {
+                format!(
+                    "- `{dir}/{}/index.md`: {} ({} sections{})",
+                    k.id,
+                    k.projects.join(", "),
+                    k.sections,
+                    if k.has_architecture { ", with the system architecture" } else { "" }
+                )
+            })
+            .collect();
+        if b.books.len() > MAX_BRIEF_BOOKS {
+            rows.push(format!(
+                "- and {} more; find them with Glob in `{dir}`",
+                b.books.len() - MAX_BRIEF_BOOKS
+            ));
+        }
+        // Rule B8: an agent with the search tool queries the books before it reads them whole.
+        let how = match &b.search_tool {
+            Some(t) => format!(
+                "Search them with {t} before you read code to learn an area: it returns the sections that match \
+                 your question with only the passages that matched. Read a section's file only when you need all of it"
+            ),
+            None => "Read the sections that bear on your task".to_string(),
+        };
+        out.push(format!(
+            "{BOOKS_HEADING}\n\nOstra's docs stage wrote these books about the workspace's projects. Each `index.md` links \
+             one Markdown file per section, with its assumptions, flows, diagrams, and code references. {how}. Check \
+             what you find against the code, because a book describes the code when it was written. Do not write in \
+             `{dir}`, because Ostra writes the books.\n\n{}",
+            rows.join("\n")
+        ));
+    }
+
     let instructions: Vec<&String> = input
         .instructions
         .iter()
@@ -493,6 +553,7 @@ pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String {
         BRIEF_HEADING,
         PROJECT_DOCS_HEADING,
         ARTIFACTS_HEADING,
+        BOOKS_HEADING,
         INSTRUCTIONS_HEADING,
     ]
     .iter()

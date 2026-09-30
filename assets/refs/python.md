@@ -56,7 +56,7 @@ Commands: `uv run pytest -q`; one test `uv run pytest {PATH}::{TEST}`.
 ## Test component catalog
 
 For each test type: **find** (grep, `--include='test_*.py'`), **capture** invariants from ONE real exemplar,
-generate the named **skill** (Archetype D). Propose ONE shared convention skill `unit-test-common` (pytest +
+generate the named **skill** (Archetype C). Propose ONE shared convention skill `unit-test-common` (pytest +
 `asyncio_mode="auto"`, `unittest.mock` doubles, Arrange-Act-Assert, the tree-mirroring layout, and the
 "log-and-return-None on failure" contract scraper services follow). Every test skill applies it first.
 

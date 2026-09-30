@@ -35,6 +35,7 @@ const PAGE_TITLE: Record<string, string> = {
   settings: "Settings",
   memory: "Memory",
   skills: "Skills",
+  docs: "Documentation",
 };
 
 /** The session a resource belongs to, for the quick question's context. */
@@ -58,6 +59,8 @@ export function mobileTitle(
       return r.page === "overview"
         ? { title: ctx.wsName, sub: ctx.root }
         : { title: PAGE_TITLE[r.page], sub: ctx.wsName };
+    case "book":
+      return { title: r.id, sub: "Documentation book" };
     case "session": {
       const s = ctx.sessions.find((x) => x.id === r.id);
       return s ? { title: sessionLabel(s), sub: `Session · ${STATUS[s.status]}` } : { title: "Session", sub: r.id };

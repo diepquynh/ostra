@@ -1,0 +1,348 @@
+# Retrieval eval questions: policy, sandbox, native tools, the native agent loop, harness
+# executors, and model providers. Written from the source, not the docs.
+
+# ---------------------------------------------------------------------------------------------
+# lexical: names an identifier, file, or config key
+# ---------------------------------------------------------------------------------------------
+
+[[case]]
+id = "exec-001"
+kind = "lexical"
+question = "What do RECALL_THRESHOLD, WARN_THRESHOLD, and DENY_THRESHOLD control in the build streak?"
+gold = ["crates/ostra-policy/src/build.rs"]
+
+[[case]]
+id = "exec-002"
+kind = "lexical"
+question = "Which commands does the READ_ONLY list auto-allow, and which git subcommands count as GIT_READ?"
+gold = ["crates/ostra-policy/src/policy.rs"]
+
+[[case]]
+id = "exec-003"
+kind = "lexical"
+question = "What does is_test_path treat as a test file, and which guard uses it to stop the implementer?"
+gold = ["crates/ostra-policy/src/guards.rs"]
+
+[[case]]
+id = "exec-004"
+kind = "lexical"
+question = "How does parse_rule read a permission like Bash(npm test:*) compared with Bash(npm run test *)?"
+gold = ["crates/ostra-policy/src/perms.rs"]
+
+[[case]]
+id = "exec-005"
+kind = "lexical"
+question = "What is MAX_TURNS in the native loop, and what does COMPACT_AT decide?"
+gold = ["crates/ostra-exec-native/src/lib.rs"]
+
+[[case]]
+id = "exec-006"
+kind = "lexical"
+question = "Which hosts are in DEFAULT_ALLOWED_HOSTS for the egress proxy, and what does model_hosts add per harness?"
+gold = ["crates/ostra-sandbox/src/egress.rs"]
+
+[[case]]
+id = "exec-007"
+kind = "lexical"
+question = "What does repair_git_dirs undo inside a repository's .git folder?"
+gold = ["crates/ostra-sandbox/src/git.rs"]
+
+[[case]]
+id = "exec-008"
+kind = "lexical"
+question = "What is MAX_STOP_NUDGES and what happens when a harness Stop event arrives before submit?"
+gold = ["crates/ostra-exec-harness/src/live.rs", "crates/ostra-exec-harness/src/bridge.rs"]
+
+[[case]]
+id = "exec-009"
+kind = "lexical"
+question = "What does INVALID_INPUT_KEY mark on a tool-use block, and how does the agent loop answer it?"
+gold = ["crates/ostra-providers/src/anthropic.rs", "crates/ostra-exec-native/src/lib.rs"]
+
+[[case]]
+id = "exec-010"
+kind = "lexical"
+question = "Which paths does runs_code_later cover, such as .envrc or .pre-commit-config.yaml, and why does writing them ask?"
+gold = ["crates/ostra-policy/src/policy.rs"]
+
+[[case]]
+id = "exec-011"
+kind = "lexical"
+question = "What are HOME_DECOYS and how many extra decoys may sandbox_decoys add?"
+gold = ["crates/ostra-sandbox/src/decoy.rs"]
+
+# ---------------------------------------------------------------------------------------------
+# paraphrase: behavior in plain words, no identifiers
+# ---------------------------------------------------------------------------------------------
+
+[[case]]
+id = "exec-012"
+kind = "paraphrase"
+question = "What stops an agent from writing outside the files its phase is allowed to touch?"
+gold = ["crates/ostra-policy/src/guards.rs"]
+
+[[case]]
+id = "exec-013"
+kind = "paraphrase"
+question = "Why can't an agent edit a file it has not opened first during the same run?"
+gold = ["crates/ostra-tools/src/fs.rs"]
+
+[[case]]
+id = "exec-014"
+kind = "paraphrase"
+question = "How long may a shell command run by default, and what is the longest timeout a model can ask for?"
+gold = ["crates/ostra-tools/src/bash.rs"]
+
+[[case]]
+id = "exec-015"
+kind = "paraphrase"
+question = "When a command prints megabytes of output, how much of it does the model see and which part is dropped?"
+gold = ["crates/ostra-tools/src/bash.rs", "crates/ostra-tools/src/text.rs"]
+
+[[case]]
+id = "exec-016"
+kind = "paraphrase"
+question = "Does the directory change from one shell call carry over to the next call in the same run?"
+gold = ["crates/ostra-tools/src/bash.rs"]
+
+[[case]]
+id = "exec-017"
+kind = "paraphrase"
+question = "What happens when a fetched web page redirects to a different host?"
+gold = ["crates/ostra-tools/src/web.rs"]
+
+[[case]]
+id = "exec-018"
+kind = "cross"
+question = "How is a web fetch kept from reaching a machine on the local network or the cloud metadata address?"
+gold = ["crates/ostra-tools/src/web.rs", "crates/ostra-sandbox/src/egress.rs"]
+
+[[case]]
+id = "exec-019"
+kind = "paraphrase"
+question = "What does an agent see when it tries to read someone's SSH private key or another process's memory?"
+gold = ["crates/ostra-policy/src/guards.rs"]
+
+[[case]]
+id = "exec-020"
+kind = "paraphrase"
+question = "After several failed builds in a row, when does the agent get warned and when are further builds refused?"
+gold = ["crates/ostra-policy/src/build.rs", "crates/ostra-policy/src/policy.rs"]
+
+[[case]]
+id = "exec-021"
+kind = "paraphrase"
+question = "Why is an agent told to record a lesson before it can submit after fixing a broken build?"
+gold = ["crates/ostra-policy/src/guards.rs", "crates/ostra-policy/src/build.rs"]
+
+[[case]]
+id = "exec-022"
+kind = "paraphrase"
+question = "Which files in the session folder may only the reviewer or the implementer write, like the review ledger?"
+gold = ["crates/ostra-policy/src/guards.rs"]
+
+[[case]]
+id = "exec-023"
+kind = "paraphrase"
+question = "How does a sandboxed build reach the package registry when the sandbox has no network of its own?"
+gold = ["crates/ostra-sandbox/src/egress.rs", "crates/ostra-sandbox/src/init.rs"]
+
+[[case]]
+id = "exec-024"
+kind = "paraphrase"
+question = "On a Mac, how are processes that detach from their shell found and killed when a sandboxed command ends?"
+gold = ["crates/ostra-sandbox/src/members.rs", "crates/ostra-sandbox/src/sys/macos/mod.rs"]
+
+[[case]]
+id = "exec-025"
+kind = "paraphrase"
+question = "Where do cargo and npm write their downloads during a sandboxed build, given the user's own caches are read-only?"
+gold = ["crates/ostra-sandbox/src/cache.rs"]
+
+[[case]]
+id = "exec-026"
+kind = "paraphrase"
+question = "How does Ostra notice that a sandboxed command opened a fake credential file?"
+gold = ["crates/ostra-sandbox/src/decoy.rs", "crates/ostra-sandbox/src/sys/linux/inotify.rs", "crates/ostra-sandbox/src/sys/macos/log.rs"]
+
+[[case]]
+id = "exec-027"
+kind = "paraphrase"
+question = "What happens to the conversation when a native run gets close to the model's context limit?"
+gold = ["crates/ostra-exec-native/src/lib.rs"]
+
+[[case]]
+id = "exec-028"
+kind = "paraphrase"
+question = "Which tool calls in one model turn may run at the same time, and which run one after another?"
+gold = ["crates/ostra-exec-native/src/lib.rs"]
+
+[[case]]
+id = "exec-029"
+kind = "paraphrase"
+question = "When a model API call fails with a rate limit, how long does the client wait before trying again?"
+gold = ["crates/ostra-providers/src/retry.rs"]
+
+[[case]]
+id = "exec-030"
+kind = "paraphrase"
+question = "Where are prompt cache breakpoints placed in a request to the Anthropic API, and with what lifetime?"
+gold = ["crates/ostra-providers/src/anthropic.rs"]
+
+[[case]]
+id = "exec-031"
+kind = "paraphrase"
+question = "How much of the output limit becomes a thinking budget at each effort level on older Claude models?"
+gold = ["crates/ostra-providers/src/anthropic.rs"]
+
+[[case]]
+id = "exec-032"
+kind = "paraphrase"
+question = "How does the OpenAI client keep reasoning across turns without storing responses on OpenAI's side?"
+gold = ["crates/ostra-providers/src/openai.rs"]
+
+[[case]]
+id = "exec-033"
+kind = "paraphrase"
+question = "What does Ostra do when a harness CLI shows a folder trust prompt or a sign-in screen on start?"
+gold = ["crates/ostra-exec-harness/src/executor.rs"]
+
+[[case]]
+id = "exec-034"
+kind = "paraphrase"
+question = "How does a harness run that sits idle with no output and no submit get moving again?"
+gold = ["crates/ostra-exec-harness/src/executor.rs"]
+
+[[case]]
+id = "exec-035"
+kind = "paraphrase"
+question = "How does a browser that opens a running terminal mid-session see the current screen and its history?"
+gold = ["crates/ostra-exec-harness/src/pty.rs"]
+
+[[case]]
+id = "exec-036"
+kind = "paraphrase"
+question = "How is token spend of a harness CLI measured while its run is still going?"
+gold = ["crates/ostra-exec-harness/src/usage_watch.rs", "crates/ostra-exec-harness/src/transcript.rs"]
+
+# ---------------------------------------------------------------------------------------------
+# conceptual: why, invariants, assumptions, what breaks
+# ---------------------------------------------------------------------------------------------
+
+[[case]]
+id = "exec-037"
+kind = "conceptual"
+question = "Why are denial reasons written with the correction first, and what would break for Grok if they were not?"
+gold = ["crates/ostra-exec-harness/src/adapters/grok.rs", "crates/ostra-policy/src/guards.rs"]
+
+[[case]]
+id = "exec-038"
+kind = "conceptual"
+question = "Why does the hook command deny a tool call when it cannot reach the server instead of letting it run?"
+gold = ["crates/ostra-exec-harness/src/bridge.rs"]
+
+[[case]]
+id = "exec-039"
+kind = "conceptual"
+question = "Why can't a harmless-looking command like sort or find be auto-allowed when it carries certain flags?"
+gold = ["crates/ostra-policy/src/policy.rs"]
+
+[[case]]
+id = "exec-040"
+kind = "conceptual"
+question = "Why does a command that starts with a variable assignment or a wrapper like env never count as safe to run without asking?"
+gold = ["crates/ostra-policy/src/policy.rs", "crates/ostra-policy/src/bash.rs"]
+
+[[case]]
+id = "exec-041"
+kind = "conceptual"
+question = "Why is a heredoc body sometimes treated as data and sometimes as code when checking what a shell command writes?"
+gold = ["crates/ostra-policy/src/bash.rs"]
+
+[[case]]
+id = "exec-042"
+kind = "conceptual"
+question = "Why does the egress proxy connect to the address it already checked rather than resolving the name again?"
+gold = ["crates/ostra-sandbox/src/egress.rs"]
+
+[[case]]
+id = "exec-043"
+kind = "conceptual"
+question = "Why are shell startup files and git hooks kept read-only even inside a folder the agent may write?"
+gold = ["crates/ostra-sandbox/src/profile.rs"]
+
+[[case]]
+id = "exec-044"
+kind = "conceptual"
+question = "What could an agent do by planting a commondir file in a repository, and why is it removed during a run?"
+gold = ["crates/ostra-sandbox/src/git.rs", "crates/ostra-exec-harness/src/executor.rs"]
+
+[[case]]
+id = "exec-045"
+kind = "conceptual"
+question = "Why is the container engine socket hidden from the sandbox even though the host filesystem is already read-only?"
+gold = ["crates/ostra-sandbox/src/profile.rs"]
+
+[[case]]
+id = "exec-046"
+kind = "conceptual"
+question = "Why do all cache breakpoints use a one-hour lifetime instead of mixing five-minute and one-hour entries?"
+gold = ["crates/ostra-providers/src/anthropic.rs"]
+
+[[case]]
+id = "exec-047"
+kind = "conceptual"
+question = "Why is a failed model stream never retried once output has started?"
+gold = ["crates/ostra-providers/src/retry.rs", "crates/ostra-providers/src/lib.rs"]
+
+[[case]]
+id = "exec-048"
+kind = "conceptual"
+question = "Why must a harness CLI not start a sandbox of its own when Ostra runs it on macOS?"
+gold = ["crates/ostra-exec-harness/src/launch.rs", "crates/ostra-exec-harness/src/sandbox.rs"]
+
+[[case]]
+id = "exec-049"
+kind = "conceptual"
+question = "Why does Ostra answer the terminal's cursor and color queries itself instead of letting the viewing browser reply?"
+gold = ["crates/ostra-exec-harness/src/pty.rs"]
+
+[[case]]
+id = "exec-050"
+kind = "cross"
+question = "Why are PowerShell and cmd commands never auto-allowed on Windows while simple bash reads are?"
+gold = ["crates/ostra-tools/src/winshell.rs", "crates/ostra-exec-harness/src/adapters/codex.rs"]
+
+# ---------------------------------------------------------------------------------------------
+# cross: the answer spans two or more crates
+# ---------------------------------------------------------------------------------------------
+
+[[case]]
+id = "exec-051"
+kind = "cross"
+question = "Trace a harness CLI's tool call from its hook payload to the allow or deny answer it prints back."
+gold = ["crates/ostra-exec-harness/src/adapters/mod.rs", "crates/ostra-exec-harness/src/bridge.rs", "crates/ostra-policy/src/policy.rs"]
+
+[[case]]
+id = "exec-052"
+kind = "cross"
+question = "How are Ostra's own tools, such as recording a lesson or submitting a result, offered to a harness CLI and run on the server?"
+gold = ["crates/ostra-exec-harness/src/bridge.rs", "crates/ostra-exec-harness/src/services.rs", "crates/ostra-tools/src/lib.rs"]
+
+[[case]]
+id = "exec-053"
+kind = "cross"
+question = "Which layers keep provider API keys out of the commands an agent runs, in both native and harness runs?"
+gold = ["crates/ostra-tools/src/bash.rs", "crates/ostra-exec-harness/src/launch.rs", "crates/ostra-exec-native/src/lib.rs"]
+
+[[case]]
+id = "exec-054"
+kind = "cross"
+question = "How does a native run's shell command end up inside the sandbox, from the tool call to the wrapped process?"
+gold = ["crates/ostra-exec-native/src/lib.rs", "crates/ostra-tools/src/bash.rs", "crates/ostra-sandbox/src/profile.rs"]
+
+[[case]]
+id = "exec-055"
+kind = "cross"
+question = "How do egress decisions and decoy opens inside a sandbox reach the execution's activity log?"
+gold = ["crates/ostra-sandbox/src/report.rs", "crates/ostra-exec-harness/src/sandbox.rs", "crates/ostra-sandbox/src/egress.rs"]

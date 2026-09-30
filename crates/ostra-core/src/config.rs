@@ -2,7 +2,7 @@
 //! `<project>/.ostra/project.toml`. Route resolution and save-time validation live here, because a
 //! route that does not resolve is a settings error shown at save time, not at spawn time.
 
-use crate::agent::{AgentName, JUDGE_ROUTE, route_keys};
+use crate::agent::{AgentName, JUDGE_ROUTE, RETIRED_AGENTS, route_keys};
 use crate::executor::{ExecutorKind, HarnessKind};
 use crate::model::{Complexity, Effort, Tier};
 use crate::slug::{is_project_key, is_stack_name, stack_issue};
@@ -937,7 +937,8 @@ impl WorkspaceSettings {
             ("fact-check", "advanced"),
             ("code-reviewer", "balanced"),
             ("execution-path-analyzer", "balanced"),
-            ("module-documentation", "advanced"),
+            ("documentation", "advanced"),
+            ("system-architecture", "advanced"),
             ("prompt-generation", "advanced"),
             ("initializer", "balanced"),
             ("judge", "advanced"),
@@ -1354,7 +1355,7 @@ pub fn validate_workspace(
     }
 
     for key in ws.routing.executor.by_agent.keys() {
-        if !route_keys().contains(&key.as_str()) {
+        if !route_keys().contains(&key.as_str()) && !RETIRED_AGENTS.contains(&key.as_str()) {
             issues.push(issue(
                 format!("routing.executor.byAgent.{key}"),
                 format!("`{key}` is not an agent."),
@@ -1362,7 +1363,7 @@ pub fn validate_workspace(
         }
     }
     for key in ws.routing.model.by_agent.keys() {
-        if !route_keys().contains(&key.as_str()) {
+        if !route_keys().contains(&key.as_str()) && !RETIRED_AGENTS.contains(&key.as_str()) {
             issues.push(issue(
                 format!("routing.model.byAgent.{key}"),
                 format!("`{key}` is not an agent."),
@@ -1370,7 +1371,9 @@ pub fn validate_workspace(
         }
     }
     for key in ws.routing.effort.by_agent.keys() {
-        if !AgentName::ALL.iter().any(|a| a.as_str() == key) {
+        if !AgentName::ALL.iter().any(|a| a.as_str() == key)
+            && !RETIRED_AGENTS.contains(&key.as_str())
+        {
             issues.push(issue(
                 format!("routing.effort.byAgent.{key}"),
                 format!("`{key}` is not an agent."),
@@ -1615,7 +1618,6 @@ pub struct TestType {
 pub struct ModuleRow {
     pub glob: String,
     pub area: String,
-    pub reference: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, Default)]
@@ -1623,7 +1625,7 @@ pub struct ModuleRow {
 #[ts(export)]
 pub struct SkillEntry {
     pub name: String,
-    /// `convention`, `module-hub`, `creation`, `test`, or `other`.
+    /// `convention`, `creation`, `test`, or `other`.
     pub kind: String,
     /// Relative to the project root, for example `.agents/skills/convention/SKILL.md`.
     pub path: String,
@@ -1896,7 +1898,8 @@ plan = "advanced"
 fact-check = "advanced"
 code-reviewer = "balanced"
 execution-path-analyzer = "balanced"
-module-documentation = "advanced"
+documentation = "advanced"
+system-architecture = "advanced"
 prompt-generation = "advanced"
 initializer = "balanced"
 judge = "advanced"

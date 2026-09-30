@@ -53,7 +53,7 @@ you mean. When a literal phrase is available, use it.
 
 - YAML front matter: `name` (kebab-case, matches the directory) and an exhaustive `description` with concrete
   trigger conditions. Routing is done by the INVENTORY, but a good description still helps discovery.
-- Pick the archetype (creation, convention, module-hub, or test) from `refs/skill-archetypes.md` and fill it.
+- Pick the archetype (creation, convention, or test) from `refs/skill-archetypes.md` and fill it.
 - Creation skills: list every placeholder up front. Order steps by dependency. The template must compile or
   parse after substitution. Name every secondary file that must change (registration, migration, index, DI
   module).

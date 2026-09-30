@@ -1,9 +1,11 @@
-import { Banner, Button, Checkbox, Panel } from "@ostra/design";
+import { Banner, Button, Checkbox, Panel, Select } from "@ostra/design";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
+import type { BookSummary } from "../../api/gen/BookSummary";
 import type { ContextFile, ProjectView, SessionSummary, Track } from "../../api/types";
 import { FileTagInput } from "../../features/context/FileTagInput";
 import { useUploads } from "../../features/context/uploads";
+import { useAsync } from "../../lib/hooks";
 import { isMac, modHint } from "../../lib/keys";
 import { useShell } from "../../lib/nav";
 
@@ -20,6 +22,8 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
   const [request, setRequest] = useState("");
   const [tests, setTests] = useState(false);
   const [docs, setDocs] = useState(false);
+  const [book, setBook] = useState("");
+  const books = useAsync<BookSummary[]>(() => (docs ? api.books(ws) : Promise.resolve([])), [ws, docs]);
   const [yolo, setYolo] = useState(yoloDefault);
   const [track, setTrack] = useState<Track | null>(null);
   const [pins, setPins] = useState<string[]>([]);
@@ -53,6 +57,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
         projects: pins,
         files,
         uploads: uploads.ids,
+        ...(docs && book ? { docs_book: book } : {}),
       });
       setRequest("");
       uploads.clear();
@@ -105,11 +110,24 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
             onChange={(e) => setTests(e.target.checked)}
           />
           <Checkbox
-            label="Update docs"
-            title="The area references are refreshed once every phase passes review"
+            label="Write docs"
+            title="A documentation book for the changed projects is written or updated once every phase passes review"
             checked={docs}
             onChange={(e) => setDocs(e.target.checked)}
           />
+          {docs && (
+            <Select
+              size="sm"
+              aria-label="Documentation book"
+              title="The book this session writes into"
+              value={book}
+              onChange={(e) => setBook(e.target.value)}
+              options={[
+                { value: "", label: "Book: new or matching the projects" },
+                ...(books.data ?? []).map((b) => ({ value: b.id, label: `Book: ${b.id}` })),
+              ]}
+            />
+          )}
           <Checkbox
             label="YOLO"
             title="Ostra answers every question and permission ask itself and lists each decision at the end"

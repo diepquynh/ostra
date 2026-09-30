@@ -63,7 +63,7 @@ you mean. When a literal phrase is available, use it.
 | **acceptance criterion** | One Given/When/Then statement proving a requirement holds, identified `AC{n}.{m}`. For example `AC7.2` is the second acceptance criterion of `R7`. The plan agent turns these into success criteria. |
 | **contract provided** | An externally observable artifact this work creates that another deliverable or an external caller may consume: an API endpoint, a transfer-object or DTO shape, a schema or table, a published event, a client-facing type, or an exported function signature. |
 | **contract consumed** | A contract the work depends on. If a deliverable in this spec provides it, name that deliverable ID. If it already exists in the repo, cite its real path and symbol. |
-| **open question** | A question you cannot answer from the research documents, the repo source code, the module-hub references, or a source one of those documents cites. Written in question-card form (tag, 2 to 4 options, one recommended option) for the orchestrator to show the user as a question card. |
+| **open question** | A question you cannot answer from the research documents, the repo source code, or a source one of those documents cites. Written in question-card form (tag, 2 to 4 options, one recommended option) for the orchestrator to show the user as a question card. |
 
 ## Step 1: {{tool_read}} inputs and compute the run stamp
 
@@ -449,8 +449,7 @@ and cover its criterion elsewhere.
 ## Step 7: Open questions
 
 Your trusted sources are, in order: the research documents, a page one of them cites that you re-read in Step
-2C, the repo source code, and the module-hub references (the module-hub skill's `references/`, under `{repo-root}/.agents/skills/module-hub/` or `{repo-root}/.ostra/skills/module-hub/`). For every
-ambiguity, try all four before asking. Do NOT answer from general framework, language, or API knowledge, and
+2C, and the repo source code. For every ambiguity, try all three before asking. Do NOT answer from general framework, language, or API knowledge, and
 do NOT assume an answer. An ambiguity about a technology no research document covers is **not** yours to
 resolve by searching: raise it here so the orchestrator can run another research pass.
 

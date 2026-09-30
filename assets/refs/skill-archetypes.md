@@ -1,9 +1,9 @@
 # Skill Archetypes
 
-The initializer's **generate** mode fills one of these four templates per skill. They are the four skill
+The initializer's **generate** mode fills one of these three templates per skill. They are the three skill
 shapes that work well in practice: a **creation** skill (how to build a recurring component), a
-**convention** skill (rules applied to all edits), a **module-hub** skill (routing tables plus references),
-and a **test** skill (how to write a test for a recurring component type).
+**convention** skill (rules applied to all edits), and a **test** skill (how to write a test for a recurring
+component type).
 
 Creation and test skills are proposed from the stack reference's two catalogs, the **Component catalog**
 (source components) and the **Test component catalog** (test types), one skill per type that recurs.
@@ -93,60 +93,7 @@ that the repo does not actually follow. No "etc." Enumerate.
 
 ---
 
-## Archetype C: Module-hub skill
-
-Exactly one per repo. Routing tables from the module/area map, plus per-area reference files when an area is
-complex.
-
-```markdown
----
-name: module-hub
-description: Module/area reference hub for {this repo}. ACTIVATE when working on any area, or when locating which area a path belongs to.
----
-
-# {Repo} Module Reference Hub
-
-## How to use
-1. Find the area from the tables below.
-2. Read its reference file if one exists: `references/{area}.md`.
-3. Follow that area's patterns.
-
-## Routing Table A: Path to Area
-| Path glob | Area | Reference |
-| --- | --- | --- |
-
-## Routing Table B: Concept to Area
-| If the task mentions… | Area(s) |
-| --- | --- |
-
-## Area Semantics
-| Area | What it contains | Typical patterns |
-| --- | --- | --- |
-```
-
-Per-area reference file (`references/{area}.md`), only when an area warrants it:
-
-```markdown
-# {Area}
-Purpose: {one paragraph, grounded in code}.
-Key files: {table of path -> purpose}.
-Entry points: {controllers/handlers/schedulers}.
-Data flow: {A -> B -> C using real class/function names}.
-Integration points: {events published/consumed, queues, external services}.
-```
-
-**Rules:** every routing-table entry points at a real path. Every reference file is grounded in actual source,
-never generated from memory.
-
-**A project with no source yet** (created moments ago, its folder empty): route the planned paths from the
-approved proposal's module map instead, because the build creates them and the implementer needs to know which
-area a new file belongs to. Mark each planned area `(planned)` in its Area Semantics row, take what it contains
-from the proposal and the project's base requirements, and write no reference file for it, because there is no
-source to ground one in.
-
----
-
-## Archetype D: Test skill
+## Archetype C: Test skill
 
 Use for a recurring **test** type: a unit test for a service, repository, controller/route handler, or UI
 component, or an integration/slice test. Proposed from the stack reference's **Test component catalog**, one

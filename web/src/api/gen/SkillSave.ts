@@ -7,6 +7,6 @@
  */
 export type SkillSave = { 
 /**
- * `convention`, `module-hub`, `creation`, `test`, or `other`.
+ * `convention`, `creation`, `test`, or `other`.
  */
 kind: string, component_type: string | null, content: string, };

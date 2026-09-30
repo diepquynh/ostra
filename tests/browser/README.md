@@ -35,3 +35,4 @@ dialog, popup, or navigation away from the app.
 | `storage` | localStorage, sessionStorage, IndexedDB, and Cache Storage hold no transcripts, tokens, or keys |
 | `shortcuts` | The web app manifest and icons load from the app origin under the CSP; a recorded shortcut stays in the workspace's localStorage entry and runs |
 | `site` | Docs Markdown with test strings, Mermaid diagrams with hostile labels, links, and directives, every docs page, search and hostile addresses, the homepage and its console shot loading only same-origin files under their meta CSP, messages from another origin ignored by the shot, and storage |
+| `books` | A documentation book (written by `global-setup.ts` into `.ostra/docs/pw_book/`) with test strings in every field: the Docs list, each reader page, Mermaid diagrams, search, and the exported HTML file, which must hold no script, carry its meta CSP, and render under it with nothing blocked |

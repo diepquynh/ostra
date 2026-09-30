@@ -2,7 +2,7 @@
 
 use crate::plan::removed_phases;
 use crate::runner::EngineError;
-use crate::state::{DocsState, EpaState, ExecRecord, LoopNext, SessionState, WorkLoop};
+use crate::state::{DocsState, EpaState, ExecRecord, LoopNext, SessionState, StageRun, WorkLoop};
 use ostra_core::agent::AgentName;
 use ostra_core::api::{
     ArtifactRef, ChangedBy, ContextAddition, DecisionView, ExecutionGroupView, ExecutionView,
@@ -162,7 +162,9 @@ pub fn stage_label(k: StageKind) -> &'static str {
         Epa => "Trace execution paths",
         WriteTest => "Write tests",
         TestReview => "Review tests",
-        ModuleDocs => "Module documentation",
+        Documentation => "Write documentation",
+        Architecture => "System architecture",
+        BookWrite => "Write the book",
         Verify => "Verify",
         PromptGen => "Write prompts",
         QuickAnswer => "Answer",
@@ -189,6 +191,16 @@ fn gate_for(
     f: impl Fn(&GatePayload) -> bool,
 ) -> Option<&crate::state::GateRecord> {
     s.gates.values().rev().find(|g| f(&g.payload))
+}
+
+fn run_status<T>(r: &StageRun<T>) -> Option<StageStatus> {
+    match r {
+        StageRun::NotStarted => None,
+        StageRun::Running(_) => Some(StageStatus::Running),
+        StageRun::Done(_) => Some(StageStatus::Done),
+        StageRun::Failed { .. } => Some(StageStatus::Failed),
+        StageRun::Abandoned => Some(StageStatus::Skipped),
+    }
 }
 
 fn card(stage: StageKind, label: String, status: StageStatus) -> StageCard {
@@ -657,22 +669,45 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             });
             out.push(c);
         }
-        let docs_status = match &t.docs {
-            DocsState::NotStarted => None,
-            DocsState::Running(_) => Some(StageStatus::Running),
-            DocsState::Done(_) => Some(StageStatus::Done),
-            DocsState::Failed { .. } => Some(StageStatus::Failed),
-            DocsState::Abandoned => Some(StageStatus::Skipped),
-        };
-        if let Some(st) = docs_status {
-            let mut c = card(StageKind::ModuleDocs, format!("Module docs for {key}"), st);
+        let docs = t.docs_aggregate();
+        if let Some(st) = run_status(&docs) {
+            let mut c = card(StageKind::Documentation, format!("Documentation for {key}"), st);
             c.project = Some(key.clone());
             c.executions = exec_ids(
                 s,
-                |e| matches!(&e.purpose, P::ModuleDocs { project } if project == key),
+                |e| matches!(&e.purpose, P::Docs { project, .. } if project == key),
             );
+            c.detail = match (&docs, t.docs_areas()) {
+                (DocsState::Done(d), None) => Some(format!("{} sections", d.sections.len())),
+                (DocsState::Done(d), Some(a)) => Some(format!(
+                    "{} sections from {} of {} areas",
+                    d.sections.len(),
+                    t.area_docs.len(),
+                    a.len()
+                )),
+                (_, Some(a)) => Some(format!("{} of {} areas", t.area_docs.len(), a.len())),
+                _ => None,
+            };
             out.push(c);
         }
+    }
+    if let Some(st) = run_status(&s.architecture) {
+        let mut c = card(StageKind::Architecture, "System architecture".into(), st);
+        c.executions = exec_ids(s, |e| matches!(&e.purpose, P::Architecture));
+        out.push(c);
+    }
+    if let Some(w) = &s.book_written {
+        let mut c = card(
+            StageKind::BookWrite,
+            format!("Book {}", w.book),
+            if w.error.is_some() {
+                StageStatus::Failed
+            } else {
+                StageStatus::Done
+            },
+        );
+        c.detail = Some(w.error.clone().unwrap_or_else(|| w.projects.join(", ")));
+        out.push(c);
     }
     if s.quick.exec.is_some() {
         let mut c = card(
@@ -846,15 +881,13 @@ pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> {
             );
         }
     }
-    for (key, t) in &s.project_tracks {
-        if let DocsState::Done(Some(p)) = &t.docs {
-            add(
-                p.clone(),
-                "report",
-                format!("Module docs report, {key}"),
-                Some(key.clone()),
-            );
-        }
+    if let Some(w) = s.book_written.as_ref().filter(|w| w.error.is_none()) {
+        add(
+            ostra_core::book::book_dir(&s.workspace_root, &w.book).join("index.md"),
+            "book",
+            "Documentation book".into(),
+            None,
+        );
     }
     if let Some((path, _)) = &s.completed {
         add(path.clone(), "completion", "Completion report".into(), None);
@@ -1206,6 +1239,7 @@ mod tests {
             files: vec![],
             uploads: vec![],
             pinned: vec![],
+            docs_book: None,
         }
     }
 

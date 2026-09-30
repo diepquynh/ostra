@@ -296,6 +296,7 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         files: vec![],
         uploads: vec![],
         pinned: vec![],
+        docs_book: None,
     });
     if case.judge == "classify" {
         return SessionState::fold(SessionId::from("eval"), &log.events);

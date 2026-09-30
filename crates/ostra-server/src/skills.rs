@@ -11,7 +11,7 @@ use ostra_core::paths;
 use ostra_workspace::WorkspaceRt;
 use std::path::{Path, PathBuf};
 
-pub const KINDS: &[&str] = &["convention", "module-hub", "creation", "test", "other"];
+pub const KINDS: &[&str] = &["convention", "creation", "test", "other"];
 
 /// Harness skill directories, relative to the project root.
 pub const HARNESS_DIRS: &[&str] = &[

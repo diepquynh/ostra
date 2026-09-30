@@ -10,7 +10,7 @@ import { Api, mintUrl, signIn } from "./lib/api";
 import { startAttacker } from "./lib/attacker";
 import { OSTRA_BIN, ostraEnv, REPO_ROOT, ROOT, STATE_FILE, type SuiteState } from "./lib/env";
 import { startFakeModel } from "./lib/fake-model";
-import { htmlFile, inline, markdown, svgFile } from "./lib/payloads";
+import { htmlFile, inline, markdown, mermaid, svgFile } from "./lib/payloads";
 import { BRANCH, makeRepo, makeStubHarness, makeStubMcp, REPO, writeConfig } from "./lib/scenario";
 import { buildSite, startSite } from "./lib/site";
 
@@ -175,6 +175,8 @@ export default async function globalSetup() {
   if (detail.summary.status !== "completed")
     console.warn(`[pw] session ended ${detail.summary.status}; rendering what it produced`);
 
+  writeBook(path.join(ROOT, "ws"), fake.origin);
+
   const sessionDir = findSessionDir(path.join(ROOT, "ws"), s.id);
   const state: SuiteState = {
     app,
@@ -207,6 +209,51 @@ export default async function globalSetup() {
     await attacker.close();
     await site.close();
   };
+}
+
+/**
+ * A documentation book whose every field carries test strings, written where the engine writes books. The Docs view
+ * and the exported HTML render it.
+ */
+function writeBook(ws: string, fake: string) {
+  const diagrams = [...mermaid("book", fake).matchAll(/```mermaid\n([\s\S]*?)```/g)].map((m, i) => ({
+    title: inline(`book-diagram-${i}`),
+    kind: "flowchart",
+    source: m[1],
+  }));
+  const unit = (tag: string) => ({
+    id: tag,
+    title: inline(`${tag}-title`),
+    purpose: markdown(tag, fake),
+    boundaries: { owns: [inline(`${tag}-owns`)], does_not_own: [markdown(`${tag}-notown`, fake)] },
+    assumptions: [markdown(`${tag}-assume`, fake)],
+    business_flow: [{ actor: inline(`${tag}-actor`), action: markdown(`${tag}-action`, fake), outcome: inline(`${tag}-out`) }],
+    diagrams,
+    tables: [{ title: inline(`${tag}-table`), columns: [inline(`${tag}-col`)], rows: [[markdown(`${tag}-cell`, fake)]] }],
+    concerns: [{ component: inline(`${tag}-comp`), responsibility: inline(`${tag}-resp`) }],
+    code_refs: [{ path: "src/<img src=x onerror=window.__pwned='ref'>.rs", symbol: "a`b|c", lines: "1-2", note: inline(`${tag}-note`) }],
+  });
+  const now = new Date().toISOString();
+  const book = {
+    id: "pw_book",
+    title: inline("book-title"),
+    projects: ["app"],
+    updated_at: now,
+    sessions: [],
+    architecture: {
+      overview: markdown("book-arch", fake),
+      diagram: diagrams[0],
+      components: [{ name: inline("book-c"), project: "app", role: inline("book-role"), owns: [inline("book-own")] }],
+      links: [{ from: inline("book-c"), to: inline("book-c"), protocol: inline("book-proto"), mode: "sync", payload: inline("book-pay") }],
+      failure_recovery: [{ failure: inline("book-f"), detection: inline("book-d"), recovery: inline("book-r") }],
+      scalability: [{ component: inline("book-c"), scales_by: inline("book-s"), limit: inline("book-l") }],
+    },
+    parts: [{ project: "app", overview: markdown("book-overview", fake), updated_at: now, sections: [{ ...unit("book"), subsections: [unit("book-sub")] }] }],
+    glossary: [{ term: inline("book-term"), definition: markdown("book-def", fake), code_ref: inline("book-code") }],
+  };
+  const dir = path.join(ws, ".ostra", "docs", book.id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "book.json"), JSON.stringify(book, null, 2));
 }
 
 function listFiles(dir: string): string[] {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { Theme } from "../shared/theme";
+
+export type Theme = "light" | "dark";
 
 let seq = 0;
 

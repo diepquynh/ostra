@@ -134,7 +134,7 @@ One gate per batch of projects that finished together (Rule T6). A project the r
 of is not asked about that stage (Rule T3). The answers decide which of the test and docs stages run; they never
 change requirements (Rule T5).
 
-![The closing gate with Write tests and Update the module documentation checkboxes](../images/console/closing-gate.png)
+![The closing gate with the tests and documentation checkboxes](../images/console/closing-gate.png)
 
 ### Permission
 
@@ -330,7 +330,7 @@ that names stages is kept as a note. On a gate with one text, every item is abou
 A remembered note is kept in the fold (`user_notes`) with an ID, `N1`, `N2`, and so on, and reaches later agents
 as a `User notes:` line: `implement`
 notes reach the implementer and fix passes, `tests` notes the path analyzer and the test writer, and `docs` notes
-the module documentation agent. Nothing can be kept for the plan agent, which reads only the spec (Rule D4); an
+the documentation writers and the system architecture agent. Nothing can be kept for the plan agent, which reads only the spec (Rule D4); an
 answer the plan needs is delivered, so it lands in the spec. A delivered answer can name stages too, when part of
 it is also an instruction for later.
 

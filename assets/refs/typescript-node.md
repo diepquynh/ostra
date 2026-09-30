@@ -50,7 +50,7 @@ single-run in CI is `ng test --watch=false --browsers=ChromeHeadless`. Never mix
 ## Test component catalog
 
 For each test type: **find** (grep), **capture** invariants from ONE real exemplar, generate the named
-**skill** (Archetype D). Propose ONE shared convention skill `unit-test-common` per workspace, matched to the
+**skill** (Archetype C). Propose ONE shared convention skill `unit-test-common` per workspace, matched to the
 runner that workspace actually uses (Jest, Vitest, or Jasmine/Karma).
 
 ### Angular component spec: skill `unit-test-component`  (Jasmine + Karma + TestBed)

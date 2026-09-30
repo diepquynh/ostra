@@ -1,6 +1,6 @@
 use super::*;
 use crate::brief::{
-    ArtifactsBrief, BriefInput, ProjectDoc, augment, build_brief, project_docs, stated_in,
+    ArtifactsBrief, BooksBrief, BriefInput, ProjectDoc, augment, build_brief, project_docs, stated_in,
 };
 use crate::spawn::*;
 use ostra_core::HarnessKind;
@@ -29,7 +29,8 @@ fn every_agent_definition_loads_with_the_handover_tiers() {
         (AgentName::CodeReviewer, Tier::Balanced),
         (AgentName::ExecutionPathAnalyzer, Tier::Balanced),
         (AgentName::WriteTest, Tier::Balanced),
-        (AgentName::ModuleDocumentation, Tier::Advanced),
+        (AgentName::Documentation, Tier::Advanced),
+        (AgentName::SystemArchitecture, Tier::Advanced),
         (AgentName::PromptGeneration, Tier::Advanced),
         (AgentName::Initializer, Tier::Balanced),
         (AgentName::QuickAnswer, Tier::Balanced),
@@ -452,13 +453,37 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         extra: Extras::default(),
     };
     roundtrip(&wt);
-    let md = ModuleDocsParams {
+    let md = DocumentationParams {
         common: common(),
         implementer_reports: vec!["/r/i1.md".into(), "/r/i2.md".into()],
-        report_file: "/r/m.md".into(),
+        existing_book: Some("/ws/.ostra/docs/api_web/book.json".into()),
+        area: None,
         extra: Extras::default(),
     };
     roundtrip(&md);
+    let area = DocumentationParams {
+        area: Some(DocsAreaScope {
+            id: "server-and-1-more".into(),
+            title: "server, other files".into(),
+            paths: vec!["server/**".into()],
+            rest: true,
+            others: vec![("engine".into(), vec!["engine/**".into()])],
+        }),
+        ..md.clone()
+    };
+    roundtrip(&area);
+    let text = area.render();
+    assert!(text.contains("Area: server, other files (server-and-1-more)"), "{text}");
+    assert!(text.contains("Area paths: server/**, and every file no other area covers"), "{text}");
+    assert!(text.contains("Other areas: engine (engine/**)"), "{text}");
+    let arch = ArchitectureParams {
+        common: common(),
+        book_parts: "/r/ostra-docs-parts.json".into(),
+        projects: vec![("api".into(), "/ws/api".into()), ("web".into(), "/ws/web".into())],
+        existing_book: None,
+        extra: Extras::default(),
+    };
+    roundtrip(&arch);
     let pg = PromptGenParams {
         common: common(),
         task: "Write a skill".into(),
@@ -624,12 +649,10 @@ fn profile() -> ProjectProfile {
             ModuleRow {
                 glob: "src/orders/**".into(),
                 area: "orders".into(),
-                reference: None,
             },
             ModuleRow {
                 glob: "src/billing/**".into(),
                 area: "billing".into(),
-                reference: None,
             },
         ],
         skills: vec![
@@ -684,6 +707,7 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
         instructions: &instructions,
         project_docs: &[],
         artifacts: None,
+        books: None,
         new_projects: &[],
     };
     let brief = build_brief(&input).unwrap();
@@ -751,6 +775,7 @@ fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
             instructions: &[],
             project_docs: &[],
             artifacts: None,
+        books: None,
             new_projects: &[],
         };
         let brief = build_brief(&input).unwrap();
@@ -775,6 +800,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
         instructions: &[],
         project_docs: &[],
         artifacts: None,
+        books: None,
         new_projects: &[],
     };
     let once = augment("Task: x", &input);
@@ -836,6 +862,38 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     assert!(brief.contains("- and 2 more; find them with Glob in `/ws/.ostra/artifacts`"));
     let once = augment("Task: x", &with_artifacts);
     assert_eq!(augment(&once, &with_artifacts), once);
+    let books = BooksBrief {
+        dir: "/ws/.ostra/docs".into(),
+        books: vec![ostra_core::book::BookSummary {
+            id: "api_web".into(),
+            title: "Documentation for api, web".into(),
+            projects: vec!["api".into(), "web".into()],
+            updated_at: chrono::DateTime::UNIX_EPOCH,
+            sections: 7,
+            has_architecture: true,
+        }],
+        search_tool: None,
+    };
+    let with_books = BriefInput {
+        books: Some(&books),
+        ..init_docs
+    };
+    let brief = build_brief(&with_books).unwrap();
+    assert!(brief.contains("## Workspace documentation"));
+    assert!(brief.contains(
+        "- `/ws/.ostra/docs/api_web/index.md`: api, web (7 sections, with the system architecture)"
+    ));
+    assert!(brief.contains("Read the sections that bear on your task."));
+    let searchable = BooksBrief {
+        search_tool: Some("mcp__ostra__docs_search".into()),
+        ..books.clone()
+    };
+    let brief = build_brief(&BriefInput {
+        books: Some(&searchable),
+        ..with_books
+    })
+    .unwrap();
+    assert!(brief.contains("Search them with mcp__ostra__docs_search before you read code"));
     assert!(stated_in("a  b   c", "a\nb c"));
     assert!(stated_in("", "ab"));
 }

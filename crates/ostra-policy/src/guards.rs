@@ -22,6 +22,7 @@ pub const SELF_PROTECTION: &str = ostra_core::containment::SELF_PROTECTION;
 pub const GIT_METADATA: &str = ostra_core::containment::GIT_METADATA;
 pub const SECRET_READ: &str = ostra_core::containment::SECRET_READ;
 pub const WORKSPACE_ARTIFACTS: &str = "workspace-artifacts";
+pub const WORKSPACE_DOCS: &str = "workspace-docs";
 pub const MANAGE_TOOLS: &str = "manage-tools";
 
 /// A refusal: which guard, and the message for the model (correction first).
@@ -67,6 +68,8 @@ pub struct Roots {
     pub report_file: Option<PathBuf>,
     /// The workspace's visible artifacts, which agents read and never write (Rule W1).
     pub artifacts: PathBuf,
+    /// The workspace's documentation books, which only the engine writes (Rule B5).
+    pub books: PathBuf,
     /// Rule G1: tool enforcement is on, so write scope, the report path, and self-protection
     /// apply.
     pub strict: bool,
@@ -112,6 +115,11 @@ impl Roots {
                 PathBuf::new()
             } else {
                 canon(&ostra_core::artifacts::dir(ws))
+            },
+            books: if ws.as_os_str().is_empty() {
+                PathBuf::new()
+            } else {
+                canon(&ostra_core::book::dir(ws))
             },
             strict: ctx.enforce_tool_calls,
         }
@@ -474,6 +482,18 @@ pub fn check_write(
         ));
     }
 
+    // Rule B5: the engine writes the books from the docs stage's submit calls.
+    if inside(&roots.books, target) {
+        return Some(deny(
+            WORKSPACE_DOCS,
+            format!(
+                "Put the documentation in your submit call instead of writing \"{raw}\": Ostra writes the \
+                 workspace books from the docs stage's submit calls, so agents read them but never write, move, or \
+                 delete them."
+            ),
+        ));
+    }
+
     // Hardening: git metadata names programs git runs later (hooks, fsmonitor, a gitfile
     // pointing at another git dir), so it changes only through git commands.
     if target.components().any(|c| c.as_os_str() == ".git") {
@@ -766,12 +786,6 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
     }
     let extra: Option<Vec<PathBuf>> = match agent {
         AgentName::Initializer => Some(vec![canon(&paths::project_runtime(&roots.repo)), skills]),
-        AgentName::ModuleDocumentation => Some(
-            paths::project_skill_dirs(&roots.repo)
-                .into_iter()
-                .map(|d| canon(&d.join("module-hub").join("references")))
-                .collect(),
-        ),
         _ => None,
     };
     if let Some(roots_allowed) = extra {

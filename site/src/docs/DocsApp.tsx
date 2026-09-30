@@ -3,9 +3,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { GitHubMark } from "../shared/GitHubMark";
 import { REPO, REPO_FILE } from "../shared/links";
 import { useSiteTheme } from "../shared/theme";
-import { Markdown } from "./Markdown";
-import { Docs, MAX_HITS, type Target } from "./model";
+import { Docs, MAX_HITS, Markdown, type Target } from "./model";
 import { NAV } from "./pages";
+import { IMAGES } from "./sources";
 
 const NARROW = 900;
 const WIDE = 1240;
@@ -202,7 +202,7 @@ export function DocsApp() {
               </a>
             </div>
             <h1 className="docs-h1">{page.title}</h1>
-            <Markdown docs={docs} page={page} go={go} theme={theme} />
+            <Markdown docs={docs} page={page} go={go} theme={theme} images={IMAGES} />
             <nav className="docs-pager">
               <div>
                 {prev && (

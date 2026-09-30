@@ -243,7 +243,7 @@ agent.
 
 Every route key needs a model route. A new workspace is seeded with one for each
 (`WorkspaceSettings::seeded`), taken from Ultracode's inventory profile: research, spec, plan, fact-check,
-module documentation, prompt generation, and the advisor on `advanced`; review, execution-path analysis, the initializer,
+documentation, system architecture, prompt generation, and the advisor on `advanced`; review, execution-path analysis, the initializer,
 and quick answers on `balanced`; judges on `advanced`, because a wrong route costs more than the call.
 
 A workspace saved before an agent existed has no route for it, so an Ostra update that adds an agent (the
@@ -255,6 +255,10 @@ tier. The dashboard's settings banner has a button that applies them through
 `POST /api/workspaces/:ws/settings/fix`, which writes only those routes and leaves any other problem for the
 user. On the Settings screen the same fix is a button next to the problem, and it changes the form, so it is
 saved with the rest of the edits.
+
+A route for an agent Ostra replaced stays valid and is ignored (`RETIRED_AGENTS` in
+`crates/ostra-core/src/agent.rs`), so a workspace saved with `module-documentation` still loads. Its replacements,
+`documentation` and `system-architecture`, need their own routes, which the same fix supplies.
 
 ### Effort
 
@@ -466,7 +470,7 @@ plan = { native = "frontier", codex = "gpt-5.6-sol" }  # per executor
 fact-check = "advanced"
 code-reviewer = "balanced"
 execution-path-analyzer = "balanced"
-module-documentation = "default"    # the agent.toml default tier
+documentation = "default"    # the agent.toml default tier
 prompt-generation = "advanced"
 initializer = "balanced"
 judge = "advanced"

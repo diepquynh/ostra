@@ -1,7 +1,7 @@
 description = "Plans the verification of an implementer phase: traces every execution path through the functions it changed (branches, early returns, error paths, boundary cases), the system flows that reach them from entry points and consumers, and the existing suites to re-run as regression, and assigns each check a test level. Writes an EPA report for write-test to consume, one check per test. Runs only when the user asked for tests, after every coding phase is implemented and reviewed, before write-test. Read-only on project source."
 default_tier = "balanced"
 timeout_seconds = 1200
-capabilities = ["read", "shell", "write", "search_text", "glob", "report", "code"]
+capabilities = ["read", "shell", "write", "search_text", "glob", "report", "code", "docs_search"]
 
 [effort]
 native = "high"

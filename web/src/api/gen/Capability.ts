@@ -3,4 +3,4 @@
 /**
  * Tool capabilities an agent definition may declare. Native tool names follow Claude Code's.
  */
-export type Capability = "read" | "write" | "edit" | "shell" | "search_text" | "glob" | "skill" | "web_search" | "web_fetch" | "report" | "document" | "memory" | "memory_recall" | "code" | "manage_projects" | "coordinate";
+export type Capability = "read" | "write" | "edit" | "shell" | "search_text" | "glob" | "skill" | "web_search" | "web_fetch" | "report" | "document" | "memory" | "memory_recall" | "docs_search" | "code" | "manage_projects" | "coordinate";

@@ -3,4 +3,4 @@
 /**
  * Every leaf agent Ostra runs. Kebab-case names match `assets/agents/<name>/`.
  */
-export type AgentName = "explore" | "generate-spec" | "fact-check" | "plan" | "implementer" | "code-reviewer" | "execution-path-analyzer" | "write-test" | "module-documentation" | "prompt-generation" | "initializer" | "quick-answer" | "advisor";
+export type AgentName = "explore" | "generate-spec" | "fact-check" | "plan" | "implementer" | "code-reviewer" | "execution-path-analyzer" | "write-test" | "documentation" | "system-architecture" | "prompt-generation" | "initializer" | "quick-answer" | "advisor";

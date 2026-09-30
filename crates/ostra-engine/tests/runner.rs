@@ -62,9 +62,11 @@ impl Services for Fake {
         schema: Value,
         _e: Effort,
     ) -> Result<(Value, Usage), String> {
-        let out = if system.contains("\"category\"")
-            || user.contains("# Toggles from the New task form")
-        {
+        let classify = system.contains("\"category\"")
+            || user.contains("# Toggles from the New task form");
+        let out = if classify && user.contains("Document the greeting") {
+            json!({"category": "DOCS", "projects": ["app"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "The request asks for documentation.", "title": "Greeting docs"})
+        } else if classify {
             json!({"category": "IMPLEMENT", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "research"}], "opts_in": {"tests": false, "docs": false}, "reason": "The request changes code.", "title": "Greeting"})
         } else if schema["properties"].get("track").is_some() {
             json!({"track": "full", "reason": "A contract changes."})
@@ -162,6 +164,17 @@ impl Executor for Scripted {
             AgentName::CodeReviewer => {
                 json!({"findings": [], "security_block": false, "ledger_path": "/l", "summary": "passed"})
             }
+            AgentName::Documentation => {
+                let stub = sess.join("ostra-docs-request.md");
+                let text = std::fs::read_to_string(&stub).unwrap_or_default();
+                assert!(text.contains("Document the greeting"), "the stub holds the request: {text}");
+                json!({"status": "ok", "summary": "Documented the greeting.", "overview": "app greets users.",
+                    "sections": [{"id": "greeting", "title": "Greeting", "purpose": "Prints a greeting.",
+                        "assumptions": ["stdout is open."],
+                        "diagrams": [{"title": "Greet", "kind": "sequence", "source": "sequenceDiagram\nUser->>app: run\napp-->>User: hello"}],
+                        "code_refs": [{"path": "src.txt", "note": "the greeting"}]}],
+                    "glossary": [{"term": "Greeting", "definition": "The text app prints."}]})
+            }
             other => return ExecutionResult::error(format!("unexpected agent {other}")),
         };
         ExecutionResult {
@@ -234,6 +247,7 @@ async fn implement_session_runs_to_completion_under_yolo() {
             projects: vec![],
             files: vec![],
             uploads: vec![],
+            docs_book: None,
         })
         .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -517,6 +531,7 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
             projects: vec![],
             files: vec![],
             uploads: vec![],
+            docs_book: None,
         })
         .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -595,6 +610,7 @@ async fn pinned_session_holds_only_its_pinned_projects() {
             projects: vec!["lib".into()],
             files: vec![],
             uploads: vec![],
+            docs_book: None,
         })
         .unwrap();
     engine.stop_session(&summary.id).unwrap();
@@ -602,4 +618,65 @@ async fn pinned_session_holds_only_its_pinned_projects() {
     let keys: Vec<&str> = st.projects.iter().map(|p| p.key.as_str()).collect();
     assert_eq!(keys, vec!["lib"]);
     assert_eq!(st.pinned, vec!["lib".to_string()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn docs_session_writes_the_book_into_the_workspace() {
+    // Rules B1, B5, B6.
+    let dir = tempfile::tempdir().unwrap();
+    let app = project(dir.path());
+    let ws_root = dir.path().join("ws");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    let mut ws = WorkspaceSettings::seeded("t");
+    ws.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app.clone(),
+        stack: None,
+        code_provider: None,
+        language_servers: vec![],
+    });
+    let exec = Arc::new(Scripted {
+        root: app.clone(),
+        runs: Mutex::new(vec![]),
+    });
+    let services = Arc::new(Fake {
+        ws,
+        executor: exec.clone(),
+        notices: Mutex::new(vec![]),
+    });
+    let db = WorkspaceDb::open_in_memory().unwrap();
+    let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
+    let mut rx = engine.subscribe();
+    let summary = engine
+        .create_session(CreateSession {
+            request: "Document the greeting".into(),
+            options: SessionOptions::default(),
+            projects: vec![],
+            files: vec![],
+            uploads: vec![],
+            docs_book: None,
+        })
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !engine.state(&summary.id).unwrap().is_terminal() {
+        assert!(tokio::time::Instant::now() < deadline, "timed out");
+        let _ = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
+    }
+    let st = engine.state(&summary.id).unwrap();
+    assert!(st.failed.is_none(), "failed: {:?}", st.failed);
+    let written = st.book_written.clone().expect("the book write is recorded");
+    assert_eq!((written.book.as_str(), written.error), ("app", None));
+    let book = ostra_core::book::read(&ws_root, "app").expect("book.json");
+    assert_eq!(book.projects, ["app"]);
+    assert_eq!(book.sessions, [summary.id.to_string()]);
+    let root = ostra_core::book::book_dir(&ws_root, "app");
+    let section = std::fs::read_to_string(root.join("app/greeting.md")).unwrap();
+    assert!(section.contains("## Assumptions\n\n- stdout is open."), "{section}");
+    assert!(section.contains("```mermaid\nsequenceDiagram"), "{section}");
+    assert!(section.find("## Code references") > section.find("```mermaid"), "code references come last");
+    let index = std::fs::read_to_string(root.join("index.md")).unwrap();
+    assert!(index.contains("- [Greeting](app/greeting.md): Prints a greeting."), "{index}");
+    assert!(std::fs::read_to_string(root.join("glossary.md")).unwrap().contains("| Greeting |"));
+    let agents: Vec<AgentName> = exec.runs.lock().unwrap().iter().map(|r| r.0).collect();
+    assert_eq!(agents, [AgentName::Documentation], "no implementer runs for a DOCS request");
 }

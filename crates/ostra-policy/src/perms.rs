@@ -31,6 +31,7 @@ const KNOWN_TOOLS: &[&str] = &[
     "Document",
     "Memory",
     "MemoryRecall",
+    "DocsSearch",
     "CodeOutline",
     "CodeFind",
     "CodeCallers",

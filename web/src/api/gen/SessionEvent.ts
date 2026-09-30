@@ -9,6 +9,7 @@ import type { ContextFile } from "./ContextFile";
 import type { CreatedProject } from "./CreatedProject";
 import type { DecisionId } from "./DecisionId";
 import type { DeliveryKind } from "./DeliveryKind";
+import type { DocsArea } from "./DocsArea";
 import type { ExecPurpose } from "./ExecPurpose";
 import type { ExecutionId } from "./ExecutionId";
 import type { ExecutionResult } from "./ExecutionResult";
@@ -37,7 +38,12 @@ uploads: Array<UploadedFile>,
 /**
  * Rule O6: the projects the user pinned, which are then the whole scope.
  */
-pinned: Array<string>, } | { "type": "request_amended", text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, 
+pinned: Array<string>, 
+/**
+ * Rule B6: the documentation book the user picked for this session's docs. Absent names
+ * the book after the session's documented projects.
+ */
+docs_book?: string, } | { "type": "request_amended", text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, 
 /**
  * Rule C2: the context waits for the Route answer judge before anything starts. Context
  * added before the rule has none and folds as it always did.
@@ -67,7 +73,11 @@ reason: string | null,
  * Rule J1: the answer waits for the Route answer or Feedback judge before it is applied.
  * Answers recorded before the rule have none and fold as they always did.
  */
-routed: boolean, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "autofix_applied", project: string, phase: number, tests: boolean, applied: Array<string>, 
+routed: boolean, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "docs_planned", project: string, areas: Array<DocsArea>, existing: Array<string> | null, touched: Array<string>, } | { "type": "book_written", book: string, 
+/**
+ * The projects whose parts this session wrote.
+ */
+projects: Array<string>, error: string | null, } | { "type": "autofix_applied", project: string, phase: number, tests: boolean, applied: Array<string>, 
 /**
  * Findings that could not be applied mechanically, with the reason.
  */

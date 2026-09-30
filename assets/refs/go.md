@@ -40,12 +40,12 @@ Commands: `go test ./...`; one `go test ./internal/{pkg} -run {Test}`; coverage 
 
 If a repo has no `*_test.go` files (common here) and only an indirect `testify` dependency, treat "new exported
 function without a test" (T1) as a real gap to fill from the convention below, not an existing pattern to
-mirror. This is the convention-seeded case (Archetype D).
+mirror. This is the convention-seeded case (Archetype C).
 
 ## Test component catalog
 
 **find** existing tests first (`grep -rl 'func Test' --include='*_test.go'`). Zero hits means CONVENTION-SEEDED:
-generate the named **skill** (Archetype D) from the convention below, grounded in real source signatures so
+generate the named **skill** (Archetype C) from the convention below, grounded in real source signatures so
 examples compile. Propose ONE `unit-test-common` skill (it is both the convention and the how-to, since Go has one
 test idiom).
 

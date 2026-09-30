@@ -113,7 +113,7 @@ pub fn ostra_mcp_tool(name: &str) -> Option<String> {
 }
 
 /// `report` to `Report`, `document` to `Document`, `memory` to `Memory`, `memory_recall` to
-/// `MemoryRecall`, `code_callers` to `CodeCallers`, `project_create` to `ProjectCreate`, a
+/// `MemoryRecall`, `docs_search` to `DocsSearch`, `code_callers` to `CodeCallers`, `project_create` to `ProjectCreate`, a
 /// workspace server's `github__search` to `mcp__github__search`; `submit_*` keeps its name.
 pub fn canonical_ostra_tool(bare: &str) -> String {
     if ostra_core::mcp::is_gateway_bare(bare) {
@@ -124,6 +124,7 @@ pub fn canonical_ostra_tool(bare: &str) -> String {
         "document" => "Document".into(),
         "memory" => "Memory".into(),
         "memory_recall" => "MemoryRecall".into(),
+        "docs_search" => "DocsSearch".into(),
         other
             if let Some((_, native)) = ostra_core::manage::PROJECT_TOOLS
                 .iter()
@@ -336,6 +337,10 @@ mod tests {
         assert_eq!(
             ostra_mcp_tool("ostra__memory_recall").as_deref(),
             Some("MemoryRecall")
+        );
+        assert_eq!(
+            ostra_mcp_tool("mcp__ostra__docs_search").as_deref(),
+            Some("DocsSearch")
         );
         assert_eq!(
             ostra_mcp_tool("mcp__ostra__code_callers").as_deref(),

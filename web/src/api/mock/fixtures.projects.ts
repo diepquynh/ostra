@@ -22,9 +22,9 @@ export const backendProfile: ProjectProfile = {
   test_framework: "cargo test",
   test_types: {},
   module_map: [
-    { glob: "crates/orders/**", area: "orders", reference: ".ostra/skills/module-hub/references/orders.md" },
-    { glob: "crates/payments/**", area: "payments", reference: null },
-    { glob: "migrations/**", area: "schema", reference: null },
+    { glob: "crates/orders/**", area: "orders" },
+    { glob: "crates/payments/**", area: "payments" },
+    { glob: "migrations/**", area: "schema" },
   ],
   skills: [
     {
@@ -45,13 +45,6 @@ export const backendProfile: ProjectProfile = {
       name: "convention",
       kind: "convention",
       path: ".ostra/skills/convention/SKILL.md",
-      component_type: null,
-      source: "generated",
-    },
-    {
-      name: "module-hub",
-      kind: "module-hub",
-      path: ".ostra/skills/module-hub/SKILL.md",
       component_type: null,
       source: "generated",
     },

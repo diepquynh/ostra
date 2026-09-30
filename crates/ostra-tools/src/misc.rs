@@ -155,10 +155,72 @@ pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput {
     ToolOutput::ok(out.trim_end().to_string())
 }
 
+pub async fn docs_search(env: &ToolEnv, input: &Value) -> ToolOutput {
+    use ostra_core::book_search::{self, Filter, Index};
+    let Some(query) = str_arg(input, "query").map(str::to_string) else {
+        return ToolOutput::err("Pass query: the question you want the documentation books to answer.");
+    };
+    let project = str_arg(input, "project").map(str::to_string);
+    let limit = u64_arg(input, "limit")
+        .map(|l| l as usize)
+        .unwrap_or(book_search::DEFAULT_LIMIT)
+        .clamp(1, book_search::MAX_LIMIT);
+    let ws = env.config().workspace_root.clone();
+    if ws.as_os_str().is_empty() {
+        return ToolOutput::ok("This run has no workspace, so there are no documentation books. Read the code instead.");
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        let index = Index::build(&book_search::load_books(&ws));
+        if index.is_empty() {
+            return "This workspace has no documentation books yet. Read the code instead.".to_string();
+        }
+        let filter = Filter { book: None, project: project.as_deref() };
+        let hits = index.search(&query, &filter, limit);
+        if hits.is_empty() {
+            return "No section of the documentation books matches this query. Try other names or terms, or read the code.".to_string();
+        }
+        format!(
+            "{} section{} matched, most relevant first:\n\n{}",
+            hits.len(),
+            if hits.len() == 1 { "" } else { "s" },
+            index.render(&query, &hits, &ostra_core::book::dir(&ws))
+        )
+    })
+    .await;
+    match result {
+        Ok(text) => ToolOutput::ok(text),
+        Err(e) => ToolOutput::err(format!("The documentation search failed: {e}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::testutil::{env_in, run};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn docs_search_returns_matching_passages() {
+        use ostra_core::book::*;
+        let d = tempfile::tempdir().unwrap();
+        let env = env_in(d.path());
+        let out = run(&env, "DocsSearch", json!({"query": "slots"})).await;
+        assert!(out.text.contains("no documentation books"), "{}", out.text);
+        let submit: DocumentationSubmit = serde_json::from_value(json!({
+            "status": "ok", "summary": "s", "overview": "The app.",
+            "sections": [{"id": "slots", "title": "Execution slots", "purpose": "Caps concurrent executions.",
+                "assumptions": ["The budget is checked first."],
+                "code_refs": [{"path": "src/runner.rs", "note": "The slot limiter."}]}]
+        }))
+        .unwrap();
+        let update = BookUpdate { session: "s_1".into(), parts: vec![("app".into(), submit)], ..Default::default() };
+        apply(d.path(), "app", &update, chrono::Utc::now()).unwrap();
+        let out = run(&env, "DocsSearch", json!({"query": "how many concurrent executions"})).await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(out.text.contains("1. Execution slots (app, project `app`)"), "{}", out.text);
+        assert!(out.text.contains("Caps concurrent executions."), "{}", out.text);
+        assert!(!out.text.contains("budget"), "{}", out.text);
+        assert!(out.text.contains("app/slots.md"), "{}", out.text);
+    }
 
     #[tokio::test]
     async fn skill_by_name_path_and_resolver() {

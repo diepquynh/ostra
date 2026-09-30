@@ -51,6 +51,9 @@ function judge(req: Req, fake: string): Record<string, unknown> {
       reason: `The request changes code. ${inline("classify-reason")}`,
       title: inline("title"),
     };
+  if (props.items && !props.route) return { items: [], reason: `Research covers it. ${inline("sufficiency-reason")}` };
+  // The full track, so the session writes the spec and plan the specs render.
+  if (props.track) return { track: "full", reason: `Spec and plan it. ${inline("track-reason")}` };
   if (props.stakes) return { stakes: "high", reason: `Plan it. ${inline("stakes-reason")}` };
   if (props.report_markdown) return { report_markdown: markdown("completion", fake), reason: "done" };
   if (props.answer?.properties?.kind?.const === "approval")

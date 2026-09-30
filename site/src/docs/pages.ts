@@ -1,17 +1,6 @@
-export type PageDef = {
-  /** The page's address: `docs/#<id>`. */
-  id: string;
-  title: string;
-  /** The Markdown file, as a path from the repository root. Files in docs/ need no other registration. */
-  file: string;
-  /**
-   * One `##` section of the file: its number ("8" matches "## 8. The engine") or its exact heading text. "" is the
-   * text before the first `##`. Omit it to show the whole file.
-   */
-  section?: string;
-};
+import type { NavGroup } from "@ostra/design/docs";
 
-export type NavGroup = { label: string; pages: PageDef[] };
+export type { NavGroup, PageDef } from "@ostra/design/docs";
 
 const R = "README.md";
 

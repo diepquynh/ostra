@@ -25,6 +25,7 @@ const PAGE: Record<string, [string, IconName]> = {
   settings: ["Settings", "settings"],
   memory: ["Memory", "brain"],
   skills: ["Skills", "book-open"],
+  docs: ["Documentation", "book-check"],
 };
 
 export const sessionLabel = (s: Pick<TreeSession, "title" | "request">) => s.title ?? truncate(s.request, 40);
@@ -39,6 +40,13 @@ export function resourceMeta(id: string, ctx: MetaContext): ResourceMeta {
       const [label, icon] = PAGE[r.page];
       return { label, icon, crumbs: [ws, { label }] };
     }
+    case "book":
+      return {
+        label: r.id,
+        icon: "book-check",
+        title: `Documentation book ${r.id}`,
+        crumbs: [ws, { label: "Documentation", to: "ws:docs" }, { label: r.id }],
+      };
     case "project":
       return { label: r.key, icon: "folder-git-2", crumbs: [ws, { label: "Projects" }, { label: r.key }] };
     case "file":

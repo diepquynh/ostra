@@ -158,8 +158,8 @@ everything a change reaches. Then:
 - {{tool_read}} the target files to be modified to understand their current structure.
 - {{tool_read}} an existing sibling of each artifact type you will create (a peer in the same area) to learn
   the exact local pattern to follow.
-- For each in-scope repo, use **that repo's** inventory Module/Area Map to find affected areas. Read any area
-  reference under that repo's module-hub skill `references/` for those areas.
+- For each in-scope repo, use **that repo's** inventory Module/Area Map to find affected areas, then read the
+  source under those areas' path globs.
 
 For refactors and renames: enumerate every affected location and record what each change breaks, then fold it
 into the Risk Assessment so the implementer agent knows how far the change reaches.
@@ -470,10 +470,9 @@ external rule, copy the `E{n}` row into `constraints` and its Binding rule sente
 **Single-phase plans:** still write a plan with one phase. Ostra writes both the master plan file and the one
 phase file.
 
-**No documentation phase.** Never write a phase that updates the module-hub skill's `references/`. The
-orchestrator spawns `module-documentation` once per repo after every phase has passed review, and
-that agent reads all the implementer reports and documents the finished state. A documentation phase here would
-duplicate it and document an intermediate state.
+**No documentation phase.** Never write a phase that writes the workspace documentation book. When the user asks for documentation, Ostra runs the `documentation` agent
+once per repo after every phase has passed review, and that agent reads all the implementer reports and
+documents the finished state. A documentation phase here would duplicate it and document an intermediate state.
 
 **Ostra checks these on every {{tool_document}} call** and lists each failure in the result. An error blocks
 the submit call. A warning does not, but fix it:
@@ -629,7 +628,7 @@ Example input:
    spec is approved, so ask only about gaps it leaves, and never invent a question to hit a count. Every
    question is in question-card form with 2 to 4 options and one recommended option.
 9. Complete plans only: success criteria, steps with verification, and risks (Medium and High). Never write a
-   documentation phase and never write a test phase. `module-documentation` and the test pipeline
+   documentation phase and never write a test phase. The docs stage and the test pipeline
    are optional closing stages the orchestrator runs after every phase, on the user's request.
 10. Skill references (from the phase's repo's INVENTORY mapping) on every code step. Verification via that
     repo's `build` command only: never a hardcoded build tool, never a test command, never another repo's

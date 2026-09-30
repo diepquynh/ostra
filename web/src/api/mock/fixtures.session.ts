@@ -1481,13 +1481,6 @@ const specs: SessionSpec[] = [
               disposition: "regenerate",
               exemplars: [],
             },
-            {
-              name: "module-hub",
-              kind: "module-hub",
-              description: "The area map every agent routes by.",
-              disposition: "reuse",
-              exemplars: [],
-            },
           ],
         },
       },

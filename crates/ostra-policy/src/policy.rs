@@ -693,7 +693,13 @@ impl ExecutionPolicy {
                 });
                 let known = matches!(
                     tool,
-                    "WebSearch" | "Skill" | "Report" | "Document" | "Memory" | "MemoryRecall"
+                    "WebSearch"
+                        | "Skill"
+                        | "Report"
+                        | "Document"
+                        | "Memory"
+                        | "MemoryRecall"
+                        | "DocsSearch"
                 ) || ostra_core::agent::is_code_tool(tool)
                     || ostra_core::manage::is_manage_tool(tool)
                     || ostra_core::coord::is_coord_tool(tool)

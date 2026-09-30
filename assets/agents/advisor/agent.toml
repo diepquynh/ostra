@@ -1,7 +1,7 @@
 description = "Reads one pipeline step that failed or got stuck, finds why from its inputs, its outputs, and the project, and tells Ostra how to continue: run the step again with concrete guidance, or ask the user when the fix needs a decision or a fact no agent has. Read-only."
 default_tier = "advanced"
 timeout_seconds = 900
-capabilities = ["read", "shell", "search_text", "glob", "web_search", "web_fetch", "memory_recall"]
+capabilities = ["read", "shell", "search_text", "glob", "web_search", "web_fetch", "memory_recall", "docs_search"]
 
 [effort]
 native = "high"

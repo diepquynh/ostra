@@ -46,7 +46,7 @@ the user's words:
 | `discard` | The user tells Ostra to ignore what they typed. | Builds nothing and asks for review again. The text stays in the session log. |
 
 `stages` names the later stages that also receive `note`: `implement` (later revisions), `tests`, or `docs`
-(the module documentation agent, which writes the area reference files agents read). A change to a page,
+(the documentation writers, which write the workspace documentation book). A change to a page,
 README, or docs site that people read is a revision to build now, so it is `deliver` with a target, even when
 the user says it looks good.
 A `deliver` item may name stages too, when part of the feedback is also for later. Write `note` as a

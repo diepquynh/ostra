@@ -1184,6 +1184,7 @@ async fn run_session(
             projects: vec![key.clone()],
             files: vec![],
             uploads: vec![],
+            docs_book: None,
         })
         .unwrap();
     let session = summary.id.clone();

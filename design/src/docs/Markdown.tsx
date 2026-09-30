@@ -1,19 +1,17 @@
 import type { PhrasingContent, RootContent } from "mdast";
 import type { ReactNode } from "react";
-import type { Theme } from "../shared/theme";
-import { Diagram } from "./Diagram";
+import { Diagram, type Theme } from "./Diagram";
 import { type Docs, type Page, resolvePath, type Target } from "./model";
-import { IMAGES } from "./sources";
 
-type Ctx = { docs: Docs; page: Page; go: (t: Target) => void; theme: Theme };
+type Ctx = { docs: Docs; page: Page; go: (t: Target) => void; theme: Theme; images?: Record<string, string> };
 
 /**
- * The page's blocks as React elements. Raw HTML is never rendered, except `<br>` and the SVG Mermaid draws in strict mode. Only images bundled from docs/images
- * render; any other image is a link to the file, because the site loads no image from another origin (the same rule
- * as the console's CSP).
+ * The page's blocks as React elements. Raw HTML is never rendered, except `<br>` and the SVG Mermaid draws in strict
+ * mode. Only images in `images` (bundled with the page, keyed by source path) render; any other image is a link to the
+ * file, because the pages load no image from another origin (the same rule as the console's CSP).
  */
-export function Markdown({ docs, page, go, theme }: Ctx) {
-  const ctx = { docs, page, go, theme };
+export function Markdown({ docs, page, go, theme, images }: Ctx) {
+  const ctx = { docs, page, go, theme, images };
   return <>{page.blocks.map((b, i) => block(b, `b${i}`, ctx))}</>;
 }
 
@@ -158,7 +156,8 @@ function inline(nodes: PhrasingContent[], key: string, ctx: Ctx): ReactNode[] {
       case "image":
       case "imageReference": {
         const url = n.type === "image" ? n.url : ctx.page.definitions.get(n.identifier)?.url;
-        const src = url && !/^[a-z][a-z0-9+.-]*:/i.test(url) ? IMAGES[resolvePath(ctx.page.file, url)] : undefined;
+        const src =
+          url && !/^[a-z][a-z0-9+.-]*:/i.test(url) ? ctx.images?.[resolvePath(ctx.page.file, url)] : undefined;
         if (src)
           return (
             <a key={k} href={src} target="_blank" rel="noreferrer" className="md-img-link">

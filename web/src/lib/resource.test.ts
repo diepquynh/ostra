@@ -13,6 +13,8 @@ describe("resource ids and routes", () => {
     ["ws:settings", "/w/shop/settings"],
     ["ws:memory", "/w/shop/memory"],
     ["ws:skills", "/w/shop/skills"],
+    ["ws:docs", "/w/shop/docs"],
+    ["book:api_web", "/w/shop/b/api_web"],
     ["session:s_1", "/w/shop/s/s_1"],
     ["exec:x9", "/w/shop/x/x9"],
     [

@@ -14,4 +14,9 @@ files: Array<ContextFile>,
 /**
  * Staged uploads (`UploadRef::id`) to keep in the session.
  */
-uploads: Array<string>, };
+uploads: Array<string>, 
+/**
+ * Rule B6: an existing documentation book for the session's docs. Absent names the book
+ * after the documented projects.
+ */
+docs_book?: string, };

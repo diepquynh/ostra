@@ -69,7 +69,9 @@ use that note to decide how to read it. Up to 50 tags and 20 uploads go with one
 
 Three toggles sit under the text:
 
-- **Tests** and **Docs** answer the closing gate in advance. Leave them off to be asked at the end.
+- **Tests** and **Docs** answer the closing gate in advance. Leave them off to be asked at the end. With
+  **Docs** on, a picker chooses the documentation book the session writes into; the default is the book named
+  after the session's projects, created on the first run.
 - **YOLO** lets a judge model answer the gates for you. It never answers a budget gate or waives a security
   finding. Leave it off for now.
 
@@ -189,14 +191,17 @@ Every file a session writes is under `<workspace>/.ostra/sessions/<session id>/`
 
 - The research documents, the spec, and the plan sit at the session root, because they can span projects.
 - Each project gets a subfolder for its reports: `ostra-implementer-phase-<n>.md`, the review ledger
-  `ostra-review-ledger-phase-<n>.md`, the test reports, `ostra-module-docs.md`, and at the end
-  `ostra-completion.md`.
+  `ostra-review-ledger-phase-<n>.md`, the test reports, and at the end `ostra-completion.md`.
 - `uploads/` holds files you attached.
 - `.state/` belongs to the engine. No agent may write there.
 
 In the console, these are listed under the session in the Sessions tree. The spec and plan open as rendered
 documents with an outline, and IDs such as `R3` or `step 2.3` link to the part that defines them. The review
 ledger opens as comments on a diff.
+
+A documentation book is not a session file. The engine writes it to `<workspace>/.ostra/docs/<book>/`, and
+**Documentation** in the workspace menu lists every book. A book opens as pages with a sidebar, search, and a
+table of contents, and **Export HTML** saves it as one file that opens without a server.
 
 The completion report lists what changed, which stages ran and which were skipped, and why. Your code changes
 are staged in each project's git index and not committed, so the last review is yours: open the Git tab,

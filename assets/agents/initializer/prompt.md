@@ -54,7 +54,7 @@ you mean. When a literal phrase is available, use it.
 | **existing skill** | A `SKILL.md` already present under `{repo}/.agents/skills/` or `{repo}/.ostra/skills/` before this run, written by a prior initialization or hand-authored by the team. Discovered read-only in `detect`. Re-used as-is by default. Never overwritten unless its `disposition` is `regenerate`. |
 | **Ultracode bootstrap** | A complete bootstrap from Ultracode, the plugin Ostra replaces: `{repo}/.ultracode/repo-profile.json` plus `{repo}/.ultracode/INVENTORY.md`, with skills in a harness skill directory (`.claude/skills/`, `.agents/skills/`, or `.grok/skills/`). Its skill bodies and module map are prose, so migrating it (`adopt`) is cheaper than re-scouting. |
 | **covered component type** | A candidate component type that an existing skill of the same name already teaches. Scouts count it but do not distill a template for it, because the existing skill is reused by default. |
-| **bespoke skill** | An existing skill whose `name` matches NO scouted component type and is neither `convention` nor `module-hub`. Registered in the inventory for routing but never regenerated. |
+| **bespoke skill** | An existing skill whose `name` matches NO scouted component type and is not `convention`. Registered in the inventory for routing but never regenerated. |
 | **status** | A per-skill field set by `propose`: `new` (no existing skill of this name) or `existing` (an existing skill of this name was found). |
 | **disposition** | A per-skill action set from the user's approval-gate choice: `generate` (write a new skill), `regenerate` (overwrite an existing skill with a fresh one), `reuse` (keep the existing skill unchanged and register it only), or `drop` (leave it out). |
 | **source** | Provenance recorded on each `project.toml` `[[skills]]` entry: `generated` (this run wrote it) or `reused` (an existing skill kept as-is). |
@@ -112,7 +112,6 @@ For each `SKILL.md` path printed:
 3. {{tool_read}} its YAML front matter. Capture the front-matter `description` as one line.
 4. Classify its `kind guess`:
    - `name` is exactly `convention`: `convention`.
-   - `name` is exactly `module-hub`: `module-hub`.
    - any other `name`: `other`. Do NOT decide here whether an `other` skill matches a scouted component type or
      is bespoke. The `propose` mode makes that call once it has the scout counts.
 5. Record the skill's path relative to the repo root, keeping the dir it was found in
@@ -153,7 +152,7 @@ find {repo-root} -type f -name '*.*' -not -path '*/.git/*' -not -path '*/node_mo
 If the repo holds no source files at all (a new, empty project), still continue. The user picked a stack in
 project settings, and a `User focus:` line or the brief names it. Choose that stack's reference in Step D2 and
 plan a single slice covering the repo root, so `propose` recommends convention-seeded skills from the stack
-reference (Archetype D in `{{assets_dir}}/refs/skill-archetypes.md`).
+reference (Archetype C in `{{assets_dir}}/refs/skill-archetypes.md`).
 
 ### Step D2: Name the stack and choose the stack reference
 
@@ -188,8 +187,8 @@ Then apply the existing setup from Step D0:
 
 - Mark each candidate component type that an existing skill of the same name teaches as `covered by {path}`.
   Scouts count covered types but skip their template, because the existing skill is reused by default.
-- Plan zero slices when every candidate component type is covered AND the existing skills include both
-  `convention` and `module-hub`. The repo's skill setup is then complete, and Ostra skips scouting and runs
+- Plan zero slices when every candidate component type is covered AND the existing skills include
+  `convention`. The repo's skill setup is then complete, and Ostra skips scouting and runs
   `propose` on the existing skills alone. A `User focus:` line that names areas to scout overrides this.
 - Otherwise, drop a slice only when every candidate component type in it is covered. Keep at least one slice.
 
@@ -252,7 +251,7 @@ Prior profile: {.ostra/project.toml | none}
 ## Existing Skills
 | Name | Kind guess | Path | Description |
 | --- | --- | --- | --- |
-| {name} | convention / module-hub / other | {.agents/skills or .ostra/skills}/{name}/SKILL.md | {front-matter description} |
+| {name} | convention / other | {.agents/skills or .ostra/skills}/{name}/SKILL.md | {front-matter description} |
 ```
 
 Assign each slice a short kebab-case `slug` (used in labels and the `ostra-findings-{slug}.md` filename).
@@ -267,7 +266,7 @@ With zero slices, write one Slices row: `| none | none | none | existing skills 
   "stack": "{stack}",
   "reference_name": "{the reference's file stem, for example java-spring or _generic}",
   "slices": [{"descriptor": "{slice descriptor}", "slug": "{kebab-slug}", "paths": ["{repo-relative path}"]}],
-  "existing_skills": [{"name": "{name}", "kind": "convention | module-hub | other", "path": "{.agents/skills or .ostra/skills}/{name}/SKILL.md", "description": "{one line}"}],
+  "existing_skills": [{"name": "{name}", "kind": "convention | other", "path": "{.agents/skills or .ostra/skills}/{name}/SKILL.md", "description": "{one line}"}],
   "ultracode_bootstrap": false
 }
 ```
@@ -313,9 +312,12 @@ source, carrying every value over EXCEPT:
    `auto_fixable`). A JSON `null` becomes an omitted key, because TOML has no null.
 2. The source's `models` and `harnesses` blocks are dropped entirely. Ostra keeps routing in the workspace
    settings, and a copy here would be ignored and would mislead a reader.
-3. Every path string that starts with the source's skills dir or runtime dir (`skills[].path`, Module/Area map
-   `Reference` cells, the inventory header's "Machine profile" link) is rewritten to the equivalent path under
+3. Every path string that starts with the source's skills dir or runtime dir (`skills[].path`, the inventory
+   header's "Machine profile" link) is rewritten to the equivalent path under
    `.agents/skills/` or `.ostra/`. The inventory's header links `.ostra/project.toml`.
+   Module/Area map rows keep only the path glob and the area: drop the `Reference` column and each row's
+   `reference`, because Ostra's module map has no reference files. A source skill of kind `module-hub` is
+   copied like any other skill and gets kind `other`.
 4. Every `ultracode-` or `ultracode:` string in the inventory becomes `ostra-` or the bare agent name.
 5. `generated_at` keeps the source's original date. Do not fabricate today's date.
 
@@ -410,8 +412,9 @@ in `summary`.
 
 `Scout findings: none` means detect found a complete existing skill setup and no scout ran. Then every skill
 comes from the scout plan's `## Existing Skills` table: skip Steps P2 and P3, give each row `status: existing`
-in Step P4 (rule 1 for `convention` and `module-hub`, rule 3 for the rest), and build the module map in Step P5
-from the existing `module-hub` skill's routing table.
+in Step P4 (rule 1 for `convention`, rule 3 for the rest), and build the module map in Step P5 from the prior
+profile's `[[module_map]]` when the scout plan names one, or else from the top-level modules or source
+directories, partitioned as Step D3 would slice them.
 
 ### Step P1: Merge and dedupe
 
@@ -425,25 +428,24 @@ Rank component types by ubiquity: primarily `slice_spread` (appears across many 
 
 - **Creation skill**: recommend one per component type above the ubiquity threshold (default: `slice_spread >= 2` OR total count >= 5). List every type with its numbers so the user can override the threshold.
 - **Convention skill**: recommend exactly one, distilled from conventions observed consistently across exemplars (naming, immutability keywords, timestamp handling, error and exception style, logging) and from the scout plan's `## Conventions From Instruction Files`.
-- **Module-hub skill**: recommend exactly one, built from the slice/module map (path glob to area).
 
 ### Step P4: Reconcile with existing skills
 
 Use the `## Existing Skills` rows from Step P1. Give every skill you recommended in Step P3 a `status`, and set `existing_path` whenever an existing skill is present:
 
-1. **Match by name.** A recommended creation skill is named after its component type. `convention` and `module-hub` have fixed names. If an existing-skills row has the SAME `name` as a recommended skill, set that skill's `status` to `existing` and its `existing_path` to that row's path. If no existing-skills row matches, set its `status` to `new` and `existing_path` to `null`.
+1. **Match by name.** A recommended creation skill is named after its component type. `convention` has a fixed name. If an existing-skills row has the SAME `name` as a recommended skill, set that skill's `status` to `existing` and its `existing_path` to that row's path. If no existing-skills row matches, set its `status` to `new` and `existing_path` to `null`.
 2. **Default existing skills to reuse.** An `existing` skill is re-used as-is by default. Do NOT plan to regenerate it. You only record that a file is present. The user decides at the approval gate whether to regenerate any of them.
-3. **Fold in bespoke skills.** For every existing-skills row whose `name` matches NO recommended skill and is neither `convention` nor `module-hub`, add a new `skills` entry: `kind: "other"`, `component_type: null`, `status: "existing"`, `existing_path` set to that row's path, `count: 0`, `slice_spread: 0`, `recommend: true`, `rationale: "existing hand-authored skill: register for routing"`, and its front-matter description as `description`. This registers the team's own skills in the inventory without regenerating them.
+3. **Fold in bespoke skills.** For every existing-skills row whose `name` matches NO recommended skill and is not `convention`, add a new `skills` entry: `kind: "other"`, `component_type: null`, `status: "existing"`, `existing_path` set to that row's path, `count: 0`, `slice_spread: 0`, `recommend: true`, `rationale: "existing hand-authored skill: register for routing"`, and its front-matter description as `description`. This registers the team's own skills in the inventory without regenerating them.
 
 Pass condition: every recommended skill has a `status` of `new` or `existing`, and every existing-skills row is either matched to a recommended skill or added as a bespoke `skills` entry. Fail condition: an existing-skills row cannot be classified. Add it as a bespoke entry (rule 3) rather than dropping it.
 
 ### Step P5: Assemble the module map and commands
 
-Build the module map (path glob, area name, planned reference file). Carry the detected commands and test types from the scout plan.
+Build the module map (path glob and area name), one row per slice or module. Carry the detected commands and test types from the scout plan.
 For a project with no source yet, plan the module map from the User focus and the base requirements instead:
 one area per part of the project they name (for example the tool handlers, the database access, the event
-publisher), each with the path glob a project of this stack puts it under, and `reference` left out. These are
-the planned paths the module-hub routes to.
+publisher), each with the path glob a project of this stack puts it under. The build creates these paths, and the
+map tells each phase which area a new file belongs to.
 
 ### Step P6: {{tool_write}} the proposal (human)
 
@@ -459,7 +461,6 @@ Stack: {stack}
 | {name} | creation | {type} | {n} | {spread} | new | yes/no | {one line} |
 | {name} | creation | {type} | {n} | {spread} | existing | reuse | Existing skill at {existing_path} |
 | convention | convention | none | none | none | new | yes | Observed across N exemplars |
-| module-hub | module-hub | none | none | none | new | yes | {slice count} areas |
 | {name} | other | none | none | none | existing | reuse | Bespoke skill at {existing_path}: register for routing |
 
 Skills with Status `existing` are re-used as-is by default (kept on disk and registered in the inventory,
@@ -473,8 +474,8 @@ never regenerated). The user may choose to regenerate any of them at the approva
 {same table as scout plan}
 
 ## Proposed Module Map
-| Path glob | Area | Reference file |
-| --- | --- | --- |
+| Path glob | Area |
+| --- | --- |
 ```
 
 ### Step P7: {{tool_write}} the machine-readable proposal (JSON)
@@ -492,9 +493,9 @@ above:
   "findings_paths": ["{every scout-findings path you merged}"],
   "commands": { "build": "…", "test": "…", "test_one": "…", "format": "…", "lint": null, "typecheck": null, "run": null },
   "test_types": { "{name}": { "command": "…", "command_one": "… or null", "matches": ["…"], "note": "{what it needs to run}" } },
-  "module_map": [ { "glob": "…", "area": "…", "reference": null } ],
+  "module_map": [ { "glob": "…", "area": "…" } ],
   "skills": [
-    { "name": "{name}", "kind": "creation|convention|module-hub|other", "component_type": "{type or null}", "count": 0, "slice_spread": 0, "status": "new|existing", "existing_path": "{repo-root-relative SKILL.md path, e.g. .agents/skills/{name}/SKILL.md, or null}", "recommend": true, "rationale": "{one line}", "description": "{one line saying what the skill teaches, shown to the user at approval}" }
+    { "name": "{name}", "kind": "creation|convention|other", "component_type": "{type or null}", "count": 0, "slice_spread": 0, "status": "new|existing", "existing_path": "{repo-root-relative SKILL.md path, e.g. .agents/skills/{name}/SKILL.md, or null}", "recommend": true, "rationale": "{one line}", "description": "{one line saying what the skill teaches, shown to the user at approval}" }
   ]
 }
 ```
@@ -513,7 +514,7 @@ mode runs.
 
 ## Mode: GENERATE-SKILL (run once per skill to generate or regenerate, in parallel, AFTER user approval)
 
-**Input:** `Skill name:`, `Skill kind:` (`creation` | `convention` | `module-hub`), `Disposition:` (`generate` | `regenerate`), `Proposal:` (the `ostra-proposal.json` path), `Scout findings:` (one path per line), `Session dir:`, `Repo root:`, `Repo key:`.
+**Input:** `Skill name:`, `Skill kind:` (`creation` | `convention`), `Disposition:` (`generate` | `regenerate`), `Proposal:` (the `ostra-proposal.json` path), `Scout findings:` (one path per line), `Session dir:`, `Repo root:`, `Repo key:`.
 
 You generate exactly ONE skill file. Sibling generate-skill agents run concurrently on other skills. Because each writes only its own `{repo}/.agents/skills/{name}/` directory, there is no write conflict. Do NOT touch any other skill's files, the INVENTORY, or the profile. Those belong to other agents.
 
@@ -524,7 +525,7 @@ This mode only ever receives a skill whose `Disposition` is `generate` or `regen
 {{tool_read}} in full and follow exactly:
 
 1. `{{assets_dir}}/skills/meta-author/SKILL.md`: the 16 Laws, Chain-of-Thought rules, and self-review checklist for writing any instruction file.
-2. `{{assets_dir}}/refs/skill-archetypes.md`: use ONLY the archetype matching your `Skill kind` (A = creation, B = convention, C = module-hub, D = convention-seeded for a project with no source yet).
+2. `{{assets_dir}}/refs/skill-archetypes.md`: use ONLY the archetype matching your `Skill kind` (A = creation, B = convention, C = a skill for a test type, convention-seeded when the repo has no tests yet).
 
 {{tool_read}} `Proposal:` (`ostra-proposal.json`) for the stack, module map, and your skill's `component_type`. {{tool_read}} the scout findings. Locate the entry for your component type to get its captured exemplar, invariants, and distilled template. When the entry has an exemplar but a `Covered by:` value and no template (you are regenerating a covered skill), {{tool_read}} that exemplar file and capture its invariants and template yourself, as scout Step S3 describes.
 
@@ -537,8 +538,7 @@ mkdir -p {repo}/.agents/skills
 ### Step GS3: Generate your one skill
 
 - **creation**: fill Archetype A from your component type's captured exemplar, invariants, and distilled template. {{tool_write}} `{repo}/.agents/skills/{name}/SKILL.md`. **Ground every template line in the real exemplar.** Never invent an annotation, base class, or registration that was not observed. Mark any invariant you cannot confirm `{TODO: confirm}` rather than inventing it.
-- **convention**: fill Archetype B from conventions observed CONSISTENTLY across all findings' exemplars, plus the conventions the instruction files state (cite the file for each). {{tool_write}} `{repo}/.agents/skills/convention/SKILL.md`. Do not restate a rule an instruction file already gives word for word: point to the file instead, because every agent already receives that file. Every rule gets a real PASS and FAIL example. Do not import stack-reference rules the repo does not actually follow. For a project with no source yet, fill Archetype D from the stack reference instead, and say so in the skill.
-- **module-hub**: fill Archetype C from the proposal's module map. {{tool_write}} `{repo}/.agents/skills/module-hub/SKILL.md` with the routing tables (path glob to area, area to reference). {{tool_write}} `{repo}/.agents/skills/module-hub/references/{area}.md` only for an area complex enough to warrant it, grounded in real source. For a project with no source yet, route the proposal's planned paths as Archetype C's rule for that case says, even though the directories do not exist, and write no reference file. Never create the directories: the build does.
+- **convention**: fill Archetype B from conventions observed CONSISTENTLY across all findings' exemplars, plus the conventions the instruction files state (cite the file for each). {{tool_write}} `{repo}/.agents/skills/convention/SKILL.md`. Do not restate a rule an instruction file already gives word for word: point to the file instead, because every agent already receives that file. Every rule gets a real PASS and FAIL example. Do not import stack-reference rules the repo does not actually follow. For a project with no source yet, fill Archetype B from the stack reference's conventions instead, and say so in the skill.
 
 ### Step GS4: Self-review
 
@@ -546,7 +546,7 @@ Re-read your skill against the meta-author self-review checklist. Verify: the te
 
 **Submit:** `result` is
 `{"name": "{name}", "kind": "{kind}", "component_type": "{type or null}", "path": ".agents/skills/{name}/SKILL.md"}`.
-List every file you wrote, including any `references/{area}.md`, in `files`.
+List every file you wrote in `files`.
 
 ---
 
@@ -575,7 +575,7 @@ Per the contract, write:
 The repo's skill set is `Generated skills` PLUS `Reused skills`. EVERY skill in BOTH arrays MUST appear in the INVENTORY Skills Inventory table AND in the profile's `[[skills]]` array (mirror them 1:1). On each profile `[[skills]]` entry set `source`: `generated` for a skill from `Generated skills`, `reused` for a skill from `Reused skills`. Build each skill's Skills Inventory `Load when` cell and Skill Application Mapping row from its component type when it has one. For a reused skill whose `component_type` is `null` (a bespoke skill), derive the `Load when` cell from the trigger in its own `SKILL.md` front-matter description, and add a Skill Application Mapping row only if a concrete file type triggers it. `commands`, `test_types` (one `[test_types.{name}]` table each), and `module_map` come from the proposal. The Review Rule Set is seeded from the stack reference with stable IDs.
 
 The inputs are JSON, and the profile is TOML, so do not copy their shapes across:
-- TOML has no null. Omit any key whose value would be null (`reference`, `component_type`, a command), and never write `null`, because Ostra refuses a profile it cannot parse.
+- TOML has no null. Omit any key whose value would be null (`component_type`, a command), and never write `null`, because Ostra refuses a profile it cannot parse.
 - `stack` is one string (`stack = "java-spring"`), never a `[stack]` table. `build_tool` and `test_framework` are top-level strings.
 - `conventions` is one table (`[conventions]`), never `[[conventions]]`.
 - `schema_version` is the number `1`.

@@ -58,6 +58,7 @@ All decisions below were made by the user on 2026-09-22. Treat them as requireme
 | Judge call | A model call the engine makes to reach an orchestration decision. Returns JSON against a schema. |
 | Gate | A point where the pipeline waits for a decision: a user answer, or under YOLO a judge answer. |
 | Guard | A policy rule no permission, no user instruction, and no YOLO setting can override. |
+| Book | The documentation the docs stage writes for a set of projects, in `<workspace>/.ostra/docs/<book>/`: one part per project, a glossary, and a system architecture when it covers two or more projects. Section 8.5. |
 
 ## 4. Architecture
 
@@ -100,12 +101,12 @@ Read these before building the matching part. Paths are relative to `UC/`.
 | Repo brief | `hooks/lib/context-brief.js` | What each agent is handed from the profile and inventory, and the containment rule that avoids stating a fact twice. |
 | Tool names | `definitions/tool-mapping.json` | Per-harness tool names and the skill-loading strategies for harnesses without a Skill tool. |
 | Model tiers | `definitions/model-mapping.json`, `hooks/model-router.js` | Tier-to-model per harness, `default`/`inherit`, deny on a mismatching caller model, phase-complexity lookup. |
-| Write scope | `hooks/lib/scope-policy.js`, `hooks/scope-guard.js`, `hooks/bash-scope-guard.js` | Per-agent write roots, session-only agents, initializer and module-documentation subtrees, implementer barred from test paths. |
+| Write scope | `hooks/lib/scope-policy.js`, `hooks/scope-guard.js`, `hooks/bash-scope-guard.js` | Per-agent write roots, session-only agents, the initializer subtree, implementer barred from test paths. Ultracode's module-documentation subtree is replaced by the engine-written books (8.5). |
 | State ownership | `hooks/lib/ledger-policy.js`, `hooks/artifact-guard.js` | Which actor may write which state file. |
 | Report paths | `hooks/lib/report-policy.js`, `mcp/lib/report.js` | Declared report path, any tool may write it, invented names refused, lesson gate. |
 | Build loops | `hooks/build-streak.js`, `hooks/build-streak-gate.js`, `hooks/lib/build-signal.js` | Consecutive-failure counter, recall at 2, warn at 3, refuse at 5, diagnostic signatures, recovery lessons. |
 | Review cap | `hooks/review-cap.js` | Cap of 3 per loop, YOLO budget of 10, one verification pass per escalation. |
-| Security | `agents/code-reviewer/prompt.md` Step 2.5, `hooks/security-block.js` | The `SEC-BLOCK-*` catalog, waiver detection, the module-documentation block. |
+| Security | `agents/code-reviewer/prompt.md` Step 2.5, `hooks/security-block.js` | The `SEC-BLOCK-*` catalog, waiver detection, the documentation block (Hard rule 21). |
 | Plugin tamper | `hooks/lib/plugin-policy.js` | Why an agent must not run the tool's own code, and the opaque interpreter write channel (`node -e`, heredoc, pipe). |
 | Shell parsing | `hooks/lib/shell-paths.js` | Write-target extraction, heredoc bodies as data, placeholder `<ID>` not a redirect. Its test cases in `tests/test_definitions.test.js` are the edge cases to keep. |
 | Gates | `mcp/lib/gate.js`, `hooks/pipeline-gate.js` | Approval requires a fact-check PASS under the same key. Plan gate before phase spawns. |
@@ -145,13 +146,13 @@ Removing a project from a workspace deletes nothing on disk.
 
 | File | Content | Written by |
 | --- | --- | --- |
-| `INVENTORY.md` | Commands, skills, skill application mapping, module map, review rule set. Same shape as `UC/refs/inventory-and-profile.md` section 1. | initializer |
+| `INVENTORY.md` | Commands, skills, skill application mapping, module map, review rule set. Same shape as `UC/refs/inventory-and-profile.md` section 1, without the module map's `Reference` column. | initializer |
 | `project.toml` | Stack, commands, test framework, module map, skills with paths, conventions, review rules. Ultracode's `repo-profile.json` without `models` and `harnesses`, which move to the workspace. | initializer, user |
 | `memory/knowledge.sqlite3` | Durable lessons. | memory tools, user through the UI |
 
-Per-project skills, including `convention` and `module-hub`, live in `<project>/.agents/skills/<name>/SKILL.md`,
-the cross-harness standard. They are written by the initializer, prompt-generation, module-documentation
-(references only), and the user. Projects initialized before this kept skills in `.ostra/skills/`, which Ostra
+Per-project skills, including `convention`, live in `<project>/.agents/skills/<name>/SKILL.md`,
+the cross-harness standard. They are written by the initializer, prompt-generation, and the user. The docs stage writes no skill: it
+writes the workspace documentation books (8.5). Projects initialized before this kept skills in `.ostra/skills/`, which Ostra
 still reads but never writes a new skill to; a name in both resolves to `.agents/skills/`. Other harness
 directories (`.claude/skills/` and the rest) are not loaded until a skill is adopted into `.agents/skills/`.
 Every executor loads a skill by its path, which Ultracode measured as the one mechanism that works on every
@@ -334,7 +335,8 @@ plan = "advanced"
 fact-check = "advanced"
 code-reviewer = "balanced"
 execution-path-analyzer = "balanced"
-module-documentation = "advanced"
+documentation = "advanced"
+system-architecture = "advanced"
 prompt-generation = "advanced"
 initializer = "balanced"
 judge = "advanced"
@@ -496,7 +498,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | Quick change | QUICK_CHANGE is a small edit the request fully describes. It runs one implementer pass per project in scope with `No plan:`, always on the native executor whatever the routing says, because a harness adds seconds of startup to a change that takes one edit. No research, spec, plan, review, format, or closing stage runs. Changed files are staged, then the completion report. |
 | Staging | After a phase's review passes, the engine runs `git -C <project> add` on the implementer report's changed files. Reviews use `Review scope: unstaged`. |
 | Review loop, Step 4 | Findings split into BLOCKER, auto-fixable, and the rest, using the project's review rule set. Auto-fixable findings are applied by the engine from their exact `Change \`x\` to \`y\` on line N` text. HIGH and MEDIUM go to the fix agent with the ledger path. The cap is 3 iterations per loop, counted by the engine. The 4th pass is a gate. |
-| Hard 21, security | A BLOCKER finding sends only the BLOCKER findings to the fix agent with a removal instruction, loops until clear, has no cap, and blocks module documentation. No gate answer can waive it. |
+| Hard 21, security | A BLOCKER finding sends only the BLOCKER findings to the fix agent with a removal instruction, loops until clear, has no cap, and blocks the project's documentation. No gate answer can waive it. |
 | HANDOFF | The engine runs prompt-generation with the handoff request, then resumes the original agent with its resume instructions. |
 | STUCK | The Rescue judge picks one: run a targeted explore, re-run the agent with the missing fact quoted, or raise a gate. Never a plain retry. |
 | C1 | A request or an addition may attach up to 50 files or folders, tagged in the text as `@project/path`, a folder with a trailing `/`. Each is an existing file or folder inside one of the session's projects, checked when the API receives it; a path with `..`, an absolute path, or a trailing `/` on a file is refused. Every agent that gets the request gets each one as an absolute path beside its tag, with the instruction to read each file and look through each folder. |
@@ -541,8 +543,29 @@ propose mode sets. The legacy `adopt` mode becomes the `.ultracode/` migration f
 
 | Rule | Behavior |
 | --- | --- |
-| I1 | Detect checks the existing setup before it plans any scout: skills in `.agents/skills/` and `.ostra/skills/`, the instruction files, and a prior `project.toml`. Candidate component types that an existing skill already teaches are scouted for counts only. When existing skills cover every candidate type plus `convention` and `module-hub`, detect returns no slices and propose runs on the existing skills with no scouts. No slices and no existing skills fail the init. |
+| I1 | Detect checks the existing setup before it plans any scout: skills in `.agents/skills/` and `.ostra/skills/`, the instruction files, and a prior `project.toml`. Candidate component types that an existing skill already teaches are scouted for counts only. When existing skills cover every candidate type plus `convention`, detect returns no slices and propose runs on the existing skills with no scouts, taking the module map from the prior `project.toml` or the top-level source directories. No slices and no existing skills fail the init. |
 | I2 | Every skill the init writes goes to `.agents/skills/`. Regenerating a skill that lives in `.ostra/skills/` writes the new one to `.agents/skills/` and leaves the old file for the user. |
+
+### 8.5 Documentation books
+
+The docs stage writes documentation for people and agents into the workspace, not into a project. A book
+covers a set of projects: each project is one part of sections and sub-sections, and a book of two or more
+projects also has a system architecture. The console renders a book from `book.json` (`ws:docs` lists the books,
+`book:<id>` reads one) with the docs site's renderer, and exports it as one HTML file with the diagrams drawn as SVG,
+no script, and a meta policy that loads nothing. Agents read its Markdown, which every brief lists.
+
+| Rule | Behavior |
+| --- | --- |
+| B1 | One `documentation` agent per project returns that project's part in `submit_documentation`: an overview, then sections of one unit of work each, each with purpose, boundaries (owns and does not own), assumptions, business flow, Mermaid diagrams, tables, separation of concerns, and code references last, and at most one level of sub-sections with the same fields. A run that ends `ok` without a readable submit fails, because the book is built from it. The agent writes no file. |
+| B2 | Every section and sub-section lists its assumptions. `validate_submit` refuses a submit with an empty list. |
+| B3 | A sequence diagram has at most 8 participants and 20 messages, and a flowchart at most 15 nodes. Its first line must match its declared kind. `validate_submit` refuses a larger or mismatched diagram with the instruction to split it. |
+| B4 | When the parts written in a session cover two or more projects, one `system-architecture` agent runs after them and returns `submit_system_architecture`: an overview, one flowchart, components with what each owns, links with protocol, mode, and payload, failure and recovery, and scalability. It reads the parts from `ostra-docs-parts.json`, which the runner writes into the session root from the fold before the spawn. |
+| B5 | The engine writes the book after the last docs execution settles (`Step::WriteBook`), records `BookWritten`, and only then completes the session. It writes `<workspace>/.ostra/docs/<book>/book.json`, `index.md`, `glossary.md`, `architecture.md`, and `<project>/<section>.md`, and removes the files of sections that no longer exist. No agent writes that folder (the `workspace-docs` guard, a read-only sandbox mount). A failed write is recorded with its error and the session goes on. |
+| B6 | A book is named after its sorted project keys joined with `_` (`api_web`), so a later session on the same projects updates it. The New task form may pick an existing book (`docs_book`). A session's part for a project replaces that project's part in the book, a new architecture replaces the old one, and glossary entries merge by term with the newer definition kept. Each writer gets the existing `book.json` as `Existing book:` and keeps the sections its change does not reach, because its submit replaces the part. The engine reads, merges, and writes a book under one lock, so two sessions updating the same book both keep their parts. |
+| B7 | At most `MAX_DOCS_WRITERS` (4) documentation agents run at once in a session, and each also takes a slot of `limits.max_parallel_executions`. |
+| B8 | Every agent that learns code has the `docs_search` capability (`DocsSearch` natively, `docs_search` from Ostra's MCP server). It ranks passages, not whole sections: each section and sub-section is cut into its purpose, boundaries, assumptions, business flow, each diagram (by its title and labels, not its Mermaid syntax), each table, concerns, and code references, with long lists in windows of five. BM25 ranks each passage over its label, its code paths and symbols, and its text. A unit (a section, sub-section, glossary term, or architecture aspect) ranks by its title once, its best passage, a share of its second, and a BM25 score of its whole text, and a hit shows only the passages that matched, and within a list or table only the lines that name a query word, so an agent does not read a whole section to find one fact. `tests/evals/book_retrieval/` holds the questions, the labeled book, and the floors. The brief names the tool when the workspace has a book. |
+| B9 | Before a project's first docs writer, `Step::PlanDocs` measures its tracked source by module-map area (top-level folders without a map; lockfiles, binaries, generated folders, and files over 1 MB skipped) and records `DocsPlanned` with the areas, the areas the book's current part records, and the areas this session's changed files touch. Areas group in map order to about `AREA_TARGET_BYTES` (384 KB) per writer, at most `MAX_DOCS_AREAS` (20); a project at or under the target, or with source in one area, keeps one writer. A `DOCS` request, a book with no part for the project, or a part recorded in other areas rewrites every area; after a build only touched areas are rewritten and the rest keep their sections. Each writer gets `Area:`, `Area paths:`, and `Other areas:`, documents only its area, and prefixes its section IDs with the area ID. The engine joins areas in order, suffixes a repeated section ID with the area ID, and records each area's sections and overview in `BookPart.areas`. Area writers share the B7 cap; an abandoned area keeps its sections. |
+| DOCS | A `DOCS` request documents existing code. Classify always sets `opts_in.docs`. The fold adds one done inline phase per project with closing `(tests no, docs yes)` and format settled, so the session goes straight to the docs stage with no closing gate, and the runner writes `ostra-docs-request.md` with the request as each writer's implementer report. |
 
 ## 9. Agents and prompts
 
@@ -564,7 +587,8 @@ type, because a harness executor must see that harness's tool names.
 | code-reviewer | balanced | Submit call with findings and `securityBlock`, plus its review ledger. |
 | execution-path-analyzer | balanced | EPA report at the declared path: the phase's verification plan (execution paths, system flows, regression suites, a test level per check). |
 | write-test | balanced (routed by complexity) | Tests at every level the EPA report assigns (unit, integration, end to end), run with its regression suites; test report at the declared path. |
-| module-documentation | advanced | Area references plus its report. |
+| documentation | advanced | New, replacing module-documentation. Submit call with one project's part of the documentation book: overview, sections and sub-sections, glossary. Writes no file. Section 8.5. |
+| system-architecture | advanced | New. Submit call with the architecture of a book of two or more projects: components, links, failure and recovery, scalability. Writes no file. Section 8.5. |
 | prompt-generation | advanced | Changed instruction files plus its report. |
 | initializer | balanced (generate-skill on advanced) | Per mode, as in `UC/agents/initializer/prompt.md`. |
 | quick-answer | balanced | New. Side-panel answers, read-only. Section 12.3. |
@@ -718,10 +742,11 @@ Permissions tab.
 
 | Guard | Rule | Source |
 | --- | --- | --- |
-| Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. initializer writes only `.ostra/` and `.agents/skills/`. module-documentation writes only the module-hub skill's `references/` (under `.agents/skills/` or `.ostra/skills/`). Everything else stays inside its `Repo root:`. | `scope-policy.js` |
+| Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. documentation and system-architecture write only there too, because they return the book in their submit call. initializer writes only `.ostra/` and `.agents/skills/`. Everything else stays inside its `Repo root:`. | `scope-policy.js` |
 | No tests from implementer | implementer may not write a path matching the test patterns. | `scope-policy.js` |
 | State ownership | Engine-owned state (gates, verdicts, progress, streaks, scope records, the memory database) has no writer but the engine. The review ledger is writable by code-reviewer, implementer, and write-test. The security sentinel only by code-reviewer. The progress log only by implementer. | `ledger-policy.js` |
 | Artifact ownership | Spec and plan files are written only by their owning agent. | `artifact-guard.js` |
+| Workspace docs | No agent writes, moves, or deletes a file under `<workspace>/.ostra/docs/`. The engine writes the books (Rule B5), and the sandbox mounts the folder read-only. | New |
 | Document tool | `ostra-research-*`, `ostra-spec-*`, and `ostra-plan-*` files (`.md` and `.json`) are written only by the `Document` tool. A file write, edit, or shell write to one is refused with the correction to call `Document`, because the next render would overwrite it and the browser view would not show it. Fact-check snapshot copies are exempt. | Ostra (no Ultracode source) |
 | Report path | For agents given `Report file:`, an `ostra-*` file in the session dir must be that exact path. Any mechanism may write it. | `report-policy.js` |
 | Lesson gate | A report is refused while a verified failure-to-recovery transition has no recorded lesson, unless the report tool is called with a stated reason. | `report-policy.js`, `report.js` |
@@ -856,7 +881,7 @@ Rules:
   `User focus:` built from the `ProjectCreate` call. Nothing but that init and its advisor runs in the project
   until the init ends: its phases, reviews, tests, research, docs, format, staging, and autofix wait, and the
   session does not complete before that. Work in other projects does not wait. For a project with no source yet, propose plans the module map from the base
-  requirements and the module-hub routes to those planned paths, marked planned (Archetype C), so the phases
+  requirements, one area per part of the project they name with the path glob it will live under, so the phases
   put new files in the right areas. The init ends with a
   `ProjectInitFinished` event, appended after the runner checks that `INVENTORY.md` and a valid
   `project.toml` exist; the stopped phase then starts over with fresh work in the new project. If the user
@@ -1001,7 +1026,7 @@ Each workspace opens as one console, laid out like a code editor:
   staged files outside the project will be committed too. Every git command that changes the checkout is
   refused while a session works in the project, and remotes authenticate with the saved git credential.
 - **Editor tabs.** Every screen is a resource with an id and a URL: `ws:overview`, `ws:settings`, `ws:cost`,
-  `ws:memory`, `session:<id>`, `exec:<id>`, `artifact:<path>`, `project:<key>`, `file:<key>:<path>`. A row opened
+  `ws:memory`, `ws:docs`, `book:<id>`, `session:<id>`, `exec:<id>`, `artifact:<path>`, `project:<key>`, `file:<key>:<path>`. A row opened
   from a list opens a preview tab, shown in italics, which the next preview replaces; an explicit open or a pin
   keeps the tab. The tabs, the focused tab, the left dock tab, and the dock state are stored per workspace
   through `/api/workspaces/:ws/ui`, so another browser opens the same layout. Ctrl+Tab and Ctrl+Shift+Tab move
@@ -1252,6 +1277,8 @@ GET             /api/workspaces/:ws/projects/:key/code/symbols
 GET/POST        /api/workspaces/:ws/sessions              list, create (request, toggles, pinned projects,
                                                           attached files)
 GET             /api/workspaces/:ws/tree                  the Sessions tree: sessions, groups, runs, artifacts
+GET             /api/workspaces/:ws/docs                  the documentation books (8.5), newest first
+GET | DELETE    /api/workspaces/:ws/docs/:book            one book's `book.json`; delete removes its folder
 GET             /api/workspaces/:ws/search                ?q=&limit=; ranked hits for ⌘K
 GET             /api/workspaces/:ws/activity              running executions, open gates, spend today and this
                                                           week with the window starts

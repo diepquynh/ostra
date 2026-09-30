@@ -1,0 +1,11 @@
+description = "Writes one project's part of the workspace documentation book: the project overview, then one section per unit of work with its purpose, boundaries, assumptions, business flow, small Mermaid diagrams, tables, separation of concerns, and code references last, plus the glossary terms it uses. Grounds every name in real source. Returns the whole part in its submit call; Ostra writes the book, and the agent writes no file. Runs in the docs stage, after every phase has passed review, or directly when the user asks for documentation of existing code."
+default_tier = "advanced"
+timeout_seconds = 2400
+capabilities = ["read", "shell", "search_text", "glob", "code", "docs_search"]
+
+[effort]
+native = "high"
+claude = "high"
+codex = "high"
+grok = "high"
+agy = "high"

@@ -75,7 +75,7 @@ a tool call names, so with enforcement on Ostra refuses it outright and the mode
 | Write scope, including quick-answer's read-only rule and the `Document` tool's session-dir rule | off | on |
 | Report path | off | on |
 | Self-protection: writes to Ostra's binary, config, and `workspace.toml`, running `ostra`, and inline interpreter code that writes files or spawns processes | off | on |
-| No tests from implementer, state ownership, artifact ownership, workspace artifacts, `Document` tool, git metadata, secret reads, Windows paths | on | on |
+| No tests from implementer, state ownership, artifact ownership, workspace artifacts, workspace docs, `Document` tool, git metadata, secret reads, Windows paths | on | on |
 | Lesson gate, build streak, management tools, and the subagent coordination gates | on | on |
 
 The choice is a trade between protection and tool calls. `enabled` protects the pipeline from a weaker model
@@ -107,7 +107,7 @@ Each agent has a region of the disk it may write, and a write outside that regio
 | --- | --- |
 | explore, generate-spec, fact-check, plan, code-reviewer, EPA | its session dir, and OS temp |
 | initializer | `.ostra/` and `.agents/skills/` in the project |
-| module-documentation | the module-hub skill's `references/` folder |
+| documentation, system-architecture | their session dir and OS temp; they return the book in their submit call |
 | quick-answer | nothing: it answers in its submit call |
 | implementer, write-test, and the rest | the repo root and the session dir |
 
@@ -231,6 +231,9 @@ A few guards were added on top of the Ultracode ports during Ostra's security re
   delete them (`guard: workspace-artifacts`), because they belong to the user. A hidden artifact is moved into
   the data dir, so the secret-read guard keeps it from every agent without a list of hidden names
   ([Workspace artifacts](../internals/workspaces.md#workspace-artifacts)).
+- **Workspace docs.** Agents read the documentation books in `<workspace>/.ostra/docs/` and never write, move, or
+  delete them (`guard: workspace-docs`), because the engine writes each book from the docs stage's submit calls
+  (Rule B5). The sandbox mounts the folder read-only as well.
 - **Management tools** (`guard: manage-tools`, rule O2). Only the implementer of a phase the approved plan puts
   in a new project may call `ProjectCreate` (`creates_project` in its execution context), only with that
   phase's project key, and only with a well-formed call: a valid key and stack, a purpose and requirements

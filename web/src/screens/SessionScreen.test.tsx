@@ -181,8 +181,8 @@ describe("session board", () => {
   it("builds the skills answer from the approval table", async () => {
     mount("s_init");
     const card = await screen.findByRole("region", { name: "Approve the skills" });
-    expect(within(card).getByText(/5 of 5 kept/)).toBeTruthy();
+    expect(within(card).getByText(/4 of 4 kept/)).toBeTruthy();
     fireEvent.change(within(card).getByLabelText("Decision for page-route"), { target: { value: "drop" } });
-    expect(within(card).getByText(/4 of 5 kept/)).toBeTruthy();
+    expect(within(card).getByText(/3 of 4 kept/)).toBeTruthy();
   });
 });

@@ -1,0 +1,6 @@
+/* The styles an exported book carries inline: color, type and spacing tokens and the docs renderer, without the
+   bundled fonts, because an exported file loads nothing. */
+@import "../tokens/colors.css";
+@import "../tokens/typography.css";
+@import "../tokens/spacing.css";
+@import "./docs.css";

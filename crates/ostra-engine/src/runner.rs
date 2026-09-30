@@ -73,6 +73,14 @@ pub enum EngineError {
     Store(#[from] ostra_store::StoreError),
 }
 
+/// What a new session carries besides its request and options.
+#[derive(Default)]
+struct Attached<'a> {
+    files: &'a [ContextFile],
+    uploads: &'a [String],
+    docs_book: Option<String>,
+}
+
 struct Live {
     state: Mutex<SessionState>,
     wake: Notify,
@@ -237,13 +245,21 @@ impl Engine {
         if req.request.trim().is_empty() {
             return Err(EngineError::Invalid("Describe the task first.".into()));
         }
+        if let Some(b) = req.docs_book.as_deref().filter(|b| !ostra_core::book::is_book_id(b)) {
+            return Err(EngineError::Invalid(format!(
+                "Pick a documentation book from the list instead of `{b}`: a book ID is lowercase letters, digits, dashes, and underscores."
+            )));
+        }
         self.start_session(
             SessionKind::Pipeline,
             req.request,
             req.options,
             &req.projects,
-            &req.files,
-            &req.uploads,
+            Attached {
+                files: &req.files,
+                uploads: &req.uploads,
+                docs_book: req.docs_book.clone(),
+            },
         )
     }
 
@@ -269,8 +285,7 @@ impl Engine {
                 ..Default::default()
             },
             &[project.to_string()],
-            &[],
-            &[],
+            Attached::default(),
         )
     }
 
@@ -344,9 +359,13 @@ impl Engine {
         request: String,
         mut options: SessionOptions,
         pinned: &[String],
-        files: &[ContextFile],
-        uploads: &[String],
+        attached: Attached<'_>,
     ) -> Result<SessionSummary, EngineError> {
+        let Attached {
+            files,
+            uploads,
+            docs_book,
+        } = attached;
         let settings = self.inner.services.workspace();
         if settings.yolo.default {
             options.yolo = true;
@@ -421,6 +440,7 @@ impl Engine {
                 files,
                 uploads,
                 pinned: pinned.to_vec(),
+                docs_book,
             },
         )?;
         self.inner.ensure_driver(&id, live);
@@ -1747,6 +1767,57 @@ impl Inner {
                 )?;
                 Ok(())
             }
+            Step::PlanDocs { project } => {
+                let st = self.snapshot(session)?;
+                let path = st.project_path(&project).ok_or_else(|| {
+                    EngineError::Invalid(format!("Project `{project}` is not in this workspace."))
+                })?;
+                let profile: ProjectProfile = load_toml(&paths::project_profile(&path)).unwrap_or_default();
+                let changed: Vec<String> = st
+                    .phases
+                    .values()
+                    .filter(|p| p.info.project == project)
+                    .flat_map(|p| p.impl_loop.changed.iter().chain(p.test_loop.changed.iter()))
+                    .cloned()
+                    .collect();
+                let map = profile.module_map;
+                let (areas, touched) = tokio::task::spawn_blocking(move || {
+                    crate::docs_areas::plan(&path, &map, &changed)
+                })
+                .await
+                .unwrap_or_default();
+                let existing = ostra_core::book::read(&st.workspace_root, &st.book_id())
+                    .and_then(|b| b.parts.into_iter().find(|p| p.project == project))
+                    .map(|p| p.areas.into_iter().map(|a| a.id).collect());
+                self.append(
+                    session,
+                    SessionEvent::DocsPlanned {
+                        project,
+                        areas,
+                        existing,
+                        touched,
+                    },
+                )?;
+                Ok(())
+            }
+            Step::WriteBook { book } => {
+                let st = self.snapshot(session)?;
+                let update = st.book_update();
+                let projects = update.parts.iter().map(|(k, _)| k.clone()).collect();
+                let ws = &st.workspace_root;
+                let error = ostra_core::book::apply(ws, &book, &update, chrono::Utc::now())
+                    .err()
+                    .map(|e| format!("The book could not be written to {}: {e}", ostra_core::book::book_dir(ws, &book).display()));
+                self.append(
+                    session,
+                    SessionEvent::BookWritten {
+                        book,
+                        projects,
+                        error,
+                    },
+                )?;
+                Ok(())
+            }
         }
     }
 
@@ -2303,6 +2374,31 @@ impl Inner {
                     "# Test request\n\nNo implementer ran in this session. The user asked for tests directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone, because no implementer ran. Take the code under test from the request: the files or symbols it names, or the earlier change it refers to, from the git history or the staged changes.\n",
                     st.full_request()
                 ),
+            );
+        }
+        if st.category == Some(Category::Docs) {
+            for p in req.inputs.implementer_reports.iter().filter(|p| !p.exists()) {
+                let _ = std::fs::write(
+                    p,
+                    format!(
+                        "# Documentation request\n\nNo implementer ran in this session. The user asked for documentation directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone, because no implementer ran. Take the code to document from the request: the flows, areas, files, or symbols it names. When it names none, document the whole project, starting from its entry points.\n",
+                        st.full_request()
+                    ),
+                );
+            }
+        }
+        if req.agent == AgentName::SystemArchitecture
+            && let Some(p) = &req.inputs.target
+        {
+            let parts: serde_json::Map<String, serde_json::Value> = st
+                .book_update()
+                .parts
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::to_value(v).unwrap_or_default()))
+                .collect();
+            let _ = std::fs::write(
+                p,
+                serde_json::to_string_pretty(&parts).unwrap_or_default(),
             );
         }
         let built = match factory.build(

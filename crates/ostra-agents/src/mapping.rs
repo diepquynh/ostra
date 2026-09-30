@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 /// Template token names and the mapping key each resolves through.
-const TOKENS: [(&str, &str); 27] = [
+const TOKENS: [(&str, &str); 28] = [
     ("tool_read", "read"),
     ("tool_write", "write"),
     ("tool_edit", "edit"),
@@ -21,6 +21,7 @@ const TOKENS: [(&str, &str); 27] = [
     ("tool_document", "document"),
     ("tool_memory", "memory"),
     ("tool_memory_recall", "memory_recall"),
+    ("tool_docs_search", "docs_search"),
     ("tool_code_outline", "code:outline"),
     ("tool_code_find", "code:find"),
     ("tool_code_callers", "code:callers"),
@@ -67,6 +68,7 @@ fn capability_key(c: Capability) -> &'static str {
         Capability::Document => "document",
         Capability::Memory => "memory",
         Capability::MemoryRecall => "memory_recall",
+        Capability::DocsSearch => "docs_search",
         Capability::Code => "code",
         Capability::ManageProjects => "manage_projects",
         Capability::Coordinate => "coordinate",

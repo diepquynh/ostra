@@ -5,7 +5,7 @@ import { type GateFormProps, muted, OpenGate, row } from "./kit";
 
 type Picks = Record<string, { tests: boolean; docs: boolean }>;
 
-/** Closing gate: per project, whether to write tests and refresh the module documentation (Rule D8, T3). */
+/** Closing gate: per project, whether to write tests and the documentation book (Rule D8, T3). */
 export function ClosingGate({ gate, payload, submit, busy, error }: GateFormProps<"closing_gate">) {
   const [picks, setPicks] = useState<Picks>({});
   const pick = (p: string) => picks[p] ?? { tests: false, docs: false };
@@ -52,8 +52,8 @@ export function ClosingGate({ gate, payload, submit, busy, error }: GateFormProp
             <Checkbox
               checked={pick(item.project).docs}
               onChange={(e) => set(item.project, "docs", e.target.checked)}
-              label="Update the module documentation"
-              description="Refreshes the area references for the changed code, grounded in the real source."
+              label="Write the documentation book"
+              description="Writes this project's part of the workspace book, with flows, diagrams, and code references grounded in the real source."
             />
           )}
           {!item.ask_tests && !item.ask_docs && (

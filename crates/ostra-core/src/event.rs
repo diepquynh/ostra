@@ -191,9 +191,17 @@ pub enum ExecPurpose {
         phase: u32,
         work: WorkKind,
     },
-    ModuleDocs {
+    /// Rule B1: one project's part of the documentation book. Logs written before books say
+    /// `module_docs`.
+    #[serde(alias = "module_docs")]
+    Docs {
         project: String,
+        /// Rule B9: the area of a large project this writer covers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<String>,
     },
+    /// Rule B4: the architecture of a book that covers two or more projects.
+    Architecture,
     PromptGen {
         handoff_for: Option<ExecutionId>,
     },
@@ -254,7 +262,15 @@ impl ExecPurpose {
             }
             ExecPurpose::Epa { phase } => format!("Phase {phase}"),
             ExecPurpose::WriteTest { phase, work: w } => format!("Phase {phase}{}", work(w)),
-            ExecPurpose::ModuleDocs { .. } => "Module docs".into(),
+            ExecPurpose::Docs {
+                project,
+                area: None,
+            } => format!("Docs for {project}"),
+            ExecPurpose::Docs {
+                project,
+                area: Some(a),
+            } => format!("Docs for {project} · {a}"),
+            ExecPurpose::Architecture => "System architecture".into(),
             ExecPurpose::PromptGen {
                 handoff_for: Some(_),
             } => "Handoff prompt".into(),
@@ -564,6 +580,11 @@ pub enum SessionEvent {
         /// Rule O6: the projects the user pinned, which are then the whole scope.
         #[serde(default)]
         pinned: Vec<String>,
+        /// Rule B6: the documentation book the user picked for this session's docs. Absent names
+        /// the book after the session's documented projects.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        docs_book: Option<String>,
     },
     /// The user extended or changed the request, or added context (Rules D2, D10, C2).
     RequestAmended {
@@ -698,6 +719,27 @@ pub enum SessionEvent {
         command: String,
         exit_code: Option<i32>,
         output_tail: String,
+    },
+    /// Rule B9: how a project's part of the book is split among writers, measured before the first
+    /// writer starts. `areas` is empty for one writer. `existing` names the areas the book's
+    /// current part records, `None` when the book has no part for the project; `touched` names the
+    /// areas holding a file this session's work changed.
+    DocsPlanned {
+        project: String,
+        areas: Vec<crate::book::DocsArea>,
+        #[serde(default)]
+        existing: Option<Vec<String>>,
+        #[serde(default)]
+        touched: Vec<String>,
+    },
+    /// Rule B5: the engine wrote the session's documentation into a workspace book. `error` is set
+    /// when the files could not be written, and the session goes on without them.
+    BookWritten {
+        book: String,
+        /// The projects whose parts this session wrote.
+        projects: Vec<String>,
+        #[serde(default)]
+        error: Option<String>,
     },
     AutofixApplied {
         project: String,

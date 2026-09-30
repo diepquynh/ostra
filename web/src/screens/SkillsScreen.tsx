@@ -10,7 +10,7 @@ import "./skills.css";
 
 export type SkillsScreenProps = { ws: string };
 
-export const KINDS = ["creation", "test", "convention", "module-hub", "other"];
+export const KINDS = ["creation", "test", "convention", "other"];
 
 export const TEMPLATE = (name: string) => `---
 name: ${name}
@@ -416,7 +416,7 @@ function SkillEditor({
               value={kind}
               onChange={(e) => setKind(e.target.value)}
               options={KINDS}
-              hint="Convention and module-hub skills reach every agent; the others reach the agents that create or test code."
+              hint="Convention skills reach every agent; the others reach the agents that create or test code."
             />
             <Input
               label="Use for"

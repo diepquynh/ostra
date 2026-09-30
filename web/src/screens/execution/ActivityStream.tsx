@@ -35,7 +35,9 @@ function ToolBody({ entry }: { entry: ToolEntry }) {
   if (call.tool === "Memory" && typeof input.lesson === "string") {
     return <pre style={{ whiteSpace: "pre-wrap" }}>{`${input.area ?? ""}\n${input.lesson}`}</pre>;
   }
-  const summarized = ["Read", "Grep", "Glob", "WebFetch", "WebSearch", "Skill", "MemoryRecall"].includes(call.tool);
+  const summarized = ["Read", "Grep", "Glob", "WebFetch", "WebSearch", "Skill", "MemoryRecall", "DocsSearch"].includes(
+    call.tool,
+  );
   return (
     <>
       {!summarized && <pre>{JSON.stringify(call.input, null, 2)}</pre>}

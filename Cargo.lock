@@ -2296,6 +2296,7 @@ dependencies = [
 name = "ostra-agents"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "minijinja",
  "ostra-core",
  "regex",
@@ -2358,6 +2359,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "globset",
  "ostra-agents",
  "ostra-core",
  "ostra-sandbox",
@@ -2599,6 +2601,7 @@ name = "ostra-tools"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "globset",
  "grep-matcher",
  "grep-regex",

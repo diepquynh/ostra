@@ -722,13 +722,18 @@ pub fn materialize(plan: &LaunchPlan) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Rule W1: the harness may read the workspace artifacts folder, outside its working directory.
+/// Rules W1 and B5: the harness may read the workspace artifacts and books folders, outside its
+/// working directory.
 fn artifacts_dir_args(spec: &ExecutionSpec) -> Vec<String> {
-    let dir = ostra_core::artifacts::dir(&spec.ctx.workspace_root);
-    if spec.ctx.workspace_root.as_os_str().is_empty() || !dir.is_dir() {
+    let ws = &spec.ctx.workspace_root;
+    if ws.as_os_str().is_empty() {
         return vec![];
     }
-    vec!["--add-dir".into(), dir.to_string_lossy().into()]
+    [ostra_core::artifacts::dir(ws), ostra_core::book::dir(ws)]
+        .into_iter()
+        .filter(|d| d.is_dir())
+        .flat_map(|d| ["--add-dir".to_string(), d.to_string_lossy().into_owned()])
+        .collect()
 }
 
 #[cfg(test)]

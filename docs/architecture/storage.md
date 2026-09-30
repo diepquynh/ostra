@@ -23,6 +23,7 @@ files are protected.
   workspace.toml                              workspace settings
   workspace.db                                the event log and the tables built from it
   artifacts/                                  workspace artifacts: skills, docs, guidelines, sample data
+  docs/<book>/                                documentation books: book.json and its Markdown; engine-written
   sessions/<session-id>/                      spec, plan, phases, reports, ledgers, uploads
     <project-key>/                            per-project reports of that session
     .state/                                   engine-owned; no agent may write here

@@ -4,7 +4,7 @@
 use crate::init::STACK_REFERENCE_NAME;
 use crate::plan::{SpawnInputs, SpawnRequest};
 use crate::services::{AgentMeta, BuiltSpawn, SpawnEnv, SpawnFactory};
-use ostra_agents::brief::{ArtifactsBrief, BriefInput, augment};
+use ostra_agents::brief::{ArtifactsBrief, BooksBrief, BriefInput, augment};
 use ostra_agents::spawn::*;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, FactTarget, WorkKind};
@@ -23,6 +23,7 @@ fn work_source(inputs: &SpawnInputs, s: &SessionState) -> WorkSource {
                 (Some(_), _, _) => "A revision the user asked for after reviewing the implementation. The request below and the session context file describe it.",
                 (_, Some(Category::Verify), _) => "A verification request: no code change is planned.",
                 (_, Some(Category::Test), _) => "The user asked for tests directly, so no plan exists.",
+                (_, Some(Category::Docs), _) => "The user asked for documentation directly, so no plan exists.",
                 (_, Some(Category::Prompt), _) => "A prompt change: the pipeline has no plan tier for it.",
                 (_, Some(Category::QuickChange), _) => "A quick change: the request names the whole edit, so research, spec, plan, and review were skipped.",
                 (_, Some(Category::Implement), Some(Track::Light)) => "The light track: research found a contained change, so the spec and plan stages were skipped. Work from the request and the research documents.",
@@ -31,6 +32,12 @@ fn work_source(inputs: &SpawnInputs, s: &SessionState) -> WorkSource {
             .into(),
         ),
     }
+}
+
+/// The session's book, when an earlier session already wrote it. Read at spawn time, outside the fold.
+fn existing_book(s: &SessionState) -> Option<PathBuf> {
+    let path = ostra_core::book::book_json(&s.workspace_root, &s.book_id());
+    path.is_file().then_some(path)
 }
 
 fn work_extras(inputs: &SpawnInputs) -> Extras {
@@ -215,10 +222,33 @@ impl SpawnFactory for AgentsFactory {
                 work: work_source(i, s),
                 extra: work_extras(i),
             }),
-            AgentName::ModuleDocumentation => Box::new(ModuleDocsParams {
+            AgentName::Documentation => Box::new(DocumentationParams {
                 common,
                 implementer_reports: i.implementer_reports.clone(),
-                report_file: required(i.report_file.clone(), "report file")?,
+                existing_book: existing_book(s),
+                area: i.docs_area.as_ref().map(|a| DocsAreaScope {
+                    id: a.id.clone(),
+                    title: a.title.clone(),
+                    paths: a.globs.clone(),
+                    rest: a.rest,
+                    others: i
+                        .docs_areas
+                        .iter()
+                        .filter(|o| o.id != a.id)
+                        .map(|o| (o.title.clone(), o.globs.clone()))
+                        .collect(),
+                }),
+                extra: Extras {
+                    user_notes: i.user_notes.clone(),
+                    task_note: Some(format!("The request: {}", s.full_request())),
+                    ..Default::default()
+                },
+            }),
+            AgentName::SystemArchitecture => Box::new(ArchitectureParams {
+                common,
+                book_parts: required(i.target.clone(), "book parts")?,
+                projects: i.projects_in_scope.clone(),
+                existing_book: existing_book(s),
                 extra: Extras {
                     user_notes: i.user_notes.clone(),
                     ..Default::default()
@@ -333,6 +363,15 @@ impl SpawnFactory for AgentsFactory {
             .map(|text| with_tagged_files(text, ws, &projects))
             .collect();
         let artifacts = ArtifactsBrief::read(ws);
+        let books = BooksBrief::read(ws).map(|mut b| {
+            if ostra_agents::agent_def(req.agent)
+                .capabilities
+                .contains(&ostra_core::Capability::DocsSearch)
+            {
+                b.search_tool = ostra_agents::tool_name("docs_search", req.agent, env.executor);
+            }
+            b
+        });
         let first_message = augment(
             &block,
             &BriefInput {
@@ -344,6 +383,7 @@ impl SpawnFactory for AgentsFactory {
                 instructions: &instructions,
                 project_docs: env.project_docs,
                 artifacts: artifacts.as_ref(),
+                books: books.as_ref(),
                 new_projects: &s.created_projects,
             },
         );

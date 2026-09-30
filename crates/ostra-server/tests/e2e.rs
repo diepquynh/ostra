@@ -1764,7 +1764,7 @@ async fn setup_wizard_creates_a_workspace_in_one_call() {
         [None, None],
         "neither folder is a repository"
     );
-    assert_eq!(ws.agents.len(), 13);
+    assert_eq!(ws.agents.len(), 14);
     let plan = ws
         .agents
         .iter()
@@ -4366,4 +4366,62 @@ async fn a_missing_route_is_fixed_in_one_call() {
     assert!(fixed.fixes.is_empty());
     let saved = std::fs::read_to_string(&toml_path).unwrap();
     assert!(saved.contains("advisor = \"default\""), "{saved}");
+}
+
+#[tokio::test]
+async fn workspace_books_are_listed_read_and_deleted() {
+    // Rule B5: the docs endpoints serve what the engine wrote under `.ostra/docs/`.
+    use ostra_core::book::{Book, BookSummary, BookUpdate, DocumentationSubmit};
+    let _serial = SERIAL.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let Server { base, client, .. } = boot(root).await;
+    let ws: WorkspaceDetail = client
+        .post(format!("{base}/api/workspaces"))
+        .json(&json!({"name": "books", "root": root.join("ws")}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let part: DocumentationSubmit = serde_json::from_value(json!({
+        "status": "ok", "summary": "s", "overview": "api serves orders.",
+        "sections": [{"id": "orders", "title": "Orders", "purpose": "Creates orders.", "assumptions": ["Auth is done upstream."]}]
+    }))
+    .unwrap();
+    let update = BookUpdate {
+        session: "s1".into(),
+        parts: vec![("api".into(), part)],
+        ..Default::default()
+    };
+    let book = ostra_core::book::merge(None, "api", &update, chrono::Utc::now());
+    ostra_core::book::write(&root.join("ws"), &book).unwrap();
+    let docs = format!("{base}/api/workspaces/{}/docs", ws.id);
+    let list: Vec<BookSummary> = client.get(&docs).send().await.unwrap().json().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!((list[0].id.as_str(), list[0].sections), ("api", 1));
+    let got: Book = client
+        .get(format!("{docs}/api"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(got.parts[0].sections[0].title, "Orders");
+    let bad = client.get(format!("{docs}/..%2Fx")).send().await.unwrap();
+    assert_eq!(bad.status(), 400);
+    let missing = client.get(format!("{docs}/nope")).send().await.unwrap();
+    assert_eq!(missing.status(), 404);
+    let after: Vec<BookSummary> = client
+        .delete(format!("{docs}/api"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(after.is_empty());
+    assert!(!ostra_core::book::book_dir(&root.join("ws"), "api").exists());
 }

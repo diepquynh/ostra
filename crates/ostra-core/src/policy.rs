@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// A tool call in canonical form. `tool` is a native tool name (`Read`, `Write`, `Edit`, `Bash`,
-/// `Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, `Report`, `Memory`, `MemoryRecall`,
+/// `Grep`, `Glob`, `Skill`, `WebSearch`, `WebFetch`, `Report`, `Memory`, `MemoryRecall`, `DocsSearch`,
 /// `ProjectList`, `ProjectCreate`, `submit_<agent>`), or `ApplyPatch` for Codex patches, or
 /// `Other:<name>` for a harness tool with no canonical equivalent.
 ///
@@ -20,6 +20,7 @@ use ts_rs::TS;
 /// - `WebSearch {query}`, `WebFetch {url, prompt?}`
 /// - `Report {content, reason?}`
 /// - `Memory {area, lesson, source}`, `MemoryRecall {query, area?, limit?}`
+/// - `DocsSearch {query, project?, limit?}`
 /// - `ProjectList {}`, `ProjectCreate {key, stack, purpose, requirements, folder?, git_init?}`
 /// - `ApplyPatch {patch}` (Codex `*** Begin Patch` format)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+globset.workspace = true
 ostra-core.workspace = true
 ostra-sandbox.workspace = true
 ostra-store.workspace = true

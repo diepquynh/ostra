@@ -41,6 +41,7 @@ capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill"
 | `document` | `Document` | `mcp__ostra__document` | `document` | `document` | `document` |
 | `memory` | `Memory` | `mcp__ostra__memory` | `memory` | `memory` | `memory` |
 | `memory_recall` | `MemoryRecall` | `mcp__ostra__memory_recall` | `memory_recall` | `memory_recall` | `memory_recall` |
+| `docs_search` | `DocsSearch` | `mcp__ostra__docs_search` | `docs_search` | `docs_search` | `docs_search` |
 | `code` | `CodeOutline`, `CodeFind`, ... | `mcp__ostra__code_*` | `code_*` | `code_*` | `code_*` |
 | `manage_projects` | `ProjectList`, `ProjectCreate` | `mcp__ostra__project_list`, `mcp__ostra__project_create` | `project_*` | `project_*` | `project_*` |
 
@@ -55,8 +56,8 @@ Two consequences follow from the table:
   Codex's `apply_patch`. It checks each call through the hook bridge and lets the CLI run it. The adapters turn
   each CLI's call back into the canonical shape before the policy sees it, so `apply_patch` is judged as writes
   to the files the patch touches.
-- **Ostra's own tools come from Ostra everywhere.** `Report`, `Document`, `Memory`, `MemoryRecall`, the code
-  navigation tools, the project management tools, the submit tool, and the workspace MCP tools are Ostra's code
+- **Ostra's own tools come from Ostra everywhere.** `Report`, `Document`, `Memory`, `MemoryRecall`, `DocsSearch`, the
+  code navigation tools, the project management tools, the submit tool, and the workspace MCP tools are Ostra's code
   on every executor. The native
   loop calls them directly. A harness reaches them through the `ostra` MCP server.
 
@@ -67,19 +68,19 @@ executor. The policy then narrows further what the tools an agent has may touch.
 
 | Agent | Capabilities |
 | --- | --- |
-| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document, code, coordinate |
-| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document, code, coordinate |
-| fact-check | read, write, shell, search_text, glob, web_search, web_fetch, code, coordinate |
-| plan | read, shell, search_text, glob, document, code, coordinate |
-| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate |
-| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate |
-| code-reviewer | read, shell, search_text, glob, code, coordinate |
-| execution-path-analyzer | read, shell, write, search_text, glob, report, code |
-| module-documentation | read, edit, write, shell, search_text, glob, report, code |
+| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document, code, coordinate, docs_search |
+| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document, code, coordinate, docs_search |
+| fact-check | read, write, shell, search_text, glob, web_search, web_fetch, code, coordinate, docs_search |
+| plan | read, shell, search_text, glob, document, code, coordinate, docs_search |
+| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate, docs_search |
+| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate, docs_search |
+| code-reviewer | read, shell, search_text, glob, code, coordinate, docs_search |
+| execution-path-analyzer | read, shell, write, search_text, glob, report, code, docs_search |
+| documentation, system-architecture | read, shell, search_text, glob, code, docs_search |
 | prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code |
 | initializer | read, write, edit, shell, search_text, glob, code |
-| quick-answer | read, search_text, glob, web_search, web_fetch, memory_recall, code |
-| advisor | read, shell, search_text, glob, web_search, web_fetch, memory_recall |
+| quick-answer | read, search_text, glob, web_search, web_fetch, memory_recall, code, docs_search |
+| advisor | read, shell, search_text, glob, web_search, web_fetch, memory_recall, docs_search |
 
 Every agent also gets its own `submit_<agent>` tool and the workspace's MCP tools. [Agents](agents.md) covers
 what each agent is for.
@@ -96,7 +97,7 @@ The permission layer sorts tools into families, and the family decides which rul
 | Other (opaque shells) | `PowerShell`, `Cmd` (Windows only) | Not parsed. Refused when the text names Ostra's own files, engine state, or a credential store; otherwise matched against `PowerShell(...)` and `Cmd(...)` rules, then the mode, which never allows one unasked. |
 | WebFetch | `WebFetch` | Matched against `WebFetch(domain:...)` rules. With no rule, it asks, except in bypass mode. |
 | Other (changes Ostra) | `ProjectCreate` | Always asks, in every mode including bypass, and no allow rule stands in for the answer (rule O1). A `deny` rule refuses it, plan mode refuses it, and only YOLO answers the ask. |
-| Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, `ProjectList`, the code tools, `submit_*`, workspace MCP tools | Ostra's own tools are allowed. `Skill` with a `path` is judged as a Read of that file. Workspace MCP tools are allowed unless a rule says otherwise, and plan mode allows only those their server marks read-only (rule M1). |
+| Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, `DocsSearch`, `ProjectList`, the code tools, `submit_*`, workspace MCP tools | Ostra's own tools are allowed. `Skill` with a `path` is judged as a Read of that file. Workspace MCP tools are allowed unless a rule says otherwise, and plan mode allows only those their server marks read-only (rule M1). |
 
 The guards (write scope, state ownership, the report path, the lesson gate, the build streak, self-protection,
 and the management tools guard) run before this, on every family. Write scope, the report path, and most of
@@ -362,6 +363,44 @@ The database is engine-owned: agents reach it only through these two tools, and 
 streak also uses it: after the second failed build in a row, recalled lessons for that failure are appended to the
 tool result without the agent asking. [Project memory](project-memory.md) covers how lessons are stored and ranked.
 
+### DocsSearch
+
+`DocsSearch` searches the documentation books the docs stage wrote into the workspace (Rule B8) and returns the
+sections that best match a question, each with only the passages that matched. Inputs: `query`, an optional
+`project` that narrows the search to one project's part, and `limit` (default 5, at most 15 sections).
+
+A section of a book can be long, and most of it does not bear on any one question, so the search does not rank
+whole sections. It cuts each section and sub-section into passages: the purpose, the boundaries, the assumptions,
+the business flow, each diagram, each table, the separation of concerns, and the code references, with lists and
+tables over five rows split into windows of five. A diagram is indexed by its title and the words in its labels
+and messages, never by its Mermaid keywords or node IDs, so a question about "participants" does not match every
+sequence diagram. The glossary gives one passage per term, and the system architecture one per component, failure
+case, and group of links or scaling rows.
+
+BM25 ranks each passage over three fields: its label (weight 2), the paths and symbols of its code references
+(weight 1.5), and its text (weight 1). Words are lowercased and lightly stemmed, and an identifier also yields
+its parts, so `SessionState` matches "session state", and plurals, `-ed`, and `-ing` are stripped, so "started"
+meets "starts". A section ranks by its title (weight 3, counted once), plus its best passage, 35% of its second
+best, and a BM25 score of the section's whole text, which catches a question whose words are spread over several
+passages. The title counts once for the section and never decides which passages are
+shown: a section whose title matches the question shows the passages whose own text matches, or its purpose when
+none does. A hit shows at most two passages, each at least half as strong as the section's best, then the path of
+the section's Markdown file, which the agent reads when it needs the whole section. Within a list or table passage,
+only the lines that name a word of the question are shown, with a count of the lines left out, so a window of five
+assumptions shows the one that matched. Prose and diagrams are shown whole, because a sentence or a flow cut in
+half misleads.
+
+The index is built from `book.json` on every call, so it never falls behind a book the docs stage just rewrote.
+When the workspace has a book and the agent has the capability, the repo brief names the tool and tells the agent
+to search before it reads code to learn an area.
+
+The retrieval eval (`tests/evals/book_retrieval/`, run by `crates/ostra-core/tests/book_retrieval.rs`) measures
+the ranking with 221 questions about Ostra's own source against a book an Opus docs run wrote about the repository.
+Each question was labeled with the sections that state its answer; 127 have one. On those, the right section is
+first for 63% of questions and in the top five for 90%, and a top-five result is about 3,200 characters. The weak
+spot is a question in plain words that share none with the book ("the code formatter" for a section about the
+format command): 82% of those reach the top five. The eval fails when a ranking change drops below its floors.
+
 A Memory call expanded in the Activity tab, after a failed check and its fix:
 
 ![An expanded Memory call recording a build lesson](../images/console/memory-call.png)
@@ -484,7 +523,8 @@ becomes JSON, and results are cut at 100 KiB. [MCP servers](mcp.md) covers trans
 | Bash | `crates/ostra-tools/src/bash.rs` |
 | Grep, Glob | `crates/ostra-tools/src/search.rs` |
 | WebFetch | `crates/ostra-tools/src/web.rs` |
-| Skill, Report, Memory, MemoryRecall | `crates/ostra-tools/src/misc.rs` |
+| Skill, Report, Memory, MemoryRecall, DocsSearch | `crates/ostra-tools/src/misc.rs` |
+| Book passages and ranking for DocsSearch | `crates/ostra-core/src/book_search.rs` |
 | Document | `crates/ostra-tools/src/doc.rs` |
 | ProjectList, ProjectCreate: input rules, the handle, the server side | `crates/ostra-core/src/manage.rs`, `crates/ostra-tools/src/manage.rs`, `crates/ostra-server/src/manage.rs` |
 | Capability to tool name per executor | `assets/tool-mapping.toml` |

@@ -34,7 +34,7 @@ function WorkspaceSwitcher({ ws, wsName, activeId, go, onNewWorkspace, onAddProj
   const page = (
     id: string,
     label: string,
-    icon: "layout-dashboard" | "coins" | "settings" | "brain" | "book-open",
+    icon: "layout-dashboard" | "coins" | "settings" | "brain" | "book-open" | "book-check",
     hint?: string,
   ): MenuItem => ({
     id,
@@ -70,6 +70,7 @@ function WorkspaceSwitcher({ ws, wsName, activeId, go, onNewWorkspace, onAddProj
         page("ws:settings", "Settings", "settings"),
         page("ws:memory", "Memory", "brain"),
         page("ws:skills", "Skills", "book-open"),
+        page("ws:docs", "Documentation", "book-check"),
       ];
     }),
     { type: "divider" },

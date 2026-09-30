@@ -2,7 +2,7 @@
 
 export type SkillEntry = { name: string, 
 /**
- * `convention`, `module-hub`, `creation`, `test`, or `other`.
+ * `convention`, `creation`, `test`, or `other`.
  */
 kind: string, 
 /**

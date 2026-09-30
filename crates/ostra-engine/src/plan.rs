@@ -22,6 +22,20 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+/// Rule B7: documentation writers that run at once in one session.
+pub const MAX_DOCS_WRITERS: usize = 4;
+
+struct BookProgress {
+    /// Projects whose part of the book is written, sorted.
+    parts: Vec<String>,
+}
+
+fn blocker_open(passed: &[&PhaseRun]) -> bool {
+    passed
+        .iter()
+        .any(|p| p.impl_loop.blocker_open || p.test_loop.blocker_open)
+}
+
 /// Facts from outside the event log the planner needs: each project's format command.
 #[derive(Debug, Clone, Default)]
 pub struct PlanCtx {
@@ -72,6 +86,9 @@ pub struct SpawnInputs {
     pub user_notes: Vec<String>,
     /// Initializer inputs, by spawn label.
     pub init: BTreeMap<String, String>,
+    /// Rule B9: the area a documentation writer covers, and every area of its project.
+    pub docs_area: Option<ostra_core::book::DocsArea>,
+    pub docs_areas: Vec<ostra_core::book::DocsArea>,
     pub init_item: Option<String>,
 }
 
@@ -154,6 +171,15 @@ pub enum Step {
         ask: MessageId,
         kind: DeliveryKind,
     },
+    /// Rule B9: measure a project's source by module-map area and record how its part of the
+    /// book is split among writers.
+    PlanDocs {
+        project: String,
+    },
+    /// Rule B5: write the session's documentation into the workspace book `book`.
+    WriteBook {
+        book: String,
+    },
     Complete {
         report_markdown: Option<String>,
     },
@@ -198,6 +224,8 @@ impl Step {
             Step::FinishInit { project } => format!("finish-init:{project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
             Step::Deliver { ask, kind, .. } => format!("deliver:{ask}:{kind:?}"),
+            Step::PlanDocs { project } => format!("plan-docs:{project}"),
+            Step::WriteBook { book } => format!("book:{book}"),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
         }
@@ -229,6 +257,8 @@ impl Step {
             Step::AnnounceBlocked { phase, .. } => format!("blocked phase {phase}"),
             Step::FinishInit { project } => format!("finish-init {project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem {project}"),
+            Step::PlanDocs { project } => format!("plan-docs {project}"),
+            Step::WriteBook { book } => format!("write-book {book}"),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
         }
@@ -258,7 +288,15 @@ fn purpose_summary(p: &ExecPurpose) -> String {
         ExecPurpose::WriteTest { phase, work } => {
             format!("write-test phase {phase} {work:?}").to_lowercase()
         }
-        ExecPurpose::ModuleDocs { project } => format!("docs {project}"),
+        ExecPurpose::Docs {
+            project,
+            area: None,
+        } => format!("docs {project}"),
+        ExecPurpose::Docs {
+            project,
+            area: Some(a),
+        } => format!("docs {project}/{a}"),
+        ExecPurpose::Architecture => "architecture".into(),
         ExecPurpose::Inspect { of } => format!("inspect {of}"),
         ExecPurpose::PromptGen { handoff_for } => {
             if handoff_for.is_some() {
@@ -608,7 +646,7 @@ impl<'a> Planner<'a> {
                     self.completion();
                 }
             }
-            Category::Test => {
+            Category::Test | Category::Docs => {
                 self.closing_stages();
                 if self.all_implement_done() {
                     self.completion();
@@ -1497,11 +1535,12 @@ impl<'a> Planner<'a> {
             self.gate(
                 "Tests and documentation",
                 format!(
-                    "All {n} phases are implemented and reviewed. Writing tests and updating the module documentation are optional. Neither changes the requirements (Rule T5)."
+                    "All {n} phases are implemented and reviewed. Writing tests and writing the documentation book are optional. Neither changes the requirements (Rule T5)."
                 ),
                 GatePayload::ClosingGate { items: closing_items },
             );
         }
+        self.book_stage();
     }
 
     /// Returns true when the project's test stage is finished.
@@ -1576,46 +1615,178 @@ impl<'a> Planner<'a> {
     fn docs_stage(&mut self, project: &str, passed: &[&PhaseRun]) {
         let s = self.s;
         let track = &s.project_tracks[project];
-        // Hard rule 21: an open BLOCKER blocks module documentation.
-        if passed
-            .iter()
-            .any(|p| p.impl_loop.blocker_open || p.test_loop.blocker_open)
-        {
+        // Hard rule 21: an open BLOCKER blocks documentation.
+        if blocker_open(passed) {
             return;
         }
-        match &track.docs {
-            DocsState::NotStarted => {
-                let dir = s.project_session_dir(project);
-                let inputs = SpawnInputs {
-                    implementer_reports: passed
-                        .iter()
-                        .filter_map(|p| p.implementer_report.clone())
-                        .collect(),
-                    report_file: Some(dir.join(report::module_docs())),
-                    user_notes: s.notes_for(NoteStage::Docs),
-                    ..Default::default()
-                };
-                self.spawn(
-                    AgentName::ModuleDocumentation,
-                    ExecPurpose::ModuleDocs {
-                        project: project.to_string(),
-                    },
-                    project,
-                    dir,
-                    inputs,
-                );
-            }
-            DocsState::Failed {
-                exec,
-                error,
-                gate: None,
-                ..
-            } => {
-                let (exec, error) = (exec.clone(), error.clone());
-                self.exec_failed_gate(&exec, AgentName::ModuleDocumentation, project, &error);
-            }
-            _ => {}
+        // Rule B9: measure before the first writer, unless a log from before B9 already ran one.
+        if track.docs_plan.is_none() && matches!(track.docs, DocsState::NotStarted) {
+            self.push(Step::PlanDocs {
+                project: project.to_string(),
+            });
+            return;
         }
+        let writers: Vec<(Option<&ostra_core::book::DocsArea>, &DocsState)> =
+            match track.docs_areas() {
+                Some(areas) => areas
+                    .iter()
+                    .filter_map(|a| track.area_docs.get(&a.id).map(|st| (Some(a), st)))
+                    .collect(),
+                None => vec![(None, &track.docs)],
+            };
+        for (area, state) in writers {
+            match state {
+                DocsState::NotStarted => {
+                    // Rules B7 and B9: docs writers fan out, at most MAX_DOCS_WRITERS at a time.
+                    if self.docs_in_flight() >= MAX_DOCS_WRITERS {
+                        return;
+                    }
+                    let inputs = SpawnInputs {
+                        implementer_reports: passed
+                            .iter()
+                            .filter_map(|p| p.implementer_report.clone())
+                            .collect(),
+                        user_notes: s.notes_for(NoteStage::Docs),
+                        docs_area: area.cloned(),
+                        docs_areas: track.docs_areas().map(<[_]>::to_vec).unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    self.spawn(
+                        AgentName::Documentation,
+                        ExecPurpose::Docs {
+                            project: project.to_string(),
+                            area: area.map(|a| a.id.clone()),
+                        },
+                        project,
+                        s.project_session_dir(project),
+                        inputs,
+                    );
+                }
+                DocsState::Failed {
+                    exec,
+                    error,
+                    gate: None,
+                    ..
+                } => {
+                    let (exec, error) = (exec.clone(), error.clone());
+                    self.exec_failed_gate(&exec, AgentName::Documentation, project, &error);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn docs_in_flight(&self) -> usize {
+        let running = self
+            .s
+            .project_tracks
+            .values()
+            .flat_map(|t| std::iter::once(&t.docs).chain(t.area_docs.values()))
+            .filter(|d| matches!(d, DocsState::Running(_)))
+            .count();
+        let queued = self
+            .out
+            .iter()
+            .filter(|st| matches!(st, Step::Spawn(r) if matches!(r.purpose, ExecPurpose::Docs { .. })))
+            .count();
+        running + queued
+    }
+
+    /// Where the book stands once every project's closing stages are known. `None` while a
+    /// project may still get documentation.
+    fn book_progress(&self) -> Option<BookProgress> {
+        let s = self.s;
+        let removed = removed_phases(s);
+        let mut parts = vec![];
+        for key in s.project_tracks.keys() {
+            if !self.project_code_done(key, &removed) {
+                return None;
+            }
+            let passed: Vec<&PhaseRun> = self
+                .project_phases(key)
+                .into_iter()
+                .filter(|p| p.impl_loop.is_done())
+                .collect();
+            if passed.is_empty() {
+                continue;
+            }
+            let track = &s.project_tracks[key];
+            let docs_on = match track.closing {
+                Some(c) => c.1,
+                None if s.tests_requested() && s.docs_requested() => true,
+                None => return None,
+            };
+            if !docs_on || blocker_open(&passed) {
+                continue;
+            }
+            match track.docs_aggregate() {
+                DocsState::Done(_) => parts.push(key.clone()),
+                DocsState::Abandoned => {}
+                _ => return None,
+            }
+        }
+        Some(BookProgress { parts })
+    }
+
+    /// Rules B4 and B5: after every part is written, the architecture of a book of two or more
+    /// projects, then the book write.
+    fn book_stage(&mut self) {
+        let s = self.s;
+        let Some(progress) = self.book_progress() else {
+            return;
+        };
+        if progress.parts.is_empty() || s.book_written.is_some() {
+            return;
+        }
+        if progress.parts.len() >= 2 {
+            match &s.architecture {
+                ArchitectureState::NotStarted => {
+                    let projects = progress
+                        .parts
+                        .iter()
+                        .filter_map(|k| s.project_path(k).map(|p| (k.clone(), p)))
+                        .collect();
+                    let inputs = SpawnInputs {
+                        target: Some(s.session_root.join(report::docs_parts())),
+                        projects_in_scope: projects,
+                        user_notes: s.notes_for(NoteStage::Docs),
+                        ..Default::default()
+                    };
+                    self.spawn(
+                        AgentName::SystemArchitecture,
+                        ExecPurpose::Architecture,
+                        &progress.parts[0],
+                        s.session_root.clone(),
+                        inputs,
+                    );
+                    return;
+                }
+                ArchitectureState::Failed {
+                    exec,
+                    error,
+                    gate: None,
+                    ..
+                } => {
+                    let (exec, error) = (exec.clone(), error.clone());
+                    self.exec_failed_gate(
+                        &exec,
+                        AgentName::SystemArchitecture,
+                        &progress.parts[0],
+                        &error,
+                    );
+                    return;
+                }
+                ArchitectureState::Done(_) | ArchitectureState::Abandoned => {}
+                _ => return,
+            }
+        }
+        // Rule B6: the book is named after the parts written, so an abandoned part names no book.
+        let book = s
+            .docs_book
+            .clone()
+            .filter(|b| ostra_core::book::is_book_id(b))
+            .unwrap_or_else(|| ostra_core::book::book_id(&progress.parts));
+        self.push(Step::WriteBook { book });
     }
 
     fn all_implement_done(&self) -> bool {
@@ -1659,18 +1830,15 @@ impl<'a> Planner<'a> {
                     }
                 }
             }
-            if docs {
-                let blocked_by_blocker = passed
-                    .iter()
-                    .any(|p| p.impl_loop.blocker_open || p.test_loop.blocker_open);
-                if !blocked_by_blocker
-                    && !matches!(track.docs, DocsState::Done(_) | DocsState::Abandoned)
-                {
-                    return false;
-                }
+            if docs && !blocker_open(&passed) && !track.docs_aggregate().is_settled() {
+                return false;
             }
         }
-        true
+        match self.book_progress() {
+            Some(p) if !p.parts.is_empty() => s.book_written.is_some(),
+            Some(_) => true,
+            None => false,
+        }
     }
 
     // -------------------------------------------------------------------------------------

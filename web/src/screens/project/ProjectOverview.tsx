@@ -198,11 +198,6 @@ export function ProjectOverview({ ws, project }: { ws: string; project: ProjectV
                 columns={[
                   { key: "glob", label: "Files", render: (m) => <code>{m.glob}</code> },
                   { key: "area", label: "Area" },
-                  {
-                    key: "reference",
-                    label: "Reference",
-                    render: (m) => (m.reference ? <code>{m.reference}</code> : null),
-                  },
                 ]}
               />
             </Panel>
