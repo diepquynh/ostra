@@ -854,6 +854,8 @@ pub struct SessionState {
     pub options: SessionOptions,
     pub yolo: bool,
     pub projects: Vec<ProjectRef>,
+    /// Rule O6: the projects the user pinned on the New task form.
+    pub pinned: Vec<String>,
     pub workspace_root: PathBuf,
     pub session_root: PathBuf,
     pub created_at: DateTime<Utc>,
@@ -1002,6 +1004,7 @@ impl SessionState {
             options: SessionOptions::default(),
             yolo: false,
             projects: vec![],
+            pinned: vec![],
             workspace_root: PathBuf::new(),
             session_root: PathBuf::new(),
             created_at: epoch,
@@ -1247,8 +1250,10 @@ impl SessionState {
                 session_root,
                 files,
                 uploads,
+                pinned,
             } => {
                 self.created = true;
+                self.pinned = pinned.clone();
                 self.files = files.clone();
                 self.uploads = uploads.clone();
                 self.created_at = at;
@@ -2161,8 +2166,13 @@ impl SessionState {
         if let Some(t) = clean_title(&out.title) {
             self.title = Some(t);
         }
-        let mut scope: Vec<String> = out
-            .projects
+        // Rule O6: pinned projects are the whole scope, whatever the judge picked.
+        let picked = if self.pinned.is_empty() {
+            &out.projects
+        } else {
+            &self.pinned
+        };
+        let mut scope: Vec<String> = picked
             .iter()
             .filter(|p| self.valid_project(p))
             .cloned()

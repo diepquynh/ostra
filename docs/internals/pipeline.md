@@ -80,7 +80,13 @@ The first step of every session is a judge call. The Classify judge reads the re
 The research tasks carry the paths of any files the user attached or uploaded (Rules C1, C3), because a
 researcher reads only its own task and never sees the original request's attachment list.
 
-The fold guards the judge's output. Projects that do not exist in the workspace are dropped, an empty scope
+Pinning projects on the New task form limits the session to them (Rule O6). The session starts with only the
+pinned projects, and the fold sets the scope to exactly those, whatever the judge returns, so research tasks,
+feedback, and plan phases cannot land in another project. A plan phase that names an unpinned project is
+blocked. A project the approved plan creates still joins the session (Rule O3). Without a pin, every
+initialized project is in the session and the judge chooses the scope.
+
+The fold guards the judge's output. Projects that are not in the session are dropped, an empty scope
 falls back to the first project, and a research-bearing category with no tasks gets one task per project in
 scope with the full request as its text (Rule D1: the spec always has research to stand on). You can override
 the classification from the session board until the first research task or phase starts.

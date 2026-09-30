@@ -52,19 +52,17 @@ export function SessionHeader({ summary: s, files, uploads, additions, onSummary
         <div style={{ flex: "1 1 420px", minWidth: 0 }}>
           <h1 style={{ margin: "0 0 6px", font: "var(--type-title)", textWrap: "pretty" }}>{s.title ?? "Untitled"}</h1>
           {s.request && (
-            <p
-              style={{
-                margin: "0 0 12px",
-                fontSize: "var(--text-sm)",
-                color: "var(--text-secondary)",
-                lineHeight: "var(--leading-normal)",
-              }}
-            >
-              <TaggedText text={s.request} files={files} /> <UntaggedFiles text={s.request} files={files} />
-              {uploads.map((u) => (
-                <UploadChip key={u.path} upload={u} />
-              ))}
-            </p>
+            <section className="ctx-request" aria-labelledby="session-request-label">
+              <h2 id="session-request-label" className="ctx-request__label">
+                Original request
+              </h2>
+              <div className="ctx-request__text">
+                <TaggedText text={s.request} files={files} /> <UntaggedFiles text={s.request} files={files} />
+                {uploads.map((u) => (
+                  <UploadChip key={u.path} upload={u} />
+                ))}
+              </div>
+            </section>
           )}
           {additions.length > 0 && (
             <ul className="ctx-additions" aria-label="Context you added">

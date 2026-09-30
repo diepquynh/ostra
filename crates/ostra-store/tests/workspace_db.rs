@@ -187,6 +187,7 @@ fn events_are_sequenced_per_session() {
         session_root: "/w/.ostra/sessions/a".into(),
         files: vec![],
         uploads: vec![],
+        pinned: vec![],
     };
     assert_eq!(db.append_event(&a, &ev).unwrap().seq, 1);
     assert_eq!(

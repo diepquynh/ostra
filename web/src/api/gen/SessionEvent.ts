@@ -33,7 +33,11 @@ files: Array<ContextFile>,
 /**
  * Files the user uploaded with the request (Rule C3).
  */
-uploads: Array<UploadedFile>, } | { "type": "request_amended", text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, 
+uploads: Array<UploadedFile>, 
+/**
+ * Rule O6: the projects the user pinned, which are then the whole scope.
+ */
+pinned: Array<string>, } | { "type": "request_amended", text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, 
 /**
  * Rule C2: the context waits for the Route answer judge before anything starts. Context
  * added before the rule has none and folds as it always did.

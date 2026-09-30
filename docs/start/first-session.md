@@ -73,7 +73,12 @@ Three toggles sit under the text:
 - **YOLO** lets a judge model answer the gates for you. It never answers a budget gate or waives a security
   finding. Leave it off for now.
 
-Start the task and the session board opens.
+With more than one initialized project, you can pin projects under the text. A pinned session works only in
+the pinned projects: research, feedback, and plan phases cannot reach another one. Leave every project
+unpinned to let Classify pick the scope.
+
+Start the task and the session board opens. Its header shows your request in an **Original request** section,
+with its line breaks as you typed them.
 
 ## Watch the board
 

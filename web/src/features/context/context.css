@@ -162,3 +162,25 @@
   color: var(--text-muted);
   line-height: var(--leading-normal);
 }
+.ctx-request {
+  margin: 0 0 12px;
+}
+.ctx-request .ctx-request__label {
+  margin: 0 0 4px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+/* The request is the user's prompt, often several lines, so its line breaks stay. */
+.ctx-request__text {
+  max-height: 40vh;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

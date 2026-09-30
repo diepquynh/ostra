@@ -553,3 +553,53 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
     assert!(events.iter().any(|e| matches!(e.event, SessionEvent::MessageDelivered { .. })));
     assert_eq!(of(AgentName::Explore).len(), 2, "the classify explore and the helper");
 }
+
+// Rule O6: a pinned session holds only its pinned projects.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pinned_session_holds_only_its_pinned_projects() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = project(dir.path());
+    let lib = dir.path().join("lib");
+    std::fs::create_dir_all(lib.join(".ostra")).unwrap();
+    std::fs::write(lib.join(".ostra/INVENTORY.md"), "# Inventory").unwrap();
+    let ws_root = dir.path().join("ws");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    let mut ws = WorkspaceSettings::seeded("t");
+    for (key, path) in [("app", &app), ("lib", &lib)] {
+        ws.projects.push(ProjectEntry {
+            key: key.into(),
+            path: path.clone(),
+            stack: None,
+            code_provider: None,
+            language_servers: vec![],
+        });
+    }
+    let services = Arc::new(Fake {
+        ws,
+        executor: Arc::new(Scripted {
+            root: app,
+            runs: Mutex::new(vec![]),
+        }),
+        notices: Mutex::new(vec![]),
+    });
+    let engine = Engine::new(
+        ws_root,
+        WorkspaceId::new(),
+        WorkspaceDb::open_in_memory().unwrap(),
+        services,
+    );
+    let summary = engine
+        .create_session(CreateSession {
+            request: "Add a greeting".into(),
+            options: SessionOptions::default(),
+            projects: vec!["lib".into()],
+            files: vec![],
+            uploads: vec![],
+        })
+        .unwrap();
+    engine.stop_session(&summary.id).unwrap();
+    let st = engine.state(&summary.id).unwrap();
+    let keys: Vec<&str> = st.projects.iter().map(|p| p.key.as_str()).collect();
+    assert_eq!(keys, vec!["lib"]);
+    assert_eq!(st.pinned, vec!["lib".to_string()]);
+}

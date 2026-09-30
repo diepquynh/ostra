@@ -180,9 +180,14 @@ function Board({
     <div className="ms-board">
       <div className="ms-pad ms-head">
         {s.request && (
-          <p className="ms-request">
-            <TaggedText text={s.request} files={d.files} /> <UntaggedFiles text={s.request} files={d.files} />
-          </p>
+          <section className="ctx-request" aria-labelledby="ms-request-label">
+            <h2 id="ms-request-label" className="ctx-request__label">
+              Original request
+            </h2>
+            <div className="ctx-request__text ms-request">
+              <TaggedText text={s.request} files={d.files} /> <UntaggedFiles text={s.request} files={d.files} />
+            </div>
+          </section>
         )}
         {d.uploads.length > 0 && (
           <div className="ms-chips">

@@ -377,7 +377,8 @@ impl Engine {
                         "Pinned projects are unknown or not initialized: {unknown:?}"
                     )));
                 }
-                projects.sort_by_key(|p| !pinned.contains(&p.key));
+                // Rule O6: a pinned session holds only its pinned projects.
+                projects.retain(|p| pinned.contains(&p.key));
             }
         }
         let files = validate_files(files, &projects, &self.inner.workspace_root)?;
@@ -419,6 +420,7 @@ impl Engine {
                 session_root,
                 files,
                 uploads,
+                pinned: pinned.to_vec(),
             },
         )?;
         self.inner.ensure_driver(&id, live);

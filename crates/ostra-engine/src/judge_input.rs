@@ -60,8 +60,23 @@ pub fn judge_input(
                 "# Toggles from the New task form\n\n- tests: {}\n- docs: {}\n- yolo: {}\n",
                 s.options.tests, s.options.docs, s.options.yolo
             );
+            if !s.pinned.is_empty() {
+                // Rule O6: the judge sees only the pinned projects, because they are the whole scope.
+                let _ = writeln!(
+                    m,
+                    "# Projects the user pinned\n\nThe scope is exactly these: {}\n",
+                    s.pinned
+                        .iter()
+                        .map(|k| format!("`{k}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
             let _ = writeln!(m, "# Projects in this workspace\n");
-            for p in projects {
+            let shown = projects
+                .iter()
+                .filter(|p| s.pinned.is_empty() || s.project_path(&p.key).is_some());
+            for p in shown {
                 let _ = writeln!(
                     m,
                     "- `{}` at {}{}{}",

@@ -561,6 +561,9 @@ pub enum SessionEvent {
         /// Files the user uploaded with the request (Rule C3).
         #[serde(default)]
         uploads: Vec<UploadedFile>,
+        /// Rule O6: the projects the user pinned, which are then the whole scope.
+        #[serde(default)]
+        pinned: Vec<String>,
     },
     /// The user extended or changed the request, or added context (Rules D2, D10, C2).
     RequestAmended {

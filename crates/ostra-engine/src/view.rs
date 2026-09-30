@@ -1205,6 +1205,7 @@ mod tests {
             session_root: PathBuf::from("/ws/.ostra/sessions/s1"),
             files: vec![],
             uploads: vec![],
+            pinned: vec![],
         }
     }
 

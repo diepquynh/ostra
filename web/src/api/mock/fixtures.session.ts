@@ -1515,6 +1515,7 @@ export function eventsFor(d: SessionDetail): StoredEvent[] {
       session_root: d.session_root,
       files: d.files,
       uploads: d.uploads,
+      pinned: [],
     },
   });
   for (const x of d.decisions)

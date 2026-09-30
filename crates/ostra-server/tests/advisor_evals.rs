@@ -235,6 +235,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
             session_root: session_root.clone(),
             files: vec![],
             uploads: vec![],
+            pinned: vec![],
         },
         SessionEvent::ProjectCreated {
             project: project.clone(),

@@ -50,6 +50,7 @@ impl H {
             session_root: root(),
             files: vec![],
             uploads: vec![],
+            pinned: vec![],
         });
         h
     }
@@ -2105,6 +2106,7 @@ fn init_session() -> H {
         session_root: root(),
         files: vec![],
         uploads: vec![],
+        pinned: vec![],
     });
     h
 }
@@ -2791,6 +2793,29 @@ fn j1_an_answer_split_into_parts_keeps_every_note() {
     assert_eq!(st.notes_for(ostra_engine::judge::NoteStage::Tests), vec!["Use a temp file."]);
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
     assert!(rerun.inputs.instructions.unwrap().contains("OSTRA_ENV_FILE"), "delivered, because one part is");
+}
+
+// ------------------------------------------------------------------------------------------
+// O6: pinned projects are the session's only projects and its whole scope.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn o6_pinned_projects_are_the_whole_scope() {
+    let mut h = H::new(&["web"], SessionOptions::default());
+    if let SessionEvent::SessionCreated { pinned, .. } = &mut h.events[0].event {
+        *pinned = vec!["web".into()];
+    }
+    h.classify("IMPLEMENT", &["api", "web"]);
+    assert_eq!(h.state().scope, vec!["web".to_string()]);
+    assert_eq!(h.summaries(), vec!["spawn explore explore#0"]);
+    assert_eq!(h.spawn_step("spawn explore").project, "web");
+
+    let mut h = H::new(&["api", "web"], SessionOptions::default());
+    if let SessionEvent::SessionCreated { pinned, .. } = &mut h.events[0].event {
+        *pinned = vec!["api".into(), "web".into()];
+    }
+    h.classify("IMPLEMENT", &["api"]);
+    assert_eq!(h.state().scope, vec!["api".to_string(), "web".to_string()]);
 }
 
 // ------------------------------------------------------------------------------------------

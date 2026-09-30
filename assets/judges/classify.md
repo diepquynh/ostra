@@ -8,8 +8,8 @@ sentences naming the words in the request that decided it.
 ## Input
 
 One user message holding the request text, the toggles the user set on the New task form (tests, docs), the
-projects the user pinned (possibly none), and every project in the workspace with its key, its stack, and
-the areas of its module map. The request text may end with lists of files and folders the user attached and
+projects the user pinned (possibly none), and every project in the workspace, or only the pinned ones when
+there are pins, with its key, its stack, and the areas of its module map. The request text may end with lists of files and folders the user attached and
 files the user uploaded, each with its absolute path (Rules C1, C3).
 
 ## Decide
@@ -48,8 +48,9 @@ An edit to an AI prompt, a `SKILL.md`, an agent file, or a judge prompt under `a
 the request spells out the whole edit, because prompt-generation applies the prompt writing rules and a quick
 change does not.
 
-**Projects.** Include a project when the user pinned it, when the request names it or its area, or when the
-change lands in it. Match each part of the request to the project whose areas cover it: a request to add a
+**Projects.** When the user pinned projects, return exactly those, because a pin limits the session to them
+and Ostra drops any other key (Rule O6); write the explore tasks for them only. Otherwise include a project
+when the request names it or its area, or when the change lands in it. Match each part of the request to the project whose areas cover it: a request to add a
 field on the server and show it in a screen lands in the server project and in the project that holds the
 screen. With one project in the workspace, it is always the only project in scope. When
 the request names none and several exist, include every project whose module map covers what the request
