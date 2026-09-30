@@ -21,3 +21,4 @@ parking_lot.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+ostra-core = { workspace = true, features = ["test-prices"] }

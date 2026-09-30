@@ -638,6 +638,8 @@ impl Engine {
                 files,
                 uploads,
                 delivery,
+                // Rule C2: once the request is classified, the judge routes what the user adds.
+                routed: st.routes_amendments(),
             },
         )?;
         if delivery == ContextDelivery::Now {
@@ -838,9 +840,9 @@ impl Engine {
             protected_paths: self.inner.services.protected_paths(),
             memory_db: paths::project_memory_db(&repo_root),
             sandbox_mode: settings.sandbox_mode,
+            enforce_tool_calls: settings.enforces_tool_calls(&global),
             sandbox_network: settings.sandbox_network,
             sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
-            enforce_tool_calls: settings.enforces_tool_calls(&global),
             sandbox_decoys: settings.sandbox_decoys.clone(),
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
@@ -2289,14 +2291,14 @@ impl Inner {
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
         let project_docs = ostra_agents::brief::project_docs(&repo_root);
         let _ = std::fs::create_dir_all(&req.session_dir);
-        if st.category == Some(Category::UnitTest)
+        if st.category == Some(Category::Test)
             && let Some(p) = &req.inputs.implementer_report
             && !p.exists()
         {
             let _ = std::fs::write(
                 p,
                 format!(
-                    "# Test request\n\nNo implementer ran in this session. The user asked for tests directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone. Cover the code the request names.\n",
+                    "# Test request\n\nNo implementer ran in this session. The user asked for tests directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone, because no implementer ran. Take the code under test from the request: the files or symbols it names, or the earlier change it refers to, from the git history or the staged changes.\n",
                     st.full_request()
                 ),
             );
@@ -2403,9 +2405,9 @@ impl Inner {
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(&repo_root),
             sandbox_mode: settings.sandbox_mode,
+            enforce_tool_calls: settings.enforces_tool_calls(&global),
             sandbox_network: settings.sandbox_network,
             sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
-            enforce_tool_calls: settings.enforces_tool_calls(&global),
             sandbox_decoys: settings.sandbox_decoys.clone(),
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
@@ -2607,9 +2609,9 @@ impl Inner {
             protected_paths: self.services.protected_paths(),
             memory_db: paths::project_memory_db(repo_root),
             sandbox_mode: settings.sandbox_mode,
+            enforce_tool_calls: settings.enforces_tool_calls(&global),
             sandbox_network: settings.sandbox_network,
             sandbox_allowed_hosts: settings.sandbox_allowed_hosts.clone(),
-            enforce_tool_calls: settings.enforces_tool_calls(&global),
             sandbox_decoys: settings.sandbox_decoys.clone(),
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),

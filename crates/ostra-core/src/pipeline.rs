@@ -13,7 +13,9 @@ pub enum Category {
     Plan,
     Implement,
     Verify,
-    UnitTest,
+    /// The test stage alone on existing code. Logs written before the rename say `UNIT_TEST`.
+    #[serde(alias = "UNIT_TEST")]
+    Test,
     Prompt,
     /// A small edit the request fully describes: one implementer pass on the native executor.
     QuickChange,
@@ -28,7 +30,7 @@ impl Category {
             Category::Plan => "PLAN",
             Category::Implement => "IMPLEMENT",
             Category::Verify => "VERIFY",
-            Category::UnitTest => "UNIT_TEST",
+            Category::Test => "TEST",
             Category::Prompt => "PROMPT",
             Category::QuickChange => "QUICK_CHANGE",
             Category::QuickAnswer => "QUICK_ANSWER",

@@ -1,0 +1,10 @@
+{
+  "status": "stuck",
+  "report_path": "{report}",
+  "changed_files": [],
+  "summary": "STUCK: the regression suite tests/unit/test_money.py fails after the change: to_cents(\"12.3\") returns 1203, not 1230. The source is wrong, not the test.",
+  "stuck": {
+    "diagnostic": "FAIL: test_one_decimal_digit_is_tens_of_cents (tests.unit.test_money.ToCentsTest)\nAssertionError: 1203 != 1230",
+    "need": "An implementer fix in shop/money.py so one decimal digit is tens of cents again (pad the fraction to two digits)."
+  }
+}

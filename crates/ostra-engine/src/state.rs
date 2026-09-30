@@ -173,7 +173,8 @@ pub struct UserNote {
     pub forgotten: bool,
     pub stages: Vec<NoteStage>,
     pub text: String,
-    pub gate: GateId,
+    /// The gate answered, or none for context the user added (Rule C2).
+    pub gate: Option<GateId>,
 }
 
 #[derive(Debug, Clone)]
@@ -780,6 +781,10 @@ pub struct Amendment {
     pub uploads: Vec<UploadedFile>,
     pub delivery: ContextDelivery,
     pub at: DateTime<Utc>,
+    /// Rule C2: the Route answer judge has not decided yet, so nothing starts.
+    pub pending: bool,
+    /// The context joins the request every later agent reads. Remembered or discarded context does not.
+    pub delivered: bool,
 }
 
 /// Why the engine interrupted a running execution.
@@ -1071,11 +1076,28 @@ impl SessionState {
             "Files the user uploaded with the request",
             &self.uploads,
         ));
-        for a in &self.amendments {
+        for a in self.amendments.iter().filter(|a| a.delivered) {
             s.push_str("\n\nAdded later by the user: ");
             s.push_str(&self.added_part(&a.text, &a.files, &a.uploads));
         }
         s
+    }
+
+    /// Rule C2: the context the user added, for a spawn whose task was written without it.
+    pub fn added_context(&self) -> String {
+        let added: Vec<String> = self
+            .amendments
+            .iter()
+            .filter(|a| a.delivered)
+            .map(|a| format!("- {}", self.added_part(&a.text, &a.files, &a.uploads)))
+            .collect();
+        if added.is_empty() {
+            return String::new();
+        }
+        format!(
+            "\n\nThe user added this context to the request while the session ran. Take it into account:\n{}",
+            added.join("\n")
+        )
     }
 
     /// Rule C1: each attached file reaches the agents as an absolute path beside its tag.
@@ -1103,7 +1125,12 @@ impl SessionState {
         s
     }
 
-    fn added_part(&self, text: &str, files: &[ContextFile], uploads: &[UploadedFile]) -> String {
+    pub(crate) fn added_part(
+        &self,
+        text: &str,
+        files: &[ContextFile],
+        uploads: &[UploadedFile],
+    ) -> String {
         format!(
             "{text}{}{}",
             self.file_list("Files and folders attached with this addition", files),
@@ -1293,6 +1320,7 @@ impl SessionState {
                 files,
                 uploads,
                 delivery,
+                routed,
             } => {
                 if *delivery == ContextDelivery::Now {
                     self.interrupt_running(Interrupt::Context);
@@ -1305,8 +1333,12 @@ impl SessionState {
                     uploads: uploads.clone(),
                     delivery: *delivery,
                     at,
+                    pending: *routed,
+                    delivered: !*routed,
                 });
-                self.on_amended(&self.added_part(text, files, uploads));
+                if !*routed {
+                    self.on_amended(&self.added_part(text, files, uploads));
+                }
             }
             SessionEvent::SessionPaused => {
                 self.paused = true;
@@ -1747,7 +1779,13 @@ impl SessionState {
     }
 
     /// Rule J1: keep every part of an answer the judge named later stages for.
-    fn remember_parts(&mut self, gate: &GateId, items: &[AnswerItem], id: &str, answer: &str) {
+    fn remember_parts(
+        &mut self,
+        gate: Option<&GateId>,
+        items: &[AnswerItem],
+        id: &str,
+        answer: &str,
+    ) {
         let parts: Vec<AnswerItem> = parts_for(items, id).into_iter().cloned().collect();
         for p in &parts {
             self.remember(gate, p, answer);
@@ -1755,7 +1793,7 @@ impl SessionState {
     }
 
     /// Rule J1: keep the part of an answer the judge named later stages for.
-    fn remember(&mut self, gate: &GateId, item: &AnswerItem, answer: &str) {
+    fn remember(&mut self, gate: Option<&GateId>, item: &AnswerItem, answer: &str) {
         if item.stages.is_empty() || item.disposition == Disposition::Discard {
             return;
         }
@@ -1772,7 +1810,7 @@ impl SessionState {
             forgotten: false,
             stages,
             text,
-            gate: gate.clone(),
+            gate: gate.cloned(),
         });
     }
 
@@ -1787,6 +1825,11 @@ impl SessionState {
 
     /// Rule J1: queue the research the judge asked for, capped, in projects the session has.
     fn queue_research(&mut self, tasks: &[ExploreTaskSpec], origin: ExploreOrigin) -> Vec<u32> {
+        let why = if origin == ExploreOrigin::Amendment {
+            "The user asked for this research when they added context to the request"
+        } else {
+            "The user asked for this research while answering a question"
+        };
         let primary = self.primary();
         tasks
             .iter()
@@ -1799,12 +1842,60 @@ impl SessionState {
                     primary.clone()
                 };
                 let task = format!(
-                    "{}\n\nThe user asked for this research while answering a question. The whole request, for context: {}",
+                    "{}\n\n{why}. The whole request, for context: {}",
                     t.task, self.request
                 );
                 self.push_explore(project, task, origin.clone())
             })
             .collect()
+    }
+
+    /// Rule C2: apply the Route answer judge's decision on context the user added mid-session.
+    fn apply_amendment_route(&mut self, i: usize, out: &RouteAnswerOut) {
+        let Some(a) = self.amendments.get(i).filter(|a| a.pending) else {
+            return;
+        };
+        let text = self.added_part(&a.text, &a.files, &a.uploads);
+        let item = out.item(ANSWER_ITEM);
+        let deliver = item.disposition == Disposition::Deliver;
+        self.amendments[i].pending = false;
+        self.amendments[i].delivered = deliver;
+        self.forget(&out.forget);
+        self.remember_parts(None, &out.items, ANSWER_ITEM, &text);
+        self.queue_research(&out.research, ExploreOrigin::Amendment);
+        // Rule D10: a requirement change after the spec exists restarts at the spec.
+        if deliver && out.route == AnswerRoute::RequirementChange && !self.spec.runs.is_empty() {
+            self.requirement_change(format!("The user extended the request: {text}"));
+        }
+    }
+
+    /// Rule C2: a classified session with research or later stages routes added context through
+    /// the judge. Before classification the Classify judge reads it with the request.
+    pub fn routes_amendments(&self) -> bool {
+        self.classify.is_some()
+            && matches!(
+                self.category,
+                Some(Category::Research | Category::Spec | Category::Plan | Category::Implement)
+            )
+    }
+
+    /// Rule C2: context the user added that waits for the judge, by index.
+    pub fn pending_amendments(&self) -> impl Iterator<Item = usize> + '_ {
+        self.amendments
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.pending)
+            .map(|(i, _)| i)
+    }
+
+    /// Rule P4: the user stopped this execution, so nothing retries it without them, YOLO included.
+    pub fn stopped_by_user(&self, exec: &ExecutionId) -> bool {
+        // A pause or an interrupt turns a cancel into Interrupted, and a stopped session ends,
+        // so a Cancelled run in a live session is one the user stopped.
+        self.executions
+            .get(exec)
+            .and_then(|r| r.result.as_ref())
+            .is_some_and(|r| r.status == ExecutionStatus::Cancelled)
     }
 
     fn apply_held(&mut self, gate: &GateId, held: HeldAnswer, out: &RouteAnswerOut) {
@@ -1828,7 +1919,7 @@ impl SessionState {
                         .find(|q| q.id == a.id)
                         .map(|q| q.answer_in_context(&a.answer))
                         .unwrap_or_else(|| a.answer.clone());
-                    self.remember_parts(gate, &out.items, &a.id, &in_context);
+                    self.remember_parts(Some(gate), &out.items, &a.id, &in_context);
                     let answer = match item.disposition {
                         Disposition::Deliver => in_context,
                         Disposition::Remember => format!(
@@ -1866,7 +1957,7 @@ impl SessionState {
                 text,
             } => {
                 let item = out.item(ANSWER_ITEM);
-                self.remember_parts(gate, &out.items, ANSWER_ITEM, &text);
+                self.remember_parts(Some(gate), &out.items, ANSWER_ITEM, &text);
                 let change = match item.disposition {
                     Disposition::Deliver => Some(text),
                     _ => research_note,
@@ -1898,7 +1989,7 @@ impl SessionState {
             }
             HeldAnswer::Recurring { target, text } => {
                 let item = out.item(ANSWER_ITEM);
-                self.remember_parts(gate, &out.items, ANSWER_ITEM, &text);
+                self.remember_parts(Some(gate), &out.items, ANSWER_ITEM, &text);
                 let change = match item.disposition {
                     Disposition::Deliver => Some(text),
                     _ => research_note,
@@ -1934,7 +2025,7 @@ impl SessionState {
             return;
         };
         let item = out.item(ANSWER_ITEM);
-        self.remember_parts(gate, &out.items, ANSWER_ITEM, &text);
+        self.remember_parts(Some(gate), &out.items, ANSWER_ITEM, &text);
         let deliver = item.disposition == Disposition::Deliver;
         // With no spec there is nothing to change first, so the answer goes to the phase.
         if deliver && out.route == AnswerRoute::RequirementChange && self.spec.current.is_some() {
@@ -2127,7 +2218,7 @@ impl SessionState {
                     self.insert_phase(inline_phase(id, key, "Verification", i), l);
                 }
             }
-            Category::UnitTest => {
+            Category::Test => {
                 for (i, key) in scope.iter().enumerate() {
                     let id = i as u32 + 1;
                     let mut l =
@@ -2135,7 +2226,7 @@ impl SessionState {
                     l.next = LoopNext::Done;
                     let report = self
                         .project_session_dir(key)
-                        .join(paths::report::unit_test_request());
+                        .join(paths::report::test_request());
                     self.insert_phase(inline_phase(id, key, "Tests requested by the user", i), l);
                     if let Some(p) = self.phases.get_mut(&id) {
                         p.implementer_report = Some(report);
@@ -2529,10 +2620,14 @@ impl SessionState {
                 }
             }
             JudgeKind::RouteAnswer => {
-                let Some(gate) = subject.map(GateId::from) else {
+                let Ok(out) = serde_json::from_value::<RouteAnswerOut>(output.clone()) else {
                     return;
                 };
-                let Ok(out) = serde_json::from_value::<RouteAnswerOut>(output.clone()) else {
+                if let Some(i) = subject.and_then(amendment_index) {
+                    self.apply_amendment_route(i, &out);
+                    return;
+                }
+                let Some(gate) = subject.map(GateId::from) else {
                     return;
                 };
                 if !self.held_answers.contains_key(&gate)
@@ -2590,7 +2685,7 @@ impl SessionState {
                 let item = item_for(&out.items, ANSWER_ITEM);
                 let text = self.feedback.rounds[i].text.clone();
                 self.forget(&out.forget);
-                self.remember_parts(&gate, &out.items, ANSWER_ITEM, &text);
+                self.remember_parts(Some(&gate), &out.items, ANSWER_ITEM, &text);
                 self.queue_research(&out.research, ExploreOrigin::Answer);
                 match item.disposition {
                     Disposition::Deliver => {
@@ -2725,10 +2820,7 @@ impl SessionState {
 
     fn on_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
         let status = result.status;
-        let error = result
-            .error
-            .clone()
-            .unwrap_or_else(|| format!("execution ended with status {status:?}"));
+        let error = exec_error(result);
         match &rec.purpose {
             ExecPurpose::Explore { task } => {
                 let idx = *task as usize;
@@ -2905,10 +2997,7 @@ impl SessionState {
             .and_then(|v| serde_json::from_value(v.clone()).ok())
             .unwrap_or_default();
         let status = result.status;
-        let error = result
-            .error
-            .clone()
-            .unwrap_or_else(|| format!("execution ended with status {status:?}"));
+        let error = exec_error(result);
         let is_review = matches!(rec.purpose, ExecPurpose::Review { .. });
         let is_handoff = matches!(
             rec.purpose,
@@ -4096,6 +4185,25 @@ pub fn stuck_problem(summary: &str, need: &str) -> String {
     } else {
         format!("{summary}. It needs: {need}")
     }
+}
+
+fn exec_error(result: &ExecutionResult) -> String {
+    match (&result.error, result.status) {
+        (Some(e), _) => e.clone(),
+        (None, ExecutionStatus::Cancelled) => STOPPED_EXECUTION.into(),
+        (None, status) => format!("execution ended with status {status:?}"),
+    }
+}
+
+pub const STOPPED_EXECUTION: &str = "You stopped this execution.";
+
+/// The Route answer judge's subject for the amendment at `i` (Rule C2).
+pub fn amendment_subject(i: usize) -> String {
+    format!("amendment:{i}")
+}
+
+pub fn amendment_index(subject: &str) -> Option<usize> {
+    subject.strip_prefix("amendment:")?.parse().ok()
 }
 
 fn missing_submit(status: ExecutionStatus, error: &str, result: &ExecutionResult) -> String {

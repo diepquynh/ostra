@@ -197,6 +197,17 @@ Then apply the existing setup from Step D0:
 
 From the instruction files, the stack reference, and the actual files, determine the concrete build, test, test-one, format, lint, typecheck, and run commands (for example read `package.json` scripts, detect `./mvnw` vs `mvn`, `Makefile` targets, `pytest`/`tox`). A command an instruction file states wins over one you infer, because the team wrote it for agents. Confirm it exists (the script, target, or binary) before you record it. Record the exact strings. Use `null` for any that do not exist.
 
+Then detect the **test types**: each kind of test the repo already runs, because the test stage picks a level
+(unit, integration, end to end, or another the repo names) for every check from this list, and a level missing
+here is one it cannot verify at. Look for separate scripts or targets (`test:e2e`, `test:integration`, a
+`make e2e` target), runner configs (`playwright.config.*`, `cypress.config.*`, Jest or Vitest projects, Maven
+Failsafe, a `pytest` marker, a Go build tag), test directories (`tests/integration/`, `e2e/`), and the
+instruction files. For each type record: a short lowercase name (`unit`, `integration`, `e2e`), the command that
+runs all of them, the command for one test with `{MODULE}`/`{TEST}`/`{PATH}` placeholders if the runner takes
+one, the file globs its tests live under, and one line on what it needs to run (a database, a running server,
+a browser, an env var) or that it needs nothing. Confirm each command exists before you record it. Record only
+types the repo has; a repo with one test command has one type, `unit`.
+
 ### Step D5: {{tool_write}} the scout plan
 
 {{tool_write}} `{session-dir}/ostra-scout-plan.md`:
@@ -220,6 +231,11 @@ Prior profile: {.ostra/project.toml | none}
 | lint | {cmd or null} |
 | typecheck | {cmd or null} |
 | run | {cmd or null} |
+
+## Detected Test Types
+| Name | Command | One test | Matches | Needs |
+| --- | --- | --- | --- | --- |
+| {unit} | {cmd} | {cmd with placeholders or null} | {globs} | {what it needs to run, or "nothing"} |
 
 ## Candidate Component Types
 {bullet list, taken from the stack reference's catalog, filtered to what plausibly exists here. Append
@@ -423,7 +439,7 @@ Pass condition: every recommended skill has a `status` of `new` or `existing`, a
 
 ### Step P5: Assemble the module map and commands
 
-Build the module map (path glob, area name, planned reference file). Carry the detected commands from the scout plan.
+Build the module map (path glob, area name, planned reference file). Carry the detected commands and test types from the scout plan.
 For a project with no source yet, plan the module map from the User focus and the base requirements instead:
 one area per part of the project they name (for example the tool handlers, the database access, the event
 publisher), each with the path glob a project of this stack puts it under, and `reference` left out. These are
@@ -453,6 +469,9 @@ never regenerated). The user may choose to regenerate any of them at the approva
 ## Detected Commands
 {same table as scout plan}
 
+## Detected Test Types
+{same table as scout plan}
+
 ## Proposed Module Map
 | Path glob | Area | Reference file |
 | --- | --- | --- |
@@ -472,6 +491,7 @@ above:
   "scout_plan_path": "{absolute scout-plan path}",
   "findings_paths": ["{every scout-findings path you merged}"],
   "commands": { "build": "…", "test": "…", "test_one": "…", "format": "…", "lint": null, "typecheck": null, "run": null },
+  "test_types": { "{name}": { "command": "…", "command_one": "… or null", "matches": ["…"], "note": "{what it needs to run}" } },
   "module_map": [ { "glob": "…", "area": "…", "reference": null } ],
   "skills": [
     { "name": "{name}", "kind": "creation|convention|module-hub|other", "component_type": "{type or null}", "count": 0, "slice_spread": 0, "status": "new|existing", "existing_path": "{repo-root-relative SKILL.md path, e.g. .agents/skills/{name}/SKILL.md, or null}", "recommend": true, "rationale": "{one line}", "description": "{one line saying what the skill teaches, shown to the user at approval}" }
@@ -552,7 +572,7 @@ Per the contract, write:
 - `{repo}/.ostra/INVENTORY.md`: Commands table, Skills Inventory table, Skill Application Mapping, Module/Area map, Review Rule Set.
 - `{repo}/.ostra/project.toml`: the machine profile in TOML with snake_case keys, as the contract's section 2 shows. It has no `models` or `harnesses` table: model and executor routing belong to the workspace settings.
 
-The repo's skill set is `Generated skills` PLUS `Reused skills`. EVERY skill in BOTH arrays MUST appear in the INVENTORY Skills Inventory table AND in the profile's `[[skills]]` array (mirror them 1:1). On each profile `[[skills]]` entry set `source`: `generated` for a skill from `Generated skills`, `reused` for a skill from `Reused skills`. Build each skill's Skills Inventory `Load when` cell and Skill Application Mapping row from its component type when it has one. For a reused skill whose `component_type` is `null` (a bespoke skill), derive the `Load when` cell from the trigger in its own `SKILL.md` front-matter description, and add a Skill Application Mapping row only if a concrete file type triggers it. `commands` and `module_map` come from the proposal. The Review Rule Set is seeded from the stack reference with stable IDs.
+The repo's skill set is `Generated skills` PLUS `Reused skills`. EVERY skill in BOTH arrays MUST appear in the INVENTORY Skills Inventory table AND in the profile's `[[skills]]` array (mirror them 1:1). On each profile `[[skills]]` entry set `source`: `generated` for a skill from `Generated skills`, `reused` for a skill from `Reused skills`. Build each skill's Skills Inventory `Load when` cell and Skill Application Mapping row from its component type when it has one. For a reused skill whose `component_type` is `null` (a bespoke skill), derive the `Load when` cell from the trigger in its own `SKILL.md` front-matter description, and add a Skill Application Mapping row only if a concrete file type triggers it. `commands`, `test_types` (one `[test_types.{name}]` table each), and `module_map` come from the proposal. The Review Rule Set is seeded from the stack reference with stable IDs.
 
 The inputs are JSON, and the profile is TOML, so do not copy their shapes across:
 - TOML has no null. Omit any key whose value would be null (`reference`, `component_type`, a command), and never write `null`, because Ostra refuses a profile it cannot parse.
@@ -562,7 +582,7 @@ The inputs are JSON, and the profile is TOML, so do not copy their shapes across
 
 ### Step GI4: Self-review
 
-Verify: the INVENTORY Skills Inventory lists every skill in `Generated skills` AND every skill in `Reused skills`; the profile's `[[skills]]` array mirrors it 1:1 with a `source` of `generated` or `reused` on each entry; `[commands]` matches the proposal; the Module/Area map mirrors the proposal's module map; the profile has no `models` or `harnesses` table; every key is snake_case; the profile contains no `null`, no `[stack]` table, and no `[[conventions]]`; and `schema_version` is `1`. Fix any mismatch by editing. When you submit, Ostra parses the profile, and if it does not parse, the submit is refused with the line and the fix. Correct the file and submit again.
+Verify: the INVENTORY Skills Inventory lists every skill in `Generated skills` AND every skill in `Reused skills`; the profile's `[[skills]]` array mirrors it 1:1 with a `source` of `generated` or `reused` on each entry; `[commands]` and every `[test_types.*]` table match the proposal; the Module/Area map mirrors the proposal's module map; the profile has no `models` or `harnesses` table; every key is snake_case; the profile contains no `null`, no `[stack]` table, and no `[[conventions]]`; and `schema_version` is `1`. Fix any mismatch by editing. When you submit, Ostra parses the profile, and if it does not parse, the submit is refused with the line and the fix. Correct the file and submit again.
 
 ### Step GI5: {{tool_write}} the generation report
 

@@ -346,10 +346,15 @@ fn plan_track(
         }
         // Rule O5: the advisor looks at a created project's failed step before the user does.
         let rounds = i.advice.get(&s.init_step_key(exec)).map_or(0, Vec::len);
-        if ending == Ending::CreatedProject && !i.escalated && rounds < MAX_ADVICE {
+        // Rule P4: a step the user stopped goes to the user, not the advisor, which would retry it.
+        if ending == Ending::CreatedProject
+            && !i.escalated
+            && rounds < MAX_ADVICE
+            && !s.stopped_by_user(exec)
+        {
             push(advise(s, i, exec, err, focus));
         } else {
-            push(failed_gate(exec, &project, err));
+            push(failed_gate(s, exec, &project, err));
         }
         return;
     }
@@ -520,11 +525,21 @@ fn plan_track(
     });
 }
 
-fn failed_gate(exec: &ExecutionId, project: &str, err: &str) -> Step {
+fn failed_gate(s: &SessionState, exec: &ExecutionId, project: &str, err: &str) -> Step {
+    let (title, explanation) = if s.stopped_by_user(exec) {
+        (
+            "You stopped the initializer",
+            "Ostra leaves a stopped execution to you, YOLO included. Retry it, or abandon the init.",
+        )
+    } else {
+        (
+            "The initializer failed",
+            "The execution ended without a usable result. Retry it, or abandon the init.",
+        )
+    };
     Step::OpenGate {
-        title: "The initializer failed".into(),
-        explanation: "The execution ended without a usable result. Retry it, or abandon the init."
-            .into(),
+        title: title.into(),
+        explanation: explanation.into(),
         payload: GatePayload::ExecutionFailed {
             execution: exec.clone(),
             agent: AgentName::Initializer,

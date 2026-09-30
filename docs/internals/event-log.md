@@ -47,7 +47,7 @@ There are about twenty event kinds. Grouped by what they record:
 | Group | Events | What they record |
 | --- | --- | --- |
 | Session lifecycle | `SessionCreated`, `SessionCompleted`, `SessionFailed` | The request, options, projects, and folders at the start; the completion report or the reason it stopped. |
-| What you did | `RequestAmended`, `SessionPaused`, `SessionResumed`, `YoloSet` | Context added mid-session (queued or sent now), pause and continue (Rules P1 and P2), turning YOLO on or off. |
+| What you did | `RequestAmended`, `SessionPaused`, `SessionResumed`, `YoloSet` | Context added mid-session (queued or sent now, with `routed` when the Route answer judge decides it, Rule C2), pause and continue (Rules P1 and P2), turning YOLO on or off. |
 | Judgment | `DecisionMade`, `DecisionOverridden` | A judge's output, its reason, and the input summary it saw; a user's override of it. |
 | Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished` | Agent, purpose, stage, executor, model, the full spawn parameters and rendered spawn block, and later the result with its submit payload, token usage, and cost. `ExecutionResumed` reopens an execution the pause interrupted (Rule P2), so one execution can have several results in the log; the last one counts, and it includes what the earlier parts spent. |
 | Gates | `GateOpened`, `GateAnswered` | A question the pipeline asks, and its answer with its source: `user`, `yolo`, or `engine`. |

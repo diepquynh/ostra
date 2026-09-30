@@ -32,11 +32,19 @@ request = "Add a `limits.max_feedback_rounds` workspace setting. After that many
 expect = { category = ["IMPLEMENT"], projects = ["ostra"] }
 
 [[case]]
-id = "classify-unit-tests"
+id = "classify-tests"
 judge = "classify"
 workspace = "one"
 request = "Write unit tests for `clean_title` in crates/ostra-engine/src/judge.rs covering wrapping quotes, newlines, and the 60 character cut."
-expect = { category = ["UNIT_TEST"] }
+expect = { category = ["TEST"] }
+
+[[case]]
+id = "classify-e2e-tests"
+judge = "classify"
+workspace = "one"
+request = "Add end-to-end tests that sign in through the console and start a session against the scripted provider."
+note = "Not only unit tests: an end-to-end test request for existing code is TEST, not VERIFY or IMPLEMENT."
+expect = { category = ["TEST"] }
 
 [[case]]
 id = "classify-verify"
@@ -520,7 +528,7 @@ id = "classify-fixtures-for-a-rule"
 judge = "classify"
 workspace = "one"
 request = "Check whether tests/conformance/main.rs has a fixture for every branch of Rule F1, and write the fixtures that are missing."
-expect = { category = ["UNIT_TEST", "IMPLEMENT"], projects = ["ostra"] }
+expect = { category = ["TEST", "IMPLEMENT"], projects = ["ostra"] }
 
 [[case]]
 id = "classify-three-projects-docs-and-tooltip"
@@ -1811,3 +1819,60 @@ report = "Added `blocked: Vec<String>` to GatePayload::ImplementationReview."
 [[case.phase]]
 project = "web"
 report = "Rendered the blocked list in ChoiceGate.tsx."
+
+[[case]]
+id = "route-amendment-names-another-project"
+judge = "route_answer"
+workspace = "split"
+track = "full"
+gate = "amendment"
+request = "Show each session's total cost on the sessions list."
+note = "Rule C2, from a real session: context added mid-session said the work belongs in another project than the first in scope, and research used to go to the first project."
+answer = "This is for the web console only. The server already returns cost_usd on every session summary, so find where the sessions list renders its rows."
+spec = """
+# Spec: session cost on the sessions list
+
+## Requirements
+- R1: The sessions list shall show each session's total cost in US dollars.
+"""
+expect = { research = true, research_projects = ["web"], dispositions = { answer = "deliver" } }
+
+[[case.research]]
+project = "server"
+task = "Find where the session summary DTO is built and whether it carries the cost."
+scope = "crates/ostra-core, crates/ostra-server"
+findings = "SessionSummary carries cost_usd, filled from the sessions table."
+doc = """
+# Research: session summary
+
+- `crates/ostra-core/src/api.rs`: `SessionSummary { id, title, status, cost_usd, ... }`, exported to TypeScript.
+- `crates/ostra-store` keeps `cost_usd` on the sessions table, updated as executions finish.
+"""
+
+[[case]]
+id = "route-amendment-discarded"
+judge = "route_answer"
+workspace = "split"
+track = "full"
+gate = "amendment"
+request = "Show each session's total cost on the sessions list."
+note = "Counter-case: the user takes back what they added, so it is discarded and nothing is researched."
+answer = "Ignore what I just added, I pasted it into the wrong session."
+spec = """
+# Spec: session cost on the sessions list
+
+## Requirements
+- R1: The sessions list shall show each session's total cost in US dollars.
+"""
+expect = { research = false, dispositions = { answer = "discard" } }
+
+[[case.research]]
+project = "server"
+task = "Find where the session summary DTO is built and whether it carries the cost."
+scope = "crates/ostra-core, crates/ostra-server"
+findings = "SessionSummary carries cost_usd, filled from the sessions table."
+doc = """
+# Research: session summary
+
+- `crates/ostra-core/src/api.rs`: `SessionSummary { id, title, status, cost_usd, ... }`, exported to TypeScript.
+"""

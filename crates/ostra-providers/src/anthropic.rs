@@ -17,6 +17,16 @@ pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
 const COMPACT_BETA: &str = "compact-2026-09-04";
 const FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
+/// Budget thinking between tool calls, on the budget models that support it.
+const INTERLEAVED_BETA: &str = "interleaved-thinking-2025-05-14";
+/// Input plus `max_tokens` past the context window stops generation at the window instead of
+/// failing validation, which Claude 4.5 and later models do without it.
+const WINDOW_BETA: &str = "model-context-window-exceeded-2025-08-26";
+/// Room kept for the answer under a thinking budget, because the budget must stay below
+/// `max_tokens` and an answer can be a whole file written through a tool call.
+const ANSWER_RESERVE: u32 = 16_000;
+/// The API's smallest thinking budget.
+const MIN_BUDGET: u32 = 1024;
 /// Key set on a tool-use input whose streamed JSON did not parse. The agent loop answers such a
 /// call with an error result instead of running the tool.
 pub const INVALID_INPUT_KEY: &str = "__invalid_json";
@@ -86,6 +96,10 @@ struct Caps {
     fallbacks: bool,
     /// On-demand compaction (`compaction: {type: "summarize"}`).
     compaction: bool,
+    /// Budget thinking interleaves with tool calls behind `INTERLEAVED_BETA`.
+    interleaved: bool,
+    /// Models before Claude 4.5, which need `WINDOW_BETA`.
+    window_beta: bool,
 }
 
 fn is_model(model: &str, id: &str) -> bool {
@@ -99,12 +113,15 @@ fn is_model(model: &str, id: &str) -> bool {
 }
 
 fn caps(model: &str) -> Caps {
+    // Adaptive thinking interleaves with tool calls on its own.
     let full = |forced, fallbacks| Caps {
         thinking: Thinking::Adaptive,
         effort: EffortSupport::Full,
         forced_tool_choice: forced,
         fallbacks,
         compaction: true,
+        interleaved: false,
+        window_beta: false,
     };
     if is_model(model, "claude-fable-5-1")
         || is_model(model, "claude-mythos-5-1")
@@ -131,37 +148,40 @@ fn caps(model: &str) -> Caps {
     {
         return full(true, false);
     }
+    // Both modes work on the 4.6 models, and adaptive is the one that interleaves on both (budget
+    // thinking on Opus 4.6 never thinks between tool calls), so they stay adaptive.
     if is_model(model, "claude-opus-4-6") || is_model(model, "claude-sonnet-4-6") {
         return Caps {
             effort: EffortSupport::NoXhigh,
             ..full(true, false)
         };
     }
+    // The models that take only a fixed budget reject adaptive thinking.
+    let budget = |effort, interleaved, window_beta| Caps {
+        thinking: Thinking::Budget,
+        effort,
+        forced_tool_choice: true,
+        fallbacks: false,
+        compaction: false,
+        interleaved,
+        window_beta,
+    };
     if is_model(model, "claude-opus-4-5") {
-        return Caps {
-            thinking: Thinking::Budget,
-            effort: EffortSupport::Basic,
-            forced_tool_choice: true,
-            fallbacks: false,
-            compaction: false,
-        };
+        return budget(EffortSupport::Basic, true, false);
     }
+    // Longest prefix first, so `claude-sonnet-4-5` is not read as `claude-sonnet-4`. Haiku 4.5
+    // cannot interleave.
     let older = [
-        "claude-haiku-4-5",
-        "claude-sonnet-4-5",
-        "claude-opus-4-1",
-        "claude-opus-4",
-        "claude-sonnet-4",
-        "claude-3",
+        ("claude-haiku-4-5", false, false),
+        ("claude-sonnet-4-5", true, false),
+        ("claude-opus-4-1", true, true),
+        ("claude-opus-4", true, true),
+        ("claude-sonnet-4", true, true),
+        ("claude-3", false, true),
     ];
-    if older.iter().any(|id| model.starts_with(id)) {
-        return Caps {
-            thinking: Thinking::Budget,
-            effort: EffortSupport::None,
-            forced_tool_choice: true,
-            fallbacks: false,
-            compaction: false,
-        };
+    if let Some((_, interleaved, window_beta)) = older.iter().find(|(id, ..)| model.starts_with(id))
+    {
+        return budget(EffortSupport::None, *interleaved, *window_beta);
     }
     // Unknown, presumably newer models: the surface every current model accepts.
     full(false, false)
@@ -183,14 +203,16 @@ fn effort_str(effort: Effort, support: EffortSupport) -> Option<&'static str> {
     }
 }
 
-fn budget_tokens(effort: Effort) -> Option<u32> {
-    match effort {
-        Effort::Low => None,
-        Effort::Medium => Some(2048),
-        Effort::High => Some(4096),
-        Effort::Xhigh => Some(8192),
-        Effort::Max => Some(16_000),
-    }
+/// The thinking budget for an effort on a budget model: a share of its output limit, and all of it
+/// but the answer's room at `max`, because the chosen effort is what the user agreed to spend.
+fn budget_tokens(effort: Effort, max_output: u32) -> Option<u32> {
+    Some(match effort {
+        Effort::Low => return None,
+        Effort::Medium => max_output / 8,
+        Effort::High => max_output / 4,
+        Effort::Xhigh => max_output / 2,
+        Effort::Max => max_output.saturating_sub(ANSWER_RESERVE),
+    })
 }
 
 fn block_json(block: &Block) -> Option<Value> {
@@ -264,9 +286,13 @@ fn cache_mark() -> Value {
 pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
     let caps = caps(&req.model);
     let mut betas = vec![];
+    // models.dev holds each model's output limit; a model it does not list gets what the caller asked.
+    let ceiling = ostra_core::pricing::max_output(&req.model)
+        .map_or(req.max_tokens, |n| u32::try_from(n).unwrap_or(u32::MAX));
+    let max_tokens = req.max_tokens.min(ceiling);
     let mut body = json!({
         "model": req.model,
-        "max_tokens": req.max_tokens,
+        "max_tokens": max_tokens,
         "stream": true,
         "messages": messages_json(&req.messages),
     });
@@ -352,13 +378,27 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
             }
         }
         Thinking::Budget => {
+            // Interleaved, the budget spans the whole turn and may pass `max_tokens`.
+            let interleaved = caps.interleaved && client_tools > 0;
+            let room = if interleaved {
+                u32::MAX
+            } else {
+                max_tokens.saturating_sub(ANSWER_RESERVE)
+            };
             if !forced
-                && let Some(budget) = budget_tokens(req.effort)
-                && budget + 1024 <= req.max_tokens
+                && let Some(budget) = budget_tokens(req.effort, ceiling)
+                    .map(|b| b.min(room))
+                    .filter(|b| *b >= MIN_BUDGET)
             {
                 body["thinking"] = json!({"type": "enabled", "budget_tokens": budget});
+                if interleaved {
+                    betas.push(INTERLEAVED_BETA);
+                }
             }
         }
+    }
+    if caps.window_beta {
+        betas.push(WINDOW_BETA);
     }
     if let Some(effort) = effort_str(req.effort, caps.effort) {
         body["output_config"] = json!({"effort": effort});
@@ -957,6 +997,62 @@ mod tests {
         assert_eq!(b["tools"][0]["type"], "web_search_20250305");
         r.effort = Effort::Low;
         assert!(request_body(&r).0.get("thinking").is_none());
+    }
+
+    #[test]
+    fn budget_models_think_against_a_share_of_their_whole_output() {
+        ostra_core::pricing::install_test_prices();
+        let budget = |model: &str, effort, max_tokens, tools: bool| {
+            let mut r = req(model);
+            r.effort = effort;
+            r.max_tokens = max_tokens;
+            if !tools {
+                r.tools.clear();
+            }
+            let (b, betas) = request_body(&r);
+            (b["max_tokens"].as_u64(), b["thinking"]["budget_tokens"].as_u64(), betas)
+        };
+        // Haiku 4.5, whose 64k limit models.dev lists, asked for all of it as the native loop does.
+        let haiku = "claude-haiku-4-5-20251001";
+        assert_eq!(budget(haiku, Effort::Low, 64_000, true).1, None);
+        assert_eq!(budget(haiku, Effort::Medium, 64_000, true).1, Some(8_000));
+        assert_eq!(budget(haiku, Effort::High, 64_000, true).1, Some(16_000));
+        assert_eq!(budget(haiku, Effort::Xhigh, 64_000, true).1, Some(32_000));
+        let (max_tokens, max, betas) = budget(haiku, Effort::Max, 64_000, true);
+        assert_eq!((max_tokens, max), (Some(64_000), Some(48_000)));
+        assert!(betas.is_empty(), "Haiku 4.5 cannot interleave");
+        // A request past the models.dev limit is held to it, and a small one leaves the answer its room.
+        assert_eq!(budget(haiku, Effort::High, 200_000, true).0, Some(64_000));
+        assert_eq!(budget(haiku, Effort::Max, 32_000, true).1, Some(16_000));
+        assert_eq!(budget(haiku, Effort::High, 16_000, true).1, None);
+
+        // Sonnet 4.5 is not in the sample, so what the caller asked is its limit. With tools it
+        // interleaves, and the budget spans the turn.
+        let (max_tokens, b, betas) = budget("claude-sonnet-4-5", Effort::Max, 64_000, true);
+        assert_eq!((max_tokens, b, betas), (Some(64_000), Some(48_000), vec![INTERLEAVED_BETA]));
+        let (_, b, betas) = budget("claude-sonnet-4-5", Effort::Max, 64_000, false);
+        assert_eq!((b, betas), (Some(48_000), vec![]));
+        // Before Claude 4.5, input plus max_tokens past the window needs a beta to be accepted.
+        assert_eq!(budget("claude-opus-4-1-20250805", Effort::High, 32_000, false).2, vec![WINDOW_BETA]);
+    }
+
+    #[test]
+    fn adaptive_models_get_their_whole_output_and_no_budget() {
+        ostra_core::pricing::install_test_prices();
+        for model in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5", "claude-fable-5-1"] {
+            let mut r = req(model);
+            r.effort = Effort::Max;
+            r.max_tokens = 1_000_000;
+            let b = request_body(&r).0;
+            assert_eq!(b["max_tokens"], 128_000, "{model}: the models.dev limit");
+            assert_eq!(b["thinking"]["type"], "adaptive", "{model}");
+            assert!(b["thinking"].get("budget_tokens").is_none(), "{model}");
+        }
+        // Opus 4.6 is not in the sample: it keeps what the caller asked, and stays adaptive.
+        let mut r = req("claude-opus-4-6");
+        r.max_tokens = 32_000;
+        let b = request_body(&r).0;
+        assert_eq!((b["max_tokens"].as_u64(), b["thinking"]["type"].as_str()), (Some(32_000), Some("adaptive")));
     }
 
     #[test]

@@ -571,6 +571,10 @@ pub enum SessionEvent {
         uploads: Vec<UploadedFile>,
         #[serde(default)]
         delivery: ContextDelivery,
+        /// Rule C2: the context waits for the Route answer judge before anything starts. Context
+        /// added before the rule has none and folds as it always did.
+        #[serde(default)]
+        routed: bool,
     },
     /// Rule O3: an agent created a project with `ProjectCreate`, and it joined the session.
     ProjectCreated {

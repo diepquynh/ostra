@@ -68,6 +68,7 @@ struct RawModel {
 #[derive(Deserialize)]
 struct RawLimit {
     context: Option<u64>,
+    output: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -122,11 +123,12 @@ fn rates(
 
 type ByProvider<T> = HashMap<String, HashMap<String, T>>;
 
-/// Prices and context windows by provider and model id.
+/// Prices, context windows, and output limits by provider and model id.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Catalog {
     providers: ByProvider<Pricing>,
     windows: ByProvider<u64>,
+    outputs: ByProvider<u64>,
 }
 
 impl Catalog {
@@ -134,18 +136,21 @@ impl Catalog {
     /// out.
     pub fn from_models_dev(json: &str) -> Result<Catalog, serde_json::Error> {
         let raw: HashMap<String, RawProvider> = serde_json::from_str(json)?;
-        let windows = raw
-            .iter()
-            .map(|(provider, p)| {
-                let models = p
-                    .models
-                    .iter()
-                    .filter_map(|(id, m)| Some((id.clone(), m.limit.as_ref()?.context?)))
-                    .filter(|(_, w)| *w > 0)
-                    .collect();
-                (provider.clone(), models)
-            })
-            .collect();
+        let limits = |pick: fn(&RawLimit) -> Option<u64>| -> ByProvider<u64> {
+            raw.iter()
+                .map(|(provider, p)| {
+                    let models = p
+                        .models
+                        .iter()
+                        .filter_map(|(id, m)| Some((id.clone(), pick(m.limit.as_ref()?)?)))
+                        .filter(|(_, n)| *n > 0)
+                        .collect();
+                    (provider.clone(), models)
+                })
+                .collect()
+        };
+        let windows = limits(|l| l.context);
+        let outputs = limits(|l| l.output);
         let providers = raw
             .into_iter()
             .map(|(provider, p)| {
@@ -180,7 +185,11 @@ impl Catalog {
                 (provider, models)
             })
             .collect();
-        Ok(Catalog { providers, windows })
+        Ok(Catalog {
+            providers,
+            windows,
+            outputs,
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -197,6 +206,11 @@ impl Catalog {
     /// Context window in tokens, resolved like [`Catalog::price`].
     pub fn context_window(&self, model: &str) -> Option<u64> {
         lookup(&self.windows, model).copied()
+    }
+
+    /// The most output tokens one response may have, resolved like [`Catalog::price`].
+    pub fn max_output(&self, model: &str) -> Option<u64> {
+        lookup(&self.outputs, model).copied()
     }
 }
 
@@ -244,6 +258,10 @@ pub fn price(model: &str) -> Option<Pricing> {
 
 pub fn context_window(model: &str) -> Option<u64> {
     catalog().and_then(|c| c.context_window(model))
+}
+
+pub fn max_output(model: &str) -> Option<u64> {
+    catalog().and_then(|c| c.max_output(model))
 }
 
 /// Install a sample of real models.dev entries, for tests in any crate.
@@ -294,12 +312,16 @@ mod tests {
     }
 
     #[test]
-    fn looks_up_context_windows_like_prices() {
+    fn looks_up_context_windows_and_output_limits_like_prices() {
         let c = sample();
         assert_eq!(c.context_window("anthropic:claude-opus-5-5"), Some(1_000_000));
         assert_eq!(c.context_window("claude-haiku-4-5-20251001"), Some(200_000));
         assert_eq!(c.context_window("openai:gpt-5.6-sol"), Some(1_050_000));
         assert_eq!(c.context_window("unknown"), None);
+        assert_eq!(c.max_output("anthropic:claude-opus-5-5"), Some(128_000));
+        assert_eq!(c.max_output("claude-haiku-4-5-20251001"), Some(64_000));
+        assert_eq!(c.max_output("openai:gpt-5.6-sol"), Some(128_000));
+        assert_eq!(c.max_output("unknown"), None);
     }
 
     #[test]

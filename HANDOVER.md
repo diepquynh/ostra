@@ -465,7 +465,7 @@ phase starts.
 
 Categories other than IMPLEMENT and PLAN take shorter paths, exactly as `UC/commands/orchestrate/prompt.md`
 Step 1 lists them: RESEARCH (explore only), SPEC (explore, spec), VERIFY (implementer running the test command),
-UNIT TEST (EPA, write-test, review, no closing gate), PROMPT (prompt-generation, then review if code changed),
+TEST (the test stage alone: EPA, write-test, review, no closing gate), PROMPT (prompt-generation, then review if code changed),
 QUICK ANSWER (routed to the side panel). Ostra adds QUICK CHANGE (one implementer pass on the native executor).
 
 ### 8.2 Rules as code
@@ -501,10 +501,11 @@ to `UC/commands/orchestrate/prompt.md`.
 | STUCK | The Rescue judge picks one: run a targeted explore, re-run the agent with the missing fact quoted, or raise a gate. Never a plain retry. |
 | C1 | A request or an addition may attach up to 50 files or folders, tagged in the text as `@project/path`, a folder with a trailing `/`. Each is an existing file or folder inside one of the session's projects, checked when the API receives it; a path with `..`, an absolute path, or a trailing `/` on a file is refused. Every agent that gets the request gets each one as an absolute path beside its tag, with the instruction to read each file and look through each folder. |
 | C3 | The user may upload up to 20 files of at most 25 MB each with a request or an addition. A file is staged in the workspace (`POST /api/workspaces/:ws/uploads`), because a new task uploads before its session exists, and the request names the staged ids. Creating the session or adding the context moves each file into the session's `uploads/` folder, never overwriting one there, and records its name, path, and size in the event. Every agent that gets the request gets each upload's path, and the Classify judge names each attached file, folder, and upload in the research tasks it bears on, because a researcher reads only its task. Uploads are session artifacts: they open in the artifact view and download from `GET /api/artifacts/download`. |
-| C2 | Context added mid-session is queued or sent now. Queued context lets running executions finish on the old request, and the next step sees it. Context sent now first interrupts every running execution; each re-runs from its spawn block with the updated request, not from where it stopped. Either way it is an amendment, so Rules D2 and D10 apply. |
+| C2 | Context added mid-session is queued or sent now. Queued context lets running executions finish on the old request, and the next step sees it. Context sent now first interrupts every running execution; each re-runs from its spawn block with the updated request, not from where it stopped. Once the request is classified (a Research, Spec, Plan, or Implement session), the Route answer judge routes the context before anything starts or re-runs, as Rule J1 does for gate answers: `deliver` adds it to the request every later agent reads, `remember` keeps it only as a note for later stages, `discard` drops it, and research it queues goes to the project the judge names. A delivered `requirement_change` after the spec exists restarts at the spec (Rule D10). The runner records `routed: true` on the event; context added before the rule, or before classification, folds as it always did. Research tasks and a re-run's spawn get every delivered addition beside their task. |
 | P1 | A paused session starts nothing: no spawn, judge, command, gate, or YOLO answer. Pausing interrupts every running execution and denies its waiting permission asks. Gates can still be answered and context added; both take effect on continue. |
 | P2 | Continuing a paused session resumes each execution the pause interrupted, where it stopped and under its own id: the engine appends `ExecutionResumed` instead of starting a new execution, so its row, Activity, transcript, terminal log, and usage continue, and it runs on the executor and model it started on. A native execution replays its stored transcript, so the provider's prompt cache still covers it, and adds one turn with the prompt "Continue the workflow."; a harness execution runs its resume command with the stored session id and that prompt. A harness is sent Esc before it is stopped, so its session is saved whole. Context added while paused cancels the resume: those executions re-run from their spawn blocks as new executions, because a resumed conversation would not see it. |
 | P3 | Ostra pauses a session as in P1 on the third containment signal of one execution, YOLO included. A signal is a Layer 1 denial by the `secret-read`, `self-protection`, or `git-metadata` guard, an egress proxy refusal of a loopback, private, or link-local destination, or a process opening one of the decoy credential files the sandbox plants in hidden credential paths (`~/.ssh/id_rsa` and `id_ed25519` where no SSH port is reachable, `~/.git-credentials`, `~/.vault-token`, plus the workspace's `sandbox_decoys`): on Linux a fake file watched with inotify, on macOS an existing file the policy refuses to read, reported through the system log on an admin account. A refused public host is not a signal, because builds call telemetry hosts; it shows in the Activity view only. The engine records at most three signals per execution, so a retry loop cannot flood the log, and the board names the execution that paused the session. Continuing (P2) is the user's "this was fine": the resumed execution's signal count starts at zero. |
+| P4 | An execution the user stops ends `cancelled` and opens its failure gate, titled "You stopped ...". Nothing retries it without the user: YOLO leaves that gate open, and a created project's init step goes to the user instead of the advisor. Only a user stops a run in a live session, because a pause or an interrupt records `interrupted` and a stopped session ends. |
 
 ### 8.3 Judge calls
 
@@ -561,8 +562,8 @@ type, because a harness executor must see that harness's tool names.
 | plan | advanced | One typed plan through `Document`, from which Ostra writes the master plan and one file per phase. |
 | implementer | balanced (routed by complexity) | Change report at the declared path, progress log. |
 | code-reviewer | balanced | Submit call with findings and `securityBlock`, plus its review ledger. |
-| execution-path-analyzer | balanced | EPA report at the declared path. |
-| write-test | balanced (routed by complexity) | Test report at the declared path. |
+| execution-path-analyzer | balanced | EPA report at the declared path: the phase's verification plan (execution paths, system flows, regression suites, a test level per check). |
+| write-test | balanced (routed by complexity) | Tests at every level the EPA report assigns (unit, integration, end to end), run with its regression suites; test report at the declared path. |
 | module-documentation | advanced | Area references plus its report. |
 | prompt-generation | advanced | Changed instruction files plus its report. |
 | initializer | balanced (generate-skill on advanced) | Per mode, as in `UC/agents/initializer/prompt.md`. |
@@ -703,7 +704,6 @@ Every tool call from every executor goes through two layers in order.
 
 **Layer 1, guards:** No permission, no user answer, and no YOLO setting overrides these. Each is a port.
 
-| Guard | Rule | Source |
 **Rule G1, tool enforcement:** the `tool_enforcement` setting (global key, replaced by a workspace value kept in
 the registry under Rule A2) decides whether the guards that check where a call reads and writes run. It is
 `disabled` by default, because capable models reach files by routes those guards cannot read, such as one
@@ -716,6 +716,7 @@ the sandbox. `enabled` runs every guard in the table below, which protects the p
 cost of more tool calls, since each refused call is spent and retried. The workspace value is set on the
 Permissions tab.
 
+| Guard | Rule | Source |
 | --- | --- | --- |
 | Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. initializer writes only `.ostra/` and `.agents/skills/`. module-documentation writes only the module-hub skill's `references/` (under `.agents/skills/` or `.ostra/skills/`). Everything else stays inside its `Repo root:`. | `scope-policy.js` |
 | No tests from implementer | implementer may not write a path matching the test patterns. | `scope-policy.js` |

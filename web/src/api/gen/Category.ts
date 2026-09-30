@@ -3,4 +3,4 @@
 /**
  * Request category from `orchestrate/prompt.md` Step 1.
  */
-export type Category = "RESEARCH" | "SPEC" | "PLAN" | "IMPLEMENT" | "VERIFY" | "UNIT_TEST" | "PROMPT" | "QUICK_CHANGE" | "QUICK_ANSWER";
+export type Category = "RESEARCH" | "SPEC" | "PLAN" | "IMPLEMENT" | "VERIFY" | "TEST" | "PROMPT" | "QUICK_CHANGE" | "QUICK_ANSWER";

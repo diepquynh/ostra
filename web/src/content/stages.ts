@@ -30,7 +30,7 @@ export const LANES: Record<Lane, LaneInfo> = {
   },
   test: {
     title: "Test",
-    why: "Tests are the first thing dropped under pressure. When you ask for them, every branch of the changed code is listed first, then each path gets a test. Which phases are skipped was decided in writing at planning time.",
+    why: "Tests are the first thing dropped under pressure. When you ask for them, Ostra first maps what the change touches: every branch of the changed code, the flows that reach it from routes, screens, and other consumers, and the existing tests that cover it. Then it writes unit, integration, and end-to-end tests at the level each check needs and re-runs the existing tests. Which phases are skipped was decided in writing at planning time.",
   },
   docs: {
     title: "Docs",
@@ -157,13 +157,16 @@ export const STAGES: Record<StageKind, StageInfo> = {
     protects: "Spending tokens on stages you did not ask for.",
   },
   epa: {
-    label: "Execution paths",
-    produces: "Every branch, early return, and error path through the changed functions.",
-    protects: "Tests that cover the happy path and miss the branch that fails in production.",
+    label: "Verification plan",
+    produces:
+      "Every branch through the changed functions, the flows that reach them, and the existing tests to re-run, each with a test level.",
+    protects:
+      "Tests that check each function alone and miss the route, the wiring, or the consumer that fails in production.",
   },
   "write-test": {
     label: "Write tests",
-    produces: "One test per execution path, following the project's test skills.",
+    produces:
+      "Unit, integration, and end-to-end tests at the level each check needs, following the project's test skills, then a run of the existing tests that cover the change.",
     protects: "Testing as an afterthought. Tests run after every phase, so no later phase changes the code under test.",
   },
   "test-review": {

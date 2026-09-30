@@ -22,15 +22,15 @@ files the user uploaded, each with its absolute path (Rules C1, C3).
 | `SPEC` | write specs, requirements breakdown, acceptance criteria |
 | `PLAN` | design, architecture, breakdown, strategy |
 | `IMPLEMENT` | write, add, fix, modify, refactor, delete |
-| `VERIFY` | test, validate, check that it works (run the existing test command) |
-| `UNIT_TEST` | write or fix tests |
+| `VERIFY` | test, validate, check that it works by running the existing test command, writing no tests |
+| `TEST` | write, extend, or fix tests of any kind (unit, integration, end to end, regression) for code that already exists |
 | `PROMPT` | write or edit an AI prompt, a `SKILL.md`, or an agent file |
 | `QUICK_CHANGE` | a small edit the request spells out in full: which file or symbol, and what it becomes (fix this typo, rename `x` to `y` in one file, set this constant to 5) |
 | `QUICK_ANSWER` | a factual question with no code change |
 
 Judge by what the request asks Ostra to produce, not by its first verb. A request that asks for files to change
 (code, tests, docs pages, UI text) is a changing category even when part of it says explain, check, or
-investigate, because `IMPLEMENT`, `UNIT_TEST`, and `PROMPT` already start with research. Pick `RESEARCH` or
+investigate, because `IMPLEMENT`, `TEST`, and `PROMPT` already start with research. Pick `RESEARCH` or
 `QUICK_ANSWER` only when nothing should change.
 
 If two categories fit, pick the one that produces more of the pipeline, because a stage the request did not
@@ -67,7 +67,7 @@ task. Every other category gets an empty list.
 
 **Opt-ins.** Set `opts_in.tests` when the request itself asks for tests to be written for the change, and
 `opts_in.docs` when it asks for the module documentation to be updated (Rule T3). A request categorized
-`UNIT_TEST` always sets `opts_in.tests`. A New task toggle that is on is already an opt-in; report it as set.
+`TEST` always sets `opts_in.tests`. A New task toggle that is on is already an opt-in; report it as set.
 
 **Title.** Name the session in 2 to 5 words, because tabs, the session list, and breadcrumbs show the title
 where the full request does not fit. Name what the request changes or asks about, taken from its own words

@@ -1,0 +1,1016 @@
+# Test stage evals, run by `crates/ostra-server/tests/test_stage_evals.rs`. Each case is a real session of a real
+# engine on a small project from `test_stage/projects/`, and puts the execution path analyzer (`epa`), write-test,
+# or both on a live model; every other run is scripted.
+#
+# A case starts either after an implementation phase (`mode = "phase"`: a scripted implementer applies `change`
+# and the engine stages it, on the light or the full track) or as a new session that asks for tests directly
+# (`mode = "request"`: the TEST category, where no implementer runs and the agents must find the code under test
+# themselves, for example after an earlier session finished without its test stage). `history` commits overlays
+# after the first commit, and `staged` leaves one staged, to lay out what an earlier session left behind.
+#
+# Overlays are folders under `test_stage/changes/<project>/`, copied over the repository. `golden` names a folder
+# under `test_stage/goldens/`: `epa.md` stands in for the analyzer when it is not live, and `files/` holds reference
+# tests, which the offline test uses to check that every mutant survives the project's own tests and dies against
+# a reasonable new suite. `{repo}`, `{session}`, `{ws}`, and `{report}` are filled in per run.
+#
+# Grading: `epa.has` groups (one alternative of each must appear in the report), `epa.lacks`, and a rubric for the
+# grader model. For write-test: the submit status, only test files changed and all of them listed, a changed test
+# at each `levels` group, the `run` test types pass, every `mutant` fails them, `files` still hold the given text,
+# `has` and `stuck_has` groups, and the rubric.
+
+# ------------------------------------------------------------------------------------------------------------------
+# Tier 1: one pure function, or a request that names the code
+# ------------------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "bulk-discount-analysis"
+tier = 1
+note = "A new pure function that nothing calls yet. The analyzer must enumerate every branch and boundary, invent no flow, and still list the module's existing tests as a regression suite."
+project = "shop"
+others = ["storefront"]
+mode = "phase"
+track = "light"
+request = "Add a bulk discount to shop/pricing.py: 5% off a line from 10 units and 10% from 50, rounded down to whole cents. Do not apply it to orders yet."
+change = "bulk-discount"
+live = ["epa"]
+golden = "bulk-discount"
+implementer_report = """
+# Implementation Report: Bulk discount
+
+**Date:** 2026-09-30
+**Plan:** Inline instructions
+**Phase:** 1: Bulk discount
+**Module(s):** pricing
+**Status:** Complete
+
+## Changes Made
+
+| # | File Path | Action | Description |
+| --- | --- | --- | --- |
+| 1 | `shop/pricing.py` | Modified | Added `bulk_discount(quantity, unit_cents)` and `BULK_TIERS`: 5% off from 10 units, 10% from 50, rounded down to whole cents. It refuses a quantity below 1 and a negative unit price. |
+
+## Changed Files
+
+### Created
+None.
+
+### Modified
+- `{repo}/shop/pricing.py`
+
+### Deleted
+None.
+
+## Skills Applied
+
+- `convention`: applied for `shop/pricing.py`
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | `python3 -m compileall -q shop` | Pass |
+
+## Notes
+
+Nothing calls `bulk_discount` yet; a later change applies it to order lines. Tests are pending for the write-test agent.
+"""
+
+[case.epa]
+has = [["bulk_discount"], ["ValueError"], ["round"], ["negative"], ["test_pricing"]]
+cause = "bulk_discount in shop/pricing.py has three guards (quantity of 0, negative quantity, negative price), two tiers checked largest first (10% from 50, 5% from 10), a no-discount path below 10, and floor rounding. Nothing calls it. tests/unit/test_pricing.py tests the same module's line_total."
+rubric = """
+1. The paths are listed one per ID, covering at least: a zero or negative quantity raising ValueError, a negative unit price raising ValueError, 10% from 50 units, 5% from 10 to 49 units, no discount below 10 units, and rounding down to whole cents. Several of these grouped under one ID fails.
+2. The boundaries 10 and 50 appear as entry conditions or assertions (for example 9, 10, 49, and 50 units).
+3. The report states that nothing calls bulk_discount yet, so there is no system flow, and it lists no invented flow.
+4. tests/unit/test_pricing.py is listed as a regression suite with a command that runs it.
+5. Every path it plans is at level unit. Regression suites at other levels are fine.
+6. It claims no consumer outside this repository, because nothing outside it can reach a function nothing calls. Checking another project and saying it is not affected is fine.
+"""
+
+[[case]]
+id = "bulk-discount-tests"
+tier = 1
+note = "write-test on a golden analysis of a pure function: unit tests for every branch and boundary, nothing else touched."
+project = "shop"
+others = ["storefront"]
+mode = "phase"
+track = "light"
+request = "Add a bulk discount to shop/pricing.py: 5% off a line from 10 units and 10% from 50, rounded down to whole cents. Do not apply it to orders yet."
+change = "bulk-discount"
+live = ["write-test"]
+golden = "bulk-discount"
+implementer_report = """
+# Implementation Report: Bulk discount
+
+**Date:** 2026-09-30
+**Plan:** Inline instructions
+**Phase:** 1: Bulk discount
+**Module(s):** pricing
+**Status:** Complete
+
+## Changed Files
+
+### Modified
+- `{repo}/shop/pricing.py`
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | `python3 -m compileall -q shop` | Pass |
+
+## Notes
+
+Nothing calls `bulk_discount` yet. Tests are pending for the write-test agent.
+"""
+
+[case.write_test]
+status = "ok"
+levels = [["unit"]]
+cause = "The golden analysis lists eight unit paths of bulk_discount, among them the boundaries 10, 49, and 50 and floor rounding, and the regression suite tests/unit/test_pricing.py."
+rubric = """
+1. The new tests are unit tests under tests/unit/ that follow the unit-test skill: unittest.TestCase, one behavior per test method, names that say the behavior.
+2. The test report lists each test file with its level, the commands it ran, and their results, and the final run passed.
+3. The summary states what was tested and the verification result.
+"""
+
+[[case.mutant]]
+id = "boundary"
+file = "shop/pricing.py"
+find = "if quantity >= minimum:"
+replace = "if quantity > minimum:"
+note = "Exactly 10 or 50 units gets the lower tier."
+
+[[case.mutant]]
+id = "rate"
+file = "shop/pricing.py"
+find = "BULK_TIERS = ((50, 10), (10, 5))"
+replace = "BULK_TIERS = ((50, 10), (10, 10))"
+note = "The 10-unit tier takes 10% instead of 5%."
+
+[[case.mutant]]
+id = "zero-quantity"
+file = "shop/pricing.py"
+find = '''if quantity <= 0:
+        raise ValueError("quantity must be positive")
+    if unit_cents < 0:'''
+replace = '''if quantity < 0:
+        raise ValueError("quantity must be positive")
+    if unit_cents < 0:'''
+note = "A zero quantity is accepted."
+
+[[case.mutant]]
+id = "negative-price"
+file = "shop/pricing.py"
+find = "if unit_cents < 0:"
+replace = "if False:"
+note = "A negative unit price is accepted."
+
+[[case.mutant]]
+id = "rounding"
+file = "shop/pricing.py"
+find = "return unit_cents * quantity * percent // 100"
+replace = "return -(-unit_cents * quantity * percent // 100)"
+note = "The discount rounds up instead of down."
+
+[[case]]
+id = "new-session-named-function"
+tier = 1
+note = "A new session that asks for tests of one named function in existing code. No implementer ran, so the analyzer gets the engine's test request and must take the file from the request instead of stopping for want of a Changed Files list."
+project = "shop"
+others = ["storefront"]
+mode = "request"
+request = "Write tests for format_money in shop/money.py. It has no tests of its own."
+live = ["epa", "write-test"]
+golden = "format-money"
+
+[case.epa]
+has = [["format_money"], ["negative"], ["test_invoice", "invoice"]]
+cause = "The implementer report is a test request with no changed files. format_money has paths for two-digit cents, cents below ten (zero padding), zero, under a dollar, and negative amounts (the minus goes before the dollar sign, abs of the cents). Its callers invoice_lines and order_json are covered by tests/unit/test_invoice.py and tests/e2e/test_http_orders.py."
+rubric = """
+1. The report analyzes format_money in shop/money.py, the function the request names, instead of reporting that no source files were identified.
+2. It lists paths for negative amounts and for cents below ten (zero padding), each with an exact expected string.
+3. It lists at least one existing test of a caller (tests/unit/test_invoice.py or tests/e2e/test_http_orders.py) as a regression suite.
+4. It invents no code change and no new system flow for the unchanged callers.
+"""
+
+[case.write_test]
+status = "ok"
+levels = [["unit"]]
+cause = "format_money has no direct tests. Reasonable unit tests cover padding, zero, negatives, and the minus placement."
+rubric = """
+1. The new tests are unit tests of format_money under tests/unit/ that follow the unit-test skill.
+2. They assert exact strings for a negative amount and for cents below ten.
+3. The test report lists the files, the commands run, and a passing final run.
+"""
+
+[[case.mutant]]
+id = "sign"
+file = "shop/money.py"
+find = 'sign = "-" if cents < 0 else ""'
+replace = 'sign = ""'
+note = "Negative amounts lose their minus."
+
+[[case.mutant]]
+id = "padding"
+file = "shop/money.py"
+find = 'return f"{sign}${whole}.{frac:02d}"'
+replace = 'return f"{sign}${whole}.{frac}"'
+note = "Cents below ten lose their leading zero."
+
+[[case.mutant]]
+id = "absolute"
+file = "shop/money.py"
+find = "divmod(abs(cents), 100)"
+replace = "divmod(cents, 100)"
+note = "Negative amounts are split without the absolute value."
+
+# ------------------------------------------------------------------------------------------------------------------
+# Tier 2: a change that crosses layers, and a new session after a session that finished without tests
+# ------------------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "cancel-analysis"
+tier = 2
+note = "A full-track phase that adds a service rule and an HTTP route. Unit paths alone are not enough: the analyzer must trace the route through the real service and repository as a flow at the integration or e2e level, and list the suites of the code it touched."
+project = "shop"
+others = ["storefront"]
+mode = "phase"
+track = "full"
+request = "Let customers cancel an order: POST /orders/<id>/cancel cancels a placed or paid order. A shipped order cannot be cancelled, and cancelling twice is refused; both answer 409."
+change = "cancel"
+live = ["epa"]
+golden = "cancel"
+spec = """
+# Order cancellation
+
+## Requirements
+- R1: WHEN a client sends POST /orders/<id>/cancel for a placed or paid order, THE SYSTEM SHALL store the status cancelled and answer 200 with the order.
+- R2: IF the order has shipped, THEN THE SYSTEM SHALL refuse the cancellation with 409 and keep the status shipped.
+- R3: IF the order is already cancelled, THEN THE SYSTEM SHALL refuse the cancellation with 409.
+- R4: IF no order has the id, THEN THE SYSTEM SHALL answer 404.
+"""
+phase_file = """
+# Phase 1: Order cancellation
+
+**Deliverable:** D1 · **Repo:** shop (`{repo}`) · **Complexity:** Medium · **Test policy:** Required
+**Test policy rationale:** Step 1.2 adds the cancel rule with two refusal branches.
+
+## Context
+
+This is the first phase. No prior phases.
+
+## Requirements
+
+- R1: WHEN a client sends POST /orders/<id>/cancel for a placed or paid order, THE SYSTEM SHALL store the status cancelled and answer 200 with the order.
+  - AC1.1: Given a placed order, when it is cancelled, then the answer is 200 with status "cancelled", and a later GET /orders/<id> shows "cancelled".
+  - AC1.2: Given a paid order, when it is cancelled, then the answer is 200 with status "cancelled".
+- R2: IF the order has shipped, THEN THE SYSTEM SHALL refuse the cancellation with 409 and keep the status shipped.
+  - AC2.1: Given a shipped order, when it is cancelled, then the answer is 409 and a later GET shows "shipped".
+- R3: IF the order is already cancelled, THEN THE SYSTEM SHALL refuse the cancellation with 409.
+  - AC3.1: Given a cancelled order, when it is cancelled again, then the answer is 409.
+- R4: IF no order has the id, THEN THE SYSTEM SHALL answer 404.
+  - AC4.1: Given no order 999, when POST /orders/999/cancel is sent, then the answer is 404.
+
+## Steps
+
+### 1.1 Add the cancelled status
+**File:** `shop/domain.py` · **Change:** Modify · **Delivers:** R1
+Add the constant `CANCELLED = "cancelled"` next to the other statuses.
+
+### 1.2 Add the cancel rule
+**File:** `shop/service.py` · **Change:** Modify · **Delivers:** R1, R2, R3, R4
+Add `OrderService.cancel(order_id) -> Order`: get the order (NotFound when missing); raise InvalidState when it is cancelled or shipped; otherwise store the status cancelled with `repo.set_status` and return the order.
+
+### 1.3 Add the route
+**File:** `shop/api.py` · **Change:** Modify · **Delivers:** R1, R2, R3, R4
+Add `("POST", r"^/orders/(\\d+)/cancel$", "cancel")` to `ROUTES` and `Api.cancel`, answering 200 with `order_json`. `Api.handle` already maps NotFound to 404 and InvalidState to 409.
+
+## Verification
+
+`python3 -m compileall -q shop`
+"""
+implementer_report = """
+# Implementation Report: Order cancellation
+
+**Date:** 2026-09-30
+**Plan:** {root}/ostra-plan-1-phase-1.md
+**Phase:** 1: Order cancellation
+**Module(s):** orders, http
+**Status:** Complete
+
+## Changes Made
+
+| # | File Path | Action | Description |
+| --- | --- | --- | --- |
+| 1 | `shop/domain.py` | Modified | Added the `CANCELLED` status. |
+| 2 | `shop/service.py` | Modified | Added `OrderService.cancel`: refuses a cancelled or shipped order with `InvalidState`, else stores `cancelled`. |
+| 3 | `shop/api.py` | Modified | Added the `POST /orders/<id>/cancel` route and `Api.cancel`. |
+
+## Changed Files
+
+### Created
+None.
+
+### Modified
+- `{repo}/shop/domain.py`
+- `{repo}/shop/service.py`
+- `{repo}/shop/api.py`
+
+### Deleted
+None.
+
+## Skills Applied
+
+- `convention`: applied for all three files
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | `python3 -m compileall -q shop` | Pass |
+
+## Notes
+
+None. Tests are pending for the write-test agent.
+"""
+
+[case.epa]
+has = [["cancel"], ["409"], ["404"], ["shipped"], ["already cancelled", "twice", "again"], ["/cancel"], ["integration", "e2e"], ["set_status"], ["test_http_orders", "test_service"]]
+cause = "OrderService.cancel has an unknown-order path, two refusals (already cancelled, shipped), and the success path for placed and paid orders that stores the status with set_status. The route POST /orders/<id>/cancel crosses api.py, the service, and the SQLite repository; Api.handle maps NotFound to 404 and InvalidState to 409. The existing e2e, service, and repository suites cover the code the change touched."
+rubric = """
+1. The service paths are listed separately: unknown order (NotFound), already cancelled (InvalidState), shipped (InvalidState), and a successful cancel of a placed and of a paid order, with the stored status as a key assertion.
+2. There is at least one system flow from POST /orders/<id>/cancel through the service to the stored status, at level integration or e2e, with 200, 409, and 404 among its assertions. A flow planned with the service or repository replaced by doubles fails.
+3. The report reads the phase's acceptance criteria: the 409 for a shipped order that stays shipped, and the 404 for an unknown id, appear as assertions.
+4. At least two existing suites are listed as regression suites, among them tests/e2e/test_http_orders.py or tests/integration/test_service.py, each with a command.
+5. Every level named is one of the project's test types (unit, integration, e2e).
+"""
+
+[[case]]
+id = "cancel-tests"
+tier = 2
+note = "write-test on a golden analysis that asks for unit paths and an e2e flow. The flow mutants (route, status code, stored status) are only caught by a test that goes through the real route and repository."
+project = "shop"
+others = ["storefront"]
+mode = "phase"
+track = "full"
+request = "Let customers cancel an order: POST /orders/<id>/cancel cancels a placed or paid order. A shipped order cannot be cancelled, and cancelling twice is refused; both answer 409."
+change = "cancel"
+live = ["write-test"]
+golden = "cancel"
+spec = """
+# Order cancellation
+
+## Requirements
+- R1: WHEN a client sends POST /orders/<id>/cancel for a placed or paid order, THE SYSTEM SHALL store the status cancelled and answer 200 with the order.
+- R2: IF the order has shipped, THEN THE SYSTEM SHALL refuse the cancellation with 409 and keep the status shipped.
+- R3: IF the order is already cancelled, THEN THE SYSTEM SHALL refuse the cancellation with 409.
+- R4: IF no order has the id, THEN THE SYSTEM SHALL answer 404.
+"""
+phase_file = """
+# Phase 1: Order cancellation
+
+**Deliverable:** D1 · **Repo:** shop (`{repo}`) · **Complexity:** Medium · **Test policy:** Required
+
+## Requirements
+
+- R1: WHEN a client sends POST /orders/<id>/cancel for a placed or paid order, THE SYSTEM SHALL store the status cancelled and answer 200 with the order.
+  - AC1.1: Given a placed order, when it is cancelled, then the answer is 200 with status "cancelled", and a later GET /orders/<id> shows "cancelled".
+- R2: IF the order has shipped, THEN THE SYSTEM SHALL refuse the cancellation with 409 and keep the status shipped.
+- R3: IF the order is already cancelled, THEN THE SYSTEM SHALL refuse the cancellation with 409.
+- R4: IF no order has the id, THEN THE SYSTEM SHALL answer 404.
+
+## Steps
+
+### 1.1 Add the cancelled status (`shop/domain.py`)
+### 1.2 Add `OrderService.cancel` (`shop/service.py`)
+### 1.3 Add the `POST /orders/<id>/cancel` route (`shop/api.py`)
+
+## Verification
+
+`python3 -m compileall -q shop`
+"""
+implementer_report = """
+# Implementation Report: Order cancellation
+
+**Phase:** 1: Order cancellation
+**Status:** Complete
+
+## Changed Files
+
+### Modified
+- `{repo}/shop/domain.py`
+- `{repo}/shop/service.py`
+- `{repo}/shop/api.py`
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | `python3 -m compileall -q shop` | Pass |
+"""
+
+[case.write_test]
+status = "ok"
+levels = [["unit"], ["integration", "e2e"]]
+cause = "The golden analysis asks for five unit paths of OrderService.cancel with a mocked repository and an e2e flow S1 through POST /orders/<id>/cancel, and lists three regression suites."
+rubric = """
+1. The flow tests drive POST /orders/<id>/cancel through the real server or Api with the real service and repository (running_server and call, or Api over a real SQLite repository), not with the service or repository replaced by doubles.
+2. The flow tests check what a client observes: 200 with status cancelled, a later GET showing the stored status, 409 for a shipped order and for a second cancel, and 404 for an unknown id.
+3. The test report lists the files with their levels and shows the new tests and the regression suites passing.
+"""
+
+[[case.mutant]]
+id = "shipped-rule"
+file = "shop/service.py"
+find = "if order.status == SHIPPED:"
+replace = "if False:"
+note = "A shipped order can be cancelled."
+
+[[case.mutant]]
+id = "twice-rule"
+file = "shop/service.py"
+find = "if order.status == CANCELLED:"
+replace = "if False:"
+note = "A cancelled order can be cancelled again."
+
+[[case.mutant]]
+id = "stored-status"
+file = "shop/service.py"
+find = "self.repo.set_status(order_id, CANCELLED)"
+replace = "self.repo.set_status(order_id, order.status)"
+note = "The cancelled status is returned but never stored."
+
+[[case.mutant]]
+id = "route"
+file = "shop/api.py"
+find = 're.compile(r"^/orders/(\d+)/cancel$"), "cancel")'
+replace = 're.compile(r"^/orders/(\d+)/cancelled$"), "cancel")'
+note = "The route answers under the wrong path, so POST /orders/<id>/cancel is 404."
+
+[[case.mutant]]
+id = "status-code"
+file = "shop/api.py"
+find = "return 200, order_json(self.service.cancel(int(order_id)))"
+replace = "return 202, order_json(self.service.cancel(int(order_id)))"
+note = "The route answers 202 instead of 200."
+
+[[case]]
+id = "new-session-after-yolo"
+tier = 2
+note = "The user's earlier session added order cancellation with YOLO on, so it accepted the change and finished before the test stage, and a finished session cannot be amended. The user committed the change, then made an unrelated commit. The new session asks for the tests that session should have written, naming the feature but no files. The agents cannot read the old session's reports, so the analyzer must find the change in git."
+project = "shop"
+others = ["storefront"]
+mode = "request"
+request = "My last Ostra session added order cancellation. YOLO was on, so it accepted the change and finished before the test stage ran, and I can't amend a finished session. Write the tests that session should have written: the cancellation rules and the new HTTP route."
+history = [
+  { apply = "cancel", message = "Add order cancellation" },
+  { apply = "readme-flags", message = "Document the server flags" },
+]
+live = ["epa", "write-test"]
+golden = "cancel"
+
+[case.epa]
+has = [["cancel"], ["service.py"], ["api.py"], ["409"], ["/cancel"], ["integration", "e2e"]]
+cause = "The change is the commit \"Add order cancellation\", one commit before HEAD: shop/domain.py, shop/service.py, and shop/api.py. The latest commit only edits README.md. From there the analysis is the same as for the cancellation phase: five service paths and a flow through POST /orders/<id>/cancel."
+rubric = """
+1. The report identifies the change from the git history (the "Add order cancellation" commit, or its files shop/service.py and shop/api.py) and says so in its summary, instead of reporting that no source files were identified.
+2. It does not treat the README commit as the change under test.
+3. It lists the cancel paths (unknown order, already cancelled, shipped, success) and a flow through POST /orders/<id>/cancel at level integration or e2e with 200, 409, and 404 among the assertions.
+4. It lists at least one existing suite of the touched code as a regression suite.
+"""
+
+[case.write_test]
+status = "ok"
+levels = [["integration", "e2e"]]
+cause = "A good analysis leads to unit or integration tests of OrderService.cancel and a flow test of the route; the same mutants as the cancellation phase apply."
+rubric = """
+1. The tests cover the cancellation rules and the route POST /orders/<id>/cancel, with at least one test that goes through the real route and repository.
+2. The test report lists the files, their levels, and a passing final run including the existing suites.
+"""
+
+[[case.mutant]]
+id = "shipped-rule"
+file = "shop/service.py"
+find = "if order.status == SHIPPED:"
+replace = "if False:"
+note = "A shipped order can be cancelled."
+
+[[case.mutant]]
+id = "twice-rule"
+file = "shop/service.py"
+find = "if order.status == CANCELLED:"
+replace = "if False:"
+note = "A cancelled order can be cancelled again."
+
+[[case.mutant]]
+id = "stored-status"
+file = "shop/service.py"
+find = "self.repo.set_status(order_id, CANCELLED)"
+replace = "self.repo.set_status(order_id, order.status)"
+note = "The cancelled status is returned but never stored."
+
+[[case.mutant]]
+id = "route"
+file = "shop/api.py"
+find = 're.compile(r"^/orders/(\d+)/cancel$"), "cancel")'
+replace = 're.compile(r"^/orders/(\d+)/cancelled$"), "cancel")'
+note = "The route answers under the wrong path."
+
+[[case]]
+id = "separators-tests"
+tier = 2
+note = "The phase changes format_money on purpose, so an existing invoice test now fails. The golden analysis marks that suite as changed on purpose. write-test must update the expectation to the new format, not escalate and not delete the test."
+project = "shop"
+others = ["storefront"]
+mode = "phase"
+track = "light"
+request = "Show amounts with thousands separators wherever they are printed, like $1,234.56."
+change = "separators"
+live = ["write-test"]
+golden = "separators"
+implementer_report = """
+# Implementation Report: Thousands separators
+
+**Date:** 2026-09-30
+**Plan:** Inline instructions
+**Phase:** 1: Thousands separators
+**Module(s):** money
+**Status:** Complete
+
+## Changes Made
+
+| # | File Path | Action | Description |
+| --- | --- | --- | --- |
+| 1 | `shop/money.py` | Modified | `format_money` prints thousands separators: 123456 cents is `$1,234.56`. |
+
+## Changed Files
+
+### Modified
+- `{repo}/shop/money.py`
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | `python3 -m compileall -q shop` | Pass |
+
+## Notes
+
+Every amount of $1,000 or more now prints with separators, as the request asks: invoices, the API's `total`, and the CLI. Tests are pending for the write-test agent.
+"""
+
+[case.write_test]
+status = "ok"
+baseline = "fails"
+levels = [["unit"]]
+files = [{ path = "tests/unit/test_invoice.py", has = ["Total: $1,233.25", "1 x desk: $999.75", "def test_lists_each_line_and_the_total"] }]
+cause = "tests/unit/test_invoice.py expects \"Total: $1233.25\". The request asks for separators, so the new expectation is \"Total: $1,233.25\"; the rest of the invoice stays."
+rubric = """
+1. The existing invoice test is updated to the new format and keeps checking every invoice line; it is not deleted, skipped, or loosened.
+2. The test report says why that test changed: the request asked for separators.
+3. New unit tests of format_money cover amounts with and without separators and a negative amount.
+"""
+
+[[case.mutant]]
+id = "separator"
+file = "shop/money.py"
+find = 'return f"{sign}${whole:,}.{frac:02d}"'
+replace = 'return f"{sign}${whole}.{frac:02d}"'
+note = "The separators are gone again."
+
+[[case.mutant]]
+id = "sign"
+file = "shop/money.py"
+find = 'sign = "-" if cents < 0 else ""'
+replace = 'sign = ""'
+note = "Negative amounts lose their minus."
+
+[[case.mutant]]
+id = "absolute"
+file = "shop/money.py"
+find = "divmod(abs(cents), 100)"
+replace = "divmod(cents, 100)"
+note = "Negative amounts are split without the absolute value."
+
+# ------------------------------------------------------------------------------------------------------------------
+# Tier 3: regressions, contracts with outside consumers, levels the project cannot run, and flows named in words
+# ------------------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "regression-escalates"
+tier = 3
+note = "The phase only asked for a leading dollar sign, but the implementer's tidied fraction parsing reads 12.3 as 1203 cents, and an existing test catches it. The golden analysis says that suite is not changed on purpose. write-test must hand the regression back as stuck, without editing the source or bending the existing test."
+project = "shop"
+others = ["storefront"]
+mode = "phase"
+track = "light"
+request = "Let to_cents accept a leading dollar sign, like $12.34 and -$0.50."
+change = "dollar-sign"
+live = ["write-test"]
+golden = "dollar-sign"
+implementer_report = """
+# Implementation Report: Dollar sign in amounts
+
+**Date:** 2026-09-30
+**Plan:** Inline instructions
+**Phase:** 1: Dollar sign in amounts
+**Module(s):** money
+**Status:** Complete
+
+## Changes Made
+
+| # | File Path | Action | Description |
+| --- | --- | --- | --- |
+| 1 | `shop/money.py` | Modified | `to_cents` strips a leading `$` after the sign, so `$12.34` and `-$0.50` parse. Tidied the fraction parsing. |
+
+## Changed Files
+
+### Modified
+- `{repo}/shop/money.py`
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | `python3 -m compileall -q shop` | Pass |
+
+## Notes
+
+None. Tests are pending for the write-test agent.
+"""
+
+[case.write_test]
+status = "stuck"
+baseline = "fails"
+files = [{ path = "tests/unit/test_money.py", has = ['self.assertEqual(to_cents("12.3"), 1230)', "def test_one_decimal_digit_is_tens_of_cents"] }]
+stuck_has = [["test_money", "test_one_decimal_digit", "12.3", "1203"]]
+cause = "The change replaced int(frac.ljust(2, \"0\")) with int(frac or \"0\"), so to_cents(\"12.3\") is 1203 instead of 1230 and test_one_decimal_digit_is_tens_of_cents fails. The request only added the dollar sign, so the test is right and the source is wrong."
+rubric = """
+1. write-test ran the regression suite, saw test_one_decimal_digit_is_tens_of_cents fail, and submitted stuck.
+2. The stuck diagnostic quotes the failure, and the need asks for a source fix in shop/money.py (the fraction parsing), not for permission to change the test.
+3. It did not change the existing assertions in tests/unit/test_money.py to match the new behavior and did not change shop/money.py. Adding the new dollar-sign tests to that file is fine.
+"""
+
+[[case]]
+id = "contract-change-analysis"
+tier = 3
+note = "A full-track phase replaces a JSON field. The analyzer must treat the response as a contract: trace the route and the in-repo consumer (the CLI), mark the existing tests that assert the old field as changed on purpose, and name the consumer in another project that the README points to."
+project = "shop"
+others = ["storefront"]
+mode = "phase"
+track = "full"
+request = "Carry order totals as integer cents in the API: replace the total field with total_cents and add currency USD. Update the CLI to format it."
+change = "total-cents"
+live = ["epa"]
+golden = "total-cents"
+spec = """
+# Totals in cents
+
+## Requirements
+- R1: THE SYSTEM SHALL answer every order JSON with total_cents, the total as an integer number of cents, and currency "USD", and no total field.
+- R2: THE CLI SHALL print the total formatted from total_cents.
+"""
+phase_file = """
+# Phase 1: Totals in cents
+
+**Deliverable:** D1 · **Repo:** shop (`{repo}`) · **Complexity:** Medium · **Test policy:** Required
+**Test policy rationale:** Step 1.1 changes the JSON every route answers with.
+
+## Context
+
+This is the first phase. No prior phases.
+
+## Requirements
+
+- R1: THE SYSTEM SHALL answer every order JSON with total_cents, the total as an integer number of cents, and currency "USD", and no total field.
+  - AC1.1: Given an order of 2 x 1234 cents, when GET /orders/<id> is sent, then the body has total_cents 2468 and currency "USD" and no total.
+- R2: THE CLI SHALL print the total formatted from total_cents.
+  - AC2.1: Given an order with total_cents 125 and one line, when summary_line runs, then it prints "Order 3: 1 line, $1.25, placed".
+
+## Steps
+
+### 1.1 Send cents
+**File:** `shop/api.py` · **Change:** Modify · **Delivers:** R1
+In `order_json`, replace `total` with `total_cents` (`order.total_cents()`) and add `currency: "USD"`.
+
+### 1.2 Format in the client
+**File:** `shop/cli.py` · **Change:** Modify · **Delivers:** R2
+`summary_line` formats `order["total_cents"]` with `format_money`.
+
+## Verification
+
+`python3 -m compileall -q shop`
+"""
+implementer_report = """
+# Implementation Report: Totals in cents
+
+**Date:** 2026-09-30
+**Plan:** {root}/ostra-plan-1-phase-1.md
+**Phase:** 1: Totals in cents
+**Module(s):** http, client
+**Status:** Complete
+
+## Changes Made
+
+| # | File Path | Action | Description |
+| --- | --- | --- | --- |
+| 1 | `shop/api.py` | Modified | `order_json` answers with `total_cents` and `currency` instead of `total`. |
+| 2 | `shop/cli.py` | Modified | `summary_line` formats `total_cents` with `format_money`. |
+
+## Changed Files
+
+### Modified
+- `{repo}/shop/api.py`
+- `{repo}/shop/cli.py`
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | `python3 -m compileall -q shop` | Pass |
+
+## Notes
+
+None. Tests are pending for the write-test agent.
+"""
+
+[case.epa]
+has = [["total_cents"], ["summary_line", "cli.py"], ["test_http_orders"], ["test_cli"], ["storefront"], ["on purpose", "intended", "intentional", "expected by the phase", "by design"]]
+cause = "order_json now sends total_cents and currency and no total. Every route answers with it, so GET /orders/<id> is a flow at the e2e level, and shop/cli.py summary_line is an in-repo consumer. tests/e2e/test_http_orders.py asserts created[\"total\"] and tests/unit/test_cli.py passes total strings, so both fail on purpose and must be updated. The README says the storefront project reads orders from GET /orders/<id>; storefront/src/order-page.js reads order.total."
+rubric = """
+1. There is a flow from GET /orders/<id> (or POST /orders) to the new JSON fields at level e2e or integration, with total_cents and currency as assertions.
+2. The CLI's summary_line is analyzed as a consumer of the changed field, as a path or a flow.
+3. tests/e2e/test_http_orders.py and tests/unit/test_cli.py are listed as regression suites that change on purpose, with the reason that they assert the old total field.
+4. The report names the storefront project (or storefront/src/order-page.js) as a consumer outside this repository that reads the removed total field.
+5. No check is at a level the project lacks.
+"""
+
+[[case]]
+id = "browser-flow-stage"
+tier = 3
+note = "A Node project: the archive feature crosses the rules, the API, and a page script. The project has unit, integration, and a Playwright e2e type. The sandbox reaches the npm registry but not the browser download host, so the e2e tests run only if the agent finds a browser already on the machine. Both agents run live: the analyzer must plan the browser flow at e2e, and write-test must write it, keep the runnable levels green, and either run it or report it as not run, never mock it down or claim a pass it did not see."
+project = "notes"
+mode = "phase"
+track = "light"
+request = "Let people archive notes: an Archive button on each note, archived notes left out of the list, and a checkbox to show them."
+change = "archive"
+live = ["epa", "write-test"]
+golden = "archive"
+implementer_report = """
+# Implementation Report: Archive notes
+
+**Date:** 2026-09-30
+**Plan:** Inline instructions
+**Phase:** 1: Archive notes
+**Module(s):** notes, api, page
+**Status:** Complete
+
+## Changes Made
+
+| # | File Path | Action | Description |
+| --- | --- | --- | --- |
+| 1 | `src/notes.js` | Modified | Added `archiveNote(store, id)` (NotFoundError for an unknown id; archiving twice keeps the first `archivedAt`) and an `archived` option on `listNotes`, false by default. |
+| 2 | `server/app.js` | Modified | Added `POST /api/notes/:id/archive` and `GET /api/notes?archived=true`. |
+| 3 | `public/app.js` | Modified | An Archive button on each active note, and a "Show archived notes" checkbox that reloads the list. |
+| 4 | `public/index.html` | Modified | Added the checkbox. |
+
+## Changed Files
+
+### Modified
+- `{repo}/src/notes.js`
+- `{repo}/server/app.js`
+- `{repo}/public/app.js`
+- `{repo}/public/index.html`
+
+## Verification Results
+
+| Verification | Command | Result |
+| --- | --- | --- |
+| Phase build | none (no build step) | Pass |
+
+## Notes
+
+None. Tests are pending for the write-test agent.
+"""
+
+[case.epa]
+has = [["archiveNote"], ["/archive"], ["NotFoundError"], ["archivedAt"], ["integration"], ["e2e"], ["public/app.js", "app.js", "page"]]
+cause = "archiveNote has an unknown-id path, a first archive that sets archivedAt, and a repeat that keeps it; listNotes filters archived notes out by default and lists only them with archived true. The API adds POST /api/notes/:id/archive and ?archived=true (integration). The page script adds the Archive button and the checkbox, a flow only a browser observes, and the project has an e2e test type for it."
+rubric = """
+1. The archiveNote and listNotes paths are listed separately, including NotFoundError for an unknown id and the repeat archive keeping archivedAt.
+2. There is a flow through POST /api/notes/:id/archive and the list at level integration.
+3. The page's Archive button (public/app.js) is a flow at level e2e, the browser level the project has, and is not planned as a unit test of the page script with a fake document.
+4. The existing test files are listed as regression suites.
+"""
+
+[case.write_test]
+status = "ok"
+levels = [["unit"], ["integration"], ["e2e"]]
+run = ["unit", "integration"]
+cause = "Unit and integration tests run in the sandbox. The Playwright e2e type needs a browser: the sandbox cannot download one, but a browser cached on the machine can be used. The existing e2e spec expects each list item to read only the note's text, which the new Archive button changes on purpose."
+rubric = """
+1. An e2e spec for the Archive button exists under e2e/ and uses Playwright as the e2e-test skill describes; it is not replaced by a unit test of public/app.js with a fake document.
+2. The test report either marks the e2e tests as Not run with a concrete reason (the missing browser or package), or shows they ran and passed, with tool calls that ran them. It never claims a pass it did not see.
+3. The integration tests go through the real app with withServer and check status codes and bodies.
+4. When the e2e tests did not run, the summary says so.
+"""
+
+[[case.mutant]]
+id = "repeat-archive"
+file = "src/notes.js"
+find = "if (note.archived) {"
+replace = "if (false) {"
+note = "Archiving twice moves archivedAt."
+
+[[case.mutant]]
+id = "not-found"
+file = "src/notes.js"
+find = "if (!note) {"
+replace = "if (note === null) {"
+note = "An unknown id throws a TypeError instead of NotFoundError, and the API answers 500."
+
+[[case.mutant]]
+id = "list-filter"
+file = "src/notes.js"
+find = ".filter((note) => note.archived === archived)"
+replace = ".filter(() => true)"
+note = "Archived notes stay in the default list."
+
+[[case.mutant]]
+id = "route"
+file = "server/app.js"
+find = '/^\/api\/notes\/(\d+)\/archive$/'
+replace = '/^\/api\/notes\/(\d+)\/archived$/'
+note = "The archive route answers under the wrong path."
+
+[[case.mutant]]
+id = "archived-query"
+file = "server/app.js"
+find = 'listNotes(store, { archived: url.searchParams.get("archived") === "true" })'
+replace = 'listNotes(store, { archived: false })'
+note = "?archived=true is ignored."
+
+[[case]]
+id = "no-browser-level-analysis"
+tier = 3
+note = "The same archive change in a project with no browser test type. The page flow can only be observed in a browser, so the analyzer must list it under Unverified flows with the level it needs, instead of planning it as a unit test of the page script."
+project = "notes"
+mode = "phase"
+track = "light"
+request = "Let people archive notes: an Archive button on each note, archived notes left out of the list, and a checkbox to show them."
+setup = ["no-e2e"]
+remove = ["e2e", "playwright.config.js", "package-lock.json", ".agents/skills/e2e-test"]
+change = "archive"
+live = ["epa"]
+golden = "archive-unverified"
+implementer_report = """
+# Implementation Report: Archive notes
+
+**Date:** 2026-09-30
+**Plan:** Inline instructions
+**Phase:** 1: Archive notes
+**Module(s):** notes, api, page
+**Status:** Complete
+
+## Changed Files
+
+### Modified
+- `{repo}/src/notes.js`
+- `{repo}/server/app.js`
+- `{repo}/public/app.js`
+- `{repo}/public/index.html`
+
+## Notes
+
+`archiveNote` and the `archived` option of `listNotes` are new; the API gains `POST /api/notes/:id/archive` and `?archived=true`; the page gains an Archive button and a "Show archived notes" checkbox. Tests are pending for the write-test agent.
+"""
+
+[case.epa]
+has = [["archiveNote"], ["unverified"], ["public/app.js", "page", "browser"], ["integration"]]
+cause = "The project has only unit and integration test types. The API flows are integration checks; the page's Archive button and checkbox are observable only in a browser, which the project cannot run, so they belong under Unverified flows with the e2e or browser level they would need."
+rubric = """
+1. The API flows (archive, then list; ?archived=true) are at level integration.
+2. The page's Archive button and checkbox (public/app.js) are listed under Unverified flows, naming the browser or e2e level they would need and that the project has no such test type.
+3. No check is assigned a level the project lacks (no e2e rows), and the page flow is not planned as a unit test with a fake document or fetch.
+"""
+
+[[case]]
+id = "new-session-staged-change"
+tier = 3
+note = "An earlier session made format_money print thousands separators and was marked done before its test stage; the change is still staged, not committed. The new session asks to verify it. The analyzer must find the staged change, and since the request says the new format is intended, the failing invoice test is changed on purpose: write-test updates it rather than escalating."
+project = "shop"
+others = ["storefront"]
+mode = "request"
+request = "My previous session made format_money print thousands separators. It was marked done before the test stage ran, and the change is still staged, not committed. Verify that change the way the test stage would have."
+staged = "separators"
+live = ["epa", "write-test"]
+golden = "separators"
+
+[case.epa]
+has = [["format_money"], ["test_invoice"], ["on purpose", "intended", "intentional", "expected", "by design"], ["1,233.25", "1,234", "separator"]]
+cause = "The change is staged: git diff --cached shows shop/money.py, where format_money now uses {whole:,}. tests/unit/test_invoice.py expects \"Total: $1233.25\" and fails; the request says the separators are the point, so the new expectation is \"Total: $1,233.25\"."
+rubric = """
+1. The report finds the staged change to format_money in shop/money.py (from the staged diff) and says how it found it.
+2. It lists paths with and without a separator and a negative amount.
+3. It lists tests/unit/test_invoice.py as a regression suite that changes on purpose, with the new expected total line.
+"""
+
+[case.write_test]
+status = "ok"
+baseline = "fails"
+levels = [["unit"]]
+files = [{ path = "tests/unit/test_invoice.py", has = ["Total: $1,233.25", "1 x desk: $999.75", "def test_lists_each_line_and_the_total"] }]
+cause = "The only failing test is the invoice total line, which must become \"Total: $1,233.25\"; new unit tests cover format_money with separators."
+rubric = """
+1. The invoice test is updated to "Total: $1,233.25" and still checks every invoice line; it is not deleted, skipped, or loosened.
+2. New unit tests of format_money cover amounts with and without separators and a negative amount.
+3. The report says why the invoice test changed and shows the full suite passing.
+"""
+
+[[case.mutant]]
+id = "separator"
+file = "shop/money.py"
+find = 'return f"{sign}${whole:,}.{frac:02d}"'
+replace = 'return f"{sign}${whole}.{frac:02d}"'
+note = "The separators are gone again."
+
+[[case.mutant]]
+id = "sign"
+file = "shop/money.py"
+find = 'sign = "-" if cents < 0 else ""'
+replace = 'sign = ""'
+note = "Negative amounts lose their minus."
+
+[[case.mutant]]
+id = "absolute"
+file = "shop/money.py"
+find = "divmod(abs(cents), 100)"
+replace = "divmod(cents, 100)"
+note = "Negative amounts are split without the absolute value."
+
+[[case]]
+id = "new-session-flow-request"
+tier = 3
+note = "A new session asks for end-to-end tests of a behavior in words, not of named code or a change. The analyzer must find the routes that implement the lifecycle and plan e2e flows for the parts no test covers yet, including the error answers; write-test must drive the real server."
+project = "shop"
+others = ["storefront"]
+mode = "request"
+request = "Add end-to-end tests for the order lifecycle over HTTP: placing, paying, shipping, and cancelling an order, and the error answers for changes an order's status does not allow. The existing tests must keep passing."
+setup = ["cancel"]
+live = ["epa", "write-test"]
+golden = "lifecycle"
+
+[case.epa]
+has = [["e2e"], ["/ship"], ["/cancel"], ["409"], ["400"], ["test_http_orders"]]
+cause = "The routes live in shop/api.py ROUTES and Api.handle, which maps InvalidState to 409, ValueError to 400, and NotFound to 404. tests/e2e/test_http_orders.py already covers place, show, pay, and an unknown order; ship, cancel, the 409 answers, and the 400 answers have no e2e test."
+rubric = """
+1. The report takes the entry points from the request: the routes in shop/api.py (POST /orders, pay, ship, cancel) handled by Api.handle.
+2. It plans e2e flows for shipping, cancelling, and the 409 answers for disallowed changes (ship before paying, cancel after shipping, repeats), and a 400 for an invalid order.
+3. It marks the flows tests/e2e/test_http_orders.py already covers as EXISTING and lists that file as a regression suite.
+"""
+
+[case.write_test]
+status = "ok"
+levels = [["e2e"]]
+cause = "Good e2e tests drive the real server for shipping, cancelling, the 409s, and the 400s."
+rubric = """
+1. The new tests are under tests/e2e/ and use running_server and call from tests/e2e/support.py, making every order through the API.
+2. They assert the status codes (200, 409, 400) and the status field after each change.
+3. The report shows the new tests and the existing suites passing.
+"""
+
+[[case.mutant]]
+id = "conflict-code"
+file = "shop/api.py"
+find = 'return 409, {"error": str(error)}'
+replace = 'return 500, {"error": str(error)}'
+note = "A disallowed status change answers 500 instead of 409."
+
+[[case.mutant]]
+id = "ship-route"
+file = "shop/api.py"
+find = 're.compile(r"^/orders/(\d+)/ship$"), "ship")'
+replace = 're.compile(r"^/orders/(\d+)/shipped$"), "ship")'
+note = "The ship route answers under the wrong path."
+
+[[case.mutant]]
+id = "cancel-route"
+file = "shop/api.py"
+find = 're.compile(r"^/orders/(\d+)/cancel$"), "cancel")'
+replace = 're.compile(r"^/orders/(\d+)/cancelled$"), "cancel")'
+note = "The cancel route answers under the wrong path."
+
+[[case.mutant]]
+id = "invalid-code"
+file = "shop/api.py"
+find = 'return 400, {"error": str(error)}'
+replace = 'return 422, {"error": str(error)}'
+note = "An invalid order answers 422 instead of 400."
+
+[[case.mutant]]
+id = "ship-status"
+file = "shop/api.py"
+find = "return 200, order_json(self.service.ship(int(order_id)))"
+replace = "return 202, order_json(self.service.ship(int(order_id)))"
+note = "Shipping answers 202 instead of 200."

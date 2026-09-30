@@ -153,17 +153,19 @@ if !s.created || s.is_terminal() || s.paused {
 `Planner::run` follows the same order the pipeline diagram in HANDOVER section 8.1 does. In outline:
 
 1. **YOLO first.** Under YOLO, every open gate gets a `YoloAnswer` step, except permission asks (the live
-   execution answers those) and budget gates.
+   execution answers those), budget gates, and the failure gate of an execution you stopped (Rule P4).
 2. **Init sessions** take their own flow: detect, scouts, propose, skill approval, generate skills, generate the
    inventory.
-3. **No category yet** means a `Classify` judge.
+3. **No category yet** means a `Classify` judge. Answers waiting for the Route answer judge get their judge step
+   here, and context you added that waits for it holds everything else: the planner returns only those judge
+   steps until the judge decides (Rule C2).
 4. **Explore tasks** spawn whatever the stage, because a rescue can add a research task in the middle of a
    build.
 5. **The category's path.** RESEARCH completes after explore. SPEC adds the spec flow. PLAN adds the plan flow.
    IMPLEMENT asks the `Track` judge after research. The full track adds the spec flow, the Stakes judge, and
    the plan flow unless stakes are low; the light track goes to the phases directly. Both then run the phases,
    the implementation review gate with its feedback rounds (Rule F1), and, once you accept, the closing stages.
-   VERIFY, PROMPT, and QUICK CHANGE go straight to phases. UNIT TEST goes to the closing stages.
+   VERIFY, PROMPT, and QUICK CHANGE go straight to phases. TEST goes to the closing stages.
 6. **Completion** once nothing is running and no gate is open: first the `Completion` judge, then `Complete`
    with the report it wrote.
 

@@ -54,8 +54,9 @@ const LANES = [
   },
   {
     title: "Test",
-    why: "Tests are the first thing dropped under pressure. When you ask for them, every branch of the changed code is listed first, then each path gets a test. Which phases are skipped was decided in writing at planning time.",
-    produces: "One test per execution path, following the project's test skills.",
+    why: "Tests are the first thing dropped under pressure. When you ask for them, Ostra first maps what the change touches: every branch of the changed code, the flows that reach it from routes, screens, and other consumers, and the existing tests that cover it. Then it writes unit, integration, and end-to-end tests at the level each check needs and re-runs the existing tests. Which phases are skipped was decided in writing at planning time.",
+    produces:
+      "Unit, integration, and end-to-end tests at the level each check needs, following the project's test skills, then a run of the existing tests that cover the change.",
     protects: "Testing as an afterthought. Tests run after every phase, so no later phase changes the code under test.",
   },
   {

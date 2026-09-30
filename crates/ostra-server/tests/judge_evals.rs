@@ -136,6 +136,9 @@ struct Expect {
     /// Route answer and Feedback: whether research must be queued.
     #[serde(default)]
     research: Option<bool>,
+    /// Route answer and Feedback: the projects every research task must target, when set.
+    #[serde(default)]
+    research_projects: Vec<String>,
     /// Route answer and Feedback: the kept note IDs the answer must forget, exactly.
     #[serde(default)]
     forget: Option<Vec<String>>,
@@ -338,6 +341,17 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         return SessionState::fold(SessionId::from("eval"), &log.events);
     }
     keep_notes(&mut log, case, &session_root);
+    if case.judge == "route_answer" && case.gate.as_deref() == Some(AMENDMENT) {
+        // Rule C2: context added from the board, with no gate.
+        log.ev(SessionEvent::RequestAmended {
+            text: case.answer.clone().unwrap_or_default(),
+            files: vec![],
+            uploads: vec![],
+            delivery: ostra_core::event::ContextDelivery::Queue,
+            routed: true,
+        });
+        return SessionState::fold(SessionId::from("eval"), &log.events);
+    }
     if case.judge == "route_answer" {
         let (payload, answer) = route_gate(case, &session_root);
         let routed = ostra_engine::state::answer_needs_route(&payload, &answer);
@@ -411,6 +425,16 @@ fn session(case: &Case, dir: &Path) -> SessionState {
 }
 
 const ROUTE_GATE: &str = "g_eval";
+/// A route-answer case's `gate` for context added mid-session (Rule C2).
+const AMENDMENT: &str = "amendment";
+
+fn route_subject(case: &Case) -> String {
+    if case.gate.as_deref() == Some(AMENDMENT) {
+        ostra_engine::state::amendment_subject(0)
+    } else {
+        ROUTE_GATE.into()
+    }
+}
 
 /// Each earlier note as the fold keeps one: an answered question the judge remembered.
 fn keep_notes(log: &mut Log, case: &Case, session_root: &Path) {
@@ -602,7 +626,22 @@ fn score_items(e: &Expect, out: &Value) -> (String, bool) {
     if let Some(want) = e.research {
         ok &= (research > 0) == want;
     }
-    label.push(format!("research:{research}"));
+    let research_in: Vec<String> = out["research"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|t| t["project"].as_str().unwrap_or("?").to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !e.research_projects.is_empty() {
+        ok &= research_in.iter().all(|p| e.research_projects.contains(p));
+    }
+    label.push(if research_in.is_empty() {
+        format!("research:{research}")
+    } else {
+        format!("research:{}", research_in.join("+"))
+    });
     let mut forget: Vec<String> = out["forget"]
         .as_array()
         .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
@@ -766,10 +805,11 @@ async fn judge_routing_evals() {
         let st = session(case, &case_dir);
         let k = kind(&case.judge);
         let sufficiency = sufficiency_subject(case);
+        let route = route_subject(case);
         let subject = match k {
             JudgeKind::Feedback => Some("0"),
             JudgeKind::Sufficiency => Some(sufficiency.as_str()),
-            JudgeKind::RouteAnswer => Some(ROUTE_GATE),
+            JudgeKind::RouteAnswer => Some(route.as_str()),
             _ => None,
         };
         let facts: Vec<ProjectFacts> = projects(&case.workspace)
@@ -948,10 +988,11 @@ fn eval_cases_build_their_sessions() {
         let st = session(case, &dir.path().join(&case.id));
         let k = kind(&case.judge);
         let sufficiency = sufficiency_subject(case);
+        let route = route_subject(case);
         let subject = match k {
             JudgeKind::Feedback => Some("0"),
             JudgeKind::Sufficiency => Some(sufficiency.as_str()),
-            JudgeKind::RouteAnswer => Some(ROUTE_GATE),
+            JudgeKind::RouteAnswer => Some(route.as_str()),
             _ => None,
         };
         let (input, _) = judge_input(&st, k, subject, &[]);
@@ -994,6 +1035,7 @@ fn eval_cases_build_their_sessions() {
             "route_answer" => {
                 assert!(
                     st.held_answers.contains_key(&GateId::from(ROUTE_GATE))
+                        || st.pending_amendments().next().is_some()
                         || st.phases.values().any(|p| matches!(
                             p.impl_loop.next,
                             ostra_engine::state::LoopNext::AwaitRoute { .. }

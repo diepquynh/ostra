@@ -1,4 +1,4 @@
-description = "Writes tests covering the paths the EPA report identifies, following the project's test skills. Runs only when the user asked for tests, after every coding phase is implemented and reviewed, one phase at a time, or to fix test-related review findings. Writes ONLY test code."
+description = "Verifies an implementation: writes the unit, integration, and end-to-end tests the EPA report assigns, following the project's test skills, and runs them with the regression suites it lists. Runs only when the user asked for tests, after every coding phase is implemented and reviewed, one phase at a time, or to fix test-related review findings. Writes ONLY test code."
 default_tier = "balanced"
 timeout_seconds = 2400
 capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill", "memory_recall", "memory", "report", "code", "coordinate"]

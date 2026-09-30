@@ -254,7 +254,7 @@ impl SessionState {
         let added: Vec<&str> = self
             .amendments
             .iter()
-            .filter(|a| a.at > at)
+            .filter(|a| a.at > at && a.delivered)
             .map(|a| a.text.as_str())
             .collect();
         if added.is_empty() {
@@ -486,7 +486,10 @@ impl SessionState {
                 .is_some_and(|e| e != head.executor)
             || (matches!(head.executor, ExecutorKind::Harness(_))
                 && result.native_session_id.is_none())
-            || self.amendments.iter().any(|a| a.at > prev_rec.started_at)
+            || self
+                .amendments
+                .iter()
+                .any(|a| a.delivered && a.at > prev_rec.started_at)
             || self.runs_of(&subagent).count() >= MAX_CONVERSATION_RUNS;
         (!fresh).then(|| head.id.clone())
     }

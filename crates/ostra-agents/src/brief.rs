@@ -68,7 +68,7 @@ fn sections(agent: AgentName) -> &'static [Section] {
         AgentName::Implementer => &[Commands, Skills, Conventions, Modules],
         AgentName::WriteTest => &[Commands, Testing, Skills, Conventions, Modules],
         AgentName::CodeReviewer => &[Commands, Review, Conventions, Skills],
-        AgentName::ExecutionPathAnalyzer => &[Testing, Modules],
+        AgentName::ExecutionPathAnalyzer => &[Commands, Testing, Modules],
         AgentName::Explore => &[Stack, Skills, Modules],
         AgentName::Plan => &[Stack, Commands, Skills, Modules],
         AgentName::GenerateSpec => &[Stack, Modules],
@@ -269,12 +269,13 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         if wanted.contains(&Section::Testing) && !profile.test_types.is_empty() {
             let mut rows = vec![];
             for (name, t) in &profile.test_types {
-                let cmd = t
-                    .command_one
-                    .as_deref()
-                    .or(t.command.as_deref())
-                    .unwrap_or("none");
-                rows.push(format!("- **{name}**: `{cmd}`"));
+                // The test stage runs a whole level for regression and single tests while it writes.
+                let cmd = match (t.command.as_deref(), t.command_one.as_deref()) {
+                    (Some(all), Some(one)) if all != one => format!("`{all}`; one test: `{one}`"),
+                    (Some(c), _) | (None, Some(c)) => format!("`{c}`"),
+                    (None, None) => "none".into(),
+                };
+                rows.push(format!("- **{name}**: {cmd}"));
                 if !t.matches.is_empty() && t.matches.iter().any(|m| !stated_in(&inventory, m)) {
                     rows.push(format!(
                         "  - applies to {}",

@@ -91,6 +91,24 @@ corrupts every stage after it, and an extra spec round costs one round-trip. An 
 choice with a requirement change is a `requirement_change`; say in the reason which part is which. With no
 spec in the session, pick `implementation_detail`.
 
+## Context the user added
+
+Sometimes there is no gate: the user added context to the running session from the board (Rule C2). The input
+then says so, shows the added text, and lists the work Ostra stopped when the user sent it now. Decide it the
+same way, with one item with ID `answer`:
+
+- `deliver` adds the text to the request that every later agent reads, and the stopped work re-runs with it.
+  With `requirement_change` after a spec exists, Ostra also writes it into the spec, checks it, and asks for
+  approval again (Rule D10). With `implementation_detail`, the spec stays as it is.
+- `remember` keeps it only as a note for the stages you name. It does not join the request.
+- `discard` drops it, when the user says to ignore it. The stopped work re-runs without it.
+
+Add research when the added context names code, a project, or a fact that no research document covers and the
+next stage needs it. Give each task the project the context is about. When the user names a project, research
+in that project, even when another one is first in scope, because the first project in scope is often not
+where the work happens: a project the session created holds its new code. When the context corrects which
+project the work is in, say so in the reason.
+
 ## Output
 
 Call `decide` once with every field: `route`, `items`, `research`, `forget`, and `reason`. Give a `route` even

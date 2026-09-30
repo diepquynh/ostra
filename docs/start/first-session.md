@@ -40,7 +40,8 @@ detect → scout ×N (parallel, at most 12) → propose → skill approval (gate
 
 - **Detect** reads what the project already has: skills in `.agents/skills/`, instruction files such as
   `CLAUDE.md` or `AGENTS.md`, and an earlier `project.toml`. It splits the code into slices worth scouting and
-  skips component types an existing skill already teaches.
+  skips component types an existing skill already teaches. It also detects the commands and the test types:
+  each kind of test the project runs (unit, integration, end to end), with its command and what it needs.
 - **Scouts** each read one slice and report the patterns they find: how a handler, a model, or a test is
   written in this codebase.
 - **Propose** turns the reports into a list of skills: short documents that teach an agent to write a given
@@ -52,6 +53,7 @@ detect → scout ×N (parallel, at most 12) → propose → skill approval (gate
 
 Review the commands on the project's Overview tab when it finishes. Build, test, format, lint, and typecheck
 are the commands agents run to check their own work; a wrong test command means every phase fails to verify.
+The test types in `project.toml` are the levels the test stage can verify at, so add one the detect step missed.
 You can edit them there, and the next execution reads them fresh.
 [Project memory](../internals/project-memory.md) covers the lessons each project keeps in `.ostra/memory/`.
 
@@ -88,7 +90,7 @@ The first thing that happens is a **judge call**. Classify reads the request and
 | SPEC | Research and spec. |
 | RESEARCH | Research only. |
 | VERIFY | One implementer run of the test command. |
-| UNIT TEST | Path analysis, test writing, and review for existing code. |
+| TEST | The test stage alone for code that already exists: a verification plan, tests at each level it needs, and review. |
 | QUICK CHANGE | One implementer pass, no spec or review, for an edit the request fully describes. |
 | QUICK ANSWER | Sent to the quick-question panel instead. |
 
@@ -122,7 +124,8 @@ For an IMPLEMENT task you then see:
 9. **Implementation review.** When every phase has finished, you try the change. Send feedback and Ostra
    builds it as a reviewed revision phase, then asks again; accept when it is right.
 10. **Format** runs the project's format command once, after you accept.
-11. **Closing gate.** Whether to write tests and docs for what changed.
+11. **Closing gate.** Whether to verify the change with tests (unit, integration, end to end, and a rerun of the
+    existing ones) and whether to update the docs.
 12. **Tests and docs**, then the **completion report**.
 
 [The pipeline](../internals/pipeline.md) explains each stage and the rule behind it, and
@@ -154,9 +157,12 @@ removes it and the review runs again, with no cap and no way to waive it.
 ## Add context or pause
 
 The Add context box under the lanes takes more text or file tags mid-session. **Queue** lets running work
-finish and hands the new context to the next step. **Send now** interrupts every running execution and re-runs
-each with the updated request. Either way the engine treats it as an amendment to the request, so a
-requirement change re-runs the spec and the plan.
+finish and hands the new context to the next step. **Send now** interrupts every running execution. Either way,
+once the request is classified, the Route answer judge reads the context before anything starts or re-runs. It
+decides whether the context joins the request, is kept only as a note for later stages, or is dropped because
+you said to ignore it. It also decides whether to research first, and in which project, so "this is for the new
+project, not the backend" sends the research there. The interrupted work then re-runs with the context beside
+its task. When the context changes a requirement after the spec exists, the spec and the plan run again.
 
 **Pause** stops starting new work and interrupts what is running. Gates can still be answered while paused.
 **Continue** resumes each interrupted execution where it stopped. The execution keeps its place on the
@@ -168,6 +174,9 @@ across a server restart.
 **Stop** on the board header ends the session: every running execution is cancelled and the session is
 marked failed with "Stopped by the user." A stopped session does not resume. With the server down, the same
 thing is `ostra stop <session id>`.
+
+**Cancel** on one execution stops only that run. Its gate opens as "You stopped ...", where you retry it or
+abandon the step. Nothing retries a run you stopped on its own, not even YOLO.
 
 ## Read what it wrote
 

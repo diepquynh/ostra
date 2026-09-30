@@ -22,8 +22,8 @@ agent definitions from disk and a user cannot swap one out by editing a file.
 | `plan` | Plan | advanced | Turns an approved spec into a master plan plus one file per phase. Each step names an exact path, an action, the skills to load, and a verification command. It reads the spec and nothing else. It lists a new project the spec names in `new_projects`. |
 | `implementer` | Build | balanced | Writes the code for one plan phase, one review fix, or one inline change, and verifies each step with the project's build command. It never writes tests. |
 | `code-reviewer` | Review | balanced | Reviews the unstaged changes of one review loop against the project's rule set and the phase's requirements, and runs a security scan whose BLOCKER findings no instruction can override. |
-| `execution-path-analyzer` | Test | balanced | Traces every path through the functions a phase changed (branches, early returns, error paths, boundaries) and writes a report that `write-test` turns into one test per path. |
-| `write-test` | Test | balanced | Writes tests for the paths the analyzer found, following the project's test skills. It writes only test code. |
+| `execution-path-analyzer` | Test | balanced | Plans how a phase is verified. It traces every path through the functions the phase changed (branches, early returns, error paths, boundaries), the system flows that reach them (from a route, a CLI command, a screen, a job, or a consumer of a changed contract), and the existing tests that cover them, and gives each check a test level from the project's test types. `write-test` turns each path and flow into one test. |
+| `write-test` | Test | balanced | Verifies the phase: writes unit, integration, and end-to-end tests at the levels the analyzer assigned, following the project's test skills, then runs them and the existing suites the analyzer listed as regression. It writes only test code. |
 | `module-documentation` | Docs | advanced | Updates the module-hub area references from what the phases actually changed, and checks every documented name against real source. It runs only when the user asks for documentation. |
 | `prompt-generation` | Build | advanced | Writes or edits instruction files (system prompts, `SKILL.md` skills, agent definitions). It runs for prompt requests and when an implementer hands off prompt authoring. |
 | `initializer` | Project setup | balanced | Bootstraps a project in one of six modes: detect, scout, propose, generate-skill, generate-inventory, and adopt. |
@@ -288,7 +288,7 @@ Each agent gets only the sections it uses:
 | code-reviewer | commands, the full review rule set, conventions, skills |
 | explore, plan, quick-answer | stack, skills, module map (plan and quick-answer also get commands) |
 | generate-spec, fact-check | stack, module map |
-| execution-path-analyzer | testing, module map |
+| execution-path-analyzer | commands, testing, module map |
 | prompt-generation | skills |
 | initializer | nothing, because it is the agent that creates these facts |
 | advisor | stack, commands, skills, module map |
@@ -590,6 +590,7 @@ checked live by `harness_probe wake`: the agent asks twice, and must submit both
 | Coordination in the fold: routes, deliveries, continuations | `crates/ostra-engine/src/coord.rs` |
 | The coordination prompt section | `assets/coordination.md` |
 | Coordination evals | `tests/evals/coordination.toml`, `crates/ostra-server/tests/coordination_evals.rs` |
+| Test stage evals | `tests/evals/test_stage.toml`, `tests/evals/test_stage/`, `crates/ostra-server/tests/test_stage_evals.rs` |
 | Report file names | `crates/ostra-core/src/paths.rs` (`report`) |
 | Submit handling, native | `crates/ostra-exec-native/src/lib.rs` |
 | Submit handling, harness | `crates/ostra-exec-harness/src/bridge.rs`, `live.rs` |

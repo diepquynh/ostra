@@ -165,6 +165,15 @@ Sign-in lists every browser signed in to this server:
 commands (`build`, `test`, `test_one`, `format`, `lint`, `typecheck`, `run`), its test types, a module map,
 its skills, its conventions, and its review rules. You can edit it by hand afterwards.
 
+Each `[test_types.<name>]` table describes one kind of test the repository runs, such as `unit`,
+`integration`, or `e2e`: the command for all of them, the command for one, the file globs its tests live under,
+and a note on what it needs to run. The init flow's detect step finds them from scripts, runner configs, and
+test directories. They are the levels the test stage can verify at: the execution path analyzer gives every
+check one of them, and write-test runs each test with its type's command. The repo brief gives both agents both
+commands of each type, the one for the whole level, which a regression run uses, and the one for a single test. A project with only a `unit` type
+gets unit tests and a regression run, and flows that need a running system are reported as unverified, so add
+a type here when the repository has integration or end-to-end tests the detect step missed.
+
 Two details matter for behavior. First, only `commands.format` is run by Ostra itself, after an implement
 step, so only that command needs approval. The other commands are run by agents, through the policy and the
 sandbox. Second, a review rule marked `auto_fixable` lets the engine apply a reviewer's fix for that rule
@@ -252,6 +261,25 @@ saved with the rest of the edits.
 `[routing.effort]` sets reasoning effort: `low`, `medium`, `high`, `xhigh`, or `max`. An agent with no entry
 keeps the effort its `agent.toml` gives for that executor. The implementer's `agent.toml`, for example, asks
 for `high` on every executor. Each executor translates the level into whatever its model or CLI accepts.
+
+The native executor spends what the chosen level allows, because the user picked it knowing the cost. Every
+request asks for the model's whole output limit, from the models.dev catalog (32,000 tokens for a model the
+catalog does not list), so thinking at a high level is never cut short by the request, and the Anthropic provider
+holds any request to that limit. On Anthropic models
+the level becomes thinking in one of two ways
+([`crates/ostra-providers/src/anthropic.rs`](../../crates/ostra-providers/src/anthropic.rs)):
+
+- **Adaptive thinking** with `output_config.effort` on Claude 4.6 and every later model. From Claude 4.7 on it
+  is the only thinking mode, because a fixed budget returns a 400. Opus 4.6 and Sonnet 4.6 accept both modes and
+  stay adaptive, because only adaptive thinking reasons between tool calls on Opus 4.6. The 4.6 models have no
+  `xhigh`, so it becomes `high` there.
+- **A fixed thinking budget** on the models that take nothing else (Claude Haiku 4.5, Sonnet 4.5, Opus 4.5, and
+  earlier). The budget is a share of the model's output limit, as models.dev lists it: an eighth at `medium`, a
+  quarter at `high`, half at `xhigh`, and all but 16,000 tokens at `max`, which stay for the answer; `low` thinks
+  not at all. Haiku 4.5 at `high` thinks against 16,000 of its 64,000 tokens. Only Opus 4.5 also takes the effort
+  itself. With tools, Sonnet 4.5, Opus 4.5, and the Claude 4.0 and 4.1 models think between tool calls through the
+  interleaved thinking beta, and their budget then spans the whole turn. Haiku 4.5 cannot, so it thinks only at the
+  start of a turn, before its first tool call.
 
 ### Phase complexity
 

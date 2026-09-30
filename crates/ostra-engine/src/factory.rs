@@ -22,7 +22,7 @@ fn work_source(inputs: &SpawnInputs, s: &SessionState) -> WorkSource {
             match (inputs.revision, s.category, s.track) {
                 (Some(_), _, _) => "A revision the user asked for after reviewing the implementation. The request below and the session context file describe it.",
                 (_, Some(Category::Verify), _) => "A verification request: no code change is planned.",
-                (_, Some(Category::UnitTest), _) => "The user asked for tests directly, so no plan exists.",
+                (_, Some(Category::Test), _) => "The user asked for tests directly, so no plan exists.",
                 (_, Some(Category::Prompt), _) => "A prompt change: the pipeline has no plan tier for it.",
                 (_, Some(Category::QuickChange), _) => "A quick change: the request names the whole edit, so research, spec, plan, and review were skipped.",
                 (_, Some(Category::Implement), Some(Track::Light)) => "The light track: research found a contained change, so the spec and plan stages were skipped. Work from the request and the research documents.",

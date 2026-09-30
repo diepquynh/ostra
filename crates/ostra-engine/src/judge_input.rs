@@ -1,7 +1,11 @@
 //! Inputs for judge calls, built from session state, and the YOLO answer logic.
 
-use crate::state::{DocsState, EpaState, LoopNext, SessionState, parse_loop_key};
-use ostra_core::event::{AnswerSource, GateAnswer, GatePayload, JudgeKind};
+use crate::state::{
+    DocsState, EpaState, Interrupt, LoopNext, SessionState, amendment_index, parse_loop_key,
+};
+use ostra_core::event::{
+    AnswerSource, ContextDelivery, ExecPurpose, GateAnswer, GatePayload, JudgeKind,
+};
 use ostra_core::ids::{ExecutionId, GateId};
 use ostra_core::pipeline::{Category, QuestionAnswer, TestPolicy};
 use serde_json::{Value, json};
@@ -215,6 +219,9 @@ pub fn judge_input(
             notes_facts(&mut m, s);
             let _ = writeln!(m, "# The user's feedback on the implementation\n\n{text}");
             (m, format!("Feedback: {}", first_line(&text)))
+        }
+        JudgeKind::RouteAnswer if subject.and_then(amendment_index).is_some() => {
+            amendment_facts(&mut m, s, &request, subject.and_then(amendment_index))
         }
         JudgeKind::RouteAnswer => {
             let gate = subject.and_then(|g| s.gates.get(&GateId::from(g)));
@@ -449,6 +456,67 @@ pub fn judge_input(
 }
 
 /// Rule J1: what the Route answer and Feedback judges need to see about the session.
+/// Rule C2: what the Route answer judge needs to route context the user added mid-session.
+fn amendment_facts(
+    m: &mut String,
+    s: &SessionState,
+    request: &str,
+    i: Option<usize>,
+) -> (String, String) {
+    let _ = writeln!(m, "# Request\n\n{request}\n");
+    session_facts(m, s);
+    let Some(a) = i.and_then(|i| s.amendments.get(i)) else {
+        return (std::mem::take(m), "Added context: unknown".into());
+    };
+    let interrupted: Vec<String> = s
+        .executions
+        .values()
+        .filter(|r| {
+            r.ended_at.is_some_and(|t| t >= a.at)
+                && r.result.as_ref().and_then(|x| x.error.as_deref())
+                    == Some(Interrupt::Context.message())
+        })
+        .map(|r| match &r.purpose {
+            ExecPurpose::Explore { task } => format!(
+                "- Research task {} in `{}`: {}",
+                task + 1,
+                r.project,
+                s.explore
+                    .get(*task as usize)
+                    .map(|t| first_line(&t.task))
+                    .unwrap_or_default()
+            ),
+            _ => format!("- {} in `{}`", r.agent, r.project),
+        })
+        .collect();
+    let _ = writeln!(
+        m,
+        "# Context the user added\n\nThere is no gate: the user added this to the running session. Give one item with ID `answer`.\n"
+    );
+    if a.delivery == ContextDelivery::Now {
+        let _ = writeln!(
+            m,
+            "The user sent it now, so Ostra stopped this running work. Each re-runs with the context once you decide, unless you discard it:\n{}\n",
+            if interrupted.is_empty() {
+                "- nothing was running".to_string()
+            } else {
+                interrupted.join("\n")
+            }
+        );
+    } else {
+        let _ = writeln!(
+            m,
+            "The user queued it, so running work finishes on the old request and the next step sees it.\n"
+        );
+    }
+    let text = s.added_part(&a.text, &a.files, &a.uploads);
+    let _ = writeln!(m, "## The added context\n\n{text}");
+    (
+        std::mem::take(m),
+        format!("Added context: {}", first_line(&a.text)),
+    )
+}
+
 fn session_facts(m: &mut String, s: &SessionState) {
     let _ = writeln!(
         m,
@@ -457,6 +525,17 @@ fn session_facts(m: &mut String, s: &SessionState) {
         s.track.map(|t| t.as_str()).unwrap_or("none"),
         s.scope.join(", ")
     );
+    if !s.created_projects.is_empty() {
+        let _ = writeln!(
+            m,
+            "Projects this session created, where its new code lives: {}\n",
+            s.created_projects
+                .iter()
+                .map(|p| p.key.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     research_facts(m, s);
     match &s.spec.current {
         Some(spec) => {
@@ -820,6 +899,15 @@ pub enum YoloPlan {
     Judge { schema: Value },
 }
 
+/// Gates YOLO never answers: spending more, and retrying an execution the user stopped (Rule P4).
+pub fn yolo_leaves_open(s: &SessionState, payload: &GatePayload) -> bool {
+    match payload {
+        GatePayload::BudgetReached { .. } => true,
+        GatePayload::ExecutionFailed { execution, .. } => s.stopped_by_user(execution),
+        _ => false,
+    }
+}
+
 pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
     let g = s.gates.get(gate)?;
     let choice = |option: &str, reason: &str| YoloPlan::Fixed {
@@ -892,6 +980,7 @@ pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
         }
         GatePayload::ReviewCap { .. } => choice("another-pass", "Under YOLO the review loop keeps its larger budget."),
         GatePayload::PhaseBlocked { .. } => choice("leave", "Under YOLO a blocked phase is recorded and independent work continues (Rule D9)."),
+        GatePayload::ExecutionFailed { .. } if yolo_leaves_open(s, &g.payload) => return None,
         GatePayload::ExecutionFailed { execution, .. } => {
             let agent = s.executions.get(execution).map(|r| r.agent);
             let prior = s

@@ -61,7 +61,7 @@ tracing = "0.1"
 notify = "8"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.26", features = ["v4", "v7", "serde"] }
-ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl", "chrono-impl"] }
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl", "chrono-impl", "no-serde-warnings"] }
 thiserror = "2"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }

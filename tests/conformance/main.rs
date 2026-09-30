@@ -5,7 +5,7 @@ use ostra_core::containment::ContainmentSignal;
 use ostra_core::event::*;
 use ostra_core::exec::{ExecutionResult, ExecutionStatus, Usage};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
-use ostra_core::pipeline::{QuestionAnswer, StageKind, Track};
+use ostra_core::pipeline::{Category, QuestionAnswer, StageKind, Track};
 use ostra_core::{AgentName, ExecutorKind};
 use ostra_engine::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use ostra_engine::state::SessionState;
@@ -381,6 +381,41 @@ fn d1_explore_leads_to_spec_never_plan() {
 }
 
 #[test]
+fn p4_yolo_leaves_a_stopped_execution_to_the_user() {
+    let mut h = H::explored(
+        &["p"],
+        SessionOptions {
+            yolo: true,
+            ..Default::default()
+        },
+    );
+    let (spec, _) = h.start("spawn generate-spec");
+    h.finish(&spec, ExecutionStatus::Cancelled, None);
+    let g = h.open_gate("execution_failed");
+    let st = h.state();
+    assert_eq!(st.gates[&g].title, "You stopped generate-spec");
+    assert!(ostra_engine::judge_input::yolo_plan(&st, &g).is_none());
+    assert!(
+        h.summaries().is_empty(),
+        "no retry and no YOLO answer: {:?}",
+        h.summaries()
+    );
+
+    // A failure, unlike a stop, is still retried under YOLO.
+    let mut h = H::explored(
+        &["p"],
+        SessionOptions {
+            yolo: true,
+            ..Default::default()
+        },
+    );
+    let (spec, _) = h.start("spawn generate-spec");
+    h.finish(&spec, ExecutionStatus::Denied, None);
+    h.open_gate("execution_failed");
+    assert_eq!(h.summaries(), vec!["yolo-answer"]);
+}
+
+#[test]
 fn d1_no_research_document_means_no_spec() {
     let mut h = H::new(&["p"], SessionOptions::default());
     h.classify("IMPLEMENT", &["p"]);
@@ -678,6 +713,7 @@ fn approval_without_pass_is_ignored_by_the_fold() {
         files: vec![],
         uploads: vec![],
         delivery: ContextDelivery::Queue,
+        routed: false,
     });
     h.answer(
         &g,
@@ -1026,6 +1062,7 @@ fn d10_spec_revision_gets_only_new_input() {
         files: vec![],
         uploads: vec![],
         delivery: ContextDelivery::Queue,
+        routed: false,
     });
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let amended = h.spawn_step("spawn generate-spec");
@@ -1038,7 +1075,7 @@ fn d10_spec_revision_gets_only_new_input() {
 }
 
 #[test]
-fn amendment_explores_the_new_part_first() {
+fn an_amendment_logged_before_c2_explores_the_new_part_first() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     h.run("spawn generate-spec", spec_submit(0, 0));
     h.ev(SessionEvent::RequestAmended {
@@ -1046,6 +1083,7 @@ fn amendment_explores_the_new_part_first() {
         files: vec![],
         uploads: vec![],
         delivery: ContextDelivery::Queue,
+        routed: false,
     });
     assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
     h.run("spawn explore explore#1", explore_submit(1, &[]));
@@ -1065,13 +1103,31 @@ fn file(project: &str, path: &str) -> ContextFile {
     }
 }
 
+/// Add context as the runner does: a classified session routes it through the judge (Rule C2).
 fn amend(h: &mut H, text: &str, files: Vec<ContextFile>, delivery: ContextDelivery) {
+    let routed = h.state().routes_amendments();
     h.ev(SessionEvent::RequestAmended {
         text: text.into(),
         files,
         uploads: vec![],
         delivery,
+        routed,
     });
+}
+
+/// The Route answer judge's decision on the amendment at `i` (Rule C2).
+fn route_amendment(h: &mut H, i: usize, output: Value) {
+    let subject = ostra_engine::state::amendment_subject(i);
+    h.decide(JudgeKind::RouteAnswer, Some(&subject), output);
+}
+
+/// Deliver the amendment as a requirement change with one research task in `project`.
+fn amendment_with_research(h: &mut H, i: usize, project: &str, task: &str) {
+    route_amendment(
+        h,
+        i,
+        json!({"route": "requirement_change", "items": [{"id": "answer", "disposition": "deliver"}], "research": [{"project": project, "task": task}], "reason": "r"}),
+    );
 }
 
 #[test]
@@ -1129,6 +1185,7 @@ fn files_added_later_reach_the_next_step() {
         vec![file("p", "src/refund.rs")],
         ContextDelivery::Queue,
     );
+    amendment_with_research(&mut h, 0, "p", "read the refund code");
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let task = h.spawn_step("spawn generate-spec").inputs.task.unwrap();
     assert!(
@@ -1144,6 +1201,8 @@ fn queued_context_lets_running_work_finish() {
     let (spec, _) = h.start("spawn generate-spec");
     amend(&mut h, "also refunds", vec![], ContextDelivery::Queue);
     assert!(h.state().interrupting.is_empty());
+    assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
+    amendment_with_research(&mut h, 0, "p", "research refunds");
     assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
     h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
     h.run("spawn explore explore#1", explore_submit(1, &[]));
@@ -1165,12 +1224,96 @@ fn context_sent_now_reruns_the_interrupted_step_fresh() {
     );
     h.finish(&spec, ExecutionStatus::Interrupted, None);
     assert!(h.state().interrupting.is_empty());
-    // Rule D2 still holds: the new part is researched before the spec runs again.
+    // Rule C2: the interrupted spec waits for the judge instead of starting again at once.
+    assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
+    amendment_with_research(&mut h, 0, "p", "research refunds");
+    // Rule D2 still holds: the research the judge queued runs before the spec runs again.
     assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let rerun = h.spawn_step("spawn generate-spec");
     assert_eq!(rerun.resumes, None);
     assert!(rerun.inputs.task.unwrap().contains("also refunds"));
+}
+
+#[test]
+fn c2_interrupted_research_waits_for_the_judge_and_reruns_with_the_context() {
+    let mut h = H::new(&["api", "mcp"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["api"]);
+    let (research, first) = h.start("spawn explore explore#0");
+    amend(&mut h, "Work in mcp, not api", vec![], ContextDelivery::Now);
+    h.finish(&research, ExecutionStatus::Interrupted, None);
+    // Nothing re-runs, and the judge's research is not started, until the judge decides.
+    assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
+    amendment_with_research(&mut h, 0, "mcp", "find the config loader");
+    let rerun = h.spawn_step("spawn explore explore#0");
+    let task = rerun.inputs.task.unwrap();
+    assert!(
+        task.starts_with(first.inputs.task.as_deref().unwrap()),
+        "{task}"
+    );
+    assert!(
+        task.contains("Work in mcp, not api"),
+        "the re-run sees the context: {task}"
+    );
+    // The research goes to the project the judge named, not the first project in scope.
+    assert_eq!(h.spawn_step("spawn explore explore#1").project, "mcp");
+}
+
+#[test]
+fn c2_discarded_context_reaches_no_agent() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    amend(&mut h, "ignore this, a typo", vec![], ContextDelivery::Now);
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    route_amendment(
+        &mut h,
+        0,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "reason": "r"}),
+    );
+    let rerun = h.spawn_step("spawn generate-spec");
+    assert!(!rerun.inputs.task.unwrap().contains("a typo"));
+    assert!(rerun.inputs.changes.is_empty());
+}
+
+#[test]
+fn c2_context_that_changes_no_requirement_leaves_the_spec() {
+    let mut h = H::spec_approved(&["p"], SessionOptions::default());
+    amend(
+        &mut h,
+        "name the module orders_cancel",
+        vec![],
+        ContextDelivery::Queue,
+    );
+    route_amendment(
+        &mut h,
+        0,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "deliver"}], "research": [], "reason": "r"}),
+    );
+    let st = h.state();
+    assert!(st.spec.approved, "the approved spec stands");
+    assert!(st.full_request().contains("name the module orders_cancel"));
+}
+
+#[test]
+fn c2_remembered_context_becomes_a_note_for_later_stages() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    amend(
+        &mut h,
+        "test with a real database",
+        vec![],
+        ContextDelivery::Queue,
+    );
+    route_amendment(
+        &mut h,
+        0,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "remember", "stages": ["tests"], "note": "Test with a real database."}], "research": [], "reason": "r"}),
+    );
+    let st = h.state();
+    assert!(!st.full_request().contains("real database"));
+    assert_eq!(
+        st.notes_for(ostra_engine::judge::NoteStage::Tests),
+        vec!["Test with a real database.".to_string()]
+    );
 }
 
 #[test]
@@ -1263,6 +1406,7 @@ fn context_added_while_paused_reruns_instead_of_resuming() {
     h.finish(&spec, ExecutionStatus::Interrupted, None);
     amend(&mut h, "also refunds", vec![], ContextDelivery::Queue);
     h.ev(SessionEvent::SessionResumed);
+    amendment_with_research(&mut h, 0, "p", "research refunds");
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     assert_eq!(h.spawn_step("spawn generate-spec").resumes, None);
 }
@@ -1787,9 +1931,20 @@ fn other_categories_follow_the_routing() {
 }
 
 #[test]
-fn unit_test_category_skips_the_closing_gate() {
+fn test_category_skips_the_closing_gate() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "TEST", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": true, "docs": false}, "reason": "r"}));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn execution-path-analyzer epa phase 1"]
+    );
+}
+
+#[test]
+fn a_log_recorded_as_unit_test_folds_as_test() {
     let mut h = H::new(&["p"], SessionOptions::default());
     h.decide(JudgeKind::Classify, None, json!({"category": "UNIT_TEST", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": true, "docs": false}, "reason": "r"}));
+    assert_eq!(h.state().category, Some(Category::Test));
     assert_eq!(
         h.summaries(),
         vec!["spawn execution-path-analyzer epa phase 1"]
@@ -2897,6 +3052,23 @@ fn rule_o5_the_advisor_looks_at_a_failed_init_step_first() {
 }
 
 #[test]
+fn p4_a_stopped_init_step_goes_to_the_user_not_the_advisor() {
+    let mut h = created_by_phase();
+    let (detect, _) = h.start("spawn initializer init detect");
+    h.finish(&detect, ExecutionStatus::Cancelled, None);
+    assert_eq!(mcp_steps(&h), vec!["gate execution_failed"]);
+    let Step::OpenGate { title, .. } = h
+        .steps()
+        .into_iter()
+        .find(|s| s.summary() == "gate execution_failed")
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    assert_eq!(title, "You stopped the initializer");
+}
+
+#[test]
 fn rule_o5_an_escalation_or_used_up_advice_asks_the_user() {
     let mut h = created_by_phase();
     let fail = |h: &mut H| {
@@ -3119,6 +3291,7 @@ fn h6_a_pair_loop_starts_fresh_when_the_conversation_cannot_continue() {
         files: vec![],
         uploads: vec![],
         delivery: ContextDelivery::Queue,
+        routed: false,
     });
     let s = h.summaries();
     assert!(s.iter().all(|x| !x.contains("continues")), "{s:?}");

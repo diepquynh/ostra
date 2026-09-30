@@ -316,7 +316,7 @@ pub fn output_schema(kind: JudgeKind, answer_schema: Option<Value>) -> Value {
         JudgeKind::Classify => json!({
             "type": "object",
             "properties": {
-                "category": {"type": "string", "enum": ["RESEARCH","SPEC","PLAN","IMPLEMENT","VERIFY","UNIT_TEST","PROMPT","QUICK_CHANGE","QUICK_ANSWER"]},
+                "category": {"type": "string", "enum": ["RESEARCH","SPEC","PLAN","IMPLEMENT","VERIFY","TEST","PROMPT","QUICK_CHANGE","QUICK_ANSWER"]},
                 "projects": {"type": "array", "items": {"type": "string"}},
                 "explore_tasks": {"type": "array", "items": explore_task_schema()},
                 "opts_in": {"type": "object", "properties": {"tests": {"type": "boolean"}, "docs": {"type": "boolean"}}, "required": ["tests", "docs"]},

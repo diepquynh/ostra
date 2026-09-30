@@ -435,6 +435,28 @@ async fn timeout_is_an_error() {
 }
 
 #[tokio::test]
+async fn asks_for_the_whole_output_limit_of_the_model() {
+    ostra_core::pricing::install_test_prices();
+    let f = fixture();
+    for (model, expected) in [
+        ("mock:claude-haiku-4-5-20251001", 64_000),
+        ("mock:unlisted", crate::DEFAULT_MAX_OUTPUT),
+    ] {
+        let mut s = spec(&f, AgentName::QuickAnswer, PermissionMode::Default, vec![]);
+        s.ctx.report_file = None;
+        s.route.model = model.into();
+        let p = ScriptedProvider::new();
+        p.push_tool_use("submit_quick_answer", json!({"answer": "a"}));
+        let (exec, p) = executor(p);
+        let r = exec
+            .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
+            .await;
+        assert_eq!(r.status, ExecutionStatus::Ok, "{model}: {:?}", r.error);
+        assert_eq!(p.requests()[0].max_tokens, expected, "{model}");
+    }
+}
+
+#[tokio::test]
 async fn resumes_from_transcript() {
     let f = fixture();
     let mut s = spec(

@@ -53,7 +53,7 @@ the LOW findings, and takes an optional change request:
 | `closing_gate` | A project's phases are done and, for `IMPLEMENT`, the implementation was accepted | Tests yes or no, docs yes or no, per project |
 | `permission` | A tool call needs approval under the permission rules | Allow once, allow always in this workspace, or deny |
 | `harness_failure` | A harness CLI failed to start or is not signed in | `retry` after signing in, `native` to re-run on the native executor, or abandon |
-| `execution_failed` | An execution failed after its automatic retry | `retry` or `abandon` |
+| `execution_failed` | An execution failed after its automatic retry, or you stopped it | `retry` or `abandon` |
 | `skill_approval` | The init flow proposed skills, in an init session or in the build of a project the session created | Per skill: generate, regenerate, reuse, or drop |
 | `budget_reached` | The session spent its budget | `raise` (with the extra dollars as text) or `stop` |
 
@@ -155,7 +155,8 @@ call that changes Ostra. Nothing is created on disk until the answer.
 In a session that created a project, the build runs that project's init, so its `skill_approval` and
 `execution_failed` gates open in the pipeline session itself. A failed init step reaches the user only after
 the advisor agent has tried: it may send the step back with guidance up to two times, and when it cannot help or
-escalates, the `execution_failed` gate opens with its reason (rule O5). Abandoning the step there does not fail
+escalates, the `execution_failed` gate opens with its reason (rule O5). A step you stopped skips the advisor and
+opens that gate at once, because the advisor would send it back (rule P4). Abandoning the step there does not fail
 the session: the init ends with a note, and the project's phases run without it (rule O4).
 
 The execution shows the same ask above its activity while the call waits:
@@ -184,8 +185,8 @@ not a positive number. `stop` fails the session with the amount spent.
 YOLO means the orchestrator decides everything. It can be the workspace default (`yolo.default`) or toggled per
 session at any time, taking effect from the next gate or tool call.
 
-With YOLO on, the planner emits a `YoloAnswer` step for every open gate except permission asks and the budget
-gate. For each gate, `judge_input::yolo_plan` in
+With YOLO on, the planner emits a `YoloAnswer` step for every open gate except permission asks, the budget
+gate, and the failure gate of an execution you stopped (`judge_input::yolo_leaves_open`). For each gate, `judge_input::yolo_plan` in
 [`judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) returns one of three things: a fixed answer with a
 stated reason, a call to the YOLO-answer judge with a JSON schema for that gate's answer, or nothing.
 
@@ -198,7 +199,7 @@ stated reason, a call to the YOLO-answer judge with a JSON schema for that gate'
 | `fact_check_recurring` | Fixed: `another-round` while fewer than six FAILs in a row, then `stop`. |
 | `review_cap` | Fixed: `another-pass`. In practice the loop rarely gets here, because the YOLO review budget is ten passes and then the Resolve judge takes over. |
 | `phase_blocked` | Fixed: `leave`. Independent work continues (Rule D9). |
-| `execution_failed` | Fixed: `retry`, until the same agent has failed three times; then `abandon`. |
+| `execution_failed` | Fixed: `retry`, until the same agent has failed three times; then `abandon`. None for an execution you stopped: the gate stays open for you, because retrying would undo your stop (Rule P4). |
 | `harness_failure` | Fixed: `native`. |
 | `skill_approval` | Fixed: the proposal's default dispositions. |
 | `permission` | Answered inside the execution: the session behaves as `bypass`, so the ask never waits. This includes `ProjectCreate`, which asks in every mode without YOLO. |
@@ -216,6 +217,7 @@ YOLO changes who answers, never what must be true:
 - Approval still requires a fact-check PASS.
 - BLOCKER security findings are still removed before the session can complete.
 - The budget is never raised, because spending more is the user's decision.
+- An execution the user stopped is never retried, because the stop is the user's decision.
 
 Every YOLO answer is an event with its reason. The completion report ends with a "Decided for you" section listing
 each one, and a push notification fires at completion and when a phase is blocked.
@@ -258,7 +260,7 @@ it as "Ostra chose X because Y".
 | Track | Research for an `IMPLEMENT` request finished and no track was forced | `light` (build from the research) or `full` (spec and plan first) | `track.md` |
 | Stakes | A full-track `IMPLEMENT` spec is approved | `low` (skip the plan), `medium`, or `high` | `stakes.md` |
 | Feedback | The user sends feedback at the implementation review gate | `requirement_change` or `implementation_detail`, one `{project, instruction}` target per project it changes, and what happens to the feedback (Rule J1) | `feedback.md` |
-| Route answer | Any other answer with content: open questions, approval text, guidance, a stuck fact, retry instructions | Per answer `deliver`, `remember`, or `discard`, research to run first, and `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
+| Route answer | Any other answer with content: open questions, approval text, guidance, a stuck fact, retry instructions, and context added mid-session | Per answer `deliver`, `remember`, or `discard`, research to run first, and `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
 | Rescue | An agent returned `stuck` | `rerun` with a stated fact, `explore` to find it, or `gate` to ask the user | `rescue.md` |
 | Resolve review | A review loop hit its budget under YOLO | `fix` with per-finding instructions, or `block` | `resolve-review.md` |
 | YOLO answer | A gate opens under YOLO and its plan is `Judge` | The gate's answer, in the schema for that gate | `yolo-answer.md` |
@@ -300,6 +302,16 @@ retry, accept, or a budget raise, is applied at once, because there is nothing t
 flag when it records the answer and stores it on the event as `routed`, so the fold stays a function of the log.
 An answer recorded before the rule has no flag and folds as it always did, which keeps older sessions replaying to
 the same state.
+
+Context you add from the board's Add context box takes the same judge (Rule C2), with the subject `amendment:N`
+instead of a gate. The runner records `routed: true` on `RequestAmended` once the request is classified. While
+the context waits (`Amendment.pending`), the planner asks the judge and starts nothing else, so work that Send
+now interrupted does not re-run on the old request. The judge sees the added text, the work Send now stopped,
+the projects in scope, and the projects the session created. Its research tasks go to the projects it names,
+which is how a correction such as "this is for the new project" reaches that project instead of the first one in
+scope. A delivered addition joins the request (`full_request`) and every explore spawn; a remembered one becomes
+a note; a discarded one reaches no agent. A delivered `requirement_change` after the spec exists restarts at the
+spec (Rule D10).
 
 While an answer waits, the spec or plan behind it (`ArtifactTrack.routing`) or the phase behind it
 (`LoopNext::AwaitRoute`) starts nothing. The judge decides for each answer, one item per question ID or one item

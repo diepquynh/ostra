@@ -103,14 +103,16 @@ impl Services for Fake {
         &self,
         _: &ResolvedRoute,
         _: &str,
-        _: &str,
+        user: &str,
         _: Value,
         _: Effort,
     ) -> Result<(Value, Usage), String> {
-        Ok((
-            json!({"category": "RESEARCH", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "t"}], "opts_in": {"tests": false, "docs": false}, "reason": "r"}),
-            Usage::default(),
-        ))
+        let out = if user.contains("# Context the user added") {
+            json!({"route": "requirement_change", "items": [{"id": "answer", "disposition": "deliver"}], "research": [], "reason": "r"})
+        } else {
+            json!({"category": "RESEARCH", "projects": ["app"], "explore_tasks": [{"project": "app", "task": "t"}], "opts_in": {"tests": false, "docs": false}, "reason": "r"})
+        };
+        Ok((out, Usage::default()))
     }
     fn notify(&self, _: Notice) {}
     fn protected_paths(&self) -> Vec<PathBuf> {

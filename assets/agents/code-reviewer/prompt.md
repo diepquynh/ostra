@@ -130,8 +130,10 @@ passes of this one.
 ### Step 1.2: Load the EPA report (test review only)
 
 If the prompt gives an EPA report path (`{session-dir}/ostra-epa-*.md`) and the context is test review,
-read it. It lists execution paths (P1, P2, ...) with NEW/EXISTING status and expected assertions. Use it as the
-authoritative source for the execution-path-coverage rule: a NEW path with no covering test is a violation.
+read it. It lists execution paths (P1, P2, ...) and system flows (S1, S2, ...), each with a test level,
+NEW/EXISTING status, and expected assertions, plus the regression suites to re-run. Use it as the authoritative
+source for the execution-path-coverage rule: a NEW path or flow with no covering test at its level is a
+violation.
 
 ### Step 1.3: Load area references
 
@@ -304,8 +306,11 @@ checking by these generic categories and map each concrete rule from the set int
 - **Tests / coverage.** Whichever coverage and test-structure rules exist in the set. **Missing-tests rule:**
   if the set contains a rule that flags a changed implementation file lacking a corresponding changed test,
   **apply it only in test review or full review. SKIP it in implementation review**, because the write-test
-  agent has not run yet. When an EPA report is present (test review), cross-reference each NEW path against
-  test methods. An uncovered NEW path violates the execution-path-coverage rule.
+  agent has not run yet. When an EPA report is present (test review), cross-reference each NEW path and each
+  NEW system flow (`S1`, `S2`, ...) against test methods at the level the report assigns. An uncovered NEW path
+  or flow violates the execution-path-coverage rule, and so does a flow test that replaces the parts the flow
+  crosses with test doubles. A regression suite the report lists that the test report does not show as run and
+  passing is a finding under the same rule.
 - **Clarity.** Complex or deeply nested branching without an explanatory comment; undocumented side effects
   (events published, messages queued, external or async calls); magic values that should be named constants;
   overly long functions. Per whatever the set defines.

@@ -103,11 +103,18 @@ test_one = "./mvnw test -pl {MODULE} -am -Dtest={TEST} -Dsurefire.failIfNoSpecif
 format = "./mvnw spotless:apply"
 # lint, typecheck, and run are omitted because this repo has none. TOML has no null.
 
+# One table per kind of test the repo runs. The test stage assigns each check one of these levels.
 [test_types.unit]
 command = "./mvnw test"
 command_one = "./mvnw test -pl {MODULE} -am -Dtest={TEST}"
 matches = ["src/test/java/**/*Test.java"]
 note = "Needs no running services."
+
+[test_types.integration]
+command = "./mvnw verify -DskipUnitTests"
+command_one = "./mvnw verify -pl {MODULE} -am -Dit.test={TEST}"
+matches = ["src/test/java/**/*IT.java"]
+note = "Starts PostgreSQL through Testcontainers, so Docker must be running."
 
 [[module_map]]
 glob = "src/**"

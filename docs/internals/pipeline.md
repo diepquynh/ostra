@@ -53,7 +53,7 @@ route:
 | `PLAN` | Research, spec with approval, plan with approval. Nothing is built. |
 | `IMPLEMENT` | Research, then the light or the full track, the phases, the implementation review, and the closing stages. |
 | `VERIFY` | One implementer pass per project that runs the project's test command and reports. |
-| `UNIT_TEST` | Straight to the test stage: EPA, write-test, review. No closing gate, because the request asked for tests. |
+| `TEST` | Straight to the test stage: EPA, write-test, review. No closing gate, because the request asked for tests. The stage verifies at every level the project has test types for (unit, integration, end to end) and re-runs the existing tests that cover the code. |
 | `PROMPT` | Prompt-generation, reviewed only when a changed file is code rather than an instruction file. |
 | `QUICK_CHANGE` | One implementer pass per project with no research, spec, plan, or review, on the native executor. |
 
@@ -97,8 +97,9 @@ runner, which every execution in Ostra goes through.
 
 An explore agent writes a research document and submits its scope and a `Not covered` list: things it touched
 but could not investigate. Explore tasks can also appear later. When a user adds context to a running session,
-a new task researches the new part (Rule D2), and the Rescue judge can start a targeted explore in the middle
-of a build.
+the Route answer judge decides what research it needs and in which project (Rule C2), and the Rescue judge can
+start a targeted explore in the middle of a build. Every explore spawn gets the context the user added beside
+its task, so a task written before the addition, or re-run after Send now interrupted it, still sees it.
 
 The Add context box on the session board. Queue for the next step waits for the running agents to finish; Send now
 restarts running work (Rule C2):
@@ -476,17 +477,107 @@ The closing gate for one project, with both optional stages unchecked by default
 
 ## Tests: analyze in parallel, write in order
 
-The test stage covers each passed phase whose test policy is `Required`, or the whole change when there was no
-plan (Rule T4).
+The test stage verifies the implementation, not only its units. Ultracode's test writer wrote unit tests for
+the paths through each changed function. Ostra's stage also checks that the changed code still works with the
+parts of the system that reach it and that nothing it touches regressed, because a change whose functions all
+pass alone can still break the route, the serializer, or the consumer between them. Unit, integration,
+end-to-end, and regression checks all run inside this one stage.
 
-1. One `execution-path-analyzer` (EPA) runs per covered phase, all at once. Each reads the implementer's report,
-   traces every execution path through the changed public functions, and writes an EPA report.
-2. When every EPA is done, `write-test` runs one phase at a time, in phase order, with its own review loop.
+The stage covers each passed phase whose test policy is `Required`, or the whole change when there was no plan
+(Rule T4).
+
+1. One `execution-path-analyzer` (EPA) runs per covered phase, all at once. Each reads the implementer's report
+   and writes an EPA report, which is the phase's verification plan:
+   - **Execution paths** (`P1`, `P2`, ...): every branch, early return, error path, and loop edge through the
+     changed public functions.
+   - **System flows** (`S1`, `S2`, ...): each route from an entry point (an HTTP route, a CLI command, a UI
+     screen, a job, a message consumer) to the changed code, and each consumer of a changed contract (a public
+     API, schema, event, config key, or file format). For a contract another project could read, the analyzer
+     searches the other projects in the workspace for the changed name and reads its own project's README and
+     docs for the clients they name. It lists each consumer it finds in the report's notes and analyzes only its
+     own project, so whether that project is verified too stays the orchestrator's decision.
+   - **Regression suites**: the existing tests that exercise the changed code, its callers, or its consumers,
+     with the exact command that runs each. An existing test whose assertion the phase changes on purpose is
+     marked, so its failure is not read as a regression.
+   - A **test level** on every check, taken from the project's `[test_types.*]` table in `project.toml` (for
+     example `unit`, `integration`, `e2e`), each with its own runner, file patterns, and requirements. The
+     analyzer picks the lowest level that observes the result with the crossed parts left real. A flow that
+     needs a level the project has no test type for is listed as unverified instead of being mocked down to a
+     unit test. A flow that starts at a page script or a UI event is planned at the browser level, apart from the
+     API part behind it, because an integration test of the API does not cover the page. Page code gets unit
+     paths of its own only when a test type runs tests in a DOM, such as jsdom.
+2. When every EPA is done, `write-test` runs one phase at a time, in phase order, with its own review loop. It
+   writes one test per NEW path and flow at the assigned level, runs each with that level's command, then runs
+   the project's `test` command and every regression suite. A test whose level needs something it cannot start
+   (a service, a database, a browser) is reported as not run with the reason, never as passed. A regression
+   failure the phase did not intend is a source bug, so write-test submits `stuck` instead of changing source.
    Writing serially keeps two test writers from editing the same test files.
+
+The test review checks each NEW path and flow for a test at its level, flags a flow test that stubs out the
+parts the flow crosses, and flags a regression suite the test report does not show as run and passing.
 
 A test loop is the same `WorkLoop` as the implement loop: reviewed, capped, BLOCKER-aware, and staged when it
 passes. Phases marked `Test policy: Skip` are listed as uncovered in the completion report with the plan's
 rationale.
+
+### Tests for code that already exists
+
+A `TEST` session asks for tests directly, so no implementer runs and no change report exists. The engine writes a
+test request in its place, `ostra-test-request.md` in the project's session folder, holding the request and no
+changed files, and hands it to the analyzer as its implementer report. The analyzer resolves the code under test
+from the request, in this order: the files, symbols, or behavior the request names; an earlier change it refers
+to, found with `git log`, `git show`, and `git diff --cached`; and the entry points of a flow it names. It says
+in its summary how it resolved them, and write-test takes its file list from that analysis.
+
+This is how to add the tests a finished session never wrote, for example one that YOLO carried through the
+implementation review before the test stage. A finished session cannot be amended, and with the sandbox on,
+agents cannot read another session's folder, because the sandbox hides it. The earlier change is still in git,
+though: Ostra staged each phase as it passed, so it is either staged or in the commits made since.
+
+### Measuring the test stage
+
+Conformance fixtures prove when the analyzer and write-test run; they cannot say whether a model finds the flows a
+change reaches or writes tests that catch a real bug. The test stage evals do that.
+[`tests/evals/test_stage.toml`](../../tests/evals/test_stage.toml) holds cases in three tiers, set in small projects
+under `tests/evals/test_stage/projects/`: a Python order service with unit, integration, and end-to-end test
+types, and a Node notes app whose browser test type cannot run in the sandbox.
+
+1. **One function.** A new pure function after a light-track phase, for the analyzer and for write-test, and a new
+   session that names one function of existing code.
+2. **Across layers.** A full-track phase adds a service rule and an HTTP route, so the plan needs a flow through
+   the real route and repository. A new session asks for the tests an earlier session skipped and names only the
+   feature, so the analyzer must find the commit in the history. A phase changes a format on purpose, and
+   write-test must update the existing test that asserts the old one.
+3. **Judgment.** A phase breaks an existing test by accident, and write-test must hand it back as stuck instead of
+   bending the test. A changed JSON field has consumers in the repository and in another project. The browser flow
+   must be written at the e2e level and either run, with a browser the agent finds on the machine, or reported as
+   not run; in a project with no browser level it is listed as unverified. New sessions verify a change that is still staged and a lifecycle described only in words.
+
+[`crates/ostra-server/tests/test_stage_evals.rs`](../../crates/ostra-server/tests/test_stage_evals.rs) runs each case
+as a real session of a real `Engine`, with scripted judges and YOLO on. A router executor sends the analyzer, write-
+test, or both to the native loop on the model under test, with the policy, the sandbox, a code index, and the
+coordination tools, and plays every other run: the implementer copies the case's change into the repository, which
+the engine then stages, and a golden analysis stands in for an analyzer that is not live. So the first message each
+agent reads, the test request, the staging, and the sandbox are the engine's own.
+
+An analyzer run passes when its report is at the declared path, it changed no project file, it names each fact the
+case lists, and a grader model finds the rubric met. A write-test run passes when its status is the expected one,
+it changed only test files and listed every one in `changed_files` (Ostra stages exactly those), each expected
+level got a test, the project's test types pass, the files it must keep are unchanged, and every mutant fails the
+tests. A mutant is a planted bug in the source, such as a wrong status code, a route under the wrong path, or a
+status returned but never stored: the project's own tests let it through, so only the new tests can catch it. The
+report gives pass rates per tier, per model, and per role: the analyzer, write-test on a golden analysis, and the
+whole stage, which is write-test after a live analyzer.
+
+An offline test replays every case with the golden analysis and golden tests in the normal suite. It checks that
+each live run is reached through the engine, that the analyzer gets the right report and plan lines, that the
+project's own tests let every mutant survive, and that the golden tests pass every code check and catch every
+mutant, so a case that cannot be passed fails before it costs anything. Run the live evals with:
+
+```bash
+OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 \
+  cargo test -p ostra-server --test test_stage_evals -- --ignored --nocapture
+```
 
 ## Module documentation
 

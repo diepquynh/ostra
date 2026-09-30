@@ -388,8 +388,8 @@ pub mod report {
     pub fn completion() -> String {
         "ostra-completion.md".into()
     }
-    pub fn unit_test_request() -> String {
-        "ostra-unit-test-request.md".into()
+    pub fn test_request() -> String {
+        "ostra-test-request.md".into()
     }
     /// The engine-written session context, in the session root: the request, every artifact
     /// path, and each feedback round, so a revision reads files instead of a conversation.

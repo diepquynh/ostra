@@ -34,6 +34,8 @@ pub const MAX_TOKEN_CONTINUES: usize = 3;
 pub const COMPACT_AT: f64 = 0.95;
 /// Context window assumed for a model the models.dev catalog does not list.
 pub const DEFAULT_CONTEXT_WINDOW: u64 = 200_000;
+/// Output limit assumed for a model the models.dev catalog does not list.
+pub const DEFAULT_MAX_OUTPUT: u32 = 32_000;
 /// After a compaction that returned no summary, the next try waits until the context grows by
 /// this share of the window, because each try sends the whole conversation.
 const COMPACT_RETRY_GROWTH: f64 = 0.02;
@@ -527,6 +529,10 @@ impl Run {
         let mut continues = 0;
         let window = ostra_core::pricing::context_window(&spec.route.model)
             .unwrap_or(DEFAULT_CONTEXT_WINDOW);
+        // The model's whole output limit, so no effort level is cut short by the request: the
+        // user chose the effort knowing what it spends.
+        let max_output = ostra_core::pricing::max_output(&spec.route.model)
+            .map_or(DEFAULT_MAX_OUTPUT, |n| u32::try_from(n).unwrap_or(u32::MAX));
         // The last response's context, and how many messages it covered.
         let (mut measured, mut measured_len) = (0u64, 0usize);
         let mut failed_compaction_at: Option<u64> = None;
@@ -541,6 +547,7 @@ impl Run {
             req.tools = tools.clone();
             req.server_tools = server_tools;
             req.effort = spec.effort;
+            req.max_tokens = max_output;
             req.tool_choice = ToolChoice::Auto;
 
             let next = measured + estimate_tokens(&messages[measured_len.min(messages.len())..]);

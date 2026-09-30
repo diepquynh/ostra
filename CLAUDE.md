@@ -170,6 +170,11 @@ cd tests/browser && npm test                # browser security suite: the consol
   `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 cargo test -p ostra-server --test coordination_evals -- --ignored --nocapture`.
   Its offline test replays every case with stand-ins, so run the normal suite after editing a case. The harness wait is
   checked live with `harness_probe wake <harness> <model> <dir>` (`crates/ostra-exec-harness/examples/`).
+- Test stage evals (`tests/evals/test_stage.toml`, run by `crates/ostra-server/tests/test_stage_evals.rs`) run the live
+  analyzer, write-test, or both in real sessions on the small projects in `tests/evals/test_stage/`, and grade write-test
+  by planted mutants its tests must catch. Tiers 1 to 3, 3 runs per model by default (Opus, Sonnet, and Haiku):
+  `OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 cargo test -p ostra-server --test test_stage_evals -- --ignored --nocapture`.
+  Its offline test replays every case with the golden analysis and tests, and needs `python3` and `node`.
 
 ## Live runs cost money
 

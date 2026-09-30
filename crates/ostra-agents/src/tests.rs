@@ -4,7 +4,7 @@ use crate::brief::{
 };
 use crate::spawn::*;
 use ostra_core::HarnessKind;
-use ostra_core::config::{Commands, ModuleRow, ProjectProfile, ReviewRule, SkillEntry};
+use ostra_core::config::{Commands, ModuleRow, ProjectProfile, ReviewRule, SkillEntry, TestType};
 use ostra_core::pipeline::QuestionAnswer;
 
 fn all_executors() -> Vec<ExecutorKind> {
@@ -719,6 +719,48 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
     let wb = build_brief(&wt).unwrap();
     assert!(wb.contains("service-test"));
     assert!(!wb.contains("`entity`"));
+}
+
+#[test]
+fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
+    let mut p = profile();
+    p.test_types.insert(
+        "unit".into(),
+        TestType {
+            command: Some("pytest tests/unit".into()),
+            command_one: Some("pytest {PATH}".into()),
+            matches: vec!["tests/unit/**".into()],
+            note: Some("Needs nothing.".into()),
+            reports: None,
+        },
+    );
+    p.test_types.insert(
+        "e2e".into(),
+        TestType {
+            command: Some("npx playwright test".into()),
+            ..Default::default()
+        },
+    );
+    for agent in [AgentName::WriteTest, AgentName::ExecutionPathAnalyzer] {
+        let input = BriefInput {
+            agent,
+            prompt: "",
+            repo_root: Path::new("/ws/backend"),
+            profile: Some(&p),
+            inventory: None,
+            instructions: &[],
+            project_docs: &[],
+            artifacts: None,
+            new_projects: &[],
+        };
+        let brief = build_brief(&input).unwrap();
+        assert!(
+            brief.contains("- **unit**: `pytest tests/unit`; one test: `pytest {PATH}`"),
+            "{brief}"
+        );
+        assert!(brief.contains("- **e2e**: `npx playwright test`\n"), "{brief}");
+        assert!(brief.contains("### Commands"), "{agent}: regression suites need exact commands");
+    }
 }
 
 #[test]

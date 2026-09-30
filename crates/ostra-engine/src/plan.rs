@@ -504,10 +504,9 @@ impl<'a> Planner<'a> {
         if s.yolo {
             for g in s.open_gates() {
                 // A budget is never raised by YOLO: spending more is the user's decision.
-                if !matches!(
-                    g.payload,
-                    GatePayload::Permission { .. } | GatePayload::BudgetReached { .. }
-                ) {
+                if !matches!(g.payload, GatePayload::Permission { .. })
+                    && !crate::judge_input::yolo_leaves_open(s, &g.payload)
+                {
                     self.push(Step::YoloAnswer { gate: g.id.clone() });
                 }
             }
@@ -531,6 +530,17 @@ impl<'a> Planner<'a> {
                 judge: JudgeKind::RouteAnswer,
                 subject: Some(gate.to_string()),
             });
+        }
+        // Rule C2: added context waits for the judge, and nothing starts or re-runs before it.
+        let mut pending = s.pending_amendments().peekable();
+        if pending.peek().is_some() {
+            for i in pending {
+                self.push(Step::Judge {
+                    judge: JudgeKind::RouteAnswer,
+                    subject: Some(amendment_subject(i)),
+                });
+            }
+            return;
         }
         // Explore tasks spawn whatever the stage: rescue explores can arrive mid-build.
         self.explore_tasks();
@@ -598,7 +608,7 @@ impl<'a> Planner<'a> {
                     self.completion();
                 }
             }
-            Category::UnitTest => {
+            Category::Test => {
                 self.closing_stages();
                 if self.all_implement_done() {
                     self.completion();
@@ -626,7 +636,7 @@ impl<'a> Planner<'a> {
             if t.exec.is_none() && !t.abandoned && t.failed.is_none() {
                 // Rule M1: read-only stages fan out; every ready explore spawns at once.
                 let inputs = SpawnInputs {
-                    task: Some(t.task.clone()),
+                    task: Some(format!("{}{}", t.task, s.added_context())),
                     ..Default::default()
                 };
                 self.spawn(
@@ -1324,9 +1334,20 @@ impl<'a> Planner<'a> {
             );
             return;
         }
+        let (title, explanation) = if self.s.stopped_by_user(exec) {
+            (
+                format!("You stopped {agent}"),
+                "Ostra leaves a stopped execution to you, YOLO included. Retry it, or abandon this step.",
+            )
+        } else {
+            (
+                format!("{agent} failed"),
+                "The execution ended without a usable result. Retry it, or abandon this step.",
+            )
+        };
         self.gate(
-            format!("{agent} failed"),
-            "The execution ended without a usable result. Retry it, or abandon this step.",
+            title,
+            explanation,
             GatePayload::ExecutionFailed {
                 execution: exec.clone(),
                 agent,
