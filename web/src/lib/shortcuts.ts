@@ -218,10 +218,10 @@ export function conflicts(bindings: Bindings, action: Action, keys: Keys): Actio
   return out;
 }
 
-const BROWSER_MAC = ["meta+w", "meta+t", "meta+n", "meta+q", "meta+shift+t", "meta+shift+n", "meta+shift+w"];
+const BROWSER_MAC = ["meta+w", "meta+t", "meta+n", "meta+q", "shift+meta+t", "shift+meta+n", "shift+meta+w"];
 const BROWSER_OTHER = ["ctrl+w", "ctrl+t", "ctrl+n", "ctrl+shift+t", "ctrl+shift+n", "ctrl+shift+w"];
 const BROWSER_ANY = ["ctrl+Tab", "ctrl+shift+Tab", "ctrl+PageUp", "ctrl+PageDown"];
-const SYSTEM_MAC = ["meta+Tab", "meta+shift+Tab", "meta+Space", "ctrl+Space", "meta+h", "meta+m", "ctrl+ArrowUp"];
+const SYSTEM_MAC = ["meta+Tab", "shift+meta+Tab", "meta+Space", "ctrl+Space", "meta+h", "meta+m", "ctrl+ArrowUp"];
 const SYSTEM_OTHER = [
   "alt+Tab",
   "alt+shift+Tab",

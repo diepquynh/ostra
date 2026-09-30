@@ -138,6 +138,8 @@ describe("custom shortcuts", () => {
   it("warns about combos the browser or the system keeps", () => {
     expect(reservedBy("ctrl+t", false)).toBe("browser");
     expect(reservedBy("meta+t", true)).toBe("browser");
+    expect(reservedBy(strokeOf(ev("T", { meta: true, shift: true }, "KeyT"))!, true)).toBe("browser");
+    expect(reservedBy(strokeOf(ev("Tab", { meta: true, shift: true }))!, true)).toBe("system");
     expect(reservedBy("ctrl+Tab", true)).toBe("browser");
     expect(reservedBy("meta+Space", true)).toBe("system");
     expect(reservedBy("meta+e", false)).toBe("system");
