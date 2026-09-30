@@ -177,19 +177,51 @@ the way you left it.
 
 ### Keyboard shortcuts
 
-The console follows VS Code's keys: ⌘K opens the command palette, ⌘/ the quick-question dock, ⌘B toggles the
-sidebar, ⇧⌘E the Files tab, and Ctrl+Tab and Ctrl+Shift+Tab step through the open tabs (Ctrl in place of ⌘
-outside macOS). A browser keeps some combos for itself, such as Ctrl+Tab, Ctrl+W, and Ctrl+N, so the page
-never sees them.
+The console follows VS Code's keys by default: ⌘K opens the command palette, ⌘/ the quick-question dock, ⌘B
+toggles the sidebar, ⇧⌘E the Files tab, and Ctrl+Tab and Ctrl+Shift+Tab step through the open tabs (Ctrl in
+place of ⌘ outside macOS). New task, Open settings, the theme toggle, and the keyboard lock have no default key.
+
+Every shortcut can be changed per workspace on the **Shortcuts** tab of Settings, which the palette also opens
+as **Keyboard shortcuts**. Click **Set** or **Change** on a row and press the keys. A shortcut is one
+combination of any modifiers and any key, such as Ctrl+Alt+P or F9, or two combinations pressed one after the
+other, such as Ctrl+K then S. The recorder takes the first combination and waits 1.2 seconds for a second one;
+Escape as the first key cancels. **Remove** leaves an action without a key, **Reset** puts back its default,
+and **Reset all** clears the workspace's changes.
+
+The shortcuts live only in this browser. Each workspace has its own localStorage entry,
+`ostra.shortcuts.<workspace id>`, holding only the actions the user changed, so other workspaces and other
+browsers keep their own keys and nothing reaches the server. Changes apply at once, in every tab of the browser
+that has the workspace open. The console reads the entry as untrusted input and drops any action or key it
+does not recognize (`web/src/lib/shortcuts.ts`).
+
+A key press is matched by its character when no Shift or Alt is held, and by the physical key otherwise,
+because Shift and Alt change the character (Alt+K types ˚ on a Mac). In a two-step shortcut the second press
+must come within 1.5 seconds of the first. Settings refuses silent collisions: a combination another action
+already uses, or one that starts another action's two-step shortcut, shows which action has it and moves it
+only after **Use it here**. A shortcut with no Ctrl, Alt, or ⌘ and no function key (a plain letter, say) runs
+only outside text fields, editors, and terminals, because there the key types text.
+
+A browser keeps some combos for itself, such as Ctrl+Tab, Ctrl+T, Ctrl+W, and Ctrl+N, and the operating system
+handles others before the browser, such as Alt+Tab or ⌘Space, so the page never sees them. The Shortcuts tab
+says so, marks such combos in the list, and warns when one is recorded. It also offers **Install Ostra as an
+app**: the console ships a web app manifest (`web/public/manifest.webmanifest`), so Chromium browsers can
+install it into its own window, where the browser passes most of its own shortcuts to the page. The button
+shows the browser's install dialog when the browser offered one (`beforeinstallprompt`, caught at startup in
+`web/src/lib/install.ts`). Otherwise it says how to install in that browser: Safari's Add to Dock or Add to Home
+Screen, the address bar's install icon in Chromium, or that Firefox installs no web apps. Browsers install apps
+only from an HTTPS address or localhost, so a console opened over plain HTTP on another address says that
+instead.
 
 In Chromium browsers the palette offers **Lock keyboard shortcuts in fullscreen**. It puts the page in
 fullscreen and calls `navigator.keyboard.lock()`, the Keyboard Lock API that vscode.dev uses, because the
 browser honors the lock only in fullscreen. While it holds, key presses reach the console before the browser:
-the console's shortcuts work, ⌘W (Ctrl+W) closes the focused console tab instead of the browser tab, and
-Escape goes to the page, so a harness terminal receives it. Inside a terminal Ctrl+W stays with the shell,
-where it deletes a word. The status bar shows **Shortcuts locked** for as long as the lock holds. Holding
-Escape, leaving fullscreen, clicking that item, or running **Release keyboard shortcuts** from the palette
-releases the lock. The code is `web/src/lib/keyboardLock.ts`; browsers without the API do not list the command.
+the console's shortcuts work, and Escape goes to the page, so a harness terminal receives it. The default
+Close tab shortcut, ⌘W (Ctrl+W), is claimed only while the lock holds or Ostra runs as an installed app;
+otherwise it stays with the browser tab. Close tab bound to any other key works at all times. Inside a terminal
+Ctrl+W stays with the shell, where it deletes a word. The status bar shows **Shortcuts locked** for as long as
+the lock holds. Holding Escape, leaving fullscreen, clicking that item, or running **Release keyboard
+shortcuts** from the palette releases the lock. The code is `web/src/lib/keyboardLock.ts`; browsers without the
+API do not list the command.
 
 ### On a phone
 

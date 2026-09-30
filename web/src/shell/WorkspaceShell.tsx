@@ -24,12 +24,23 @@ import { Outlet, useLocation, useNavigate, useParams } from "react-router";
 import { api } from "../api";
 import type { SessionStatus } from "../api/types";
 import { useAsync, useChannel } from "../lib/hooks";
+import { runningAsApp } from "../lib/install";
 import { useKeyboardLock } from "../lib/keyboardLock";
-import { isMac, modKeys, shortcutOf } from "../lib/keys";
+import { isMac } from "../lib/keys";
 import { useSessionSummaries, useWorkspaceTree } from "../lib/live";
 import { ConsoleContext, type ConsoleContextValue, type OpenOptions, type Theme } from "../lib/nav";
 import { paletteTarget } from "../lib/palette";
 import { parseResource, resourceFromPath, resourcePath } from "../lib/resource";
+import {
+  type Action,
+  hints,
+  matchStroke,
+  type Pending,
+  strokeCaps,
+  strokeOf,
+  typesText,
+  useShortcuts,
+} from "../lib/shortcuts";
 import { type CloseScope, emptyTabs, normalizeTabs, type TabsState, tabsReducer } from "../lib/tabs";
 import { applyTheme, resolveTheme } from "../lib/theme";
 import { AddProjectDialog, NewWorkspaceDialog, Onboarding, selfScrolling } from "../screens";
@@ -235,44 +246,64 @@ function Shell({ ws }: { ws: string }) {
   );
 
   const keyLock = useKeyboardLock();
+  const shortcuts = useShortcuts(ws);
+  const bindingsRef = useRef(shortcuts.bindings);
+  bindingsRef.current = shortcuts.bindings;
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const lockedRef = useRef(keyLock.locked);
   lockedRef.current = keyLock.locked;
+  const pendingStroke = useRef<Pending>(null);
+  const runShortcut = useRef<(a: Action) => void>(() => {});
+  runShortcut.current = (a) => {
+    if (a === "close-tab") {
+      const { active } = tabsRef.current;
+      if (active) dispatch({ type: "close", id: active });
+    } else if (a === "next-tab" || a === "prev-tab") {
+      // Strip order, wrapping at the ends, like VS Code with its MRU switcher turned off.
+      const { tabs: list, active } = tabsRef.current;
+      if (list.length < 2) return;
+      const i = list.findIndex((t) => t.id === active);
+      const next = list[(i + (a === "next-tab" ? 1 : -1) + list.length) % list.length];
+      dispatch({ type: "activate", id: next.id });
+    } else if (a === "palette") setPalette((p) => !p);
+    else if (a === "dock") setPref("dockOpen", (d) => !d);
+    else if (a === "sidebar") setPref("sidebarOpen", (v) => !v);
+    else if (a === "files")
+      setPrefs((p) => ({
+        ...p,
+        sidebarOpen: true,
+        leftTab: p.leftTab === "files" && p.sidebarOpen ? "sessions" : "files",
+      }));
+    else if (a === "new-task") open("ws:overview");
+    else if (a === "settings") open("ws:settings");
+    else if (a === "theme") ctx.shell.toggleTheme();
+    else if (a === "keyboard-lock") keyLock.toggle();
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const s = shortcutOf(e, isMac, lockedRef.current);
-      if (!s) return;
+      const stroke = strokeOf(e);
+      if (!stroke) return;
+      const target = e.target as HTMLElement | null;
+      if (!pendingStroke.current && typesText(stroke) && editable(target)) return;
+      const m = matchStroke(
+        bindingsRef.current,
+        pendingStroke.current,
+        stroke,
+        Date.now(),
+        lockedRef.current || runningAsApp(),
+      );
+      pendingStroke.current = m.pending;
       // Ctrl+W deletes a word in a shell, so the terminal keeps it.
-      if (s === "close-tab" && (e.target as HTMLElement | null)?.closest?.(".ex-xterm")) return;
+      if (m.action === "close-tab" && stroke === "ctrl+w" && target?.closest?.(".ex-xterm")) return;
+      if (!m.consume) return;
       e.preventDefault();
-      if (s === "close-tab") {
-        const { active } = tabsRef.current;
-        if (active) dispatch({ type: "close", id: active });
-        return;
-      }
-      if (s === "next-tab" || s === "prev-tab") {
-        // Strip order, wrapping at the ends, like VS Code with its MRU switcher turned off.
-        const { tabs: list, active } = tabsRef.current;
-        if (list.length < 2) return;
-        const i = list.findIndex((t) => t.id === active);
-        const next = list[(i + (s === "next-tab" ? 1 : -1) + list.length) % list.length];
-        dispatch({ type: "activate", id: next.id });
-        return;
-      }
-      if (s === "palette") setPalette((p) => !p);
-      else if (s === "dock") setPref("dockOpen", (d) => !d);
-      else if (s === "sidebar") setPref("sidebarOpen", (v) => !v);
-      else if (s === "files")
-        setPrefs((p) => ({
-          ...p,
-          sidebarOpen: true,
-          leftTab: p.leftTab === "files" && p.sidebarOpen ? "sessions" : "files",
-        }));
+      if (m.action) runShortcut.current(m.action);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setPref]);
+  }, []);
+  const keyHints = useMemo(() => hints(shortcuts.bindings), [shortcuts.bindings]);
 
   const metaCtx = { wsName, sessions: tree.sessions };
   const active = tabs.active;
@@ -379,6 +410,7 @@ function Shell({ ws }: { ws: string }) {
         }}
       >
         <TitleBar
+          paletteKeys={shortcuts.bindings.palette?.keys ?? null}
           ws={ws}
           wsName={wsName}
           activeId={active}
@@ -481,7 +513,7 @@ function Shell({ ws }: { ws: string }) {
               ) : active ? (
                 <Outlet />
               ) : (
-                <NothingOpen />
+                <NothingOpen palette={shortcuts.bindings.palette?.keys ?? null} />
               )}
             </div>
           </main>
@@ -543,6 +575,7 @@ function Shell({ ws }: { ws: string }) {
           else open(t.id, { anchor: t.anchor });
         }}
         lock={!keyLock.supported ? "unsupported" : keyLock.locked ? "locked" : "unlocked"}
+        hints={keyHints}
       />
     </ConsoleContext.Provider>
   );
@@ -557,7 +590,7 @@ const MARK_LABEL: Record<SessionStatus, string> = {
   completed: "Completed",
 };
 
-function NothingOpen() {
+function NothingOpen({ palette }: { palette: string[] | null }) {
   return (
     <div style={{ height: "100%", display: "grid", placeItems: "center", color: "var(--text-muted)" }}>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
@@ -565,7 +598,17 @@ function NothingOpen() {
           <LiveMark state={REST} size={36} />
         </span>
         <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-          Nothing open. Press <Kbd keys={modKeys("K")} /> to go to a session, execution or artifact.
+          {palette ? (
+            <>
+              Nothing open. Press{" "}
+              {palette.map((s, i) => (
+                <Kbd key={`${i}:${s}`} keys={strokeCaps(s)} />
+              ))}{" "}
+              to go to a session, execution or artifact.
+            </>
+          ) : (
+            "Nothing open. Open the sidebar to go to a session, execution or artifact."
+          )}
         </span>
       </div>
     </div>
@@ -598,3 +641,6 @@ function WorkspaceMissing({ ws, message }: { ws: string; message: string }) {
     </div>
   );
 }
+
+const EDITABLE = 'input, textarea, select, [contenteditable=""], [contenteditable="true"], .monaco-editor, .ex-xterm';
+const editable = (el: HTMLElement | null) => !!el && (el.isContentEditable || !!el.closest?.(EDITABLE));

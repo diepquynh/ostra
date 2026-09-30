@@ -4,9 +4,11 @@ import { App } from "./App";
 import { isMock } from "./api";
 import { exchangeTokenFromUrl, watchForTokens } from "./auth";
 import "@ostra/design/index.css";
+import { watchInstall } from "./lib/install";
 import { registerServiceWorker } from "./lib/push";
 
 async function boot() {
+  watchInstall();
   const exchangeError = isMock ? null : await exchangeTokenFromUrl();
   if (!isMock) watchForTokens();
   if (!isMock) void registerServiceWorker();

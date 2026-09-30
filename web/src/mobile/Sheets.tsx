@@ -104,7 +104,7 @@ export function SearchSheet({ ws, sessions, projects, open, onAsk, onSetup, togg
   const [query, setQuery] = useState("");
   const search = useSearch(ws, query);
   const local = useMemo(() => localItems(sessions, projects), [sessions, projects]);
-  const commands = useMemo(() => paletteCommands("").filter((c) => c.id !== "cmd:keyboard-lock"), []);
+  const commands = useMemo(() => paletteCommands().filter((c) => c.id !== "cmd:keyboard-lock"), []);
   const hits = query.trim() && !search.loading && !search.unavailable ? search.items : null;
   const rows = mergePalette(query, hits, local, commands);
 

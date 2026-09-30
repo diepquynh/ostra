@@ -479,6 +479,7 @@ export type SettingsTab =
   | "permissions"
   | "instructions"
   | "notifications"
+  | "shortcuts"
   | "signin";
 
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
@@ -490,6 +491,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "permissions", label: "Permissions" },
   { id: "instructions", label: "Instructions" },
   { id: "notifications", label: "Notifications" },
+  { id: "shortcuts", label: "Shortcuts" },
   { id: "signin", label: "Sign-in" },
 ];
 
@@ -497,6 +499,7 @@ export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
 export function tabOf(path: string): SettingsTab {
   const head = path.split(/[.[]/)[0];
   if (head === "mcp_servers") return "mcp";
+  if (head === "shortcuts") return "shortcuts";
   if (head.startsWith("sandbox_") || head === "tool_enforcement") return "permissions";
   if (
     head === "projects" ||
@@ -577,6 +580,7 @@ export function mapIssues(issues: ValidationIssue[], fields: string[]): IssueMap
     permissions: 0,
     instructions: 0,
     notifications: 0,
+    shortcuts: 0,
     signin: 0,
   };
   for (const i of issues) {

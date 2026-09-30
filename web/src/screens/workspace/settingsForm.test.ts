@@ -220,6 +220,7 @@ describe("issue paths", () => {
       permissions: 0,
       instructions: 0,
       notifications: 0,
+      shortcuts: 0,
       signin: 0,
     });
   });

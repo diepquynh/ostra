@@ -25,7 +25,7 @@ const session: TreeSession = {
   artifacts: [{ path: "/s/ostra-spec.md", kind: "spec", label: "Spec", project: null }],
 };
 const project = { key: "backend", path: "/code/backend" } as ProjectView;
-const commands = paletteCommands("⌘/");
+const commands = paletteCommands({ dock: "⌘/" });
 const local = localItems([session], [project]);
 
 describe("palette", () => {
@@ -36,6 +36,7 @@ describe("palette", () => {
       "Add project…",
       "Cost",
       "Settings",
+      "Keyboard shortcuts",
       "Ask a quick question",
       "Toggle light and dark theme",
     ]);
@@ -45,6 +46,7 @@ describe("palette", () => {
       "cmd:add-project",
       "ws:cost",
       "ws:settings",
+      "setting:shortcuts",
       "cmd:dock",
       "cmd:theme",
     ]);
@@ -52,8 +54,16 @@ describe("palette", () => {
 
   it("offers the keyboard lock only where the browser supports it", () => {
     expect(commands.some((c) => c.id === "cmd:keyboard-lock")).toBe(false);
-    expect(paletteCommands("⌘/", "unlocked").at(-1)?.label).toBe("Lock keyboard shortcuts in fullscreen");
-    expect(paletteCommands("⌘/", "locked").at(-1)?.label).toBe("Release keyboard shortcuts");
+    expect(paletteCommands({ dock: "⌘/" }, "unlocked").at(-1)?.label).toBe("Lock keyboard shortcuts in fullscreen");
+    expect(paletteCommands({ dock: "⌘/" }, "locked").at(-1)?.label).toBe("Release keyboard shortcuts");
+  });
+
+  it("shows the user's shortcut on each bound command", () => {
+    const hinted = paletteCommands({ dock: "Ctrl+J", theme: "F9", "new-task": "Ctrl+K N" });
+    expect(hinted.find((c) => c.id === "cmd:dock")?.hint).toBe("Ctrl+J");
+    expect(hinted.find((c) => c.id === "cmd:theme")?.hint).toBe("F9");
+    expect(hinted.find((c) => c.id === "ws:overview")?.hint).toBe("Ctrl+K N");
+    expect(paletteCommands().find((c) => c.id === "cmd:dock")?.hint).toBeUndefined();
   });
 
   it("builds local rows for sessions, executions, artifacts and projects", () => {

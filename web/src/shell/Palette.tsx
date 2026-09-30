@@ -4,6 +4,7 @@ import type { TreeSession } from "../api/nav";
 import type { ProjectView } from "../api/types";
 import { useFileIndex, useSearch } from "../lib/live";
 import { type LockState, localItems, mergePalette, paletteCommands } from "../lib/palette";
+import type { Action } from "../lib/shortcuts";
 
 type PaletteProps = {
   ws: string;
@@ -15,16 +16,17 @@ type PaletteProps = {
   filesProject: string | null;
   onSelect: (id: string) => void;
   lock: LockState;
+  hints: Partial<Record<Action, string>>;
 };
 
 const passThrough = (items: PaletteItem[]) => items;
 
 /** ⌘K: server search (debounced), local rows for an empty query, and the design's commands. */
-export function Palette({ ws, open, onClose, sessions, projects, filesProject, onSelect, lock }: PaletteProps) {
+export function Palette({ ws, open, onClose, sessions, projects, filesProject, onSelect, lock, hints }: PaletteProps) {
   const [query, setQuery] = useState("");
   const search = useSearch(ws, open ? query : "");
   const index = useFileIndex(ws, open && search.unavailable ? filesProject : null);
-  const commands = useMemo(() => paletteCommands(undefined, lock), [lock]);
+  const commands = useMemo(() => paletteCommands(hints, lock), [hints, lock]);
   const local = useMemo(
     () =>
       localItems(

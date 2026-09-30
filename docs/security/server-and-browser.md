@@ -242,6 +242,7 @@ violation on the app's origin, and on any unexpected dialog, popup, or navigatio
 | `signin` | The token leaves the URL, no request carries it, and what the browser profile keeps is already spent |
 | `uploads` | SVG and HTML uploads through chips, the artifact view, and raw links |
 | `storage` | localStorage, sessionStorage, IndexedDB, and Cache Storage after a full session |
+| `shortcuts` | The web app manifest and its icons load from the app origin under the server's policy, and a shortcut recorded in Settings stays in this workspace's localStorage entry and runs |
 | `site` | The homepage and docs served as a static host serves them, a docs page full of attack strings, search with hostile input, the console screenshot loading only same-origin files, and cross-origin messages to it |
 
 Any new browser surface, whether a console screen or a site page, gets a spec here and the same policy as the

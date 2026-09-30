@@ -18,6 +18,7 @@ import {
   ProjectsSection,
   RoutingSection,
 } from "./workspace/SettingsSections";
+import { ShortcutsSection } from "./workspace/ShortcutsSection";
 import { SETTINGS_TABS, type SettingsTab } from "./workspace/settingsForm";
 import { useSettingsEditor } from "./workspace/useSettingsEditor";
 
@@ -165,6 +166,7 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
         <InstructionsSection {...props} ws={ws} projects={detail.projects.map((p) => p.key)} />
       )}
       {tab === "notifications" && <NotificationsSection {...props} />}
+      {tab === "shortcuts" && <ShortcutsSection ws={ws} />}
       {tab === "signin" && <SignInSessions />}
     </Page>
   );

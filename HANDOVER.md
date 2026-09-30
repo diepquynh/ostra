@@ -1011,7 +1011,10 @@ Each workspace opens as one console, laid out like a code editor:
   toggle.
 - **Shortcuts.** ⌘K searches sessions, executions, artifacts and their headings, files, projects, lessons, and
   settings keys through `/api/workspaces/:ws/search`, and lists commands. ⌘/ opens the quick-question dock, ⌘B
-  toggles the left dock, and ⇧⌘E opens the Files tab. Other systems use Ctrl instead of ⌘.
+  toggles the left dock, and ⇧⌘E opens the Files tab. Other systems use Ctrl instead of ⌘. The Shortcuts tab of
+  Settings rebinds each of them per workspace, in this browser's localStorage, to any combination or two-step
+  sequence. It notes that browser and system shortcuts stay out of reach and offers to install Ostra as an app
+  (web app manifest), whose own window receives most browser shortcuts.
 - **First run.** On a machine with no workspace and no finished onboarding, `/` shows the setup guide: a
   machine check (`/api/environment`), name and folder, projects, defaults, and a review that validates the whole
   request (`POST /api/workspaces/validate`) before one `POST /api/workspaces` creates it.

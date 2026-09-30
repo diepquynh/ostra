@@ -2,21 +2,26 @@ import { filterPaletteItems, type IconName, type PaletteItem } from "@ostra/desi
 import type { SearchHit, SearchHitKind, TreeSession } from "../api/nav";
 import type { ProjectView } from "../api/types";
 import { humanize } from "./format";
-import { modHint } from "./keys";
+import type { Action } from "./shortcuts";
 
 /** Where the Keyboard Lock API is missing, the palette leaves its command out. */
 export type LockState = "unsupported" | "locked" | "unlocked";
 
 /** Local commands, as the design's App.jsx lists them. `cmd:*` ids run an action instead of opening a tab. */
-export function paletteCommands(dockHint = modHint("/"), lock: LockState = "unsupported"): PaletteItem[] {
+/** `hints` holds the user's shortcut for each bound action, shown at the right of its row. */
+export function paletteCommands(
+  hints: Partial<Record<Action, string>> = {},
+  lock: LockState = "unsupported",
+): PaletteItem[] {
   const items: PaletteItem[] = [
-    { id: "ws:overview", group: "Workspace", icon: "plus", label: "New task", hint: "overview" },
+    { id: "ws:overview", group: "Workspace", icon: "plus", label: "New task", hint: hints["new-task"] ?? "overview" },
     { id: "cmd:new-workspace", group: "Workspace", icon: "box", label: "New workspace…" },
     { id: "cmd:add-project", group: "Workspace", icon: "folder-plus", label: "Add project…" },
     { id: "ws:cost", group: "Workspace", icon: "coins", label: "Cost" },
-    { id: "ws:settings", group: "Workspace", icon: "settings", label: "Settings" },
-    { id: "cmd:dock", group: "Actions", icon: "message-square", label: "Ask a quick question", hint: dockHint },
-    { id: "cmd:theme", group: "Actions", icon: "sun-moon", label: "Toggle light and dark theme" },
+    { id: "ws:settings", group: "Workspace", icon: "settings", label: "Settings", hint: hints.settings },
+    { id: "setting:shortcuts", group: "Workspace", icon: "keyboard", label: "Keyboard shortcuts" },
+    { id: "cmd:dock", group: "Actions", icon: "message-square", label: "Ask a quick question", hint: hints.dock },
+    { id: "cmd:theme", group: "Actions", icon: "sun-moon", label: "Toggle light and dark theme", hint: hints.theme },
   ];
   if (lock !== "unsupported")
     items.push({
@@ -24,6 +29,7 @@ export function paletteCommands(dockHint = modHint("/"), lock: LockState = "unsu
       group: "Actions",
       icon: "lock",
       label: lock === "locked" ? "Release keyboard shortcuts" : "Lock keyboard shortcuts in fullscreen",
+      hint: hints["keyboard-lock"],
     });
   return items;
 }

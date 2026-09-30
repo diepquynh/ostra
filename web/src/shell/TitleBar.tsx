@@ -2,9 +2,9 @@ import { Breadcrumbs, Icon, IconButton, Kbd, LiveMark, type MarkState, Menu, typ
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { formatCost } from "../lib/format";
-import { modKeys } from "../lib/keys";
 import { useActivity, useWorkspaces } from "../lib/live";
 import { resourcePath } from "../lib/resource";
+import { strokeCaps } from "../lib/shortcuts";
 import type { ResourceCrumb } from "./meta";
 import { lastActive } from "./uiState";
 
@@ -104,6 +104,8 @@ export type TitleBarProps = SwitcherProps & {
   toggleDock: () => void;
   mark: MarkState;
   markLabel: string;
+  /** The palette's shortcut, or null when the user unbound it. */
+  paletteKeys: string[] | null;
 };
 
 export function TitleBar({
@@ -115,6 +117,7 @@ export function TitleBar({
   toggleDock,
   mark,
   markLabel,
+  paletteKeys,
   ...switcher
 }: TitleBarProps) {
   return (
@@ -155,7 +158,9 @@ export function TitleBar({
       >
         <Icon name="search" size={13} />
         <span style={{ flex: 1, textAlign: "left" }}>Go to anything</span>
-        <Kbd keys={modKeys("K")} />
+        {paletteKeys?.map((k, i) => (
+          <Kbd key={`${i}:${k}`} keys={strokeCaps(k)} />
+        ))}
       </button>
       <div style={{ display: "flex", gap: 2 }}>
         <IconButton size="sm" icon="panel-left" label="Toggle sidebar" active={sidebar} onClick={toggleSidebar} />

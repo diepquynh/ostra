@@ -182,6 +182,41 @@ describe("workspace shell", () => {
     expect(document.querySelector('[aria-label="Command palette"]')).not.toBeNull();
   });
 
+  it("runs the workspace's own shortcuts, sequences included, and leaves typed text alone", async () => {
+    localStorage.setItem(
+      `ostra.shortcuts.${WS}`,
+      JSON.stringify({
+        v: 1,
+        bindings: { palette: ["alt+p"], sidebar: null, settings: ["ctrl+j", "s"], theme: ["t"] },
+      }),
+    );
+    localStorage.setItem("ostra.shortcuts.ws_other", JSON.stringify({ v: 1, bindings: { theme: ["alt+p"] } }));
+    await mount(`/w/${WS}/s/${SESSION}`);
+    const mod = navigator.platform.includes("Mac") ? { metaKey: true } : { ctrlKey: true };
+    await key("b", mod);
+    expect(document.querySelector('[aria-label="Left dock"]')).not.toBeNull();
+    await key("k", mod);
+    expect(document.querySelector('[aria-label="Command palette"]')).toBeNull();
+    await key("p", { altKey: true, code: "KeyP" });
+    expect(document.querySelector('[aria-label="Command palette"]')).not.toBeNull();
+    await key("Escape");
+
+    const theme = document.documentElement.dataset.theme;
+    const box = document.createElement("input");
+    document.body.appendChild(box);
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent("keydown", { key: "t", bubbles: true }));
+    });
+    expect(document.documentElement.dataset.theme).toBe(theme);
+    box.remove();
+    await key("t");
+    expect(document.documentElement.dataset.theme).not.toBe(theme);
+
+    await key("j", { ctrlKey: true });
+    await key("s");
+    expect(router.state.location.pathname).toBe(`/w/${WS}/settings`);
+  });
+
   it("opens a file from the Files tab in a preview tab", async () => {
     await mount(`/w/${WS}/s/${SESSION}`);
     await click(document.querySelectorAll('[aria-label="Left dock"] [role="tab"]')[1]);
