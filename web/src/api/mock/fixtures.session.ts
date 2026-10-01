@@ -97,6 +97,8 @@ function execution(session: string, x: ExecSpec): ExecutionView {
     error: null,
     can_resume: false,
     can_skip: x.status === "running" && x.purpose?.kind === "explore",
+    can_steer: x.status === "running",
+    queued_steer: null,
     has_terminal: false,
     group: `${x.agent}:${x.project}`,
     run_label: x.run,

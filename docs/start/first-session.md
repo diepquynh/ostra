@@ -171,6 +171,20 @@ you said to ignore it. It also decides whether to research first, and in which p
 project, not the backend" sends the research there. The interrupted work then re-runs with the context beside
 its task. When the context changes a requirement after the spec exists, the spec and the plan run again.
 
+Queued context waits while any execution runs, and nothing new starts until the running work finishes. Until
+then the header shows it as "Queued, waits for running work" with **Withdraw**, which takes it back before any
+step reads it. A withdrawn addition stays in the header, struck through. Context sent now cannot be withdrawn,
+because it has already restarted the running work. A queued "skip the research on X" stops only research that
+has not started; use Skip or Send now to stop a running one.
+
+## Correct one run
+
+When one agent is stuck on a step, type the fix in the correction box on its execution page instead of adding
+context to the whole session. **Send now** stops only that run and resumes it in the same conversation, with
+your correction as its next message, so it keeps the work it has done. Other runs keep going. A correction sent
+to a running run cannot be withdrawn. On a paused session, the box queues the correction for when you
+continue, and the page shows it with **Withdraw** until then. Ctrl+Enter or ⌘Enter sends it.
+
 **Pause** stops starting new work and interrupts what is running. Gates can still be answered while paused.
 **Continue** resumes each interrupted execution where it stopped. The execution keeps its place on the
 board, and its Activity, cost, and conversation continue from before the pause. A paused session stays paused
@@ -187,7 +201,8 @@ abandon the step. Nothing retries a run you stopped on its own, not even YOLO.
 
 **Skip** on a running research, test analysis, docs, or architecture execution stops it and lets the session
 continue without its result, with no gate to answer. Skipping a phase's test analysis skips that phase's tests.
-You can also say it in Add context ("skip the research on X"), and Ostra drops the research tasks you name.
+You can also say it in Add context ("skip the research on X"), and Ostra drops the research tasks you name. A
+queued addition waits for running work first, so send it now to stop research that is already running.
 Work, review, spec, plan, and fact-check runs have Cancel only, because the pipeline's rules need their results.
 
 ## Read what it wrote

@@ -66,11 +66,37 @@ export function SessionHeader({ summary: s, files, uploads, additions, onSummary
           )}
           {additions.length > 0 && (
             <ul className="ctx-additions" aria-label="Context you added">
-              {additions.map((a) => (
-                <li key={a.at}>
+              {additions.map((a, i) => (
+                <li key={a.at} style={a.withdrawn ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>
                   <span className="ctx-additions__meta">
-                    {a.delivery === "now" ? "Sent now" : "Queued"} · {hhmm(a.at)}
+                    {a.withdrawn
+                      ? "Withdrawn"
+                      : a.queued
+                        ? "Queued, waits for running work"
+                        : a.delivery === "now"
+                          ? "Sent now"
+                          : "Queued"}{" "}
+                    · {hhmm(a.at)}
                   </span>
+                  {a.queued && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setError(null);
+                        api.withdrawAddition(s.id, i).then(
+                          (next) => {
+                            onSummary(next);
+                            onChanged();
+                          },
+                          (e: Error) => setError(e.message),
+                        );
+                      }}
+                      title="Take this context back before any step reads it"
+                    >
+                      Withdraw
+                    </Button>
+                  )}
                   <TaggedText text={a.text} files={a.files} /> <UntaggedFiles text={a.text} files={a.files} />
                   {a.uploads.map((u) => (
                     <UploadChip key={u.path} upload={u} />

@@ -47,9 +47,9 @@ There are about twenty event kinds. Grouped by what they record:
 | Group | Events | What they record |
 | --- | --- | --- |
 | Session lifecycle | `SessionCreated`, `SessionCompleted`, `SessionFailed` | The request, options, projects, and folders at the start; the completion report or the reason it stopped. |
-| What you did | `RequestAmended`, `SessionPaused`, `SessionResumed`, `YoloSet` | Context added mid-session (queued or sent now, with `routed` when the Route answer judge decides it, Rule C2), pause and continue (Rules P1 and P2), turning YOLO on or off. |
+| What you did | `RequestAmended`, `AmendmentWithdrawn`, `SessionPaused`, `SessionResumed`, `YoloSet` | Context added mid-session (queued or sent now, with `routed` when the Route answer judge decides it, Rule C2), queued context you took back before any step read it, pause and continue (Rules P1 and P2), turning YOLO on or off. |
 | Judgment | `DecisionMade`, `DecisionOverridden` | A judge's output, its reason, and the input summary it saw; a user's override of it. |
-| Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished` | Agent, purpose, stage, executor, model, the full spawn parameters and rendered spawn block, and later the result with its submit payload, token usage, and cost. `ExecutionResumed` reopens an execution the pause interrupted (Rule P2), so one execution can have several results in the log; the last one counts, and it includes what the earlier parts spent. |
+| Executions | `ExecutionStarted`, `ExecutionResumed`, `ExecutionFinished`, `ExecutionSkipped`, `ExecutionSteered`, `SteerWithdrawn` | Agent, purpose, stage, executor, model, the full spawn parameters and rendered spawn block, and later the result with its submit payload, token usage, and cost. `ExecutionResumed` reopens an execution the pause interrupted (Rule P2), so one execution can have several results in the log; the last one counts, and it includes what the earlier parts spent. |
 | Gates | `GateOpened`, `GateAnswered` | A question the pipeline asks, and its answer with its source: `user`, `yolo`, or `engine`. |
 | Engine work | `CommandStarted`, `CommandRan`, `AutofixApplied`, `DocsPlanned`, `BookWritten` | Format and `git add` commands with their exit code and output tail; review findings the engine applied itself; how a project's part of the book is split among writers, measured from the disk because the fold cannot read it (rule B9); the documentation book the engine wrote, with the projects whose parts it holds and any write error (rule B5). |
 | Projects | `ProjectCreated`, `ProjectInitFinished`, `InitStepFailed` | A project an implementer created with `ProjectCreate`, with every fact of the call (rule O3); the successful end of its init inside the session (rule O4); an init step whose result the engine found unusable, such as no slices or a missing inventory, which the advisor looks at next (rule O5). |
@@ -236,8 +236,22 @@ Pausing is also events, which is why a paused session survives a restart paused.
   execution as `resumes`. The runner then continues the old conversation instead of starting fresh: a native
   execution from its stored transcript in the `messages` table, a harness execution through its CLI's resume
   command with the stored session id and the prompt "Continue the workflow."
-- **Context added while paused.** A resumed conversation would not see new context, so `RequestAmended` clears
-  `resume_from`. Those steps re-run from their spawn blocks with the updated request instead.
+- **Context added while paused.** A resumed conversation would not see new context, so releasing it clears
+  `resume_from`. Those steps re-run from their spawn blocks with the updated request instead. The exception is a
+  run that holds a correction (below): it resumes with the correction, as running work finishes on the old
+  request under Queue.
+- **Queued context (Rule C2).** `RequestAmended` with `delivery: queue` while an execution runs is held: the
+  fold keeps it out of the request and marks it `held`, and the planner starts nothing while any addition is
+  held. When the `ExecutionFinished` of the last running execution folds, every held addition is released and
+  goes to the Route answer judge or straight into the request, as unqueued context does. Until then
+  `AmendmentWithdrawn` takes it back, and no agent or judge ever reads it. Context sent now is released at once,
+  so it cannot be withdrawn.
+- **Corrections (Rule U2).** `ExecutionSteered` on a running execution records the text in the fold's `steers`
+  and marks the run as interrupted for a correction. Its finish puts it in `resume_from`, exactly as a pause
+  does, so the planner asks for the step again and the runner resumes the same execution with the correction
+  as its first message, in place of "Continue the workflow." On a paused execution the correction only waits,
+  marked `queued`, and `SteerWithdrawn` drops it before the session continues. `ExecutionResumed` clears it.
+  A correction cannot be withdrawn once it stopped a running run, because the run already stopped for it.
 
 The difference between a restart and a pause shows in the result. A restart re-runs a step with a note to check
 the progress log, because the old process and its conversation are gone. A pause resumes the same conversation,

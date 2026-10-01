@@ -1203,10 +1203,11 @@ fn queued_context_lets_running_work_finish() {
     let (spec, _) = h.start("spawn generate-spec");
     amend(&mut h, "also refunds", vec![], ContextDelivery::Queue);
     assert!(h.state().interrupting.is_empty());
+    // Rule C2: queued context waits for the running spec, and nothing starts before it.
+    assert!(h.summaries().is_empty(), "{:?}", h.summaries());
+    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
     assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
     amendment_with_research(&mut h, 0, "p", "research refunds");
-    assert_eq!(h.summaries(), vec!["spawn explore explore#1"]);
-    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
     h.run("spawn explore explore#1", explore_submit(1, &[]));
     let revision = h.spawn_step("spawn generate-spec");
     assert_eq!(
@@ -1316,6 +1317,167 @@ fn c2_remembered_context_becomes_a_note_for_later_stages() {
         st.notes_for(ostra_engine::judge::NoteStage::Tests),
         vec!["Test with a real database.".to_string()]
     );
+}
+
+fn withdraw(h: &mut H, index: u32) {
+    h.ev(SessionEvent::AmendmentWithdrawn { index });
+}
+
+fn steer(h: &mut H, id: &ExecutionId, text: &str) {
+    h.ev(SessionEvent::ExecutionSteered {
+        id: id.clone(),
+        text: text.into(),
+    });
+}
+
+#[test]
+fn c2_queued_context_can_be_withdrawn_before_it_is_read() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    amend(&mut h, "also refunds", vec![], ContextDelivery::Queue);
+    assert_eq!(h.state().held_amendments().collect::<Vec<_>>(), vec![0]);
+    withdraw(&mut h, 0);
+    let st = h.state();
+    assert!(st.amendments[0].withdrawn);
+    assert!(st.held_amendments().next().is_none());
+    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
+    assert_eq!(h.summaries(), vec!["spawn fact-check fact-check-spec#1"]);
+    assert!(!h.state().full_request().contains("refunds"));
+}
+
+#[test]
+fn c2_context_already_released_cannot_be_withdrawn() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    // Nothing runs, so queued context is released at once and goes to the judge.
+    amend(&mut h, "also refunds", vec![], ContextDelivery::Queue);
+    withdraw(&mut h, 0);
+    let st = h.state();
+    assert!(!st.amendments[0].withdrawn);
+    assert!(st.amendments[0].pending);
+    assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
+}
+
+#[test]
+fn c2_context_sent_now_is_never_held() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    amend(&mut h, "also refunds", vec![], ContextDelivery::Now);
+    assert!(h.state().held_amendments().next().is_none());
+    withdraw(&mut h, 0);
+    assert!(!h.state().amendments[0].withdrawn);
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
+}
+
+#[test]
+fn u2_a_correction_resumes_the_run_in_place() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    steer(&mut h, &spec, "Read src/refund.rs, not src/order.rs.");
+    assert_eq!(
+        h.state().interrupting.get(&spec),
+        Some(&ostra_engine::state::Interrupt::Steer)
+    );
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#2"]);
+    assert_eq!(h.spawn_step("spawn generate-spec").resumes, Some(spec.clone()));
+    assert_eq!(
+        h.state().steers.get(&spec).map(|x| x.text.as_str()),
+        Some("Read src/refund.rs, not src/order.rs.")
+    );
+    assert!(!h.state().steer_queued(&spec), "sent to a running run, it cannot be withdrawn");
+    h.ev(SessionEvent::ExecutionResumed { id: spec.clone() });
+    let st = h.state();
+    assert!(st.steers.is_empty());
+    assert_eq!(st.spec.runs, vec![spec], "a correction is not a new run");
+}
+
+#[test]
+fn u2_corrections_sent_before_the_run_stops_join() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    steer(&mut h, &spec, "First.");
+    steer(&mut h, &spec, "Second.");
+    assert_eq!(
+        h.state().steers.get(&spec).map(|x| x.text.as_str()),
+        Some("First.\n\nSecond.")
+    );
+}
+
+#[test]
+fn u2_a_correction_to_a_paused_run_waits_and_can_be_withdrawn() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    h.ev(SessionEvent::SessionPaused);
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    steer(&mut h, &spec, "Use sqlx.");
+    let st = h.state();
+    assert!(st.steer_queued(&spec));
+    assert!(st.interrupting.is_empty());
+    h.ev(SessionEvent::SteerWithdrawn { id: spec.clone() });
+    assert!(h.state().steers.is_empty());
+    steer(&mut h, &spec, "Use diesel.");
+    h.ev(SessionEvent::SessionResumed);
+    assert_eq!(h.spawn_step("spawn generate-spec").resumes, Some(spec.clone()));
+    assert_eq!(
+        h.state().steers.get(&spec).map(|x| x.text.as_str()),
+        Some("Use diesel.")
+    );
+}
+
+#[test]
+fn u2_a_run_that_ends_first_drops_the_correction() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    steer(&mut h, &spec, "Use sqlx.");
+    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
+    let st = h.state();
+    assert!(st.steers.is_empty());
+    assert!(!st.can_steer(&spec));
+    assert_eq!(h.summaries(), vec!["spawn fact-check fact-check-spec#1"]);
+}
+
+#[test]
+fn u2_context_sent_now_replaces_a_correction() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    steer(&mut h, &spec, "Use sqlx.");
+    amend(&mut h, "also refunds", vec![], ContextDelivery::Now);
+    let st = h.state();
+    assert_eq!(
+        st.interrupting.get(&spec),
+        Some(&ostra_engine::state::Interrupt::Context)
+    );
+    assert!(st.steers.is_empty());
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    assert!(h.state().resume_from.is_empty(), "it re-runs fresh with the context");
+}
+
+#[test]
+fn u2_queued_context_lets_a_corrected_run_resume() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    steer(&mut h, &spec, "Use sqlx.");
+    amend(&mut h, "name it orders_cancel", vec![], ContextDelivery::Queue);
+    assert_eq!(h.state().held_amendments().count(), 1);
+    h.finish(&spec, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
+    route_amendment(
+        &mut h,
+        0,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "deliver"}], "research": [], "reason": "r"}),
+    );
+    assert_eq!(h.spawn_step("spawn generate-spec").resumes, Some(spec));
+}
+
+#[test]
+fn u2_a_finished_or_waiting_run_takes_no_correction() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
+    steer(&mut h, &spec, "Too late.");
+    assert!(h.state().steers.is_empty());
 }
 
 #[test]
@@ -3995,19 +4157,42 @@ fn u1_context_can_skip_running_and_queued_research() {
     );
     h.run("spawn explore explore#0", explore_submit(0, &[]));
     let (backoff, _) = h.start("spawn explore explore#1");
-    amend(&mut h, "skip the backoff and deadpool research", vec![], ContextDelivery::Queue);
+    amend(&mut h, "skip the backoff and deadpool research", vec![], ContextDelivery::Now);
+    assert!(h.state().interrupting.contains_key(&backoff));
+    h.finish(&backoff, ExecutionStatus::Interrupted, None);
     route_amendment(
         &mut h,
         0,
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "skip": [2, 3], "reason": "r"}),
     );
     let st = h.state();
-    assert_eq!(
-        st.interrupting.get(&backoff),
-        Some(&ostra_engine::state::Interrupt::Skipped)
-    );
+    assert!(st.explore[1].abandoned, "the interrupted task does not re-run");
     assert!(st.explore[2].abandoned, "the queued task never starts");
-    h.finish(&backoff, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["judge track"]);
+}
+
+#[test]
+fn u1_queued_context_skips_research_once_running_work_finishes() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Classify,
+        None,
+        json!({"category": "IMPLEMENT", "projects": ["p"], "explore_tasks": [
+            {"project": "p", "task": "research the order model"},
+            {"project": "p", "task": "research the deadpool errors"}
+        ], "opts_in": {"tests": false, "docs": false}, "reason": "r"}),
+    );
+    let (order, _) = h.start("spawn explore explore#0");
+    amend(&mut h, "skip the deadpool research", vec![], ContextDelivery::Queue);
+    // Rule C2: the queued context holds back the next research until the running one finishes.
+    assert!(h.summaries().is_empty(), "{:?}", h.summaries());
+    h.finish(&order, ExecutionStatus::Ok, Some(explore_submit(0, &[])));
+    route_amendment(
+        &mut h,
+        0,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "skip": [2], "reason": "r"}),
+    );
+    assert!(h.state().explore[1].abandoned, "the held-back task never starts");
     assert_eq!(h.summaries(), vec!["judge track"]);
 }
 

@@ -441,8 +441,23 @@ export const mockApi: Api = {
       ...d,
       additions: [
         ...d.additions,
-        { text: body.text, files: body.files, uploads: [], delivery: body.delivery, at: new Date().toISOString() },
+        {
+          text: body.text,
+          files: body.files,
+          uploads: [],
+          delivery: body.delivery,
+          at: new Date().toISOString(),
+          queued: body.delivery === "queue",
+          withdrawn: false,
+        },
       ],
+    }));
+    return delay(summaryFor(id));
+  },
+  withdrawAddition: (id, index) => {
+    updateBoard(id, (d) => ({
+      ...d,
+      additions: d.additions.map((a, i) => (i === index ? { ...a, queued: false, withdrawn: true } : a)),
     }));
     return delay(summaryFor(id));
   },
@@ -484,6 +499,8 @@ export const mockApi: Api = {
   execution: (id) => delay(execView(id)),
   activity: (id, after) => delay(fx.activityFor(id).filter((a) => a.seq > (after ?? 0))),
   cancelExecution: (id) => delay({ ...execView(id), status: "cancelled" }),
+  steerExecution: (id) => delay({ ...execView(id), status: "running" }),
+  withdrawSteer: (id) => delay({ ...execView(id), queued_steer: null }),
   skipExecution: (id) => delay({ ...execView(id), status: "interrupted", can_skip: false }),
   resumeExecution: (id) => delay(fx.resume(id)),
   inspectExecution: (id) => delay(fx.resume(id)),

@@ -866,10 +866,25 @@ pub struct Amendment {
     pub uploads: Vec<UploadedFile>,
     pub delivery: ContextDelivery,
     pub at: DateTime<Utc>,
+    /// Rule C2: the Route answer judge decides what happens to it once it is released.
+    pub routed: bool,
+    /// Rule C2: queued behind running executions; nothing starts, and the user may withdraw it.
+    pub held: bool,
+    /// The user withdrew it while it was queued, so no agent or judge reads it.
+    pub withdrawn: bool,
     /// Rule C2: the Route answer judge has not decided yet, so nothing starts.
     pub pending: bool,
     /// The context joins the request every later agent reads. Remembered or discarded context does not.
     pub delivered: bool,
+}
+
+/// Rule U2: the correction an execution resumes with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Steer {
+    pub text: String,
+    /// Sent to a paused run and not read yet, so the user may withdraw it. A correction sent to a
+    /// running run stopped it and is final.
+    pub queued: bool,
 }
 
 /// Why the engine interrupted a running execution.
@@ -884,6 +899,8 @@ pub enum Interrupt {
     ProjectCreated,
     /// Rule U1: the user skipped the execution's task; it ends without a result.
     Skipped,
+    /// Rule U2: the user sent the execution a correction; it resumes in place with it.
+    Steer,
 }
 
 impl Interrupt {
@@ -895,6 +912,7 @@ impl Interrupt {
                 "Stopped after creating the project, which Ostra initializes before this phase starts again in it."
             }
             Interrupt::Skipped => "You skipped this task, so Ostra stopped it and moved on without it.",
+            Interrupt::Steer => "Interrupted to deliver the correction the user sent.",
         }
     }
 }
@@ -1009,6 +1027,8 @@ pub struct SessionState {
     pub interrupting: BTreeMap<ExecutionId, Interrupt>,
     /// Paused executions to resume, by [`purpose_key`] (Rule P2).
     pub resume_from: BTreeMap<String, ExecutionId>,
+    /// Rule U2: corrections the user sent each execution, kept until it resumes with them.
+    pub steers: BTreeMap<ExecutionId, Steer>,
     /// Rule H2: native runs that ended waiting for a message, by [`purpose_key`].
     pub waiting_keys: BTreeMap<String, ExecutionId>,
     /// Rule H8: questions between subagents, in the order they were asked.
@@ -1171,6 +1191,7 @@ impl SessionState {
             contained: None,
             interrupting: BTreeMap::new(),
             resume_from: BTreeMap::new(),
+            steers: BTreeMap::new(),
             waiting_keys: BTreeMap::new(),
             asks: BTreeMap::new(),
             subagents: BTreeMap::new(),
@@ -1531,22 +1552,36 @@ impl SessionState {
                 delivery,
                 routed,
             } => {
-                if *delivery == ContextDelivery::Now {
+                let now = *delivery == ContextDelivery::Now;
+                if now {
+                    // Rule C2: a fresh re-run replaces a correction's resume, which would not see the context.
+                    self.interrupting
+                        .retain(|_, why| *why != Interrupt::Steer);
                     self.interrupt_running(Interrupt::Context);
+                    self.steers.clear();
                 }
-                // Rule P2: a resumed conversation would not see the new context, so re-run instead.
-                self.resume_from.clear();
+                // Rule C2: queued context waits for the running executions to finish.
+                let held = !now && self.running_executions().next().is_some();
                 self.amendments.push(Amendment {
                     text: text.clone(),
                     files: files.clone(),
                     uploads: uploads.clone(),
                     delivery: *delivery,
                     at,
-                    pending: *routed,
-                    delivered: !*routed,
+                    routed: *routed,
+                    held,
+                    withdrawn: false,
+                    pending: false,
+                    delivered: false,
                 });
-                if !*routed {
-                    self.on_amended(&self.added_part(text, files, uploads));
+                if !held {
+                    self.release_amendment(self.amendments.len() - 1);
+                }
+            }
+            SessionEvent::AmendmentWithdrawn { index } => {
+                if let Some(a) = self.amendments.get_mut(*index as usize).filter(|a| a.held) {
+                    a.held = false;
+                    a.withdrawn = true;
                 }
             }
             SessionEvent::SessionPaused => {
@@ -1664,6 +1699,7 @@ impl SessionState {
                 rec.ended_at = None;
                 let (purpose, loop_key) = (rec.purpose.clone(), rec.loop_key);
                 self.resume_from.remove(&purpose_key(&purpose));
+                self.steers.remove(id);
                 self.waiting_keys.retain(|_, x| x != id);
                 // Rule P3: continuing is the user's "this was fine", so the count starts again.
                 self.signals.remove(id);
@@ -1671,6 +1707,29 @@ impl SessionState {
                     self.interrupting.insert(id.clone(), Interrupt::Pause);
                 }
                 self.on_started(id, &purpose, loop_key, true);
+            }
+            SessionEvent::ExecutionSteered { id, text } => {
+                if !self.can_steer(id) {
+                    return;
+                }
+                let running = self.executions.get(id).is_some_and(|r| r.result.is_none());
+                let steer = self.steers.entry(id.clone()).or_insert(Steer {
+                    text: String::new(),
+                    queued: true,
+                });
+                if !steer.text.is_empty() {
+                    steer.text.push_str("\n\n");
+                }
+                steer.text.push_str(text);
+                steer.queued &= !running;
+                if running {
+                    self.interrupting.entry(id.clone()).or_insert(Interrupt::Steer);
+                }
+            }
+            SessionEvent::SteerWithdrawn { id } => {
+                if self.steer_queued(id) {
+                    self.steers.remove(id);
+                }
             }
             SessionEvent::ExecutionSkipped { id } => {
                 if self.can_skip(id) {
@@ -1686,9 +1745,14 @@ impl SessionState {
                 rec.ended_at = Some(at);
                 let rec = rec.clone();
                 let why = self.interrupting.remove(id);
-                if why == Some(Interrupt::Pause) && result.status == ExecutionStatus::Interrupted {
+                let resumes = matches!(why, Some(Interrupt::Pause | Interrupt::Steer))
+                    && result.status == ExecutionStatus::Interrupted;
+                if resumes {
                     self.resume_from
                         .insert(purpose_key(&rec.purpose), id.clone());
+                } else {
+                    // Rule U2: a run that ended before the correction stopped it never reads it.
+                    self.steers.remove(id);
                 }
                 if why == Some(Interrupt::ProjectCreated) {
                     self.restart_fresh.insert(id.clone());
@@ -1711,6 +1775,12 @@ impl SessionState {
                     self.skip_task(id);
                 }
                 self.coord_finished(&rec, result);
+                if self.running_executions().next().is_none() {
+                    let held: Vec<usize> = self.held_amendments().collect();
+                    for i in held {
+                        self.release_amendment(i);
+                    }
+                }
             }
             SessionEvent::GateOpened {
                 id,
@@ -2134,6 +2204,33 @@ impl SessionState {
             )
     }
 
+    /// Rule C2: queued context joins the session, to be routed or delivered. A resumed conversation
+    /// would not see it, so each paused run re-runs instead (Rule P2), except a run that holds a
+    /// correction, which resumes with it (Rule U2).
+    fn release_amendment(&mut self, i: usize) {
+        let a = &mut self.amendments[i];
+        a.held = false;
+        a.pending = a.routed;
+        a.delivered = !a.routed;
+        let routed = a.routed;
+        let a = &self.amendments[i];
+        let part = self.added_part(&a.text, &a.files, &a.uploads);
+        let steers = &self.steers;
+        self.resume_from.retain(|_, id| steers.contains_key(id));
+        if !routed {
+            self.on_amended(&part);
+        }
+    }
+
+    /// Rule C2: queued context the user may still withdraw, by index.
+    pub fn held_amendments(&self) -> impl Iterator<Item = usize> + '_ {
+        self.amendments
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.held)
+            .map(|(i, _)| i)
+    }
+
     /// Rule C2: context the user added that waits for the judge, by index.
     pub fn pending_amendments(&self) -> impl Iterator<Item = usize> + '_ {
         self.amendments
@@ -2165,6 +2262,28 @@ impl SessionState {
             ExecPurpose::Epa { .. } | ExecPurpose::Docs { .. } | ExecPurpose::Architecture => true,
             _ => false,
         }
+    }
+
+    /// Rule U2: a running execution, or one a pause stopped, can take a correction. A run waiting
+    /// on another subagent wakes only with that answer (Rule H2), so it takes none.
+    pub fn can_steer(&self, exec: &ExecutionId) -> bool {
+        let Some(rec) = self.executions.get(exec) else {
+            return false;
+        };
+        if self.is_terminal() || self.interrupting.get(exec).is_some_and(|w| *w != Interrupt::Steer) {
+            return false;
+        }
+        match &rec.result {
+            None => true,
+            Some(_) => self.resume_from.values().any(|x| x == exec),
+        }
+    }
+
+    /// Rule U2: a correction waits, withdrawable, while its run is paused. Sent to a running run, it
+    /// stops the run at once and cannot be taken back.
+    pub fn steer_queued(&self, exec: &ExecutionId) -> bool {
+        self.steers.get(exec).is_some_and(|s| s.queued)
+            && self.resume_from.values().any(|x| x == exec)
     }
 
     /// Rule U1: end the execution's task without a result, as abandoning its failure gate does.

@@ -672,6 +672,21 @@ pub enum SessionEvent {
     ExecutionSkipped {
         id: ExecutionId,
     },
+    /// Rule C2: the user withdrew queued context (`index` in the session's additions) before
+    /// anything read it.
+    AmendmentWithdrawn {
+        index: u32,
+    },
+    /// Rule U2: the user sent this execution a correction. A running execution stops and resumes
+    /// in place with `text` as its next message; a paused one takes `text` when it resumes.
+    ExecutionSteered {
+        id: ExecutionId,
+        text: String,
+    },
+    /// Rule U2: the user withdrew the correction a paused execution had not read yet.
+    SteerWithdrawn {
+        id: ExecutionId,
+    },
     /// Rule H8: a run asked a helper or another subagent, and waits for the answer.
     AgentAsked {
         id: MessageId,

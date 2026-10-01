@@ -407,6 +407,10 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/sessions/{id}/events", get(session_events))
         .route("/api/sessions/{id}/yolo", post(set_yolo))
         .route("/api/sessions/{id}/amend", post(amend))
+        .route(
+            "/api/sessions/{id}/additions/{index}/withdraw",
+            post(withdraw_addition),
+        )
         .route("/api/sessions/{id}/pause", post(pause_session))
         .route("/api/executions/{id}/inspect", post(inspect_execution))
         .route("/api/sessions/{id}/resume", post(resume_session))
@@ -418,6 +422,8 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/executions/{id}/activity", get(activity))
         .route("/api/executions/{id}/cancel", post(cancel))
         .route("/api/executions/{id}/skip", post(skip))
+        .route("/api/executions/{id}/steer", post(steer))
+        .route("/api/executions/{id}/steer/withdraw", post(withdraw_steer))
         .route("/api/executions/{id}/resume", post(resume))
         .route("/api/artifacts", get(artifact))
         .route("/api/artifacts/download", get(artifact_download))
@@ -1265,6 +1271,18 @@ async fn amend(
     )?))
 }
 
+async fn withdraw_addition(
+    State(app): AppState,
+    Path((id, index)): Path<(String, u32)>,
+) -> Res<SessionSummary> {
+    let sid = SessionId::from(id);
+    Ok(Json(
+        ws_of_session(&app, &sid)?
+            .engine
+            .withdraw_amendment(&sid, index)?,
+    ))
+}
+
 /// Reopen an ended harness run's session read-only. Returns the new execution.
 async fn inspect_execution(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView> {
     let eid = ExecutionId::from(id);
@@ -1342,6 +1360,24 @@ async fn skip(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView
     let eid = ExecutionId::from(id);
     let w = ws_of_execution(&app, &eid)?;
     w.engine.skip_execution(&eid)?;
+    Ok(Json(w.engine.execution(&eid)?))
+}
+
+async fn steer(
+    State(app): AppState,
+    Path(id): Path<String>,
+    Json(body): Json<SteerRequest>,
+) -> Res<ExecutionView> {
+    let eid = ExecutionId::from(id);
+    let w = ws_of_execution(&app, &eid)?;
+    w.engine.steer_execution(&eid, body.text)?;
+    Ok(Json(w.engine.execution(&eid)?))
+}
+
+async fn withdraw_steer(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView> {
+    let eid = ExecutionId::from(id);
+    let w = ws_of_execution(&app, &eid)?;
+    w.engine.withdraw_steer(&eid)?;
     Ok(Json(w.engine.execution(&eid)?))
 }
 

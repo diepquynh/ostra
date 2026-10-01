@@ -246,6 +246,8 @@ export const httpApi = {
     return (await res.json()) as UploadRef;
   },
   resumeSession: (id: string) => request<SessionSummary>("POST", `/api/sessions/${enc(id)}/resume`),
+  withdrawAddition: (id: string, index: number) =>
+    request<SessionSummary>("POST", `/api/sessions/${enc(id)}/additions/${index}/withdraw`),
 
   answerGate: (id: string, body: AnswerGate) => request<GateView>("POST", `/api/gates/${enc(id)}/answer`, body),
   overrideDecision: (id: string, body: OverrideDecision) =>
@@ -257,6 +259,9 @@ export const httpApi = {
   cancelExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/cancel`),
   skipExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/skip`),
   resumeExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/resume`),
+  steerExecution: (id: string, text: string) =>
+    request<ExecutionView>("POST", `/api/executions/${enc(id)}/steer`, { text }),
+  withdrawSteer: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/steer/withdraw`),
   /** Reopen an ended harness run's session read-only; returns the new execution. */
   inspectExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/inspect`),
 

@@ -306,8 +306,10 @@ An answer recorded before the rule has no flag and folds as it always did, which
 the same state.
 
 Context you add from the board's Add context box takes the same judge (Rule C2), with the subject `amendment:N`
-instead of a gate. The runner records `routed: true` on `RequestAmended` once the request is classified. While
-the context waits (`Amendment.pending`), the planner asks the judge and starts nothing else, so work that Send
+instead of a gate. The runner records `routed: true` on `RequestAmended` once the request is classified. Queued
+context reaches the judge only once it is released, after the executions running when it was queued finish
+(`Amendment.held`); until then the user may withdraw it, and the judge never sees it. While the context waits
+for the judge (`Amendment.pending`), the planner asks the judge and starts nothing else, so work that Send
 now interrupted does not re-run on the old request. The judge sees the added text, the work Send now stopped,
 the projects in scope, and the projects the session created. Its research tasks go to the projects it names,
 which is how a correction such as "this is for the new project" reaches that project instead of the first one in

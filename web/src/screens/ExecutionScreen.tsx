@@ -1,4 +1,16 @@
-import { Banner, Button, Chip, Icon, Select, Spinner, StatusChip, StatusDot, type TabItem, Tabs } from "@ostra/design";
+import {
+  Banner,
+  Button,
+  Chip,
+  Icon,
+  Input,
+  Select,
+  Spinner,
+  StatusChip,
+  StatusDot,
+  type TabItem,
+  Tabs,
+} from "@ostra/design";
 import { useMemo, useState } from "react";
 import { api } from "../api";
 import type { ExecutionView, ToolCall, Usage } from "../api/types";
@@ -104,6 +116,74 @@ function SpawnSection({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Rule U2: a correction for this run. A running run stops and resumes with it; a paused run reads it on continue. */
+function SteerBox({ e, onView }: { e: ExecutionView; onView: (v: ExecutionView) => void }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const running = e.status === "running";
+  const call = (p: Promise<ExecutionView>, clear: boolean) => {
+    setBusy(true);
+    setError(null);
+    p.then(
+      (v) => {
+        onView(v);
+        if (clear) setText("");
+      },
+      (err: Error) => setError(err.message),
+    ).finally(() => setBusy(false));
+  };
+  return (
+    <div className="ex-steer" style={{ display: "grid", gap: 6, margin: "8px 0" }}>
+      {e.queued_steer && (
+        <Banner
+          tone="info"
+          title="Correction waiting for the session to continue"
+          actions={
+            <Button size="sm" disabled={busy} onClick={() => call(api.withdrawSteer(e.id), false)}>
+              Withdraw
+            </Button>
+          }
+        >
+          {e.queued_steer}
+        </Banner>
+      )}
+      <Input
+        multiline
+        rows={2}
+        size="sm"
+        aria-label="Correction for this run"
+        placeholder="Tell this agent what to do differently"
+        value={text}
+        onChange={(ev) => setText(ev.target.value)}
+        onKeyDown={(ev) => {
+          if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey) && text.trim() && !busy) {
+            ev.preventDefault();
+            call(api.steerExecution(e.id, text), true);
+          }
+        }}
+        hint={
+          running
+            ? "Send now stops this run and resumes it in the same conversation with your correction. It cannot be withdrawn."
+            : "The session is paused, so this run reads the correction when you continue. You can withdraw it until then."
+        }
+      />
+      {error && <Banner tone="bad">{error}</Banner>}
+      <div>
+        <Button
+          size="sm"
+          variant="primary"
+          icon="message-square"
+          disabled={busy || !text.trim()}
+          onClick={() => call(api.steerExecution(e.id, text), true)}
+        >
+          {running ? "Send now" : "Queue for the resume"}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -298,6 +378,7 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
       </div>
 
       <UsageStrip usage={usage} duration={duration} />
+      {(e.can_steer || e.queued_steer) && <SteerBox e={{ ...e, status: st }} onView={exec.set} />}
       <SpawnSection
         e={e}
         nativeSessionId={act.nativeSessionId ?? e.native_session_id}

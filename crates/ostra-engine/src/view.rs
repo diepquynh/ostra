@@ -926,6 +926,11 @@ pub fn decorate(s: &SessionState, labels: &HashMap<ExecutionId, String>, e: &mut
         && paths::terminal_transcript(&s.session_root, e.id.as_str()).is_file();
     e.repo_root = s.project_path(&e.project);
     e.can_skip = s.can_skip(&e.id);
+    e.can_steer = s.can_steer(&e.id);
+    e.queued_steer = s
+        .steer_queued(&e.id)
+        .then(|| s.steers.get(&e.id).map(|x| x.text.clone()))
+        .flatten();
     e.pending_gate = s
         .open_gates()
         .filter(|g| g.payload.execution() == Some(&e.id))
@@ -1174,6 +1179,8 @@ pub fn detail(
                 uploads: a.uploads.clone(),
                 delivery: a.delivery,
                 at: a.at,
+                queued: a.held,
+                withdrawn: a.withdrawn,
             })
             .collect(),
     })
@@ -1294,6 +1301,8 @@ mod tests {
             error: None,
             can_resume: false,
             can_skip: false,
+            can_steer: false,
+            queued_steer: None,
             has_terminal: false,
             group: ostra_core::api::execution_group(agent, "backend"),
             run_label: agent.to_string(),

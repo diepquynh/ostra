@@ -553,6 +553,10 @@ impl<'a> Planner<'a> {
             self.init_flow();
             return;
         }
+        // Rule C2: queued context waits for the running executions, and nothing starts before it.
+        if s.held_amendments().next().is_some() {
+            return;
+        }
         let Some(category) = s.category else {
             if s.classify.is_none() {
                 self.push(Step::Judge {

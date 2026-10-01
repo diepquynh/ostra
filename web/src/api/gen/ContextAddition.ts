@@ -3,4 +3,12 @@ import type { ContextDelivery } from "./ContextDelivery";
 import type { ContextFile } from "./ContextFile";
 import type { UploadedFile } from "./UploadedFile";
 
-export type ContextAddition = { text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, at: string, };
+export type ContextAddition = { text: string, files: Array<ContextFile>, uploads: Array<UploadedFile>, delivery: ContextDelivery, at: string, 
+/**
+ * Rule C2: queued behind running executions, so the user may still withdraw it.
+ */
+queued: boolean, 
+/**
+ * The user withdrew it before any step read it.
+ */
+withdrawn: boolean, };

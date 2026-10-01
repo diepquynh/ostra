@@ -391,6 +391,12 @@ export function describeEvent(e: SessionEvent): string {
       return "Execution resumed where it stopped";
     case "execution_skipped":
       return "Task skipped: Ostra stopped it and moved on without it";
+    case "execution_steered":
+      return `Correction sent: ${truncate(e.text, 80)}`;
+    case "steer_withdrawn":
+      return "Correction withdrawn before the run read it";
+    case "amendment_withdrawn":
+      return "Queued context withdrawn before any step read it";
     case "execution_finished":
       return `Execution finished: ${e.result.status}`;
     case "gate_opened":

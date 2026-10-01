@@ -857,6 +857,10 @@ pub struct ExecutionView {
     pub can_resume: bool,
     /// Rule U1: a running task the session can do without, so the user may skip it.
     pub can_skip: bool,
+    /// Rule U2: a running or paused execution, so the user may send it a correction.
+    pub can_steer: bool,
+    /// Rule U2: the correction a paused run reads when the session continues; still withdrawable.
+    pub queued_steer: Option<String>,
     /// A live PTY exists for this execution.
     pub has_terminal: bool,
     /// `<agent>:<project key>`, the key of this execution's entry in `SessionDetail::execution_groups`.
@@ -963,6 +967,10 @@ pub struct ContextAddition {
     pub uploads: Vec<UploadedFile>,
     pub delivery: ContextDelivery,
     pub at: DateTime<Utc>,
+    /// Rule C2: queued behind running executions, so the user may still withdraw it.
+    pub queued: bool,
+    /// The user withdrew it before any step read it.
+    pub withdrawn: bool,
 }
 
 /// One fact-check pass, for showing its findings on the document it checked.
@@ -1012,6 +1020,13 @@ pub struct AmendRequest {
     pub uploads: Vec<String>,
     #[serde(default)]
     pub delivery: ContextDelivery,
+}
+
+/// Rule U2: a correction for one execution.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SteerRequest {
+    pub text: String,
 }
 
 /// One persisted Activity item of an execution.

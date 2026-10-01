@@ -629,3 +629,37 @@ async fn a_skipped_research_task_stops_and_opens_no_gate() {
     assert!(st.failed.unwrap().contains("no research document"));
     assert_eq!(t.exec.ids.lock().unwrap().len(), 1, "nothing re-ran it");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_correction_resumes_the_run_in_place_with_it() {
+    let t = setup();
+    let e = &t.engine;
+    let s = start(e, vec![]);
+    until("the explore runs", || {
+        t.exec.resumes.lock().unwrap().len() == 1
+    })
+    .await;
+    let id = t.exec.ids.lock().unwrap()[0].clone();
+    assert!(e.steer_execution(&id, "  ".into()).is_err());
+    e.steer_execution(&id, "Read src/refund.rs first.".into())
+        .unwrap();
+    until("the explore resumes", || {
+        t.exec.resumes.lock().unwrap().len() == 2
+    })
+    .await;
+    // Rule U2: the same run continues, and its first message is the correction.
+    let resume = t.exec.resumes.lock().unwrap()[1].clone().expect("a resume");
+    assert_eq!(resume.from, id);
+    assert_eq!(
+        resume.note,
+        Some(ostra_engine::runner::steer_note("Read src/refund.rs first."))
+    );
+    assert_eq!(t.exec.ids.lock().unwrap()[1], id);
+    assert!(e.withdraw_steer(&id).is_err(), "a correction sent to a running run is final");
+    e.stop_session(&s).unwrap();
+    until("the run ends", || {
+        e.state(&s).unwrap().running_executions().count() == 0
+    })
+    .await;
+    assert!(e.steer_execution(&id, "Too late.".into()).is_err());
+}

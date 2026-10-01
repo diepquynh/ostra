@@ -20,6 +20,14 @@ can_resume: boolean,
  */
 can_skip: boolean, 
 /**
+ * Rule U2: a running or paused execution, so the user may send it a correction.
+ */
+can_steer: boolean, 
+/**
+ * Rule U2: the correction a paused run reads when the session continues; still withdrawable.
+ */
+queued_steer: string | null, 
+/**
  * A live PTY exists for this execution.
  */
 has_terminal: boolean, 

@@ -1586,6 +1586,8 @@ fn execution_from_raw(r: RawExecution) -> Result<ExecutionView, StoreError> {
         error,
         can_resume,
         can_skip: false,
+        can_steer: false,
+        queued_steer: None,
         has_terminal: false,
         pending_gate: None,
         repo_root: None,

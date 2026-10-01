@@ -64,7 +64,7 @@ spawn_block: string, report_path: string | null,
 /**
  * Execution this one resumes, if any.
  */
-resumes: ExecutionId | null, } | { "type": "execution_resumed", id: ExecutionId, } | { "type": "execution_skipped", id: ExecutionId, } | { "type": "agent_asked", id: MessageId, from: ExecutionId, target: AskTarget, message: string, } | { "type": "agent_replied", ask: MessageId, from: ExecutionId, message: string, } | { "type": "message_delivered", ask: MessageId, to: ExecutionId, kind: DeliveryKind, } | { "type": "execution_finished", id: ExecutionId, result: ExecutionResult, } | { "type": "gate_opened", id: GateId, title: string, explanation: string, payload: GatePayload, } | { "type": "gate_answered", id: GateId, source: AnswerSource, answer: GateAnswer, 
+resumes: ExecutionId | null, } | { "type": "execution_resumed", id: ExecutionId, } | { "type": "execution_skipped", id: ExecutionId, } | { "type": "amendment_withdrawn", index: number, } | { "type": "execution_steered", id: ExecutionId, text: string, } | { "type": "steer_withdrawn", id: ExecutionId, } | { "type": "agent_asked", id: MessageId, from: ExecutionId, target: AskTarget, message: string, } | { "type": "agent_replied", ask: MessageId, from: ExecutionId, message: string, } | { "type": "message_delivered", ask: MessageId, to: ExecutionId, kind: DeliveryKind, } | { "type": "execution_finished", id: ExecutionId, result: ExecutionResult, } | { "type": "gate_opened", id: GateId, title: string, explanation: string, payload: GatePayload, } | { "type": "gate_answered", id: GateId, source: AnswerSource, answer: GateAnswer, 
 /**
  * Why the YOLO judge chose this answer.
  */

@@ -774,6 +774,72 @@ impl Engine {
         self.inner.interrupt(&session, Interrupt::Skipped)
     }
 
+    /// Rule U2: send one execution a correction. A running run stops and resumes in place with it
+    /// as its next message; a paused one reads it when the session continues.
+    pub fn steer_execution(&self, id: &ExecutionId, text: String) -> Result<(), EngineError> {
+        let text = text.trim().to_string();
+        if text.is_empty() {
+            return Err(EngineError::Invalid(
+                "Say what the agent should do differently.".into(),
+            ));
+        }
+        let session = self
+            .inner
+            .db
+            .get_execution(id)?
+            .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?
+            .session
+            .ok_or_else(|| EngineError::Invalid("A side-panel answer takes no correction.".into()))?;
+        if !self.state(&session)?.can_steer(id) {
+            return Err(EngineError::Invalid(
+                "Only a running or paused execution takes a correction. Add context to the session instead.".into(),
+            ));
+        }
+        self.inner.append(
+            &session,
+            SessionEvent::ExecutionSteered {
+                id: id.clone(),
+                text,
+            },
+        )?;
+        self.inner.interrupt(&session, Interrupt::Steer)
+    }
+
+    /// Rule U2: take back a correction its paused run has not read yet.
+    pub fn withdraw_steer(&self, id: &ExecutionId) -> Result<(), EngineError> {
+        let session = self
+            .inner
+            .db
+            .get_execution(id)?
+            .and_then(|v| v.session)
+            .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?;
+        if !self.state(&session)?.steer_queued(id) {
+            return Err(EngineError::Invalid(
+                "This correction was already sent, so it cannot be withdrawn. Send another one instead.".into(),
+            ));
+        }
+        self.inner
+            .append(&session, SessionEvent::SteerWithdrawn { id: id.clone() })?;
+        Ok(())
+    }
+
+    /// Rule C2: take back queued context before anything reads it. Context sent now cannot be.
+    pub fn withdraw_amendment(
+        &self,
+        session: &SessionId,
+        index: u32,
+    ) -> Result<SessionSummary, EngineError> {
+        let st = self.state(session)?;
+        if !st.held_amendments().any(|i| i == index as usize) {
+            return Err(EngineError::Invalid(
+                "Only queued context that no step has read yet can be withdrawn. Add a correction instead.".into(),
+            ));
+        }
+        self.inner
+            .append(session, SessionEvent::AmendmentWithdrawn { index })?;
+        self.summary_of(session)
+    }
+
     /// Resume a failed, cancelled, or interrupted execution: answer its failure gate with retry and
     /// hand the re-run the earlier execution to continue from.
     pub fn resume_execution(&self, id: &ExecutionId) -> Result<(), EngineError> {
@@ -1016,6 +1082,13 @@ const INSPECT_PROMPT: &str = "The user reopened this session to read what you di
 const INSPECT_TIMEOUT_SECS: u64 = 4 * 60 * 60;
 /// What a paused execution hears when the session continues (Rule P2).
 pub const PAUSE_RESUME_NOTE: &str = "Continue the workflow.";
+
+/// Rule U2: the message a run resumes with after the user sent it a correction.
+pub fn steer_note(text: &str) -> String {
+    format!(
+        "The user stopped you to send this correction. Follow it, then continue the workflow from where you stopped, because the rest of your task is unchanged.\n\n{text}"
+    )
+}
 /// The Activity line where a resumed execution picks up (Rule P2).
 pub const RESUMED_STATUS: &str = "The session continued, so this run resumes where it stopped.";
 /// Files one request or addition may attach (Rule C1).
@@ -2475,11 +2548,11 @@ impl Inner {
                         .result
                         .as_ref()
                         .and_then(|r| r.native_session_id.clone()),
-                    note: Some(
-                        wake.as_ref()
-                            .map(|d| d.note.clone())
-                            .unwrap_or_else(|| PAUSE_RESUME_NOTE.into()),
-                    ),
+                    note: Some(match (&wake, st.steers.get(&rec.id)) {
+                        (Some(d), _) => d.note.clone(),
+                        (None, Some(steer)) => steer_note(&steer.text),
+                        (None, None) => PAUSE_RESUME_NOTE.into(),
+                    }),
                     inspect: false,
                 }),
                 rec.report_path.clone(),

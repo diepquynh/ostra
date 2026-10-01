@@ -109,8 +109,9 @@ the Route answer judge decides what research it needs and in which project (Rule
 start a targeted explore in the middle of a build. Every explore spawn gets the context the user added beside
 its task, so a task written before the addition, or re-run after Send now interrupted it, still sees it.
 
-The Add context box on the session board. Queue for the next step waits for the running agents to finish; Send now
-restarts running work (Rule C2):
+The Add context box on the session board. Queue for the next step waits for the running agents to finish, holds
+back new work until then, and can be withdrawn while it waits; Send now restarts running work and cannot be
+withdrawn (Rule C2):
 
 ![The Add context box with Send now and Queue for the next step](../images/console/add-context.png)
 
@@ -166,7 +167,8 @@ Exploration is the user's stage (Ultracode Rule D2), so you can drop a research 
   task abandoned, and the stop opens no failure gate, so the spec no longer waits for it.
 - **Add context** that says so ("skip the deadpool research") goes to the Route answer judge, which sees each
   unfinished task numbered as "Research task N" and lists the ones you name in `skip`. A running one stops; a
-  queued one never starts, even when its spawn was already waiting for an execution slot. Context that only
+  queued one never starts, even when its spawn was already waiting for an execution slot. Queued context reaches
+  the judge only after the running executions finish, so only Send now stops a running research task this way. Context that only
   asks for the skip is discarded, so no later agent reads it and looks for research that is not there.
 
 A skipped task leaves no research document. If every task ends without one, Rule D1 still fails the session.
