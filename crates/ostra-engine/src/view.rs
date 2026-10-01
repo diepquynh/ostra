@@ -925,6 +925,7 @@ pub fn decorate(s: &SessionState, labels: &HashMap<ExecutionId, String>, e: &mut
     e.has_transcript = e.stream == ExecStream::Terminal
         && paths::terminal_transcript(&s.session_root, e.id.as_str()).is_file();
     e.repo_root = s.project_path(&e.project);
+    e.can_skip = s.can_skip(&e.id);
     e.pending_gate = s
         .open_gates()
         .filter(|g| g.payload.execution() == Some(&e.id))
@@ -1292,6 +1293,7 @@ mod tests {
             spawn_block: String::new(),
             error: None,
             can_resume: false,
+            can_skip: false,
             has_terminal: false,
             group: ostra_core::api::execution_group(agent, "backend"),
             run_label: agent.to_string(),

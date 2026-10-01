@@ -1,7 +1,8 @@
 //! Inputs for judge calls, built from session state, and the YOLO answer logic.
 
 use crate::state::{
-    DocsState, EpaState, Interrupt, LoopNext, SessionState, amendment_index, parse_loop_key,
+    DocsState, EpaState, Interrupt, LoopNext, SUFFICIENCY_ROUNDS, SessionState, amendment_index,
+    parse_loop_key,
 };
 use ostra_core::event::{
     AnswerSource, ContextDelivery, ExecPurpose, GateAnswer, GatePayload, JudgeKind,
@@ -107,7 +108,15 @@ pub fn judge_input(
                 .split(',')
                 .filter_map(|x| x.parse().ok())
                 .collect();
-            let _ = writeln!(m, "# Request\n\n{request}\n\n# Research returned\n");
+            let _ = writeln!(
+                m,
+                "# Request\n\n{request}\n\nCategory: {}\nTrack: {}\nTests requested: {}\nDocs requested: {}\nResearch rounds already judged: {} of {SUFFICIENCY_ROUNDS}\n\n# Research returned\n",
+                s.category.map(|c| c.as_str()).unwrap_or("unknown"),
+                s.track.map(|t| t.as_str()).unwrap_or("not decided yet"),
+                yes_no(s.tests_requested()),
+                yes_no(s.docs_requested()),
+                s.sufficiency_rounds,
+            );
             for t in &s.explore {
                 let Some(r) = &t.result else { continue };
                 let _ = writeln!(
@@ -511,7 +520,7 @@ fn amendment_facts(
     if a.delivery == ContextDelivery::Now {
         let _ = writeln!(
             m,
-            "The user sent it now, so Ostra stopped this running work. Each re-runs with the context once you decide, unless you discard it:\n{}\n",
+            "The user sent it now, so Ostra stopped this running work. Each re-runs with the context once you decide, unless you discard the context or skip the task:\n{}\n",
             if interrupted.is_empty() {
                 "- nothing was running".to_string()
             } else {
@@ -530,6 +539,10 @@ fn amendment_facts(
         std::mem::take(m),
         format!("Added context: {}", first_line(&a.text)),
     )
+}
+
+fn yes_no(b: bool) -> &'static str {
+    if b { "yes" } else { "no" }
 }
 
 fn session_facts(m: &mut String, s: &SessionState) {
@@ -601,15 +614,16 @@ fn research_facts(m: &mut String, s: &SessionState) {
             }
         );
     }
-    let queued: Vec<&str> = s
-        .explore
-        .iter()
-        .filter(|t| t.result.is_none() && !t.abandoned)
-        .map(|t| t.task.as_str())
-        .collect();
-    for t in &queued {
+    // Rule U1: numbered as the judge's `skip` names them.
+    for t in s.skippable_research() {
         any = true;
-        let _ = writeln!(m, "- Queued or running: {}", first_line(t));
+        let _ = writeln!(
+            m,
+            "- Research task {} ({}), not finished: {}",
+            t.idx + 1,
+            t.project,
+            first_line(&t.task)
+        );
     }
     if !any {
         let _ = writeln!(m, "none");

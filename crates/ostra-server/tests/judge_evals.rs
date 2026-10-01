@@ -42,6 +42,11 @@ struct Case {
     request: String,
     #[serde(default)]
     track: Option<String>,
+    /// The Classify opt-ins the session starts with.
+    #[serde(default)]
+    tests: bool,
+    #[serde(default)]
+    docs: bool,
     #[serde(default)]
     feedback: Option<String>,
     #[serde(default)]
@@ -99,6 +104,9 @@ struct Research {
     #[serde(default)]
     not_covered: Vec<String>,
     doc: String,
+    /// Still running when the judge is asked, so it has no document yet.
+    #[serde(default)]
+    running: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -127,6 +135,9 @@ struct Expect {
     needed: Vec<String>,
     #[serde(default)]
     not_needed: Vec<String>,
+    /// Route answer: the research task numbers it must skip, when set (Rule U1).
+    #[serde(default)]
+    skip: Option<Vec<u64>>,
     /// Route answer and Feedback: the disposition each item must get.
     #[serde(default)]
     dispositions: BTreeMap<String, String>,
@@ -246,6 +257,26 @@ impl Log {
         project: &str,
         submit: Value,
     ) {
+        let id = self.start(agent, purpose, project);
+        self.ev(SessionEvent::ExecutionFinished {
+            id,
+            result: ExecutionResult {
+                status: ExecutionStatus::Ok,
+                submit: Some(submit),
+                final_text: String::new(),
+                usage: Usage::default(),
+                native_session_id: None,
+                error: None,
+            },
+        });
+    }
+
+    fn start(
+        &mut self,
+        agent: AgentName,
+        purpose: ostra_core::event::ExecPurpose,
+        project: &str,
+    ) -> ExecutionId {
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
             id: id.clone(),
@@ -260,17 +291,7 @@ impl Log {
             report_path: None,
             resumes: None,
         });
-        self.ev(SessionEvent::ExecutionFinished {
-            id,
-            result: ExecutionResult {
-                status: ExecutionStatus::Ok,
-                submit: Some(submit),
-                final_text: String::new(),
-                usage: Usage::default(),
-                native_session_id: None,
-                error: None,
-            },
-        });
+        id
     }
 }
 
@@ -309,10 +330,18 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         .collect();
     log.decide(
         JudgeKind::Classify,
-        json!({"category": "IMPLEMENT", "projects": scope, "explore_tasks": tasks, "opts_in": {"tests": false, "docs": false}, "reason": "eval", "title": "Eval"}),
+        json!({"category": "IMPLEMENT", "projects": scope, "explore_tasks": tasks, "opts_in": {"tests": case.tests, "docs": case.docs}, "reason": "eval", "title": "Eval"}),
     );
     for (i, r) in case.research.iter().enumerate() {
         let path = session_root.join(format!("ostra-research-{i}.md"));
+        if r.running {
+            log.start(
+                AgentName::Explore,
+                ostra_core::event::ExecPurpose::Explore { task: i as u32 },
+                &r.project,
+            );
+            continue;
+        }
         std::fs::write(&path, &r.doc).unwrap();
         log.run(
             AgentName::Explore,
@@ -741,8 +770,14 @@ fn score(case: &Case, out: &Value) -> (String, bool) {
         "route_answer" => {
             let route = out["route"].as_str().unwrap_or("?").to_string();
             let (items, items_ok) = score_items(e, out);
-            let ok = e.route.as_deref().is_none_or(|r| r == route) && items_ok;
-            (format!("{route} {items}"), ok)
+            let mut skip: Vec<u64> = out["skip"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_u64()).collect())
+                .unwrap_or_default();
+            skip.sort();
+            let skip_ok = e.skip.as_ref().is_none_or(|want| *want == skip);
+            let ok = e.route.as_deref().is_none_or(|r| r == route) && items_ok && skip_ok;
+            (format!("{route} {items} skip={skip:?}"), ok)
         }
         _ => {
             let route = out["route"].as_str().unwrap_or("?").to_string();
@@ -1049,6 +1084,13 @@ fn eval_cases_build_their_sessions() {
                     "{}: the answer is not waiting for the judge",
                     case.id
                 );
+                for n in case.expect.skip.iter().flatten() {
+                    assert!(
+                        input.contains(&format!("Research task {n} (")),
+                        "{}: research task {n} is not offered to skip",
+                        case.id
+                    );
+                }
                 for q in &case.question {
                     assert!(
                         input.contains(&q.answer),

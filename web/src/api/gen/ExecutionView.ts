@@ -16,6 +16,10 @@ export type ExecutionView = { id: ExecutionId, session: SessionId | null, agent:
  */
 can_resume: boolean, 
 /**
+ * Rule U1: a running task the session can do without, so the user may skip it.
+ */
+can_skip: boolean, 
+/**
  * A live PTY exists for this execution.
  */
 has_terminal: boolean, 

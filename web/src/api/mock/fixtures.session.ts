@@ -96,6 +96,7 @@ function execution(session: string, x: ExecSpec): ExecutionView {
     spawn_block: `Workspace root: ${ROOT}\nRepo root: /home/me/code/shop-${x.project}\nSession dir: ${sroot(session)}/${x.project}\nRepo key: ${x.project}`,
     error: null,
     can_resume: false,
+    can_skip: x.status === "running" && x.purpose?.kind === "explore",
     has_terminal: false,
     group: `${x.agent}:${x.project}`,
     run_label: x.run,

@@ -113,7 +113,7 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
   const nav = useNav();
   const { exec, status, activity: act, activityError, session } = useExecution(id);
   const [tab, setTab] = useState<"stream" | "tools">("stream");
-  const [busy, setBusy] = useState<"cancel" | "resume" | "inspect" | null>(null);
+  const [busy, setBusy] = useState<"cancel" | "skip" | "resume" | "inspect" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const e = exec.data;
   const st = status ?? e?.status ?? "running";
@@ -156,11 +156,16 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
   const mode = terminalMode(e, st);
   const stageLabel = e.stage ? STAGES[e.stage]?.label : null;
 
-  const run = async (kind: "cancel" | "resume") => {
+  const run = async (kind: "cancel" | "skip" | "resume") => {
     setBusy(kind);
     setError(null);
     try {
-      const next = kind === "cancel" ? await api.cancelExecution(e.id) : await api.resumeExecution(e.id);
+      const next =
+        kind === "cancel"
+          ? await api.cancelExecution(e.id)
+          : kind === "skip"
+            ? await api.skipExecution(e.id)
+            : await api.resumeExecution(e.id);
       exec.set(next);
       setTab("stream");
     } catch (err) {
@@ -241,6 +246,17 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
               onChange={(ev) => ev.target.value !== e.id && nav.open(`exec:${ev.target.value}`)}
               options={siblings}
             />
+          )}
+          {running && e.can_skip && (
+            <Button
+              size="sm"
+              icon="corner-down-right"
+              disabled={busy !== null}
+              onClick={() => void run("skip")}
+              title="Stop this task and let the session continue without its result"
+            >
+              {busy === "skip" ? "Skipping…" : "Skip"}
+            </Button>
           )}
           {running ? (
             <Button

@@ -597,3 +597,35 @@ async fn uploads_are_kept_in_the_session_and_listed_as_artifacts() {
     );
     e.stop_session(&s).unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_skipped_research_task_stops_and_opens_no_gate() {
+    let t = setup();
+    let e = &t.engine;
+    let s = start(e, vec![]);
+    until("the explore runs", || {
+        t.exec.resumes.lock().unwrap().len() == 1
+    })
+    .await;
+    let explore = t.exec.ids.lock().unwrap()[0].clone();
+    assert!(e.execution(&explore).unwrap().can_skip);
+    e.skip_execution(&explore).unwrap();
+    until("the explore ends", || {
+        e.db().get_execution(&explore).unwrap().unwrap().status != ExecutionStatus::Running
+    })
+    .await;
+    let row = e.execution(&explore).unwrap();
+    assert_eq!(row.status, ExecutionStatus::Interrupted);
+    assert!(!row.can_skip);
+    assert!(e.skip_execution(&explore).is_err(), "skipped once");
+    until("the session moves on", || {
+        e.state(&s).unwrap().failed.is_some()
+    })
+    .await;
+    let st = e.state(&s).unwrap();
+    assert!(st.explore[0].abandoned);
+    assert_eq!(st.open_gates().count(), 0, "no failure gate");
+    // Rule D1: the only research task was skipped, so there is nothing to answer from.
+    assert!(st.failed.unwrap().contains("no research document"));
+    assert_eq!(t.exec.ids.lock().unwrap().len(), 1, "nothing re-ran it");
+}

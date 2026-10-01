@@ -840,6 +840,38 @@ including tool calls. `Providers::for_model` resolves `provider:model`. This res
 API documentation; nothing in the repo describes Gemini's stream.
 """
 
+[[case]]
+id = "sufficiency-tests-docs-details"
+judge = "sufficiency"
+workspace = "one"
+tests = true
+docs = true
+request = "Write more tests and docs for crates/ostra-notify: cover WebPush::send's error paths and document how the VAPID keys are handled."
+note = "From a real session that asked for tests and docs: the judge queued research passes to re-check a recalled library detail, a lint the researcher did not run, and a comparison outside the scope. The test writer reads the code and runs the checks itself."
+expect = { not_needed = ["reqwest's Response", "clippy", "autopush"] }
+
+[[case.research]]
+project = "ostra"
+task = "Research crates/ostra-notify for tests and docs: what each public function does, the tests that exist, and the docs that are missing."
+scope = "crates/ostra-notify/src/lib.rs, crates/ostra-notify/Cargo.toml"
+findings = "lib.rs holds VapidKeys, the RFC 8291 encryption (encrypt_with, encrypt), and WebPush::send over reqwest; six unit tests cover the RFC vector, a round trip, an oversized payload, the JWT, the audience, and padded base64. send's error paths have no test."
+not_covered = [
+  "Whether reqwest's Response can be built in a unit test without a server; this was taken from memory and not re-read in the reqwest source",
+  "cargo clippy --all-targets -- -D warnings was not run on the crate",
+  "Whether Mozilla's autopush service accepts the VAPID JWT claims Ostra sends today",
+]
+doc = """
+# Research: ostra-notify
+
+- `VapidKeys` (`generate`, `from_private_bytes`, `jwt`, `authorization`) signs the VAPID JWT with p256.
+- `encrypt_with` implements RFC 8291 with an explicit key and salt so the RFC vector is checked; `encrypt` picks
+  them at random and refuses a payload over `MAX_PLAINTEXT`.
+- `WebPush::send` posts the body with reqwest and maps a 404 or 410 to `NotifyError::Gone`, any other failure
+  status to `NotifyError::Status`. No test covers these paths.
+- Tests: `rfc8291_test_vector`, `round_trip_with_fresh_keys`, `rejects_oversized_payload`, `vapid_jwt_verifies`,
+  `audience_is_origin`, `padded_base64_is_accepted`. No module doc comment explains key storage.
+"""
+
 # --- Stakes: full-track specs --------------------------------------------------------------------------------
 
 [[case]]
@@ -1900,3 +1932,71 @@ doc = """
 
 - `crates/ostra-core/src/api.rs`: `SessionSummary { id, title, status, cost_usd, ... }`, exported to TypeScript.
 """
+
+[[case]]
+id = "route-amendment-skips-research"
+judge = "route_answer"
+workspace = "one"
+gate = "amendment"
+request = "Add Gemini as a provider for the native executor, using Google's streaming API with tool calls."
+note = "Rule U1: the user tells Ostra to drop one running research task. The judge names it in skip, and the context, which only asks for the skip, is discarded."
+answer = "Skip the research on how the Anthropic client retries, it isn't worth a pass."
+expect = { skip = [2], research = false, dispositions = { answer = "discard" } }
+
+[[case.research]]
+project = "ostra"
+task = "Research how providers plug into the native executor."
+scope = "crates/ostra-providers/src"
+findings = "Providers implement the Provider trait; the Anthropic and OpenAI clients show the pattern."
+doc = """
+# Research: providers
+
+`crates/ostra-providers/src/lib.rs` defines `Provider::chat(req, on_event, cancel)`. `Providers::for_model`
+resolves `provider:model`.
+"""
+
+[[case.research]]
+project = "ostra"
+task = "Find how the Anthropic client retries rate-limited requests and whether its backoff is configurable."
+scope = ""
+findings = ""
+doc = ""
+running = true
+
+[[case.research]]
+project = "ostra"
+task = "Fetch Google's current function-calling stream format and how tool results are sent back."
+scope = ""
+findings = ""
+doc = ""
+running = true
+
+[[case]]
+id = "route-amendment-adds-research-skips-none"
+judge = "route_answer"
+workspace = "one"
+gate = "amendment"
+request = "Add Gemini as a provider for the native executor, using Google's streaming API with tool calls."
+note = "Counter-case to route-amendment-skips-research: the user asks for more research and drops nothing, so skip stays empty."
+answer = "Also check how the OpenAI client handles retries, so the Gemini client can do the same."
+expect = { skip = [], research = true }
+
+[[case.research]]
+project = "ostra"
+task = "Research how providers plug into the native executor."
+scope = "crates/ostra-providers/src"
+findings = "Providers implement the Provider trait; the Anthropic and OpenAI clients show the pattern."
+doc = """
+# Research: providers
+
+`crates/ostra-providers/src/lib.rs` defines `Provider::chat(req, on_event, cancel)`. `Providers::for_model`
+resolves `provider:model`.
+"""
+
+[[case.research]]
+project = "ostra"
+task = "Find how the Anthropic client retries rate-limited requests and whether its backoff is configurable."
+scope = ""
+findings = ""
+doc = ""
+running = true

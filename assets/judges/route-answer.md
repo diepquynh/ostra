@@ -77,6 +77,14 @@ Leave `research` empty otherwise, including when the user declines research ("pl
 research"). Ostra runs the research first and gives the agent the new documents with the answers, so do not
 also rewrite the answer; deliver it as written. At most three tasks.
 
+**Skip.** List in `skip` the number of each unfinished research task the user tells Ostra to drop ("skip the
+deadpool research", "don't bother checking X", "stop researching that", "skip task 3"). Ostra stops it if it
+runs, never re-runs it, and moves on without its document, because exploration is the user's stage and the user
+decides what is worth investigating (Rule U1). The input lists each unfinished task as "Research task N". Match
+the user's words to the task they describe; when the user says to skip all the remaining research, list every
+unfinished task. Leave `skip` empty when the user does not ask to drop research, and never skip a task on your
+own judgment. Judge the rest of the answer as usual.
+
 **Route.** Pick one for the delivered part:
 
 | Route | When | What Ostra does |
@@ -103,6 +111,10 @@ same way, with one item with ID `answer`:
 - `remember` keeps it only as a note for the stages you name. It does not join the request.
 - `discard` drops it, when the user says to ignore it. The stopped work re-runs without it.
 
+Context that only tells Ostra to skip research is `discard` with those tasks in `skip`, because the skip does
+everything it asks, and an agent that read it would look for research that is not there. When it also asks for
+something else, judge that part as usual.
+
 Add research when the added context names code, a project, or a fact that no research document covers and the
 next stage needs it. Give each task the project the context is about. When the user names a project, research
 in that project, even when another one is first in scope, because the first project in scope is often not
@@ -111,7 +123,7 @@ project the work is in, say so in the reason.
 
 ## Output
 
-Call `decide` once with every field: `route`, `items`, `research`, `forget`, and `reason`. Give a `route` even
+Call `decide` once with every field: `route`, `items`, `research`, `forget`, `skip`, and `reason`. Give a `route` even
 when every item is remembered or discarded, from what the answer says. `reason` is one or two sentences for the
-user quoting the words that decided each research task, `remember`, `discard`, and forgotten note, or saying the
-answers are delivered as given.
+user quoting the words that decided each research task, skipped task, `remember`, `discard`, and forgotten note,
+or saying the answers are delivered as given.

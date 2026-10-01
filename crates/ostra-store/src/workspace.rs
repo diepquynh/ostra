@@ -1585,6 +1585,7 @@ fn execution_from_raw(r: RawExecution) -> Result<ExecutionView, StoreError> {
         spawn_block: spawn,
         error,
         can_resume,
+        can_skip: false,
         has_terminal: false,
         pending_gate: None,
         repo_root: None,

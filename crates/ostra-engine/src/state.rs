@@ -3,7 +3,7 @@
 
 use crate::judge::{
     ANSWER_ITEM, AnswerItem, AnswerRoute, ClassifyOut, Disposition, ExploreTaskSpec, FeedbackOut,
-    FeedbackTarget, MAX_ANSWER_RESEARCH, NoteStage, OptsIn, RescueAction, RescueOut, ResolveAction,
+    FeedbackTarget, MAX_ANSWER_RESEARCH, MAX_SUFFICIENCY_RESEARCH, NoteStage, OptsIn, RescueAction, RescueOut, ResolveAction,
     ResolveReviewOut, RouteAnswerOut, StakesOut, SufficiencyOut, TrackOut, clean_title, item_for, parts_for,
 };
 use chrono::{DateTime, Utc};
@@ -882,6 +882,8 @@ pub enum Interrupt {
     /// Rule O4: the run created its phase's project, which is initialized before the phase starts
     /// again inside it.
     ProjectCreated,
+    /// Rule U1: the user skipped the execution's task; it ends without a result.
+    Skipped,
 }
 
 impl Interrupt {
@@ -892,6 +894,7 @@ impl Interrupt {
             Interrupt::ProjectCreated => {
                 "Stopped after creating the project, which Ostra initializes before this phase starts again in it."
             }
+            Interrupt::Skipped => "You skipped this task, so Ostra stopped it and moved on without it.",
         }
     }
 }
@@ -1669,6 +1672,12 @@ impl SessionState {
                 }
                 self.on_started(id, &purpose, loop_key, true);
             }
+            SessionEvent::ExecutionSkipped { id } => {
+                if self.can_skip(id) {
+                    self.interrupting.insert(id.clone(), Interrupt::Skipped);
+                    self.skip_task(id);
+                }
+            }
             SessionEvent::ExecutionFinished { id, result } => {
                 let Some(rec) = self.executions.get_mut(id) else {
                     return;
@@ -1696,6 +1705,10 @@ impl SessionState {
                     self.on_finished(&rec, &paused);
                 } else {
                     self.on_finished(&rec, result);
+                }
+                // Rule U1: the stopped run's finish would put its task back to re-run.
+                if why == Some(Interrupt::Skipped) {
+                    self.skip_task(id);
                 }
                 self.coord_finished(&rec, result);
             }
@@ -2102,6 +2115,7 @@ impl SessionState {
         self.amendments[i].pending = false;
         self.amendments[i].delivered = deliver;
         self.forget(&out.forget);
+        self.skip_research(&out.skip);
         self.remember_parts(None, &out.items, ANSWER_ITEM, &text);
         self.queue_research(&out.research, ExploreOrigin::Amendment);
         // Rule D10: a requirement change after the spec exists restarts at the spec.
@@ -2127,6 +2141,75 @@ impl SessionState {
             .enumerate()
             .filter(|(_, a)| a.pending)
             .map(|(i, _)| i)
+    }
+
+    /// Rule U1: a running execution whose task the session can do without. Research the user or
+    /// a judge started, the test analysis, a docs writer, and the architecture overview end
+    /// without a result; work, review, spec, plan, and fact-check carry rules a skip would break,
+    /// a helper's asker waits for its answer, and a rescue's loop waits for its fact.
+    pub fn can_skip(&self, exec: &ExecutionId) -> bool {
+        let Some(rec) = self.executions.get(exec) else {
+            return false;
+        };
+        if rec.result.is_some() || rec.loop_key.is_some() || self.is_terminal() {
+            return false;
+        }
+        match &rec.purpose {
+            ExecPurpose::Explore { task } => self.explore.get(*task as usize).is_some_and(|t| {
+                !t.finished()
+                    && !matches!(
+                        t.origin,
+                        ExploreOrigin::Ask { .. } | ExploreOrigin::Rescue { .. }
+                    )
+            }),
+            ExecPurpose::Epa { .. } | ExecPurpose::Docs { .. } | ExecPurpose::Architecture => true,
+            _ => false,
+        }
+    }
+
+    /// Rule U1: end the execution's task without a result, as abandoning its failure gate does.
+    fn skip_task(&mut self, exec: &ExecutionId) {
+        self.exec_gate_answered(exec, false);
+    }
+
+    /// Rule U1: research tasks the Route answer judge may skip, numbered from 1 as it sees them.
+    pub fn skippable_research(&self) -> impl Iterator<Item = &ExploreTask> + '_ {
+        self.explore.iter().filter(|t| {
+            !t.finished()
+                && t.failed.is_none()
+                && !matches!(
+                    t.origin,
+                    ExploreOrigin::Ask { .. } | ExploreOrigin::Rescue { .. }
+                )
+        })
+    }
+
+    /// Rule U1: skip the research tasks the user told the judge to drop. A running one stops.
+    fn skip_research(&mut self, numbers: &[u32]) {
+        let idx: Vec<u32> = self
+            .skippable_research()
+            .filter(|t| numbers.contains(&(t.idx + 1)))
+            .map(|t| t.idx)
+            .collect();
+        for i in idx {
+            let running = self.explore[i as usize]
+                .exec
+                .clone()
+                .filter(|e| self.executions.get(e).is_some_and(|r| r.result.is_none()));
+            match running {
+                Some(e) => {
+                    self.interrupting.insert(e.clone(), Interrupt::Skipped);
+                    self.skip_task(&e);
+                }
+                None => {
+                    let t = &mut self.explore[i as usize];
+                    t.abandoned = true;
+                    if let ExploreOrigin::LoopAnswer { phase, tests } = t.origin {
+                        self.release_answer_research((phase, tests));
+                    }
+                }
+            }
+        }
     }
 
     /// Rule P4: the user stopped this execution, so nothing retries it without them, YOLO included.
@@ -2730,7 +2813,11 @@ impl SessionState {
                         .retain(|t| !(t.origin == ExploreOrigin::Sufficiency && t.exec.is_none()));
                 }
                 if let Ok(out) = serde_json::from_value::<SufficiencyOut>(output.clone()) {
+                    let mut added = 0;
                     for item in out.items.into_iter().filter(|i| i.needed) {
+                        if added == MAX_SUFFICIENCY_RESEARCH {
+                            break;
+                        }
                         let (project, task) = match item.task {
                             Some(t) if self.valid_project(&t.project) => (t.project, t.task),
                             _ => (self.primary(), item.item.clone()),
@@ -2742,6 +2829,7 @@ impl SessionState {
                             continue;
                         }
                         self.push_explore(project, task, ExploreOrigin::Sufficiency);
+                        added += 1;
                     }
                 }
             }
@@ -2908,6 +2996,7 @@ impl SessionState {
                     return;
                 }
                 self.forget(&out.forget);
+                self.skip_research(&out.skip);
                 if let Some(held) = self.held_answers.remove(&gate) {
                     self.apply_held(&gate, held, &out);
                     return;

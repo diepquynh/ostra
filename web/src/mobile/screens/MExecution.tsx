@@ -108,7 +108,7 @@ export function MExecution({ id }: { ws: string; id: string }) {
   const nav = useNav();
   const { exec, status, activity: act, activityError, session } = useExecution(id);
   const [tab, setTab] = useState<"stream" | "tools">("stream");
-  const [busy, setBusy] = useState<"cancel" | "resume" | "inspect" | null>(null);
+  const [busy, setBusy] = useState<"cancel" | "skip" | "resume" | "inspect" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const e = exec.data;
   const st = status ?? e?.status ?? "running";
@@ -152,11 +152,17 @@ export function MExecution({ id }: { ws: string; id: string }) {
   const canResume = !running && e.can_resume && !inspects && !e.has_terminal;
   const sess = session.data?.summary;
 
-  const run = async (kind: "cancel" | "resume") => {
+  const run = async (kind: "cancel" | "skip" | "resume") => {
     setBusy(kind);
     setError(null);
     try {
-      exec.set(kind === "cancel" ? await api.cancelExecution(e.id) : await api.resumeExecution(e.id));
+      exec.set(
+        kind === "cancel"
+          ? await api.cancelExecution(e.id)
+          : kind === "skip"
+            ? await api.skipExecution(e.id)
+            : await api.resumeExecution(e.id),
+      );
       setTab("stream");
     } catch (err) {
       setError((err as Error).message);
@@ -326,6 +332,11 @@ export function MExecution({ id }: { ws: string; id: string }) {
       )}
 
       <div className="mx-pad mx-actions">
+        {running && e.can_skip && (
+          <button type="button" className="m-btn" disabled={busy !== null} onClick={() => void run("skip")}>
+            {busy === "skip" ? "Skipping…" : "Skip this task"}
+          </button>
+        )}
         {running && (
           <button type="button" className="m-btn mx-danger" disabled={busy !== null} onClick={() => void run("cancel")}>
             {busy === "cancel" ? "Cancelling…" : "Cancel the execution"}

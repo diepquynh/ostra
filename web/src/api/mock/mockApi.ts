@@ -484,6 +484,7 @@ export const mockApi: Api = {
   execution: (id) => delay(execView(id)),
   activity: (id, after) => delay(fx.activityFor(id).filter((a) => a.seq > (after ?? 0))),
   cancelExecution: (id) => delay({ ...execView(id), status: "cancelled" }),
+  skipExecution: (id) => delay({ ...execView(id), status: "interrupted", can_skip: false }),
   resumeExecution: (id) => delay(fx.resume(id)),
   inspectExecution: (id) => delay(fx.resume(id)),
   artifact: (path) => delay(fx.artifactFor(path)),

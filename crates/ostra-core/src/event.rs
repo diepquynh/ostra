@@ -667,6 +667,11 @@ pub enum SessionEvent {
     ExecutionResumed {
         id: ExecutionId,
     },
+    /// Rule U1: the user skipped this running execution. It stops, and its task ends without a
+    /// result instead of re-running or opening a failure gate.
+    ExecutionSkipped {
+        id: ExecutionId,
+    },
     /// Rule H8: a run asked a helper or another subagent, and waits for the answer.
     AgentAsked {
         id: MessageId,

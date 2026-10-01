@@ -855,6 +855,8 @@ pub struct ExecutionView {
     pub error: Option<String>,
     /// A harness execution whose session can be reopened.
     pub can_resume: bool,
+    /// Rule U1: a running task the session can do without, so the user may skip it.
+    pub can_skip: bool,
     /// A live PTY exists for this execution.
     pub has_terminal: bool,
     /// `<agent>:<project key>`, the key of this execution's entry in `SessionDetail::execution_groups`.

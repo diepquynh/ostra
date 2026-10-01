@@ -130,6 +130,9 @@ pub const ANSWER_ITEM: &str = "answer";
 /// Research tasks one answer may queue (Rule J1, a fan-out cap).
 pub const MAX_ANSWER_RESEARCH: usize = 3;
 
+/// Rule D2: research tasks one Sufficiency round may add, because each is another full pass.
+pub const MAX_SUFFICIENCY_RESEARCH: usize = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerRoute {
@@ -150,6 +153,9 @@ pub struct RouteAnswerOut {
     /// IDs of notes kept earlier that the user takes back or replaces.
     #[serde(default)]
     pub forget: Vec<String>,
+    /// Rule U1: numbers of the unfinished research tasks the user tells Ostra to skip.
+    #[serde(default)]
+    pub skip: Vec<u32>,
     #[serde(default)]
     pub reason: String,
 }
@@ -378,9 +384,10 @@ pub fn output_schema(kind: JudgeKind, answer_schema: Option<Value>) -> Value {
                 "items": answer_items_schema(),
                 "research": research_schema(),
                 "forget": forget_schema(),
+                "skip": {"type": "array", "items": {"type": "integer"}, "description": "Numbers of the unfinished research tasks the user tells Ostra to skip. Empty otherwise."},
                 "reason": reason
             },
-            "required": ["route", "items", "research", "forget", "reason"]
+            "required": ["route", "items", "research", "forget", "skip", "reason"]
         }),
         JudgeKind::Rescue => json!({
             "type": "object",

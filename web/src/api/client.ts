@@ -255,6 +255,7 @@ export const httpApi = {
   activity: (id: string, after?: number) =>
     request<ActivityItem[]>("GET", `/api/executions/${enc(id)}/activity${q({ after })}`),
   cancelExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/cancel`),
+  skipExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/skip`),
   resumeExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/resume`),
   /** Reopen an ended harness run's session read-only; returns the new execution. */
   inspectExecution: (id: string) => request<ExecutionView>("POST", `/api/executions/${enc(id)}/inspect`),

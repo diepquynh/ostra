@@ -352,6 +352,7 @@ const exec = (
   spawn_block: `Workspace root: ${ROOT}\nRepo root: /home/me/code/shop-${project}\nSession dir: ${SROOT}/${project}\nRepo key: ${project}`,
   error: null,
   can_resume: false,
+  can_skip: status === "running" && purpose?.kind === "explore",
   has_terminal: false,
   group: `${agent}:${project}`,
   run_label: agent,

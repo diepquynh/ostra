@@ -185,6 +185,11 @@ thing is `ostra stop <session id>`.
 **Cancel** on one execution stops only that run. Its gate opens as "You stopped ...", where you retry it or
 abandon the step. Nothing retries a run you stopped on its own, not even YOLO.
 
+**Skip** on a running research, test analysis, docs, or architecture execution stops it and lets the session
+continue without its result, with no gate to answer. Skipping a phase's test analysis skips that phase's tests.
+You can also say it in Add context ("skip the research on X"), and Ostra drops the research tasks you name.
+Work, review, spec, plan, and fact-check runs have Cancel only, because the pipeline's rules need their results.
+
 ## Read what it wrote
 
 Every file a session writes is under `<workspace>/.ostra/sessions/<session id>/`:

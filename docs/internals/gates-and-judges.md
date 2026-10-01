@@ -260,7 +260,7 @@ it as "Ostra chose X because Y".
 | Track | Research for an `IMPLEMENT` request finished and no track was forced | `light` (build from the research) or `full` (spec and plan first) | `track.md` |
 | Stakes | A full-track `IMPLEMENT` spec is approved | `low` (skip the plan), `medium`, or `high` | `stakes.md` |
 | Feedback | The user sends feedback at the implementation review gate | `requirement_change` or `implementation_detail`, one `{project, instruction}` target per project it changes, and what happens to the feedback (Rule J1) | `feedback.md` |
-| Route answer | Any other answer with content: open questions, approval text, guidance, a stuck fact, retry instructions, and context added mid-session | Per answer `deliver`, `remember`, or `discard`, research to run first, and `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
+| Route answer | Any other answer with content: open questions, approval text, guidance, a stuck fact, retry instructions, and context added mid-session | Per answer `deliver`, `remember`, or `discard`, research to run first, research tasks the user says to skip, and `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
 | Rescue | An agent returned `stuck` | `rerun` with a stated fact, `explore` to find it, or `gate` to ask the user | `rescue.md` |
 | Resolve review | A review loop hit its budget under YOLO | `fix` with per-finding instructions, or `block` | `resolve-review.md` |
 | YOLO answer | A gate opens under YOLO and its plan is `Judge` | The gate's answer, in the schema for that gate | `yolo-answer.md` |
@@ -270,7 +270,9 @@ Each prompt tells the judge which way to lean when unsure, and why:
 
 - **Classify** picks the category that runs more of the pipeline, because a needed stage that was skipped costs a
   wrong result and an unneeded stage costs one round.
-- **Sufficiency** marks an item needed, because a missed dependency shows up as a wrong spec after approval.
+- **Sufficiency** marks an item needed only when it names behavior the request changes or an outside technology,
+  because a missed dependency there shows up as a wrong spec after approval. Anything else a later agent can
+  find while it works is not needed, because each research pass is a full agent run.
 - **Track** resolves to `light`, because the user reviews the built result and can send feedback, while a spec
   round costs several approvals. It picks `full` only on a research finding it can name.
 - **Stakes** resolves upward, because skipping the plan removes the phase review that catches a wrong sequence.
@@ -338,6 +340,12 @@ A later answer can take a note back or replace it ("forget what I said about the
 tokio-postgres"). The judge sees each kept note with its ID and lists the ones to drop in `forget`. A forgotten
 note stays in the fold and the log for traceability, marked `forgotten`, and reaches no agent. A decision that
 arrives for a gate that no longer waits forgets nothing.
+
+An answer or added context can also drop research ("skip the deadpool research"). The judge sees each
+unfinished research task numbered as "Research task N" and lists the ones the user names in `skip`, never one of
+its own choosing (Rule U1). The fold marks them abandoned; a running one is stopped as an interrupt, and a queued
+one never starts. Context that only asks for the skip is discarded, because an agent that read it would look for
+research that is not there.
 
 The open-questions card numbers each question's options, recommended first, and its Other field takes a typed
 answer. A typed answer may name options by number or label, combine options of a single-choice question, and add

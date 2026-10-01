@@ -389,6 +389,8 @@ export function describeEvent(e: SessionEvent): string {
       return `${humanize(e.agent)} started in ${e.project} on ${e.executor}`;
     case "execution_resumed":
       return "Execution resumed where it stopped";
+    case "execution_skipped":
+      return "Task skipped: Ostra stopped it and moved on without it";
     case "execution_finished":
       return `Execution finished: ${e.result.status}`;
     case "gate_opened":

@@ -3906,3 +3906,130 @@ fn h9_a_waiting_subagent_holds_completion() {
     let s = h.summaries();
     assert!(!s.iter().any(|x| x.contains("completion")), "{s:?}");
 }
+
+// ------------------------------------------------------------------------------------------
+// U1: the user skips a task the session can do without; it ends without a result.
+// ------------------------------------------------------------------------------------------
+
+fn skip(h: &mut H, id: &ExecutionId) {
+    h.ev(SessionEvent::ExecutionSkipped { id: id.clone() });
+}
+
+#[test]
+fn u1_skipped_research_stops_and_never_reruns() {
+    let mut h = H::new(&["a", "b"], SessionOptions {
+            track: Some(Track::Full),
+            ..Default::default()
+        });
+    h.classify("IMPLEMENT", &["a", "b"]);
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    let (research, _) = h.start("spawn explore explore#1");
+    assert!(h.state().can_skip(&research));
+    skip(&mut h, &research);
+    let st = h.state();
+    assert_eq!(
+        st.interrupting.get(&research),
+        Some(&ostra_engine::state::Interrupt::Skipped)
+    );
+    assert!(!st.can_skip(&research), "a skipped task is skipped once");
+    // Rule D2 no longer waits for it, and the stop opens no failure gate.
+    let spec = h.spawn_step("spawn generate-spec");
+    assert_eq!(spec.inputs.research_docs.len(), 1);
+    h.finish(&research, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
+}
+
+#[test]
+fn u1_work_and_checks_cannot_be_skipped() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let (spec, _) = h.start("spawn generate-spec");
+    assert!(!h.state().can_skip(&spec));
+    skip(&mut h, &spec);
+    assert!(h.state().interrupting.is_empty(), "the fold ignores it");
+    h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
+    assert_eq!(h.summaries(), vec!["spawn fact-check fact-check-spec#1"]);
+}
+
+#[test]
+fn u1_a_skipped_test_analysis_skips_that_phase_tests() {
+    let phases = json!([
+        phase(1, "p", &[], "Required"),
+        phase(2, "p", &[1], "Required")
+    ]);
+    let mut h = H::plan_approved(
+        &["p"],
+        phases,
+        SessionOptions {
+            tests: true,
+            docs: true,
+            yolo: false,
+            track: None,
+        },
+    );
+    h.pass_phase(1);
+    h.pass_phase(2);
+    h.accept();
+    h.command(CommandPurpose::Format, "p");
+    let (e1, _) = h.start("spawn execution-path-analyzer epa phase 1");
+    let (e2, _) = h.start("spawn execution-path-analyzer epa phase 2");
+    skip(&mut h, &e1);
+    h.finish(&e1, ExecutionStatus::Interrupted, None);
+    h.finish(&e2, ExecutionStatus::Ok, Some(report("/e2")));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn write-test write-test phase 2 initial"]
+    );
+}
+
+#[test]
+fn u1_context_can_skip_running_and_queued_research() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Classify,
+        None,
+        json!({"category": "IMPLEMENT", "projects": ["p"], "explore_tasks": [
+            {"project": "p", "task": "research the order model"},
+            {"project": "p", "task": "research the retry backoff"},
+            {"project": "p", "task": "research the deadpool errors"}
+        ], "opts_in": {"tests": false, "docs": false}, "reason": "r"}),
+    );
+    h.run("spawn explore explore#0", explore_submit(0, &[]));
+    let (backoff, _) = h.start("spawn explore explore#1");
+    amend(&mut h, "skip the backoff and deadpool research", vec![], ContextDelivery::Queue);
+    route_amendment(
+        &mut h,
+        0,
+        json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "skip": [2, 3], "reason": "r"}),
+    );
+    let st = h.state();
+    assert_eq!(
+        st.interrupting.get(&backoff),
+        Some(&ostra_engine::state::Interrupt::Skipped)
+    );
+    assert!(st.explore[2].abandoned, "the queued task never starts");
+    h.finish(&backoff, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["judge track"]);
+}
+
+#[test]
+fn d2_one_sufficiency_round_adds_at_most_three_tasks() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.classify("IMPLEMENT", &["p"]);
+    h.run(
+        "spawn explore explore#0",
+        explore_submit(0, &["a", "b", "c", "d", "e"]),
+    );
+    let items: Vec<Value> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|i| json!({"item": i, "needed": true, "reason": "r", "task": {"project": "p", "task": format!("research {i}")}}))
+        .collect();
+    h.decide(JudgeKind::Sufficiency, Some("0"), json!({"items": items, "reason": "r"}));
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn explore explore#1",
+            "spawn explore explore#2",
+            "spawn explore explore#3"
+        ]
+    );
+}

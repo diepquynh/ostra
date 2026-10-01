@@ -131,13 +131,45 @@ open (Rule D2). The planner collects every finished task with unjudged `Not cove
 Sufficiency judge about them in one call. For each item the judge answers needed or not needed, and a needed
 item comes with one more research task. The judge often gives several related items the same task (six gaps
 about one country's law become one "research these statutes" task), so the engine keeps one task per project
-and task text and skips a copy of a task that is still queued or running. Those tasks spawn, and the cycle
-repeats.
+and task text and skips a copy of a task that is still queued or running. One round adds at most three tasks
+(`MAX_SUFFICIENCY_RESEARCH` in [`judge.rs`](../../crates/ostra-engine/src/judge.rs)), the first three the judge
+names. Those tasks spawn, and the cycle repeats.
 
 The engine allows three sufficiency rounds (`SUFFICIENCY_ROUNDS`). After that it proceeds to the spec with what
-it has, so a request that keeps opening new questions still moves forward. When the judge is unsure it is told
-to mark an item needed: an extra research pass costs one round, while a missed dependency shows up as a wrong
+it has, so a request that keeps opening new questions still moves forward.
+
+Each research pass is a full agent run, so the judge asks for one only when the answer changes what gets
+specified or built and no later agent finds it while doing its own work. It sees the request's category,
+the track when decided, whether tests and docs were requested, and how many rounds were already judged. Items
+it marks not needed:
+
+- a detail a later agent meets while it works, such as the API of a library the project already uses or
+  whether a type can be built in a test, because the implementer and the test writer read and run the code;
+- a check the researcher did not run, such as a lint or a build, because the build stage runs the project's
+  own checks;
+- a second look at a fact about the projects' own code that the researcher says it did not re-read;
+- a comparison with code or a deployment outside the request's scope;
+- for a request that only adds tests or docs, behavior the request does not change.
+
+This came from a session that asked for tests and docs for one crate: the judge queued a pass to check whether
+a library's error type "taken from memory" could be built in a test, which the test writer finds out by
+writing the test. When the judge is unsure, it marks an item needed only if the item names behavior the
+request changes or an outside technology it brings in, because a missed dependency there shows up as a wrong
 spec after the user approved it.
+
+### Skipping research
+
+Exploration is the user's stage (Ultracode Rule D2), so you can drop a research task the session can do without
+(Rule U1):
+
+- **Skip** on a running research execution stops it. The runner records `ExecutionSkipped`, the fold marks the
+  task abandoned, and the stop opens no failure gate, so the spec no longer waits for it.
+- **Add context** that says so ("skip the deadpool research") goes to the Route answer judge, which sees each
+  unfinished task numbered as "Research task N" and lists the ones you name in `skip`. A running one stops; a
+  queued one never starts, even when its spawn was already waiting for an execution slot. Context that only
+  asks for the skip is discarded, so no later agent reads it and looks for research that is not there.
+
+A skipped task leaves no research document. If every task ends without one, Rule D1 still fails the session.
 
 ## Track: light or full
 
@@ -782,6 +814,7 @@ A completion report names the stages that did not run and how to run them, and l
 | Session spend | `limits.session_budget_usd` | Budget gate in `Planner::push` |
 | Implement pipelines per project | 1 | Rule M2, `Planner::phases` |
 | Sufficiency rounds | 3 | `SUFFICIENCY_ROUNDS` |
+| Research tasks per sufficiency round | 3 | `MAX_SUFFICIENCY_RESEARCH` |
 | Consecutive fact-check FAILs before a gate | 3 | `FACTCHECK_RECURRING_LIMIT` |
 | Review passes per loop | 3, or 10 under YOLO | `REVIEW_CAP`, `YOLO_REVIEW_BUDGET` |
 | Automatic retries after an error | 1 | `ERROR_RETRIES` |

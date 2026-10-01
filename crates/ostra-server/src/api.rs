@@ -417,6 +417,7 @@ pub fn router(app: Arc<App>) -> axum::Router {
         .route("/api/executions/{id}", get(get_execution))
         .route("/api/executions/{id}/activity", get(activity))
         .route("/api/executions/{id}/cancel", post(cancel))
+        .route("/api/executions/{id}/skip", post(skip))
         .route("/api/executions/{id}/resume", post(resume))
         .route("/api/artifacts", get(artifact))
         .route("/api/artifacts/download", get(artifact_download))
@@ -1334,6 +1335,13 @@ async fn cancel(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionVi
     let eid = ExecutionId::from(id);
     let w = ws_of_execution(&app, &eid)?;
     w.engine.cancel_execution(&eid)?;
+    Ok(Json(w.engine.execution(&eid)?))
+}
+
+async fn skip(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView> {
+    let eid = ExecutionId::from(id);
+    let w = ws_of_execution(&app, &eid)?;
+    w.engine.skip_execution(&eid)?;
     Ok(Json(w.engine.execution(&eid)?))
 }
 

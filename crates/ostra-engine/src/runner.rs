@@ -754,6 +754,26 @@ impl Engine {
         }
     }
 
+    /// Rule U1: skip a running execution's task. The run stops, and the session moves on without
+    /// its result instead of opening a failure gate.
+    pub fn skip_execution(&self, id: &ExecutionId) -> Result<(), EngineError> {
+        let session = self
+            .inner
+            .db
+            .get_execution(id)?
+            .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?
+            .session
+            .ok_or_else(|| EngineError::Invalid("A side-panel answer has no task to skip.".into()))?;
+        if !self.state(&session)?.can_skip(id) {
+            return Err(EngineError::Invalid(
+                "Only a running research, test analysis, docs, or architecture task can be skipped. Cancel the execution instead.".into(),
+            ));
+        }
+        self.inner
+            .append(&session, SessionEvent::ExecutionSkipped { id: id.clone() })?;
+        self.inner.interrupt(&session, Interrupt::Skipped)
+    }
+
     /// Resume a failed, cancelled, or interrupted execution: answer its failure gate with retry and
     /// hand the re-run the earlier execution to continue from.
     pub fn resume_execution(&self, id: &ExecutionId) -> Result<(), EngineError> {
@@ -1954,6 +1974,8 @@ impl Inner {
             .call_judge(session, kind, subject, input, summary, schema, validate)
             .await
         {
+            // Rule U1: research the decision skipped stops now.
+            Ok(_) if kind == JudgeKind::RouteAnswer => self.interrupt(session, Interrupt::Skipped),
             Ok(_) => Ok(()),
             Err(e) => {
                 if kind == JudgeKind::Completion {
@@ -2259,6 +2281,12 @@ impl Inner {
         let slot = self.acquire_slot().await;
         let st = self.snapshot(session)?;
         if st.is_terminal() || st.paused {
+            return Ok(());
+        }
+        // Rule U1: research skipped while this spawn waited for a slot does not start.
+        if let ExecPurpose::Explore { task } = &req.purpose
+            && st.explore.get(*task as usize).is_some_and(|t| t.abandoned)
+        {
             return Ok(());
         }
         if req.inputs.context_files.contains(&st.session_context_path()) {
