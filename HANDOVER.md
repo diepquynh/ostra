@@ -431,6 +431,9 @@ edit, so Ostra does not run what they name until the user approved that exact co
   `[sandbox] network`), the sandbox's extra allowed hosts (`sandbox_allowed_hosts`), which add to the
   global `[sandbox] allowed_hosts` and never remove a global or built-in host, and the workspace's own decoy
   files (`sandbox_decoys`, `~/` paths, at most 32), which add to the built-in decoys and never remove one,
+the workspace's readable credentials (`sandbox_readable`, at most 32), which add to the global
+`[sandbox] extra_readable`: credential files or dirs agents may read, read-only, with no decoy on them, and never
+Ostra's data dir, config dir, or master key file,
   and, for macOS, the loopback choice (`sandbox_loopback`, `open` by default or `listed`) and blocked loopback
   ports (`sandbox_blocked_ports`, at most 64), which exist per workspace only.
 

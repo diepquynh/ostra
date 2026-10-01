@@ -626,6 +626,25 @@ function DecoysPanel({ form, update, issues, sandbox }: SectionProps & { sandbox
   );
 }
 
+/** Credential paths agents may read, added to the global `[sandbox] extra_readable`. */
+function ReadablePanel({ form, update, issues }: SectionProps) {
+  return (
+    <Panel title="Readable credentials" subtitle="added to the global list">
+      <Input
+        label="Credential files agents may read"
+        mono
+        multiline
+        rows={3}
+        placeholder="~/.m2/settings.xml"
+        value={form.readable}
+        error={errorText(issues("sandbox_readable"))}
+        hint="One path per line, absolute or starting with ~/. Agents read these read-only although the sandbox hides credential stores, so a build that signs in to a private registry can finish. No decoy is planted on them."
+        onChange={(e) => update((f) => void (f.readable = e.target.value))}
+      />
+    </Panel>
+  );
+}
+
 /** The network choice in place of the global one, and hosts added to the global and built-in ones. */
 function NetworkPanel({
   form,
@@ -842,6 +861,9 @@ export function PermissionsSection({
         </Anchor>
         <Anchor id="sandbox_decoys">
           <DecoysPanel form={form} update={update} issues={issues} sandbox={sandbox} />
+        </Anchor>
+        <Anchor id="sandbox_readable">
+          <ReadablePanel form={form} update={update} issues={issues} />
         </Anchor>
         <Panel title="Rules" subtitle="deny beats ask, ask beats allow">
           <div className="wp-stack">

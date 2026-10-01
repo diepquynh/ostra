@@ -4,10 +4,21 @@
 
 use ostra_core::config::{SandboxConfig, ValidationIssue, WorkspaceSettings};
 
-/// A workspace's sandbox entries: allowed hosts, decoys, and blocked ports.
+/// A workspace's sandbox entries: allowed hosts, decoys, readable paths, and blocked ports.
 pub fn workspace(ws: &WorkspaceSettings) -> Vec<ValidationIssue> {
     let mut issues = validate_hosts("sandbox_allowed_hosts", &ws.sandbox_allowed_hosts);
     issues.extend(validate_decoys(&ws.sandbox_decoys));
+    issues.extend(validate_readable("sandbox_readable", &ws.sandbox_readable));
+    for (i, d) in ws.sandbox_decoys.iter().enumerate() {
+        if ws.sandbox_readable.iter().any(|r| r.trim() == d.trim()) {
+            issues.push(ValidationIssue {
+                path: format!("sandbox_decoys[{i}]"),
+                message: format!(
+                    "Remove `{d}` from the decoys or from the readable paths, because a decoy there would replace the file agents are allowed to read."
+                ),
+            });
+        }
+    }
     issues.extend(validate_blocked_ports(&ws.sandbox_blocked_ports));
     issues
 }
@@ -85,6 +96,55 @@ fn validate_decoys(decoys: &[String]) -> Vec<ValidationIssue> {
     issues
 }
 
+/// Readable paths one list may hold, because each one is a mount in every sandbox.
+pub const MAX_READABLE: usize = 32;
+
+/// A readable list (`extra_readable` or `sandbox_readable`): absolute or `~/` paths that name
+/// neither the home folder, a dir above it, nor any of Ostra's own files.
+fn validate_readable(key: &str, entries: &[String]) -> Vec<ValidationIssue> {
+    let home = ostra_core::paths::home().unwrap_or_default();
+    let private = ostra_core::paths::ostra_private_paths();
+    let mut issues: Vec<ValidationIssue> = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let t = e.trim();
+            let p = match t.strip_prefix("~/") {
+                Some(rest) => home.join(rest),
+                None => std::path::PathBuf::from(t),
+            };
+            let message = if !(t.starts_with('/') || t.starts_with("~/")) || t.contains('\0') {
+                format!(
+                    "Write `{t}` as an absolute path or one starting with `~/`, because a relative path would depend on where an execution starts."
+                )
+            } else if home.starts_with(&p) || p.components().count() < 2 {
+                format!(
+                    "Name the credential file or its dir instead of `{t}`, such as `~/.m2/settings.xml`, because each entry lets agents read everything under it."
+                )
+            } else if private.iter().any(|o| o.starts_with(&p) || p.starts_with(o)) {
+                format!(
+                    "Remove `{t}`, because it reaches Ostra's own data, config, or key file, which agents never read."
+                )
+            } else {
+                return None;
+            };
+            Some(ValidationIssue {
+                path: format!("{key}[{i}]"),
+                message,
+            })
+        })
+        .collect();
+    if entries.len() > MAX_READABLE {
+        issues.push(ValidationIssue {
+            path: key.into(),
+            message: format!(
+                "List at most {MAX_READABLE} readable paths, because each one is a mount in every agent sandbox."
+            ),
+        });
+    }
+    issues
+}
+
 /// Every `[sandbox]` path must be absolute or start with `~/`, because a relative path would
 /// resolve against whatever directory an execution happens to start in.
 pub fn global(cfg: &SandboxConfig) -> Vec<ValidationIssue> {
@@ -105,6 +165,10 @@ pub fn global(cfg: &SandboxConfig) -> Vec<ValidationIssue> {
             }
         }
     }
+    issues.extend(validate_readable(
+        "sandbox.extra_readable",
+        &cfg.extra_readable,
+    ));
     issues.extend(validate_hosts("sandbox.allowed_hosts", &cfg.allowed_hosts));
     if let Some(u) = &cfg.upstream_proxy
         && crate::egress::parse_upstream(u).is_none()
@@ -175,5 +239,43 @@ mod tests {
             .map(|i| format!("~/.d{i}"))
             .collect();
         assert_eq!(paths(many), vec!["sandbox_decoys"]);
+    }
+
+    #[test]
+    fn readable_paths_name_credentials_and_never_ostra_or_the_whole_home() {
+        let home = ostra_core::paths::home().unwrap_or_default();
+        let data = ostra_core::paths::data_dir();
+        let ws = WorkspaceSettings {
+            name: "x".into(),
+            sandbox_readable: vec![
+                "~/.m2/settings.xml".into(),
+                "relative/.netrc".into(),
+                "~/".into(),
+                "/".into(),
+                home.to_string_lossy().into_owned(),
+                data.join("registry.db").to_string_lossy().into_owned(),
+                "~/.git-credentials".into(),
+            ],
+            sandbox_decoys: vec!["~/.git-credentials".into()],
+            ..Default::default()
+        };
+        let paths: Vec<String> = workspace(&ws).into_iter().map(|i| i.path).collect();
+        assert_eq!(
+            paths,
+            [
+                "sandbox_readable[1]",
+                "sandbox_readable[2]",
+                "sandbox_readable[3]",
+                "sandbox_readable[4]",
+                "sandbox_readable[5]",
+                "sandbox_decoys[0]"
+            ]
+        );
+        let cfg = SandboxConfig {
+            extra_readable: vec!["~/.docker/config.json".into(), "netrc".into()],
+            ..Default::default()
+        };
+        let issues: Vec<String> = global(&cfg).into_iter().map(|i| i.path).collect();
+        assert_eq!(issues, ["sandbox.extra_readable[1]"]);
     }
 }

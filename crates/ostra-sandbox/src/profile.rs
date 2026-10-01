@@ -224,6 +224,8 @@ pub struct Profile {
     pub(crate) tty: bool,
     /// Single files made writable, rendered after every other rule.
     pub(crate) writable_files: Vec<PathBuf>,
+    /// Credential paths the user lets agents read, which no decoy replaces.
+    pub(crate) readable: Vec<PathBuf>,
 }
 
 impl Profile {
@@ -330,33 +332,41 @@ impl Profile {
             self = self.writable(&expand(home, w));
         }
         self.add_caches(cache, home);
-        let mut hidden: Vec<PathBuf> = vec![paths::data_dir()];
-        // Ostra's own config dir, or only the file when `OSTRA_CONFIG` places it in a shared dir.
-        hidden.push(match std::env::var_os("OSTRA_CONFIG") {
-            Some(_) => paths::global_config_path(),
-            None => paths::global_config_path()
-                .parent()
-                .map_or_else(paths::global_config_path, Path::to_path_buf),
-        });
-        hidden.extend(
+        // Never opened by `extra_readable`: Ostra's own files, the session bus, container sockets.
+        let mut never: Vec<PathBuf> = paths::ostra_private_paths();
+        never.extend(
             std::env::var_os("XDG_RUNTIME_DIR")
                 .map(PathBuf::from)
                 .or_else(|| {
                     Platform::user_id().map(|uid| PathBuf::from(format!("/run/user/{uid}")))
                 }),
         );
-        hidden.extend(std::env::var_os("OSTRA_MASTER_KEY_FILE").map(PathBuf::from));
-        hidden.extend(std::env::var_os("XAUTHORITY").map(PathBuf::from));
-        hidden.extend(
-            paths::HOME_CREDENTIALS
-                .iter()
-                .filter(|c| own.is_none() || c.harness != own)
-                .map(|c| home.join(c.path)),
-        );
-        hidden.extend(cfg.extra_hidden.iter().map(|h| expand(home, h)));
-        hidden.extend(DOCKER_SOCKETS.iter().map(|s| expand(home, s)));
-        for h in hidden {
+        never.extend(std::env::var_os("XAUTHORITY").map(PathBuf::from));
+        never.extend(DOCKER_SOCKETS.iter().map(|s| expand(home, s)));
+        let never: Vec<PathBuf> = never.iter().filter_map(|n| real(n)).collect();
+        self.readable = readable_paths(home, &cfg.extra_readable, &never);
+        let mut credentials: Vec<PathBuf> = paths::HOME_CREDENTIALS
+            .iter()
+            .filter(|c| own.is_none() || c.harness != own)
+            .map(|c| home.join(c.path))
+            .collect();
+        credentials.extend(cfg.extra_hidden.iter().map(|h| expand(home, h)));
+        for h in never {
             self = self.hidden(&h);
+        }
+        for h in credentials {
+            if let Some(h) = real(&h)
+                && !self.readable.iter().any(|r| h.starts_with(r))
+            {
+                self.mounts.push(Mount::Hidden(h));
+            }
+        }
+        for path in self.readable.clone() {
+            self.mounts.push(Mount::ReadOnly {
+                dir: path.is_dir(),
+                path,
+                revealed: true,
+            });
         }
         // Agents read skills and references from the assets dir inside the hidden data dir.
         if let Some(path) = real(&paths::data_dir().join("assets")) {
@@ -567,8 +577,8 @@ impl Profile {
         Ok(self)
     }
 
-    /// Rule P3: plants the built-in decoys and the workspace's own (`extra`, `~/` paths), and
-    /// reports each one's first open to `on`. Under bubblewrap a decoy goes where a hidden dir's
+    /// Rule P3: plants the built-in decoys and the workspace's own (`extra`, `~/` paths), apart
+    /// from those under a readable path, and reports each one's first open to `on`. Under bubblewrap a decoy goes where a hidden dir's
     /// tmpfs can hold a new file, or over an existing file, so the host is never written. Under
     /// Seatbelt only an existing file can be one, refused and reported through the system log.
     pub fn watch_decoys(
@@ -582,6 +592,11 @@ impl Profile {
         let wanted = decoy::wanted(extra)
             .into_iter()
             .filter(|(_, kind)| !(*kind == decoy::Kind::SshKey && ssh_reachable))
+            // A decoy over a file the user lets agents read would hide it and report its reads.
+            .filter(|(rel, _)| {
+                real_or_missing(&home.join(rel))
+                    .is_none_or(|d| !self.readable.iter().any(|r| d.starts_with(r)))
+            })
             .collect();
         if let Some(d) = backend.enforcer().decoys(&self, home, wanted, on)? {
             self.decoys = Some(Arc::new(d));
@@ -701,6 +716,22 @@ impl Profile {
         let args = args.into_iter().map(Into::into).collect();
         backend.enforcer().wrap(self, chdir, program, args)
     }
+}
+
+/// The real paths of `entries` (absolute or `~/...`), dropping any that would reach one of
+/// `never`, the home folder, or a dir above it, because each entry opens only what it names.
+pub(crate) fn readable_paths(home: &Path, entries: &[String], never: &[PathBuf]) -> Vec<PathBuf> {
+    let home = real(home).unwrap_or_else(|| home.to_path_buf());
+    let mut out: Vec<PathBuf> = entries
+        .iter()
+        .filter_map(|e| real(&expand(&home, e)))
+        .filter(|r| {
+            !home.starts_with(r) && !never.iter().any(|n| n.starts_with(r) || r.starts_with(n))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 fn db_files(db: &Path) -> Vec<PathBuf> {

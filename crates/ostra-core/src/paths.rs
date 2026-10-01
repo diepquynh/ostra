@@ -161,6 +161,20 @@ pub const HOME_CREDENTIALS: &[HomeCredential] = &[
     cli_cred(".gemini/google_accounts.json", crate::HarnessKind::Agy),
 ];
 
+/// Ostra's own files, which no setting lets an agent read: the data dir, the config dir (or only
+/// the file `OSTRA_CONFIG` names, which may sit in a shared dir), and the master key file.
+pub fn ostra_private_paths() -> Vec<PathBuf> {
+    let config = match std::env::var_os("OSTRA_CONFIG") {
+        Some(_) => global_config_path(),
+        None => global_config_path()
+            .parent()
+            .map_or_else(global_config_path, Path::to_path_buf),
+    };
+    let mut out = vec![data_dir(), config];
+    out.extend(std::env::var_os("OSTRA_MASTER_KEY_FILE").map(PathBuf::from));
+    out
+}
+
 /// Every path no agent may read: the data dir (registry, master key file, server log), a master
 /// key file named by `OSTRA_MASTER_KEY_FILE`, and every [`HOME_CREDENTIALS`] entry.
 pub fn secret_paths(home: &Path) -> Vec<PathBuf> {

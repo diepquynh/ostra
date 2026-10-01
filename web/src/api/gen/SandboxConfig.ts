@@ -24,4 +24,9 @@ extra_writable: Array<string>,
 /**
  * More paths agent commands must not see, absolute or `~/...`.
  */
-extra_hidden: Array<string>, };
+extra_hidden: Array<string>, 
+/**
+ * Credential files or dirs agents may read although the sandbox and the policy hide them,
+ * absolute or `~/...`, such as a private registry's login. They stay read-only.
+ */
+extra_readable: Array<string>, };

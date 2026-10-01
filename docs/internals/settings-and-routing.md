@@ -28,16 +28,16 @@ raise your budget, turn off your sandbox, switch you to YOLO, or start a program
 Two rules close that gap.
 
 **Rule A2: control settings live in the registry.** The permission mode, the YOLO default, the spend limits,
-the workspace's tool enforcement, and the workspace's sandbox mode, network choice, extra allowed hosts, decoy files, and macOS loopback settings are read from the registry
+the workspace's tool enforcement, and the workspace's sandbox mode, network choice, extra allowed hosts, decoy files, readable credentials, and macOS loopback settings are read from the registry
 and never from `workspace.toml`. The overlay that
 enforces it is short enough to quote
 ([`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs)):
 
 ```rust
 // Rule A2: the permission mode, YOLO, spend limits, tool enforcement, and the sandbox mode,
-// network, hosts, decoys, and loopback choice come from the registry, never from a folder file,
+// network, hosts, decoys, readable credentials, and loopback choice come from the registry, never from a folder file,
 // because a repository could otherwise lift its own budget, turn off its own guards, open its own
-// sandbox, or plant decoys that pause every session.
+// sandbox, read the user's credentials, or plant decoys that pause every session.
 pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
     let a = access(registry, root);
     s.permissions.mode = a.mode;
@@ -48,12 +48,13 @@ pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
     s.sandbox_network = a.sandbox_network;
     s.sandbox_allowed_hosts = a.sandbox_allowed_hosts;
     s.sandbox_decoys = a.sandbox_decoys;
+    s.sandbox_readable = a.sandbox_readable;
     s.sandbox_loopback = a.sandbox_loopback;
     s.sandbox_blocked_ports = a.sandbox_blocked_ports;
 }
 ```
 
-A `[limits]` table, a `yolo` table, a `tool_enforcement`, `sandbox_mode`, `sandbox_network`, `sandbox_allowed_hosts`, `sandbox_decoys`, `sandbox_loopback`, or `sandbox_blocked_ports` key, or a `permissions.mode` key written into
+A `[limits]` table, a `yolo` table, a `tool_enforcement`, `sandbox_mode`, `sandbox_network`, `sandbox_allowed_hosts`, `sandbox_decoys`, `sandbox_readable`, `sandbox_loopback`, or `sandbox_blocked_ports` key, or a `permissions.mode` key written into
 `workspace.toml` by hand is ignored, and Ostra removes them the next time it saves the file. Change them on
 the Settings screen.
 
@@ -446,6 +447,7 @@ mode = "required"                   # refuse to run an execution that cannot be 
 network = "allowlist"               # registries, source hosts, model APIs, and allowed_hosts
 allowed_hosts = ["mirror.corp.example"]
 extra_hidden = ["~/.aws"]           # absolute or ~/ only; a relative path is rejected
+extra_readable = ["~/.m2/settings.xml", "~/.netrc"]  # credentials agents may read, read-only
 ```
 
 ```toml

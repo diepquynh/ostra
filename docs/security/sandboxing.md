@@ -293,12 +293,53 @@ Hidden paths are not readable at all. On bubblewrap a hidden dir is an empty tmp
   execution's bridge token.
 - Each entry of `[sandbox] extra_hidden`.
 
+A credential store is hidden unless the user lets agents read it, as described in
+[readable credentials](#readable-credentials). Ostra's data dir, config dir, and master key file, the user
+session, and the container sockets are hidden in every case.
+
 The environment is cleaned the same way. `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `DISPLAY`,
 `WAYLAND_DISPLAY`, `XAUTHORITY`, `DOCKER_HOST`, and `GPG_AGENT_INFO` are unset, because each one points at a
 service that acts with the user's rights. Native Bash commands also lose provider keys, bridge tokens, MCP OAuth
 client secrets, and every `OSTRA_*` variable, and project programs lose provider keys, bridge tokens, and every
 `OSTRA_*` variable. A harness CLI inherits Ostra's environment minus every credential variable except its own
 sign-in key, and gets fresh bridge variables for its own execution (see [secrets and data](secrets-and-data.md)).
+
+#### Readable credentials
+
+Some builds sign in with a file in the home folder: a private Maven repository through `~/.m2/settings.xml`, a
+package index through `~/.netrc` or `~/.pypirc`, a container registry through `~/.docker/config.json`, a cargo
+registry through `~/.cargo/credentials.toml`. When that file is hidden, the build fails with an authentication
+error, and an agent usually tries other approaches until its time runs out, because nothing it can change makes
+the file appear. List such files so agents can read them:
+
+- `[sandbox] extra_readable` in `config.toml` applies to every workspace.
+- `sandbox_readable`, on the Settings screen's Permissions tab under "Readable credentials", adds to it for one
+  workspace. It is kept in the registry, never in `.ostra/workspace.toml` (Rule A2), because a repository could
+  otherwise give its own agents the user's credentials.
+
+Each entry is a file or dir, absolute or starting with `~/`, and opens only what it names. With
+`~/.docker/config.json` listed, the rest of `~/.docker` stays hidden. A listed path is read-only for agents, even
+inside a writable root. The three layers apply the list together:
+
+- The sandbox leaves the path out of the hidden list, or, when it lies inside a hidden dir, binds it back
+  read-only (bubblewrap) or allows reading it after the dir's deny rule (Seatbelt).
+- The `secret-read` guard lets a tool call or a Bash command read it. The guard still refuses Ostra's data dir
+  and master key file whatever the list says.
+- No decoy is planted on it, built-in or workspace. On Linux a decoy replaces the file, so the build would
+  read fake contents and every read would count as a containment signal. A workspace that lists one path both as
+  a decoy and as readable gets a validation error.
+
+Saving refuses an entry that is relative, names the home folder, `/`, or a dir above the home folder, or
+overlaps Ostra's data dir, config dir, or master key file. More than 32 entries in one list is an error too,
+because each entry is a mount in every sandbox. When building a profile the sandbox drops, for the same
+reasons, any entry that reaches one of those paths, the user session dir, or a container socket. A path that
+does not exist when the execution starts is skipped.
+
+A readable credential can leave the machine through any host the network choice allows. Under `allowlist` that
+is the built-in hosts plus `allowed_hosts`, so list only the credentials an agent's builds need.
+
+Grep and Glob still skip every credential store when they walk a folder. To search a listed file, name it as
+the path or read it.
 
 #### Decoy credential files
 
@@ -495,8 +536,14 @@ root, so they keep a cache that no agent writes.
 | `GOMODCACHE`, `GOCACHE` | `go-mod`, `go-build` |
 | `PIP_CACHE_DIR` | `pip` |
 | `YARN_CACHE_FOLDER` | `yarn` |
+| `YARN_GLOBAL_FOLDER` | `yarn-berry` |
 | `UV_CACHE_DIR` | `uv` |
 | `CLANG_MODULE_CACHE_PATH` | `clang-modules` |
+
+`YARN_GLOBAL_FOLDER` is the folder that Yarn 2 and later (Berry) use for their global cache (`<folder>/cache`),
+their package metadata, and their index. Without it Berry writes to `~/.yarn/berry`, which is read-only in the
+sandbox, so every install fails. `YARN_CACHE_FOLDER` does not move that cache, because Berry reads it only as
+`cacheFolder`, which applies when the global cache is off.
 
 The user's `~/.cargo/config.toml` and `~/.cargo/config` are linked into the sandbox `CARGO_HOME`, so registry mirrors and build settings
 carry over, and cargo's credentials file is not.
@@ -547,7 +594,9 @@ The first program in the sandbox is Ostra's helper, `ostra sandbox-init`
 forwards each connection to one of the sockets: the execution's egress proxy on a free port, and fixed ports for
 the hook bridge and for each loopback host you listed. It sets `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` (and
 their lowercase forms) to the proxy, `NO_PROXY` to `localhost,127.0.0.1,::1`, and `NODE_USE_ENV_PROXY=1` so that
-Node's built-in `fetch` uses the proxy too. Then it loads the seccomp filter and starts the command.
+Node's built-in `fetch` uses the proxy too, and `YARN_HTTP_PROXY` and `YARN_HTTPS_PROXY`, because Yarn 2 and
+later ignore the standard variables and would resolve registry hosts directly, which a private network cannot.
+Seatbelt sets the same variables on macOS. Then it loads the seccomp filter and starts the command.
 
 The egress proxy runs in the Ostra server, on a runtime of its own. Under `allowlist` and `public` each execution
 gets one, and so does a harness CLI under `none`: every Bash call of a native execution shares it, and so does

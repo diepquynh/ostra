@@ -99,6 +99,7 @@ pub fn draft(body: &CreateWorkspace, ctx: &DraftCtx<'_>) -> Draft {
             s.sandbox_network = None;
             s.sandbox_allowed_hosts.clear();
             s.sandbox_decoys.clear();
+            s.sandbox_readable.clear();
             s.sandbox_loopback = Default::default();
             s.sandbox_blocked_ports.clear();
             s

@@ -78,6 +78,7 @@ impl Fx {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_readable: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
@@ -1538,6 +1539,32 @@ fn credentials_and_process_memory_are_never_read() {
         &read(&data.join("assets/agents/x.md").to_string_lossy()),
     );
     allowed(&yolo, &read("/proc/cpuinfo"));
+}
+
+#[test]
+fn readable_entries_open_only_the_credentials_they_name() {
+    let f = fx();
+    let mut ctx = f.ctx(AgentName::Implementer);
+    let data = ostra_core::paths::data_dir();
+    ctx.sandbox_readable = vec![
+        "~/.netrc".into(),
+        "~/.docker/config.json".into(),
+        "~/".into(),
+        data.to_string_lossy().into_owned(),
+    ];
+    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
+    let home = std::env::var("HOME").unwrap();
+    let read = |p: &str| ToolCall::new("Read", json!({"file_path": p}));
+    allowed(&p, &read(&format!("{home}/.netrc")));
+    allowed(&p, &read(&format!("{home}/.docker/config.json")));
+    allowed(&p, &bash("cat ~/.netrc"));
+    for path in [
+        format!("{home}/.docker/other.json"),
+        format!("{home}/.ssh/id_ed25519"),
+        data.join("registry.db").to_string_lossy().into_owned(),
+    ] {
+        assert_eq!(guard_of(&p, &read(&path)), "secret-read", "{path}");
+    }
 }
 
 #[test]

@@ -39,6 +39,7 @@ fn ctx(root: &Path) -> ExecContext {
         sandbox_network: None,
         sandbox_allowed_hosts: vec![],
         sandbox_decoys: vec![],
+        sandbox_readable: vec![],
         sandbox_loopback: Default::default(),
         sandbox_blocked_ports: vec![],
         creates_project: false,
@@ -129,6 +130,12 @@ fn profile_args_bind_roots_hide_secrets_and_set_caches() {
         .expect("CARGO_HOME is set");
     assert!(cargo.starts_with(home.join(".cache/ostra/sandbox")));
     assert!(cargo.join("config.toml").is_symlink());
+    let berry = args
+        .windows(3)
+        .find(|w| w[0] == "--setenv" && w[1] == "YARN_GLOBAL_FOLDER")
+        .map(|w| PathBuf::from(&w[2]))
+        .expect("YARN_GLOBAL_FOLDER is set");
+    assert!(berry.starts_with(home.join(".cache/ostra/sandbox")) && berry.is_dir());
     assert!(has(&["--setenv", "TMPDIR", "/tmp"]));
     assert!(has(&["--unshare-pid"]) && has(&["--new-session"]));
     assert!(has(&["--unshare-net"]));
@@ -409,6 +416,71 @@ fn workspace_decoys_cover_files_and_fill_hidden_dirs_only() {
             home.join(".aws/sso/cache/x.json"),
             home.join(".config/app/token")
         ]
+    );
+}
+
+#[test]
+fn readable_credentials_are_shown_read_only_and_get_no_decoy() {
+    let (_d, root, home) = layout();
+    std::fs::write(
+        home.join(".netrc"),
+        "machine repo.corp login u password real\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(home.join(".docker")).unwrap();
+    std::fs::write(home.join(".docker/config.json"), "real\n").unwrap();
+    std::fs::write(home.join(".docker/other.json"), "real\n").unwrap();
+    std::fs::write(home.join(".git-credentials"), "real\n").unwrap();
+    let never = [home.join(".ostra-data")];
+    std::fs::create_dir_all(&never[0]).unwrap();
+    let entries: Vec<String> = [
+        "~/.netrc",
+        "~/.docker/config.json",
+        "~/.git-credentials",
+        "~/",
+        "~/.ostra-data",
+        "~/.missing",
+    ]
+    .iter()
+    .map(|e| e.to_string())
+    .collect();
+    assert_eq!(
+        crate::profile::readable_paths(&home, &entries, &never),
+        vec![
+            home.join(".docker/config.json"),
+            home.join(".git-credentials"),
+            home.join(".netrc")
+        ]
+    );
+    let cfg = SandboxConfig {
+        extra_readable: entries[..3].to_vec(),
+        ..Default::default()
+    };
+    let mut p = Profile::for_execution(&ctx(&root), &cfg, &home);
+    let seen = Arc::new(std::sync::Mutex::new(vec![]));
+    if let Some(b) = backend().filter(|b| matches!(b, Backend::Bubblewrap(_))) {
+        let s = seen.clone();
+        p = p
+            .watch_decoys(b, &home, &[], Arc::new(move |p| s.lock().unwrap().push(p)))
+            .unwrap();
+    }
+    let script = format!(
+        "cat {netrc} {cfg} {creds} | grep -c real; cat {other} 2>/dev/null | grep -c real; \
+         echo x > {netrc} 2>/dev/null && echo wrote",
+        netrc = home.join(".netrc").display(),
+        cfg = home.join(".docker/config.json").display(),
+        creds = home.join(".git-credentials").display(),
+        other = home.join(".docker/other.json").display(),
+    );
+    let Some(out) = run_in(&p, &root.join("repo"), &script) else {
+        return;
+    };
+    assert!(out.starts_with("3\n0\n"), "{out}");
+    assert!(!out.contains("wrote"), "readable stays read-only: {out}");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "no decoy on a readable file"
     );
 }
 

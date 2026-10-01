@@ -1375,6 +1375,10 @@ pub fn proxy_env(url: &str) -> Vec<(String, String)> {
         out.push((k.to_string(), "localhost,127.0.0.1,::1".to_string()));
     }
     out.push(("NODE_USE_ENV_PROXY".into(), "1".into()));
+    // Yarn 2 and later read only their own proxy settings and otherwise resolve hosts directly.
+    for k in ["YARN_HTTP_PROXY", "YARN_HTTPS_PROXY"] {
+        out.push((k.to_string(), url.clone()));
+    }
     out
 }
 

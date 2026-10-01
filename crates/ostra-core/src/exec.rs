@@ -116,6 +116,10 @@ pub struct ExecContext {
     /// The workspace's own decoy paths, added to the built-in ones.
     #[serde(default)]
     pub sandbox_decoys: Vec<String>,
+    /// Credential paths agents may read: the global `[sandbox] extra_readable` and the
+    /// workspace's own, merged, because the policy reads no config.
+    #[serde(default)]
+    pub sandbox_readable: Vec<String>,
     /// The workspace's loopback choice for macOS.
     #[serde(default)]
     pub sandbox_loopback: crate::config::LoopbackAccess,
@@ -142,6 +146,7 @@ impl ExecContext {
             mode: self.sandbox_mode,
             network: self.sandbox_network,
             allowed_hosts: self.sandbox_allowed_hosts.clone(),
+            readable: self.sandbox_readable.clone(),
             loopback: self.sandbox_loopback,
             blocked_ports: self.sandbox_blocked_ports.clone(),
         }

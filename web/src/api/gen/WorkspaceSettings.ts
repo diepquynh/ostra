@@ -39,6 +39,11 @@ sandbox_allowed_hosts: Array<string>,
  */
 sandbox_decoys: Array<string>, 
 /**
+ * More credential files or dirs (`~/...` or absolute) agents may read, added to the global
+ * `[sandbox] extra_readable`. Kept in the registry, never in `workspace.toml`.
+ */
+sandbox_readable: Array<string>, 
+/**
  * Which loopback ports sandboxed commands on macOS may connect to. Kept in the registry,
  * never in `workspace.toml`.
  */

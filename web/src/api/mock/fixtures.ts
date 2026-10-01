@@ -86,6 +86,7 @@ export const settings: WorkspaceSettings = {
   sandbox_network: null,
   sandbox_allowed_hosts: [],
   sandbox_decoys: [],
+  sandbox_readable: [],
   sandbox_loopback: "open",
   sandbox_blocked_ports: [],
   mcp_servers: [

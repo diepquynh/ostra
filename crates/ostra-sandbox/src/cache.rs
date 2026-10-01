@@ -18,6 +18,9 @@ pub(crate) const CACHE_ENV: &[(&str, &str)] = &[
     ("GOCACHE", "go-build"),
     ("PIP_CACHE_DIR", "pip"),
     ("YARN_CACHE_FOLDER", "yarn"),
+    // Yarn 2 and later keep their global cache under this folder, which `YARN_CACHE_FOLDER`
+    // does not move.
+    ("YARN_GLOBAL_FOLDER", "yarn-berry"),
     ("UV_CACHE_DIR", "uv"),
     ("CLANG_MODULE_CACHE_PATH", "clang-modules"),
 ];

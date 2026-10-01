@@ -79,6 +79,7 @@ export type SettingsForm = {
   allowedHosts: string;
   /** The workspace's own decoy paths, one per line. */
   decoys: string;
+  readable: string;
   /** Which loopback ports commands on macOS may connect to. */
   loopback: LoopbackAccess;
   /** Blocked loopback ports, separated by spaces, commas, or lines. */
@@ -345,6 +346,7 @@ export function toForm(s: WorkspaceSettings): SettingsForm {
     network: s.sandbox_network ?? "",
     allowedHosts: lines(s.sandbox_allowed_hosts),
     decoys: lines(s.sandbox_decoys),
+    readable: lines(s.sandbox_readable),
     loopback: s.sandbox_loopback,
     blockedPorts: s.sandbox_blocked_ports.join(", "),
     allow: lines(s.permissions.allow),
@@ -437,6 +439,7 @@ export function fromForm(
   s.sandbox_network = form.network || null;
   s.sandbox_allowed_hosts = unlines(form.allowedHosts);
   s.sandbox_decoys = unlines(form.decoys);
+  s.sandbox_readable = unlines(form.readable);
   s.sandbox_loopback = form.loopback;
   s.sandbox_blocked_ports = ports(form.blockedPorts);
   s.permissions.allow = unlines(form.allow);
@@ -524,7 +527,7 @@ export function fieldIds(form: SettingsForm): string[] {
     "notifications.push",
   ];
   ids.push("permissions.mode", "permissions.allow", "permissions.ask", "permissions.deny");
-  ids.push("sandbox_mode", "sandbox_network", "sandbox_allowed_hosts", "sandbox_decoys");
+  ids.push("sandbox_mode", "sandbox_network", "sandbox_allowed_hosts", "sandbox_decoys", "sandbox_readable");
   ids.push("sandbox_loopback", "sandbox_blocked_ports", "tool_enforcement");
   form.projects.forEach((_, i) => ids.push(`projects[${i}]`));
   ids.push("mcp_servers");

@@ -384,6 +384,7 @@ async fn main() {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_readable: vec![],
             // `PROBE_LOOPBACK=listed` closes the host's loopback on macOS, as a workspace can.
             sandbox_loopback: if std::env::var("PROBE_LOOPBACK").as_deref() == Ok("listed") {
                 ostra_core::config::LoopbackAccess::Listed
@@ -643,6 +644,7 @@ async fn pause_probe(args: &[String]) {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_readable: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
@@ -805,6 +807,7 @@ async fn inspect_probe(args: &[String]) {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_readable: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
@@ -962,6 +965,7 @@ async fn wake_probe(args: &[String]) {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_readable: vec![],
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,

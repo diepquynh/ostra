@@ -243,6 +243,9 @@ pub struct SandboxConfig {
     pub extra_writable: Vec<String>,
     /// More paths agent commands must not see, absolute or `~/...`.
     pub extra_hidden: Vec<String>,
+    /// Credential files or dirs agents may read although the sandbox and the policy hide them,
+    /// absolute or `~/...`, such as a private registry's login. They stay read-only.
+    pub extra_readable: Vec<String>,
     /// The workspace's loopback choice ([`SandboxConfig::for_workspace`]); never read from
     /// `config.toml`, because it is a workspace setting only.
     #[serde(skip)]
@@ -261,6 +264,7 @@ impl Default for SandboxConfig {
             upstream_proxy: None,
             extra_writable: vec![],
             extra_hidden: vec![],
+            extra_readable: vec![],
             loopback: LoopbackAccess::Open,
             blocked_ports: vec![],
         }
@@ -276,6 +280,8 @@ pub struct WorkspaceSandbox {
     pub network: Option<SandboxNetwork>,
     /// Added to the global `[sandbox] allowed_hosts`.
     pub allowed_hosts: Vec<String>,
+    /// Added to the global `[sandbox] extra_readable`.
+    pub readable: Vec<String>,
     /// Which loopback ports commands on macOS may connect to.
     pub loopback: LoopbackAccess,
     /// Loopback ports commands on macOS never connect to, even when listed.
@@ -294,10 +300,18 @@ impl SandboxConfig {
                 .filter(|h| !self.allowed_hosts.contains(h))
                 .cloned(),
         );
+        let mut extra_readable = self.extra_readable.clone();
+        extra_readable.extend(
+            ws.readable
+                .iter()
+                .filter(|r| !self.extra_readable.contains(r))
+                .cloned(),
+        );
         SandboxConfig {
             mode: ws.mode.unwrap_or(self.mode),
             network: ws.network.unwrap_or(self.network),
             allowed_hosts,
+            extra_readable,
             loopback: ws.loopback,
             blocked_ports: ws.blocked_ports.clone(),
             ..self.clone()
@@ -530,6 +544,9 @@ pub struct WorkspaceSettings {
     /// More decoy credential files (`~/...`) in this workspace's agent sandboxes, added to the
     /// built-in ones, which cannot be removed. Kept in the registry, never in `workspace.toml`.
     pub sandbox_decoys: Vec<String>,
+    /// More credential files or dirs (`~/...` or absolute) agents may read, added to the global
+    /// `[sandbox] extra_readable`. Kept in the registry, never in `workspace.toml`.
+    pub sandbox_readable: Vec<String>,
     /// Which loopback ports sandboxed commands on macOS may connect to. Kept in the registry,
     /// never in `workspace.toml`.
     pub sandbox_loopback: LoopbackAccess,
@@ -913,6 +930,10 @@ pub const SETTING_KEYS: &[(&str, &str)] = &[
         "More decoy credential files in agent sandboxes, added to the built-in ones",
     ),
     (
+        "sandbox_readable",
+        "Credential files agents may read, added to the global list",
+    ),
+    (
         "sandbox_loopback",
         "Which loopback ports sandboxed commands on macOS may connect to",
     ),
@@ -978,6 +999,7 @@ impl WorkspaceSettings {
             sandbox_network: None,
             sandbox_allowed_hosts: vec![],
             sandbox_decoys: vec![],
+            sandbox_readable: vec![],
             sandbox_loopback: LoopbackAccess::Open,
             sandbox_blocked_ports: vec![],
             mcp_servers: vec![],
@@ -989,12 +1011,19 @@ impl WorkspaceSettings {
         self.tool_enforcement.unwrap_or(global.tool_enforcement) == ToolEnforcement::Enabled
     }
 
+    /// The credential paths agents may read: the global `[sandbox] extra_readable` and this
+    /// workspace's own.
+    pub fn readable_paths(&self, global: &GlobalConfig) -> Vec<String> {
+        global.sandbox.for_workspace(&self.sandbox()).extra_readable
+    }
+
     /// The sandbox settings this workspace keeps in the registry.
     pub fn sandbox(&self) -> WorkspaceSandbox {
         WorkspaceSandbox {
             mode: self.sandbox_mode,
             network: self.sandbox_network,
             allowed_hosts: self.sandbox_allowed_hosts.clone(),
+            readable: self.sandbox_readable.clone(),
             loopback: self.sandbox_loopback,
             blocked_ports: self.sandbox_blocked_ports.clone(),
         }
@@ -1843,12 +1872,14 @@ mod tests {
         assert_eq!(auto.for_workspace(&mode(None)).mode, SandboxMode::Auto);
         let listed = SandboxConfig {
             allowed_hosts: vec!["a.dev".into()],
+            extra_readable: vec!["~/.netrc".into()],
             ..Default::default()
         };
         let ws = WorkspaceSandbox {
             mode: None,
             network: Some(SandboxNetwork::Public),
             allowed_hosts: vec!["a.dev".into(), "mirror.lan:8080".into()],
+            readable: vec!["~/.netrc".into(), "~/.m2/settings.xml".into()],
             loopback: LoopbackAccess::Listed,
             blocked_ports: vec![5432],
         };
@@ -1860,6 +1891,10 @@ mod tests {
             vec!["a.dev".to_string(), "mirror.lan:8080".to_string()]
         );
         assert_eq!(merged.network, SandboxNetwork::Public);
+        assert_eq!(
+            merged.extra_readable,
+            vec!["~/.netrc".to_string(), "~/.m2/settings.xml".to_string()]
+        );
         assert_eq!(
             listed.for_workspace(&WorkspaceSandbox::default()).network,
             SandboxNetwork::Allowlist

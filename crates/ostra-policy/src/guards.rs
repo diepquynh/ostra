@@ -62,6 +62,10 @@ pub struct Roots {
     pub temps: Vec<PathBuf>,
     /// Never read by an agent: the data dir (registry, master key, server log) and the key file.
     pub secret: Vec<PathBuf>,
+    /// Credential stores, which an agent reads only where `readable` covers them.
+    pub credentials: Vec<PathBuf>,
+    /// The user's `extra_readable` and `sandbox_readable` entries.
+    pub readable: Vec<PathBuf>,
     /// Agent assets inside the data dir, which agents do read.
     pub assets: PathBuf,
     pub home: PathBuf,
@@ -104,9 +108,27 @@ impl Roots {
             protected,
             protected_db_files,
             temps,
-            secret: paths::secret_paths(&home)
+            secret: [paths::data_dir()]
+                .into_iter()
+                .chain(std::env::var_os("OSTRA_MASTER_KEY_FILE").map(PathBuf::from))
+                .map(|p| canon(&p))
+                .collect(),
+            credentials: paths::HOME_CREDENTIALS
                 .iter()
-                .map(|p| canon(p))
+                .map(|c| canon(&home.join(c.path)))
+                .collect(),
+            readable: ctx
+                .sandbox_readable
+                .iter()
+                .filter_map(|r| {
+                    let r = r.trim();
+                    let p = match r.strip_prefix("~/") {
+                        Some(rest) => home.join(rest),
+                        None => PathBuf::from(r),
+                    };
+                    // Each entry opens only what it names, never the home folder as a whole.
+                    (p.is_absolute() && !home.starts_with(&p)).then(|| canon(&p))
+                })
                 .collect(),
             assets: canon(&paths::data_dir().join("assets")),
             home,
@@ -185,6 +207,8 @@ impl Roots {
     /// entries expose the server's environment and open files to in-process tools.
     pub fn is_secret(&self, p: &Path) -> bool {
         (self.secret.iter().any(|r| inside(r, p)) && !inside(&self.assets, p))
+            || (self.credentials.iter().any(|r| inside(r, p))
+                && !self.readable.iter().any(|r| inside(r, p)))
             || self
                 .protected_db_files
                 .iter()
