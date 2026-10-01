@@ -102,6 +102,14 @@ describe("default shortcuts", () => {
     expect(action("w", { ctrl: true, shift: true }, false, true)).toBeNull();
   });
 
+  it("switches tabs with Ctrl+PageDown on Android and leaves close unbound", () => {
+    const b = defaults(false, true);
+    expect(matchStroke(b, null, "ctrl+PageDown", 0).action).toBe("next-tab");
+    expect(matchStroke(b, null, "ctrl+PageUp", 0).action).toBe("prev-tab");
+    expect(matchStroke(b, null, "ctrl+Tab", 0, true).action).toBeNull();
+    expect(b["close-tab"]).toBeNull();
+  });
+
   it("claims a rebound close shortcut at all times", () => {
     const b = resolve({ "close-tab": ["alt+w"] }, false);
     expect(matchStroke(b, null, "alt+w", 0).action).toBe("close-tab");
@@ -145,6 +153,9 @@ describe("custom shortcuts", () => {
     expect(reservedBy("meta+e", false)).toBe("system");
     expect(reservedBy("alt+F4", false)).toBe("system");
     expect(reservedBy("ctrl+k", false)).toBeNull();
+    expect(reservedBy("ctrl+Tab", false, true)).toBe("browser-always");
+    expect(reservedBy("ctrl+w", false, true)).toBe("browser-always");
+    expect(reservedBy("ctrl+PageDown", false, true)).toBe("browser");
   });
 
   it("stores overrides per workspace and drops anything malformed", () => {

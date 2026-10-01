@@ -54,6 +54,10 @@ export function ShortcutsSection({ ws }: { ws: string }) {
       notes.push(
         `The browser may keep ${keysHint(keys)} for itself. It reaches Ostra while the keyboard is locked in fullscreen or Ostra runs as an installed app.`,
       );
+    if (by === "browser-always")
+      notes.push(
+        `Chrome on Android keeps ${keysHint(keys)} for itself, even when Ostra runs as an installed app, so Ostra never sees it.`,
+      );
     if (by === "system")
       notes.push(`The operating system may handle ${keysHint(keys)} before the browser, so Ostra may never see it.`);
     if (typesText(keys[0]))
@@ -144,7 +148,11 @@ export function ShortcutsSection({ ws }: { ws: string }) {
               <span className="wp-muted">while locked or installed</span>
             ) : by ? (
               <span className="wp-muted">
-                {by === "browser" ? "the browser may keep it" : "the system may keep it"}
+                {by === "browser"
+                  ? "the browser may keep it"
+                  : by === "browser-always"
+                    ? "the browser keeps it"
+                    : "the system may keep it"}
               </span>
             ) : null}
           </span>

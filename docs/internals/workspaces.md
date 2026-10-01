@@ -223,6 +223,14 @@ the lock holds. Holding Escape, leaving fullscreen, clicking that item, or runni
 shortcuts** from the palette releases the lock. The code is `web/src/lib/keyboardLock.ts`; browsers without the
 API do not list the command.
 
+Chrome on Android, including Samsung DeX with a physical keyboard, keeps Ctrl+Tab, Ctrl+Shift+Tab, Ctrl+W, and
+Ctrl+F4 for itself even in an installed app, so the page never receives them. On Android the console therefore
+steps through tabs with Ctrl+PageDown and Ctrl+PageUp, leaves Close tab without a default key, and the Shortcuts
+tab marks those four combos as kept by the browser. Android also turns an Escape the page leaves unhandled into
+Back, which closes an installed app that has no history to go back to, so on Android the console marks every
+Escape as handled (`web/src/main.tsx`). The console's own Escape handlers still run. Android is detected from
+the user agent, so a browser set to request desktop sites keeps the desktop defaults.
+
 ### On a phone
 
 When the viewport is 720 pixels wide or narrower, the console swaps its tabbed layout for a mobile shell

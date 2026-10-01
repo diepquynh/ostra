@@ -2,6 +2,12 @@
 export const isMac =
   typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
+/** True on Android, where Chrome keeps Ctrl+Tab and Ctrl+W for itself and an unhandled Esc goes back. */
+export const isAndroid =
+  typeof navigator !== "undefined" &&
+  (/Android/.test(navigator.userAgent) ||
+    (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform === "Android");
+
 /** The modifier key cap: ⌘ on a Mac, Ctrl elsewhere. */
 export const MOD = isMac ? "⌘" : "Ctrl";
 

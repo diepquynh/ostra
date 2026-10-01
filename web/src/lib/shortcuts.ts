@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { isMac } from "./keys";
+import { isAndroid, isMac } from "./keys";
 
 export type Action =
   | "palette"
@@ -43,7 +43,7 @@ const ACTION_IDS = new Set<string>(ACTIONS.map((a) => a.id));
 /** A second stroke must follow the first within this time to count as one sequence. */
 export const SEQUENCE_MS = 1500;
 
-export function defaults(mac = isMac): Bindings {
+export function defaults(mac = isMac, android = isAndroid): Bindings {
   const mod = mac ? "meta+" : "ctrl+";
   const b = (s: Stroke, reserved = false): Bound => ({ keys: [s], reserved });
   return {
@@ -51,10 +51,11 @@ export function defaults(mac = isMac): Bindings {
     dock: b(`${mod}/`),
     sidebar: b(`${mod}b`),
     files: b(mac ? "shift+meta+e" : "ctrl+shift+e"),
-    "next-tab": b("ctrl+Tab"),
-    "prev-tab": b("ctrl+shift+Tab"),
+    // Chrome on Android never passes Ctrl+Tab or Ctrl+W to the page, even in an installed app.
+    "next-tab": b(android ? "ctrl+PageDown" : "ctrl+Tab"),
+    "prev-tab": b(android ? "ctrl+PageUp" : "ctrl+shift+Tab"),
     // ⌘W belongs to the browser tab unless the keyboard is locked or Ostra runs as an installed app.
-    "close-tab": b(`${mod}w`, true),
+    "close-tab": android ? null : b(`${mod}w`, true),
     "new-task": null,
     settings: null,
     theme: null,
@@ -62,8 +63,8 @@ export function defaults(mac = isMac): Bindings {
   };
 }
 
-export function resolve(overrides: Overrides, mac = isMac): Bindings {
-  const out = defaults(mac);
+export function resolve(overrides: Overrides, mac = isMac, android = isAndroid): Bindings {
+  const out = defaults(mac, android);
   for (const [id, keys] of Object.entries(overrides) as [Action, Keys | null][])
     out[id] = keys ? { keys, reserved: false } : null;
   return out;
@@ -221,6 +222,7 @@ export function conflicts(bindings: Bindings, action: Action, keys: Keys): Actio
 const BROWSER_MAC = ["meta+w", "meta+t", "meta+n", "meta+q", "shift+meta+t", "shift+meta+n", "shift+meta+w"];
 const BROWSER_OTHER = ["ctrl+w", "ctrl+t", "ctrl+n", "ctrl+shift+t", "ctrl+shift+n", "ctrl+shift+w"];
 const BROWSER_ANY = ["ctrl+Tab", "ctrl+shift+Tab", "ctrl+PageUp", "ctrl+PageDown"];
+const BROWSER_ANDROID = ["ctrl+Tab", "ctrl+shift+Tab", "ctrl+w", "ctrl+shift+w", "ctrl+F4", "ctrl+shift+F4"];
 const SYSTEM_MAC = ["meta+Tab", "shift+meta+Tab", "meta+Space", "ctrl+Space", "meta+h", "meta+m", "ctrl+ArrowUp"];
 const SYSTEM_OTHER = [
   "alt+Tab",
@@ -231,8 +233,16 @@ const SYSTEM_OTHER = [
   "ctrl+alt+ArrowRight",
 ];
 
-/** Who likely handles a stroke before the page does, so the console may never see it. */
-export function reservedBy(s: Stroke, mac = isMac): "browser" | "system" | null {
+/**
+ * Who likely handles a stroke before the page does, so the console may never see it. `browser-always`: the browser
+ * keeps it even while the keyboard is locked or Ostra runs as an installed app.
+ */
+export function reservedBy(
+  s: Stroke,
+  mac = isMac,
+  android = isAndroid,
+): "browser" | "browser-always" | "system" | null {
+  if (android && BROWSER_ANDROID.includes(s)) return "browser-always";
   if ((mac ? SYSTEM_MAC : SYSTEM_OTHER).includes(s)) return "system";
   if (!mac && parseStroke(s)?.meta) return "system";
   if ((mac ? BROWSER_MAC : BROWSER_OTHER).includes(s) || BROWSER_ANY.includes(s)) return "browser";
