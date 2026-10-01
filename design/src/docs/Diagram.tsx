@@ -25,7 +25,9 @@ export function Diagram({ source, theme }: { source: string; theme: Theme }) {
           startOnLoad: false,
           securityLevel: "strict",
           htmlLabels: false,
-          flowchart: { htmlLabels: false },
+          // Drawn at natural size; the box scrolls, because fitting the column shrinks labels below reading size.
+          flowchart: { htmlLabels: false, useMaxWidth: false },
+          sequence: { useMaxWidth: false },
           secure: [...SECURE, "htmlLabels"],
           suppressErrorRendering: true,
           theme: theme === "dark" ? "dark" : "neutral",

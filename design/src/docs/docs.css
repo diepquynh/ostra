@@ -277,6 +277,10 @@
   display: block;
   margin: 0 auto;
 }
+/* Mermaid's themes draw edge label backgrounds at half opacity, so the edge line crosses the text. Its rule is scoped by id. */
+.md-diagram .edgeLabel rect {
+  opacity: 1 !important;
+}
 .md-strong {
   color: var(--text-primary);
   font-weight: 600;
