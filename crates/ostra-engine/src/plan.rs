@@ -1182,6 +1182,47 @@ impl<'a> Planner<'a> {
         let dir = s.project_session_dir(&project);
         match &l.next {
             LoopNext::Idle | LoopNext::Done => {}
+            LoopNext::RescueAdvise {
+                advisor: Some(_), ..
+            } => {}
+            LoopNext::RescueAdvise {
+                exec,
+                stuck,
+                advisor: None,
+            } => {
+                // Rule O7: the advisor looks at a stuck run whose failure is in its environment.
+                let rec = s.executions.get(exec);
+                let context = format!(
+                    "Phase {phase} of the session: {}{}. The step is in the {} loop of this phase.",
+                    p.info.title,
+                    p.info
+                        .file
+                        .as_ref()
+                        .map(|f| format!(" (phase file {})", f.display()))
+                        .unwrap_or_default(),
+                    if tests { "test" } else { "build" },
+                );
+                self.push(Step::Spawn(Box::new(crate::init::advisor_request(
+                    crate::init::AdviceInputs {
+                        project: project.clone(),
+                        session_dir: dir,
+                        execution: exec.clone(),
+                        failed_step: rec
+                            .map(|r| crate::init::failed_step_label(r.agent, &r.purpose))
+                            .unwrap_or_default(),
+                        problem: format!(
+                            "The step returned stuck.\nDiagnostic:\n{}\nNeed: {}",
+                            stuck.diagnostic, stuck.need
+                        ),
+                        step_inputs: rec.map(|r| r.spawn_block.clone()).unwrap_or_default(),
+                        step_result: rec
+                            .and_then(|r| r.result.as_ref())
+                            .and_then(|r| r.submit.clone()),
+                        context,
+                        earlier: l.advice.clone(),
+                    },
+                ))));
+            }
             LoopNext::Work { kind, instructions } => {
                 self.loop_work(p, tests, *kind, instructions.clone())
             }
@@ -1603,6 +1644,15 @@ impl<'a> Planner<'a> {
                 continue;
             }
             let l = &p.test_loop;
+            if l.is_blocked() {
+                // Rule D9: a blocked test phase is announced, and asked about outside YOLO, before
+                // the completion report, which waits for the announcement.
+                self.loop_steps(p, true);
+                if l.announced_block && (s.yolo || l.block_gate_answered) {
+                    continue;
+                }
+                return false;
+            }
             if l.is_terminal() {
                 continue;
             }

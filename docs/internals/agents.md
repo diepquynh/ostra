@@ -28,7 +28,7 @@ agent definitions from disk and a user cannot swap one out by editing a file.
 | `system-architecture` | Docs | advanced | Writes how the projects of a book of two or more projects work together: components and what each owns, links with protocol and payload, failure and recovery, and scaling, with one flowchart. It returns them in its submit call and writes no file. |
 | `prompt-generation` | Build | advanced | Writes or edits instruction files (system prompts, `SKILL.md` skills, agent definitions). It runs for prompt requests and when an implementer hands off prompt authoring. |
 | `initializer` | Project setup | balanced | Bootstraps a project in one of six modes: detect, scout, propose, generate-skill, generate-inventory, and adopt. |
-| `advisor` | Rescue | advanced (high effort) | Reads one failed or stuck step of a created project's init, from its inputs, its outputs, and the project, and submits `retry` with guidance for the step's next run or `escalate` with a reason for the user (rule O5). It is read-only. |
+| `advisor` | Rescue | advanced (high effort) | Reads one failed or stuck step of a created project's init (rule O5), or a build or test run stuck on its environment (rule O7), from its inputs, its outputs, and the project, and submits `retry` with guidance for the step's next run or `escalate` with a reason for the user. It is read-only. |
 | `quick-answer` | Side panel | balanced | Answers one question about the workspace from the code, project memory, and fetched pages. It never writes files and never changes pipeline state. |
 
 The tier column is a default. Workspace routing settings pick the model behind each tier and can route an agent
@@ -260,11 +260,11 @@ did, built by `advisor_request` in [`init.rs`](../../crates/ostra-engine/src/ini
 
 | Line | Content |
 | --- | --- |
-| `Failed step:` | The agent and mode, such as `initializer detect` |
+| `Failed step:` | The agent and mode, such as `initializer detect`, or the agent alone, such as `write-test`, for a stuck build or test run |
 | `Problem:` | The error, the stuck report as its summary and then what it needs, or the engine's own finding (no slices, no skills, a missing inventory) |
 | `Step inputs:` | The failed run's own spawn block |
 | `Step result:` | The failed run's submit payload as JSON, cut at 8,000 characters, because a step can submit `ok` with a result Ostra cannot use |
-| `Step context:` | What the step is for: the created project's stack, purpose, and base requirements |
+| `Step context:` | What the step is for: the created project's stack, purpose, and base requirements, or the phase, its file, and whether the run was in the build or the test loop |
 | `Earlier guidance:` | Guidance an earlier round gave this step, which did not fix it |
 
 The advisor also reads the failed agent's own instructions. Ostra writes every agent's prompt, rendered for the

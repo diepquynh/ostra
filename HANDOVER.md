@@ -503,7 +503,7 @@ to `UC/commands/orchestrate/prompt.md`.
 | Review loop, Step 4 | Findings split into BLOCKER, auto-fixable, and the rest, using the project's review rule set. Auto-fixable findings are applied by the engine from their exact `Change \`x\` to \`y\` on line N` text. HIGH and MEDIUM go to the fix agent with the ledger path. The cap is 3 iterations per loop, counted by the engine. The 4th pass is a gate. |
 | Hard 21, security | A BLOCKER finding sends only the BLOCKER findings to the fix agent with a removal instruction, loops until clear, has no cap, and blocks the project's documentation. No gate answer can waive it. |
 | HANDOFF | The engine runs prompt-generation with the handoff request, then resumes the original agent with its resume instructions. |
-| STUCK | The Rescue judge picks one: run a targeted explore, re-run the agent with the missing fact quoted, or raise a gate. Never a plain retry. |
+| STUCK | The Rescue judge picks one: run a targeted explore, re-run the agent with the missing fact quoted, send an environment failure to the advisor (Rule O7), or raise a gate. Never a plain retry. |
 | C1 | A request or an addition may attach up to 50 files or folders, tagged in the text as `@project/path`, a folder with a trailing `/`. Each is an existing file or folder inside one of the session's projects, checked when the API receives it; a path with `..`, an absolute path, or a trailing `/` on a file is refused. Every agent that gets the request gets each one as an absolute path beside its tag, with the instruction to read each file and look through each folder. |
 | C3 | The user may upload up to 20 files of at most 25 MB each with a request or an addition. A file is staged in the workspace (`POST /api/workspaces/:ws/uploads`), because a new task uploads before its session exists, and the request names the staged ids. Creating the session or adding the context moves each file into the session's `uploads/` folder, never overwriting one there, and records its name, path, and size in the event. Every agent that gets the request gets each upload's path, and the Classify judge names each attached file, folder, and upload in the research tasks it bears on, because a researcher reads only its task. Uploads are session artifacts: they open in the artifact view and download from `GET /api/artifacts/download`. |
 | C2 | Context added mid-session is queued or sent now. Queued context lets running executions finish on the old request: while any execution runs, it is held, nothing new starts, and the user may withdraw it (`AmendmentWithdrawn`); when the last running execution finishes, it is released, and the next step sees it. Context sent now cannot be withdrawn. Context sent now first interrupts every running execution; each re-runs from its spawn block with the updated request, not from where it stopped. Once the request is classified (a Research, Spec, Plan, or Implement session), the Route answer judge routes the context before anything starts or re-runs, as Rule J1 does for gate answers: `deliver` adds it to the request every later agent reads, `remember` keeps it only as a note for later stages, `discard` drops it, and research it queues goes to the project the judge names. A delivered `requirement_change` after the spec exists restarts at the spec (Rule D10). The runner records `routed: true` on the event; context added before the rule, or before classification, folds as it always did. Research tasks and a re-run's spawn get every delivered addition beside their task. |
@@ -529,7 +529,7 @@ default, because routing a request or an answer needs the strongest tier). Each 
 | Stakes | `low`, `medium`, or `high`, with a reason. `low` skips plan. Full track only. |
 | Feedback | For a round of implementation feedback: `requirement_change` or `implementation_detail`, one `{project, instruction}` target per project it changes, and whether the feedback is delivered, remembered for a later stage, or discarded, plus research to run first (Rule J1). |
 | Route answer | For every other answer with content (Rule J1): per answer `deliver`, `remember` (with the later stages), or `discard`; research to run first; and requirement change, implementation detail, or stage choice. Doubt resolves to requirement change; the user's words decide over the agent's recommendation. |
-| Rescue | For a STUCK report: explore, re-run with a stated fact, or gate. |
+| Rescue | For a STUCK report: explore, re-run with a stated fact, advise (an environment failure, Rule O7), or gate. |
 | Resolve review | For a review loop at its cap under YOLO: per-finding fix instructions for one fix-and-verify round, or declare the phase blocked. |
 | YOLO answer | Under YOLO, the answer to any gate: an open question, an approval, the closing gate, a permission ask. Section 10.5. |
 | Completion | The completion report prose, including the stages not run and, under YOLO, the decided-for-you list. |
@@ -900,6 +900,14 @@ Rules:
   submits `retry` with guidance or `escalate` with a reason. Its evals are `tests/evals/advisor.toml`. A retry runs the step again with the guidance on its `Advisor guidance:` line.
   At most `MAX_ADVICE` (2) retries per step; after that, or on an escalation, the step's failure gate opens
   for the user, with the advisor's reason. The advisor is read-only and routed like any agent (`advisor`).
+- **O7.** A build or test agent that returns `stuck` because of its environment goes to the advisor before
+  the user: the Rescue judge picks `advise` for a dependency that will not install, a read-only or missing
+  path, a missing tool or wrong version, a refused host, or a sandbox limit. The advisor gets the stuck run's
+  spawn block, its submit payload, and the diagnostic and need as `Problem:`, and runs its shell in the same
+  sandbox as the step. `retry` re-runs the agent with the guidance quoted beside the diagnostic, as a rescue;
+  `escalate`, a failed advisor run, or a judge `advise` after `MAX_ADVICE` (2) rounds on the loop opens the
+  stuck gate, with the advisor's reason added to the need. The judge sees the loop's advisor rounds and the
+  guidance that did not fix it. The advisor shows on the phase's card while it runs.
 - **O6.** Projects pinned on the New task form are the session's only projects and its whole scope. The
   `SessionCreated` event lists only them and records the pins, so the Classify judge, research tasks, feedback
   routing, and plan phases cannot reach another project; a plan phase that names one is blocked. A project

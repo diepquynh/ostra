@@ -153,6 +153,9 @@ struct Expect {
     /// Route answer and Feedback: the kept note IDs the answer must forget, exactly.
     #[serde(default)]
     forget: Option<Vec<String>>,
+    /// Rescue: the actions that pass.
+    #[serde(default)]
+    action: Vec<String>,
 }
 
 fn repo() -> PathBuf {
@@ -222,6 +225,7 @@ fn kind(judge: &str) -> JudgeKind {
         "sufficiency" => JudgeKind::Sufficiency,
         "stakes" => JudgeKind::Stakes,
         "route_answer" => JudgeKind::RouteAnswer,
+        "rescue" => JudgeKind::Rescue,
         other => panic!("no eval support for judge {other}"),
     }
 }
@@ -414,6 +418,35 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         .keys()
         .copied()
         .collect();
+    if case.judge == "rescue" {
+        // The first phase's run returned stuck with the case's diagnostic.
+        let (id, project) = (phases[0], scope[0].clone());
+        let (agent, purpose) = if case.tests {
+            (
+                AgentName::WriteTest,
+                ostra_core::event::ExecPurpose::WriteTest {
+                    phase: id,
+                    work: WorkKind::Initial,
+                },
+            )
+        } else {
+            (
+                AgentName::Implementer,
+                ostra_core::event::ExecPurpose::Implement {
+                    phase: id,
+                    work: WorkKind::Initial,
+                },
+            )
+        };
+        log.run(
+            agent,
+            purpose,
+            &project,
+            json!({"status": "stuck", "report_path": session_root.join("r.md"), "changed_files": [], "summary": "Stuck.",
+                   "stuck": {"diagnostic": case.diagnostic, "need": case.need}}),
+        );
+        return SessionState::fold(SessionId::from("eval"), &log.events);
+    }
     for (id, p) in phases.iter().zip(&case.phase) {
         let path = session_root
             .join(&p.project)
@@ -458,6 +491,18 @@ fn session(case: &Case, dir: &Path) -> SessionState {
 const ROUTE_GATE: &str = "g_eval";
 /// A route-answer case's `gate` for context added mid-session (Rule C2).
 const AMENDMENT: &str = "amendment";
+
+/// The stuck run a rescue case asks the judge about.
+fn rescue_subject(st: &SessionState) -> String {
+    st.phases
+        .values()
+        .flat_map(|p| [&p.impl_loop, &p.test_loop])
+        .find_map(|l| match &l.next {
+            ostra_engine::state::LoopNext::Rescue { exec, .. } => Some(exec.to_string()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
 
 fn route_subject(case: &Case) -> String {
     if case.gate.as_deref() == Some(AMENDMENT) {
@@ -733,6 +778,11 @@ fn score(case: &Case, out: &Value) -> (String, bool) {
                 e.category.contains(&cat) && (want_projects.is_empty() || got == want_projects);
             (format!("{cat} {}", got.join("+")), ok)
         }
+        "rescue" => {
+            let a = out["action"].as_str().unwrap_or("?").to_string();
+            let ok = e.action.contains(&a);
+            (a, ok)
+        }
         "track" => {
             let t = out["track"].as_str().unwrap_or("?").to_string();
             let ok = e.track.as_deref() == Some(t.as_str());
@@ -843,10 +893,12 @@ async fn judge_routing_evals() {
         let k = kind(&case.judge);
         let sufficiency = sufficiency_subject(case);
         let route = route_subject(case);
+        let rescue = rescue_subject(&st);
         let subject = match k {
             JudgeKind::Feedback => Some("0"),
             JudgeKind::Sufficiency => Some(sufficiency.as_str()),
             JudgeKind::RouteAnswer => Some(route.as_str()),
+            JudgeKind::Rescue => Some(rescue.as_str()),
             _ => None,
         };
         let facts: Vec<ProjectFacts> = projects(&case.workspace)
@@ -1026,10 +1078,12 @@ fn eval_cases_build_their_sessions() {
         let k = kind(&case.judge);
         let sufficiency = sufficiency_subject(case);
         let route = route_subject(case);
+        let rescue = rescue_subject(&st);
         let subject = match k {
             JudgeKind::Feedback => Some("0"),
             JudgeKind::Sufficiency => Some(sufficiency.as_str()),
             JudgeKind::RouteAnswer => Some(route.as_str()),
+            JudgeKind::Rescue => Some(rescue.as_str()),
             _ => None,
         };
         let (input, _) = judge_input(&st, k, subject, &[]);
@@ -1039,6 +1093,14 @@ fn eval_cases_build_their_sessions() {
             case.id
         );
         match case.judge.as_str() {
+            "rescue" => {
+                let d = case.diagnostic.as_deref().unwrap_or_default();
+                assert!(
+                    !d.is_empty() && input.contains(d) && !case.expect.action.is_empty(),
+                    "{}: the stuck run is not in the input",
+                    case.id
+                );
+            }
             "sufficiency" => {
                 for n in case.expect.needed.iter().chain(&case.expect.not_needed) {
                     assert!(

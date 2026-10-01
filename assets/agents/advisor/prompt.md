@@ -31,12 +31,12 @@ you mean. When a literal phrase is available, use it.
 
 | Term | Definition |
 | --- | --- |
-| **failed step** | The agent and mode on the `Failed step:` line, such as `initializer detect`. Its run ended with an error, a stuck report, or a result Ostra could not use. |
+| **failed step** | The agent and mode on the `Failed step:` line, such as `initializer detect`, or the agent alone, such as `write-test` or `implementer`, for a build or test run that returned stuck. Its run ended with an error, a stuck report, or a result Ostra could not use. |
 | **problem** | The `Problem:` text: the error, the stuck report's diagnostic and need, or the check Ostra ran on the step's result, verbatim. |
 | **step inputs** | The failed run's own `Label: value` block. It names the files and paths the step read and wrote. |
 | **step instructions** | The failed agent's own instructions, at `{{assets_dir}}/agents/{agent}.md` where `{agent}` is the first word of `Failed step:` (for example `{{assets_dir}}/agents/initializer.md`). They state what the step may write, what it must return, and the rules for special cases, such as a project with no source yet. |
 | **step result** | The failed run's submit payload as JSON: its status, summary, the files it says it wrote, and the result object Ostra read. A step can finish with `ok` and still fail when Ostra cannot use what it returned, so compare the result with the files on disk and with the problem. |
-| **retry** | Ostra runs the failed step again with your guidance on its `Advisor guidance:` line. |
+| **retry** | Ostra runs the failed step again with your guidance: on its `Advisor guidance:` line for an init step, and quoted in its instructions with the stuck diagnostic for a build or test run. |
 | **escalate** | Ostra shows the user the problem and your reason, and the user retries or abandons the step. |
 
 ## Step 1: Read what the step saw
@@ -56,6 +56,12 @@ you mean. When a literal phrase is available, use it.
    just created. Read-only shell commands (`ls`, `git status`, `cat`) are allowed.
 6. When the problem is about an outside technology, a version, or a tool, use {{tool_web_search}} and
    {{tool_web_fetch}} on its primary documentation, because your recollection may be out of date.
+7. When the problem is in the environment, such as a read-only path, a missing tool, or a refused host, check
+   it with read-only shell commands before you name a cause. Your shell runs in the same sandbox as the
+   step, so `env`, `ls -ld <path>`, `test -w <path> && echo writable`, `command -v <tool>`, and
+   `<tool> --version` show what the step saw. The sandbox points tool caches at writable folders through
+   variables such as `YARN_CACHE_FOLDER`, `YARN_GLOBAL_FOLDER`, `npm_config_cache`, and `CARGO_HOME`; list them
+   with `env` instead of assuming them.
 
 ## Step 2: Name the cause
 
@@ -66,6 +72,10 @@ State the cause in one or two sentences, grounded in a file you read or a page y
 - The step misread an input, such as a stack the context names, a path, or a JSON shape.
 - The step wrote its result in a shape Ostra could not use, or left a file it was told to write missing.
 - A tool, a command, or a version the step relied on does not behave as it assumed.
+- The environment refused something the step tried: a write outside the writable folders, a tool's cache in
+  a read-only home folder, a missing tool, or a host the network policy refuses. Often a tool option or a
+  variable moves the write into a writable folder, such as the session dir, `Repo root:`, or a cache folder
+  the sandbox set.
 - A decision only the user can make, or a fact no agent can reach, such as a credential or a choice between two
   valid designs.
 
@@ -88,7 +98,9 @@ name the exact field and the shape its instructions require. When the step misse
 to that rule. Do not restate the rest of its instructions.
 
 **Escalate** when the fix needs the user: a decision, a credential, access, or a fact no agent can reach; or
-when `Earlier guidance:` already tried the fix you would give. Retrying without a change fails the same way
+when `Earlier guidance:` already tried the fix you would give. An environment the step cannot change, such as
+a tool that is not installed and cannot be installed into a writable folder, needs the user too. Then say in
+`reason` exactly what the user should install, allow, or change, because the user acts on it directly. Retrying without a change fails the same way
 and costs another run.
 
 ## Step 4: Submit

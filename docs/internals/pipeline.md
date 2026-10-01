@@ -430,8 +430,16 @@ The build loop has three exits besides success.
 - **Errors.** An execution that ends in an error is re-run once from its spawn block. A second error opens an
   execution-failed gate. A harness that fails to start is not retried; it opens a harness-failure gate instead.
 - **STUCK.** An agent returns `stuck` with a diagnostic and a specific need. The Rescue judge picks one action:
-  re-run the agent with the missing fact quoted, run a targeted explore and then re-run, or ask the user. A
-  plain retry is not an option, because it would reproduce the same failure.
+  re-run the agent with the missing fact quoted, run a targeted explore and then re-run, send the run to the
+  advisor, or ask the user. A plain retry is not an option, because it would reproduce the same failure.
+- **Environment failures go to the advisor first (Rule O7).** When the failure is in the agent's environment,
+  such as a cache in a read-only home folder, a tool that is not installed, or a refused host, the judge picks
+  `advise`. The advisor agent reads the stuck run's spawn block, its result, and the diagnostic, and checks the
+  machine with read-only shell commands from inside the same sandbox, so it sees what the step saw. It submits
+  `retry` with guidance, and the agent runs again as a rescue with the guidance quoted beside its diagnostic.
+  Or it submits `escalate`, and the stuck gate opens with the advisor's reason under the need, so the user
+  gets a diagnosis instead of a raw error. A loop gets at most two advisor rounds (`MAX_ADVICE`); after that
+  an `advise` decision opens the gate. The advisor shows on the phase's card, or the tests card, while it runs.
 - **HANDOFF.** An agent that needs a prompt or skill written asks for a handoff. The engine runs
   prompt-generation with that request, then resumes the original agent with its resume instructions.
 
@@ -553,7 +561,10 @@ The stage covers each passed phase whose test policy is `Required`, or the whole
    the project's `test` command and every regression suite. A test whose level needs something it cannot start
    (a service, a database, a browser) is reported as not run with the reason, never as passed. A regression
    failure the phase did not intend is a source bug, so write-test submits `stuck` instead of changing source.
-   Writing serially keeps two test writers from editing the same test files.
+   Writing serially keeps two test writers from editing the same test files. A test phase that ends blocked,
+   by a stuck gate left blocked or a review loop at its cap, is announced like a blocked build phase and,
+   outside YOLO, gets a phase blocked gate (Rule D9). The next phase's tests and the completion report wait
+   for both, because the report lists every blocked phase.
 
 The test review checks each NEW path and flow for a test at its level, flags a flow test that stubs out the
 parts the flow crosses, and flags a regression suite the test report does not show as run and passing.

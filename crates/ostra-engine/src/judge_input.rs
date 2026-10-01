@@ -397,6 +397,18 @@ pub fn judge_input(
                     previous.join("\n")
                 );
             }
+            // Rule O7: the judge sees how much of the advisor's budget this loop has used.
+            if let Some(l) = rec.and_then(|r| r.loop_key).and_then(|k| s.loop_ref(k)) {
+                let _ = writeln!(
+                    m,
+                    "\n# Advisor rounds for this loop\n\n{} of {}",
+                    l.advice.len(),
+                    crate::init::MAX_ADVICE
+                );
+                for g in &l.advice {
+                    let _ = writeln!(m, "\nGuidance that did not fix it:\n{g}");
+                }
+            }
             (
                 m,
                 format!(

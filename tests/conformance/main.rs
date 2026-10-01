@@ -875,6 +875,64 @@ fn t4_epa_fans_out_and_write_test_is_serial() {
 }
 
 #[test]
+fn d9_a_stuck_test_phase_left_blocked_is_announced_then_completes() {
+    let phases = json!([phase(1, "p", &[], "Required")]);
+    let mut h = H::plan_approved(
+        &["p"],
+        phases,
+        SessionOptions {
+            tests: true,
+            docs: false,
+            yolo: false,
+            track: None,
+        },
+    );
+    h.pass_phase(1);
+    h.accept();
+    h.command(CommandPurpose::Format, "p");
+    let g = h.open_gate("closing_gate");
+    h.answer(
+        &g,
+        GateAnswer::Closing {
+            items: vec![ClosingChoice {
+                project: "p".into(),
+                tests: true,
+                docs: false,
+            }],
+        },
+    );
+    h.run("spawn execution-path-analyzer epa phase 1", report("/e1"));
+    let (id, _) = h.start("spawn write-test write-test phase 1 initial");
+    h.finish(
+        &id,
+        ExecutionStatus::Ok,
+        Some(json!({"status": "stuck", "report_path": "/t1", "changed_files": [], "summary": "s",
+                     "stuck": {"diagnostic": "EROFS: read-only file system", "need": "a writable cache"}})),
+    );
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "gate", "reason": "r"}),
+    );
+    let g = h.open_gate("stuck");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "block".into(),
+            text: None,
+        },
+    );
+    assert_eq!(h.summaries(), vec!["blocked phase 1"]);
+    h.ev(SessionEvent::PhaseBlocked {
+        project: "p".into(),
+        phase: 1,
+        tests: true,
+        reason: "Stuck: a writable cache".into(),
+    });
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+#[test]
 fn a1_an_unapproved_format_command_is_skipped_once() {
     let phases = json!([phase(1, "p", &[], "Required")]);
     let mut h = H::plan_approved(&["p"], phases, SessionOptions::default());
@@ -1892,6 +1950,126 @@ fn stuck_goes_to_rescue_never_a_plain_retry() {
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
     let ctx = rerun.inputs.instructions.unwrap();
     assert!(ctx.contains("error[E0433]") && ctx.contains("ostra_core"));
+}
+
+fn stuck_env(h: &mut H, prefix: &str) -> ExecutionId {
+    let (id, _) = h.start(prefix);
+    h.finish(
+        &id,
+        ExecutionStatus::Ok,
+        Some(json!({"status": "stuck", "report_path": "/r", "changed_files": [], "summary": "s",
+                     "stuck": {"diagnostic": "EROFS: read-only file system, copyfile '/home/u/.yarn/berry/cache/x.zip'", "need": "a writable Yarn cache"}})),
+    );
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "advise", "reason": "r"}),
+    );
+    id
+}
+
+#[test]
+fn o7_stuck_environment_goes_to_the_advisor_then_reruns_with_its_guidance() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let id = stuck_env(&mut h, "spawn implementer");
+    assert_eq!(h.summaries(), vec!["spawn advisor advise p #1"]);
+    let adv = h.spawn_step("spawn advisor");
+    assert!(adv.inputs.init["Problem"].contains("EROFS"));
+    assert_eq!(adv.inputs.init["Failed step"], "implementer");
+    assert!(matches!(&adv.purpose, ExecPurpose::Advise { execution, .. } if *execution == id));
+    let (a, _) = h.start("spawn advisor");
+    assert_eq!(
+        h.summaries(),
+        vec![] as Vec<String>,
+        "nothing starts while the advisor looks"
+    );
+    h.finish(
+        &a,
+        ExecutionStatus::Ok,
+        Some(json!({"action": "retry", "guidance": "Run yarn with YARN_GLOBAL_FOLDER set.", "reason": "r"})),
+    );
+    let rerun = h.spawn_step("spawn implementer phase 1 rescue");
+    let ctx = rerun.inputs.instructions.unwrap();
+    assert!(ctx.contains("EROFS") && ctx.contains("YARN_GLOBAL_FOLDER"));
+}
+
+#[test]
+fn o7_an_interrupted_advisor_runs_again() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    stuck_env(&mut h, "spawn implementer");
+    let (a, _) = h.start("spawn advisor");
+    h.finish(&a, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["spawn advisor advise p #1"]);
+}
+
+#[test]
+fn o7_an_advisor_escalation_opens_the_stuck_gate_with_its_reason() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    stuck_env(&mut h, "spawn implementer");
+    h.run(
+        "spawn advisor",
+        json!({"action": "escalate", "guidance": "", "reason": "Install jest in pallet-mobile."}),
+    );
+    let steps = h.steps();
+    let Some(Step::OpenGate {
+        payload: GatePayload::Stuck { need, .. },
+        ..
+    }) = steps.first()
+    else {
+        panic!("{:?}", h.summaries())
+    };
+    assert!(need.contains("a writable Yarn cache") && need.contains("Advisor: Install jest"));
+}
+
+#[test]
+fn o7_after_max_advice_rounds_advise_becomes_the_gate() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    stuck_env(&mut h, "spawn implementer");
+    h.run(
+        "spawn advisor",
+        json!({"action": "retry", "guidance": "g1", "reason": "r"}),
+    );
+    stuck_env(&mut h, "spawn implementer phase 1 rescue");
+    let adv = h.spawn_step("spawn advisor");
+    assert!(adv.inputs.init["Earlier guidance"].contains("g1"));
+    h.run(
+        "spawn advisor",
+        json!({"action": "retry", "guidance": "g2", "reason": "r"}),
+    );
+    stuck_env(&mut h, "spawn implementer phase 1 rescue");
+    assert_eq!(h.summaries(), vec!["gate stuck"]);
+}
+
+#[test]
+fn o7_a_stuck_test_run_shows_its_advisor_on_the_test_card() {
+    let phases = json!([phase(1, "p", &[], "Required")]);
+    let mut h = H::plan_approved(
+        &["p"],
+        phases,
+        SessionOptions {
+            tests: true,
+            docs: true,
+            yolo: true,
+            track: None,
+        },
+    );
+    h.pass_phase(1);
+    h.accept();
+    h.command(CommandPurpose::Format, "p");
+    h.run("spawn execution-path-analyzer epa phase 1", report("/e1"));
+    stuck_env(&mut h, "spawn write-test write-test phase 1 initial");
+    let (a, _) = h.start("spawn advisor");
+    let st = h.state();
+    let card = ostra_engine::view::stages(&st)
+        .into_iter()
+        .find(|c| c.stage == StageKind::WriteTest)
+        .unwrap();
+    assert!(card.executions.contains(&a));
+    assert_eq!(card.status, ostra_core::api::StageStatus::Running);
+    assert_eq!(
+        card.detail.as_deref(),
+        Some("The advisor is looking at the stuck run.")
+    );
 }
 
 #[test]

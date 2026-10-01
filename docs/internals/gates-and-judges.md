@@ -47,7 +47,7 @@ the LOW findings, and takes an optional change request:
 | `plan_approval` | The plan passed its fact-check | Approve, or reject with what to change |
 | `fact_check_recurring` | The spec or plan fact-check failed three times in a row | `another-round` (optionally with guidance) or `stop` |
 | `review_cap` | A review loop used its passes with HIGH or MEDIUM findings open | `another-pass` (optionally with guidance) or leave it blocked |
-| `stuck` | The Rescue judge decided only the user has the missing fact | `fact` with the fact as text, or `block` |
+| `stuck` | The Rescue judge decided only the user has the missing fact, or the advisor escalated an environment failure (Rule O7) | `fact` with the fact as text, or `block` |
 | `phase_blocked` | A phase ended blocked | `retry` (optionally with instructions) or `leave` |
 | `implementation_review` | Every phase of an `IMPLEMENT` session finished and nothing runs | `done`, or `feedback` with what to change as text |
 | `closing_gate` | A project's phases are done and, for `IMPLEMENT`, the implementation was accepted | Tests yes or no, docs yes or no, per project |
@@ -261,7 +261,7 @@ it as "Ostra chose X because Y".
 | Stakes | A full-track `IMPLEMENT` spec is approved | `low` (skip the plan), `medium`, or `high` | `stakes.md` |
 | Feedback | The user sends feedback at the implementation review gate | `requirement_change` or `implementation_detail`, one `{project, instruction}` target per project it changes, and what happens to the feedback (Rule J1) | `feedback.md` |
 | Route answer | Any other answer with content: open questions, approval text, guidance, a stuck fact, retry instructions, and context added mid-session | Per answer `deliver`, `remember`, or `discard`, research to run first, research tasks the user says to skip, and `requirement_change`, `implementation_detail`, or `stage_choice` | `route-answer.md` |
-| Rescue | An agent returned `stuck` | `rerun` with a stated fact, `explore` to find it, or `gate` to ask the user | `rescue.md` |
+| Rescue | An agent returned `stuck` | `rerun` with a stated fact, `explore` to find it, `advise` to send an environment failure to the advisor (Rule O7), or `gate` to ask the user | `rescue.md` |
 | Resolve review | A review loop hit its budget under YOLO | `fix` with per-finding instructions, or `block` | `resolve-review.md` |
 | YOLO answer | A gate opens under YOLO and its plan is `Judge` | The gate's answer, in the schema for that gate | `yolo-answer.md` |
 | Completion | Nothing is left to run | The completion report in Markdown | `completion.md` |
@@ -282,7 +282,9 @@ Each prompt tells the judge which way to lean when unsure, and why:
   delivers an answer unless the user's own words keep it for later or drop it, because dropping an answer the user
   meant to give loses their decision.
 - **Rescue** never picks a plain retry, and after two rescues of the same phase with the same diagnostic it picks
-  `gate`, because neither rescue changed the failure.
+  `gate`, because neither rescue changed the failure. It picks `advise` over `gate` for a failure in the
+  agent's environment, because the advisor can often find a workaround inside the sandbox; once the loop has
+  used its two advisor rounds, an `advise` opens the gate.
 - **YOLO answer** never invents a requirement, business rule, or fact, and picks the answer that sets work aside
   over one that guesses.
 

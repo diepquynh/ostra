@@ -373,6 +373,12 @@ pub enum LoopNext {
         task: u32,
         stuck: StuckInfo,
     },
+    /// Rule O7: the advisor looks at a stuck run whose failure is in its environment.
+    RescueAdvise {
+        exec: ExecutionId,
+        stuck: StuckInfo,
+        advisor: Option<ExecutionId>,
+    },
     RescueGate {
         exec: ExecutionId,
         stuck: StuckInfo,
@@ -446,6 +452,8 @@ pub struct WorkLoop {
     pub work_count: u32,
     /// The stage command ran and exited 0 for this loop's changed files.
     pub staged: bool,
+    /// Rule O7: guidance the advisor gave this loop's stuck runs, oldest first.
+    pub advice: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -483,6 +491,7 @@ impl WorkLoop {
             block_gate_answered: false,
             work_count: 0,
             staged: false,
+            advice: vec![],
         }
     }
 
@@ -3033,7 +3042,19 @@ impl SessionState {
                             out.fact.as_deref().unwrap_or(&out.reason),
                         )),
                     },
-                    RescueAction::Gate => LoopNext::RescueGate { exec, stuck },
+                    // Rule O7: at most MAX_ADVICE advisor rounds per loop before the user is asked.
+                    RescueAction::Advise
+                        if self
+                            .loop_ref(key)
+                            .is_some_and(|l| l.advice.len() < crate::init::MAX_ADVICE) =>
+                    {
+                        LoopNext::RescueAdvise {
+                            exec,
+                            stuck,
+                            advisor: None,
+                        }
+                    }
+                    RescueAction::Advise | RescueAction::Gate => LoopNext::RescueGate { exec, stuck },
                 };
                 if let Some(l) = self.loop_mut(key) {
                     l.next = new_next;
@@ -3265,8 +3286,14 @@ impl SessionState {
                 self.quick.running = true;
             }
             ExecPurpose::Init { mode, item } => self.init_started(id, *mode, item.clone()),
-            ExecPurpose::Advise { project, .. } => {
-                if let Some(i) = self.project_inits.get_mut(project) {
+            ExecPurpose::Advise {
+                project, execution, ..
+            } => {
+                if let Some(l) = self.stuck_loop_mut(execution)
+                    && let LoopNext::RescueAdvise { advisor, .. } = &mut l.next
+                {
+                    *advisor = Some(id.clone());
+                } else if let Some(i) = self.project_inits.get_mut(project) {
                     i.advising = Some(id.clone());
                 }
             }
@@ -3455,7 +3482,13 @@ impl SessionState {
             }
             ExecPurpose::Advise {
                 project, execution, ..
-            } => self.advice_finished(project, execution, status, result, error),
+            } => {
+                if self.stuck_loop_mut(execution).is_some() {
+                    self.loop_advice_finished(execution, status, result, error);
+                } else {
+                    self.advice_finished(project, execution, status, result, error);
+                }
+            }
             _ => {}
         }
         if let Some(key) = rec.loop_key {
@@ -4523,6 +4556,66 @@ impl SessionState {
             }
             _ => String::new(),
         }
+    }
+
+    /// The work loop waiting on the advisor's look at its stuck run `exec` (Rule O7).
+    fn stuck_loop_mut(&mut self, exec: &ExecutionId) -> Option<&mut WorkLoop> {
+        let key = self.executions.get(exec).and_then(|r| r.loop_key)?;
+        self.loop_mut(key)
+            .filter(|l| matches!(&l.next, LoopNext::RescueAdvise { exec: e, .. } if e == exec))
+    }
+
+    fn loop_advice_finished(
+        &mut self,
+        failed: &ExecutionId,
+        status: ExecutionStatus,
+        result: &ExecutionResult,
+        error: String,
+    ) {
+        let parsed: Option<ostra_core::submit::AdvisorSubmit> = parse(&result.submit);
+        let Some(l) = self.stuck_loop_mut(failed) else {
+            return;
+        };
+        let LoopNext::RescueAdvise { exec, stuck, .. } = l.next.clone() else {
+            return;
+        };
+        if status == ExecutionStatus::Interrupted {
+            l.next = LoopNext::RescueAdvise {
+                exec,
+                stuck,
+                advisor: None,
+            };
+            return;
+        }
+        l.next = match parsed {
+            Some(a)
+                if status == ExecutionStatus::Ok
+                    && a.action == ostra_core::submit::AdviceAction::Retry =>
+            {
+                l.advice.push(a.guidance.clone());
+                let fact = format!(
+                    "An advisor looked at this failure and says how to get past it:\n{}",
+                    a.guidance
+                );
+                LoopNext::Work {
+                    kind: WorkKind::Rescue,
+                    instructions: Some(rescue_context(&stuck, &fact)),
+                }
+            }
+            other => {
+                let why = match other {
+                    Some(a) => format!("Advisor: {}", a.reason),
+                    None => format!("The advisor could not help: {error}"),
+                };
+                LoopNext::RescueGate {
+                    exec,
+                    stuck: StuckInfo {
+                        diagnostic: stuck.diagnostic,
+                        need: format!("{}\n\n{why}", stuck.need),
+                    },
+                }
+            }
+        };
     }
 
     fn advice_finished(

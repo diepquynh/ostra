@@ -2000,3 +2000,58 @@ scope = ""
 findings = ""
 doc = ""
 running = true
+
+# ---------------------------------------------------------------------------------------------------------
+# Rescue: what to do with a STUCK report (Rule O7 sends environment failures to the advisor)
+# ---------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "rescue-env-read-only-cache"
+judge = "rescue"
+workspace = "one"
+tests = true
+request = "Show a count of unread messages on the board's Activity tab, refreshed every 10 seconds."
+diagnostic = "npm error code EROFS\nnpm error syscall mkdir\nnpm error path /home/u/.npm/_cacache\nnpm error errno -30\nnpm error rofs EROFS: read-only file system, mkdir '/home/u/.npm/_cacache'"
+need = "A writable npm cache, or vitest and @testing-library/react installed in web/node_modules, so the new component tests can run."
+note = "A cache in a read-only home folder is the sandbox, which the advisor can work around by moving the cache."
+expect = { action = ["advise"] }
+
+[[case]]
+id = "rescue-env-missing-tool"
+judge = "rescue"
+workspace = "one"
+request = "Generate the TypeScript types for the stage card from its protobuf definition instead of by hand."
+diagnostic = "$ protoc --ts_out=web/src/api/gen proto/stage.proto\nsh: 1: protoc: not found"
+need = "protoc installed and on PATH, so the types can be generated."
+note = "A missing tool is an environment failure: the advisor checks whether it can be installed into a writable folder before the user is asked."
+expect = { action = ["advise"] }
+
+[[case]]
+id = "rescue-gate-business-rule"
+judge = "rescue"
+workspace = "one"
+request = "Expire sign-in sessions after a period of inactivity."
+diagnostic = "The request and the spec name no inactivity period, and `auth.rs` has no existing timeout to extend."
+need = "How long a sign-in session may stay idle before it expires."
+note = "Counter-case to the environment cases: an intent only the user holds goes to the gate, not the advisor."
+expect = { action = ["gate"] }
+
+[[case]]
+id = "rescue-gate-credential"
+judge = "rescue"
+workspace = "one"
+request = "Add a live test that sends one Web Push notification to a real subscription."
+diagnostic = "thread 'push_live' panicked: OSTRA_PUSH_TEST_ENDPOINT is not set; the test needs a real browser push subscription endpoint and its p256dh and auth keys."
+need = "A real push subscription (endpoint, p256dh, auth) to send the test notification to."
+note = "Counter-case: a credential no agent can create is the user's, even though it looks like setup."
+expect = { action = ["gate"] }
+
+[[case]]
+id = "rescue-code-fact"
+judge = "rescue"
+workspace = "one"
+request = "Record the model's stop reason on every native execution's usage."
+diagnostic = "error[E0609]: no field `stop_reason` on type `StreamEvent`\n  --> crates/ostra-exec-native/src/lib.rs:412:31"
+need = "Where the provider stream exposes the stop reason, and under which field name."
+note = "Counter-case: a fact in the code is research, not the environment."
+expect = { action = ["explore", "rerun"] }

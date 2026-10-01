@@ -217,6 +217,21 @@ fn card(stage: StageKind, label: String, status: StageStatus) -> StageCard {
     }
 }
 
+/// The work loop whose stuck run the advisor execution `exec` looks at (Rule O7).
+fn advised_loop(s: &SessionState, exec: &ExecutionId) -> Option<(u32, bool)> {
+    match s.executions.get(exec).map(|e| &e.purpose) {
+        Some(ostra_core::event::ExecPurpose::Advise { execution, .. }) => {
+            s.executions.get(execution).and_then(|r| r.loop_key)
+        }
+        _ => None,
+    }
+}
+
+fn advising_detail(l: &WorkLoop) -> Option<String> {
+    matches!(l.next, LoopNext::RescueAdvise { .. })
+        .then(|| "The advisor is looking at the stuck run.".into())
+}
+
 fn loop_status(l: &WorkLoop) -> StageStatus {
     if l.running.is_some() {
         return StageStatus::Running;
@@ -522,7 +537,18 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         let executions: Vec<ExecutionId> = s
             .executions
             .values()
-            .filter(|e| e.project == *key && matches!(e.purpose, P::Init { .. } | P::Advise { .. }))
+            .filter(|e| {
+                e.project == *key
+                    && match &e.purpose {
+                        P::Init { .. } => true,
+                        P::Advise { execution, .. } => s
+                            .executions
+                            .get(execution)
+                            .and_then(|r| r.loop_key)
+                            .is_none(),
+                        _ => false,
+                    }
+            })
             .map(|e| e.id.clone())
             .collect();
         let gate = i.approval_gate.clone().or_else(|| i.failed_gate.clone());
@@ -568,17 +594,21 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         );
         c.project = Some(p.info.project.clone());
         c.phase = Some(id);
-        c.executions = exec_ids(s, |e| e.loop_key == Some((id, false)));
+        c.executions = exec_ids(s, |e| {
+            e.loop_key == Some((id, false)) || advised_loop(s, &e.id) == Some((id, false))
+        });
         c.gate = p.impl_loop.gate.clone().or(p.blocked_gate.clone());
-        c.detail = Some(format!(
-            "{} review passes{}",
-            p.impl_loop.iterations,
-            if p.impl_loop.blocker_open {
-                ", BLOCKER open"
-            } else {
-                ""
-            }
-        ));
+        c.detail = Some(advising_detail(&p.impl_loop).unwrap_or_else(|| {
+            format!(
+                "{} review passes{}",
+                p.impl_loop.iterations,
+                if p.impl_loop.blocker_open {
+                    ", BLOCKER open"
+                } else {
+                    ""
+                }
+            )
+        }));
         out.push(c);
         if !matches!(p.epa, EpaState::NotStarted) || !p.test_loop.is_idle() {
             let mut c = card(
@@ -596,7 +626,9 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             c.executions = exec_ids(s, |e| {
                 e.loop_key == Some((id, true))
                     || matches!(e.purpose, P::Epa { phase } if phase == id)
+                    || advised_loop(s, &e.id) == Some((id, true))
             });
+            c.detail = advising_detail(&p.test_loop);
             out.push(c);
         }
     }

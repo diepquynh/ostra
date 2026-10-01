@@ -202,6 +202,8 @@ pub fn item_for(items: &[AnswerItem], id: &str) -> AnswerItem {
 pub enum RescueAction {
     Explore,
     Rerun,
+    /// Rule O7: the failure is in the agent's environment, so the advisor looks first.
+    Advise,
     Gate,
 }
 
@@ -392,7 +394,7 @@ pub fn output_schema(kind: JudgeKind, answer_schema: Option<Value>) -> Value {
         JudgeKind::Rescue => json!({
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["explore","rerun","gate"]},
+                "action": {"type": "string", "enum": ["explore","rerun","advise","gate"]},
                 "explore_task": {"anyOf": [explore_task_schema(), {"type": "null"}]},
                 "fact": {"type": ["string", "null"]},
                 "reason": reason
