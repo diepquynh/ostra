@@ -139,6 +139,10 @@ regenerate `web/src/api/gen/`, then `cd web && npm run typecheck` and fix only w
 - Prose that users or models read (prompts, judge prompts, UI copy, error messages) follows HANDOVER
   section 20: no em dashes, sentence-case headings, the instruction first and then the reason, no metaphor,
   no superlatives, and keep "because" clauses.
+- Commit messages: a short title of at most 72 characters, a type prefix (`feat:`, `fix:`, `docs:`,
+  `refactor:`, `test:`, `chore:`) and the change in a few words, for example `feat: Add planning evals`.
+  The details go in the body after a blank line: what changed and why, one bullet per part, with the rule
+  IDs it touches. Never put the details in the title.
 
 ## Tests
 
