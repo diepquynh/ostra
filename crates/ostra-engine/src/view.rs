@@ -997,7 +997,7 @@ pub fn execution_groups(executions: &[ExecutionView]) -> Vec<ExecutionGroupView>
                 out.push(ExecutionGroupView {
                     group: e.group.clone(),
                     agent: e.agent,
-                    project: e.project.clone(),
+                    project: (!e.spans_session).then(|| e.project.clone()),
                     status: e.status,
                     cost_usd: 0.0,
                     executions: vec![],
@@ -1342,7 +1342,8 @@ mod tests {
             can_steer: false,
             queued_steer: None,
             has_terminal: false,
-            group: ostra_core::api::execution_group(agent, "backend"),
+            group: ostra_core::api::execution_group(agent, Some("backend")),
+            spans_session: false,
             run_label: agent.to_string(),
             stream: executor.stream(),
             summary: None,

@@ -863,8 +863,12 @@ pub struct ExecutionView {
     pub queued_steer: Option<String>,
     /// A live PTY exists for this execution.
     pub has_terminal: bool,
-    /// `<agent>:<project key>`, the key of this execution's entry in `SessionDetail::execution_groups`.
+    /// `<agent>:<project key>`, or `<agent>` when `spans_session`: the key of this execution's
+    /// entry in `SessionDetail::execution_groups`.
     pub group: String,
+    /// The run covers every project in the session's scope (spec, plan, their fact-checks), so it
+    /// belongs to no single project although `project` names the folder it works in.
+    pub spans_session: bool,
     /// The run within its group, for example `Phase 2`, `Phase 1 · fix pass`, or `Spec · pass 2`.
     pub run_label: String,
     /// The live view this execution streams, taken from its executor.
@@ -1070,10 +1074,11 @@ pub struct Heading {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ExecutionGroupView {
-    /// `<agent>:<project key>`.
+    /// `<agent>:<project key>`, or `<agent>` for runs that span the session.
     pub group: String,
     pub agent: AgentName,
-    pub project: String,
+    /// Null for a group of runs that span the session.
+    pub project: Option<String>,
     /// `running` while any run is running, else the status of the latest run.
     pub status: ExecutionStatus,
     pub cost_usd: f64,
@@ -1112,10 +1117,11 @@ pub struct TreeSession {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct TreeGroup {
-    /// `<agent>:<project key>`.
+    /// `<agent>:<project key>`, or `<agent>` for runs that span the session.
     pub group: String,
     pub agent: AgentName,
-    pub project: String,
+    /// Null for a group of runs that span the session.
+    pub project: Option<String>,
     /// `running` while any run is running, else the status of the latest run.
     pub status: ExecutionStatus,
     pub cost_usd: f64,
@@ -1192,7 +1198,8 @@ pub struct RunningExecution {
     pub id: ExecutionId,
     pub session: Option<SessionId>,
     pub agent: AgentName,
-    pub project: String,
+    /// Null for a run that spans the session.
+    pub project: Option<String>,
     pub run_label: String,
     pub stream: ExecStream,
     pub summary: Option<String>,
@@ -1210,9 +1217,13 @@ pub struct OpenGateRef {
     pub opened_at: DateTime<Utc>,
 }
 
-/// Group key of an execution: `<agent>:<project key>`.
-pub fn execution_group(agent: AgentName, project: &str) -> String {
-    format!("{agent}:{project}")
+/// Group key of an execution: `<agent>:<project key>`, or `<agent>` for a run that spans the
+/// session.
+pub fn execution_group(agent: AgentName, project: Option<&str>) -> String {
+    match project {
+        Some(p) => format!("{agent}:{p}"),
+        None => agent.to_string(),
+    }
 }
 
 /// Longest [`ExecutionView::summary`], in characters.

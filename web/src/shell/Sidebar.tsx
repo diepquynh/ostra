@@ -73,7 +73,7 @@ function GroupRows({
       <TreeItem
         depth={2}
         label={humanize(g.agent)}
-        meta={g.project}
+        meta={g.project ?? undefined}
         icon={<RunIcon status={x.status} />}
         selected={activeId === `exec:${x.id}`}
         onClick={() => open(`exec:${x.id}`, { preview: true })}
@@ -93,11 +93,11 @@ function GroupRows({
             {humanize(g.agent)} <span style={{ color: "var(--text-muted)" }}>×{g.runs.length}</span>
           </span>
         }
-        meta={g.project}
+        meta={g.project ?? undefined}
         icon={<RunIcon status={g.status} />}
         expanded={isOpen}
         onToggle={() => toggle(key, def)}
-        title={`${humanize(g.agent)} in ${g.project}`}
+        title={g.project ? `${humanize(g.agent)} in ${g.project}` : humanize(g.agent)}
       />
       {isOpen &&
         g.runs.map((x) => (

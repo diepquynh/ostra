@@ -614,9 +614,9 @@ async fn yolo_implement_session_end_to_end() {
         groups,
         [
             ("explore:app", 1),
-            ("generate-spec:app", 1),
-            ("fact-check:app", 2),
-            ("plan:app", 1),
+            ("generate-spec", 1),
+            ("fact-check", 2),
+            ("plan", 1),
             ("implementer:app", 1),
             ("code-reviewer:app", 1)
         ]
@@ -776,9 +776,9 @@ async fn yolo_implement_session_end_to_end() {
         groups,
         [
             ("explore:app", vec!["Research task 1"]),
-            ("generate-spec:app", vec!["Spec"]),
-            ("fact-check:app", vec!["Spec check", "Plan check"]),
-            ("plan:app", vec!["Plan"]),
+            ("generate-spec", vec!["Spec"]),
+            ("fact-check", vec!["Spec check", "Plan check"]),
+            ("plan", vec!["Plan"]),
             ("implementer:app", vec!["Phase 1"]),
             ("code-reviewer:app", vec!["Phase 1 · review pass"]),
         ]

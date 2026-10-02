@@ -239,6 +239,19 @@ pub enum ExecPurpose {
 }
 
 impl ExecPurpose {
+    /// A run that covers every project in the session's scope. It still works in the primary
+    /// project's folder, but belongs to no single project.
+    pub fn spans_session(&self) -> bool {
+        matches!(
+            self,
+            ExecPurpose::Spec { .. }
+                | ExecPurpose::FactCheck { .. }
+                | ExecPurpose::Plan { .. }
+                | ExecPurpose::Architecture
+                | ExecPurpose::QuickAnswer
+        )
+    }
+
     /// The label of one run within its execution group, before a pass number is added.
     pub fn run_label(&self) -> String {
         let work = |w: &WorkKind| match w {

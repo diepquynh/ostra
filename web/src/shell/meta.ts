@@ -83,7 +83,7 @@ export function resourceMeta(id: string, ctx: MetaContext): ResourceMeta {
           return {
             label,
             icon: run.stream === "terminal" ? "square-terminal" : "activity",
-            title: `${label} in ${g.project}`,
+            title: g.project ? `${label} in ${g.project}` : label,
             crumbs: [ws, { label: sessionLabel(s), to: `session:${s.id}` }, { label }],
           };
         }

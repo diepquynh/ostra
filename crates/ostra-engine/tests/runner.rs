@@ -369,14 +369,24 @@ async fn implement_session_runs_to_completion_under_yolo() {
         groups,
         [
             "explore:app",
-            "generate-spec:app",
-            "fact-check:app",
-            "plan:app",
+            "generate-spec",
+            "fact-check",
+            "plan",
             "implementer:app",
             "code-reviewer:app"
         ]
     );
     assert_eq!(detail.execution_groups[2].executions.len(), 2);
+    let projects: Vec<Option<&str>> = detail
+        .execution_groups
+        .iter()
+        .map(|g| g.project.as_deref())
+        .collect();
+    assert_eq!(
+        projects,
+        [Some("app"), None, None, None, Some("app"), Some("app")],
+        "spec, plan, and their checks span the session"
+    );
     assert!(
         detail
             .execution_groups

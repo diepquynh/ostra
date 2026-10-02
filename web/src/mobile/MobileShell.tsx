@@ -69,7 +69,11 @@ export function mobileTitle(
       for (const s of ctx.sessions)
         for (const g of s.groups) {
           const run = g.runs.find((x) => x.id === r.id);
-          if (run) return { title: `${humanize(g.agent)} · ${run.run_label}`, sub: `${g.project} · ${run.status}` };
+          if (run)
+            return {
+              title: `${humanize(g.agent)} · ${run.run_label}`,
+              sub: [g.project, run.status].filter(Boolean).join(" · "),
+            };
         }
       return { title: "Execution", sub: r.id };
     }

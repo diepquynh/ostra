@@ -89,7 +89,7 @@ export type ExecRow = { id: string; run: string; icon: IconName; meta: string; c
 export type ExecGroup = {
   key: string;
   agent: string;
-  project: string;
+  project: string | null;
   status: ExecutionView["status"];
   cost: string;
   rows: ExecRow[];

@@ -4,4 +4,8 @@ import type { ExecStream } from "./ExecStream";
 import type { ExecutionId } from "./ExecutionId";
 import type { SessionId } from "./SessionId";
 
-export type RunningExecution = { id: ExecutionId, session: SessionId | null, agent: AgentName, project: string, run_label: string, stream: ExecStream, summary: string | null, };
+export type RunningExecution = { id: ExecutionId, session: SessionId | null, agent: AgentName, 
+/**
+ * Null for a run that spans the session.
+ */
+project: string | null, run_label: string, stream: ExecStream, summary: string | null, };

@@ -303,7 +303,8 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
       <div className="ex-head">
         <div className="ex-head__main">
           <h1 className="ex-title">
-            {humanize(e.agent)} · {e.run_label} <span className="ex-title__sub">in {e.project}</span>
+            {humanize(e.agent)} · {e.run_label}{" "}
+            {!e.spans_session && <span className="ex-title__sub">in {e.project}</span>}
           </h1>
           <div className="ex-chips">
             <StatusChip kind="execution" status={st} />
@@ -322,7 +323,7 @@ export function ExecutionScreen({ id }: ExecutionScreenProps) {
               size="sm"
               aria-label="Run"
               value={e.id}
-              title={`${siblings.length} ${humanize(e.agent)} runs in ${e.project}`}
+              title={`${siblings.length} ${humanize(e.agent)} runs${e.spans_session ? "" : ` in ${e.project}`}`}
               onChange={(ev) => ev.target.value !== e.id && nav.open(`exec:${ev.target.value}`)}
               options={siblings}
             />

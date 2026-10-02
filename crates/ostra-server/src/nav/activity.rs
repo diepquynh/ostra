@@ -52,7 +52,7 @@ pub fn build<Tz: TimeZone>(
                     id: e.id,
                     session: e.session,
                     agent: e.agent,
-                    project: e.project,
+                    project: (!e.spans_session).then_some(e.project),
                     run_label: label,
                     stream: e.stream,
                     summary: e.summary,

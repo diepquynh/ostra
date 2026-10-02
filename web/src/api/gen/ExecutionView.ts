@@ -32,9 +32,15 @@ queued_steer: string | null,
  */
 has_terminal: boolean, 
 /**
- * `<agent>:<project key>`, the key of this execution's entry in `SessionDetail::execution_groups`.
+ * `<agent>:<project key>`, or `<agent>` when `spans_session`: the key of this execution's
+ * entry in `SessionDetail::execution_groups`.
  */
 group: string, 
+/**
+ * The run covers every project in the session's scope (spec, plan, their fact-checks), so it
+ * belongs to no single project although `project` names the folder it works in.
+ */
+spans_session: boolean, 
 /**
  * The run within its group, for example `Phase 2`, `Phase 1 · fix pass`, or `Spec · pass 2`.
  */

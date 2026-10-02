@@ -325,6 +325,9 @@ export const sessions: SessionSummary[] = [
   },
 ];
 
+const SESSION_WIDE = new Set(["spec", "fact_check", "plan", "architecture", "quick_answer"]);
+export const spansSession = (purpose: ExecutionView["purpose"]) => SESSION_WIDE.has(purpose?.kind ?? "");
+
 const exec = (
   id: string,
   agent: ExecutionView["agent"],
@@ -357,7 +360,8 @@ const exec = (
   can_steer: status === "running",
   queued_steer: null,
   has_terminal: false,
-  group: `${agent}:${project}`,
+  group: spansSession(purpose) ? agent : `${agent}:${project}`,
+  spans_session: spansSession(purpose),
   run_label: agent,
   stream: extra.executor?.startsWith("harness:") ? "terminal" : "activity",
   summary: null,
@@ -521,7 +525,7 @@ export function groupsFor(list: ExecutionView[]): ExecutionGroupView[] {
     const g = groups.get(x.group) ?? {
       group: x.group,
       agent: x.agent,
-      project: x.project,
+      project: x.spans_session ? null : x.project,
       status: x.status,
       cost_usd: 0,
       executions: [],

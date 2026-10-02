@@ -230,7 +230,8 @@ function search(query: string, limit: number): SearchHit[] {
   for (const s of tree()) {
     add("session", `session:${s.id}`, s.title ?? s.request, s.status, `${s.title ?? ""} ${s.request}`);
     for (const g of s.groups)
-      for (const r of g.runs) add("execution", `exec:${r.id}`, `${g.agent} · ${r.run_label} in ${g.project}`, r.status);
+      for (const r of g.runs)
+        add("execution", `exec:${r.id}`, `${g.agent} · ${r.run_label}${g.project ? ` in ${g.project}` : ""}`, r.status);
     for (const a of s.artifacts)
       add("artifact", `artifact:${a.path}`, a.label, a.path.split("/").pop() ?? null, `${a.label} ${a.path}`);
   }

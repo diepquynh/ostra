@@ -234,7 +234,8 @@ export function MExecution({ id }: { ws: string; id: string }) {
       {siblings.length > 1 && (
         <div className="mx-siblings">
           <span className="mx-pad mx-caption">
-            Other runs of {humanize(e.agent)} in {e.project}
+            Other runs of {humanize(e.agent)}
+            {!e.spans_session && ` in ${e.project}`}
           </span>
           <div className="mx-chiprow">
             {siblings.map((r) => (

@@ -86,7 +86,7 @@ export function localItems(
           id: `exec:${r.id}`,
           group: "Executions",
           icon: r.stream === "terminal" ? "square-terminal" : "activity",
-          label: `${humanize(g.agent)} · ${r.run_label} in ${g.project}`,
+          label: `${humanize(g.agent)} · ${r.run_label}${g.project ? ` in ${g.project}` : ""}`,
           hint: r.status,
         });
   for (const s of sessions)

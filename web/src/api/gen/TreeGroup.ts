@@ -5,9 +5,13 @@ import type { TreeRun } from "./TreeRun";
 
 export type TreeGroup = { 
 /**
- * `<agent>:<project key>`.
+ * `<agent>:<project key>`, or `<agent>` for runs that span the session.
  */
-group: string, agent: AgentName, project: string, 
+group: string, agent: AgentName, 
+/**
+ * Null for a group of runs that span the session.
+ */
+project: string | null, 
 /**
  * `running` while any run is running, else the status of the latest run.
  */

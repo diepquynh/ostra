@@ -223,6 +223,7 @@ fn execution(r: &Row<'_>) -> Result<ExecutionView, StoreError> {
         .map_err(StoreError::Invalid)?;
     let purpose: Option<ExecPurpose> = r.json_opt("purpose")?;
     let project: String = r.get("project")?;
+    let spans_session = purpose.as_ref().is_some_and(ExecPurpose::spans_session);
     let native_session_id: Option<String> = r.get("native_session_id")?;
     // The engine numbers repeated runs from the fold; this is the label of a first run.
     let run_label = purpose
@@ -235,7 +236,8 @@ fn execution(r: &Row<'_>) -> Result<ExecutionView, StoreError> {
         agent,
         purpose,
         stage: r.variant_opt("stage")?,
-        group: execution_group(agent, &project),
+        group: execution_group(agent, (!spans_session).then_some(project.as_str())),
+        spans_session,
         run_label,
         stream: executor.stream(),
         summary: r.get("summary")?,

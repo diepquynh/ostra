@@ -215,7 +215,10 @@ pub fn rank_tree(needle: &Needle, sessions: &[TreeSession]) -> Vec<SearchHit> {
                         SearchKind::Execution,
                         format!("exec:{}", r.id),
                         label,
-                        Some(format!("{owner} · {}", g.project)),
+                        Some(match &g.project {
+                            Some(p) => format!("{owner} · {p}"),
+                            None => owner.to_string(),
+                        }),
                         score + 0.02,
                     ));
                 }
