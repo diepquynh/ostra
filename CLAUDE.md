@@ -143,6 +143,11 @@ regenerate `web/src/api/gen/`, then `cd web && npm run typecheck` and fix only w
   `refactor:`, `test:`, `chore:`) and the change in a few words, for example `feat: Add planning evals`.
   The details go in the body after a blank line: what changed and why, one bullet per part, with the rule
   IDs it touches. Never put the details in the title.
+- The title's type sets the version bump, because `./release.sh` computes the next version from the titles
+  since the last tag (git-cliff, `cliff.toml`): `feat:` is a feature, `fix:` and the rest a patch. A change
+  that breaks a user (config keys, API or CLI shape, stored data that no longer loads) adds `!` after the type,
+  `feat!: Rename the routes table`, and a `BREAKING CHANGE: <what to do>` line at the end of the body.
+  An optional scope names the crate or area, `fix(sandbox): ...`. Never bump versions by hand in a commit.
 
 ## Tests
 

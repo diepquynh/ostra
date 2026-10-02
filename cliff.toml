@@ -1,0 +1,52 @@
+# git-cliff: reads Conventional Commit titles to compute the next version and write CHANGELOG.md.
+# release.sh drives it; see "Versions and releases" in docs/start/install.md.
+
+[changelog]
+header = """
+# Changelog
+
+Every release of Ostra, written from its commit titles by `./release.sh`.
+
+"""
+body = """
+{% if version %}\
+## {{ version | trim_start_matches(pat="v") }} ({{ timestamp | date(format="%Y-%m-%d") }})
+{% else %}\
+## Unreleased
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {% if commit.scope %}{{ commit.scope }}: {% endif %}\
+{% if commit.breaking %}**Breaking:** {% endif %}\
+{{ commit.message | split(pat="\n") | first | trim }} ({{ commit.id | truncate(length=7, end="") }})\
+{% endfor %}
+{% endfor %}\n
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = true
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+$"
+sort_commits = "oldest"
+commit_parsers = [
+  { message = "^chore: Release v", skip = true },
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Refactors" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^test", group = "<!-- 5 -->Tests" },
+  { message = "^(build|chore|ci)", group = "<!-- 6 -->Build and chores" },
+  { message = ".*", group = "<!-- 7 -->Other" },
+]
+
+[bump]
+# Below 1.0.0 the version shifts one place right, as Cargo reads 0.y.z: a breaking change bumps y, and a
+# feature or fix bumps z. From 1.0.0 on, breaking bumps major, a feature minor, and anything else patch.
+features_always_bump_minor = false
+breaking_always_bump_major = false
+initial_tag = "v0.1.0"

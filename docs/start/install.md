@@ -67,6 +67,25 @@ cargo build --release -p ostra-server
 The result is `target/release/ostra`. Build the console first every time `web/` or `design/` changes,
 because a binary built against an old `web/dist` serves the old console.
 
+### Versions and releases
+
+Ostra follows Semantic Versioning, and `ostra --version` prints the version it was built at. Each commit
+title says what kind of change it is in the Conventional Commits form, and that kind decides the bump:
+
+| Title | Example | From 1.0.0 | Below 1.0.0 |
+|---|---|---|---|
+| `!` after the type, plus a `BREAKING CHANGE:` line in the body | `feat!: Rename the routes table` | major | minor |
+| `feat:` | `feat: Add planning evals` | minor | patch |
+| any other type (`fix:`, `docs:`, `refactor:`, ...) | `fix: Keep Esc from closing the app` | patch | patch |
+
+Below 1.0.0 every place shifts one to the right, the way Cargo reads `0.y.z`, so a breaking change never
+lands in a patch release. A commit sets no version itself. `./release.sh` reads the titles since the last
+`vX.Y.Z` tag with [git-cliff](https://git-cliff.org) (configured in `cliff.toml`), takes the largest bump among
+them, writes that version into `Cargo.toml`, `Cargo.lock`, and the npm manifests, rewrites `CHANGELOG.md`
+grouped by type, then commits `chore: Release vX.Y.Z` and tags it. It refuses a dirty working tree, because
+the release commit must hold only the bump, and it does not push. Pass a version, `./release.sh 1.0.0`, to
+choose it yourself.
+
 ## Where Ostra keeps its files
 
 Ostra splits its files into three places: one config file for the machine, one data folder for the server,
