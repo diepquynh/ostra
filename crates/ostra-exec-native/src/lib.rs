@@ -409,7 +409,6 @@ impl Run {
         };
         let mut inputs = policy_inputs(ctx);
         inputs.read_only_mcp_tools = mcp.iter().flat_map(|m| m.read_only()).collect();
-        let policy = ExecutionPolicy::new(ctx.clone(), inputs);
         let env = ToolEnv::new(ToolEnvConfig {
             agent: spec.agent,
             repo_root: ctx.repo_root.clone(),
@@ -445,6 +444,8 @@ impl Run {
             }
             Err(e) => return self.fail(e),
         };
+        let policy =
+            ExecutionPolicy::new(ctx.clone(), inputs).sandboxed(env.every_ignore_file().is_some());
 
         let offered = provider.server_tools(&model);
         let caps = &spec.capabilities;

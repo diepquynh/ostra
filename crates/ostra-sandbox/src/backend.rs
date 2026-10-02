@@ -134,6 +134,17 @@ pub fn unavailable_message() -> String {
     }
 }
 
+/// Whether an execution with this workspace sandbox runs sandboxed under the global config read
+/// fresh now.
+pub fn runs_sandboxed(ws: &ostra_core::config::WorkspaceSandbox) -> bool {
+    let global: ostra_core::config::GlobalConfig =
+        ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
+    matches!(
+        decide(&global.sandbox.for_workspace(ws)),
+        Ok(Decision::Sandboxed(_))
+    )
+}
+
 /// `Err` when the config requires a sandbox this machine cannot provide.
 pub fn decide(cfg: &SandboxConfig) -> Result<Decision, String> {
     match (cfg.mode, backend()) {

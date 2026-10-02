@@ -4,6 +4,7 @@
 use crate::bash::{self, Parsed, SimpleCommand, TargetSpec};
 use ostra_core::AgentName;
 use ostra_core::exec::ExecContext;
+use ostra_core::ignore_files::{IgnoreFiles, Under};
 use ostra_core::paths;
 use ostra_core::policy::RuleRef;
 use regex::Regex;
@@ -168,6 +169,18 @@ impl Roots {
     /// OS temp scratch. A project that itself lives under temp is project source, not scratch.
     pub fn in_temp(&self, p: &Path) -> bool {
         self.temps.iter().any(|t| inside(t, p)) && !inside(&self.repo, p)
+    }
+
+    /// Rule G2: the ignore files as this execution's searches see them, Ostra's own state and the
+    /// temp dirs exempt.
+    pub fn ignore_files(&self) -> IgnoreFiles {
+        IgnoreFiles::new().exempt(
+            self.sessions_root
+                .parent()
+                .map(Path::to_path_buf)
+                .into_iter()
+                .chain(self.temps.iter().cloned()),
+        )
     }
 
     pub fn in_repo(&self, p: &Path) -> bool {
@@ -1186,6 +1199,229 @@ pub fn check_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denia
         }
     }
     None
+}
+
+pub const IGNORED_SEARCH: &str = "ignored-search";
+
+/// Entries a walking command's check looks at before it stops and refuses.
+const IGNORED_WALK_BUDGET: usize = 20_000;
+
+/// Rule G2: a sandboxed Grep or Glob never searches a path a `.*ignore` file hides.
+pub fn check_ignored_search_tool(roots: &Roots, target: &Path, raw: &str) -> Option<Denial> {
+    let ignores = roots.ignore_files();
+    let file = ignores.hidden_by(target)?;
+    Some(ignored_denial(
+        raw,
+        &file,
+        "Search a path no ignore file hides",
+    ))
+}
+
+/// Rule G2: a sandboxed shell search never lists a path a `.*ignore` file hides. Searchers that
+/// read ignore files (`rg`, `fd`, `ag`) are refused when told to skip them or pointed at a hidden
+/// path; walkers that read none (`grep -r`, `find`, `tree`, `ls -R`, `ack`) are refused when their
+/// tree holds a hidden path.
+pub fn check_ignored_search_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denial> {
+    let cwds = bash::command_cwds(parsed);
+    let ignores = roots.ignore_files();
+    for (i, cmd) in parsed.commands.iter().enumerate() {
+        let Some(name) = cmd.effective_name() else {
+            continue;
+        };
+        let args = cmd.args();
+        let base = cwd_for(roots, start, cwds[i].as_deref());
+        let kind = match name.as_str() {
+            "rg" | "fd" | "fdfind" | "ag" => SearchKind::ReadsIgnores,
+            "grep" | "egrep" | "fgrep" if grep_recurses(args) => SearchKind::Walks,
+            "rgrep" | "find" | "tree" | "ack" | "ack-grep" => SearchKind::Walks,
+            "ls" if has_short(args, 'R') || has_long(args, "--recursive") => SearchKind::Walks,
+            "git" => {
+                if let Some(flag) = git_lists_ignored(args) {
+                    return Some(deny(
+                        IGNORED_SEARCH,
+                        format!(
+                            "Drop `{flag}` from the git command: it lists files the repository's ignore files hide, \
+                             and a sandboxed agent never searches those."
+                        ),
+                    ));
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        if kind == SearchKind::ReadsIgnores
+            && let Some(flag) = skips_ignores(&name, args)
+        {
+            return Some(deny(
+                IGNORED_SEARCH,
+                format!(
+                    "Run `{name}` without `{flag}`: that flag makes it search files the `.*ignore` files hide, and a \
+                     sandboxed agent never searches those."
+                ),
+            ));
+        }
+        let mut operands: Vec<(PathBuf, String)> = search_operands(&name, args)
+            .into_iter()
+            .map(|w| (roots.resolve(&base, w.text()), w.text().to_string()))
+            .filter(|(p, _)| p.exists())
+            .collect();
+        if operands.is_empty() {
+            operands.push((base.clone(), ".".into()));
+        }
+        for (path, raw) in operands {
+            if let Some(file) = ignores.hidden_by(&path) {
+                return Some(ignored_denial(
+                    &raw,
+                    &file,
+                    "Search a path no ignore file hides",
+                ));
+            }
+            if kind == SearchKind::Walks && path.is_dir() {
+                let correction = format!(
+                    "Use Grep, Glob, `rg`, or `rg --files` instead of `{name}` on \"{raw}\""
+                );
+                match ignores.first_hidden_under(&path, IGNORED_WALK_BUDGET) {
+                    Under::Clean => {}
+                    Under::Hidden(p) => {
+                        let shown = p.strip_prefix(&path).unwrap_or(&p).display().to_string();
+                        return Some(deny(
+                            IGNORED_SEARCH,
+                            format!(
+                                "{correction}: `{name}` reads no ignore files, so it would search \"{shown}\", which \
+                                 an ignore file hides, and a sandboxed agent never searches those."
+                            ),
+                        ));
+                    }
+                    Under::TooLarge => {
+                        return Some(deny(
+                            IGNORED_SEARCH,
+                            format!(
+                                "{correction}: `{name}` reads no ignore files, and the tree is too large to confirm \
+                                 that no ignore file hides part of it."
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SearchKind {
+    ReadsIgnores,
+    Walks,
+}
+
+fn ignored_denial(raw: &str, file: &Path, correction: &str) -> Denial {
+    deny(
+        IGNORED_SEARCH,
+        format!(
+            "{correction}: \"{raw}\" is hidden by {}, and a sandboxed agent never searches what an ignore file \
+             hides. Read a file you already know the path of with Read instead.",
+            file.display()
+        ),
+    )
+}
+
+/// The words a search command walks: every positional word for `tree` and `ls`, the words before
+/// the first expression for `find`, and the positional words after the pattern for the rest.
+fn search_operands<'a>(name: &str, args: &'a [bash::Word]) -> Vec<&'a bash::Word> {
+    let plain = |w: &&bash::Word| w.is_static() && !w.glob;
+    match name {
+        "find" => args
+            .iter()
+            .take_while(|w| !w.text().starts_with('-') && !matches!(w.text(), "(" | "!"))
+            .filter(plain)
+            .collect(),
+        "tree" | "ls" => args
+            .iter()
+            .filter(plain)
+            .filter(|w| !w.text().starts_with('-'))
+            .collect(),
+        _ => {
+            let words: Vec<&bash::Word> =
+                args.iter().filter(|w| !w.text().starts_with('-')).collect();
+            let given = ["-e", "-f", "--regexp", "--file", "--files"];
+            let pattern_given = args.iter().any(|w| {
+                given
+                    .iter()
+                    .any(|g| w.text() == *g || w.text().starts_with(&format!("{g}=")))
+            });
+            let skip = usize::from(!pattern_given);
+            words.into_iter().skip(skip).filter(plain).collect()
+        }
+    }
+}
+
+fn has_short(args: &[bash::Word], flag: char) -> bool {
+    args.iter().any(|w| {
+        let t = w.text();
+        t.len() > 1 && t.starts_with('-') && !t.starts_with("--") && t[1..].contains(flag)
+    })
+}
+
+fn has_long(args: &[bash::Word], prefix: &str) -> bool {
+    args.iter().any(|w| w.text().starts_with(prefix))
+}
+
+fn grep_recurses(args: &[bash::Word]) -> bool {
+    has_short(args, 'r')
+        || has_short(args, 'R')
+        || has_long(args, "--recursive")
+        || has_long(args, "--dereference-recursive")
+        || has_long(args, "--directories=recurse")
+        || args
+            .windows(2)
+            .any(|w| w[0].text() == "-d" && w[1].text() == "recurse")
+}
+
+/// The flag that turns off a searcher's own ignore files, if any.
+fn skips_ignores(name: &str, args: &[bash::Word]) -> Option<String> {
+    let shorts: &[char] = match name {
+        "rg" => &['u'],
+        "fd" | "fdfind" => &['u', 'I'],
+        _ => &['u', 'U'],
+    };
+    let longs: &[&str] = match name {
+        "ag" => &["--unrestricted", "--skip-vcs-ignores"],
+        _ => &["--unrestricted", "--no-ignore"],
+    };
+    args.iter().map(|w| w.text()).find_map(|t| {
+        let short = t.len() > 1
+            && t.starts_with('-')
+            && !t.starts_with("--")
+            && t[1..].chars().any(|c| shorts.contains(&c));
+        let long = longs.iter().any(|l| t.starts_with(l));
+        (short || long).then(|| t.to_string())
+    })
+}
+
+/// The flag of a git command that lists or searches ignored files.
+fn git_lists_ignored(args: &[bash::Word]) -> Option<String> {
+    let (sub, _) = bash::git_subcommand(args);
+    let words: Vec<&str> = args.iter().map(|w| w.text()).collect();
+    let find = |fs: &[&str]| {
+        words
+            .iter()
+            .find(|w| fs.iter().any(|f| w.starts_with(f)))
+            .map(|w| w.to_string())
+    };
+    match sub.as_deref() {
+        Some("status") => find(&["--ignored"]),
+        Some("grep") => find(&["--no-exclude-standard"]),
+        Some("ls-files") => find(&["--ignored"])
+            .or_else(|| words.iter().any(|w| *w == "-i").then(|| "-i".to_string()))
+            .or_else(|| {
+                let others = words.iter().any(|w| *w == "-o" || *w == "--others");
+                let excluded = words
+                    .iter()
+                    .any(|w| *w == "--exclude-standard" || w.starts_with("--exclude"));
+                (others && !excluded).then(|| "--others".to_string())
+            }),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

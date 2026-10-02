@@ -21,16 +21,30 @@ fn walker(
     root: &Path,
     glob: Option<&str>,
     file_type: Option<&str>,
+    every_ignore_file: Option<&[PathBuf]>,
 ) -> Result<ignore::Walk, String> {
     let mut b = ignore::WalkBuilder::new(root);
-    b.hidden(false)
-        .git_ignore(true)
-        .git_exclude(true)
-        .git_global(true)
-        .parents(true)
-        .require_git(false);
+    if every_ignore_file.is_some() {
+        b.standard_filters(false);
+    } else {
+        b.hidden(false)
+            .git_ignore(true)
+            .git_exclude(true)
+            .git_global(true)
+            .parents(true)
+            .require_git(false);
+    }
     let secret = SecretFilter::new();
-    b.filter_entry(move |e| e.file_name() != ".git" && !secret.hides(e.path()));
+    // Rule G2: a sandboxed search skips every path a `.*ignore` file hides.
+    let ignores = every_ignore_file
+        .map(|exempt| ostra_core::ignore_files::IgnoreFiles::new().exempt(exempt.to_vec()));
+    b.filter_entry(move |e| {
+        e.file_name() != ".git"
+            && !secret.hides(e.path())
+            && !ignores.as_ref().is_some_and(|i| {
+                i.entry_hidden(e.path(), e.file_type().is_some_and(|t| t.is_dir()))
+            })
+    });
     if let Some(glob) = glob.filter(|g| !g.trim().is_empty()) {
         let mut ob = ignore::overrides::OverrideBuilder::new(root);
         for g in split_globs(glob) {
@@ -167,6 +181,7 @@ struct GrepArgs {
     after: usize,
     head_limit: Option<usize>,
     multiline: bool,
+    every_ignore_file: Option<Vec<PathBuf>>,
 }
 
 struct ContentSink<'a> {
@@ -260,7 +275,12 @@ fn grep_blocking(a: GrepArgs) -> ToolOutput {
     let files: Vec<PathBuf> = if a.root.is_file() {
         vec![a.root.clone()]
     } else {
-        let walk = match walker(&a.root, a.glob.as_deref(), a.file_type.as_deref()) {
+        let walk = match walker(
+            &a.root,
+            a.glob.as_deref(),
+            a.file_type.as_deref(),
+            a.every_ignore_file.as_deref(),
+        ) {
             Ok(w) => w,
             Err(e) => return ToolOutput::err(e),
         };
@@ -397,13 +417,18 @@ pub async fn grep(env: &ToolEnv, input: &Value) -> ToolOutput {
             .map(|n| n as usize)
             .filter(|n| *n > 0),
         multiline: bool_arg(input, "multiline").unwrap_or(false),
+        every_ignore_file: env.every_ignore_file(),
     };
     tokio::task::spawn_blocking(move || grep_blocking(args))
         .await
         .unwrap_or_else(|e| ToolOutput::err(format!("Search failed: {e}")))
 }
 
-fn glob_blocking(pattern: String, root: PathBuf) -> ToolOutput {
+fn glob_blocking(
+    pattern: String,
+    root: PathBuf,
+    every_ignore_file: Option<Vec<PathBuf>>,
+) -> ToolOutput {
     let matcher = match globset::GlobBuilder::new(&pattern)
         .literal_separator(true)
         .build()
@@ -411,7 +436,7 @@ fn glob_blocking(pattern: String, root: PathBuf) -> ToolOutput {
         Ok(g) => g.compile_matcher(),
         Err(e) => return ToolOutput::err(format!("Invalid glob `{pattern}`: {e}")),
     };
-    let walk = match walker(&root, None, None) {
+    let walk = match walker(&root, None, None, every_ignore_file.as_deref()) {
         Ok(w) => w,
         Err(e) => return ToolOutput::err(e),
     };
@@ -452,7 +477,8 @@ pub async fn glob(env: &ToolEnv, input: &Value) -> ToolOutput {
     if !root.is_dir() {
         return ToolOutput::err(format!("Not a directory: {}", root.display()));
     }
-    tokio::task::spawn_blocking(move || glob_blocking(pattern, root))
+    let every = env.every_ignore_file();
+    tokio::task::spawn_blocking(move || glob_blocking(pattern, root, every))
         .await
         .unwrap_or_else(|e| ToolOutput::err(format!("Search failed: {e}")))
 }
@@ -481,6 +507,27 @@ mod tests {
             "order rules\n",
         )
         .unwrap();
+    }
+
+    // Rule G2: the sandboxed walk honors every `.*ignore` file, not only ripgrep's set.
+    #[test]
+    fn sandboxed_walk_honors_every_ignore_file() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        fixture(root);
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::write(root.join(".dockerignore"), "src/app.js\n").unwrap();
+        let open = super::glob_blocking("**/*".into(), root.to_path_buf(), None).text;
+        assert!(
+            open.contains("src/app.js") && !open.contains("target/"),
+            "{open}"
+        );
+        let shut = super::glob_blocking("**/*".into(), root.to_path_buf(), Some(vec![])).text;
+        assert!(shut.contains("src/main.rs"), "{shut}");
+        assert!(
+            !shut.contains("src/app.js") && !shut.contains("target/"),
+            "{shut}"
+        );
     }
 
     #[tokio::test]

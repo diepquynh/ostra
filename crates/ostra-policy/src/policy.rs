@@ -44,6 +44,8 @@ pub struct ExecutionPolicy {
     allow: Vec<Rule>,
     ask: Vec<Rule>,
     deny: Vec<Rule>,
+    /// Rule G2: the execution runs in a sandbox, so its searches honor every `.*ignore` file.
+    sandboxed: bool,
     state: Mutex<State>,
 }
 
@@ -276,8 +278,15 @@ impl ExecutionPolicy {
             allow,
             ask,
             deny,
+            sandboxed: false,
             state: Mutex::new(state),
         }
+    }
+
+    /// Rule G2: marks the execution as sandboxed, which hides ignored paths from its searches.
+    pub fn sandboxed(mut self, on: bool) -> Self {
+        self.sandboxed = on;
+        self
     }
 
     pub fn ctx(&self) -> &ExecContext {
@@ -470,6 +479,22 @@ impl ExecutionPolicy {
                 return Some(d);
             }
             if let Some(d) = guards::check_read(&self.roots, &path, &raw) {
+                return Some(d);
+            }
+        }
+        if self.sandboxed {
+            if matches!(tool, "Grep" | "Glob") {
+                let (target, raw) = self
+                    .file_path(call)
+                    .unwrap_or_else(|| (self.start_cwd(call), ".".into()));
+                if let Some(d) = guards::check_ignored_search_tool(&self.roots, &target, &raw) {
+                    return Some(d);
+                }
+            }
+            if let Some(parsed) = parsed
+                && let Some(d) =
+                    guards::check_ignored_search_shell(&self.roots, parsed, &self.start_cwd(call))
+            {
                 return Some(d);
             }
         }

@@ -745,6 +745,20 @@ the sandbox. `enabled` runs every guard in the table below, which protects the p
 cost of more tool calls, since each refused call is spent and retried. The workspace value is set on the
 Permissions tab.
 
+**Rule G2, ignored paths:** while an execution runs in a sandbox, its searches never include a path that a
+`.*ignore` file hides. Every file whose name is a dot, any text, and `ignore` counts (`.gitignore`, `.ignore`,
+`.rgignore`, `.dockerignore`, `.npmignore`, `.prettierignore`, and so on), read with gitignore syntax. Each file
+name is its own family: the deepest folder's file decides first, and a `!` line re-includes only within its own
+family. A path is hidden when any family hides it or one of its folders. The files apply from the nearest
+enclosing git root down; `.git/info/exclude` and the global excludes file join the `.gitignore` family. Ostra's
+own `.ostra/` folder and the temp dirs are exempt, because their `.gitignore` files keep them out of git, not out
+of an agent's view. Native Grep and Glob skip hidden paths during the walk. The `ignored-search` guard refuses
+Grep and Glob from any executor aimed at a hidden path, and shell searches: `rg`, `fd`, and `ag` with a flag that
+skips their ignore files or aimed at a hidden path, walkers that read no ignore files (`grep -r`, `rgrep`, `find`,
+`tree`, `ls -R`, `ack`) over a tree that holds a hidden path, and git commands that list ignored files. Reading a
+known path is not a search and stays allowed. Without a sandbox (`mode = "off"`, or `auto` with no backend) the
+rule does not apply and Grep and Glob honor the ripgrep set only.
+
 | Guard | Rule | Source |
 | --- | --- | --- |
 | Write scope | explore, generate-spec, fact-check, plan, code-reviewer, and EPA write only in their session dir and OS temp. documentation and system-architecture write only there too, because they return the book in their submit call. initializer writes only `.ostra/` and `.agents/skills/`. Everything else stays inside its `Repo root:`. | `scope-policy.js` |
@@ -757,6 +771,7 @@ Permissions tab.
 | Lesson gate | A report is refused while a verified failure-to-recovery transition has no recorded lesson, unless the report tool is called with a stated reason. | `report-policy.js`, `report.js` |
 | Build streak | Counted per execution. At 2 failures, recalled lessons are appended to the tool result. At 3, a warning. At 5, build and test commands are refused and the agent is told to return `STUCK:`. | `build-streak*.js`, `build-signal.js` |
 | Management tools | Only the implementer of a phase the approved plan puts in a new project calls `ProjectCreate`, only for that project, and only with a well-formed call. Until the project exists, that run writes nothing outside its session dir and temp (Rule O2). | Ostra (no Ultracode source) |
+| Ignored paths | Rule G2: a sandboxed execution's searches never include a path a `.*ignore` file hides. | Ostra (no Ultracode source) |
 | Tool self-protection | Ostra's binary, assets, config, and databases are read-only to agents. Inline interpreter code that writes files, spawns processes, or names engine state is refused. | `plugin-policy.js` |
 
 **Layer 2, permissions**, in Claude Code's model:

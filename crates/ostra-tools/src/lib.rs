@@ -154,6 +154,24 @@ impl ToolEnv {
         self
     }
 
+    /// Rule G2: a sandboxed execution's Grep and Glob honor every `.*ignore` file, except in
+    /// Ostra's own state and the temp dirs, which these folders name.
+    pub fn every_ignore_file(&self) -> Option<Vec<PathBuf>> {
+        self.sandbox.as_ref()?;
+        let mut exempt = vec![std::env::temp_dir(), PathBuf::from("/tmp")];
+        if !self.config.workspace_root.as_os_str().is_empty() {
+            exempt.push(ostra_core::paths::workspace_runtime(
+                &self.config.workspace_root,
+            ));
+        }
+        let canonical: Vec<PathBuf> = exempt
+            .iter()
+            .filter_map(|p| ostra_core::paths::canonical(p).ok())
+            .collect();
+        exempt.extend(canonical);
+        Some(exempt)
+    }
+
     /// A path as the sandboxed shell names it, as the host names the same file. Bubblewrap binds
     /// the scratch dir at `/tmp`; Seatbelt remaps nothing.
     pub fn sandbox_to_host(&self, inside: &Path) -> PathBuf {

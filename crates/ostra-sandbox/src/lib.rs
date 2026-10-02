@@ -33,8 +33,8 @@ pub mod validate;
 mod tests;
 
 pub use backend::{
-    Backend, Decision, backend, decide, first_warning, known_gaps, unavailable_message,
-    unavailable_reason,
+    Backend, Decision, backend, decide, first_warning, known_gaps, runs_sandboxed,
+    unavailable_message, unavailable_reason,
 };
 pub use bwrap::{Bubblewrap, helper, set_helper};
 pub use cache::{remove_session_cache, session_cache};

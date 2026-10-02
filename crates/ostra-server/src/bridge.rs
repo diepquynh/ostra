@@ -206,7 +206,9 @@ impl Executor for Wrapped {
         let mut inputs = policy_inputs(&ctx.repo_root);
         inputs.read_only_mcp_tools = mcp.iter().flat_map(|m| m.read_only()).collect();
         let running = Arc::new(Running {
-            policy: ExecutionPolicy::new(ctx.clone(), inputs),
+            // Rule G2: the harness runs sandboxed exactly when this decides so.
+            policy: ExecutionPolicy::new(ctx.clone(), inputs)
+                .sandboxed(ostra_sandbox::runs_sandboxed(&ctx.sandbox())),
             env: ToolEnv::new(ToolEnvConfig {
                 agent: spec.agent,
                 repo_root: ctx.repo_root.clone(),

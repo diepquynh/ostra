@@ -2247,3 +2247,58 @@ fn without_tool_enforcement_ownership_secrets_git_and_tests_still_hold() {
         "secret-read"
     );
 }
+
+// Rule G2: a sandboxed execution's searches never include what a `.*ignore` file hides.
+#[test]
+fn sandboxed_searches_skip_ignored_paths() {
+    let f = fx();
+    let repo = &f.repo;
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::create_dir_all(repo.join("target/debug")).unwrap();
+    std::fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+    std::fs::write(repo.join("src/main.rs"), "fn main() {}\n").unwrap();
+    let p = f.policy(AgentName::Implementer).sandboxed(true);
+    let grep = |path: &str| ToolCall::new("Grep", json!({"pattern": "x", "path": path}));
+
+    allowed(&p, &grep(&shp(repo.join("src"))));
+    allowed(&p, &bash("rg main src"));
+    allowed(&p, &bash("grep -rn main src"));
+    allowed(&p, &bash("find src -name '*.rs'"));
+    allowed(&p, &bash("cat target/debug/out"));
+    allowed(&p, &bash("git ls-files --others --exclude-standard"));
+    denied(&p, &grep(&shp(repo.join("target/debug"))), ".gitignore");
+    denied(&p, &bash("rg main target"), ".gitignore");
+    denied(&p, &bash("rg -uu main"), "-uu");
+    denied(&p, &bash("rg --no-ignore-vcs main src"), "--no-ignore-vcs");
+    denied(&p, &bash("fd -I main"), "-I");
+    denied(&p, &bash("grep -rn main ."), "target");
+    denied(&p, &bash("grep -R main"), "target");
+    denied(&p, &bash("find . -name '*.rs'"), "target");
+    denied(&p, &bash("ls -R"), "target");
+    denied(&p, &bash("git status --ignored"), "--ignored");
+    denied(&p, &bash("bash -c 'grep -rn main .'"), "target");
+    denied(&p, &bash("echo . | xargs grep -rn main"), "target");
+    denied(&p, &bash("cd target && rg main"), ".gitignore");
+    denied(&p, &bash("git ls-files -o"), "--others");
+
+    // Every `.*ignore` file counts, not only the ones ripgrep reads.
+    std::fs::write(repo.join(".dockerignore"), "src/secret.txt\n").unwrap();
+    std::fs::write(repo.join("src/secret.txt"), "x").unwrap();
+    denied(&p, &bash("grep -rn main src"), "secret.txt");
+    denied(
+        &p,
+        &grep(&shp(repo.join("src/secret.txt"))),
+        ".dockerignore",
+    );
+
+    // Ostra's own state is searchable although its `.gitignore` keeps it out of git.
+    std::fs::write(f.session_root.parent().unwrap().join(".gitignore"), "*\n").unwrap();
+    std::fs::write(f.session_dir.join("report.md"), "x").unwrap();
+    allowed(&p, &grep(&shp(&f.session_dir)));
+    allowed(&p, &bash(format!("grep -rn x {}", shp(&f.session_dir))));
+
+    // Without a sandbox the rule does not apply.
+    let open = f.policy(AgentName::Implementer);
+    allowed(&open, &bash("grep -rn main ."));
+    allowed(&open, &grep(&shp(repo.join("target/debug"))));
+}

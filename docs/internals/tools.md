@@ -266,9 +266,14 @@ Output is capped at 30,000 characters.
 Finds files by name pattern, such as `src/**/*.ts`. Inputs: `pattern`, `path`. Returns at most 100 paths, newest
 first.
 
-Both tools respect `.gitignore` and search hidden files, so `.ostra/` and `.agents/` are visible. Both skip
-credential stores and Ostra's own data dir (except its agent assets) even when a search starts from a parent
-folder, so a `Grep` from your home folder does not read `~/.ssh`.
+Both tools search hidden files, so `.ostra/` and `.agents/` are visible. Which ignore files they honor depends on
+the sandbox. In a sandboxed execution they honor every `.*ignore` file (`.gitignore`, `.dockerignore`,
+`.npmignore`, and any other name of that shape), skipping each hidden folder without walking into it, because a
+sandboxed agent never searches what an ignore file hides (Rule G2,
+[Ignored paths](../security/agent-containment.md#ignored-paths)). Without a sandbox they honor the set ripgrep
+reads: `.gitignore`, `.ignore`, `.git/info/exclude`, and the global excludes file. Both skip credential stores and
+Ostra's own data dir (except its agent assets) even when a search starts from a parent folder, so a `Grep` from
+your home folder does not read `~/.ssh`.
 
 ## Web tools
 

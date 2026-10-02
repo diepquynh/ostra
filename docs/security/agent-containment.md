@@ -244,7 +244,44 @@ A few guards were added on top of the Ultracode ports during Ostra's security re
   for its phase to write in.
 - **Read-only session.** When a user reopens an ended harness run to look back over it, every tool call in that
   session is refused with `guard: read-only-session`.
+- **Ignored paths** (`guard: ignored-search`, rule G2). See [Ignored paths](#ignored-paths).
 - **Windows path forms** (`guard: windows-path`). See the next section.
+
+### Ignored paths
+
+A sandboxed execution never searches a path that a `.*ignore` file hides. Projects list generated output,
+vendored dependencies, local configuration, and secrets in those files, and an agent that searches them reads
+noise at best and a credential at worst. The rule ties to the sandbox because the sandbox is the user's choice to
+contain agents: with `[sandbox] mode = "off"`, or `auto` on a machine with no backend, it does not apply.
+
+Every file named a dot, any text, and `ignore` counts, read with gitignore syntax
+([`ignore_files.rs`](../../crates/ostra-core/src/ignore_files.rs)). Each name is its own family, evaluated the
+way git evaluates `.gitignore`: the deepest folder's file decides first, and a `!` line in `.npmignore` cannot
+re-include what `.dockerignore` hides. A path is hidden when any family hides it or one of its folders. The files
+apply from the nearest folder that holds `.git` downward, and `.git/info/exclude` and the global excludes file
+join the `.gitignore` family. Ostra's own `.ostra/` folder and the temp dirs are exempt: the session folder's
+`.gitignore` holds `*` to keep it out of git, and agents still search each other's reports there.
+
+Three places enforce it:
+
+- **Native Grep and Glob** skip hidden entries during the walk and never descend into a hidden folder.
+- **Grep and Glob from any executor**, harness CLIs included, are refused when their `path` is hidden.
+- **Shell searches** are refused in three shapes. `rg`, `fd`, and `ag` read ignore files themselves, so they are
+  refused only with a flag that turns that off (`-u`, `--no-ignore*`, `--unrestricted`, `fd -I`,
+  `ag --skip-vcs-ignores`) or when pointed at a hidden path. Walkers that read no ignore files (`grep -r`,
+  `rgrep`, `find`, `tree`, `ls -R`, `ack`) are refused when the tree they would walk holds a hidden path; the
+  check walks breadth first and stops at the first hidden entry, and refuses a tree of more than 20,000 entries
+  it could not clear. `git status --ignored`, `git ls-files -i` or `--others` without `--exclude-standard`, and
+  `git grep --no-exclude-standard` are refused because they list ignored files. The parser sees through `cd`,
+  `bash -c`, and `xargs`, as for every other shell guard.
+
+Each denial leads with the replacement: Grep, Glob, `rg`, or `rg --files`, which skip ignored paths.
+
+Reading a file whose path the agent already knows (`Read`, `cat`) is not a search and stays allowed, so an agent
+can open a dependency's source it found in a stack trace. Two gaps remain. `rg` and the harness CLIs' own Grep and
+Glob read only ripgrep's set (`.gitignore`, `.ignore`, `.rgignore`), so a file hidden only by another name, such
+as `.dockerignore`, can appear in their results; Ostra sees their calls but not their output. PowerShell and Cmd
+commands are not parsed, so this guard does not read them.
 
 ### Windows paths
 

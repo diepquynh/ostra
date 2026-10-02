@@ -17,6 +17,7 @@ pub mod exec;
 pub mod executor;
 pub mod git;
 pub mod ids;
+pub mod ignore_files;
 pub mod manage;
 pub mod mcp;
 pub mod model;

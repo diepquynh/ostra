@@ -2333,6 +2333,7 @@ dependencies = [
  "chrono",
  "dirs",
  "dunce",
+ "ignore",
  "junction",
  "libc",
  "pretty_assertions",
