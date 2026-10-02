@@ -889,6 +889,7 @@ async fn patch_workspace(
 ) -> Res<WorkspaceDetail> {
     let w = ws(&app, &id)?;
     w.save_settings(&settings).map_err(ApiErr::invalid)?;
+    app.shared.mcp.prune(&w.root).await;
     if let Some(r) = app.shared.registry.get_workspace(&w.id)?
         && r.name != settings.name
     {

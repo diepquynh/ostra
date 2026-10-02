@@ -201,6 +201,71 @@ async fn stdio_server_does_not_inherit_removed_variables() {
     assert!(e.to_string().contains("secret=[unset] keep=[yes]"), "{e}");
 }
 
+#[cfg(unix)]
+fn running(pid: &str) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+/// The server runs as a grandchild, the way `npx` starts one, and a holder other than the closer
+/// keeps the client: closing still ends the server.
+#[cfg(unix)]
+#[tokio::test]
+async fn close_ends_a_stdio_server_tree() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("pid");
+    let Endpoint::Stdio {
+        program, mut args, ..
+    } = stdio_endpoint()
+    else {
+        unreachable!()
+    };
+    args.insert(0, program);
+    let quoted: Vec<String> = args.iter().map(|a| format!("'{a}'")).collect();
+    let script = format!(
+        "exec 3<&0; {} <&3 & echo $! > '{}'; wait",
+        quoted.join(" "),
+        pidfile.display()
+    );
+    let client = Arc::new(
+        Client::connect(
+            Endpoint::Stdio {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), script],
+                env: vec![(CHILD.into(), "1".into())],
+                env_remove: vec![],
+                cwd: dir.path().to_path_buf(),
+                guard: None,
+            },
+            T,
+        )
+        .await
+        .unwrap(),
+    );
+    let holder = client.clone();
+    let pid = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(running(&pid));
+
+    client.close();
+    assert!(!holder.is_alive());
+    let e = holder.list_tools(T).await.unwrap_err();
+    assert!(matches!(e, McpError::Closed(_)), "{e:?}");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while running(&pid) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the server outlived close"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Streamable HTTP
 // ---------------------------------------------------------------------------------------------

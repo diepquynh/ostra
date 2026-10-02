@@ -126,13 +126,22 @@ The gateway keeps one connection per workspace and server name. A connection is 
 parts of its settings that matter (command, env, URL, headers, OAuth, and the sandbox mode), so changing any
 of them starts a fresh connection on next use.
 
+A connection lives until its server is removed, turned off, or changed, not only until Ostra stops. Saving the
+workspace settings, reading the MCP status, and opening an execution each compare the open connections with the
+workspace file and close the ones it no longer runs as they are. Closing ends a local server's whole process
+tree, so a server started through `npx` and the browser it opened stop with it. It also ends the connection for
+executions that still hold it: their next call to that server fails instead of reaching a server the user
+turned off. A workspace file that does not load closes nothing, because a half-saved edit must not stop every
+server.
+
 | Situation | What happens |
 | --- | --- |
 | An execution opens | Each server that serves this agent is connected, or its live connection is reused |
 | The tool list is older than 30 seconds, or the server announced a change | The list is fetched again |
 | A server failed | It is not retried for 20 seconds, because parallel executions would each start it again |
 | A server cannot be reached when an execution opens | The execution gets one Activity line and runs without that server |
-| A server exited during an execution | It is started once more on the next call |
+| A server exited during an execution | It is started once more on the next call, unless it was turned off since |
+| A server is turned off, removed, or changed | Its connection closes and its processes end |
 
 Tools are fixed when an execution opens, before a harness starts, because a harness lists MCP tools only once.
 

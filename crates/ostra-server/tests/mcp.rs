@@ -214,7 +214,7 @@ async fn workspace_mcp_servers_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
     // Not canonicalized: on macOS `/private` would push the bridge socket past the 104-byte limit.
     let root = dir.path().to_path_buf();
-    let (_app, base, client) = boot(&root).await;
+    let (app, base, client) = boot(&root).await;
     let plain = serve(Arc::new(Fake::default())).await;
     let oauth_fake = Arc::new(Fake {
         oauth: true,
@@ -388,4 +388,30 @@ async fn workspace_mcp_servers_end_to_end() {
     assert!(!activity.iter().any(
         |a| matches!(&a.delta, ExecutionDelta::Status { message } if message.contains("guarded"))
     ));
+
+    // Turning a server off closes its connection, instead of leaving it running until Ostra stops.
+    let ws_root = root.join("ws");
+    assert_eq!(
+        app.shared.mcp.connected(&ws_root).await,
+        ["fake", "guarded"]
+    );
+    settings["mcp_servers"][0]["enabled"] = json!(false);
+    let r = client
+        .patch(format!("{base}/api/workspaces/{ws}"))
+        .json(&settings)
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+    assert_eq!(app.shared.mcp.connected(&ws_root).await, ["guarded"]);
+    let status: Vec<McpServerStatus> = client
+        .get(format!("{base}/api/workspaces/{ws}/mcp"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status[0].state, McpConnState::Disabled, "{:?}", status[0]);
+    assert_eq!(app.shared.mcp.connected(&ws_root).await, ["guarded"]);
 }

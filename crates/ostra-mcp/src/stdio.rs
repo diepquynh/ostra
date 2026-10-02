@@ -25,7 +25,7 @@ pub(crate) struct Stdio {
     stderr_eof: tokio::sync::watch::Receiver<bool>,
     _child: Mutex<Child>,
     /// The server and what it starts (`npx` and `uvx` servers run in grandchildren).
-    tree: Option<ostra_core::proctree::Tree>,
+    tree: Mutex<Option<ostra_core::proctree::Tree>>,
     /// Dropped after [`Drop`] signals the group, see [`crate::Endpoint::Stdio`].
     _guard: Option<Arc<dyn std::any::Any + Send + Sync>>,
 }
@@ -125,7 +125,7 @@ impl Stdio {
             stderr,
             stderr_eof,
             _child: Mutex::new(child),
-            tree: Some(tree),
+            tree: Mutex::new(Some(tree)),
             _guard: guard,
         })
     }
@@ -163,13 +163,19 @@ impl Stdio {
     }
 }
 
-impl Drop for Stdio {
-    fn drop(&mut self) {
-        // Servers started through `npx` or `uvx` run in grandchildren; end the whole tree. On
-        // Windows dropping the tree closes its job, which kills them.
-        if let Some(t) = self.tree.take() {
+impl Stdio {
+    /// Servers started through `npx` or `uvx` run in grandchildren; end the whole tree. On
+    /// Windows dropping the tree closes its job, which kills them.
+    fn stop(&self) {
+        if let Some(t) = self.tree.lock().take() {
             t.terminate();
         }
+    }
+}
+
+impl Drop for Stdio {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -194,5 +200,9 @@ impl Transport for Stdio {
 
     fn abandon(&self, id: i64) {
         self.pending.lock().remove(&id);
+    }
+
+    fn close(&self) {
+        self.stop();
     }
 }

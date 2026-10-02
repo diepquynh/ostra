@@ -109,6 +109,8 @@ pub(crate) trait Transport: Send + Sync {
     fn abandon(&self, _id: i64) {}
     /// Called once `initialize` succeeded, with the negotiated protocol version.
     fn initialized(&self, _version: &str) {}
+    /// Stop the server now, even while other holders keep the client.
+    fn close(&self) {}
 }
 
 /// One live connection to one server.
@@ -192,6 +194,13 @@ impl Client {
 
     pub fn is_alive(&self) -> bool {
         self.shared.alive.load(Ordering::SeqCst)
+    }
+
+    /// End the connection for every holder: a stdio server's process tree is stopped, and later
+    /// calls fail as on a server that exited.
+    pub fn close(&self) {
+        self.shared.alive.store(false, Ordering::SeqCst);
+        self.transport.close();
     }
 
     /// Whether the server said its tool list changed since the last call.

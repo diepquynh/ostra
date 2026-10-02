@@ -184,6 +184,57 @@ impl McpGateway {
         self.conns.lock().retain(|(r, _), _| r != root);
     }
 
+    /// The workspace's servers with a live connection, sorted.
+    pub async fn connected(&self, root: &Path) -> Vec<String> {
+        let conns: Vec<(String, Arc<Conn>)> = self
+            .conns
+            .lock()
+            .iter()
+            .filter(|((r, _), _)| r == root)
+            .map(|((_, name), c)| (name.clone(), c.clone()))
+            .collect();
+        let mut names = vec![];
+        for (name, c) in conns {
+            if c.inner
+                .lock()
+                .await
+                .client
+                .as_ref()
+                .is_some_and(|c| c.is_alive())
+            {
+                names.push(name);
+            }
+        }
+        names.sort();
+        names
+    }
+
+    /// Close the connections of servers the workspace file no longer runs as they are: removed,
+    /// turned off, or changed. Executions that hold one lose it too, so the server's processes
+    /// end now instead of when Ostra stops. A file that does not load closes nothing.
+    pub async fn prune(&self, root: &Path) {
+        let Ok(s) = load_toml_required::<WorkspaceSettings>(&paths::workspace_toml(root)) else {
+            return;
+        };
+        let sandbox = ostra_workspace::trust::sandbox(&self.registry, root);
+        let mut gone = vec![];
+        self.conns.lock().retain(|(r, name), c| {
+            let keep = r != root
+                || s.mcp_servers.iter().any(|cfg| {
+                    &cfg.name == name && cfg.enabled && fingerprint(cfg, &sandbox) == c.fingerprint
+                });
+            if !keep {
+                gone.push(c.clone());
+            }
+            keep
+        });
+        for c in gone {
+            if let Some(client) = c.inner.lock().await.client.take() {
+                client.close();
+            }
+        }
+    }
+
     fn load_record(&self, key: &Key) -> Option<OAuthRecord> {
         let bytes = self.registry.secret_get(&oauth_key(key)).ok()??;
         serde_json::from_slice(&bytes).ok()
@@ -271,6 +322,16 @@ impl McpGateway {
         cfg: &McpServerConfig,
         force: bool,
     ) -> Result<(Arc<Client>, Vec<ToolInfo>), ConnError> {
+        // An execution opened before its server was turned off must not start it again.
+        if !settings(root)
+            .mcp_servers
+            .iter()
+            .any(|c| c.name == cfg.name && c.enabled)
+        {
+            return Err(ConnError::Other(
+                "it is turned off or removed in this workspace's settings".into(),
+            ));
+        }
         let key: Key = (root.to_path_buf(), cfg.name.clone());
         let conn = self.conn(&key, cfg);
         let mut inner = conn.inner.lock().await;
@@ -346,6 +407,7 @@ impl McpGateway {
         root: &Path,
         force: Option<&str>,
     ) -> Vec<McpServerStatus> {
+        self.prune(root).await;
         let servers = settings(root).mcp_servers;
         let futs = servers.iter().map(|cfg| async move {
             let force = force == Some(cfg.name.as_str());
@@ -720,6 +782,7 @@ impl McpConnector for Connector {
             return none;
         }
         let root = spec.ctx.workspace_root.clone();
+        gateway.prune(&root).await;
         let servers: Vec<McpServerConfig> = settings(&root)
             .mcp_servers
             .into_iter()
