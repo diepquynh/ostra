@@ -271,7 +271,7 @@ gold = ["crates/ostra-server/src/bridge.rs", "crates/ostra-exec-harness/src/prot
 id = "server-044"
 kind = "cross"
 question = "How is an engine notice turned into an encrypted Web Push message on a subscribed browser?"
-gold = ["crates/ostra-server/src/services.rs", "crates/ostra-notify/src/lib.rs", "crates/ostra-store/src/registry.rs"]
+gold = ["crates/ostra-server/src/services.rs", "crates/ostra-notify/src/lib.rs", "crates/ostra-store/src/registry/push.rs"]
 
 [[case]]
 id = "server-045"
@@ -283,7 +283,7 @@ gold = ["crates/ostra-server/src/code.rs", "crates/ostra-code/src/provider.rs", 
 id = "server-046"
 kind = "cross"
 question = "How are saved credentials encrypted at rest, and what happens to ones that were stored before encryption existed?"
-gold = ["crates/ostra-server/src/master_key.rs", "crates/ostra-store/src/registry.rs", "crates/ostra-store/src/secrets.rs"]
+gold = ["crates/ostra-server/src/master_key.rs", "crates/ostra-store/src/registry/mod.rs", "crates/ostra-store/src/secrets.rs"]
 
 [[case]]
 id = "server-047"

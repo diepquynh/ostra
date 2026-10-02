@@ -483,8 +483,8 @@ database for the session, because the command line does not know which workspace
 | The stored console layout | [`crates/ostra-workspace/src/ui_state.rs`](../../crates/ostra-workspace/src/ui_state.rs) |
 | Opening at startup, `attach`, `delete_workspace`, the `WorkspaceHost` implementation | [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |
 | Registry overlay, approvals, and what the file keeps out | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
-| The `workspaces` table | [`crates/ostra-store/src/registry.rs`](../../crates/ostra-store/src/registry.rs) |
-| `workspace.db` and its `.gitignore` | [`crates/ostra-store/src/workspace.rs`](../../crates/ostra-store/src/workspace.rs) |
+| The `workspaces` table | [`crates/ostra-store/src/registry/workspaces.rs`](../../crates/ostra-store/src/registry/workspaces.rs) |
+| `workspace.db` and its `.gitignore` | [`crates/ostra-store/src/workspace/mod.rs`](../../crates/ostra-store/src/workspace/mod.rs) |
 | Every workspace path | [`crates/ostra-core/src/paths.rs`](../../crates/ostra-core/src/paths.rs) |
 | `WorkspaceSettings`, `seeded`, `validate_workspace` | [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs) |
 | Execution slots | `acquire_slot` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |

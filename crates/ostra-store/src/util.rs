@@ -3,17 +3,18 @@ use chrono::{DateTime, Utc};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(crate) fn now() -> String {
-    Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    ts(Utc::now())
+}
+
+/// The form every TEXT time column holds: RFC 3339 in UTC with milliseconds.
+pub(crate) fn ts(t: DateTime<Utc>) -> String {
+    t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 pub(crate) fn parse_time(s: &str) -> Result<DateTime<Utc>, StoreError> {
     DateTime::parse_from_rfc3339(s)
         .map(|t| t.with_timezone(&Utc))
         .map_err(|e| StoreError::Invalid(format!("bad timestamp `{s}`: {e}")))
-}
-
-pub(crate) fn parse_time_opt(s: Option<&str>) -> Result<Option<DateTime<Utc>>, StoreError> {
-    s.map(parse_time).transpose()
 }
 
 /// A unit-variant enum's serde name, for TEXT columns.

@@ -1,16 +1,29 @@
 //! `~/.local/share/ostra/registry.db`: the machine's workspace list, push subscriptions, and
 //! secrets such as the VAPID private key.
+//!
+//! Each table has a repository in its own module that holds its SQL. `RegistryDb` owns the
+//! connection and the encryption key, and seals credentials before they reach the `kv` table.
+
+mod kv;
+mod push;
+mod workspaces;
+
+pub use push::StoredPushSubscription;
+pub use workspaces::WorkspaceRecord;
 
 use crate::StoreError;
 use crate::secrets::{OpenError, Sealer, is_sealed, is_secret_key};
+use crate::sqlite::{Db, compact, migrate, open_file};
 use crate::util::{now, parse_time};
-use crate::workspace::open_connection;
 use chrono::{DateTime, Utc};
-use ostra_core::api::{PushKeys, PushSubscription};
+use kv::Kv;
+use ostra_core::api::PushSubscription;
 use ostra_core::ids::WorkspaceId;
-use rusqlite::{Connection, OptionalExtension, params};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use push::PushSubscriptions;
+use rusqlite::Connection;
+use std::path::Path;
+use std::sync::Arc;
+use workspaces::Workspaces;
 
 const MIGRATIONS: &[&str] = &[r#"
 CREATE TABLE workspaces (
@@ -29,44 +42,16 @@ CREATE TABLE push_subscriptions (
 CREATE TABLE kv (key TEXT PRIMARY KEY, value BLOB NOT NULL);
 "#];
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct WorkspaceRecord {
-    pub id: WorkspaceId,
-    pub name: String,
-    pub root: PathBuf,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StoredPushSubscription {
-    pub subscription: PushSubscription,
-    pub workspace: Option<WorkspaceId>,
-    pub created_at: DateTime<Utc>,
-}
-
 /// Set once a rewrite after sealing finished, so plaintext left by an interrupted one is removed
 /// at the next start.
 const SECRETS_VACUUMED: &str = "secrets_vacuumed";
 
+const ONBOARDED_AT: &str = "onboarded_at";
+
 #[derive(Debug, Clone)]
 pub struct RegistryDb {
-    conn: Arc<Mutex<Connection>>,
+    db: Db,
     sealer: Option<Arc<Sealer>>,
-}
-
-fn workspace_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, String, String, String)> {
-    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-}
-
-fn to_record(
-    (id, name, root, created): (String, String, String, String),
-) -> Result<WorkspaceRecord, StoreError> {
-    Ok(WorkspaceRecord {
-        id: WorkspaceId(id),
-        name,
-        root: PathBuf::from(root),
-        created_at: parse_time(&created)?,
-    })
 }
 
 fn open_logged(sealer: &Sealer, key: &str, stored: &[u8]) -> Option<Vec<u8>> {
@@ -85,11 +70,11 @@ impl RegistryDb {
     /// Opens without an encryption key: credentials cannot be read or saved until
     /// [`RegistryDb::with_sealer`] gives it one.
     pub fn open(path: &Path) -> Result<Self, StoreError> {
-        let conn = open_connection(path, MIGRATIONS)?;
+        let conn = open_file(path, MIGRATIONS)?;
         // Freed pages are zeroed, so a replaced plaintext credential does not linger in the file.
         conn.pragma_update(None, "secure_delete", "ON")?;
         Ok(RegistryDb {
-            conn: Arc::new(Mutex::new(conn)),
+            db: Db::new(conn),
             sealer: None,
         })
     }
@@ -97,9 +82,9 @@ impl RegistryDb {
     /// An in-memory registry with a key that lives as long as the process.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let conn = Connection::open_in_memory()?;
-        conn.execute_batch(MIGRATIONS[0])?;
+        migrate(&conn, MIGRATIONS)?;
         Ok(RegistryDb {
-            conn: Arc::new(Mutex::new(conn)),
+            db: Db::new(conn),
             sealer: Some(Arc::new(Sealer::ephemeral())),
         })
     }
@@ -113,10 +98,6 @@ impl RegistryDb {
         self.sealer.as_deref().ok_or(StoreError::Locked)
     }
 
-    fn lock(&self) -> MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
     // -- workspaces ---------------------------------------------------------------------------
 
     /// Register a workspace. Fails with `Invalid` when the root is already registered.
@@ -126,83 +107,45 @@ impl RegistryDb {
         name: &str,
         root: &Path,
     ) -> Result<WorkspaceRecord, StoreError> {
-        let root_text = root.to_string_lossy().to_string();
-        {
-            let conn = self.lock();
-            let taken: Option<String> = conn
-                .query_row(
-                    "SELECT id FROM workspaces WHERE root = ?1",
-                    params![root_text],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            if let Some(other) = taken {
+        self.db.transaction(|c| {
+            let workspaces = Workspaces(c);
+            if let Some(other) = workspaces.by_root(root)? {
                 return Err(StoreError::Invalid(format!(
-                    "{root_text} is already registered as workspace {other}"
+                    "{} is already registered as workspace {}",
+                    root.to_string_lossy(),
+                    other.id
                 )));
             }
-            conn.execute(
-                "INSERT INTO workspaces (id, name, root, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![id.as_str(), name, root_text, now()],
-            )?;
-        }
-        self.get_workspace(id)?
-            .ok_or_else(|| StoreError::NotFound(id.to_string()))
+            workspaces.insert(id, name, root)?;
+            workspaces
+                .get(id)?
+                .ok_or_else(|| StoreError::NotFound(id.to_string()))
+        })
     }
 
     pub fn rename_workspace(&self, id: &WorkspaceId, name: &str) -> Result<bool, StoreError> {
-        Ok(self.lock().execute(
-            "UPDATE workspaces SET name = ?1 WHERE id = ?2",
-            params![name, id.as_str()],
-        )? > 0)
+        self.db.run(|c| Workspaces(c).rename(id, name))
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<WorkspaceRecord>, StoreError> {
-        let conn = self.lock();
-        let mut st = conn
-            .prepare("SELECT id, name, root, created_at FROM workspaces ORDER BY created_at, id")?;
-        let rows = st
-            .query_map([], workspace_row)?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter().map(to_record).collect()
+        self.db.run(|c| Workspaces(c).list())
     }
 
     pub fn get_workspace(&self, id: &WorkspaceId) -> Result<Option<WorkspaceRecord>, StoreError> {
-        let row = self
-            .lock()
-            .query_row(
-                "SELECT id, name, root, created_at FROM workspaces WHERE id = ?1",
-                params![id.as_str()],
-                workspace_row,
-            )
-            .optional()?;
-        row.map(to_record).transpose()
+        self.db.run(|c| Workspaces(c).get(id))
     }
 
     pub fn workspace_by_root(&self, root: &Path) -> Result<Option<WorkspaceRecord>, StoreError> {
-        let row = self
-            .lock()
-            .query_row(
-                "SELECT id, name, root, created_at FROM workspaces WHERE root = ?1",
-                params![root.to_string_lossy()],
-                workspace_row,
-            )
-            .optional()?;
-        row.map(to_record).transpose()
+        self.db.run(|c| Workspaces(c).by_root(root))
     }
 
     /// Unregister a workspace and drop the push subscriptions scoped to it. Deletes nothing on
     /// disk.
     pub fn remove_workspace(&self, id: &WorkspaceId) -> Result<bool, StoreError> {
-        let mut conn = self.lock();
-        let tx = conn.transaction()?;
-        tx.execute(
-            "DELETE FROM push_subscriptions WHERE workspace_id = ?1",
-            params![id.as_str()],
-        )?;
-        let removed = tx.execute("DELETE FROM workspaces WHERE id = ?1", params![id.as_str()])?;
-        tx.commit()?;
-        Ok(removed > 0)
+        self.db.transaction(|c| {
+            PushSubscriptions(c).delete_for_workspace(id)?;
+            Workspaces(c).delete(id)
+        })
     }
 
     // -- push subscriptions -------------------------------------------------------------------
@@ -213,85 +156,42 @@ impl RegistryDb {
         sub: &PushSubscription,
         workspace: Option<&WorkspaceId>,
     ) -> Result<(), StoreError> {
-        self.lock().execute(
-            "INSERT INTO push_subscriptions (endpoint, p256dh, auth, workspace_id, created_at) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth,
-             workspace_id = excluded.workspace_id",
-            params![sub.endpoint, sub.keys.p256dh, sub.keys.auth, workspace.map(|w| w.as_str().to_string()), now()],
-        )?;
-        Ok(())
+        self.db.run(|c| PushSubscriptions(c).upsert(sub, workspace))
     }
 
     pub fn list_push_subscriptions(&self) -> Result<Vec<StoredPushSubscription>, StoreError> {
-        let conn = self.lock();
-        let mut st = conn.prepare(
-            "SELECT endpoint, p256dh, auth, workspace_id, created_at FROM push_subscriptions ORDER BY created_at, endpoint",
-        )?;
-        let rows = st
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                    r.get::<_, String>(4)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter()
-            .map(|(endpoint, p256dh, auth, ws, created)| {
-                Ok(StoredPushSubscription {
-                    subscription: PushSubscription {
-                        endpoint,
-                        keys: PushKeys { p256dh, auth },
-                    },
-                    workspace: ws.map(WorkspaceId),
-                    created_at: parse_time(&created)?,
-                })
-            })
-            .collect()
+        self.db.run(|c| PushSubscriptions(c).list())
     }
 
     pub fn remove_push_subscription(&self, endpoint: &str) -> Result<bool, StoreError> {
-        Ok(self.lock().execute(
-            "DELETE FROM push_subscriptions WHERE endpoint = ?1",
-            params![endpoint],
-        )? > 0)
+        self.db.run(|c| PushSubscriptions(c).delete(endpoint))
     }
 
     // -- kv -----------------------------------------------------------------------------------
 
     pub fn kv_get(&self, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        Ok(self
-            .lock()
-            .query_row("SELECT value FROM kv WHERE key = ?1", params![key], |r| {
-                r.get(0)
-            })
-            .optional()?)
+        self.db.run(|c| Kv(c).get(key))
     }
 
     pub fn kv_set(&self, key: &str, value: &[u8]) -> Result<(), StoreError> {
-        self.lock().execute(
-            "INSERT INTO kv (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![key, value],
-        )?;
-        Ok(())
+        self.db.run(|c| Kv(c).set(key, value))
     }
 
     /// Sets `key` to `new` only while it still holds `expected`, so two callers cannot both win.
     pub fn kv_replace(&self, key: &str, expected: &[u8], new: &[u8]) -> Result<bool, StoreError> {
-        Ok(self.lock().execute(
-            "UPDATE kv SET value = ?3 WHERE key = ?1 AND value = ?2",
-            params![key, expected, new],
-        )? > 0)
+        self.db.run(|c| Kv(c).replace(key, expected, new))
     }
 
     pub fn kv_delete(&self, key: &str) -> Result<bool, StoreError> {
-        Ok(self
-            .lock()
-            .execute("DELETE FROM kv WHERE key = ?1", params![key])?
-            > 0)
+        self.db.run(|c| Kv(c).delete(key))
     }
+
+    /// Every entry whose key starts with `prefix`, in key order.
+    pub fn kv_scan(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+        self.db.run(|c| Kv(c).scan(prefix))
+    }
+
+    // -- secrets ------------------------------------------------------------------------------
 
     /// A credential, decrypted. A value sealed under another key reads as absent, with a log line
     /// asking the user to enter it again.
@@ -324,9 +224,8 @@ impl RegistryDb {
     /// run sealed rows but stopped before finishing it. Returns how many rows were sealed.
     pub fn seal_plaintext_secrets(&self) -> Result<usize, StoreError> {
         let sealer = self.sealer()?;
-        let rows = self.kv_scan("")?;
         let mut sealed = 0;
-        for (key, value) in rows {
+        for (key, value) in self.kv_scan("")? {
             if is_secret_key(&key) && !is_sealed(&value) {
                 let new = sealer.seal(&key, &value);
                 if self.kv_replace(&key, &value, &new)? {
@@ -335,49 +234,28 @@ impl RegistryDb {
             }
         }
         if sealed > 0 || self.kv_get(SECRETS_VACUUMED)?.is_none() {
-            {
-                let conn = self.lock();
-                conn.execute_batch("VACUUM;")?;
-                conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-            }
+            self.db.run(compact)?;
             self.kv_set(SECRETS_VACUUMED, b"1")?;
         }
         Ok(sealed)
     }
 
-    /// Every entry whose key starts with `prefix`, in key order.
-    pub fn kv_scan(&self, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
-        let conn = self.lock();
-        let mut stmt = conn.prepare(
-            "SELECT key, value FROM kv WHERE substr(key, 1, length(?1)) = ?1 ORDER BY key",
-        )?;
-        let rows = stmt
-            .query_map(params![prefix], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
-    }
-
     // -- onboarding ---------------------------------------------------------------------------
 
     pub fn onboarded_at(&self) -> Result<Option<DateTime<Utc>>, StoreError> {
-        match self.kv_get(ONBOARDED_AT)? {
-            Some(bytes) => Ok(Some(parse_time(&String::from_utf8_lossy(&bytes))?)),
-            None => Ok(None),
-        }
+        self.kv_get(ONBOARDED_AT)?
+            .map(|bytes| parse_time(&String::from_utf8_lossy(&bytes)))
+            .transpose()
     }
 
     /// Record that the first-run setup is done. A second call keeps the first time.
     pub fn mark_onboarded(&self) -> Result<DateTime<Utc>, StoreError> {
-        self.lock().execute(
-            "INSERT OR IGNORE INTO kv (key, value) VALUES (?1, ?2)",
-            params![ONBOARDED_AT, now().into_bytes()],
-        )?;
+        self.db
+            .run(|c| Kv(c).insert_if_absent(ONBOARDED_AT, now().as_bytes()))?;
         self.onboarded_at()?
             .ok_or_else(|| StoreError::NotFound(ONBOARDED_AT.into()))
     }
 }
-
-const ONBOARDED_AT: &str = "onboarded_at";
 
 #[cfg(test)]
 mod tests {

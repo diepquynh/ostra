@@ -151,12 +151,36 @@ file lock instead of sharing one handle.
 Each database carries a list of SQL migrations in its source file and records how many have run in
 SQLite's `user_version`. On open, the store runs each missing migration in its own transaction and bumps
 `user_version` in that same transaction, so a crash during an upgrade leaves the database at the last
-complete version (`migrate` in `crates/ostra-store/src/workspace.rs`). Migrations are only ever appended.
+complete version (`migrate` in `crates/ostra-store/src/sqlite.rs`). Migrations are only ever appended.
 The workspace database is at version 3: the base schema, then session titles and execution summaries, then
 full-text search.
 
 The lesson store has a single schema, created with `CREATE ... IF NOT EXISTS` on every open, because it
 keeps Ultracode's lesson schema unchanged.
+
+## How the store code is organized
+
+Each table has a repository: a small struct over a borrowed connection that holds that table's SQL and
+turns its rows into API types. The workspace repositories live in `crates/ostra-store/src/workspace/`, one
+file per table (`sessions.rs`, `events.rs`, `executions.rs`, `gates.rs`, and so on), and the registry's in
+`crates/ostra-store/src/registry/`. The lesson store keeps its one repository in `memory.rs`.
+
+`WorkspaceDb` and `RegistryDb` own the connection and are the only types other crates see. A method either
+runs its repository calls one statement at a time (`Db::run`) or wraps them in one immediate transaction
+(`Db::transaction`), so the choice of what commits together sits in one place. Appending an event, for
+example, inserts the event and stamps the session's `updated_at` in the same transaction:
+
+```rust
+self.db.transaction(|c| {
+    let stored = Events(c).append(session, event)?;
+    Sessions(c).touch(session, stored.at)?;
+    Ok(stored)
+})
+```
+
+Rows are read by column name. Columns that hold JSON, a serde enum name, or an RFC 3339 time are decoded
+through `RowExt` (`json`, `variant`, `time`, and their `_opt` forms) in `crates/ostra-store/src/sqlite.rs`,
+so a bad value fails as a JSON or invalid-value error, not as a SQLite one.
 
 ## How the files are protected
 

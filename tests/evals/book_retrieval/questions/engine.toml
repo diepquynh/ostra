@@ -316,7 +316,7 @@ gold = ["crates/ostra-engine/src/factory.rs", "crates/ostra-agents/src/spawn.rs"
 id = "engine-053"
 kind = "cross"
 question = "Where are session events written to disk and how are the materialized tables kept in step with the log?"
-gold = ["crates/ostra-engine/src/runner.rs", "crates/ostra-store/src/workspace.rs"]
+gold = ["crates/ostra-engine/src/runner.rs", "crates/ostra-store/src/workspace/mod.rs"]
 
 [[case]]
 id = "engine-054"

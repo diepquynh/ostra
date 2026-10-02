@@ -3,8 +3,10 @@
 //! ranking, and targeted forget. Never capped and never auto-expired.
 
 use crate::StoreError;
+use crate::sqlite::{query_all, query_one};
+use crate::util::now;
 use ostra_core::api::Lesson;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, Row, params};
 use std::path::Path;
 use std::time::Duration;
 
@@ -37,20 +39,6 @@ const SCHEMA: &str = "
 #[derive(Debug, Clone)]
 pub struct MemoryStore {
     path: std::path::PathBuf,
-}
-
-fn now() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
-fn row_to_lesson(row: &rusqlite::Row<'_>) -> rusqlite::Result<Lesson> {
-    Ok(Lesson {
-        id: row.get(0)?,
-        area: row.get(1)?,
-        lesson: row.get(2)?,
-        source: row.get(3)?,
-        created_at: row.get(4)?,
-    })
 }
 
 /// Any-token-matches FTS query, each token quoted, as `ftsQueryFromText` does.
@@ -89,13 +77,9 @@ impl MemoryStore {
     /// Record a lesson. The newest occurrence of an (area, lesson) pair wins. Returns the total.
     pub fn record(&self, area: &str, lesson: &str, source: &str) -> Result<u64, StoreError> {
         let conn = self.conn()?;
-        conn.execute(
-            "INSERT INTO lessons (area, lesson, source, created_at) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(area, lesson) DO UPDATE SET source = excluded.source, created_at = excluded.created_at",
-            params![area, lesson, source, now()],
-        )?;
-        let total: i64 = conn.query_row("SELECT count(*) FROM lessons", [], |r| r.get(0))?;
-        Ok(total as u64)
+        let lessons = Lessons(&conn);
+        lessons.upsert(area, lesson, source)?;
+        lessons.count()
     }
 
     /// Buckets, most relevant first: lessons in `area` (and `area::*`) ranked by the query or by
@@ -110,52 +94,29 @@ impl MemoryStore {
             return Ok(vec![]);
         }
         let conn = self.conn()?;
+        let lessons = Lessons(&conn);
         let fts = query.map(fts_query_from_text).filter(|q| !q.is_empty());
         let area = area.map(str::trim).filter(|a| !a.is_empty());
-        let cols = "l.id, l.area, l.lesson, l.source, l.created_at";
+        // Each bucket needs at most `limit` rows, because the output never holds more.
+        let page = Page { limit, offset: 0 };
         let mut buckets: Vec<Vec<Lesson>> = vec![];
-        if let (Some(area), Some(fts)) = (area, fts.as_deref()) {
-            let mut st = conn.prepare(&format!(
-                "SELECT {cols} FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
-                 WHERE lessons_fts MATCH ?1 AND (l.area = ?2 OR l.area LIKE ?3) ORDER BY bm25(lessons_fts)"
-            ))?;
-            buckets.push(
-                st.query_map(params![fts, area, format!("{area}::%")], row_to_lesson)?
-                    .collect::<Result<_, _>>()?,
-            );
-        } else if let Some(area) = area {
-            let mut st = conn.prepare(&format!(
-                "SELECT {cols} FROM lessons l WHERE l.area = ?1 OR l.area LIKE ?2 ORDER BY l.created_at DESC"
-            ))?;
-            buckets.push(
-                st.query_map(params![area, format!("{area}::%")], row_to_lesson)?
-                    .collect::<Result<_, _>>()?,
-            );
+        match (area, fts.as_deref()) {
+            (Some(area), Some(fts)) => buckets.push(lessons.matching_in_area(fts, area, page)?),
+            (Some(area), None) => buckets.push(lessons.in_area(area, page)?),
+            _ => {}
         }
-        if let Some(fts) = fts.as_deref() {
-            let mut st = conn.prepare(&format!(
-                "SELECT {cols} FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
-                 WHERE lessons_fts MATCH ?1 ORDER BY bm25(lessons_fts)"
-            ))?;
-            buckets.push(
-                st.query_map(params![fts], row_to_lesson)?
-                    .collect::<Result<_, _>>()?,
-            );
-        } else if area.is_none() {
-            let mut st = conn.prepare(&format!(
-                "SELECT {cols} FROM lessons l ORDER BY l.created_at DESC"
-            ))?;
-            buckets.push(st.query_map([], row_to_lesson)?.collect::<Result<_, _>>()?);
+        match (area, fts.as_deref()) {
+            (_, Some(fts)) => buckets.push(lessons.matching(fts, page)?),
+            (None, None) => buckets.push(lessons.newest(page)?),
+            (Some(_), None) => {}
         }
         let mut seen = std::collections::HashSet::new();
         let mut out = vec![];
-        for bucket in buckets {
-            for lesson in bucket {
-                if seen.insert((lesson.area.clone(), lesson.lesson.clone())) {
-                    out.push(lesson);
-                    if out.len() >= limit {
-                        return Ok(out);
-                    }
+        for lesson in buckets.into_iter().flatten() {
+            if seen.insert((lesson.area.clone(), lesson.lesson.clone())) {
+                out.push(lesson);
+                if out.len() >= limit {
+                    break;
                 }
             }
         }
@@ -167,12 +128,7 @@ impl MemoryStore {
         if !self.path.exists() {
             return Ok(false);
         }
-        let conn = self.conn()?;
-        let n = conn.execute(
-            "DELETE FROM lessons WHERE area = ?1 AND lesson = ?2",
-            params![area, lesson],
-        )?;
-        Ok(n > 0)
+        Lessons(&self.conn()?).delete_exact(area, lesson)
     }
 
     /// For the memory browser: every lesson, or those matching `query`, newest first.
@@ -186,51 +142,162 @@ impl MemoryStore {
             return Ok(vec![]);
         }
         let conn = self.conn()?;
-        let fts = query.map(fts_query_from_text).filter(|q| !q.is_empty());
-        let cols = "l.id, l.area, l.lesson, l.source, l.created_at";
-        let rows = match fts {
-            Some(fts) => {
-                let mut st = conn.prepare(&format!(
-                    "SELECT {cols} FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
-                     WHERE lessons_fts MATCH ?1 ORDER BY bm25(lessons_fts) LIMIT ?2 OFFSET ?3"
-                ))?;
-                st.query_map(params![fts, limit as i64, offset as i64], row_to_lesson)?
-                    .collect::<Result<_, _>>()?
-            }
-            None => {
-                let mut st = conn.prepare(&format!(
-                    "SELECT {cols} FROM lessons l ORDER BY l.created_at DESC LIMIT ?1 OFFSET ?2"
-                ))?;
-                st.query_map(params![limit as i64, offset as i64], row_to_lesson)?
-                    .collect::<Result<_, _>>()?
-            }
-        };
-        Ok(rows)
+        let lessons = Lessons(&conn);
+        let page = Page { limit, offset };
+        match query.map(fts_query_from_text).filter(|q| !q.is_empty()) {
+            Some(fts) => lessons.matching(&fts, page),
+            None => lessons.newest(page),
+        }
     }
 
     /// A user edit from the memory browser.
     pub fn update(&self, id: i64, area: &str, lesson: &str) -> Result<Lesson, StoreError> {
         let conn = self.conn()?;
-        conn.execute(
-            "UPDATE lessons SET area = ?1, lesson = ?2, source = 'user', created_at = ?3 WHERE id = ?4",
-            params![area, lesson, now(), id],
-        )?;
-        conn.query_row(
-            "SELECT id, area, lesson, source, created_at FROM lessons WHERE id = ?1",
-            params![id],
-            row_to_lesson,
-        )
-        .optional()?
-        .ok_or_else(|| StoreError::NotFound(format!("lesson {id}")))
+        let lessons = Lessons(&conn);
+        lessons.edit(id, area, lesson)?;
+        lessons
+            .get(id)?
+            .ok_or_else(|| StoreError::NotFound(format!("lesson {id}")))
     }
 
     pub fn delete(&self, id: i64) -> Result<bool, StoreError> {
         if !self.path.exists() {
             return Ok(false);
         }
-        let conn = self.conn()?;
-        Ok(conn.execute("DELETE FROM lessons WHERE id = ?1", params![id])? > 0)
+        Lessons(&self.conn()?).delete(id)
     }
+}
+
+#[derive(Clone, Copy)]
+struct Page {
+    limit: usize,
+    offset: usize,
+}
+
+const COLS: &str = "l.id, l.area, l.lesson, l.source, l.created_at";
+
+struct Lessons<'c>(&'c Connection);
+
+impl Lessons<'_> {
+    fn upsert(&self, area: &str, lesson: &str, source: &str) -> Result<(), StoreError> {
+        self.0.execute(
+            "INSERT INTO lessons (area, lesson, source, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(area, lesson) DO UPDATE SET source = excluded.source, created_at = excluded.created_at",
+            params![area, lesson, source, now()],
+        )?;
+        Ok(())
+    }
+
+    fn count(&self) -> Result<u64, StoreError> {
+        let n: i64 = self
+            .0
+            .query_row("SELECT count(*) FROM lessons", [], |r| r.get(0))?;
+        Ok(n as u64)
+    }
+
+    /// Text matches in `area` and its sub-areas, best first.
+    fn matching_in_area(
+        &self,
+        fts: &str,
+        area: &str,
+        page: Page,
+    ) -> Result<Vec<Lesson>, StoreError> {
+        query_all(
+            self.0,
+            &format!(
+                "SELECT {COLS} FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
+                 WHERE lessons_fts MATCH ?1 AND (l.area = ?2 OR l.area LIKE ?3)
+                 ORDER BY bm25(lessons_fts) LIMIT ?4 OFFSET ?5"
+            ),
+            params![
+                fts,
+                area,
+                format!("{area}::%"),
+                page.limit as i64,
+                page.offset as i64
+            ],
+            lesson,
+        )
+    }
+
+    /// Lessons in `area` and its sub-areas, newest first.
+    fn in_area(&self, area: &str, page: Page) -> Result<Vec<Lesson>, StoreError> {
+        query_all(
+            self.0,
+            &format!(
+                "SELECT {COLS} FROM lessons l WHERE l.area = ?1 OR l.area LIKE ?2
+                 ORDER BY l.created_at DESC LIMIT ?3 OFFSET ?4"
+            ),
+            params![
+                area,
+                format!("{area}::%"),
+                page.limit as i64,
+                page.offset as i64
+            ],
+            lesson,
+        )
+    }
+
+    /// Text matches anywhere, best first.
+    fn matching(&self, fts: &str, page: Page) -> Result<Vec<Lesson>, StoreError> {
+        query_all(
+            self.0,
+            &format!(
+                "SELECT {COLS} FROM lessons_fts JOIN lessons l ON l.id = lessons_fts.rowid
+                 WHERE lessons_fts MATCH ?1 ORDER BY bm25(lessons_fts) LIMIT ?2 OFFSET ?3"
+            ),
+            params![fts, page.limit as i64, page.offset as i64],
+            lesson,
+        )
+    }
+
+    fn newest(&self, page: Page) -> Result<Vec<Lesson>, StoreError> {
+        query_all(
+            self.0,
+            &format!("SELECT {COLS} FROM lessons l ORDER BY l.created_at DESC LIMIT ?1 OFFSET ?2"),
+            params![page.limit as i64, page.offset as i64],
+            lesson,
+        )
+    }
+
+    fn get(&self, id: i64) -> Result<Option<Lesson>, StoreError> {
+        query_one(
+            self.0,
+            &format!("SELECT {COLS} FROM lessons l WHERE l.id = ?1"),
+            [id],
+            lesson,
+        )
+    }
+
+    /// Marks the lesson as the user's.
+    fn edit(&self, id: i64, area: &str, lesson: &str) -> Result<(), StoreError> {
+        self.0.execute(
+            "UPDATE lessons SET area = ?1, lesson = ?2, source = 'user', created_at = ?3 WHERE id = ?4",
+            params![area, lesson, now(), id],
+        )?;
+        Ok(())
+    }
+
+    fn delete_exact(&self, area: &str, lesson: &str) -> Result<bool, StoreError> {
+        Ok(self.0.execute(
+            "DELETE FROM lessons WHERE area = ?1 AND lesson = ?2",
+            params![area, lesson],
+        )? > 0)
+    }
+
+    fn delete(&self, id: i64) -> Result<bool, StoreError> {
+        Ok(self.0.execute("DELETE FROM lessons WHERE id = ?1", [id])? > 0)
+    }
+}
+
+fn lesson(r: &Row<'_>) -> Result<Lesson, StoreError> {
+    Ok(Lesson {
+        id: r.get("id")?,
+        area: r.get("area")?,
+        lesson: r.get("lesson")?,
+        source: r.get("source")?,
+        created_at: r.get("created_at")?,
+    })
 }
 
 #[cfg(test)]

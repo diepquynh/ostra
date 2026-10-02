@@ -40,7 +40,7 @@ INSERT INTO events (session_id, seq, type, payload, at) VALUES (?1, ?2, ?3, ?4, 
 
 The sequence number is computed inside an immediate SQLite transaction as one more than the session's current
 maximum, so two events in one session can never share a number
-(`crates/ostra-store/src/workspace.rs`, `append_event`).
+(`crates/ostra-store/src/workspace/events.rs`, `Events::append`).
 
 There are about twenty event kinds. Grouped by what they record:
 
@@ -294,7 +294,7 @@ it belongs to the repository and outlives any one workspace.
 | Event and gate types | `crates/ostra-core/src/event.rs` |
 | The fold and `SessionState` | `crates/ostra-engine/src/state.rs` |
 | `Inner::append`, `recover`, pause, stop | `crates/ostra-engine/src/runner.rs` |
-| Storage of events | `crates/ostra-store/src/workspace.rs` |
+| Storage of events | `crates/ostra-store/src/workspace/events.rs` |
 | WebSocket routing of events | `crates/ostra-server/src/ws.rs` |
 | Restart and pause tests | `crates/ostra-engine/tests/recover.rs`, `crates/ostra-engine/tests/pause.rs` |
 

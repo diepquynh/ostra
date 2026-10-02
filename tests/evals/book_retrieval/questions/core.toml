@@ -35,19 +35,19 @@ gold = ["crates/ostra-workspace/src/settings.rs", "crates/ostra-workspace/src/ru
 id = "core-006"
 kind = "lexical"
 question = "Which table in workspace.db holds the append-only session log, and how is the next sequence number assigned in append_event?"
-gold = ["crates/ostra-store/src/workspace.rs"]
+gold = ["crates/ostra-store/src/workspace/events.rs"]
 
 [[case]]
 id = "core-007"
 kind = "paraphrase"
 question = "How are saved API keys protected on disk, and can an encrypted value copied into another row still be read?"
-gold = ["crates/ostra-store/src/secrets.rs", "crates/ostra-store/src/registry.rs"]
+gold = ["crates/ostra-store/src/secrets.rs", "crates/ostra-store/src/registry/mod.rs"]
 
 [[case]]
 id = "core-008"
 kind = "conceptual"
 question = "What happens to credentials that were written in plain text by an older version once encryption is turned on, and how is leftover plaintext in the write-ahead log removed?"
-gold = ["crates/ostra-store/src/registry.rs"]
+gold = ["crates/ostra-store/src/registry/mod.rs"]
 
 [[case]]
 id = "core-009"
@@ -65,7 +65,7 @@ gold = ["crates/ostra-workspace/src/trust.rs", "crates/ostra-workspace/src/runti
 id = "core-011"
 kind = "cross"
 question = "How do literal secret header values of an MCP server in workspace settings get moved out of the file, and where do they live afterwards?"
-gold = ["crates/ostra-workspace/src/trust.rs", "crates/ostra-store/src/registry.rs", "crates/ostra-core/src/mcp.rs"]
+gold = ["crates/ostra-workspace/src/trust.rs", "crates/ostra-store/src/registry/mod.rs", "crates/ostra-core/src/mcp.rs"]
 
 [[case]]
 id = "core-012"
@@ -329,13 +329,13 @@ gold = ["crates/ostra-workspace/src/create.rs"]
 id = "core-055"
 kind = "lexical"
 question = "How does kv_replace keep two callers from both winning the same registry update?"
-gold = ["crates/ostra-store/src/registry.rs"]
+gold = ["crates/ostra-store/src/registry/kv.rs"]
 
 [[case]]
 id = "core-056"
 kind = "paraphrase"
 question = "How does the search box find past sessions and workspace files from partial words?"
-gold = ["crates/ostra-store/src/workspace.rs"]
+gold = ["crates/ostra-store/src/workspace/search.rs"]
 
 [[case]]
 id = "core-057"

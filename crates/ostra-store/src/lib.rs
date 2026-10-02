@@ -4,6 +4,7 @@
 pub mod memory;
 pub mod registry;
 pub mod secrets;
+mod sqlite;
 mod util;
 pub mod workspace;
 
