@@ -606,7 +606,7 @@ checked live by `harness_probe wake`: the agent asks twice, and must submit both
 | The coordination prompt section | `assets/coordination.md` |
 | Coordination evals | `tests/evals/coordination.toml`, `crates/ostra-server/tests/coordination_evals.rs` |
 | Test stage evals | `tests/evals/test_stage.toml`, `tests/evals/test_stage/`, `crates/ostra-server/tests/test_stage_evals.rs` |
-| Planning evals | `tests/evals/planning.toml`, `tests/evals/planning/research/`, `crates/ostra-server/tests/planning_evals.rs` |
+| Planning evals | `tests/evals/planning.toml`, `tests/evals/planning/research/`, `tests/evals/planning/results/`, `crates/ostra-server/tests/planning_evals.rs` |
 | Report file names | `crates/ostra-core/src/paths.rs` (`report`) |
 | Submit handling, native | `crates/ostra-exec-native/src/lib.rs` |
 | Submit handling, harness | `crates/ostra-exec-harness/src/bridge.rs`, `live.rs` |

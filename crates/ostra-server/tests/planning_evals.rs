@@ -17,6 +17,8 @@
 //! test treats it as it treats any research document, and two engines compared on one case read the same research.
 //! The report counts, per stage, the cost, the tool calls, the code files read, and how many of those the research
 //! had already described, and checks the approved plan: requirement and deliverable coverage and step files that exist.
+//! Reports and comparisons go to `tests/evals/planning/results/`, beside the cases and the research they ran on, so
+//! they are committed with them.
 //!
 //! A recording skips cases that already have research unless `OSTRA_EVAL_RECORD_AGAIN=1`.
 //! `OSTRA_EVAL_MODEL` (default Sonnet 5.5), `OSTRA_EVAL_CASES` and `OSTRA_EVAL_TIERS` filter, `OSTRA_EVAL_JOBS` (default
@@ -110,6 +112,30 @@ fn repo_root() -> PathBuf {
 fn load_cases() -> File {
     let text = std::fs::read_to_string(repo_root().join("tests/evals/planning.toml")).unwrap();
     toml::from_str(&text).unwrap()
+}
+
+/// Reports are committed beside the cases and the research they ran on.
+fn results_dir() -> PathBuf {
+    repo_root().join("tests/evals/planning/results")
+}
+
+/// `p` relative to the repo, so a committed report names no machine path.
+fn relative(p: &Path) -> String {
+    let root = paths::canonical(&repo_root()).unwrap_or_else(|_| repo_root());
+    let p = paths::canonical(p).unwrap_or_else(|_| p.to_path_buf());
+    p.strip_prefix(&root)
+        .map(|r| r.display().to_string())
+        .unwrap_or_else(|_| p.display().to_string())
+}
+
+/// A file-name part for an engine label or a model.
+fn label(s: &str) -> String {
+    s.rsplit(':')
+        .next()
+        .unwrap_or(s)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+        .collect()
 }
 
 fn fixture_path(case: &str) -> PathBuf {
@@ -1228,7 +1254,7 @@ fn report(s: &Session, case: &Case, arm: &str, model: &str, dir: &Path) -> CaseR
         stages,
         quality: quality(&s.state, &s.repo),
         secs: s.secs,
-        dir: dir.display().to_string(),
+        dir: relative(dir),
     }
 }
 
@@ -1623,9 +1649,9 @@ async fn planning_evals() {
     }
     let mut reports: Vec<CaseReport> = reports.into_iter().flatten().collect();
     reports.sort_by(|a, b| (a.tier, &a.case).cmp(&(b.tier, &b.case)));
-    let out = repo_root().join("target/evals");
+    let out = results_dir();
     std::fs::create_dir_all(&out).unwrap();
-    let name = format!("planning-{}-{stamp}", arm.replace(['+', '/'], "-"));
+    let name = format!("{stamp}-{}-{}", label(arm), label(model));
     std::fs::write(out.join(format!("{name}.json")), serde_json::to_string_pretty(&reports).unwrap()).unwrap();
     let md = markdown(&reports, &format!("Planning evals: engine {arm}, {model}, code at {pin}"));
     std::fs::write(out.join(format!("{name}.md")), &md).unwrap();
@@ -1641,13 +1667,20 @@ async fn planning_evals() {
 fn planning_compare() {
     let read = |var: &str| -> Vec<CaseReport> {
         let path = std::env::var(var).unwrap_or_else(|_| panic!("set {var} to a planning report"));
+        let path = repo_root().join(path);
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
     };
     let (base, cand) = (read("OSTRA_EVAL_BASELINE"), read("OSTRA_EVAL_CANDIDATE"));
     let md = compare(&base, &cand);
-    let out = repo_root().join("target/evals");
+    let arm = |r: &[CaseReport]| label(&r.first().map(|c| c.arm.clone()).unwrap_or_default());
+    let out = results_dir();
     std::fs::create_dir_all(&out).unwrap();
-    let path = out.join(format!("planning-compare-{}.md", Utc::now().format("%Y%m%dT%H%M%S")));
+    let path = out.join(format!(
+        "{}-compare-{}-vs-{}.md",
+        Utc::now().format("%Y%m%dT%H%M%S"),
+        arm(&base),
+        arm(&cand)
+    ));
     std::fs::write(&path, &md).unwrap();
     println!("{md}\nComparison: {}", path.display());
 }

@@ -388,8 +388,11 @@ Document tool caught, and the size of the plan's Document calls. It then checks 
 spec: every requirement delivered by a step, every deliverable planned, and every `Modify` or `Delete` step naming a
 file that exists or that an earlier step creates.
 
-The harness uses only engine APIs that exist at the pinned commit, so the same file runs on an unchanged engine in a
-git worktree at that commit, and a second test compares two reports case by case. An offline test replays every case
+Each run writes its report, in Markdown and JSON, to
+[`tests/evals/planning/results/`](../../tests/evals/planning/results/), named by its time, engine commit, and model, so
+results are committed beside the cases and the research they measured. The harness uses only engine APIs that exist
+at the pinned commit, so the same file runs on an unchanged engine in a git worktree at that commit, and a second test
+compares two reports case by case into the same folder. An offline test replays every case
 with stand-ins for the live stages in the normal suite. Record, run, and compare with:
 
 ```bash
