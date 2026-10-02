@@ -103,9 +103,10 @@ const DOCUMENT: &str = "Writes your document: the research document, the spec, o
 Usage:
 - path is the absolute path of the document's markdown file in your session dir, named as your prompt says. Ostra writes it and a .json beside it. A plan also gets one `-phase-{N}.md` file per phase.
 - Send document to write the whole document. It replaces what is there.
-- Send update to revise in place: each top-level field you name replaces the stored one, except a list whose items carry an `id`, which is merged by id. Send only the items that changed. remove drops list items by id.
+- Send update to revise in place. Each top-level field you name replaces the stored one, except a list whose items carry an `id`, which merges by id. A merged item takes the fields you send and keeps the rest, at every level, so send only what changed: one step's action is `{\"phases\": [{\"id\": 2, \"steps\": [{\"id\": \"2.3\", \"action\": \"...\"}]}]}`. The result names the items an update kept without sending them. To clear an optional field, send it as null.
+- remove deletes list items by id at any depth: a requirement such as `R4`, a phase number, or a step id. Name an id that sits in more than one item with its parent, such as `2.3/E1`.
 - A long document can be written in parts: a first call with document holding every required field, then update calls that add list items.
-- The result lists what Ostra's checks found. Fix every error before you submit, because the submit call is refused while one remains.
+- The result lists what Ostra's checks found, including every file or `path:Symbol` the document names that is not in the repo. Fix every error before you submit, because the submit call is refused while one remains.
 - Never write these files with Write, Edit, or the shell. Ostra refuses it, because the markdown is rendered from the document.";
 
 const MEMORY: &str = "Records a durable lesson in this project's memory, for future runs to recall.
@@ -560,8 +561,8 @@ pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition> {
         json!({"type": "object", "properties": {
             "path": {"type": "string", "description": "Absolute path of the document's markdown file in your session dir"},
             "document": {"$ref": "#/$defs/Document", "description": "The whole document. Replaces what is stored"},
-            "update": {"type": "object", "description": "Top-level fields to change. Lists of items with an `id` merge by id"},
-            "remove": {"type": "array", "items": {"type": "string"}, "description": "Ids of list items to remove, such as `R4` or a phase number"}
+            "update": {"type": "object", "description": "Top-level fields to change. Lists of items with an `id` merge by id, and a merged item keeps the fields you leave out"},
+            "remove": {"type": "array", "items": {"type": "string"}, "description": "Ids of list items to remove, such as `R4`, a phase number, a step id, or `{parent id}/{id}`"}
         }, "required": ["path"], "additionalProperties": false, "$defs": defs}),
     ))
 }

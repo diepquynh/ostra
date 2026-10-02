@@ -56,8 +56,8 @@ too, when part of the answer is also an instruction for later. Name only the sta
 an instruction about writing or running tests is `tests`, never `implement`, and `implement` is only for how the
 code itself is built. Write `note` as a self-contained instruction in
 the user's terms, because the later agent sees only the note. Leave `stages` empty and `note` empty when
-nothing is for later. Nothing can be kept for the plan agent, because it reads only the spec: an answer the
-plan needs is `deliver`, and Ostra writes it into the spec.
+nothing is for later. Nothing can be kept for the plan agent, because it takes requirements only from the
+spec: an answer the plan needs is `deliver`, and Ostra writes it into the spec.
 
 A remembered note never changes a requirement. When the answer changes what the system must do, it is
 `deliver`, so the spec records it.

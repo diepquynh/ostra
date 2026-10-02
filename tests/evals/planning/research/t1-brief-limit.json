@@ -1,0 +1,210 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:39:34.286533859+00:00",
+  "docs": [
+    {
+      "task": "How the repo brief is built and capped: its character limit, where it is truncated, the note it adds, and its tests.",
+      "file": "ostra-research-20261002-083830-repo-brief-limit.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-agents",
+          "ostra-engine"
+        ],
+        "asks": [
+          "How the repo brief is built",
+          "Its character limit",
+          "Where it is truncated",
+          "The note it adds when truncated",
+          "Its tests"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/factory.rs:AgentsFactory",
+            "step": "AgentsFactory::build renders the spawn block, gathers the workspace instructions, ArtifactsBrief::read(ws), and BooksBrief::read(ws), then calls augment(&block, &BriefInput{...}). profile, inventory and project_docs come from the spawn environment (env.profile, env.inventory, env.project_docs). project_docs was read earlier by brief::project_docs in runner.rs."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:augment",
+            "step": "augment returns the message unchanged if it already contains any of the five brief headings (BRIEF_HEADING, PROJECT_DOCS_HEADING, ARTIFACTS_HEADING, BOOKS_HEADING, INSTRUCTIONS_HEADING). Otherwise it calls build_brief and joins the result with the trimmed first message using a blank line, '---', and a blank line."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:build_brief",
+            "step": "build_brief selects sections for the agent via sections(agent). Initializer gets none. Only when a profile exists and the agent has sections does it build the body: Stack, Commands, Testing, Skills (max 16 rows), Conventions, Review, Modules (max 10 rows, only when the prompt names paths). Values the inventory text already states are skipped via stated_in; individual values are shortened by truncate."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:409",
+            "step": "If the body is non-empty, the profile block is formatted as the heading '## Repo brief for <agent>', an intro sentence, the joined body sections, and a closing sentence naming the INVENTORY.md path. This is the only string subject to MAX_BRIEF_CHARS. If its char count is over 3600, it is cut to 3600 chars and '\\n(brief truncated; see the inventory for the rest)' is appended."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:build_brief",
+            "step": "Later blocks are appended in this order and are not subject to the 3600 cap: Project instructions (each file capped at 12000 chars, own note), Projects created in this session, Workspace artifacts (max 40 entries from ostra_core::artifacts::MAX_BRIEF_ARTIFACTS), Workspace documentation (max 20 books), Workspace instructions. The blocks are joined by blank lines. None is returned if there are no blocks."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Provides AgentName, ProjectProfile, ModuleRow, SkillEntry, paths::project_inventory, paths::project_instruction_files, artifacts::MAX_BRIEF_ARTIFACTS (40), book::list."
+          },
+          {
+            "kind": "external",
+            "name": "regex",
+            "role": "Used by scope_hints to extract path-like tokens from the prompt."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-agents/src/brief.rs",
+            "purpose": "Defines the brief builder, every cap constant, the truncation site (lines 409-412) and the truncation note. Single source of the cap.",
+            "symbols": [
+              "pub const MAX_BRIEF_CHARS: usize = 3600;",
+              "pub const MAX_PROJECT_DOC_CHARS: usize = 12000;",
+              "const MAX_SKILL_ROWS: usize = 16;",
+              "const MAX_MODULE_ROWS: usize = 10;",
+              "pub const MAX_BRIEF_BOOKS: usize = 20;",
+              "pub const BRIEF_HEADING: &str = \"## Repo brief for \";",
+              "pub fn build_brief(input: &BriefInput<'_>) -> Option<String>",
+              "pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String",
+              "pub fn project_docs(repo_root: &Path) -> Vec<ProjectDoc>",
+              "pub fn stated_in(haystack: &str, value: &str) -> bool",
+              "fn truncate(value: &str, limit: usize) -> String",
+              "pub struct BriefInput<'a>"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/tests.rs",
+            "purpose": "Holds the brief unit tests (lines 638-914). None asserts the 3600 cap, the truncation note, or the 12000 per-file cap.",
+            "symbols": [
+              "fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states()",
+              "fn brief_gives_each_test_type_its_level_command_and_its_one_test_command()",
+              "fn brief_is_idempotent_and_handles_a_missing_profile()",
+              "fn project_docs_skip_links_and_copies()",
+              "fn parse_block_stops_at_the_brief()",
+              "fn profile() -> ProjectProfile"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "Only production caller of augment. AgentsFactory::build wraps the rendered spawn block with the brief to make first_message.",
+            "symbols": [
+              "use ostra_agents::brief::{ArtifactsBrief, BooksBrief, BriefInput, augment};"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Reads the project instruction files with ostra_agents::brief::project_docs (line 2467) before spawn, passed on through services.rs.",
+            "symbols": [
+              "ostra_agents::brief::project_docs(&repo_root)"
+            ]
+          },
+          {
+            "path": "docs/internals/agents.md",
+            "purpose": "The docs page that describes the brief; its section 'The repo brief' (lines 281-326) states the cap. Must be updated with any behavior change (CLAUDE.md pattern 9).",
+            "symbols": [
+              "## The repo brief"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the cap or the note changes, update crates/ostra-agents/src/brief.rs, add a unit test in crates/ostra-agents/src/tests.rs, and edit docs/internals/agents.md (section 'The repo brief', line 318).",
+          "A research pass on executors could check whether first_message is size-limited downstream."
+        ],
+        "not_covered": [
+          "How INVENTORY.md and project.toml are generated by the initializer, and what sizes they typically reach.",
+          "The tests/evals/book_retrieval JSON fixtures that quote the 3600 cap; they are eval data, not unit tests, and were only grepped.",
+          "Whether any harness executor (ostra-exec-harness) or native executor further trims first_message after the brief is added."
+        ],
+        "open_questions": [
+          {
+            "id": "Q1",
+            "multi_select": false,
+            "options": [
+              {
+                "description": "Matches the code today (brief.rs:409) and the book/eval text 'the whole repo brief block'. Only the docs wording in docs/internals/agents.md:318 would change.",
+                "label": "Profile block only"
+              },
+              {
+                "description": "Would also cut the project instruction files, which have their own 12000-char cap and are the largest part of the brief. Needs a new rule for which block loses text first.",
+                "label": "Whole brief"
+              }
+            ],
+            "question": "Is the 3600-character cap meant to apply to the profile block only (current code) or to the whole brief, including project instruction files, artifacts, books, and workspace instructions?",
+            "recommended": 0,
+            "tag": "Cap scope"
+          }
+        ],
+        "patterns": [
+          {
+            "description": "The profile-derived block is assembled as one string (heading, intro sentence, body sections, closing inventory pointer). If its char count exceeds MAX_BRIEF_CHARS it is cut to exactly MAX_BRIEF_CHARS chars and the note is appended after the cut. The cut is on char boundaries (chars().take), not on a line or section boundary, so it can end mid-row, and the closing 'full inventory is at ...' sentence is the part most likely to be lost. The note is 49 characters plus a leading newline, so a truncated block is 3650 characters long, which is above the constant.",
+            "files": [
+              "crates/ostra-agents/src/brief.rs"
+            ],
+            "name": "Cap the profile block by characters, then append a note outside the cap",
+            "snippet": {
+              "code": "if brief.chars().count() > MAX_BRIEF_CHARS {\n    brief = brief.chars().take(MAX_BRIEF_CHARS).collect();\n    brief.push_str(\"\\n(brief truncated; see the inventory for the rest)\");\n}\nout.push(brief);",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/brief.rs:409"
+            }
+          },
+          {
+            "description": "Each project instruction file (CLAUDE.md, AGENTS.md, AGENT.md) is capped separately at MAX_PROJECT_DOC_CHARS = 12000 chars, then a different note is appended, preceded by a blank line. These files are not subject to MAX_BRIEF_CHARS because they are pushed as their own block after the profile block.",
+            "files": [
+              "crates/ostra-agents/src/brief.rs"
+            ],
+            "name": "Per-file instruction cap with a different note",
+            "snippet": {
+              "code": "let body = if text.chars().count() > MAX_PROJECT_DOC_CHARS {\n    let cut: String = text.chars().take(MAX_PROJECT_DOC_CHARS).collect();\n    format!(\"{cut}\\n\\n(truncated; read the file for the rest)\")\n} else {\n    text.to_string()\n};",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/brief.rs:423"
+            }
+          },
+          {
+            "description": "Individual profile values are squashed to single-line whitespace and shortened by truncate(value, limit), which keeps limit-1 chars and adds a single '…'. Limits in use: 48 (skill use-for), 150 (test matches), 190 (test note, naming, convention notes), 90 (test reports, immutability keyword), 170 (review rule). These keep rows small before the whole-block cap applies.",
+            "files": [
+              "crates/ostra-agents/src/brief.rs"
+            ],
+            "name": "Per-field truncation with an ellipsis",
+            "snippet": {
+              "code": "fn truncate(value: &str, limit: usize) -> String {\n    let text = squash(value);\n    if text.chars().count() > limit {\n        let cut: String = text.chars().take(limit.saturating_sub(1)).collect();\n        format!(\"{cut}…\")\n    } else {\n        text\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/brief.rs:169"
+            }
+          },
+          {
+            "description": "Tests build a ProjectProfile with the profile() helper, build a BriefInput with every field set (agent, prompt, repo_root, profile, inventory, instructions, project_docs, artifacts, books, new_projects), call build_brief or augment, and assert with contains / starts_with. A struct-update (..input) switches the agent. A cap test would follow this shape with a profile or inventory large enough to pass 3600 chars.",
+            "files": [
+              "crates/ostra-agents/src/tests.rs"
+            ],
+            "name": "Brief unit test shape",
+            "snippet": {
+              "code": "let input = BriefInput {\n    agent: AgentName::Implementer,\n    prompt: \"Phase file: /s/p.md\\nTouch src/orders/OrderService.java\",\n    repo_root: Path::new(\"/ws/backend\"),\n    profile: Some(&p),\n    inventory: Some(inv),\n    instructions: &instructions,\n    project_docs: &[],\n    artifacts: None,\n    books: None,\n    new_projects: &[],\n};\nlet brief = build_brief(&input).unwrap();\nassert!(brief.starts_with(\"## Repo brief for implementer\"));",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/tests.rs:698"
+            }
+          }
+        ],
+        "problem": "The repo brief is appended to every execution's first message. A single constant, MAX_BRIEF_CHARS = 3600, caps only the profile-derived block, and one truncation site cuts it and appends a fixed note. No test exercises that cap or the note, and the docs page states the cap more broadly than the code applies it.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "How the repo brief is built and capped: its character limit, where it is truncated, the note it adds, and its tests. Covers crates/ostra-agents/src/brief.rs, its one production caller in ostra-engine, its unit tests, and the docs page that describes it. It does not cover the inventory/profile generation or the agent prompts.",
+        "sources": [],
+        "title": "Repo brief construction and character cap"
+      },
+      "submit": {
+        "findings_summary": "The brief is built by build_brief in crates/ostra-agents/src/brief.rs and attached by augment, which AgentsFactory::build in ostra-engine calls. MAX_BRIEF_CHARS = 3600 caps only the profile block headed '## Repo brief for <agent>'. At brief.rs:409-412 an over-length block is cut to 3600 chars on a char boundary, and '\\n(brief truncated; see the inventory for the rest)' is appended after the cut, so the block can be 3650 chars. Project instruction files have a separate 12000-char per-file cap with a different note, and artifacts, books and workspace instructions are not capped by characters. No test in crates/ostra-agents/src/tests.rs covers either cap or either note. The existing brief tests only cover section selection, idempotence and the block order. docs/internals/agents.md line 318 says 'The brief is limited to 3,600 characters', which is broader than the code.",
+        "not_covered": [
+          "How INVENTORY.md and project.toml are generated and how large they usually are",
+          "The tests/evals/book_retrieval JSON fixtures that quote the 3600 cap",
+          "Whether harness or native executors trim first_message after the brief is added"
+        ],
+        "open_questions": 1,
+        "scope_covered": "How the repo brief is built, its 3600-character cap, the truncation site and note, and its unit tests in ostra-agents; inventory generation, executor-side trimming and eval fixtures were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

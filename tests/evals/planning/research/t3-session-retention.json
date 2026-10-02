@@ -1,0 +1,661 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T09:00:47.593323933+00:00",
+  "docs": [
+    {
+      "task": "How sessions, events, executions, and messages are stored in the workspace db, and how a session is deleted today.",
+      "file": "ostra-research-20261002-085811-session-storage-and-deletion.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-store",
+          "ostra-engine",
+          "ostra-workspace",
+          "ostra-server",
+          "ostra-sandbox"
+        ],
+        "asks": [
+          "Explain how sessions, events, executions, and messages are stored in the workspace db.",
+          "Explain how a session is deleted today."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/runner.rs:create_session",
+            "step": "Engine::create_session creates `<workspace>/.ostra/sessions/<id>/` (plus uploads claimed from staging, a `.gitignore` of `*` in sessions/, and one subfolder per project), then inserts the sessions row with status running, lane research, stage_label Intake."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:append",
+            "step": "The engine registers a Live { state, wake, inflight, driving } in the in-memory `sessions` map and appends SessionCreated through Inner::append."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/mod.rs:append_event",
+            "step": "Inner::append: under the per-session state lock, WorkspaceDb::append_event runs one transaction that takes next_seq (MAX(seq)+1 for the session), inserts into events(session_id, seq, type, payload JSON, at), and touches sessions.updated_at."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:materialize",
+            "step": "materialize upserts gates on GateOpened, answers them on GateAnswered, inserts decisions on DecisionMade. Then the fold runs and update_session rewrites status, lane, stage_label, projects, yolo, cost_usd, title on the sessions row. The sessions INSERT and UPDATE OF title, request triggers keep the kind='session' row in search_docs in step."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/executions.rs:insert",
+            "step": "When an execution spawns, insert_execution writes executions(id, session_id, agent, purpose, stage, project, executor, model, params, spawn_block, report_path, status running, usage, started_at). session_id is NULL for side-panel executions. finish_execution sets status, usage, cost_usd, error, submit, final_text, ended_at."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:record_message",
+            "step": "While a native execution runs, record_message appends each model turn to messages(execution_id, seq, role, content JSON), and the delta stream is appended to activity(execution_id, seq, delta JSON, at). Both use next_seq in a transaction. messages and activity link to a session only through executions.session_id."
+          },
+          {
+            "location": "crates/ostra-core/src/paths.rs:harness_execution_dir",
+            "step": "Harness executions also write files under `<session>/.state/harness/<execution>/` (hook config, MCP registration, terminal.log), outside the db."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:sweep_session_caches",
+            "step": "When the fold first reports a terminal state, Inner::append calls remove_session_cache, which deletes `~/.cache/ostra/sandbox/session-<id>` on a thread. On server start, sweep_session_caches repeats this for every Completed or Failed session in every attached workspace."
+          },
+          {
+            "location": "crates/ostra-workspace/src/runtime.rs:unregister",
+            "step": "Deletion today: DELETE /api/workspaces/{id} calls App::delete_workspace, which retires the runtime (refused with a Busy error while a session is Running, Waiting, or Paused or an execution runs), then ostra_workspace::unregister removes the registry row and push subscriptions in one transaction and removes workspace.toml, workspace.db, and its -wal and -shm files. Session folders under .ostra/sessions/ and per-project .ostra/ files stay on disk. No code deletes one session."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "rusqlite",
+            "role": "SQLite access. open_file sets WAL, busy_timeout 5000 ms, and PRAGMA foreign_keys=ON. The bundled FTS5 module backs search_fts."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "SessionId, ExecutionId, SessionEvent, StoredEvent, ExecutionView, SessionSummary, and the paths module."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-sandbox",
+            "role": "Owns remove_session_cache, the only per-session removal."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-store/src/workspace/schema.rs",
+            "purpose": "All workspace db migrations (3), tracked by PRAGMA user_version. Defines every table, index, and the FTS triggers. No FOREIGN KEY or ON DELETE clauses anywhere.",
+            "symbols": [
+              "pub(crate) const MIGRATIONS: &[&str]"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/mod.rs",
+            "purpose": "WorkspaceDb: owns the connection, exposes one method per repository call, and chooses run (autocommit) versus transaction. Has delete_project but no session delete.",
+            "symbols": [
+              "pub struct WorkspaceDb { db: Db }",
+              "pub fn create_session(&self, new: &NewSession) -> Result<SessionSummary, StoreError>",
+              "pub fn update_session(&self, id: &SessionId, update: &SessionUpdate) -> Result<SessionSummary, StoreError>",
+              "pub fn append_event(&self, session: &SessionId, event: &SessionEvent) -> Result<StoredEvent, StoreError>",
+              "pub fn events(&self, session: &SessionId) -> Result<Vec<StoredEvent>, StoreError>",
+              "pub fn insert_execution(&self, new: &NewExecution) -> Result<ExecutionView, StoreError>",
+              "pub fn list_executions(&self, session: &SessionId) -> Result<Vec<ExecutionView>, StoreError>",
+              "pub fn append_message(&self, execution: &ExecutionId, role: &str, content: &serde_json::Value) -> Result<i64, StoreError>",
+              "pub fn messages(&self, execution: &ExecutionId) -> Result<Vec<StoredMessage>, StoreError>",
+              "pub fn append_activity(&self, execution: &ExecutionId, delta: &ExecutionDelta) -> Result<ActivityItem, StoreError>",
+              "pub fn delete_project(&self, key: &str) -> Result<bool, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/sessions.rs",
+            "purpose": "Repository for the sessions table: insert, per-column update, touch, get, list. The row is a materialized summary of the event log.",
+            "symbols": [
+              "pub(crate) struct Sessions<'c>(pub &'c Connection)",
+              "pub struct NewSession",
+              "pub struct SessionUpdate"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/events.rs",
+            "purpose": "Repository for the events table, the append-only source of truth. seq is per session, assigned by next_seq inside a transaction.",
+            "symbols": [
+              "pub fn append(&self, session: &SessionId, event: &SessionEvent) -> Result<StoredEvent, StoreError>",
+              "pub fn after(&self, session: &SessionId, after: i64) -> Result<Vec<StoredEvent>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/executions.rs",
+            "purpose": "Repository for the executions table: insert, finish, reopen, usage, status, summary, queries by session, sessionless (session_id NULL), running, and interrupt_running.",
+            "symbols": [
+              "pub struct NewExecution",
+              "pub fn of_session(&self, session: &SessionId) -> Result<Vec<ExecutionView>, StoreError>",
+              "pub fn sessionless(&self, limit: usize)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/messages.rs",
+            "purpose": "Repository for the messages table: an execution's model transcript, keyed (execution_id, seq). It has no session_id column.",
+            "symbols": [
+              "pub struct StoredMessage { pub seq: i64, pub role: String, pub content: serde_json::Value }"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/activity.rs",
+            "purpose": "Repository for the activity table: streamed ExecutionDelta rows per execution, keyed (execution_id, seq). No session_id column.",
+            "symbols": [
+              "pub fn append(&self, execution: &ExecutionId, delta: &ExecutionDelta) -> Result<ActivityItem, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/tool_calls.rs",
+            "purpose": "Repository for the tool_calls table, keyed by execution_id with an autoincrement id. Production code never calls record_tool_call (only store tests do).",
+            "symbols": [
+              "pub const TOOL_OUTPUT_LIMIT: usize = 8 * 1024",
+              "pub fn record(&self, rec: &ToolCallRecord)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/gates.rs",
+            "purpose": "Repository for gates (session_id column, materialized from GateOpened and GateAnswered events).",
+            "symbols": [
+              "pub fn upsert(...)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/decisions.rs",
+            "purpose": "Repository for decisions (session_id column, materialized from DecisionMade events)."
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/search.rs",
+            "purpose": "search_docs plus the FTS5 index. Session rows are kept by triggers on sessions; artifact rows are written by index_artifact and carry session_id.",
+            "symbols": [
+              "pub fn index_artifact(...)",
+              "pub fn artifacts_of(&self, session: &SessionId)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/costs.rs",
+            "purpose": "Spend queries read directly from the executions table (spend_since, cost_report). Deleting execution rows lowers these numbers.",
+            "symbols": [
+              "pub fn since(&self, since: DateTime<Utc>) -> Result<f64, StoreError>",
+              "pub fn report(&self, since: Option<DateTime<Utc>>) -> Result<CostReport, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/sqlite.rs",
+            "purpose": "Shared plumbing: open_file (WAL, foreign_keys=ON, owner-only perms), migrate, Db::run versus Db::transaction (BEGIN IMMEDIATE), next_seq, and an unused-by-workspace compact (VACUUM plus wal_checkpoint(TRUNCATE)) that only the registry calls.",
+            "symbols": [
+              "pub(crate) fn open_file(path: &Path, migrations: &[&str])",
+              "pub(crate) fn compact(conn: &Connection) -> Result<(), StoreError>",
+              "pub fn transaction<T>(&self, f: impl FnOnce(&Connection) -> Result<T, StoreError>)",
+              "pub(crate) fn next_seq(conn: &Connection, table: &'static str, parent_col: &'static str, parent: &str)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/registry/mod.rs",
+            "purpose": "Registry db. remove_workspace is the only transactional multi-table delete in the store, and the only caller of compact.",
+            "symbols": [
+              "pub fn remove_workspace(&self, id: &WorkspaceId) -> Result<bool, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "The only writer of session data. Inner::append stores an event, materializes gates and decisions, folds, updates the session row, removes the sandbox cache when the session ends, and broadcasts. create_session makes the session folder and row. Engine holds an in-memory sessions map of Live state that has no removal path.",
+            "symbols": [
+              "fn append(&self, session: &SessionId, event: SessionEvent) -> Result<StoredEvent, EngineError>",
+              "fn materialize(&self, session: &SessionId, event: &SessionEvent) -> Result<(), EngineError>",
+              "fn load(&self, id: &SessionId) -> Result<Arc<Live>, EngineError>",
+              "pub fn recover(&self) -> Result<(), EngineError>",
+              "pub fn create_session(&self, req: CreateSession) -> Result<SessionSummary, EngineError>",
+              "pub fn stop_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError>",
+              "pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usize, EngineError>",
+              "fn record_message(&self, role: &str, content: &Value)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "SessionState::fold(events) and is_terminal; the in-memory state rebuilt from the events table.",
+            "symbols": [
+              "pub fn is_terminal(&self) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "SessionStatus and SessionSummary DTOs (TypeScript-exported).",
+            "symbols": [
+              "pub enum SessionStatus { Running, Waiting, Completed, Failed, Stalled, Paused }",
+              "pub struct SessionSummary"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/paths.rs",
+            "purpose": "On-disk layout: workspace_db, sessions_root, session_root, session_uploads, session_state_dir, harness_execution_dir.",
+            "symbols": [
+              "pub fn workspace_db(workspace: &Path) -> PathBuf",
+              "pub fn sessions_root(workspace: &Path) -> PathBuf",
+              "pub fn session_root(workspace: &Path, session_id: &str) -> PathBuf",
+              "pub fn session_state_dir(session_root: &Path) -> PathBuf",
+              "pub fn harness_execution_dir(session_root: &Path, execution: &str) -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "unregister deletes workspace.toml and workspace.db (+ -wal, -shm) but leaves session folders. WorkspaceRt::busy and retire refuse workspace delete while any session is Running, Waiting, or Paused or any execution runs.",
+            "symbols": [
+              "pub fn unregister(registry: &RegistryDb, id: &WorkspaceId, root: &Path) -> Result<(), ostra_store::StoreError>",
+              "pub fn busy(&self) -> Result<Option<String>, ostra_store::StoreError>",
+              "pub fn retire(&self) -> Result<(), DeleteError>",
+              "pub fn project_busy(&self, key: &str)"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/app.rs",
+            "purpose": "App::delete_workspace and sweep_session_caches (startup sweep that removes tool caches of Completed and Failed sessions).",
+            "symbols": [
+              "pub fn delete_workspace(&self, id: &WorkspaceId) -> Result<(), DeleteError>",
+              "pub fn sweep_session_caches(app: &App)"
+            ]
+          },
+          {
+            "path": "crates/ostra-sandbox/src/cache.rs",
+            "purpose": "The only per-session file removal in the codebase: removes ~/.cache/ostra/sandbox/session-{id} on a background thread.",
+            "symbols": [
+              "pub fn remove_session_cache(session: &SessionId)",
+              "pub fn session_cache(home: &Path, session: &SessionId) -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "REST routes. Sessions have GET list/create, get, events, yolo, amend, pause, resume, stop, diff; no DELETE route for a session. DELETE /api/auth/sessions/{id} is sign-in revocation, unrelated.",
+            "symbols": [
+              "\"/api/workspaces/{ws}/sessions\" get(list_sessions).post(create_session)",
+              "\"/api/sessions/{id}/stop\" post(stop_session)",
+              "\"/api/auth/sessions/{id}\" delete(revoke_sign_in)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/tests/workspace_db.rs",
+            "purpose": "Store tests that show repository usage patterns (db(), new_session, new_exec helpers) a new store method would be tested with."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "Research the web UI and API client for session actions and any existing archive or delete UI.",
+          "Research docs/internals pages that describe session storage and workspace delete so the docs update can be scoped.",
+          "Research how the engine's in-memory Live map, the nav and hub subscribers, and the file touch tracker would handle a session that disappears."
+        ],
+        "not_covered": [
+          "The web UI session list and any delete or archive affordance in web/ (not opened).",
+          "The registry db, project memory db (memory.rs), and lessons that came from a session.",
+          "Whether uploads claimed into the session folder, harness native session files kept by each CLI, or per-project reports outside the session folder need cleanup; only the paths helpers were read.",
+          "In-memory caches held per session outside the engine (server nav, hub, files touches), which would need to forget a deleted session; only App::delete_workspace's nav.forget and mcp.forget calls were read.",
+          "docs/ pages that describe the workspace db, which a change would have to update (docs/internals/workspaces.md was only grepped).",
+          "SQLite file shrinkage: deleted rows stay in the file until VACUUM, and WorkspaceDb never calls compact."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Each table has a pub(crate) struct wrapping &Connection in its own module with the SQL. WorkspaceDb has one thin method per call and uses `db.run` (autocommit) or `db.transaction` (BEGIN IMMEDIATE, commit or roll back). Anything that deletes across several tables belongs in `db.transaction`, as registry's remove_workspace does.",
+            "files": [
+              "crates/ostra-store/src/workspace/mod.rs",
+              "crates/ostra-store/src/registry/mod.rs",
+              "crates/ostra-store/src/sqlite.rs"
+            ],
+            "name": "Repository per table, WorkspaceDb picks the transaction",
+            "snippet": {
+              "code": "    pub fn remove_workspace(&self, id: &WorkspaceId) -> Result<bool, StoreError> {\n        self.db.transaction(|c| {\n            PushSubscriptions(c).delete_for_workspace(id)?;\n            Workspaces(c).delete(id)\n        })\n    }",
+              "language": "rust",
+              "source": "crates/ostra-store/src/registry/mod.rs:144"
+            }
+          },
+          {
+            "description": "Inner::append is the single writer: store event, materialize gates and decisions, fold, update the sessions row, remove the sandbox cache when the session first becomes terminal, then broadcast. executions, messages, activity, and tool_calls are written directly by the executor path rather than from events. A restart rebuilds SessionState from `events` alone (Inner::load, Engine::recover).",
+            "files": [
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Event log is the source of truth, other tables are derived",
+            "snippet": {
+              "code": "            let stored = self.db.append_event(session, &event)?;\n            self.materialize(session, &event)?;\n            st.apply(&stored);\n            let ended = !was_terminal && st.is_terminal();\n            if ended {\n                // An ended session runs no more tools, and a later one must not build from its downloads.\n                ostra_sandbox::remove_session_cache(session);\n            }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1398"
+            }
+          },
+          {
+            "description": "Workspace delete and project removal check for sessions with status Running, Waiting, or Paused and for running executions, return a Busy error whose text names the session and says what to do. Artifact delete follows Rule W4 (no delete while a session has not ended). Stalled sessions are not counted as live by busy().",
+            "files": [
+              "crates/ostra-workspace/src/runtime.rs"
+            ],
+            "name": "Delete refuses while a session is live",
+            "snippet": {
+              "code": "    pub fn busy(&self) -> Result<Option<String>, ostra_store::StoreError> {\n        if let Some(s) = self.db.list_sessions()?.into_iter().find(|s| {\n            matches!(\n                s.status,\n                SessionStatus::Running | SessionStatus::Waiting | SessionStatus::Paused\n            )\n        }) {\n            return Ok(Some(format!(\n                \"Stop session {} or wait for it to finish, then try again, because deleting the workspace would lose its state.\",\n                s.id\n            )));\n        }",
+              "language": "rust",
+              "source": "crates/ostra-workspace/src/runtime.rs:363"
+            }
+          }
+        ],
+        "problem": "A retention feature needs to know which rows and files belong to a session and what removes them. The workspace db has no session delete: no SQL DELETE touches sessions, events, executions, messages, activity, gates, decisions, tool_calls, or search_docs. The only removals of session data are deleting the whole workspace (db file and toml) and removing the sandbox tool cache of an ended session.",
+        "repo": "ostra",
+        "scope": "Task: how sessions, events, executions, and messages are stored in the workspace db, and how a session is deleted today. Covers the SQLite schema and repositories in ostra-store, the writers in ostra-engine, the on-disk session folder, and every deletion path found. It does not design a retention feature, does not cover the web UI, and does not cover the registry db or project memory db.",
+        "sources": [],
+        "title": "Session storage in the workspace db and how a session is deleted today"
+      },
+      "submit": {
+        "findings_summary": "The workspace db (`.ostra/workspace.db`, 3 migrations in schema.rs) holds an append-only `events` log keyed (session_id, seq) as the source of truth. Beside it are derived tables: sessions, gates, decisions, search_docs with FTS5 triggers, and executions, with messages, activity, and tool_calls hanging off executions by execution_id. No table declares foreign keys or ON DELETE, so nothing cascades, and messages, activity, and tool_calls reach a session only through executions.session_id. Nothing deletes a single session today: no DELETE route exists for sessions, no store method deletes session rows, and the only per-session removal is the sandbox tool cache. Workspace delete removes workspace.db and workspace.toml after refusing while a session is Running, Waiting, or Paused. The `.ostra/sessions/<id>` folders stay on disk. Spend queries read executions directly, and the engine keeps an in-memory Live map with no removal path.",
+        "not_covered": [
+          "The web UI session list and any delete or archive affordance in web/",
+          "The registry db, project memory db, and lessons that originate from a session",
+          "Cleanup of uploads, harness native session files, and per-project reports outside the session folder",
+          "In-memory per-session caches in the server (nav, hub, file touches) that would need to forget a deleted session",
+          "docs/ pages describing the workspace db and workspace delete, which a change would need to update",
+          "Disk shrinkage after row deletion: WorkspaceDb never runs VACUUM or a WAL checkpoint (only the registry does)"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How sessions, events, executions, and messages are stored in the workspace db and how a session is deleted today; the web UI, the registry db, and project memory were left out, and no retention design was attempted.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How the server starts a workspace and how the CLI commands are defined.",
+      "file": "ostra-research-20261002-085809-server-start-and-cli.md",
+      "document": {
+        "areas": [
+          "ostra-server",
+          "ostra-workspace",
+          "ostra-engine (recover)"
+        ],
+        "asks": [
+          "How the server starts a workspace",
+          "How the CLI commands are defined"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-server/src/main.rs:main",
+            "step": "Process starts. If argv[1] is sandbox-init, hand off to ostra_sandbox::init::main and exit (hidden from help). Otherwise scrub_startup_env, set_helper(current_exe), Cli::parse(), extend_path(), and build a multi-thread tokio runtime."
+          },
+          {
+            "location": "crates/ostra-server/src/main.rs:main",
+            "step": "Match on cli.command. None uses the flattened cli.serve; Some(Serve(args)) uses its own args. Both call runtime.block_on(serve(args))."
+          },
+          {
+            "location": "crates/ostra-server/src/main.rs:serve",
+            "step": "serve initializes tracing (OSTRA_LOG filter, default info; writes to stdout and appends to <data_dir>/server.log), converts ServeArgs to ServeOptions (open_browser = !no_open, exe = current_exe), and calls app::run."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:run",
+            "step": "run loads the global config (defaults on failure), resolves the bind address (flag, else server.bind, else 127.0.0.1; accepts localhost, all, *), and binds a listener. An explicit port (flag or server.port) binds exactly; otherwise it tries 7878 through 7897, then port 0."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:run",
+            "step": "If server.json names no live process, run kills sandbox leftovers and removes stale egress sockets and decoys, then spawns the decoy report watcher on a blocking thread."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:build",
+            "step": "build(&opts, port): validate and load the global config and sandbox status (warn when unsandboxed); ensure the data dir; start price refresh; master_key::unlock(open_registry()?); materialize embedded assets into <data_dir>/assets; construct Providers, McpGateway, Management, Coordination, NativeExecutor, Notifier (VAPID keys from the registry), EnvStatus::detect, Access, and HarnessRuntime; assemble Shared and App (hub capacity 8192, push 1024); bind the weak references; create the bridge socket on unix; spawn files::run_touches and nav::run."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:build",
+            "step": "Still in build: for each registry workspace record, skip it if workspace.toml is missing, else app.attach(id, root). Errors are logged only. Then sweep_session_caches."
+          },
+          {
+            "location": "crates/ostra-workspace/src/runtime.rs:WorkspaceRt::open",
+            "step": "attach calls WorkspaceRt::open: trust::migrate, trust::seal_file_secrets, WorkspaceDb::open(paths::workspace_db(root)), db.set_workspace_id, host.services(id, root) (yields ServerServices), Engine::new(root, id, db, services), then sync_projects()."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Engine::recover",
+            "step": "attach calls Engine::recover. For each stored session, running executions are finished as Interrupted (or Waiting when an ask is open) with an ExecutionFinished event; open Permission gates are answered Deny by the engine; non-terminal sessions get ensure_driver; finally db.mark_running_interrupted()."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:App::attach",
+            "step": "attach subscribes to engine.subscribe(), spawns the forwarding task into files, nav, and hub, and stores the runtime in App.workspaces."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:run",
+            "step": "Back in run: write server.json (port, url_host, pid), print the sign-in URL, print a network warning when the bind is not loopback, optionally open the browser, then mount api::router(app) and axum::serve with graceful shutdown on ctrl-c. On exit it removes the bridge socket and server.json."
+          },
+          {
+            "location": "crates/ostra-server/src/setup.rs:create",
+            "step": "A workspace created while the server runs: the REST handler calls setup::create, which calls ostra_workspace::create::register and then the same app.attach, then registry.mark_onboarded()."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "clap (derive)",
+            "role": "Parses the CLI in main.rs. The version is pinned in the root workspace Cargo.toml, which this run did not open."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-workspace",
+            "role": "WorkspaceRt, WorkspaceHost, create::register, unregister."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Engine::new, recover, subscribe, runner::stop_session_offline. It reaches the server only through the Services trait."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "RegistryDb (workspace list, kv, secrets) and WorkspaceDb (per-workspace SQLite)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "paths (data dir, workspace_db, workspace_toml, registry_db_path, global_config_path), GlobalConfig, load_toml and save_toml."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-sandbox",
+            "role": "Startup env scrubbing, the sandbox-init entry, sandbox status, and leftover cleanup."
+          },
+          {
+            "kind": "external",
+            "name": "tokio and axum",
+            "role": "Runtime, listener, and axum::serve with with_graceful_shutdown."
+          }
+        ],
+        "files": [
+          {
+            "path": "crates/ostra-server/src/main.rs",
+            "purpose": "The ostra binary. Defines the whole clap CLI (Cli, ServeArgs, Command, SessionsAction), dispatches each subcommand in main, and serve sets up logging then calls app::run.",
+            "symbols": [
+              "struct Cli",
+              "struct ServeArgs",
+              "enum Command",
+              "enum SessionsAction",
+              "fn main() -> anyhow::Result<()>",
+              "async fn serve(args: ServeArgs) -> anyhow::Result<()>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/app.rs",
+            "purpose": "Server bootstrap: ServeOptions, run (bind, banner, axum serve), build (global config, sandbox, registry, providers, executors, Shared, App, workspace attach loop), App::attach (opens one workspace), and offline helpers open_registry, stop_offline, ensure_global_config.",
+            "symbols": [
+              "pub struct ServeOptions",
+              "pub struct Shared",
+              "pub struct App",
+              "pub async fn run(opts: ServeOptions) -> anyhow::Result<()>",
+              "pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>>",
+              "pub fn attach(self: &Arc<Self>, id: WorkspaceId, root: &Path) -> anyhow::Result<Arc<WorkspaceRt>>",
+              "pub fn open_registry() -> anyhow::Result<RegistryDb>",
+              "pub fn stop_offline(session: &str) -> anyhow::Result<usize>",
+              "pub fn ensure_global_config() -> anyhow::Result<PathBuf>",
+              "pub fn sweep_session_caches(app: &App)",
+              "impl WorkspaceHost for Shared"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/setup.rs",
+            "purpose": "Runtime workspace creation: registers the workspace through ostra_workspace::create::register, then calls App::attach. Called from the REST handler in api.rs (around line 779).",
+            "symbols": [
+              "pub fn create(app: &Arc<App>, body: &CreateWorkspace) -> Result<Arc<WorkspaceRt>, CreateError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/auth.rs",
+            "purpose": "Helpers the CLI subcommands call: sign-in listing and revocation, server.json read and write, the server_running pid probe, and request_url.",
+            "symbols": [
+              "pub fn list_sign_ins(registry: &RegistryDb) -> anyhow::Result<Vec<SignInSession>>",
+              "pub fn revoke_sign_in(registry: &RegistryDb, id: &str) -> anyhow::Result<bool>",
+              "pub fn revoke_sign_ins(registry: &RegistryDb) -> anyhow::Result<usize>",
+              "pub fn write_server_file(auth: &Auth) -> anyhow::Result<()>",
+              "pub fn server_running() -> bool",
+              "pub fn remove_server_file()",
+              "pub fn request_url() -> anyhow::Result<String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/lib.rs",
+            "purpose": "Library half of the crate. Declares the modules that main.rs and the tests use as ostra_server::...",
+            "symbols": [
+              "pub mod app",
+              "pub mod auth",
+              "pub mod bridge",
+              "pub mod setup",
+              "pub mod manage",
+              "pub mod commands"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/commands.rs",
+            "purpose": "Not the CLI. Saves a project's build, test, and lint commands into .ostra/project.toml from the project screen (REST). The name is unrelated to clap subcommands.",
+            "symbols": [
+              "pub fn save(w: &WorkspaceRt, key: &str, body: Commands) -> Result<Commands, ApiErr>",
+              "pub const MAX_COMMAND_LEN: usize = 2_000"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/Cargo.toml",
+            "purpose": "Declares the ostra binary ([[bin]] name = \"ostra\", path = \"src/main.rs\") and the clap.workspace dependency.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "WorkspaceRt, the open workspace: its db, engine, host, clone list, and work lock. open builds it; retire and busy guard deletion.",
+            "symbols": [
+              "pub struct WorkspaceRt",
+              "pub fn open(host: Arc<dyn WorkspaceHost>, id: WorkspaceId, root: &Path) -> Result<Self, ostra_store::StoreError>",
+              "pub fn retire(&self) -> Result<(), DeleteError>",
+              "pub fn busy(&self) -> Result<Option<String>, ostra_store::StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/host.rs",
+            "purpose": "The WorkspaceHost trait, the only way ostra-workspace reaches the server. Shared implements it.",
+            "symbols": [
+              "pub trait WorkspaceHost: Send + Sync",
+              "fn services(self: Arc<Self>, id: &WorkspaceId, root: &Path) -> Arc<dyn Services>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Engine::recover, called by App::attach right after open. Marks running executions interrupted, denies stale permission gates, and restarts drivers for non-terminal sessions.",
+            "symbols": [
+              "pub fn recover(&self) -> Result<(), EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/tests/e2e.rs",
+            "purpose": "Shows how tests start the stack: build ServeOptions, call app::build(&opts, port), mount api::router(app) on a listener. tests/mcp.rs does the same.",
+            "symbols": [
+              "ostra_server::app::build(&opts, port)",
+              "ostra_server::api::router(app.clone())"
+            ]
+          }
+        ],
+        "next_steps": [
+          "If a change touches a CLI subcommand, read the docs/ pages that describe the CLI and sign-in so the docs update in the same change (CLAUDE.md pattern 9).",
+          "If a change touches how sessions are recovered or retained at startup, take up Engine::recover, ensure_driver, and sweep_session_caches in a follow-up pass."
+        ],
+        "not_covered": [
+          "The REST handler that calls setup::create and the other api.rs routes",
+          "Engine::new, the session driver (ensure_driver), and stop_session_offline internals",
+          "ostra_workspace::create::register and sync_projects details",
+          "bridge::hook_cli and bridge::mcp_cli, the bodies of the Hook and McpStdio subcommands",
+          "auth::Auth token minting and cookie checks beyond the CLI helpers",
+          "Existing docs pages under docs/ (the docs search index was empty)"
+        ],
+        "patterns": [
+          {
+            "description": "Cli has command: Option<Command> and a flattened ServeArgs, so a bare `ostra --port 1` serves. Command::Serve(ServeArgs) repeats the args for the explicit form. main matches each variant; the None arm and the Serve arm both call serve(args). Subcommands that need no server (Config, Url, Sessions, Signout, Stop) call library functions in ostra_server::app or ostra_server::auth and print. Hook and McpStdio call ostra_server::bridge::hook_cli and mcp_cli and exit with their code. Doc comments on variants are the --help text. Adding a command means a new Command variant and a match arm in main.",
+            "files": [
+              "crates/ostra-server/src/main.rs"
+            ],
+            "name": "Clap derive: flattened serve args plus optional subcommand",
+            "snippet": {
+              "code": "#[derive(Parser)]\n#[command(name = \"ostra\", version, about = \"Ostra: a local workspace that runs the engineering pipeline\")]\nstruct Cli {\n    #[command(subcommand)]\n    command: Option<Command>,\n    #[command(flatten)]\n    serve: ServeArgs,\n}\n\n#[derive(Subcommand)]\nenum Command {\n    /// Start the server (the default).\n    Serve(ServeArgs),\n    Hook { #[arg(trailing_var_arg = true, allow_hyphen_values = true)] args: Vec<String> },\n    McpStdio { #[arg(trailing_var_arg = true, allow_hyphen_values = true)] args: Vec<String> },\n    /// Print the config path, writing the default config if none exists.\n    Config,\n    /// Print a fresh sign-in URL for a running server.\n    Url,\n    Sessions { #[command(subcommand)] action: Option<SessionsAction> },\n    Signout,\n    Stop { session: String },\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/main.rs:4"
+            }
+          },
+          {
+            "description": "sessions, signout, and stop do not talk to the server. They call app::open_registry() (owner-only 0600 modes on the db and its -wal and -shm files on unix) and operate on it. stop refuses when auth::server_running() is true (the pid in server.json is alive); otherwise it opens each registered workspace db and calls ostra_engine::runner::stop_session_offline. A running server refuses a revoked sign-in within 5 seconds (RECHECK in auth.rs).",
+            "files": [
+              "crates/ostra-server/src/main.rs",
+              "crates/ostra-server/src/app.rs",
+              "crates/ostra-server/src/auth.rs"
+            ],
+            "name": "Offline CLI commands open the registry directly",
+            "snippet": {
+              "code": "pub fn stop_offline(session: &str) -> anyhow::Result<usize> {\n    if crate::auth::server_running() {\n        anyhow::bail!(\"The Ostra server is running. Stop the session from its board ...\");\n    }\n    let registry = open_registry()?;\n    let id = ostra_core::ids::SessionId::from(session);\n    for w in registry.list_workspaces()? {\n        let db_path = paths::workspace_db(&w.root);\n        if !db_path.exists() {\n            continue;\n        }\n        let db = ostra_store::WorkspaceDb::open(&db_path)?;\n        if db.get_session(&id)?.is_some() {\n            return ostra_engine::runner::stop_session_offline(&db, &id)\n                .map_err(|e| anyhow::anyhow!(\"{e}\"));\n        }\n    }\n    anyhow::bail!(\"No registered workspace has a session {session}.\")\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/app.rs:217"
+            }
+          },
+          {
+            "description": "App::attach is the single place a workspace becomes live. It is idempotent: it returns the existing Arc<WorkspaceRt> if the id is open. Otherwise it runs WorkspaceRt::open(shared, id, root), then rt.engine.recover(), then subscribes to engine notices and spawns a task that feeds files.observe, nav.observe, and the hub broadcast (lag is logged and reported to nav.lagged), then inserts the runtime into App.workspaces. Callers are the startup loop in build and setup::create.",
+            "files": [
+              "crates/ostra-server/src/app.rs",
+              "crates/ostra-server/src/setup.rs",
+              "crates/ostra-workspace/src/runtime.rs"
+            ],
+            "name": "Workspace attach: open, recover, forward notices, register",
+            "snippet": {
+              "code": "pub fn attach(self: &Arc<Self>, id: WorkspaceId, root: &Path) -> anyhow::Result<Arc<WorkspaceRt>> {\n    if let Some(w) = self.workspace(&id) {\n        return Ok(w);\n    }\n    let rt = Arc::new(WorkspaceRt::open(self.shared.clone(), id.clone(), root)?);\n    rt.engine\n        .recover()\n        .map_err(|e| anyhow::anyhow!(\"recovering {}: {e}\", root.display()))?;\n    let mut rx = rt.engine.subscribe();\n    let hub = self.hub.clone();\n    let files = self.files.clone();\n    let nav = self.nav.clone();\n    let wid = id.clone();\n    tokio::spawn(async move {\n        loop {\n            match rx.recv().await {\n                Ok(notice) => {\n                    files.observe(&wid, &notice);\n                    nav.observe(&wid, &notice);\n                    let _ = hub.send(HubMsg { workspace: wid.clone(), notice });\n                }\n                Err(broadcast::error::RecvError::Lagged(n)) => {\n                    tracing::warn!(\"hub lagged by {n} notices\");\n                    nav.lagged(&wid);\n                }\n                Err(broadcast::error::RecvError::Closed) => break,\n            }\n        }\n    });\n    self.workspaces.write().insert(id, rt.clone());\n    Ok(rt)\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/app.rs:309"
+            }
+          },
+          {
+            "description": "At the end of build, every registry.list_workspaces() record is attached. A workspace whose workspace.toml is missing is skipped with a warning; an attach error is logged with tracing::error and does not stop the server. After the loop, sweep_session_caches removes tool caches of Completed or Failed sessions.",
+            "files": [
+              "crates/ostra-server/src/app.rs"
+            ],
+            "name": "Startup loop over registered workspaces tolerates failures",
+            "snippet": {
+              "code": "for record in app.shared.registry.list_workspaces()? {\n    if !paths::workspace_toml(&record.root).exists() {\n        tracing::warn!(\"workspace {} is missing at {}\", record.name, record.root.display());\n        continue;\n    }\n    if let Err(e) = app.attach(record.id.clone(), &record.root) {\n        tracing::error!(\"could not open workspace {}: {e:#}\", record.name);\n    }\n}\nsweep_session_caches(&app);",
+              "language": "rust",
+              "source": "crates/ostra-server/src/app.rs:464"
+            }
+          },
+          {
+            "description": "code_tools, Management, and Coordination are created before App, because the executors need them first, and receive a Weak<App> through bind(&app) afterward.",
+            "files": [
+              "crates/ostra-server/src/app.rs",
+              "crates/ostra-server/src/manage.rs"
+            ],
+            "name": "Late-bound back-references to App",
+            "snippet": {
+              "code": "#[derive(Default)]\npub struct Management {\n    app: OnceLock<Weak<App>>,\n}\n\nimpl Management {\n    pub fn bind(&self, app: &Arc<App>) {\n        let _ = self.app.set(Arc::downgrade(app));\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/manage.rs:16"
+            }
+          }
+        ],
+        "problem": "Ostra is one binary whose clap definition lives in crates/ostra-server/src/main.rs. The default path (no subcommand) starts the server, which builds shared state, then opens every registered workspace with WorkspaceRt::open, recovers its sessions, and forwards engine notices to a hub. A workspace created at runtime goes through the same App::attach. This document records how both work so a change to startup or to the CLI follows the existing structure.",
+        "repo": "ostra",
+        "scope": "Task: how the server starts a workspace and how the CLI commands are defined. Covers the ostra binary entry point, app::run, app::build, App::attach, WorkspaceRt::open, Engine::recover, and the clap command tree. It does not cover REST or WebSocket handlers beyond where they call attach, the engine's session driver, or the web UI.",
+        "title": "Server start, workspace attach, and CLI command definitions"
+      },
+      "submit": {
+        "findings_summary": "The whole CLI is one clap-derive tree in crates/ostra-server/src/main.rs, with a flattened ServeArgs so bare `ostra` serves, and subcommands Serve, Hook, McpStdio, Config, Url, Sessions (revoke), Signout and Stop. Offline subcommands call helpers in app.rs and auth.rs and open the registry directly. `serve` calls app::run, which binds, runs app::build (shared state, executors, App), and then attaches every registered workspace through App::attach. attach is idempotent. It calls WorkspaceRt::open (db, Engine::new, sync_projects) and Engine::recover, then forwards engine notices to the hub. Workspaces created at runtime use the same attach through setup::create. Note that crates/ostra-server/src/commands.rs is unrelated to the CLI: it saves project build and test commands.",
+        "not_covered": [
+          "REST handlers beyond where they call setup::create",
+          "Engine::new, ensure_driver and stop_session_offline internals",
+          "ostra_workspace::create::register and sync_projects",
+          "bridge::hook_cli and bridge::mcp_cli bodies",
+          "docs/ pages describing the CLI"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the ostra server starts and attaches a workspace, and how the clap CLI commands are defined and dispatched; REST handlers, the engine session driver, and web UI were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

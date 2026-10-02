@@ -1,0 +1,994 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T09:00:31.123228201+00:00",
+  "docs": [
+    {
+      "task": "How a native tool is added: its implementation, its definition, its capability mapping, and its policy classification.",
+      "file": "ostra-research-20261002-085705-native-tool-addition.md",
+      "document": {
+        "approaches": [
+          {
+            "best_for": "A new tool that needs its own capability so an agent can be granted it separately.",
+            "concept": "Add one `Capability` variant, one `native_tool` name, one `*_def()`, one `execute` arm, one mapping TOML table, one `MCP_TOOLS` and `canonical_ostra_tool` entry, and list the name in the policy `known` list and `KNOWN_TOOLS`.",
+            "cons": [
+              "Touches about ten files for one tool.",
+              "The TOML, `TOKENS`, `MCP_TOOLS`, `canonical_ostra_tool`, policy `known` list, and `KNOWN_TOOLS` are not compile-checked."
+            ],
+            "name": "Single-tool capability (DocsSearch pattern)",
+            "precedent": "crates/ostra-tools/src/defs.rs:docs_search_def",
+            "pros": [
+              "Matches the most recent single-tool addition and every touched place is already a per-tool list.",
+              "Compile errors guide the enum matches."
+            ],
+            "recommended": true
+          },
+          {
+            "best_for": "A new tool that is another operation of an existing family.",
+            "concept": "Add a row to a name table (`CODE_TOOLS`, `PROJECT_TOOLS`, `COORD_TOOLS`) and a definition in the family's `*_defs()`. The existing guard arm in `execute`, `canonical_ostra_tool`, `MCP_TOOLS`, and the policy `known` predicates already cover it. Needs no new enum variant or TOML table, but the table length constant and the mapping `TOKENS` array change.",
+            "cons": [
+              "Only fits a tool of the same kind as the family (code navigation, project management, coordination).",
+              "Cannot be granted to an agent separately from the rest of the family."
+            ],
+            "name": "Extend an existing capability family (Code/Project/Subagent pattern)",
+            "precedent": "crates/ostra-core/src/agent.rs:CODE_TOOLS",
+            "pros": [
+              "Fewer files; dispatch, harness name mapping, and policy classification come from the table.",
+              "Every agent already granted the family gets the tool."
+            ]
+          },
+          {
+            "best_for": "A tool that reads or writes files by path and has a counterpart in the harness CLIs.",
+            "concept": "Name the tool as a Claude Code built-in, add it to `perms::family` as Read or Edit, and add it to the harness adapter's pass-through name list and to `claude_tools` in launch.rs. Each harness has its own tool for the capability.",
+            "cons": [
+              "Only valid when the CLI has an equivalent tool; the mapping TOML needs a name per harness.",
+              "A write tool also needs `write_paths`, and `canonical_call` needs its path key, to be seen by guards."
+            ],
+            "name": "Reuse a Claude Code built-in name and policy family (Read/Grep/Glob pattern)",
+            "precedent": "crates/ostra-policy/src/perms.rs:family",
+            "pros": [
+              "Permission rules (`Read(...)`, `Edit(...)`) and path guards apply automatically through the family.",
+              "Harnesses run their own tool and Ostra only checks it."
+            ]
+          }
+        ],
+        "areas": [
+          "ostra-tools",
+          "ostra-core",
+          "ostra-policy",
+          "ostra-agents",
+          "ostra-exec-native",
+          "ostra-exec-harness",
+          "ostra-server",
+          "assets",
+          "docs"
+        ],
+        "asks": [
+          "Describe how a native tool is implemented.",
+          "Describe how a native tool is defined (description and input schema).",
+          "Describe how a capability is mapped to a native tool, per executor.",
+          "Describe how the policy classifies a native tool as read, write, or other."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:458",
+            "step": "At execution start the native loop gets the agent's capabilities (`spec.capabilities`, from `agent.toml`) and builds `Vec<ToolDef>` from `ostra_tools::definitions(caps)`; Document, workspace MCP tools, and the `submit_*` tool are appended."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:ToolEnv::canonical_call",
+            "step": "The model emits a tool call by name with JSON input. `tool_end` first calls `env.canonical_call`, which makes `file_path`/`path` absolute for Read, Write, Edit, Grep, Glob, Skill, Document, sets `cwd` for shells, and normalizes a WebFetch URL. Any other tool name returns the call unchanged."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::check",
+            "step": "`policy.check(&call)` runs layer 1 guards (answer-only, write scope for `write_paths`, read guard for `read_path`, shell guards) then layer 2 by `perms::family`. The decision is emitted as an `ExecutionDelta::Policy`. Deny returns an error result to the model; Ask calls `host.ask_permission`."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:execute",
+            "step": "On allow, `ostra_tools::execute` coerces input against the tool's schema, matches the tool name, and runs the implementation, wrapped in a cancel select. It stamps `duration_ms`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:tool_end",
+            "step": "The result `ToolOutput` is turned into a tool-result block. `policy.observe` may append notes. If `ToolOutput.diff` is set, the Activity row shows `text` plus the diff; the model sees `text` only."
+          },
+          {
+            "location": "crates/ostra-server/src/bridge.rs:policy_check",
+            "step": "Harness path: Claude Code calls `mcp__ostra__<name>`; `canonical_claude_call` → `ostra_mcp_tool` → `canonical_ostra_tool` yields the native name; `policy_check` in the bridge runs the same `ExecutionPolicy`; the tool runs through the bridge's MCP handler via `ostra_tools::execute` with the same `ToolEnv`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "Implementation, definitions, dispatch."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Capability enum, native_tool, name tables (CODE_TOOLS, COORD_TOOLS, PROJECT_TOOLS), ToolCall."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "Family, KNOWN_TOOLS, known list, write_paths/read_path guards."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents",
+            "role": "tool-mapping.toml loader, TOKENS, capability_key, prompt vocabulary; assets embedded from ../../assets."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-native",
+            "role": "Builds tool list from definitions, runs canonical_call, policy, execute; is_concurrent list."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-harness",
+            "role": "Adapters and capability matches in setup.rs and launch.rs."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "MCP_TOOLS list that exposes Ostra-own tools to harnesses."
+          },
+          {
+            "kind": "external",
+            "name": "similar",
+            "role": "Used by `text::unified_diff` for the existing diff text (Edit/Write Activity view). Version not read in this run."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "Dispatch and shared helpers. `execute` matches the canonical tool name to an implementation; `ToolEnv::canonical_call` rewrites path-like inputs to absolute form before the policy check and the run; `str_arg`, `required`, `u64_arg`, `bool_arg` read inputs. `ToolOutput` carries text, is_error, exit_code, duration_ms, an optional `diff` for the Activity view, and an `end` marker.",
+            "symbols": [
+              "pub async fn execute(env: &ToolEnv, call_id: &str, call: &ToolCall, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput",
+              "pub fn canonical_call(&self, call: &ToolCall) -> ToolCall",
+              "pub(crate) fn required<'a>(input: &'a serde_json::Value, key: &str) -> Result<&'a str, ToolOutput>",
+              "pub(crate) fn str_arg<'a>(input: &'a serde_json::Value, key: &str) -> Option<&'a str>",
+              "pub(crate) fn u64_arg(input: &serde_json::Value, key: &str) -> Option<u64>",
+              "pub(crate) fn bool_arg(input: &serde_json::Value, key: &str) -> Option<bool>",
+              "ToolOutput { text, is_error, exit_code, duration_ms, diff, end }",
+              "ToolOutput::ok(..) / ToolOutput::err(..)"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/defs.rs",
+            "purpose": "Tool definitions: one `const NAME: &str` description per tool in Claude Code's 'what it does, then Usage bullets' shape, one `*_def()` function returning a `ToolDefinition` (name, description, JSON input schema), the `definitions(&[Capability])` match that maps a capability to its definitions, the `EVERY` capability list used by `input_schema`, and tests.",
+            "symbols": [
+              "pub struct ToolDefinition { pub name: String, pub description: String, pub input_schema: Value }",
+              "fn def(name: &str, description: &str, input_schema: Value) -> ToolDefinition",
+              "pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition>",
+              "const EVERY: [Capability; 17]",
+              "pub(crate) fn input_schema(tool: &str, agent: AgentName) -> Option<Value>",
+              "pub fn wants_web_search(capabilities: &[Capability]) -> bool",
+              "fn docs_search_def() -> ToolDefinition",
+              "fn code_defs() -> Vec<ToolDefinition>",
+              "fn project_defs() -> Vec<ToolDefinition>",
+              "fn coord_defs() -> Vec<ToolDefinition>",
+              "tests: maps_capabilities_and_skips_web_search, every_capability_has_a_native_name_match, descriptions_follow_writing_rules"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/fs.rs",
+            "purpose": "Implementation of Read, Write, Edit. Shows the implementation shape: `pub async fn read(env: &ToolEnv, input: &Value) -> ToolOutput`, resolves `file_path` with `env.resolve`, marks files read with `env.mark_read`, returns `ToolOutput::ok/err`. Write and Edit set `ToolOutput.diff` from `unified_diff`.",
+            "symbols": [
+              "pub async fn read(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "pub async fn write(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "pub async fn edit(env: &ToolEnv, input: &Value) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/text.rs",
+            "purpose": "Shared text helpers: `unified_diff(path, old, new) -> Option<String>` (similar crate, 3 lines of context, capped at 50000 bytes), `truncate_middle`, `truncate_end`, `floor_boundary`, `ceil_boundary`.",
+            "symbols": [
+              "pub fn unified_diff(path: &str, old: &str, new: &str) -> Option<String>",
+              "pub fn truncate_middle(s: &str, max: usize) -> String",
+              "pub fn truncate_end(s: &str, max: usize) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/misc.rs",
+            "purpose": "Implementations of Skill, Report, Memory, MemoryRecall, DocsSearch. The closest single-tool precedent for an Ostra-own read-only tool: `docs_search` reads `str_arg` inputs, clamps `limit`, reads `env.config().workspace_root`, runs blocking work in `spawn_blocking`, and returns text.",
+            "symbols": [
+              "pub async fn docs_search(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/code.rs",
+            "purpose": "Precedent for a tool family whose backing state lives in the server: a `CodeNav` trait object handed in through `ToolEnvConfig.code` answers each call; `run` returns an error output when it is absent.",
+            "symbols": [
+              "pub trait CodeNav: Send + Sync { async fn call(&self, repo_root: &Path, tool: &str, input: &Value) -> Result<String, String>; }",
+              "pub async fn run(env: &ToolEnv, tool: &str, input: &Value) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/agent.rs",
+            "purpose": "The `Capability` enum (snake_case serde, `#[ts(export)]`), `Capability::native_tool` (capability to native tool name, exhaustive match), `Capability::writes` (only Write and Edit), and the `CODE_TOOLS` table with `is_code_tool` for a multi-tool capability.",
+            "symbols": [
+              "pub enum Capability { Read, Write, Edit, Shell, SearchText, Glob, Skill, WebSearch, WebFetch, Report, Document, Memory, MemoryRecall, DocsSearch, Code, ManageProjects, Coordinate }",
+              "pub fn native_tool(self) -> &'static str",
+              "pub fn writes(self) -> bool",
+              "pub const CODE_TOOLS: [(&str, &str); 8]",
+              "pub fn is_code_tool(native: &str) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/coord.rs",
+            "purpose": "Precedent for a multi-tool capability's name table: `COORD_TOOLS: [(&str, &str); 3]` pairs the MCP name with the native name, and `is_coord_tool` is used by `execute`, the policy, and the harness adapter. `crates/ostra-core/src/manage.rs` holds the same for `PROJECT_TOOLS`.",
+            "symbols": [
+              "pub const COORD_TOOLS: [(&str, &str); 3]",
+              "pub fn is_coord_tool(native: &str) -> bool"
+            ]
+          },
+          {
+            "path": "assets/tool-mapping.toml",
+            "purpose": "Capability to tool name per executor table (native, claude, codex, grok, agy). Native names follow Claude Code's. Ostra's own tools map to `mcp__ostra__<name>` for Claude and to the bare MCP name on other harnesses. Also holds per-harness strategy prose.",
+            "symbols": [
+              "[capabilities.docs_search] native = \"DocsSearch\" claude = \"mcp__ostra__docs_search\" codex = \"docs_search\" grok = \"docs_search\" agy = \"docs_search\"",
+              "[capabilities.code] native = \"Code{Op}\" claude = \"mcp__ostra__code_{op}\""
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/mapping.rs",
+            "purpose": "Loads `tool-mapping.toml` (rust-embed from `../../assets`). `TOKENS` maps each prompt template token (`tool_docs_search`) to a mapping key; `capability_key` is an exhaustive match from `Capability` to the TOML key; `Mapping::tool` resolves a key per executor tier and fills `{agent}`, `{op}`, `{Op}`; `vocabulary` writes the harness prompt's tool table from the agent's capabilities.",
+            "symbols": [
+              "const TOKENS: [(&str, &str); 28]",
+              "fn capability_key(c: Capability) -> &'static str",
+              "pub(crate) fn tool(&self, capability: &str, executor: ExecutorKind, agent: AgentName) -> Option<String>",
+              "pub(crate) fn vocabulary(&self, agent: AgentName, harness: HarnessKind, caps: &[Capability]) -> String"
+            ]
+          },
+          {
+            "path": "assets/agents/implementer/agent.toml",
+            "purpose": "Where an agent declares the capability by snake_case name (`capabilities = [\"read\", \"edit\", ...]`). A capability is an upper bound: an agent without it gets no definition for the tool on any executor.",
+            "symbols": [
+              "capabilities = [\"read\", \"edit\", \"write\", \"shell\", \"search_text\", \"glob\", \"skill\", \"memory_recall\", \"memory\", \"report\", \"code\", \"manage_projects\", \"coordinate\", \"docs_search\"]"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/perms.rs",
+            "purpose": "Permission families and rule names. `family(tool)` sorts a tool into Bash, Edit, Read, WebFetch, or Other. `KNOWN_TOOLS` is the list of tool names a user permission rule may name; `parse_rule` rejects a rule whose tool is not in it (other than `mcp__`, `Other:`, `submit_` prefixes).",
+            "symbols": [
+              "pub enum Family { Bash, Edit, Read, WebFetch, Other }",
+              "pub fn family(tool: &str) -> Family",
+              "const KNOWN_TOOLS: &[&str]",
+              "pub fn parse_rule(raw: &str) -> Result<Rule, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/policy.rs",
+            "purpose": "`ExecutionPolicy::check` runs layer 1 guards then layer 2 permissions. `layer2` switches on `perms::family`. In `Family::Other`, a local `known` list decides whether a tool is allowed without asking; a tool not in it falls to `mode_default` (ask in default and acceptEdits, deny in plan, allow in bypass). `write_paths` decides which tools are write targets for the write-scope guards (Write, Edit, MultiEdit, NotebookEdit, ApplyPatch). `read_path` feeds the read guard for Family::Read and Family::Edit tools plus Skill and Document. `layer1` also lists tools denied under `answer_only`.",
+            "symbols": [
+              "pub fn check(&self, call: &ToolCall) -> PolicyDecision",
+              "fn layer1(&self, call: &ToolCall, parsed: Option<&Parsed>) -> Option<Denial>",
+              "fn layer2(&self, call: &ToolCall, parsed: Option<&Parsed>) -> PolicyDecision",
+              "fn write_paths(&self, call: &ToolCall) -> Vec<(PathBuf, String)>",
+              "fn read_path(&self, call: &ToolCall) -> Option<(PathBuf, String)>",
+              "fn file_path(&self, call: &ToolCall) -> Option<(PathBuf, String)>"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/tests/policy.rs",
+            "purpose": "Policy tests. One test asserts the Other family allows Ostra's own tools: `allowed(&p, &ToolCall::new(\"DocsSearch\", json!({\"query\": \"x\"})))`. A new tool's classification is tested here.",
+            "symbols": [
+              "allowed(&p, &ToolCall::new(\"MemoryRecall\", json!({\"query\": \"x\"})))",
+              "allowed(&p, &ToolCall::new(\"CodeCallers\", json!({\"symbol\": \"x\"})))"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "The native loop. Builds the tool list from `ostra_tools::definitions(caps)` (dropping WebFetch when the provider serves it), appends `document_tool_definition`, workspace MCP definitions, and the submit tool. Each call goes through `tool_end`: `env.canonical_call`, `policy.check`, user ask, `ostra_tools::execute`, then `ToolOutput.diff` is appended to what the Activity view shows. `is_concurrent` lists read-only tools whose calls in one turn run concurrently.",
+            "symbols": [
+              "fn is_concurrent(name: &str) -> bool",
+              "async fn tool_end(&self, id: &str, name: &str, input: &Value, policy: &ExecutionPolicy, env: &ToolEnv) -> (Block, RunEnd)"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/bridge.rs",
+            "purpose": "Harness side of Ostra-own tools. `MCP_TOOLS` is a static list of (MCP name, native name, Capability) for every non-submit Ostra tool; `mcp_tools` builds the MCP server's tool list from `ostra_tools::definitions` filtered through `MCP_TOOLS`, so a tool missing from `MCP_TOOLS` is never offered to a harness. `served_by_mcp` uses the same list to avoid double logging.",
+            "symbols": [
+              "static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>>",
+              "fn mcp_tools(&self, execution: &ExecutionId) -> Vec<(String, String, Value)>"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/mod.rs",
+            "purpose": "`canonical_ostra_tool(bare)` turns a harness's MCP tool name back into the canonical native name before the policy sees it. Single tools are an explicit `match` arm (`\"docs_search\" => \"DocsSearch\"`); families go through the `PROJECT_TOOLS`, `COORD_TOOLS`, and `CODE_TOOLS` tables.",
+            "symbols": [
+              "pub fn ostra_mcp_tool(name: &str) -> Option<String>",
+              "pub fn canonical_ostra_tool(bare: &str) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/claude.rs",
+            "purpose": "Claude Code adapter. Claude's own tools pass through by name (`\"Read\" | \"Write\" | \"Edit\" | \"Grep\" | \"Glob\" | \"WebFetch\" | \"WebSearch\" | \"Skill\"`); Ostra-own tools arrive as `mcp__ostra__*` and go through `ostra_mcp_tool`.",
+            "symbols": [
+              "pub(crate) fn canonical_claude_call(name: &str, input: &Value, cwd: Option<&str>) -> PreParse"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/setup.rs",
+            "purpose": "An exhaustive `match` on `Capability` (around line 211) for the Antigravity harness: file, shell, search, web capabilities add CLI tool names; Ostra-own capabilities (Report, Document, Memory, MemoryRecall, DocsSearch, Code, ManageProjects, Coordinate) are an empty arm. Adding a `Capability` variant fails to compile here until an arm is added.",
+            "symbols": [
+              "Capability::Report | Capability::Document | Capability::Memory | Capability::MemoryRecall | Capability::DocsSearch | Capability::Code | Capability::ManageProjects | Capability::Coordinate => {}"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/launch.rs",
+            "purpose": "`claude_tools(caps)` builds Claude Code's `--tools` list from capabilities with a `_ => continue` fallback, so Ostra-own capabilities add nothing there (they come over MCP). A new capability that should be a Claude Code built-in would need an arm.",
+            "symbols": [
+              "fn claude_tools(caps: &[Capability]) -> String"
+            ]
+          },
+          {
+            "path": "docs/internals/tools.md",
+            "purpose": "The docs page a tool addition must update (CLAUDE.md pattern 9): the capability table (lines 29-46) mirroring tool-mapping.toml, the 'Who gets what' table, the policy family table (lines 92-100), and the 'Where to look in the code' table (lines 523-536). `docs/internals/executors.md:166` lists the read-only tools that run concurrently."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "A research pass on the tests that enumerate capabilities or tool names (ostra-agents tests.rs, ostra-exec-native tests.rs, policy tests) to list what must change with a new tool.",
+          "A research pass on the codex, grok, and agy adapters if the new tool must be visible to those harnesses."
+        ],
+        "not_covered": [
+          "Which agents should receive a new capability, and what their prompts under assets/agents/<name>/prompt.md say about it (prompt tokens are rendered from TOKENS; prompt text was not read).",
+          "The per-harness adapters other than Claude (codex.rs, grok.rs, agy.rs): how each turns its CLI's tool names into canonical calls was not read beyond the Claude adapter and `canonical_ostra_tool`.",
+          "The web console's Activity view rendering of tool calls and of `ToolOutput.diff` (web/ and any TypeScript tool-name lists).",
+          "Conformance fixtures in tests/conformance/main.rs and the prompt-render tests in crates/ostra-agents/src/tests.rs and crates/ostra-exec-native/src/tests.rs that count or list capabilities: not read, so whether a new capability breaks an existing count is unknown.",
+          "docs/internals/agents.md and docs/security/agent-containment.md, which also mention tool names and mapping and may need updates."
+        ],
+        "open_questions": [
+          {
+            "id": "Q1",
+            "multi_select": false,
+            "options": [
+              {
+                "description": "Family::Read: rules like Read(...) and the read guard apply; add to is_concurrent. Precedent: Grep, Glob (crates/ostra-policy/src/perms.rs:141).",
+                "label": "Read-only, path-based"
+              },
+              {
+                "description": "Family::Other with the known list; no path guards. Precedent: DocsSearch, MemoryRecall (crates/ostra-policy/src/policy.rs:719).",
+                "label": "Other, Ostra-own, no paths"
+              },
+              {
+                "description": "Family::Edit plus write_paths so write-scope guards apply; Capability::writes() may need to include it. Precedent: Write, Edit (crates/ostra-core/src/agent.rs:254).",
+                "label": "Writes files"
+              }
+            ],
+            "question": "Which kind of tool is the new one, so the wiring matches: read-only and path-based, writes files, or neither (text computed from inputs)?",
+            "recommended": 0,
+            "tag": "Tool kind"
+          },
+          {
+            "id": "Q2",
+            "multi_select": false,
+            "options": [
+              {
+                "description": "New Capability variant, TOML table, TOKENS entry; each agent lists it in agent.toml. Precedent: DocsSearch (crates/ostra-core/src/agent.rs:204).",
+                "label": "Own capability"
+              },
+              {
+                "description": "Add a row to CODE_TOOLS, PROJECT_TOOLS or COORD_TOOLS. Precedent: CODE_TOOLS (crates/ostra-core/src/agent.rs:214).",
+                "label": "Extend a family"
+              }
+            ],
+            "question": "Should the new tool be its own capability that agents opt into in `agent.toml`, or an extra operation of an existing capability?",
+            "recommended": 0,
+            "tag": "Capability"
+          }
+        ],
+        "patterns": [
+          {
+            "description": "Every in-process tool is one arm of the `match call.tool.as_str()` in `ostra_tools::execute`. A single tool is a string arm calling `module::function(env, input)`. A family is a guard arm using an `is_*_tool` predicate from `ostra-core`. An unknown name returns `Unknown tool` as an error output, so a missing arm is a run-time error, not a compile error. Inputs are first coerced against the tool's own schema (`defs::input_schema` then `coerce_json_strings`), so the schema entry also controls string-to-number/bool coercion. Every arm is wrapped in a cancel `select!` except the shell tools.",
+            "files": [
+              "crates/ostra-tools/src/lib.rs"
+            ],
+            "name": "Dispatch by canonical name in `execute`",
+            "snippet": {
+              "code": "\"Grep\" => search::grep(env, input).await,\n\"Glob\" => search::glob(env, input).await,\n\"Skill\" => misc::skill(env, input).await,\n\"WebFetch\" => web::fetch(env, input).await,\n\"Report\" => misc::report(env, input).await,\n\"Document\" => doc::document(env, input).await,\n\"Memory\" => misc::memory(env, input).await,\n\"MemoryRecall\" => misc::memory_recall(env, input).await,\n\"DocsSearch\" => misc::docs_search(env, input).await,\nt if ostra_core::agent::is_code_tool(t) => code::run(env, t, input).await,",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/lib.rs:301"
+            }
+          },
+          {
+            "description": "A tool function takes `&ToolEnv` and the JSON input, reads fields with `required`/`str_arg`/`u64_arg`/`bool_arg`, resolves paths with `env.resolve` (relative to the shell cwd, with sandbox `/tmp` mapping), and returns `ToolOutput::ok(text)` or `ToolOutput::err(text)`. Error text is written for the model: it says what to do next. Reading tools that make a later Write/Edit legal call `env.mark_read(&path)`. Write and Edit set `ToolOutput.diff` (from `text::unified_diff`) which the native loop appends to the Activity row but not to the model's tool result. Nothing in `ostra-tools` checks permissions; the policy runs before the tool.",
+            "files": [
+              "crates/ostra-tools/src/fs.rs",
+              "crates/ostra-tools/src/misc.rs",
+              "crates/ostra-tools/src/lib.rs"
+            ],
+            "name": "Implementation shape: async fn (env, input) -> ToolOutput",
+            "snippet": {
+              "code": "pub async fn read(env: &ToolEnv, input: &Value) -> ToolOutput {\n    let raw = match required(input, \"file_path\") {\n        Ok(p) => p,\n        Err(e) => return e,\n    };\n    let path = env.resolve(raw);\n    let meta = match tokio::fs::metadata(&path).await {\n        Ok(m) => m,\n        Err(_) => return ToolOutput::err(format!(\"File does not exist: {}\", path.display())),\n    };\n    ...\n    env.mark_read(&path);\n    ...\n    ToolOutput::ok(out)\n}",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/fs.rs:32"
+            }
+          },
+          {
+            "description": "A description is a `const NAME: &str` in Claude Code's style: one sentence saying what the tool does, a blank line, `Usage:`, then bullets naming each parameter and the reason for each rule. A `*_def()` function calls `def(name, DESCRIPTION, json!({...}))` with an object schema, `required`, and `\"additionalProperties\": false`. `definitions` maps each `Capability` to a `Vec<ToolDefinition>` in an exhaustive match; `Capability::Document` and `WebSearch` return empty vectors because they are built elsewhere. `definitions` dedupes capabilities and keeps declaration order. Prose follows HANDOVER 20: the test `descriptions_follow_writing_rules` rejects an em dash. A new tool is also added to the capability lists in the three tests in `defs.rs` and to `EVERY` (whose length is a typed array, `[Capability; 17]`, so adding a capability forces the length to change).",
+            "files": [
+              "crates/ostra-tools/src/defs.rs"
+            ],
+            "name": "Definition: const description + `*_def()` + `definitions` arm",
+            "snippet": {
+              "code": "const DOCS_SEARCH: &str = \"Searches the documentation books ... and returns the best-matching sections with only the passages that matched.\n\nUsage:\n- Call it before you read code to learn an area: ...\";\n\nfn docs_search_def() -> ToolDefinition {\n    def(\n        \"DocsSearch\",\n        DOCS_SEARCH,\n        json!({\"type\": \"object\", \"properties\": {\n            \"query\": {\"type\": \"string\", \"description\": \"The question, with any names you know\"},\n            \"project\": {\"type\": \"string\", \"description\": \"A project key, to search only its part of the books\"},\n            \"limit\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 15, \"description\": \"Maximum sections to return. Defaults to 5\"}\n        }, \"required\": [\"query\"], \"additionalProperties\": false}),\n    )\n}\n\n// in definitions():\nCapability::DocsSearch => vec![docs_search_def()],",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/defs.rs:126"
+            }
+          },
+          {
+            "description": "(1) `ostra-core` `Capability` enum variant plus `native_tool()` arm, (2) `ostra-agents/src/mapping.rs` `capability_key` arm and, for a prompt token, a `TOKENS` entry (the array length is typed, `[(&str, &str); 28]`), (3) `assets/tool-mapping.toml` `[capabilities.<key>]` with one value per executor table (native, claude, codex, grok, agy), and (4) the agent's `capabilities` list in `assets/agents/<name>/agent.toml`. Rust matches on `Capability` in `native_tool`, `capability_key`, `definitions`, and `ostra-exec-harness/src/setup.rs` are exhaustive, so a new variant fails to compile until each has an arm. The TOML and `TOKENS` are not compile-checked: `Mapping::context` falls back to the key text when a value is missing, and `Mapping::tool` returns `None`. An Ostra-own tool uses `mcp__ostra__<name>` for Claude and the bare MCP name for the others. A tool that is a Claude Code built-in name for Claude (Read, Grep, Glob) uses that name and the other harnesses' own tool names.",
+            "files": [
+              "crates/ostra-core/src/agent.rs",
+              "crates/ostra-agents/src/mapping.rs",
+              "assets/tool-mapping.toml",
+              "assets/agents/implementer/agent.toml"
+            ],
+            "name": "Capability mapping in four places",
+            "snippet": {
+              "code": "[capabilities.docs_search]\nnative = \"DocsSearch\"\nclaude = \"mcp__ostra__docs_search\"\ncodex = \"docs_search\"\ngrok = \"docs_search\"\nagy = \"docs_search\"",
+              "language": "toml",
+              "source": "assets/tool-mapping.toml:98"
+            }
+          },
+          {
+            "description": "A harness reaches an Ostra-own tool through the `ostra` MCP server. Three places carry the name: the `MCP_TOOLS` list in `ostra-server/src/bridge.rs` (MCP name, native name, capability), the `canonical_ostra_tool` match in `ostra-exec-harness/src/adapters/mod.rs` that turns the bare MCP name back into the native name before policy, and the `tool-mapping.toml` entry. Without the first, the tool is not listed to the harness; without the second, the policy sees the bare name and falls to `mode_default`. The tool's own definition is reused unchanged (`mcp_tools` calls `ostra_tools::definitions`).",
+            "files": [
+              "crates/ostra-server/src/bridge.rs",
+              "crates/ostra-exec-harness/src/adapters/mod.rs"
+            ],
+            "name": "Harness exposure of an Ostra-own tool",
+            "snippet": {
+              "code": "static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>> = LazyLock::new(|| {\n    let mut v: Vec<(String, &'static str, Capability)> = vec![\n        (\"report\".into(), \"Report\", Capability::Report),\n        (\"document\".into(), \"Document\", Capability::Document),\n        (\"memory\".into(), \"Memory\", Capability::Memory),\n        (\"memory_recall\".into(), \"MemoryRecall\", Capability::MemoryRecall),\n        (\"docs_search\".into(), \"DocsSearch\", Capability::DocsSearch),\n    ];\n    ...",
+              "language": "rust",
+              "source": "crates/ostra-server/src/bridge.rs:284"
+            }
+          },
+          {
+            "description": "`perms::family` has three explicit groups: Edit (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `ApplyPatch`), Read (`Read`, `Grep`, `Glob`), and WebFetch/Bash; every other name is `Family::Other`. Read family: `layer1` runs `check_read` on the call's `file_path` or `path`; `layer2` allows unless a deny or ask rule names the path; permission rules `Read(...)` apply, and a `Read` rule matches only Read, Grep, Glob by tool name (perms.rs:278). Edit family: `write_paths` supplies targets for the write-scope guards, the session dir and temp dir are allowed, and other paths follow rules then mode. Other family: allowed without asking only if the name is in the inline `known` list (Skill, Report, Document, Memory, MemoryRecall, DocsSearch, WebSearch, the `is_code_tool`, `is_manage_tool`, `is_coord_tool` predicates, `submit_*`, harness-internal names); otherwise `mode_default` applies (ask in default and acceptEdits, deny in plan, allow in bypass). Separately, `KNOWN_TOOLS` in perms.rs controls which tool names a user permission rule may name; a name missing there is rejected at save time as 'not a tool Ostra knows'. A tool that writes files must be named in `family` (Edit) and in `write_paths`, otherwise the write-scope guards (`check_write`) do not see its target; `answer_only` mode in `layer1` denies calls where `write_paths` is non-empty or the tool is Report, Document, Memory, or a manage tool.",
+            "files": [
+              "crates/ostra-policy/src/perms.rs",
+              "crates/ostra-policy/src/policy.rs"
+            ],
+            "name": "Policy classification: family, then Other's known list",
+            "snippet": {
+              "code": "pub fn family(tool: &str) -> Family {\n    match tool {\n        \"Bash\" => Family::Bash,\n        \"Edit\" | \"Write\" | \"MultiEdit\" | \"NotebookEdit\" | \"ApplyPatch\" => Family::Edit,\n        \"Read\" | \"Grep\" | \"Glob\" => Family::Read,\n        \"WebFetch\" => Family::WebFetch,\n        _ => Family::Other,\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/perms.rs:137"
+            }
+          },
+          {
+            "description": "The place where an Ostra-own, non-file tool is classified as 'other, allowed'. A tool not named here is asked about in default mode.",
+            "files": [
+              "crates/ostra-policy/src/policy.rs"
+            ],
+            "name": "Family::Other known list",
+            "snippet": {
+              "code": "let known = matches!(\n    tool,\n    \"WebSearch\"\n        | \"Skill\"\n        | \"Report\"\n        | \"Document\"\n        | \"Memory\"\n        | \"MemoryRecall\"\n        | \"DocsSearch\"\n) || ostra_core::agent::is_code_tool(tool)\n    || ostra_core::manage::is_manage_tool(tool)\n    || ostra_core::coord::is_coord_tool(tool)\n    || tool.starts_with(\"submit_\")\n    || harness_internal;",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/policy.rs:719"
+            }
+          }
+        ],
+        "problem": "CLAUDE.md gives a one-line recipe: implement in ostra-tools, give a definition modeled on Claude Code's tool description, map a Capability to it, and make sure ostra-policy classifies it. The recipe touches more places than it names: a tool name is repeated as a string in a dispatch match, a definitions function, a Capability enum, a mapping TOML, a policy family or known list, a rule-name list, the harness MCP bridge, and docs. Several of these are compile-enforced and several are silent (a missed one falls through to an 'Unknown tool' error or to an 'ask' decision at run time).",
+        "recommendation": "For a new tool that is not another operation of the code, project, or subagent families, follow the DocsSearch pattern: one capability, one native name, and an entry in every list that repeats the name. If the tool reads or writes files by path, also add it to `perms::family` (Read or Edit), to `write_paths` when it writes, and to `canonical_call`'s path-key arm, because the path guards and permission rules only see tools classified there.",
+        "repo": "ostra",
+        "scope": "Task: how a native tool is added in Ostra: its implementation, its definition, its capability mapping, and its policy classification. This document traces the existing wiring for the single-tool precedents (Read, Grep, Glob, DocsSearch, MemoryRecall) and the multi-tool families (Code*, Project*, Subagent*). It does not design a specific new tool and does not investigate any external technology.",
+        "sources": [],
+        "title": "How a native tool is added"
+      },
+      "submit": {
+        "findings_summary": "A native tool is an `async fn(env, input) -> ToolOutput` in `ostra-tools`, dispatched by a string arm in `execute` (lib.rs). Its description constant, `*_def()` function, and `Capability` arm in `definitions()` live in `defs.rs`. The capability is mapped in four places: the `Capability` enum and `native_tool` in ostra-core, `capability_key` and `TOKENS` in ostra-agents `mapping.rs`, `assets/tool-mapping.toml`, and the agent's `agent.toml`. An Ostra-own tool also needs entries in `MCP_TOOLS` (bridge.rs) and `canonical_ostra_tool` (adapters/mod.rs) for harnesses. The policy sorts tools by `perms::family` (Read, Edit, Other). Other-family tools are allowed unasked only if listed in the inline `known` list in `layer2`, and `KNOWN_TOOLS` separately gates rule names. Several of these lists are not compile-checked. The document records DocsSearch as the closest single-tool precedent, and docs/internals/tools.md as the page to update.",
+        "not_covered": [
+          "Which agents should receive a new capability and what their prompts say about it",
+          "Codex, Grok, and Antigravity adapters beyond canonical_ostra_tool",
+          "Web console rendering of tool calls and ToolOutput.diff",
+          "Tests that count or list capabilities (ostra-agents tests.rs, ostra-exec-native tests.rs, conformance fixtures)",
+          "docs/internals/agents.md, docs/security/agent-containment.md and executors.md updates"
+        ],
+        "open_questions": 2,
+        "scope_covered": "How a native tool is implemented, defined, mapped to a capability, and classified by the policy, traced through the single-tool and family precedents; no specific new tool was designed and the harness adapters other than Claude were not read.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How the implementer and the code reviewer get their capabilities, and how harness adapters map tool names.",
+      "file": "ostra-research-20261002-085706-agent-capabilities-and-tool-mapping.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-agents",
+          "ostra-core",
+          "ostra-exec-harness",
+          "ostra-exec-native",
+          "ostra-tools",
+          "ostra-policy",
+          "ostra-server (bridge)",
+          "assets/"
+        ],
+        "asks": [
+          "How the implementer agent gets its capabilities.",
+          "How the code-reviewer agent gets its capabilities.",
+          "How harness adapters map tool names."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-agents/src/lib.rs:load_defs",
+            "step": "`assets/agents/implementer/agent.toml` and `assets/agents/code-reviewer/agent.toml` list capabilities; they are embedded by `rust_embed` (`#[folder = \"../../assets\"]`) and parsed into `AgentDef` the first time `agent_def` runs."
+          },
+          {
+            "location": "crates/ostra-engine/src/factory.rs:AgentsFactory::agent_meta",
+            "step": "The spawn factory reads the definition for the agent being started and puts `capabilities` into `AgentMeta`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs",
+            "step": "The runner copies `meta.capabilities` into the `ExecutionSpec` it hands to the executor."
+          },
+          {
+            "location": "crates/ostra-engine/src/factory.rs:AgentsFactory::build",
+            "step": "The factory renders the system prompt for the resolved executor: `render_prompt(req.agent, env.executor)`. Tokens such as `{{tool_edit}}` resolve through `Mapping::context` using the executor's column of `tool-mapping.toml`. For a harness, `Mapping::vocabulary` prepends the `## Tool vocabulary` table built from the same capability list."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs",
+            "step": "Native executor: `ostra_tools::definitions(&spec.capabilities)` yields the local tool definitions (Read, Edit, Write, Bash, Grep, Glob, Skill, Report, Memory, ...). `Document` is added by `document_tool_definition(agent)` when the agent has it, workspace MCP tools are appended, and `submit_<agent>` is added last. A capability not listed means no definition is sent, so the model cannot call that tool."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/launch.rs:plan",
+            "step": "Harness executor launch: `launch::plan` picks the per-harness planner. Claude gets `--tools <claude_tools(caps)>`; Antigravity gets an agent file with `tools: agy_tools(caps)`; Codex and Grok receive no capability-based tool list (Codex runs with `--dangerously-bypass-approvals-and-sandbox`, Grok with `--permission-mode bypassPermissions`). All four register the `ostra` MCP server (`mcp-stdio --execution <id>`) and hooks that call back into Ostra."
+          },
+          {
+            "location": "crates/ostra-server/src/bridge.rs:mcp_tools",
+            "step": "The MCP shim's `tools/list` returns the agent's `submit_<agent>` tool plus what the server bridge supplies. `ServerBridge::mcp_tools` builds the list from every entry in `MCP_TOOLS` (report, document, memory, memory_recall, docs_search, code_*, project_*, subagent_*), dropping ManageProjects and Coordinate unless the execution has a `manage` or `coord` handle (which `ostra-server/src/manage.rs` and `coord.rs` grant only when `spec.capabilities` contains the capability). The Report, Memory, MemoryRecall, DocsSearch, Code, and Document tools are therefore offered to every harness run regardless of the agent's capability list."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/adapters/mod.rs:for_harness",
+            "step": "The harness model calls a tool. The harness fires its PreToolUse hook (`ostra hook --harness <h> --event PreToolUse`), and the bridge selects the adapter with `for_harness` and calls `parse_pre(payload)`. Result is either `PreParse::Refuse(reason)` (spawn or ask tool, truncated Grok input) or `PreParse::Call { call, native }`."
+          },
+          {
+            "location": "crates/ostra-server/src/bridge.rs:policy_check",
+            "step": "`ServerBridge::policy_check` runs `ExecutionPolicy::check` on the canonical `ToolCall`. Workspace MCP tools and management tools skip the hook check because the MCP path checks them (Rules M2 and O1). Layer 1 guards include the write-scope guard, which denies project-source writes for session-only agents such as the code reviewer and applies to `ApplyPatch` through `write_paths`. The decision is formatted back by the adapter's `pre_response`."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/adapters/mod.rs:outcome_from",
+            "step": "After the call, `parse_post` builds a `PostParse { call, outcome }` (exit code read from the response or text via `exit_code_from`; Agy carries no result, so `result_known` is false) for the policy observer."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Capability, HarnessKind, ExecutorKind, AgentName, CODE_TOOLS, PROJECT_TOOLS, COORD_TOOLS, ToolCall."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents",
+            "role": "Reads agent.toml and tool-mapping.toml, renders prompts and the harness tool vocabulary."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "Native tool definitions by capability; also used by the server bridge to describe MCP tools."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "Consumes canonical ToolCalls: write scope, ledger ownership, permission families, KNOWN_TOOLS."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-harness",
+            "role": "Launch plans, adapters, hook and MCP bridge."
+          },
+          {
+            "kind": "external",
+            "name": "minijinja",
+            "role": "Renders prompt templates with `UndefinedBehavior::Strict`."
+          },
+          {
+            "kind": "external",
+            "name": "rust-embed",
+            "role": "Embeds `assets/` (agent.toml, prompt.md, tool-mapping.toml) into the binary."
+          },
+          {
+            "kind": "external",
+            "name": "toml / serde",
+            "role": "Parse agent.toml and tool-mapping.toml."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "assets/agents/implementer/agent.toml",
+            "purpose": "Declares the implementer's capabilities, tier, timeout, and per-executor effort.",
+            "symbols": [
+              "capabilities = [\"read\", \"edit\", \"write\", \"shell\", \"search_text\", \"glob\", \"skill\", \"memory_recall\", \"memory\", \"report\", \"code\", \"manage_projects\", \"coordinate\", \"docs_search\"]",
+              "default_tier = \"balanced\"",
+              "timeout_seconds = 2400"
+            ]
+          },
+          {
+            "path": "assets/agents/code-reviewer/agent.toml",
+            "purpose": "Declares the code reviewer's capabilities. Read-only on project source: no edit, write, skill, report, memory, or document.",
+            "symbols": [
+              "capabilities = [\"read\", \"shell\", \"search_text\", \"glob\", \"code\", \"coordinate\", \"docs_search\"]",
+              "default_tier = \"balanced\"",
+              "timeout_seconds = 1200"
+            ]
+          },
+          {
+            "path": "assets/tool-mapping.toml",
+            "purpose": "Capability to tool-name table per executor table (native, claude, codex, grok, agy), plus `[strategies.*]` prose per harness for skills, Ostra MCP tools, and file writing.",
+            "symbols": [
+              "[capabilities.read]",
+              "[capabilities.code] native = \"Code{Op}\" claude = \"mcp__ostra__code_{op}\"",
+              "[capabilities.submit] native = \"submit_{agent}\" claude = \"mcp__ostra__submit_{agent}\"",
+              "[strategies.skill]",
+              "[strategies.ostra_tools]",
+              "[strategies.write]"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/lib.rs",
+            "purpose": "Loads every `agent.toml` into `AgentDef` (cached in a OnceLock), renders prompts per executor, prepends guides and the harness tool vocabulary.",
+            "symbols": [
+              "pub struct AgentDef { pub name, pub description, pub default_tier, pub effort: BTreeMap<String, Effort>, pub capabilities: Vec<Capability>, pub timeout_secs: u64 }",
+              "pub fn agent_def(agent: AgentName) -> &'static AgentDef",
+              "pub fn effort_for(agent: AgentName, executor: ExecutorKind) -> Effort",
+              "pub fn tool_name(capability: &str, agent: AgentName, executor: ExecutorKind) -> Option<String>",
+              "pub fn render_prompt(agent: AgentName, executor: ExecutorKind) -> Result<String, AgentsError>",
+              "fn render_prompt_in(agent, executor, assets: &Path)"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/mapping.rs",
+            "purpose": "Parses `tool-mapping.toml`; resolves a capability key to a tool name for an executor; builds the minijinja token context (`tool_*`) and the harness `## Tool vocabulary` section.",
+            "symbols": [
+              "const TOKENS: [(&str, &str); 28]",
+              "pub(crate) struct Mapping { capabilities: BTreeMap<String, BTreeMap<String, String>>, strategies: BTreeMap<String, BTreeMap<String, String>> }",
+              "pub(crate) fn get() -> &'static Mapping",
+              "fn capability_key(c: Capability) -> &'static str",
+              "pub(crate) fn tool(&self, capability: &str, executor: ExecutorKind, agent: AgentName) -> Option<String>",
+              "pub(crate) fn context(&self, agent, executor, assets_dir) -> BTreeMap<&'static str, String>",
+              "pub(crate) fn vocabulary(&self, agent, harness: HarnessKind, caps: &[Capability]) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/agent.rs",
+            "purpose": "Defines the `Capability` enum (17 variants), `CODE_TOOLS`, native tool names per capability, `writes()`, the submit tool name, and `is_session_only()` (write-scope confinement).",
+            "symbols": [
+              "pub enum Capability { Read, Write, Edit, Shell, SearchText, Glob, Skill, WebSearch, WebFetch, Report, Document, Memory, MemoryRecall, DocsSearch, Code, ManageProjects, Coordinate }",
+              "pub const CODE_TOOLS: [(&str, &str); 8]",
+              "pub fn native_tool(self) -> &'static str",
+              "pub fn writes(self) -> bool",
+              "pub fn submit_tool_name(self) -> String",
+              "pub fn snake(self) -> String",
+              "pub fn is_session_only(self) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/executor.rs",
+            "purpose": "`HarnessKind` (Claude, Codex, Grok, Agy) and `ExecutorKind`; `tier_table()` is the column key into `tool-mapping.toml` and the effort table.",
+            "symbols": [
+              "pub enum HarnessKind { Claude, Codex, Grok, Agy }",
+              "pub enum ExecutorKind { Native, Harness(HarnessKind) }",
+              "pub fn tier_table(self) -> &'static str",
+              "pub fn display_name(self) -> &'static str"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/coord.rs",
+            "purpose": "Coordination tool pairs (MCP name, native name) and run limits.",
+            "symbols": [
+              "pub const COORD_TOOLS: [(&str, &str); 3]",
+              "pub const MAX_HELPERS_PER_RUN: usize = 3"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/manage.rs",
+            "purpose": "Project-management tool pairs; `ProjectCreate` is the one that asks the user.",
+            "symbols": [
+              "pub const PROJECT_TOOLS: [(&str, &str); 2]",
+              "pub fn is_manage_tool(native: &str) -> bool",
+              "pub fn changes_ostra(native: &str) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "`AgentsFactory` implements `SpawnFactory`: `agent_meta` copies the capabilities out of `AgentDef`; `build` renders the system prompt for the resolved executor.",
+            "symbols": [
+              "fn agent_meta(&self, agent: AgentName) -> AgentMeta",
+              "ostra_agents::render_prompt(req.agent, env.executor)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/services.rs",
+            "purpose": "`AgentMeta` carries `capabilities: Vec<Capability>` from the factory to the runner.",
+            "symbols": [
+              "pub capabilities: Vec<Capability>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Copies `meta.capabilities` into the `ExecutionSpec` handed to the executor (lines about 2709 and 2855).",
+            "symbols": [
+              "capabilities: meta.capabilities.clone()"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/defs.rs",
+            "purpose": "Native tool definitions per capability; `Capability::WebSearch` yields none locally (provider-side), `Capability::Document` yields none here (agent-specific `document_tool_definition`).",
+            "symbols": [
+              "pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition>",
+              "pub fn wants_web_search(capabilities: &[Capability]) -> bool",
+              "pub fn submit_tool_definition(agent: AgentName) -> ToolDefinition",
+              "const EVERY: [Capability; 17]"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native loop: builds the tool list from `spec.capabilities` via `ostra_tools::definitions(caps)`, adds Document for agents with the capability, workspace MCP tools, and the submit tool (about lines 450 to 494).",
+            "symbols": [
+              "let mut tools: Vec<ToolDef> = ostra_tools::definitions(caps)",
+              "ostra_tools::submit_tool_definition(spec.agent)"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/launch.rs",
+            "purpose": "Per-harness launch plans. Only Claude (`--tools`) uses the capability list to restrict built-in tools; Codex and Grok launch with their full toolsets and bypassed approvals; Agy gets a generated agent file with a `tools:` list.",
+            "symbols": [
+              "fn claude_tools(caps: &[Capability]) -> String",
+              "const INSPECT_TOOLS: &str = \"Read,Bash,Grep,Glob\"",
+              "fn plan_claude(inp: &LaunchInput<'_>) -> LaunchPlan",
+              "fn plan_codex(inp: &LaunchInput<'_>) -> LaunchPlan",
+              "fn plan_grok(inp: &LaunchInput<'_>) -> LaunchPlan",
+              "fn plan_agy(inp: &LaunchInput<'_>) -> LaunchPlan",
+              "pub fn plan(inp: &LaunchInput<'_>) -> LaunchPlan"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/setup.rs",
+            "purpose": "Antigravity integration: writes the `ostra-<agent>.md` agent definition and maps capabilities to Antigravity's native tool names.",
+            "symbols": [
+              "pub fn agy_agent_markdown(spec: &ExecutionSpec) -> String",
+              "pub fn agy_tools(caps: &[Capability]) -> Vec<&'static str>",
+              "pub fn agy_agent_name(agent: AgentName) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/mod.rs",
+            "purpose": "The `Adapter` trait, `for_harness`, shared helpers, Ostra-MCP-name canonicalization, spawn/ask refusal, `Other:<name>` fallback.",
+            "symbols": [
+              "pub trait Adapter: Sync { fn kind; fn meta; fn parse_pre(&self, payload: &Value) -> PreParse; fn parse_post(&self, event: HookEvent, payload: &Value) -> Option<PostParse>; fn pre_response(&self, decision: &Decision) -> Value; fn post_response; fn stop_response }",
+              "pub fn for_harness(kind: HarnessKind) -> &'static dyn Adapter",
+              "pub fn ostra_mcp_tool(name: &str) -> Option<String>",
+              "pub fn canonical_ostra_tool(bare: &str) -> String",
+              "pub(crate) fn is_spawn_tool(name: &str) -> bool",
+              "pub(crate) fn is_ask_tool(name: &str) -> bool",
+              "pub(crate) fn with_file_path(input: &Value, keys: &[&str]) -> Value",
+              "pub(crate) fn other(name: &str, input: &Value) -> ToolCall",
+              "pub enum PreParse { Call { call: ToolCall, native: String }, Refuse(String) }"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/claude.rs",
+            "purpose": "Claude Code adapter: names are already canonical; MultiEdit/NotebookEdit become Edit, LS becomes Glob, MCP `mcp__ostra__*` is canonicalized.",
+            "symbols": [
+              "pub(crate) fn canonical_claude_call(name: &str, input: &Value, cwd: Option<&str>) -> PreParse"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/codex.rs",
+            "purpose": "Codex adapter: `exec_command`/`shell`/`local_shell`/`Bash` become Bash (command array re-quoted); `apply_patch` becomes `ApplyPatch {patch}`; on Windows a non-POSIX shell becomes `PowerShell`.",
+            "symbols": [
+              "fn windows_shell_tool(input: &Value) -> &'static str",
+              "\"apply_patch\" => ToolCall::new(\"ApplyPatch\", ...)"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/grok.rs",
+            "purpose": "Grok Build adapter: read_file/hashline_read to Read, write/write_file to Write, search_replace/hashline_edit/edit_file to Edit, run_terminal_command/monitor to Bash, grep to Grep, list_dir/glob to Glob, `use_tool` unwrapped to its inner MCP tool; truncated payloads refused; deny reasons clipped to 256 characters.",
+            "symbols": [
+              "pub const GROK_REASON_MAX: usize = 256",
+              "pub fn fit_reason(reason: &str) -> String",
+              "pub const TRUNCATED_REFUSAL: &str"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/agy.rs",
+            "purpose": "Antigravity adapter: payload nests the call in `toolCall.{name,args}` with PascalCase args; view_file to Read, write_to_file to Write, replace_file_content to Edit, run_command to Bash, grep_search to Grep, find_by_name/list_dir to Glob, read_url_content to WebFetch, search_web to WebSearch, `call_mcp_tool` unwrapped for the `ostra` server.",
+            "symbols": [
+              "fn call_parts(payload: &Value) -> (String, Value)"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/bridge.rs",
+            "purpose": "Server side of the harness bridge: `policy_check` runs `ExecutionPolicy` on the canonical call; `MCP_TOOLS` lists Ostra's MCP tools with their native name and capability; `mcp_tools` decides what the MCP shim lists.",
+            "symbols": [
+              "static MCP_TOOLS: LazyLock<Vec<(String, &'static str, Capability)>>",
+              "fn mcp_tools(&self, execution: &ExecutionId) -> Vec<(String, String, Value)>",
+              "fn mcp_call(&self, execution, tool: &str, args: Value)",
+              "fn served_by_mcp(tool: &str) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/bridge.rs",
+            "purpose": "Harness-side MCP handler: `tool_list` always lists the agent's own `submit_<agent>` tool first, then the server-provided tools.",
+            "symbols": [
+              "fn tool_list(&self, live: &LiveExecution) -> Vec<Value>",
+              "async fn call_tool(&self, live: &LiveExecution, params: &Value) -> Value"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/perms.rs",
+            "purpose": "`KNOWN_TOOLS` canonical names a permission rule may use; `family()` groups ApplyPatch/Edit/Write/MultiEdit/NotebookEdit as the Edit family.",
+            "symbols": [
+              "const KNOWN_TOOLS: &[&str]"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/policy.rs",
+            "purpose": "`ExecutionPolicy::check`; `write_paths` extracts file paths from Write/Edit/MultiEdit/NotebookEdit and from `ApplyPatch` patch text.",
+            "symbols": [
+              "pub fn check(&self, call: &ToolCall) -> PolicyDecision",
+              "fn write_paths(&self, call: &ToolCall) -> Vec<(PathBuf, String)>"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/guards.rs",
+            "purpose": "Write-scope guard and ledger ownership: code-reviewer is session-only (cannot modify project source), and owns `ostra-review-ledger*.md` and `ostra-security-block.json` (the ledger is also writable by implementer and write-test).",
+            "symbols": [
+              "static AGENT_OWNED: LazyLock<Vec<Owned>>",
+              "pub fn check_write(...)"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/tests.rs",
+            "purpose": "Tests that pin the capability and rendering contracts.",
+            "symbols": [
+              "fn read_only_agents_have_no_edit_and_quick_answer_cannot_write",
+              "fn every_prompt_renders_for_every_executor_with_no_unresolved_token",
+              "fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabulary"
+            ]
+          },
+          {
+            "path": "assets/agents/implementer/prompt.md",
+            "purpose": "Implementer prompt template using `{{tool_*}}` tokens (read, write, edit, skill, search_text, glob, memory_recall, project_create, submit, ...).",
+            "symbols": [
+              "{{tool_write}}",
+              "{{tool_edit}}",
+              "{{tool_project_create}}",
+              "{{tool_submit}}"
+            ]
+          },
+          {
+            "path": "assets/agents/code-reviewer/prompt.md",
+            "purpose": "Code reviewer prompt template. Uses `{{tool_skill}}`, `{{tool_read}}`, `{{tool_search_text}}`, `{{tool_glob}}`, `{{tool_shell}}`, `{{tool_submit}}`; names `{{tool_edit}}` only to say the reviewer has none, and updates its ledger through a shell heredoc (about lines 467 to 472).",
+            "symbols": [
+              "{{tool_shell}} heredoc",
+              "{{tool_submit}}"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a change adds or renames a tool or capability, a research pass on `ostra-tools/src/defs.rs` classification and `ostra-policy` handling of the new canonical name would be needed.",
+          "If a change targets Codex or Grok tool restriction, a pass on whether those CLIs expose an allowlist flag is needed; the repo currently passes none."
+        ],
+        "not_covered": [
+          "The Layer 2 permission model and Layer 1 guards beyond write scope and ledger ownership (ostra-policy/src/policy.rs, perms.rs).",
+          "The hook transport (`ostra hook` CLI, `ostra-exec-harness/src/bridge.rs` handle_policy) and the MCP stdio shim in detail.",
+          "How the agent-specific `document_tool_definition` and the `submit_*` schemas are built (ostra-tools, ostra-core/src/submit.rs).",
+          "Whether a test cross-checks `tool-mapping.toml` names against the adapter match arms: none was found in the files read, but the test suite was not searched exhaustively.",
+          "The full Grok and Antigravity adapter response and post-parse code beyond line 150 and 160 respectively, and the sandbox profiles that further restrict a read-only agent.",
+          "HANDOVER.md sections describing harness executors (around lines 640 to 680) and the Ultracode `definitions/tool-mapping.json` source."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "An agent's tool surface starts as a list of abstract `Capability` values (snake_case in TOML) in `assets/agents/<name>/agent.toml`. `ostra_agents::load_defs` reads all agents at first use into `AgentDef`; a malformed file panics, and tests validate the assets. The factory copies `AgentDef.capabilities` into `AgentMeta`, the runner copies it into `ExecutionSpec.capabilities`, and each executor consumes that list. The implementer holds read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate, docs_search. The code reviewer holds read, shell, search_text, glob, code, coordinate, docs_search. Every agent additionally always gets its `submit_<agent>` tool (not a capability): `mapping::vocabulary` appends the `submit` key, `ostra_tools::submit_tool_definition` adds it natively, and `bridge::tool_list` lists it first on harnesses.",
+            "files": [
+              "assets/agents/implementer/agent.toml",
+              "assets/agents/code-reviewer/agent.toml",
+              "crates/ostra-agents/src/lib.rs",
+              "crates/ostra-engine/src/factory.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Capability declaration in agent.toml",
+            "snippet": {
+              "code": "fn load_defs() -> Result<BTreeMap<AgentName, AgentDef>, AgentsError> {\n    let mut out = BTreeMap::new();\n    for agent in AgentName::ALL {\n        let path = format!(\"agents/{}/agent.toml\", agent.as_str());\n        let raw: AgentToml =\n            toml::from_str(&asset_text(&path)?).map_err(|e| AgentsError::Parse {\n                path: path.clone(),\n                message: e.to_string(),\n            })?;\n        out.insert(\n            agent,\n            AgentDef {\n                name: agent,\n                description: raw.description,\n                default_tier: raw.default_tier,\n                effort: raw.effort,\n                capabilities: raw.capabilities,\n                timeout_secs: raw.timeout_seconds,\n            },\n        );\n    }\n    Ok(out)\n}",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/lib.rs:69"
+            }
+          },
+          {
+            "description": "`assets/tool-mapping.toml` has one `[capabilities.<key>]` table per capability with a column per executor table (`native`, `claude`, `codex`, `grok`, `agy`). `ExecutorKind::tier_table()` picks the column. `{agent}` expands to the agent's snake_case name; for the three multi-tool capabilities (`code`, `manage_projects`, `coordinate`) the value holds `{op}` or `{Op}` and the caller passes keys like `code:callers`. A value that is not a bare tool name is prose (for example `Read on the skill's SKILL.md`). `TOKENS` maps 28 template tokens (`tool_read` to `read`, `tool_code_callers` to `code:callers`, `tool_submit` to `submit`) to mapping keys. A key missing for an executor falls back to the key text itself in `context`.",
+            "files": [
+              "assets/tool-mapping.toml",
+              "crates/ostra-agents/src/mapping.rs"
+            ],
+            "name": "Capability to tool-name table with executor columns",
+            "snippet": {
+              "code": "pub(crate) fn tool(\n    &self,\n    capability: &str,\n    executor: ExecutorKind,\n    agent: AgentName,\n) -> Option<String> {\n    let (key, op) = capability\n        .split_once(':')\n        .map_or((capability, None), |(k, o)| (k, Some(o)));\n    let value = self.capabilities.get(key)?.get(executor.tier_table())?;\n    let mut v = value.replace(\"{agent}\", &agent.snake());\n    if let Some(op) = op {\n        let mut cap = op.to_string();\n        cap[..1].make_ascii_uppercase();\n        v = v.replace(\"{op}\", op).replace(\"{Op}\", &cap);\n    }\n    Some(v)\n}",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/mapping.rs:81"
+            }
+          },
+          {
+            "description": "`render_prompt_in` renders `agents/<name>/prompt.md` with the token context in strict-undefined minijinja (an unknown token is an error). Then, in this order of prepending, it adds `code-tools.md` if the agent has `Code`, `coordination.md` if it has `Coordinate`, and always `output-rules.md`. For a harness executor it finally prepends the `## Tool vocabulary` section from `Mapping::vocabulary`: a table of capability to tool for every capability the agent declares plus `submit`, then the `[strategies.*]` prose for that harness (the `skill` strategy appears when the agent has Skill or Read; the `write` strategy when it has Write or Edit; `ostra_tools` always), a ban on the harness's own subagents, and the instruction to reply only `Done!` after submit. Native prompts get no vocabulary section because the prompt tokens already render to Claude Code names.",
+            "files": [
+              "crates/ostra-agents/src/lib.rs",
+              "crates/ostra-agents/src/mapping.rs"
+            ],
+            "name": "Prompt rendering per executor",
+            "snippet": {
+              "code": "    let rules = render_str(\"output-rules.md\", &asset_text(\"output-rules.md\")?, &ctx)?;\n    body = format!(\"{rules}{body}\");\n    match executor {\n        ExecutorKind::Native => Ok(body),\n        ExecutorKind::Harness(h) => {\n            let vocab = mapping::get().vocabulary(agent, h, &agent_def(agent).capabilities);\n            let vocab = render_str(\"tool vocabulary\", &vocab, &ctx)?;\n            Ok(format!(\"{vocab}\\n{body}\"))\n        }\n    }",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/lib.rs:299"
+            }
+          },
+          {
+            "description": "Each harness has a unit struct implementing `Adapter` (`Claude`, `Codex`, `Grok`, `Agy`), selected by `for_harness`. `parse_pre` reads the harness's payload keys (snake_case for Claude and Codex, camelCase first for Grok, nested `toolCall` for Agy), refuses spawn tools (`Task`, `Agent`, `spawn_agent`, ...) with `LEAF_REFUSAL` and ask tools (`AskUserQuestion`, `request_user_input`, ...) with `ASK_REFUSAL`, then resolves: (1) an Ostra MCP tool via `ostra_mcp_tool` (prefixes `mcp__ostra__`, `mcp_ostra_`, `ostra__`, `ostra/`, `ostra.`, `ostra:`) into the canonical name (`report` to `Report`, `code_callers` to `CodeCallers`, `subagent_ask` to `SubagentAsk`, `submit_*` unchanged, a workspace server's tool to `mcp__<server>__<tool>`); (2) a per-harness match from native names to canonical `Read`, `Write`, `Edit`, `Bash`, `Grep`, `Glob`, `WebFetch`, `WebSearch`, with the file path normalized into `file_path` by `with_file_path`; (3) anything else becomes `Other:<native name>` with the input untouched. The `PreParse::Call` also keeps the harness's own name in `native`. Responses go the other way: `pre_response` formats Allow/Deny in the shape that harness accepts (Claude-shaped for Claude and Grok, `{}` for an allowed Codex call, `decision`/`reason` only for Agy). The canonical names are the ones the policy, permission rules (`KNOWN_TOOLS`), and the bridge's `MCP_TOOLS` use.",
+            "files": [
+              "crates/ostra-exec-harness/src/adapters/mod.rs",
+              "crates/ostra-exec-harness/src/adapters/claude.rs",
+              "crates/ostra-exec-harness/src/adapters/codex.rs",
+              "crates/ostra-exec-harness/src/adapters/grok.rs",
+              "crates/ostra-exec-harness/src/adapters/agy.rs"
+            ],
+            "name": "Harness adapter: payload to canonical ToolCall",
+            "snippet": {
+              "code": "            match name.as_str() {\n                \"view_file\" | \"view_file_outline\" | \"view_code_item\" => ToolCall::new(\n                    \"Read\",\n                    with_file_path(&args, &[\"AbsolutePath\", \"File\", \"TargetFile\", \"path\"]),\n                ),\n                \"write_to_file\" => {\n                    let mut v = with_file_path(&args, &[\"TargetFile\", \"AbsolutePath\", \"path\"]);\n                    if let Some(content) = get_str(&args, &[\"CodeContent\", \"Content\"]) {\n                        v[\"content\"] = json!(content);\n                    }\n                    ToolCall::new(\"Write\", v)\n                }\n                \"replace_file_content\" | \"multi_replace_file_content\" => ToolCall::new(\n                    \"Edit\",\n                    with_file_path(&args, &[\"TargetFile\", \"AbsolutePath\", \"path\"]),\n                ),\n                \"run_command\" | \"send_command_input\" => { /* Bash with command from CommandLine|Command|Input */ }\n                other_name => other(other_name, &args),\n            }",
+              "language": "rust",
+              "source": "crates/ostra-exec-harness/src/adapters/agy.rs:73"
+            }
+          },
+          {
+            "description": "`claude_tools` maps only the file, shell, search, and web capabilities to Claude Code built-in tool names, adds `Read` if the agent has Skill, and always appends `ToolSearch` so deferred `mcp__ostra__*` tools can load. Ostra-owned capabilities (Report, Memory, Code, ...) are not listed there because they arrive through the `ostra` MCP server registered by `--mcp-config`. `--strict-mcp-config`, `--setting-sources user`, and `--disallowed-tools Agent,Task,AskUserQuestion,EnterPlanMode,ExitPlanMode` are also passed. An inspection (read-only reopen) uses `INSPECT_TOOLS = \"Read,Bash,Grep,Glob\"` and no MCP server.",
+            "files": [
+              "crates/ostra-exec-harness/src/launch.rs"
+            ],
+            "name": "Claude `--tools` allowlist from capabilities",
+            "snippet": {
+              "code": "fn claude_tools(caps: &[Capability]) -> String {\n    let mut tools: Vec<&str> = vec![];\n    for c in caps {\n        let t = match c {\n            Capability::Read => \"Read\",\n            Capability::Write => \"Write\",\n            Capability::Edit => \"Edit\",\n            Capability::Shell => \"Bash\",\n            Capability::SearchText => \"Grep\",\n            Capability::Glob => \"Glob\",\n            Capability::WebSearch => \"WebSearch\",\n            Capability::WebFetch => \"WebFetch\",\n            _ => continue,\n        };\n        if !tools.contains(&t) {\n            tools.push(t);\n        }\n    }\n    if caps.contains(&Capability::Skill) && !tools.contains(&\"Read\") {\n        tools.push(\"Read\");\n    }\n    tools.push(\"ToolSearch\");\n    tools.join(\",\")\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-harness/src/launch.rs:177"
+            }
+          },
+          {
+            "description": "`agy_tools` maps capabilities to Antigravity names (view_file, write_to_file, replace_file_content, run_command, grep_search, find_by_name, search_web, read_url_content; Skill maps to view_file) and returns nothing for Ostra-owned capabilities. The list is written into the generated `ostra-<agent>.md` agent file. The doc comment records that an agent file without `tools:` gets no native tools and one unknown name fails session start (measured on agy 1.2.8), so only verified names are listed.",
+            "files": [
+              "crates/ostra-exec-harness/src/setup.rs"
+            ],
+            "name": "Antigravity `tools:` list from capabilities",
+            "snippet": null
+          }
+        ],
+        "problem": "Each agent declares a list of abstract capabilities in `assets/agents/<name>/agent.toml`. Those capabilities are turned into concrete tools in two separate directions: outbound (prompt text names the tool for the executor; the launcher or tool-definition builder exposes it) and inbound (a harness adapter turns the harness's own tool-call payload back into a canonical Claude-Code-named `ToolCall` for the policy). The two directions use different tables that are not generated from each other, and the capability list limits exposure differently on each executor.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the implementer and the code reviewer get their capabilities, and how harness adapters map tool names. Covers the repo `ostra` only: capability declaration in agent.toml, the capability to tool-name table, prompt rendering, per-executor tool exposure (native, Claude, Codex, Grok, Antigravity), and the adapter translation of harness payloads into canonical ToolCalls. It does not cover the policy rules in depth, the sandbox, or the web UI.",
+        "sources": [],
+        "title": "Agent capabilities and harness tool-name mapping (implementer and code-reviewer)"
+      },
+      "submit": {
+        "findings_summary": "Capabilities are declared in each agent's assets/agents/<name>/agent.toml (the implementer has 14, including edit, write, report, memory and manage_projects; the code reviewer has 7 and no edit or write). They flow through AgentDef, AgentMeta and ExecutionSpec to the executor. The native executor sends only the tools ostra_tools::definitions(caps) returns. On harnesses the capability list limits built-in tools only for Claude (--tools) and Antigravity (tools: list). Codex and Grok get no allowlist, and the server's MCP tool list is not gated by Report/Memory/Code, so those rely on policy hooks such as the session-only write-scope guard. assets/tool-mapping.toml and the Adapter implementations (claude, codex, grok, agy) are separate tables: the first names tools in prompts and the vocabulary section, and the adapters turn harness payloads into canonical Claude-named ToolCalls, with unmapped names becoming Other:<name>.",
+        "not_covered": [
+          "Layer 2 permission model and Layer 1 guards beyond write scope and ledger ownership",
+          "Hook transport (ostra hook CLI, handle_policy) and MCP stdio shim internals",
+          "Construction of document_tool_definition and the submit_* schemas",
+          "Whether any test cross-checks tool-mapping.toml names against adapter match arms",
+          "Sandbox profiles that further restrict read-only agents",
+          "HANDOVER.md harness sections and the Ultracode tool-mapping.json source"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the implementer and code-reviewer declare and receive capabilities, how tool-mapping.toml turns them into per-executor tool names, and how the four harness adapters map tool names back to canonical ToolCalls; policy internals, sandbox and UI were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

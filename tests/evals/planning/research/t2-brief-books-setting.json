@@ -1,0 +1,570 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:45:18.804175159+00:00",
+  "docs": [
+    {
+      "task": "How the repo brief lists the workspace's books and caps the list.",
+      "file": "ostra-research-20261002-084238-brief-books-list.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-agents",
+          "ostra-core",
+          "ostra-engine"
+        ],
+        "asks": [
+          "Explain how the repo brief lists the workspace's books",
+          "Explain how the brief caps that list"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/factory.rs:BooksBrief::read call at line 383",
+            "step": "The factory builds a spawn for an agent and reads the workspace's books from disk."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:BooksBrief::read",
+            "step": "BooksBrief::read calls book::list(workspace) and returns None when it is empty, so no books section appears. Otherwise it stores dir and the whole list."
+          },
+          {
+            "location": "crates/ostra-core/src/book.rs:list",
+            "step": "book::list reads every directory in `<workspace runtime>/docs` whose name passes is_book_id, parses each book.json, maps it to a BookSummary, and sorts by updated_at descending then id ascending. It applies no limit."
+          },
+          {
+            "location": "crates/ostra-engine/src/factory.rs:383",
+            "step": "When the agent's definition has Capability::DocsSearch, the factory sets search_tool to the executor-specific tool name from tool_name(\"docs_search\", agent, executor)."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:augment",
+            "step": "The factory passes books: books.as_ref() in BriefInput to augment, which skips the brief when the first message already carries a heading, else calls build_brief and appends the result after `---`."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:build_brief",
+            "step": "build_brief renders the books section: takes the first MAX_BRIEF_BOOKS (20) books, which are the newest 20 because the list is sorted newest first. Each line is `- `<dir>/<id>/index.md`: <projects> (<n> sections[, with the system architecture])`. If more than 20 exist it adds `- and N more; find them with Glob in <dir>`. Then the intro sentence says to search with the tool name (Rule B8) or to read the sections that bear on the task."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core (book, artifacts, config)",
+            "role": "Supplies BookSummary, book::list, and the settings types."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents",
+            "role": "Owns the brief and the cap constant."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "The factory is the only caller of BooksBrief::read and augment for spawns."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-agents/src/brief.rs",
+            "purpose": "Defines the books cap constant, BooksBrief, BriefInput, and the section of build_brief that renders the books list and the overflow line.",
+            "symbols": [
+              "pub const MAX_BRIEF_BOOKS: usize = 20;",
+              "pub const BOOKS_HEADING: &str = \"## Workspace documentation\";",
+              "pub struct BooksBrief { pub dir: PathBuf, pub books: Vec<ostra_core::book::BookSummary>, pub search_tool: Option<String> }",
+              "impl BooksBrief { pub fn read(workspace: &Path) -> Option<BooksBrief> }",
+              "pub struct BriefInput<'a> { ..., pub books: Option<&'a BooksBrief>, ... }",
+              "pub fn build_brief(input: &BriefInput<'_>) -> Option<String>",
+              "pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/book.rs",
+            "purpose": "Reads the books of a workspace. list returns every readable book as a BookSummary, newest first, with no limit. dir gives the docs folder.",
+            "symbols": [
+              "pub fn list(workspace: &Path) -> Vec<BookSummary>",
+              "pub fn dir(workspace: &Path) -> PathBuf",
+              "pub struct BookSummary { id, title, projects, updated_at, sections: u32, has_architecture: bool }",
+              "pub fn is_book_id(id: &str) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "Builds each spawn. Reads BooksBrief for the workspace, sets search_tool when the agent has the DocsSearch capability, and passes it to augment. It has the settings in hand (env.settings) but does not pass them to the books brief.",
+            "symbols": [
+              "let books = BooksBrief::read(ws).map(|mut b| { ... b.search_tool = ostra_agents::tool_name(\"docs_search\", req.agent, env.executor); ... b });"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/services.rs",
+            "purpose": "SpawnEnv carries settings: &WorkspaceSettings into the factory.",
+            "symbols": [
+              "pub struct SpawnEnv<'a> { ... pub settings: &'a WorkspaceSettings, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/artifacts.rs",
+            "purpose": "Sibling precedent: the artifacts list in the same brief is capped by a constant in ostra-core, applied when ArtifactsBrief::read builds the entries.",
+            "symbols": [
+              "pub const MAX_BRIEF_ARTIFACTS: usize = 40;"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Where workspace limits are declared (Limits), defaulted, listed in the settings field table, and validated by validate_workspace. This is the only place caps are user settings today.",
+            "symbols": [
+              "pub struct Limits { pub max_parallel_executions: u32, pub session_budget_usd: f64 }",
+              "impl Default for Limits",
+              "validate_workspace (limits checks near line 1424)"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/tests.rs",
+            "purpose": "The existing test of the books section: one book, checks the heading, the list line, and the search or read wording. No test covers the cap or the overflow line.",
+            "symbols": [
+              "fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states",
+              "fn brief_is_idempotent_and_handles_a_missing_profile"
+            ]
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Docs text on books: says every agent's brief lists the books (around line 763) and that the spawn brief lists them and tells the agent to search (around line 809). It states no cap.",
+            "symbols": [
+              "### How agents read a book"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the cap should become a setting, a research pass or the spec should decide where it lives (Limits or a new settings group), its default (20 today), its validation at save, and how it reaches BooksBrief or build_brief: the factory has env.settings, but BriefInput carries no settings field.",
+          "Note for the spec: the existing test covers one book only, so a cap or overflow test is new, and docs/internals/pipeline.md and the settings docs would need updating under CLAUDE.md pattern 9."
+        ],
+        "not_covered": [
+          "The docs_search tool and its ranking (ostra-tools), which agents use instead of reading the list.",
+          "Web UI and API listing of books (GET /api/workspaces/{ws}/docs), which return the uncapped list.",
+          "Other callers of build_brief or augment outside factory.rs (for example the harness launch path in crates/ostra-exec-harness/src/launch.rs was seen to mention books but not read)."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Both the artifacts and the books sections of build_brief take the first N entries, render one bullet each, and append a line `and K more; find them with Glob in <dir>` when the total exceeds N. Books use MAX_BRIEF_BOOKS in the same file. Artifacts use MAX_BRIEF_ARTIFACTS from ostra-core, applied earlier in ArtifactsBrief::read and reported through a `total` field. BooksBrief holds the full list and the cap is applied at render time.",
+            "files": [
+              "crates/ostra-agents/src/brief.rs"
+            ],
+            "name": "Brief list capped by a constant with an overflow line",
+            "snippet": {
+              "code": "    // Rule B5: every agent can read the books; only the engine writes them.\n    if let Some(b) = input.books {\n        let dir = b.dir.display();\n        let mut rows: Vec<String> = b\n            .books\n            .iter()\n            .take(MAX_BRIEF_BOOKS)\n            .map(|k| {\n                format!(\n                    \"- `{dir}/{}/index.md`: {} ({} sections{})\",\n                    k.id,\n                    k.projects.join(\", \"),\n                    k.sections,\n                    if k.has_architecture { \", with the system architecture\" } else { \"\" }\n                )\n            })\n            .collect();\n        if b.books.len() > MAX_BRIEF_BOOKS {\n            rows.push(format!(\n                \"- and {} more; find them with Glob in `{dir}`\",\n                b.books.len() - MAX_BRIEF_BOOKS\n            ));\n        }",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/brief.rs:488"
+            }
+          },
+          {
+            "description": "Caps that users tune are fields of Limits in WorkspaceSettings (serde default, ts export), listed in a field table with a label, and rejected at save by validate_workspace when out of range (CLAUDE.md pattern 7). The brief's caps (MAX_BRIEF_CHARS, MAX_SKILL_ROWS, MAX_MODULE_ROWS, MAX_BRIEF_BOOKS, MAX_BRIEF_ARTIFACTS) are not among them.",
+            "files": [
+              "crates/ostra-core/src/config.rs"
+            ],
+            "name": "Workspace limits as validated settings",
+            "snippet": {
+              "code": "pub struct Limits {\n    /// Executions that may run at once in this workspace. Further spawns wait their turn.\n    pub max_parallel_executions: u32,\n    /// Dollars one session may spend before it pauses for a decision. `0` means no limit.\n    pub session_budget_usd: f64,\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:652"
+            }
+          }
+        ],
+        "problem": "The repo brief appended to every agent's first message names at most 20 workspace books, using the compile-time constant MAX_BRIEF_BOOKS in crates/ostra-agents/src/brief.rs, and points to Glob for the rest. The cap is not read from any setting. Existing spend and parallelism caps live in WorkspaceSettings.limits and are validated at save, so a setting for this cap would have a precedent but none exists today.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "How the repo brief lists the workspace's books and caps the list. Covers brief.rs, book::list, the spawn factory call site, the existing test and docs text, and how existing limits are declared as settings. Does not cover the docs-search tool, book writing, or the web UI.",
+        "sources": [],
+        "title": "Repo brief books list and its cap"
+      },
+      "submit": {
+        "findings_summary": "The factory calls BooksBrief::read(ws), which takes the full newest-first list from ostra_core::book::list, which has no limit. build_brief then renders the first MAX_BRIEF_BOOKS (a constant of 20 in crates/ostra-agents/src/brief.rs) as one bullet per book, and adds an \"and N more; find them with Glob\" line when more exist. The cap is not a setting. User-tunable caps live in WorkspaceSettings.limits, validated in validate_workspace, and BriefInput carries no settings. The only test covers one book, so the cap and the overflow line have no test. docs/internals/pipeline.md mentions the books list but states no cap.",
+        "not_covered": [
+          "The docs_search tool and its ranking in ostra-tools",
+          "The web UI and API book listing, which return the uncapped list",
+          "Other callers of build_brief or augment outside factory.rs, including crates/ostra-exec-harness/src/launch.rs"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the repo brief lists the workspace's books and caps the list; the docs-search tool, book writing, and the web UI were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How workspace settings reach the spawn factory and the brief, and how a setting is validated at save.",
+      "file": "ostra-research-20261002-084228-settings-to-spawn-factory-and-brief.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (config)",
+          "ostra-workspace (settings, trust, runtime)",
+          "ostra-engine (runner, factory, services)",
+          "ostra-agents (brief)",
+          "ostra-sandbox (validate)",
+          "ostra-server (api, services)"
+        ],
+        "asks": [
+          "How workspace settings reach the spawn factory",
+          "How workspace settings reach the brief",
+          "How a setting is validated at save"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-server/src/api.rs:validate_workspace",
+            "step": "The browser or API client sends the whole WorkspaceSettings as JSON. `POST /api/workspaces/{id}/validate` returns the issues and writes nothing. `PATCH /api/workspaces/{id}` saves."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:patch_workspace",
+            "step": "patch_workspace calls WorkspaceRt::save_settings and maps an Err(issues) through ApiErr::invalid to a 422 body `{error, issues}`. On success it renames the registry workspace when `name` changed and returns WorkspaceDetail."
+          },
+          {
+            "location": "crates/ostra-workspace/src/runtime.rs:save_settings",
+            "step": "save_settings calls WorkspaceRt::validate. validate calls validate_settings with the global config, the machine Environment, and the settings, then adds a Rule W3 tag issue for each bad artifact tag in instructions.all and instructions.agents.*."
+          },
+          {
+            "location": "crates/ostra-workspace/src/settings.rs:validate_settings",
+            "step": "validate_settings runs ostra_sandbox::validate::workspace first, then validate_workspace (ostra-core), then each permission rule through ostra_policy::validate_rule, then checks each absolute project path is a folder. validate_workspace checks the name, project keys, paths, stacks, code providers and language servers, routing agent keys, MCP servers, limits, forbidden routes, and that every route key resolves on every complexity, on an installed harness, with a provider key. The list is sorted by path then message and deduplicated."
+          },
+          {
+            "location": "crates/ostra-workspace/src/trust.rs:save_workspace",
+            "step": "With no issues, write_settings calls trust::save_workspace: it stashes file literals, seals MCP secrets, writes workspace.toml through write_file (which drops yolo, limits, the sandbox_* fields, tool_enforcement and permissions.mode), then set_access writes those dropped values to the registry Access record, and records the file hash for command approval when the file was approved. sync_projects then updates the project table."
+          },
+          {
+            "location": "crates/ostra-server/src/services.rs:workspace",
+            "step": "Later, the runner reaches a spawn step. perform_spawn calls `self.services.workspace()`. ServerServices::workspace re-reads workspace.toml with load_toml_required (falling back to seeded defaults if the file does not parse), applies overlay (registry values over the file), and, if the file is not approved, strips MCP servers, code providers, language servers, allow rules and projects outside the root."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform_spawn",
+            "step": "perform_spawn resolves the route from `global` and `settings`, loads project.toml, INVENTORY.md and the project instruction files from disk, and calls `factory.build(&req, &SpawnEnv { state, executor, settings, profile, inventory, repo_root, project_docs })`. A route error or a build Err is recorded as a denied execution, not retried with defaults."
+          },
+          {
+            "location": "crates/ostra-engine/src/factory.rs:build",
+            "step": "AgentsFactory::build maps SpawnInputs to the agent's typed params, renders the `Label: value` block, then derives from the settings: `projects` (for tag resolution), `instructions_for(agent)` (each passed through with_tagged_files), and the effort via resolve_effort(settings, agent, complexity). It reads ArtifactsBrief and BooksBrief from the workspace folder, not from settings."
+          },
+          {
+            "location": "crates/ostra-agents/src/brief.rs:augment",
+            "step": "augment appends build_brief's output to the first message after a `---` line, unless the message already contains one of the brief headings. build_brief emits, in order: the profile and inventory sections chosen by `sections(agent)`, project instruction files, new projects, artifacts, books (Rule B5, with the Rule B8 search hint), then workspace instructions. It returns None when nothing applies."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "WorkspaceSettings, validate_workspace, ValidationIssue, book listing; depends on nothing internal."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents",
+            "role": "BriefInput, build_brief, augment, BooksBrief, ArtifactsBrief; depends on ostra-core, takes no WorkspaceSettings."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "SpawnEnv, SpawnFactory, Services traits; AgentsFactory is the one place that maps settings onto the brief; it knows no server."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-workspace",
+            "role": "Registry/file split of settings, save-time validation aggregator, WorkspaceRt::save_settings."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-sandbox",
+            "role": "validate::workspace for sandbox_* settings, called by ostra-workspace."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "ServerServices implements Services; api.rs routes for PATCH and validate."
+          },
+          {
+            "kind": "external",
+            "name": "serde / toml / ts-rs",
+            "role": "WorkspaceSettings is #[serde(default)] and #[ts(export)]; workspace.toml is written with toml::Value::try_from."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "WorkspaceSettings and its sub-structs, SETTING_KEYS, seeded defaults, instructions_for, resolve_effort, and validate_workspace with ValidationIssue and Environment.",
+            "symbols": [
+              "pub struct WorkspaceSettings { name, projects, routing, instructions, yolo, permissions, notifications, limits, sandbox_mode, tool_enforcement, sandbox_network, sandbox_allowed_hosts, sandbox_decoys, sandbox_readable, sandbox_loopback, sandbox_blocked_ports, mcp_servers }  (L520-558, #[serde(default)], #[ts(export)])",
+              "pub const SETTING_KEYS: &[(&str, &str)]  (L872)",
+              "pub fn seeded(name: &str) -> Self  (L952, WorkspaceSettings)",
+              "pub fn instructions_for(&self, agent: AgentName) -> Vec<String>  (L1037)",
+              "pub struct ValidationIssue { pub path: String, pub message: String }  (L1266)",
+              "pub struct Environment { installed_harnesses: Vec<HarnessKind>, providers_with_keys: Vec<String> }  (L1276)",
+              "pub fn validate_workspace(global: &GlobalConfig, ws: &WorkspaceSettings, env: &Environment, default_tier: impl Fn(&str) -> Tier) -> Vec<ValidationIssue>  (L1283)",
+              "test setting_keys_name_fields (L1905), seeded_defaults_validate (L2075)"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/settings.rs",
+            "purpose": "validate_settings: the full save-time check. Runs ostra_sandbox::validate::workspace, then validate_workspace, then permission rules and project folder existence.",
+            "symbols": [
+              "pub fn validate_settings(global: &GlobalConfig, env: &Environment, settings: &WorkspaceSettings) -> Vec<ValidationIssue>  (L35)",
+              "pub fn field_issue(path: &str, message: String) -> ValidationIssue  (L69)",
+              "pub fn default_tier(key: &str) -> Tier"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "WorkspaceRt: settings(), effective_settings(), validate(), save_settings(), write_settings(). validate() adds the Rule W3 instruction tag check on top of validate_settings.",
+            "symbols": [
+              "pub fn settings(&self) -> WorkspaceSettings  (L118: file_settings() then trust::overlay)",
+              "fn file_settings(&self) -> WorkspaceSettings  (L124: load_toml_required of workspace.toml, falls back to WorkspaceSettings::seeded(\"workspace\") with a warning)",
+              "pub fn effective_settings(&self) -> WorkspaceSettings  (L132)",
+              "pub fn validate(&self, settings: &WorkspaceSettings) -> Vec<ValidationIssue>  (L144)",
+              "pub fn save_settings(&self, settings: &WorkspaceSettings) -> Result<(), Vec<ValidationIssue>>  (L187)"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/trust.rs",
+            "purpose": "Where each setting is stored. Registry-held settings (Access record), overlay, effective, save_workspace, write_file (strips registry-held keys from workspace.toml), create_workspace.",
+            "symbols": [
+              "struct Access { mode, yolo, limits: Option<Limits>, sandbox_mode, tool_enforcement, sandbox_network, sandbox_allowed_hosts, sandbox_decoys, sandbox_readable, sandbox_loopback, sandbox_blocked_ports }  (L327, every field after yolo is #[serde(default)])",
+              "fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings)  (L360)",
+              "pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings)  (L384)",
+              "pub fn effective(registry: &RegistryDb, root: &Path, mut s: WorkspaceSettings) -> WorkspaceSettings  (L414)",
+              "pub fn save_workspace(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) -> Result<(), ConfigError>  (L437)",
+              "fn write_file(root: &Path, s: &WorkspaceSettings) -> Result<(), ConfigError>  (L456)"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/create.rs",
+            "purpose": "Workspace creation. When a folder already holds workspace.toml, the registry-held settings in it are reset (Rule A2) before the request's own choices apply.",
+            "symbols": [
+              "draft_for (L92-105 resets sandbox_* fields, limits, mode, yolo)",
+              "pub fn register(host: &dyn WorkspaceHost, body: &CreateWorkspace) -> Result<(WorkspaceId, PathBuf), CreateError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-sandbox/src/validate.rs",
+            "purpose": "Save-time checks for the sandbox settings of a workspace, called first from validate_settings. The model of a per-setting validator with caps, indexed paths and because-clauses.",
+            "symbols": [
+              "pub fn workspace(ws: &WorkspaceSettings) -> Vec<ValidationIssue>  (L8)",
+              "fn validate_blocked_ports(ports: &[u16]) -> Vec<ValidationIssue>  (L53)",
+              "pub const MAX_BLOCKED_PORTS: usize = 64"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "HTTP entry points: PATCH /api/workspaces/{id} saves, POST /api/workspaces/{id}/validate validates without writing. ApiErr::invalid turns the issue list into a 422 with {error, issues}.",
+            "symbols": [
+              "async fn patch_workspace(State(app): AppState, Path(id): Path<String>, Json(settings): Json<WorkspaceSettings>) -> Res<WorkspaceDetail>  (L885)",
+              "async fn validate_workspace(State(app): AppState, Path(id): Path<String>, Json(settings): Json<WorkspaceSettings>) -> Res<Vec<ValidationIssue>>  (L954)",
+              "fn invalid(issues: Vec<ValidationIssue>) -> Self  (L77, 422, \"The settings have problems. Fix them and save again.\")"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/services.rs",
+            "purpose": "ServerServices: the engine's Services implementation. workspace() re-reads workspace.toml and applies the registry overlay and approval filter on every call.",
+            "symbols": [
+              "fn file_settings(&self) -> WorkspaceSettings  (L24)",
+              "fn settings(&self) -> WorkspaceSettings  (L29: trust::effective(registry, root, file_settings()))",
+              "fn workspace(&self) -> WorkspaceSettings  (L40)",
+              "fn factory(&self) -> Arc<dyn SpawnFactory>  (L51: Arc::new(AgentsFactory))"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/services.rs",
+            "purpose": "The trait boundary the engine uses. SpawnEnv carries the settings, profile, inventory, repo root and project docs into the factory.",
+            "symbols": [
+              "pub struct SpawnEnv<'a> { state: &'a SessionState, executor: ExecutorKind, settings: &'a WorkspaceSettings, profile: Option<&'a ProjectProfile>, inventory: Option<&'a str>, repo_root: &'a Path, project_docs: &'a [ostra_agents::brief::ProjectDoc] }  (L35)",
+              "pub trait SpawnFactory: Send + Sync { fn agent_meta; fn build(&self, req: &SpawnRequest, env: &SpawnEnv<'_>) -> Result<BuiltSpawn, String>; fn judge_prompt }  (L46)",
+              "pub trait Services { fn global(&self) -> GlobalConfig; fn workspace(&self) -> WorkspaceSettings; fn factory(&self) -> Arc<dyn SpawnFactory>; ... }  (L63)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "perform_spawn reads global and workspace settings, resolves the route, loads profile, inventory and project docs from disk, and calls factory.build with a SpawnEnv. plan_ctx reads limits.session_budget_usd for the planner.",
+            "symbols": [
+              "perform_spawn (L2398-2528): let settings = self.services.workspace(); resolve_route(&global, &settings, RouteQuery{..}); load_toml(&paths::project_profile(&repo_root)); ostra_agents::brief::project_docs(&repo_root); factory.build(&req, &SpawnEnv { state: &st, executor: route.executor, settings: &settings, profile: profile.as_ref(), inventory: inventory.as_deref(), repo_root: &repo_root, project_docs: &project_docs })",
+              "fn plan_ctx(&self, st: &SessionState) -> PlanCtx  (L1612)",
+              "a build error becomes record_denied(.., format!(\"spawn: {e}\")) and a route error becomes record_denied(.., format!(\"route: {}\", e.0))"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "AgentsFactory::build: builds the typed spawn params, then (L368-406) reads settings.projects and settings.instructions_for(agent), tags files, reads ArtifactsBrief and BooksBrief from the workspace folder, calls augment with a BriefInput, renders the system prompt, and resolves effort from settings.",
+            "symbols": [
+              "fn build(&self, req: &SpawnRequest, env: &SpawnEnv<'_>) -> Result<BuiltSpawn, String>  (L115)",
+              "fn with_tagged_files(text: String, workspace: &Path, projects: &[(String, PathBuf)]) -> String  (L427)",
+              "fn existing_book(s: &SessionState) -> Option<PathBuf>  (L38: reads the book at spawn time, outside the fold)"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/brief.rs",
+            "purpose": "The repo brief. BriefInput is its only input. Sections: repo brief from profile and inventory (per-agent section list), project instruction files, workspace artifacts, workspace documentation (books), workspace instructions, new projects. Takes no WorkspaceSettings: instructions arrive as an already resolved &[String].",
+            "symbols": [
+              "pub struct BriefInput<'a> { agent, prompt, repo_root, profile, inventory, instructions: &'a [String], project_docs, artifacts: Option<&'a ArtifactsBrief>, books: Option<&'a BooksBrief>, new_projects }  (L137)",
+              "pub struct BooksBrief { pub dir: PathBuf, pub books: Vec<BookSummary>, pub search_tool: Option<String> }  (L117)",
+              "impl BooksBrief { pub fn read(workspace: &Path) -> Option<BooksBrief> }  (L126: ostra_core::book::list; None when there are no books)",
+              "pub const MAX_BRIEF_BOOKS: usize = 20  (L28)",
+              "pub const BOOKS_HEADING: &str = \"## Workspace documentation\"  (L26)",
+              "pub fn build_brief(input: &BriefInput<'_>) -> Option<String>  (L255; books block L488-526)",
+              "pub fn augment(first_message: &str, input: &BriefInput<'_>) -> String  (L551; idempotent by heading check)",
+              "fn sections(agent: AgentName) -> &'static [Section]  (L68)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/book.rs",
+            "purpose": "Books on disk under <workspace>/.ostra/docs/<id>/book.json. BooksBrief lists them via list().",
+            "symbols": [
+              "pub fn dir(workspace: &Path) -> PathBuf  (L536)",
+              "pub fn list(workspace: &Path) -> Vec<BookSummary>  (L584, newest first)",
+              "pub struct BookSummary { id, title, projects, updated_at, sections: u32, has_architecture: bool }  (L326)"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/tests.rs",
+            "purpose": "Brief tests, including the books block (BooksBrief literal at L866 and L888, build_brief at L882 and L892, idempotency).",
+            "symbols": [
+              "fn brief_is_idempotent_and_handles_a_missing_profile"
+            ]
+          },
+          {
+            "path": "docs/internals/settings-and-routing.md",
+            "purpose": "The docs page that describes where settings live, Rule A2, validation at save, and read-fresh behavior. Pattern 9 requires updating it with any settings change.",
+            "symbols": [
+              "## Where settings live",
+              "## Why some settings stay out of the folder",
+              "## Validation at save time",
+              "## Read fresh, every execution",
+              "## Where to look in the code"
+            ]
+          },
+          {
+            "path": "web/src/screens/workspace/settingsForm.ts",
+            "purpose": "The console's settings form: maps WorkspaceSettings fields to form state and back (sandbox_blocked_ports at L351 and L444; field id list at L530-531). Named only; not investigated further.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/api/gen/WorkspaceSettings.ts",
+            "purpose": "Generated TypeScript for WorkspaceSettings (from #[ts(export)]); regenerated with cargo test -p ostra-core.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a setting is to change what the books section of the brief shows, the spec should decide whether it is stored in workspace.toml or in the registry Access record (Rule A2), because that sets how many files change.",
+          "A follow-up pass could cover the web form and the docs search tool if the setting needs a UI control or changes agent tool access."
+        ],
+        "not_covered": [
+          "The web settings form (web/src/screens/workspace/*) beyond naming settingsForm.ts, and the Claude Design sync that CLAUDE.md requires for any web/ change.",
+          "How the native and harness executors use the first message, and the docs_search tool implementation (Capability::DocsSearch, ostra_agents::tool_name).",
+          "The planner's use of settings through PlanCtx beyond plan_ctx reading limits.session_budget_usd and project format commands.",
+          "The global config (GlobalConfig) validation path and its last-good fallback.",
+          "The create-workspace validation path (create.rs draft_for) other than the Rule A2 reset of registry-held fields.",
+          "Which tests would need a changed fixture for a new settings field (e2e.rs, mcp.rs settings round-trips, web mock fixtures) beyond the ones named in files."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The engine never caches workspace settings. perform_spawn calls services.workspace() once per spawn, uses the result for route resolution, and passes a reference to the factory in SpawnEnv. The factory is the only place that decides which settings reach the brief. The brief crate sees no WorkspaceSettings: it receives pre-selected values (instructions: &[String]) in BriefInput.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/services.rs",
+              "crates/ostra-engine/src/factory.rs",
+              "crates/ostra-agents/src/brief.rs",
+              "crates/ostra-server/src/services.rs"
+            ],
+            "name": "Settings are re-read through Services::workspace() and passed to the factory in SpawnEnv",
+            "snippet": {
+              "code": "let block = params.render();\nlet ws = &env.state.workspace_root;\nlet projects: Vec<(String, PathBuf)> = env\n    .settings\n    .projects\n    .iter()\n    .map(|p| (p.key.clone(), p.path.clone()))\n    .collect();\nlet instructions: Vec<String> = env\n    .settings\n    .instructions_for(req.agent)\n    .into_iter()\n    .map(|text| with_tagged_files(text, ws, &projects))\n    .collect();\nlet artifacts = ArtifactsBrief::read(ws);\nlet books = BooksBrief::read(ws).map(|mut b| {\n    if ostra_agents::agent_def(req.agent)\n        .capabilities\n        .contains(&ostra_core::Capability::DocsSearch)\n    {\n        b.search_tool = ostra_agents::tool_name(\"docs_search\", req.agent, env.executor);\n    }\n    b\n});\nlet first_message = augment(\n    &block,\n    &BriefInput {\n        agent: req.agent,\n        prompt: &block,\n        repo_root: env.repo_root,\n        profile: env.profile,\n        inventory: env.inventory,\n        instructions: &instructions,\n        project_docs: env.project_docs,\n        artifacts: artifacts.as_ref(),\n        books: books.as_ref(),\n        new_projects: &s.created_projects,\n    },\n);",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/factory.rs:368"
+            }
+          },
+          {
+            "description": "ArtifactsBrief::read and BooksBrief::read return None when the folder holds nothing, and build_brief emits a section only for Some. Each section carries a heading constant that augment checks so a message with a brief already in it is returned unchanged. The books block is not tied to any setting today: every agent, including the initializer, receives it when books exist. The block lists at most MAX_BRIEF_BOOKS books and says how to search them from BooksBrief.search_tool, which the factory fills when the agent has Capability::DocsSearch (Rule B8).",
+            "files": [
+              "crates/ostra-agents/src/brief.rs",
+              "crates/ostra-engine/src/factory.rs"
+            ],
+            "name": "Brief inputs are read from disk at spawn time; a section is an Option on BriefInput",
+            "snippet": {
+              "code": "// Rule B5: every agent can read the books; only the engine writes them.\nif let Some(b) = input.books {\n    let dir = b.dir.display();\n    let mut rows: Vec<String> = b\n        .books\n        .iter()\n        .take(MAX_BRIEF_BOOKS)\n        .map(|k| {\n            format!(\n                \"- `{dir}/{}/index.md`: {} ({} sections{})\",\n                k.id,\n                k.projects.join(\", \"),\n                k.sections,\n                if k.has_architecture { \", with the system architecture\" } else { \"\" }\n            )\n        })\n        .collect();\n    if b.books.len() > MAX_BRIEF_BOOKS {\n        rows.push(format!(\n            \"- and {} more; find them with Glob in `{dir}`\",\n            b.books.len() - MAX_BRIEF_BOOKS\n        ));\n    }\n    // Rule B8: an agent with the search tool queries the books before it reads them whole.\n    let how = match &b.search_tool {\n        Some(t) => format!(\n            \"Search them with {t} before you read code to learn an area: it returns the sections that match \\\n             your question with only the passages that matched. Read a section's file only when you need all of it\"\n        ),\n        None => \"Read the sections that bear on your task\".to_string(),\n    };\n    out.push(format!(\n        \"{BOOKS_HEADING}\\n\\nOstra's docs stage wrote these books about the workspace's projects. ...\",\n        rows.join(\"\\n\")\n    ));\n}",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/brief.rs:488"
+            }
+          },
+          {
+            "description": "Most settings live in .ostra/workspace.toml. The control settings live in the registry under an Access record, are removed from workspace.toml by write_file, and overlay() writes them back over the file's values on every read. A new field that must not be controllable by a folder file needs all of: a field on Access with #[serde(default)], set_access, overlay, write_file's t.remove list, create.rs's adopted-file reset, and (if sandbox) the sandbox() accessor. A field that lives in the file needs none of these. sandbox_blocked_ports is the latest field added this way and shows every touch point.",
+            "files": [
+              "crates/ostra-workspace/src/trust.rs",
+              "crates/ostra-workspace/src/create.rs",
+              "crates/ostra-core/src/config.rs"
+            ],
+            "name": "Two storage locations for workspace settings (Rule A2)",
+            "snippet": {
+              "code": "pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {\n    let a = access(registry, root);\n    s.permissions.mode = a.mode;\n    s.yolo.default = a.yolo;\n    s.limits = a.limits.unwrap_or_default();\n    s.sandbox_mode = a.sandbox_mode;\n    s.tool_enforcement = a.tool_enforcement;\n    s.sandbox_network = a.sandbox_network;\n    s.sandbox_allowed_hosts = a.sandbox_allowed_hosts;\n    s.sandbox_decoys = a.sandbox_decoys;\n    s.sandbox_readable = a.sandbox_readable;\n    s.sandbox_loopback = a.sandbox_loopback;\n    s.sandbox_blocked_ports = a.sandbox_blocked_ports;\n}",
+              "language": "rust",
+              "source": "crates/ostra-workspace/src/trust.rs:384"
+            }
+          },
+          {
+            "description": "Every validator returns ValidationIssue { path, message } with a dotted or indexed settings path. Layers, in order: ostra_sandbox::validate::workspace (sandbox fields), validate_workspace in ostra-core (name, projects, routing keys and routes, MCP, limits), permission rule parsing and project folder existence in validate_settings, and the Rule W3 instruction tag check in WorkspaceRt::validate. save_settings refuses to write when any issue is returned. Messages follow HANDOVER section 20: the instruction first, then a because clause. A list setting is validated per entry with an indexed path plus a cap constant on the whole list.",
+            "files": [
+              "crates/ostra-workspace/src/runtime.rs",
+              "crates/ostra-workspace/src/settings.rs",
+              "crates/ostra-core/src/config.rs",
+              "crates/ostra-sandbox/src/validate.rs"
+            ],
+            "name": "Save-time validation: layered validators returning Vec<ValidationIssue>",
+            "snippet": {
+              "code": "pub fn save_settings(&self, settings: &WorkspaceSettings) -> Result<(), Vec<ValidationIssue>> {\n    let issues = self.validate(settings);\n    if !issues.is_empty() {\n        return Err(issues);\n    }\n    self.write_settings(settings).map_err(|e| {\n        vec![ValidationIssue {\n            path: String::new(),\n            message: e.to_string(),\n        }]\n    })?;\n    self.sync_projects();\n    Ok(())\n}",
+              "language": "rust",
+              "source": "crates/ostra-workspace/src/runtime.rs:187"
+            }
+          },
+          {
+            "description": "Model for validating one new setting: a private function per setting in a crate that owns the semantics, called from a public aggregator, with a MAX_ constant and one issue per bad entry plus one for the list as a whole.",
+            "files": [
+              "crates/ostra-sandbox/src/validate.rs"
+            ],
+            "name": "A per-setting validator with a cap and indexed paths",
+            "snippet": {
+              "code": "/// Blocked loopback ports a workspace may list, because each is a rule in every sandbox policy.\npub const MAX_BLOCKED_PORTS: usize = 64;\n\n/// A `sandbox_blocked_ports` list: real ports, at most [`MAX_BLOCKED_PORTS`].\nfn validate_blocked_ports(ports: &[u16]) -> Vec<ValidationIssue> {\n    let mut issues: Vec<ValidationIssue> = ports\n        .iter()\n        .enumerate()\n        .filter(|(_, p)| **p == 0)\n        .map(|(i, _)| ValidationIssue {\n            path: format!(\"sandbox_blocked_ports[{i}]\"),\n            message: \"Write a port from 1 to 65535, because port 0 names no service.\".into(),\n        })\n        .collect();\n    if ports.len() > MAX_BLOCKED_PORTS {\n        issues.push(ValidationIssue {\n            path: \"sandbox_blocked_ports\".into(),\n            message: format!(\n                \"List at most {MAX_BLOCKED_PORTS} ports, because each one is a rule in every sandbox policy.\"\n            ),\n        });\n    }\n    issues\n}",
+              "language": "rust",
+              "source": "crates/ostra-sandbox/src/validate.rs:49"
+            }
+          },
+          {
+            "description": "SETTING_KEYS lists dotted serialized keys with a one-line description for settings search; the test setting_keys_name_fields fails if a key is not a field of the serialized seeded settings. WorkspaceSettings carries #[serde(default)], so a new field with a Default value loads from an existing workspace.toml without a migration. #[ts(export)] makes cargo test -p ostra-core regenerate web/src/api/gen/WorkspaceSettings.ts.",
+            "files": [
+              "crates/ostra-core/src/config.rs",
+              "web/src/api/gen/WorkspaceSettings.ts"
+            ],
+            "name": "Settings catalog and type export",
+            "snippet": {
+              "code": "#[test]\nfn setting_keys_name_fields() {\n    let json = serde_json::to_value(WorkspaceSettings::seeded(\"x\")).unwrap();\n    for (key, _) in SETTING_KEYS {\n        let found = key.split('.').try_fold(&json, |v, part| v.get(part));\n        assert!(found.is_some(), \"{key} is not a settings field\");\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:1904"
+            }
+          }
+        ],
+        "problem": "A workspace setting lives in WorkspaceSettings, is stored either in .ostra/workspace.toml or in the registry, is re-read through Services::workspace() on every spawn, and is handed to the spawn factory in SpawnEnv. The factory then selects which settings feed the repo brief; only instructions reach the brief today, and the books section of the brief is built from disk and not from any setting. Save-time validation is a pipeline of three functions plus a tag check, and a rejected value stops the write.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how workspace settings reach the spawn factory and the brief, and how a setting is validated at save. Covers the Rust path from workspace.toml and the registry to AgentsFactory::build and build_brief, and the save/validate path from the API to validate_workspace. Does not cover the web form beyond naming the files, the harness and native executors, or the planner's PlanCtx beyond noting how it reads settings.",
+        "sources": [],
+        "title": "Workspace settings to the spawn factory and the brief, and save-time validation"
+      },
+      "submit": {
+        "findings_summary": "The engine calls Services::workspace() on every spawn. ServerServices re-reads workspace.toml, applies the registry overlay for the control settings (Rule A2), and strips unapproved commands. perform_spawn hands the result to AgentsFactory::build in SpawnEnv. The factory is the only place that selects settings for the brief, and today that is `instructions_for(agent)` and `projects` for tag resolution. The books section comes from BooksBrief::read on disk, not from a setting, and brief.rs never sees WorkspaceSettings. Save goes through PATCH /api/workspaces/{id} to WorkspaceRt::save_settings, which runs validate: ostra_sandbox::validate::workspace, then validate_workspace in ostra-core, then permission rules and project folders, then the Rule W3 tag check. Any issue returns a 422 with {error, issues} and nothing is written. The document records the registry versus file storage touch points and a per-setting validator model with a cap constant and indexed paths.",
+        "not_covered": [
+          "The web settings form (web/src/screens/workspace/*) and the Claude Design sync CLAUDE.md requires for web/ changes",
+          "Native and harness executor use of the first message, and the docs_search tool implementation",
+          "The planner's use of settings through PlanCtx beyond the budget and format commands",
+          "GlobalConfig validation and its last-good fallback",
+          "Create-workspace validation (create.rs draft_for) beyond the Rule A2 reset",
+          "Which existing tests and fixtures (e2e.rs, mcp.rs, web mock fixtures) a new settings field would require changing"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How WorkspaceSettings go from storage (workspace.toml plus registry overlay) through Services::workspace() and SpawnEnv to AgentsFactory::build and the repo brief, and how a setting is validated and refused at save; the web form, executors, and global-config validation were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,650 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:51:23.595696473+00:00",
+  "docs": [
+    {
+      "task": "How Layer 1 guards are defined, ordered, and tested in ostra-policy, and how a denial reason is written.",
+      "file": "ostra-research-20261002-084859-layer1-guards.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-policy",
+          "ostra-core (policy types, ExecContext)",
+          "docs/security"
+        ],
+        "asks": [
+          "How Layer 1 guards are defined in ostra-policy",
+          "How they are ordered",
+          "How they are tested",
+          "How a denial reason is written"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::check",
+            "step": "An executor (native loop, or a harness adapter after translating its payload to canonical Claude Code names) calls `ExecutionPolicy::check(&ToolCall)`. For a Bash call it parses the command once with `bash::parse`."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:from_denial",
+            "step": "`check` calls `layer1(call, parsed)`. A `Some(Denial)` returns at once through `from_denial`, which maps it to `PolicyDecision::Deny { reason, rule }`. Layer 2 and YOLO are never reached, so nothing overrides a guard."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::layer1",
+            "step": "`layer1` snapshots the build-streak state (pending recovery, blocked flag, streak count, last signature) under the mutex, then runs guards in a fixed order. First denial wins. Order, with early returns marked: (1) `answer_only` runs: any write path, Report, Document, Memory, manage tool, or shell write target is refused with `answer-only`; (2) tool `Report`: refused with `lesson-gate` if a recovery is pending and `reason` is empty, otherwise returns None (early return); (3) tool `Document`: returns `guards::check_document` (early return); (4) manage tools (ProjectCreate and kin): returns `guards::check_manage` (early return); (5) `owes_reply` and a `submit_*` tool: `reply-first` (Rule H3); (6) any other `submit_*`: `lesson-gate` when status is `ok` and a recovery is pending, else None (early return); (7) `PowerShell`/`Cmd`: `check_opaque_shell`; (8) for each path from `write_paths` (Write, Edit, MultiEdit, NotebookEdit, ApplyPatch): `check_write`; (9) a file tool's `read_path`: `check_windows_path`, then `check_read` (`secret-read`); (10) when `self.sandboxed`: `check_ignored_search_tool` for Grep and Glob, and `check_ignored_search_shell` for Bash (`ignored-search`, Rule G2); (11) for Bash: `check_shell`, then `check_shell_reads`, then for each `shell_targets` entry `check_ambiguous_target` then `check_write`; (12) last, the build-streak gate for a Bash command that `build::is_build_command` matches."
+          },
+          {
+            "location": "crates/ostra-policy/src/guards.rs:check_write",
+            "step": "`check_write` is itself an ordered list, run once per write target (Write/Edit path or shell redirect/cp/rm target): `check_creates_project` (manage-tools, Rule O2); `check_windows_path` (windows-path); self-protection when `roots.strict` and the target is protected; workspace-artifacts (W1); workspace-docs (B5); git-metadata (any `.git` component); state-ownership (engine state, then TOOL_OWNED names, then AGENT_OWNED names for non-owners); artifact-ownership (ARTIFACTS regexes, skipped under a `factcheck-snapshot-*` ancestor); document-tool (target in the session dir that `doc_kind_for` recognizes); `check_scope` (`no-tests-from-implementer` first, then, only when `roots.strict`: quick-answer read-only, session-dir and repo-root scope, per-agent roots, session-only agents); finally report-path (only when `roots.report_file` is set, the target is inside the session root and named `ostra-*`; refused when `strict` and the path is not the declared one, then `lesson-gate` if a recovery is pending)."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/adapters/grok.rs:fit_reason",
+            "step": "A Denial's `rule` is `RuleRef::guard(<const>)` with layer `guard`, and its `reason` is the model-facing text. The native executor shows the model ``Denied by guard `build-streak`: ...`` and the hook bridge appends `(Ostra guard: build-streak)`; the Activity view shows the rule next to each call (docs/security/agent-containment.md, 'Why a denial leads with the correction'). The Grok adapter passes the reason through `fit_reason`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "RuleRef, PolicyDecision, ToolCall (policy.rs), ExecContext (exec.rs), AgentName, paths, ignore_files, manage, doc, containment constants (SELF_PROTECTION, GIT_METADATA, SECRET_READ)"
+          },
+          {
+            "kind": "external",
+            "name": "regex",
+            "role": "Name and path patterns for ownership, test paths, and shell scanning, held in `LazyLock<Regex>` statics"
+          },
+          {
+            "kind": "external",
+            "name": "tempfile",
+            "role": "Temporary directory for the Fx test fixture (dev-dependency of ostra-policy tests)"
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-policy/src/guards.rs",
+            "purpose": "All Layer 1 guard functions, guard-name constants, the Denial type, Roots (canonical paths of one execution), and the shell-analysis guards. Ends with a small #[cfg(test)] module for pure helpers.",
+            "symbols": [
+              "pub const WRITE_SCOPE: &str = \"write-scope\";",
+              "pub const NO_TESTS: &str = \"no-tests-from-implementer\";",
+              "pub const STATE_OWNERSHIP: &str = \"state-ownership\";",
+              "pub const ARTIFACT_OWNERSHIP: &str = \"artifact-ownership\";",
+              "pub const REPORT_PATH: &str = \"report-path\";",
+              "pub const DOCUMENT_TOOL: &str = \"document-tool\";",
+              "pub const LESSON_GATE: &str = \"lesson-gate\";",
+              "pub const BUILD_STREAK: &str = \"build-streak\";",
+              "pub const WORKSPACE_ARTIFACTS: &str = \"workspace-artifacts\";",
+              "pub const WORKSPACE_DOCS: &str = \"workspace-docs\";",
+              "pub const MANAGE_TOOLS: &str = \"manage-tools\";",
+              "pub const WINDOWS_PATH: &str = \"windows-path\";",
+              "pub const ANSWER_ONLY: &str = \"answer-only\";",
+              "pub const REPLY_FIRST: &str = \"reply-first\";",
+              "pub const IGNORED_SEARCH: &str = \"ignored-search\";",
+              "pub struct Denial { pub rule: RuleRef, pub reason: String }",
+              "fn deny(guard: &str, reason: String) -> Denial",
+              "pub struct Roots { repo, session_dir, session_root, state_dir, sessions_root, memory_db, protected, protected_db_files, temps, secret, credentials, readable, assets, home, report_file, artifacts, books, strict }",
+              "pub fn check_write(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str, pending_lesson: Option<&crate::build::Recovery>) -> Option<Denial>",
+              "fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial>",
+              "pub fn check_read(roots: &Roots, target: &Path, raw: &str) -> Option<Denial>",
+              "pub fn check_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denial>",
+              "pub fn check_shell_reads(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denial>",
+              "pub fn check_document(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial>",
+              "pub fn check_manage(ctx: &ExecContext, tool: &str, input: &serde_json::Value) -> Option<Denial>",
+              "pub fn check_windows_path(raw: &str, target: &Path) -> Option<Denial>",
+              "pub fn check_ignored_search_tool(roots: &Roots, target: &Path, raw: &str) -> Option<Denial>",
+              "pub fn check_ignored_search_shell(roots: &Roots, parsed: &Parsed, start: &Path) -> Option<Denial>",
+              "pub fn check_opaque_shell(...) -> Option<Denial>",
+              "pub fn lesson_denial(rec: &crate::build::Recovery, report: bool) -> Denial",
+              "pub fn answer_only_denial() -> Denial",
+              "pub fn reply_first_denial() -> Denial",
+              "pub fn shell_targets(...) -> Vec<ShellTarget>",
+              "pub fn is_test_path(rel: &str) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/policy.rs",
+            "purpose": "ExecutionPolicy: check() runs layer1 then layer2 then YOLO; layer1() holds the call order of every guard. Also from_denial and the Layer 2 rule-denial wording.",
+            "symbols": [
+              "pub fn check(&self, call: &ToolCall) -> PolicyDecision",
+              "fn layer1(&self, call: &ToolCall, parsed: Option<&Parsed>) -> Option<Denial>",
+              "fn write_paths(&self, call: &ToolCall) -> Vec<(PathBuf, String)>",
+              "fn read_path(&self, call: &ToolCall) -> Option<(PathBuf, String)>",
+              "fn from_denial(d: Denial) -> PolicyDecision",
+              "pub struct PolicyInputs { build_commands, test_commands, read_only_mcp_tools }"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/lib.rs",
+            "purpose": "Module wiring and re-exports. guards is `pub mod`; policy is private and re-exported as ExecutionPolicy, Observation, PolicyInputs.",
+            "symbols": [
+              "pub mod guards;",
+              "pub use policy::{ExecutionPolicy, Observation, PolicyInputs};"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/tests/policy.rs",
+            "purpose": "Integration tests for every guard, ported from Ultracode's test_definitions.test.js, plus the permission model. Holds the Fx fixture and the allowed/denied/guard_of helpers.",
+            "symbols": [
+              "struct Fx { _tmp, repo, ws, session_root, session_dir, bin, config }",
+              "fn fx() -> Fx",
+              "impl Fx { fn ctx(&self, agent: AgentName) -> ExecContext; fn policy(&self, agent: AgentName) -> ExecutionPolicy }",
+              "fn write(p: impl AsRef<Path>) -> ToolCall",
+              "fn bash(cmd: impl AsRef<str>) -> ToolCall",
+              "fn shp(p: impl AsRef<Path>) -> String",
+              "fn allowed(p: &ExecutionPolicy, call: &ToolCall)",
+              "fn denied(p: &ExecutionPolicy, call: &ToolCall, pattern: &str) -> String",
+              "fn guard_of(p: &ExecutionPolicy, call: &ToolCall) -> String",
+              "fn with_perms(...) -> ExecutionPolicy"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/policy.rs",
+            "purpose": "Canonical ToolCall, RuleRef, PolicyDecision. The Deny variant's doc comment states the correction-first rule and the reason (Grok clips at 256 characters). The RuleRef.rule doc comment lists guard ids but is not exhaustive (it omits workspace-artifacts, workspace-docs, document-tool, manage-tools, secret-read, git-metadata, windows-path, ignored-search, answer-only, reply-first).",
+            "symbols": [
+              "pub struct RuleRef { pub layer: String, pub rule: String }",
+              "RuleRef::guard(rule: &str) -> Self",
+              "pub enum PolicyDecision { Allow { rule: Option<RuleRef> }, Ask { reason: String, rule: RuleRef }, Deny { reason: String, rule: RuleRef } }",
+              "PolicyDecision::deny(rule: RuleRef, reason: impl Into<String>) -> Self"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "ExecContext, the per-execution facts every guard reads (agent, repo_root, session_dir, enforce_tool_calls, creates_project, answer_only, owes_reply, report_file, protected_paths, and so on). A guard needing a new per-execution fact adds a field here.",
+            "symbols": [
+              "pub struct ExecContext { execution_id, session_id, agent, initializer_mode, executor, workspace_root, repo_root, project_key, session_dir, session_root, report_file, phase, yolo, permission_mode, permissions, protected_paths, memory_db, sandbox_mode, enforce_tool_calls, ... creates_project, answer_only, owes_reply }"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/grok.rs",
+            "purpose": "Shortens a long deny reason for Grok Build by keeping the head and the final sentence.",
+            "symbols": [
+              "pub const GROK_REASON_MAX: usize = 256;",
+              "const MIN_HEAD: usize = 120;",
+              "pub fn fit_reason(reason: &str) -> String"
+            ]
+          },
+          {
+            "path": "docs/security/agent-containment.md",
+            "purpose": "The docs page that describes Layer 1 (section 'Layer 1: guards', 'Tool enforcement' table, per-guard subsections, 'Further hardening guards', 'Why a denial leads with the correction'). CLAUDE.md pattern 9 requires updating it when guard behavior changes; its tool-enforcement table at lines 73-79 classifies each guard as on/off with enforcement disabled.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a guard depends on file size or content, a pass over crates/ostra-tools (Write, Edit, Read) and the canonical ToolCall shapes in crates/ostra-core/src/policy.rs is needed, since layer1 sees only the tool name and input, not the file on disk, and `Write` carries `content` while `Edit` carries `old_string` and `new_string`.",
+          "If the guard should be switchable by tool enforcement, decide whether it belongs in the `roots.strict` group or the always-on group of the table at docs/security/agent-containment.md:73-79."
+        ],
+        "not_covered": [
+          "How the native executor (ostra-exec-native) and the hook bridge (ostra-server/src/bridge.rs) format a Deny for the model, beyond what docs/security/agent-containment.md states; the `read-only-session` guard is defined in bridge.rs, not in ostra-policy.",
+          "The bash parser (crates/ostra-policy/src/bash.rs) and how `shell_targets` derives write targets from `cp`, `rm`, redirects, and heredocs, which determines whether a new write-path guard also fires on shell writes.",
+          "How a Read tool is implemented in ostra-tools and whether a read-side guard has access to file contents or size; this pass only read the policy side.",
+          "Whether ostra-tools or sandbox code already knows a file size or line count that a new guard could reuse.",
+          "Layer 2 permissions (perms.rs, layer2, bash_permission) and YOLO handling beyond the note that Layer 1 runs first and its denials are never converted."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "A guard is a `pub fn check_*` (or private helper) in guards.rs that takes the execution context and/or `Roots` plus a target and returns `Some(Denial)` to refuse or `None` to pass. A guard id is a `pub const &str` at the top of the file. The private `deny(guard, reason)` builds the Denial with `RuleRef::guard(guard)`. There is no trait, list, or registry of guards. The file's doc comment says each guard ports an Ultracode hook library, and each function's comment names its source (for example `(scope-policy.js checkScope)`, `(ledger-policy.js)`) or a Rule ID (`Rule W1`, `Rule B5`, `Rule O2`, `Rule G1`, `Rule G2`, `Rule H3`), or `Hardening:` for Ostra-only additions.",
+            "files": [
+              "crates/ostra-policy/src/guards.rs"
+            ],
+            "name": "Guard as a free function returning Option<Denial>",
+            "snippet": {
+              "code": "/// A refusal: which guard, and the message for the model (correction first).\n#[derive(Debug, Clone, PartialEq, Eq)]\npub struct Denial {\n    pub rule: RuleRef,\n    pub reason: String,\n}\n\nfn deny(guard: &str, reason: String) -> Denial {\n    Denial {\n        rule: RuleRef::guard(guard),\n        reason,\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/guards.rs:29"
+            }
+          },
+          {
+            "description": "Rule W1 (workspace-artifacts) and Rule B5 (workspace-docs) are two-condition guards placed inside `check_write`. A guard that applies only with tool enforcement checks `roots.strict` (Rule G1: `roots.strict` is false when `tool_enforcement` is disabled); guards that must hold in every mode do not test it. `check_read` is a standalone guard that is a single `then`.",
+            "files": [
+              "crates/ostra-policy/src/guards.rs"
+            ],
+            "name": "A small guard in full, with its rule citation and enforcement toggle",
+            "snippet": {
+              "code": "    // Rule W1: agents read workspace artifacts; only the user changes them.\n    if inside(&roots.artifacts, target) {\n        return Some(deny(\n            WORKSPACE_ARTIFACTS,\n            format!(\n                \"Write your result in your session dir instead of \\\"{raw}\\\": workspace artifacts belong to the user, \\\n                 so agents read them but never write, move, or delete them. Propose a change in your report.\"\n            ),\n        ));\n    }\n\n    // Rule B5: the engine writes the books from the docs stage's submit calls.\n    if inside(&roots.books, target) {\n        return Some(deny(\n            WORKSPACE_DOCS,\n            format!(\n                \"Put the documentation in your submit call instead of writing \\\"{raw}\\\": Ostra writes the \\\n                 workspace books from the docs stage's submit calls, so agents read them but never write, move, or \\\n                 delete them.\"\n            ),\n        ));\n    }",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/guards.rs:511"
+            }
+          },
+          {
+            "description": "A guard that is not about a write target is a `pub fn check_*` called from `ExecutionPolicy::layer1` in policy.rs. Examples: `check_read` (Hardening), `check_windows_path`, `check_ignored_search_tool`, `check_shell`, `check_shell_reads`, `check_opaque_shell`. Guards that need execution state held in `ExecutionPolicy` (the build streak, the pending lesson) are written inline in layer1 and build their Denial directly (`Denial { rule: RuleRef::guard(guards::BUILD_STREAK), reason: format!(...) }`), or call a public helper such as `guards::lesson_denial` / `answer_only_denial` / `reply_first_denial`. The build-streak guard is the only guard whose message is built in policy.rs.",
+            "files": [
+              "crates/ostra-policy/src/policy.rs",
+              "crates/ostra-policy/src/guards.rs"
+            ],
+            "name": "Standalone check function plus a hook in layer1",
+            "snippet": {
+              "code": "            // Build streak gate (build-streak-gate.js): only the build loop itself is refused.\n            let command = call.str_field(\"command\").unwrap_or_default();\n            if blocked && build::is_build_command(command, &self.build_commands()) {\n                let submit = self.ctx.agent.submit_tool_name();\n                let diag = last_sig\n                    .map(|s| format!(\", last diagnostic: \\\"{s}\\\"\"))\n                    .unwrap_or_default();\n                return Some(Denial {\n                    rule: RuleRef::guard(guards::BUILD_STREAK),\n                    reason: format!(\n                        \"Call {submit} with status `stuck` (the STUCK: hand-back) instead of another build or test \\\n                         command: {streak} consecutive build or test failures in this run{diag}. Retrying is not the next \\\n                         step, because you do not yet have the information the fix needs. ...\"\n                    ),\n                });\n            }",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/policy.rs:519"
+            }
+          },
+          {
+            "description": "All guard tests are integration tests in crates/ostra-policy/tests/policy.rs. `fx()` builds a temp tree under CARGO_TARGET_TMPDIR with `repo/src`, a session dir, `bin/ostra`, and `config/config.toml`; `Fx::ctx(agent)` returns an ExecContext with `permission_mode: Bypass`, `enforce_tool_calls: true`, `yolo: false`; `Fx::policy(agent)` wraps it in ExecutionPolicy with default PolicyInputs. `allowed(p, call)` asserts `is_allow()`. `denied(p, call, pattern)` asserts the call is a Deny whose reason contains `pattern` and returns the reason so a test can also assert `starts_with`. `guard_of(p, call)` returns the denying rule id. `write(path)` builds a canonical Write ToolCall; `bash(cmd)` a Bash ToolCall. Tests are grouped under banner comments by guard and cite the Rule ID in a first-line comment (`// Rule W1.`).",
+            "files": [
+              "crates/ostra-policy/tests/policy.rs"
+            ],
+            "name": "Test fixture and assertion helpers",
+            "snippet": {
+              "code": "#[track_caller]\nfn denied(p: &ExecutionPolicy, call: &ToolCall, pattern: &str) -> String {\n    let d = p.check(call);\n    let reason = deny_reason(&d).unwrap_or_else(|| {\n        panic!(\n            \"{} should be denied for {}, got {d:?}\",\n            call.input,\n            p.ctx().agent\n        )\n    });\n    assert!(\n        reason.contains(pattern),\n        \"reason for {} should mention {pattern:?}: {reason}\",\n        call.input\n    );\n    reason\n}\n\n#[track_caller]\nfn guard_of(p: &ExecutionPolicy, call: &ToolCall) -> String {\n    match p.check(call) {\n        PolicyDecision::Deny { rule, .. } => rule.rule,\n        other => panic!(\"{} should be denied, got {other:?}\", call.input),\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/tests/policy.rs:136"
+            }
+          },
+          {
+            "description": "The most recent small guards (W1, B5, git-metadata) are tested by calling `guard_of` on the Write tool and on shell commands that write (`cp`, `rm`, redirect), looping over agents where the guard must hold for several, and calling `allowed` for a Read of the same file so the guard is shown not to over-block. The git-metadata test also builds a YOLO policy to show YOLO does not override.",
+            "files": [
+              "crates/ostra-policy/tests/policy.rs"
+            ],
+            "name": "A guard test that checks the rule id across tool surfaces and agents",
+            "snippet": {
+              "code": "fn workspace_artifacts_are_read_but_never_written() {\n    // Rule W1.\n    let f = fx();\n    let dir = ostra_core::artifacts::dir(&f.ws);\n    std::fs::create_dir_all(&dir).unwrap();\n    std::fs::write(dir.join(\"sample.csv\"), \"a,b\\n\").unwrap();\n    let p = f.policy(AgentName::Implementer);\n    let file = dir.join(\"sample.csv\");\n    allowed(\n        &p,\n        &ToolCall::new(\"Read\", json!({\"file_path\": file.to_string_lossy()})),\n    );\n    allowed(&p, &bash(format!(\"python3 scripts/load.py {}\", shp(&file))));\n    assert_eq!(guard_of(&p, &write(&file)), \"workspace-artifacts\");\n    assert_eq!(\n        guard_of(&p, &bash(format!(\"cp src/x {}/y.md\", shp(&dir)))),\n        \"workspace-artifacts\"\n    );\n    assert_eq!(\n        guard_of(&p, &bash(format!(\"rm {}\", shp(&file)))),\n        \"workspace-artifacts\"\n    );\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/tests/policy.rs:1711"
+            }
+          },
+          {
+            "description": "Where the wording matters, tests capture the reason returned by `denied` and assert `starts_with` on the correction clause, in addition to `contains` on a distinguishing phrase. Examples: `r.starts_with(\"Leave test files to write-test\")` (line 244), `r.starts_with(\"Write your report to \\\"\")` (442), `r.starts_with(\"Call submit_implementer with status `stuck` ...\")` (596), `memory.starts_with(\"Record lessons with the Memory tool\")` (803), `reason.starts_with(\"Answer with SubagentReply\")` (2109), `reason.starts_with(\"Call SubagentReply\")` (2138). No test in ostra-policy checks the 256-character length of any reason.",
+            "files": [
+              "crates/ostra-policy/tests/policy.rs"
+            ],
+            "name": "Asserting the correction comes first",
+            "snippet": {
+              "code": "    let invented = f.session_dir.join(\"ostra-implementer-credentials-uri.md\");\n    let r = denied(&p, &write(&invented), \"declared report path\");\n    assert!(r.starts_with(\"Write your report to \\\"\"));\n    assert!(r.contains(\"ostra-implementer-phase-3.md\"), \"{r}\");",
+              "language": "rust",
+              "source": "crates/ostra-policy/tests/policy.rs:440"
+            }
+          },
+          {
+            "description": "Every Layer 1 reason opens with an imperative that names the allowed alternative (`Write your result in your session dir instead of \"{raw}\"`, `Use git commands instead of writing`, `Leave \"{base}\" to {owner}`, `Record lessons with the Memory tool instead of writing`, `Call ProjectCreate for `key` first`, `Drop `{flag}` from the git command`, `Run `{name}` without `{flag}``). The next clause states why the rule exists, usually with 'because' or a colon (`: workspace artifacts belong to the user, so ...`). A closing sentence says where to put what the agent could not do, typically `in your report` or `in your submit call`. The offending path is quoted from the caller's own spelling (`raw`) so the model sees what it typed; the file name alone (`base`) is used for ownership rules; absolute allowed roots are shown through `disp(&roots.repo)`. Messages are built with `format!` and a backslash line continuation inside one string. They follow HANDOVER section 20 (no em dashes, instruction first, then the reason, keep 'because'). Reasons are not hard-capped in Layer 1: many exceed 256 characters (the build-streak and lesson-gate reasons are several hundred), and the Grok adapter shortens them with fit_reason, which keeps the head and the last sentence, so the first sentence must carry the fix and the last sentence must be meaningful on its own.",
+            "files": [
+              "crates/ostra-policy/src/guards.rs",
+              "crates/ostra-core/src/policy.rs",
+              "crates/ostra-exec-harness/src/adapters/grok.rs",
+              "docs/security/agent-containment.md"
+            ],
+            "name": "Denial wording: correction first, then reason with 'because', then optional escape",
+            "snippet": {
+              "code": "    // Hardening: git metadata names programs git runs later (hooks, fsmonitor, a gitfile\n    // pointing at another git dir), so it changes only through git commands.\n    if target.components().any(|c| c.as_os_str() == \".git\") {\n        return Some(deny(\n            GIT_METADATA,\n            format!(\n                \"Use git commands instead of writing \\\"{raw}\\\" directly: files under .git decide which programs git \\\n                 runs, so Ostra refuses direct writes there in every mode.\"\n            ),\n        ));\n    }",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/guards.rs:534"
+            }
+          },
+          {
+            "description": "Grok Build clips deny and ask reasons to 256 characters. The Grok adapter flattens whitespace; if the result is over 256 characters it keeps a head and the final sentence joined by ' … ', falls back to a plain 256-character cut when the head budget is under MIN_HEAD (120).",
+            "files": [
+              "crates/ostra-exec-harness/src/adapters/grok.rs"
+            ],
+            "name": "Grok reason clipping",
+            "snippet": {
+              "code": "pub fn fit_reason(reason: &str) -> String {\n    let flat = reason.split_whitespace().collect::<Vec<_>>().join(\" \");\n    if flat.chars().count() <= GROK_REASON_MAX {\n        return flat;\n    }\n    let sentences: Vec<&str> = flat.split_inclusive(['.', '!', '?']).collect();\n    let tail = sentences.last().map(|s| s.trim()).unwrap_or(\"\");\n    let joiner = \" … \";\n    let tail_len = tail.chars().count();\n    let head_budget = GROK_REASON_MAX.saturating_sub(tail_len + joiner.chars().count());\n    if head_budget < MIN_HEAD {\n        return flat.chars().take(GROK_REASON_MAX).collect();\n    }\n    let head: String = flat.chars().take(head_budget).collect();\n    format!(\"{}{joiner}{tail}\", head.trim_end())\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-harness/src/adapters/grok.rs:22"
+            }
+          }
+        ],
+        "problem": "A new Layer 1 guard has to be added to ostra-policy. There is no guard registry: each guard is a free function in guards.rs that returns Option<Denial>, and the order in which guards run is fixed by hand-written call order in ExecutionPolicy::layer1 and in guards::check_write. The first guard that returns a denial wins, so where a new check is placed decides which rule name and message a caller sees. This document records those mechanics, the test harness, and the denial-writing conventions.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how Layer 1 guards are defined, ordered, and tested in ostra-policy, and how a denial reason is written. Covers crates/ostra-policy (src and tests), the policy types in ostra-core, the Grok reason clipping, and the docs page that describes the guards. It does not design any new guard, and it does not cover Layer 2 permissions, the bash parser internals, or the executors' handling of a Deny beyond what the docs state.",
+        "sources": [],
+        "title": "Layer 1 guards in ostra-policy"
+      },
+      "submit": {
+        "findings_summary": "Layer 1 guards are free functions in crates/ostra-policy/src/guards.rs that return Option<Denial>. Each guard has a `pub const` id and builds its Denial through `deny(guard, reason)`, and there is no registry. Order is hand-coded. `ExecutionPolicy::layer1` in policy.rs runs the guards in a fixed sequence with early returns for Report, Document, manage tools and submit_*, and `guards::check_write` holds a second fixed sequence. The first denial wins, and Layer 2 and YOLO never see it. Tests are all integration tests in crates/ostra-policy/tests/policy.rs, built on the Fx fixture and the allowed/denied/guard_of helpers, with a rule-ID comment on each test. Some tests assert `starts_with` on the reason's correction clause. Denial reasons open with the correction naming the allowed alternative, then give the reason with 'because' or a colon, then say where to put what the agent could not do. They do this because Grok clips reasons to 256 characters (`fit_reason` keeps the head and the last sentence). No test in ostra-policy checks reason length.",
+        "not_covered": [
+          "How the native executor and hook bridge format a Deny for the model, and the read-only-session guard defined in ostra-server/src/bridge.rs",
+          "The bash parser (bash.rs) and how shell_targets derives write targets, which decides whether a new write-path guard also fires on shell writes",
+          "Whether ostra-tools (Read, Write, Edit) or the sandbox expose file size or line count that a new guard could reuse",
+          "Layer 2 permissions (perms.rs, layer2, bash_permission) and YOLO handling beyond Layer 1 running first"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How Layer 1 guards are defined, ordered, and tested in ostra-policy, and how a denial reason is written; no new guard was designed, and Layer 2, the bash parser, and executor-side denial formatting were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How a Write tool call reaches the policy as a canonical ToolCall.",
+      "file": "ostra-research-20261002-084858-write-toolcall-to-policy.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (policy types)",
+          "ostra-policy",
+          "ostra-exec-native",
+          "ostra-exec-harness",
+          "ostra-tools",
+          "ostra-server (bridge)"
+        ],
+        "asks": [
+          "Explain how a Write tool call reaches the policy as a canonical ToolCall."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::run_tools",
+            "step": "**Native path, model output.** The provider returns a `ChatResponse`; `run_tools` extracts `(id, name, input)` for each tool_use block (`resp.tool_uses()`), coerces JSON-string arguments only for the submit tool, and runs non-concurrent, non-submit, non-coord tools one at a time. `Write` is not in `is_concurrent`, so it takes the sequential `self.tool(...)` branch."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:ToolEnv::canonical_call",
+            "step": "**Native path, canonicalization.** `tool_end` calls `env.canonical_call(&ToolCall::new(name, input.clone()))`. For `Write` it makes `file_path` absolute with `ToolEnv::resolve` (shell cwd, `~/` expansion, bubblewrap `/tmp` mapping) and leaves `content` untouched. A non-object input is returned unchanged."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::tool_end",
+            "step": "**Native path, invalid input.** A `__invalid_json` marker in the input short-circuits to an error result before the policy runs. Otherwise `policy.set_yolo(host.yolo())` and `policy.check(&call)` are called; the call and the decision are emitted as `ExecutionDelta::ToolCall` and `ExecutionDelta::Policy`."
+          },
+          {
+            "location": "crates/ostra-server/src/bridge.rs:policy_route",
+            "step": "**Harness path, hook arrives.** The harness CLI's PreToolUse hook POSTs a `PolicyRequest {harness, execution, event, payload}` with a bearer token to the server's policy route, which calls `HarnessBridge::handle_policy`. The bridge authorizes the execution token, checks the harness matches, then `adapters::for_harness(req.harness)` selects the adapter."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/adapters/claude.rs:canonical_claude_call",
+            "step": "**Harness path, translation.** `adapter.parse_pre(&payload)` returns `PreParse::Call { call, native }` or `PreParse::Refuse`. Claude: `Write` passes through with the input as sent; Grok: `write`/`write_file`/`Write` -> `Write` with `file_path` normalized from several keys; Agy: `write_to_file` -> `Write` with `file_path` and `content` mapped; Codex: no Write, `apply_patch` -> `ApplyPatch`. Spawn and ask tools are refused here. Unmapped tool names become `Other:<name>`."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/bridge.rs:HarnessBridge::decide",
+            "step": "**Harness path, decision.** `handle_policy` counts the call (`live.note_tool_call()`), then `decide` rejects a foreign `submit_*` and calls `BridgeServices::policy_check(&live.id, call)`. The server implementation returns early for gateway MCP and manage tools, otherwise calls `ServerBridge::check`, which sets YOLO, denies everything for an inspect (read-only) session, else calls `r.policy.check(call)`, and logs the call and decision. Ask is resolved through `resolve_ask`; the final `Decision::{Allow,Deny}` goes back through `adapter.pre_response`. Note: this path does not call `ToolEnv::canonical_call`, so `file_path` is whatever the harness sent (usually absolute) and relative paths are resolved later by the policy against `start_cwd`."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::check",
+            "step": "**Policy, both paths.** `ExecutionPolicy::check` runs `layer1`. For `Write`, `write_paths` returns the single `(resolved PathBuf, raw String)` from `file_path` (resolved by `Roots::resolve` against `start_cwd`: the call's absolute `cwd` field if present, else the repo root). `guards::check_write` runs per target; any denial returns immediately as `PolicyDecision::Deny` with `RuleRef::guard(...)`. `content` is not read by layer 1 or layer 2 today."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::layer2",
+            "step": "**Policy, layer 2.** If layer 1 passes, `layer2` treats `Write` as `Family::Edit`: it evaluates allow/ask/deny rules per target, treats session-dir and temp-dir writes as allowed, allows repo writes in acceptEdits mode, and otherwise falls to the mode default. YOLO turns an Ask into Allow but not a Deny."
+          },
+          {
+            "location": "crates/ostra-tools/src/fs.rs:write",
+            "step": "**After allow, native only.** `ostra_tools::execute(env, id, &call, ...)` dispatches `\"Write\"` to `fs::write`, which requires `file_path` and `content`, resolves the path again with `env.resolve`, refuses a directory, and refuses overwriting an existing file the run has not read. Harness Writes are executed by the CLI itself, outside Ostra's tools."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns `ToolCall`, `PolicyDecision`, `RuleRef`, `ToolOutcome`, `ExecContext`; depends on nothing internal."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "`ExecutionPolicy`, guards, permissions; depends on ostra-core only for these types."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "`ToolEnv::canonical_call` (native canonicalization) and the Write implementation."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-native",
+            "role": "Native loop that calls `canonical_call` then `policy.check`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-harness",
+            "role": "Adapters and `HarnessBridge`; reaches the policy only through the `BridgeServices` trait."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "Implements `BridgeServices` over `ExecutionPolicy`, one policy per running harness execution."
+          },
+          {
+            "kind": "external",
+            "name": "serde_json",
+            "role": "`ToolCall.input` is a `serde_json::Value`."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/policy.rs",
+            "purpose": "Defines the canonical ToolCall (`tool` string plus free-form JSON `input`), its documented input shapes (`Write {file_path, content}`), PolicyDecision, RuleRef, ToolOutcome. The type has no typed per-tool fields: the policy reads `input` by key through `str_field`.",
+            "symbols": [
+              "pub struct ToolCall { pub tool: String, pub input: serde_json::Value }",
+              "pub fn ToolCall::new(tool: impl Into<String>, input: serde_json::Value) -> Self",
+              "pub fn ToolCall::str_field(&self, key: &str) -> Option<&str>",
+              "pub enum PolicyDecision { Allow { rule: Option<RuleRef> }, Ask { reason: String, rule: RuleRef }, Deny { reason: String, rule: RuleRef } }",
+              "pub fn PolicyDecision::deny(rule: RuleRef, reason: impl Into<String>) -> Self",
+              "pub fn RuleRef::guard(rule: &str) -> Self"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native agent loop. `Run::run_tools` collects the model's tool_use blocks, `Run::tool_end` canonicalizes each call with `ToolEnv::canonical_call`, emits it, calls `policy.check`, handles Ask/Deny, then runs `ostra_tools::execute` on the same canonical call. Write is not in `is_concurrent`, so Writes run one at a time in order.",
+            "symbols": [
+              "async fn run_tools(&self, resp: &ChatResponse, policy: &ExecutionPolicy, env: &ToolEnv, submit_name: &str) -> TurnEnd",
+              "async fn tool_end(&self, id: &str, name: &str, input: &Value, policy: &ExecutionPolicy, env: &ToolEnv) -> (Block, RunEnd)",
+              "fn is_concurrent(name: &str) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "`ToolEnv::canonical_call` rewrites the native call before both the policy check and execution: `Read`/`Write`/`Edit` get `file_path` made absolute against the shell cwd (via `ToolEnv::resolve`, which expands `~/` and maps bubblewrap `/tmp` to the host scratch dir). `execute` dispatches `\"Write\"` to `fs::write` after `coerce_json_strings` against the tool schema.",
+            "symbols": [
+              "pub fn canonical_call(&self, call: &ToolCall) -> ToolCall",
+              "pub fn resolve(&self, path: &str) -> PathBuf",
+              "pub async fn execute(env: &ToolEnv, call_id: &str, call: &ToolCall, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/defs.rs",
+            "purpose": "The native Write tool definition the model sees: required `file_path` and `content`, `additionalProperties: false`. This fixes the native input keys the policy receives.",
+            "symbols": [
+              "fn write_def() -> ToolDefinition"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/fs.rs",
+            "purpose": "The Write implementation that runs after the policy allows: requires `file_path` and `content`, refuses a directory, refuses overwriting an existing file not read in this run (`env.has_read`), then `write_file` and a unified diff.",
+            "symbols": [
+              "pub async fn write(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "pub(crate) async fn write_file(path: &Path, content: &str) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/mod.rs",
+            "purpose": "The `Adapter` trait every harness implements, `PreParse` (a canonical `Call` or a `Refuse`), and the shared helpers adapters use to build canonical input: `with_file_path`, `with_cwd`, `other` (the `Other:<name>` fallback), `get_str`.",
+            "symbols": [
+              "pub trait Adapter: Sync { fn parse_pre(&self, payload: &Value) -> PreParse; fn parse_post(&self, event: HookEvent, payload: &Value) -> Option<PostParse>; fn pre_response(&self, decision: &Decision) -> Value; ... }",
+              "pub enum PreParse { Call { call: ToolCall, native: String }, Refuse(String) }",
+              "pub fn for_harness(kind: HarnessKind) -> &'static dyn Adapter",
+              "pub(crate) fn with_file_path(input: &Value, keys: &[&str]) -> Value",
+              "pub(crate) fn with_cwd(mut input: Value, cwd: Option<&str>) -> Value",
+              "pub(crate) fn other(name: &str, input: &Value) -> ToolCall"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/claude.rs",
+            "purpose": "Claude Code already uses canonical names: `Write` passes through with its input unchanged (`file_path`, `content`). `MultiEdit` and `NotebookEdit` become `Edit`. Only Bash and PowerShell get `cwd` added.",
+            "symbols": [
+              "pub(crate) fn canonical_claude_call(name: &str, input: &Value, cwd: Option<&str>) -> PreParse"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/grok.rs",
+            "purpose": "Grok Build: `write`, `write_file`, and `Write` become canonical `Write` with `file_path` taken from the first present of `file_path`, `filePath`, `path`, `target_file`, `targetFile`. The rest of the input is kept as sent, so `content` is not remapped.",
+            "symbols": [
+              "const PATH_KEYS: &[&str] = &[\"file_path\", \"filePath\", \"path\", \"target_file\", \"targetFile\"]"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/agy.rs",
+            "purpose": "Antigravity: `write_to_file` becomes canonical `Write`; `file_path` from `TargetFile`, `AbsolutePath`, or `path`; `content` copied from `CodeContent` or `Content`.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/codex.rs",
+            "purpose": "Codex has no Write tool at the hook: file changes arrive as `apply_patch` and become canonical `ApplyPatch {patch, cwd?}`, not `Write`. Listed so a guard on Write content is not assumed to cover Codex.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/bridge.rs",
+            "purpose": "`HarnessBridge::handle_policy` authorizes the hook, parses a PreToolUse payload with the harness adapter, calls `decide`, and returns the adapter's response. `decide` calls `BridgeServices::policy_check`; an Ask is resolved with `resolve_ask`. Never fails open: unreadable input denies.",
+            "symbols": [
+              "pub async fn handle_policy(&self, token: &str, req: PolicyRequest) -> PolicyResponse",
+              "async fn decide(&self, live: &LiveExecution, call: &ToolCall) -> Decision"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/services.rs",
+            "purpose": "The `BridgeServices` trait through which the harness crate reaches the policy without depending on it.",
+            "symbols": [
+              "fn policy_check(&self, execution: &ExecutionId, call: &ToolCall) -> PolicyDecision;"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/bridge.rs",
+            "purpose": "Server side of the harness path. Builds one `ExecutionPolicy` per harness execution in `Running` (with `policy_inputs` and `.sandboxed(...)`), implements `BridgeServices::policy_check`, and logs the ToolCall plus its Policy decision as `ExecutionDelta`s. `policy_route` is the HTTP handler that feeds `handle_policy`.",
+            "symbols": [
+              "fn policy_check(&self, execution: &ExecutionId, call: &ToolCall) -> PolicyDecision",
+              "fn check(&self, r: &Running, call: &ToolCall, id: &str, log: bool) -> PolicyDecision",
+              "async fn policy_route(State(app): State<Arc<App>>, headers: HeaderMap, Json(req): Json<PolicyRequest>) -> Response"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/policy.rs",
+            "purpose": "`ExecutionPolicy::check` runs layer 1 (guards) then layer 2 (permissions). `write_paths` lists the write targets of a call (`Write`, `Edit`, `MultiEdit`, `NotebookEdit` via `file_path`/`path`; `ApplyPatch` via parsed patch). `file_path` resolves the raw path against `start_cwd` (the call's absolute `cwd`, else the repo root). `layer1` runs `guards::check_write` for each write target. `layer2` handles `Family::Edit` with rules, `runs_code_later`, session/temp dirs, and acceptEdits mode.",
+            "symbols": [
+              "pub fn check(&self, call: &ToolCall) -> PolicyDecision",
+              "fn layer1(&self, call: &ToolCall, parsed: Option<&Parsed>) -> Option<Denial>",
+              "fn layer2(&self, call: &ToolCall, parsed: Option<&Parsed>) -> PolicyDecision",
+              "fn write_paths(&self, call: &ToolCall) -> Vec<(PathBuf, String)>",
+              "fn file_path(&self, call: &ToolCall) -> Option<(PathBuf, String)>",
+              "fn start_cwd(&self, call: &ToolCall) -> PathBuf",
+              "pub fn observe(&self, call: &ToolCall, outcome: &ToolOutcome) -> Vec<Observation>"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/guards.rs",
+            "purpose": "Layer 1 guard functions. `check_write(ctx, roots, target, raw, pending_lesson)` is the per-target Write guard chain: creates-project, Windows path hardening, self-protection, workspace artifacts (W1), books (B5), `.git`, state ownership, tool/agent-owned files, artifact ownership and Document-tool redirect, write scope (`check_scope`), report path. It sees only the resolved target path and the raw string, not `content`. `Denial`, `deny`, and the guard-id constants live here.",
+            "symbols": [
+              "pub fn check_write(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str, pending_lesson: Option<&crate::build::Recovery>) -> Option<Denial>",
+              "fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial>",
+              "pub struct Denial { pub rule: RuleRef, pub reason: String }",
+              "fn deny(rule: &str, reason: String) -> Denial",
+              "pub fn resolve(&self, base: &Path, raw: &str) -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/perms.rs",
+            "purpose": "Maps tool names to a permission `Family`; `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `ApplyPatch` are `Family::Edit`.",
+            "symbols": [
+              "pub fn family(tool: &str) -> Family"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/tests/policy.rs",
+            "purpose": "Where guard tests live. `fx()` builds a temp repo, workspace, session dir; `Fx::policy(agent)` builds an `ExecutionPolicy`; `write(path)` builds the canonical `Write {file_path, content: \"x\"}` call; `allowed`, `denied`, `guard_of` assert decisions.",
+            "symbols": [
+              "fn fx() -> Fx",
+              "fn write(p: impl AsRef<Path>) -> ToolCall",
+              "fn denied(p: &ExecutionPolicy, call: &ToolCall, pattern: &str) -> String",
+              "fn guard_of(p: &ExecutionPolicy, call: &ToolCall) -> String"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a guard needs `content` (for example its size or line count), a pass should confirm that `check_write` and `write_paths` carry only paths today and decide where content would be read in layer 1, for both native and harness shapes (Grok keeps the harness's own `content` key; Codex has no Write).",
+          "A pass on the relative-path difference between the native path (absolute `file_path` from `canonical_call`) and the harness path (policy resolves against `cwd` or repo root) if a guard depends on the resolved target."
+        ],
+        "not_covered": [
+          "The MCP-served tools path (`handle_mcp`, `call_tool` in crates/ostra-exec-harness/src/bridge.rs): Write is not an MCP tool, so it was not traced.",
+          "`ExecutionPolicy::new` body and how `Roots::new` is built from `ExecContext` (strict mode, protected paths), beyond the `Roots::resolve` behavior recorded here.",
+          "Edit, MultiEdit, NotebookEdit and ApplyPatch internals (`apply_patch_paths`) beyond their shared `write_paths` handling.",
+          "How the Activity view and `ostra-store` tool_calls table persist the emitted ToolCall and Policy deltas.",
+          "The sandboxed shell path (a Bash command writing files) and `guards::shell_targets`, which reaches `check_write` by a different route."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "`ToolCall` is a tool-name string plus an untyped `serde_json::Value`. The doc comment in `ostra-core/src/policy.rs` is the schema (`Write {file_path, content}`). The policy reads fields by key (`str_field`), so a field that an adapter does not set is simply absent at check time. Harness adapters translate each CLI's payload into this form before the policy sees it (CLAUDE.md pattern 6).",
+            "files": [
+              "crates/ostra-core/src/policy.rs",
+              "crates/ostra-exec-harness/src/adapters/mod.rs"
+            ],
+            "name": "Canonical ToolCall: Claude Code names and input shapes, free-form JSON",
+            "snippet": {
+              "code": "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]\n#[ts(export)]\npub struct ToolCall {\n    pub tool: String,\n    #[ts(type = \"unknown\")]\n    pub input: serde_json::Value,\n}\n\nimpl ToolCall {\n    pub fn new(tool: impl Into<String>, input: serde_json::Value) -> Self {\n        ToolCall { tool: tool.into(), input }\n    }\n\n    pub fn str_field(&self, key: &str) -> Option<&str> {\n        self.input.get(key).and_then(|v| v.as_str())\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/policy.rs:26"
+            }
+          },
+          {
+            "description": "Each adapter's `parse_pre` maps the CLI's native tool names to canonical ones inside one `match name`. Write-like tools use `with_file_path` (copy the path from whichever key the harness uses into `file_path`, keep the other fields) or build the input by hand (Agy copies `content` too). Unknown tools become `Other:<name>`.",
+            "files": [
+              "crates/ostra-exec-harness/src/adapters/claude.rs",
+              "crates/ostra-exec-harness/src/adapters/grok.rs",
+              "crates/ostra-exec-harness/src/adapters/agy.rs"
+            ],
+            "name": "Harness adapter match arm for a file-write tool",
+            "snippet": {
+              "code": "\"write_to_file\" => {\n    let mut v = with_file_path(&args, &[\"TargetFile\", \"AbsolutePath\", \"path\"]);\n    if let Some(content) = get_str(&args, &[\"CodeContent\", \"Content\"]) {\n        v[\"content\"] = json!(content);\n    }\n    ToolCall::new(\"Write\", v)\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-harness/src/adapters/agy.rs:78"
+            }
+          },
+          {
+            "description": "`Run::tool_end` builds the call once with `env.canonical_call`, emits it as `ExecutionDelta::ToolCall`, runs `policy.check`, emits `ExecutionDelta::Policy`, resolves Deny/Ask, then executes the same call. The in-code comment states the reason: relative paths mean the same target in check, approval, and run.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs",
+              "crates/ostra-tools/src/lib.rs"
+            ],
+            "name": "Native: canonicalize, emit, check, ask, execute the same call",
+            "snippet": {
+              "code": "// The policy checks, the user approves, and the tool runs this one call, so relative\n// paths and the Bash working directory mean the same target in all three.\nlet call = env.canonical_call(&ToolCall::new(name, input.clone()));\nself.host.emit(ExecutionDelta::ToolCall { call_id: id.into(), call: call.clone() });\n...\npolicy.set_yolo(self.host.yolo());\nlet decision = policy.check(&call);\nself.host.emit(ExecutionDelta::Policy { call_id: id.into(), decision: decision.clone() });\nmatch decision {\n    PolicyDecision::Deny { reason, rule } => {\n        return err(format!(\"Denied by {} `{}`: {reason}\", rule.layer, rule.rule));\n    }\n    ...",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:936"
+            }
+          },
+          {
+            "description": "`layer1` loops `write_paths(call)` and calls `guards::check_write` for each; the first denial wins and `check` returns it via `from_denial` before layer 2 runs. Guard denials put the correction first in the reason. Layer 1 is not affected by YOLO or permission mode.",
+            "files": [
+              "crates/ostra-policy/src/policy.rs",
+              "crates/ostra-policy/src/guards.rs"
+            ],
+            "name": "Layer 1 write guards run once per write target, before permissions",
+            "snippet": {
+              "code": "for (path, raw) in self.write_paths(call) {\n    if let Some(d) =\n        guards::check_write(&self.ctx, &self.roots, &path, &raw, pending.as_ref())\n    {\n        return Some(d);\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/policy.rs:469"
+            }
+          },
+          {
+            "description": "Policy guard tests build the canonical call directly with `ToolCall::new(\"Write\", json!({file_path, content}))` and assert with `allowed`, `denied`, `guard_of` against an `ExecutionPolicy` from `Fx::policy(agent)`.",
+            "files": [
+              "crates/ostra-policy/tests/policy.rs"
+            ],
+            "name": "Policy test fixture for a Write call",
+            "snippet": {
+              "code": "fn write(p: impl AsRef<Path>) -> ToolCall {\n    ToolCall::new(\n        \"Write\",\n        json!({\"file_path\": p.as_ref().to_string_lossy(), \"content\": \"x\"}),\n    )\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/tests/policy.rs:95"
+            }
+          }
+        ],
+        "problem": "Every Write call, native or from a harness CLI, must be reduced to the canonical shape `ToolCall { tool: \"Write\", input: {file_path, content} }` before `ExecutionPolicy::check` runs. The path to that point differs per executor: native calls go through `ToolEnv::canonical_call`, harness calls go through a per-harness `Adapter::parse_pre`, and the two do not normalize identically (for example, only the native path makes `file_path` absolute before the policy). Anything that wants to inspect a Write's `content` or target in the policy has to know which fields exist at check time on each path.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how a Write tool call reaches the policy as a canonical ToolCall. Covers the native executor path, the four harness adapter paths (Claude, Codex, Grok, Agy), the server bridge that owns the harness's ExecutionPolicy, and what the policy does with a Write (layer 1 guards, layer 2 permissions). It does not cover Edit/Bash internals beyond where they share code, the Read tool, the web UI, or any design for a new guard.",
+        "sources": [],
+        "title": "How a Write tool call reaches the policy as a canonical ToolCall"
+      },
+      "submit": {
+        "findings_summary": "A canonical ToolCall is `{tool: String, input: serde_json::Value}`, and a Write's input is `{file_path, content}`. On the native path, `Run::tool_end` runs `ToolEnv::canonical_call`, which makes `file_path` absolute. It then calls `policy.check`, and only after an allow does it run `fs::write`. On the harness path, the CLI's PreToolUse hook reaches `HarnessBridge::handle_policy`. A per-harness `Adapter::parse_pre` builds the canonical call, `BridgeServices::policy_check` hands it to `ServerBridge::check`, and that calls `ExecutionPolicy::check`. This path does not call `canonical_call`. Claude passes Write through unchanged, Grok and Agy normalize the path (Agy also maps `content`), and Codex has no Write because `apply_patch` becomes `ApplyPatch`. In the policy, layer 1 runs `guards::check_write` per target from `write_paths`, which sees only the resolved path and the raw string, never `content`. Layer 2 treats Write as `Family::Edit`.",
+        "not_covered": [
+          "MCP-served tools path (handle_mcp/call_tool); Write is not served there",
+          "ExecutionPolicy::new and Roots::new construction details",
+          "Edit, MultiEdit, NotebookEdit, and ApplyPatch internals (apply_patch_paths)",
+          "Persistence of emitted ToolCall and Policy deltas in ostra-store and the Activity view",
+          "Shell-write path through guards::shell_targets for Bash"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How a Write call becomes a canonical ToolCall and reaches ExecutionPolicy::check on the native path and the four harness adapter paths, including what layer 1 and layer 2 do with a Write; no design for a new guard, and Edit, Bash, and MCP-served tools were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

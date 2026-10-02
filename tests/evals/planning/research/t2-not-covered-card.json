@@ -1,0 +1,611 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:55:42.289089201+00:00",
+  "docs": [
+    {
+      "task": "How an explore execution's submit, including `not_covered`, reaches the session detail API.",
+      "file": "ostra-research-20261002-085157-explore-submit-to-session-detail.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (submit schemas, API DTOs, doc check)",
+          "ostra-engine (fold, view, runner)",
+          "ostra-exec-native",
+          "ostra-exec-harness",
+          "ostra-store (executions table)",
+          "ostra-server (REST)"
+        ],
+        "asks": [
+          "Explain how an explore execution's submit, including `not_covered`, reaches the session detail API."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/submit.rs:ExploreSubmit",
+            "step": "The agent calls `submit_explore` with an `ExploreSubmit`-shaped JSON object. The schema it sees comes from `submit_schema(AgentName::Explore)`, derived from the struct with `schemars`. `not_covered` is `#[serde(default)]`, so omitting it parses as an empty list."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:run_tools",
+            "step": "Native executor: `run_tools` coerces JSON-string arguments against the schema, then `submit` runs the policy check, `validate_submit`, `doc::check_submit`, and the report-file check. On success `TurnEnd::Submitted { submit: input.clone(), status }` ends the loop and the executor builds `ExecutionResult::with_status(status)` with `r.submit = Some(submit)`."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/bridge.rs:call_tool",
+            "step": "Harness executor (Claude Code and others): the MCP stdio shim's `call_tool` coerces, validates with `validate_submit` and `doc::check_submit`, and `live.record_submit(args)` stores it in `LiveState.submit`. When the run ends with `End::Submitted`, `outcome::result` returns `ExecutionResult { status: status_of(&submit), submit: Some(submit), .. }`."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check_submit",
+            "step": "`doc::check_submit` for the Explore agent reads the research document at `research_path` and blocks on document errors. It does not compare `not_covered` with the document. The two `not_covered` lists are separate fields that the agent is told to keep equal in `assets/agents/explore/prompt.md`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:2716",
+            "step": "The runner awaits `executor.run(...)`, adds the carried-over usage, maps a cancel to `Interrupted` when an interrupt reason is set, and writes the result to the `executions` row with `db.finish_execution` (columns `submit` as JSON text, `final_text`)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::append",
+            "step": "Then it appends `SessionEvent::ExecutionFinished { id, result }`. `Inner::append` stores the event (`db.append_event`), runs `materialize`, calls `SessionState::apply`, updates the session row from `view::summary`, broadcasts the stored event, and wakes the driver. `materialize` has no `ExecutionFinished` arm, so the event log and the `executions` row are the only two persisted copies of the submit."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_finished",
+            "step": "The fold: `apply` stores `result` on the `ExecRecord`, then `on_finished` for `ExecPurpose::Explore { task }` parses `result.submit` into `ExploreSubmit` and sets `ExploreTask.result = Some(sub)` when the status is `Ok` and the parse succeeds. On a parse failure or non-Ok status it retries (up to `ERROR_RETRIES`) or sets `failed`. After a restart the same state comes from `Inner::load`, which folds `db.events(id)`."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:explore_complete",
+            "step": "Uses of the folded `not_covered` inside the engine: the planner's `explore_complete` (Rule D2) emits `Step::Judge { Sufficiency, subject }` for tasks with non-empty `not_covered` and `judged == false`; `judge_input` writes the `Not covered:` bullet list into the judge's input and returns the summary `\"{n} Not covered items across {m} research documents\"`; the runner appends `DecisionMade { input_summary, output, reason, .. }`; `coord.rs` appends `Not covered: a; b` to a helper's reply text."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:get_session",
+            "step": "Request: `GET /api/sessions/{id}` goes through the `guard` layer and `get_session`, which finds the workspace for the session and returns `Json(w.engine.detail(&sid)?)`."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:detail",
+            "step": "`Engine::detail` clones the folded `SessionState` and calls `view::detail(&st, &db, &workspace_id, live_executions)`. `view::detail` loads `ExecutionView`s with `db.list_executions` (which excludes `submit` and `final_text`), decorates them, and builds `stages(s)`, `artifacts(s)`, `phases(s)`, `gates`, `decisions`, `fact_checks(s)`, and the rest of `SessionDetail`."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:stages, artifacts",
+            "step": "What of the explore submit reaches `SessionDetail`: (1) `stages`: an Explore card per task with `status` Done when `result` is set and `detail = \"{sources_retrieved} sources, {open_questions} open questions\"`, plus `project`, `executions` and `gate`. (2) `artifacts`: an `ArtifactRef { kind: \"research\", label: \"Research: ...\", path: research_path, project }` from `r.research_path`. (3) `decisions`: for a Sufficiency decision, `input_summary` carries only the count of Not covered items and the number of documents; `output` and `reason` are the judge's own. (4) `executions`: status, usage, error, but no `submit`. `scope_covered`, `findings_summary` and the `not_covered` strings are not in the response."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:session_events",
+            "step": "Other routes that do expose the raw submit: `GET /api/sessions/{id}/events` returns `StoredEvent`s, including `execution_finished` with `result.submit` (so `not_covered` is present there), and the same events are broadcast over the WebSocket as they are appended. The web client handles `execution_finished` in `web/src/lib/events.ts` and reloads the session detail on it (`useExecution.ts`). `GET /api/executions/{id}` returns only an `ExecutionView`, and `WorkspaceDb::execution_output` has no caller in `ostra-server`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns `ExploreSubmit`, `validate_submit`, `submit_schema`, `doc::check_submit`, `SessionDetail`, `StageCard`, `DecisionView` and their TypeScript export."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Fold (`state.rs`), planner (`plan.rs`), judge input (`judge_input.rs`), view (`view.rs`), runner (`runner.rs`)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "`executions` table with `submit` and `final_text` columns; the event log table (`append_event`, `events`)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-native",
+            "role": "Native submit interception."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-harness",
+            "role": "Harness MCP shim submit path."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "Axum route `GET /api/sessions/{id}`."
+          },
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "`#[ts(export)]` generates `web/src/api/gen/*.ts`; not researched online because the repo already uses it in the way the task needs."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/submit.rs",
+            "purpose": "Defines `ExploreSubmit` (the `submit_explore` payload, with `not_covered`), the JSON schema given to the model (`submit_schema`), and the shape check `validate_submit`.",
+            "symbols": [
+              "pub struct ExploreSubmit { research_path: String, scope_covered: String, findings_summary: String, sources_retrieved: u32, open_questions: u32, #[serde(default)] not_covered: Vec<String> }",
+              "pub fn submit_schema(agent: AgentName) -> serde_json::Value",
+              "pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "`check_submit` runs at the tool boundary after `validate_submit`: reads the research document at `research_path` and refuses the submit if the document has errors. For `Document::Research` it checks nothing against `not_covered`; the document's own `not_covered` is a separate field.",
+            "symbols": [
+              "pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "`ExecutionResult` is what an executor returns and what `ExecutionFinished` carries; `submit` holds the raw payload as untyped JSON.",
+            "symbols": [
+              "pub struct ExecutionResult { status: ExecutionStatus, submit: Option<serde_json::Value>, final_text: String, usage: Usage, native_session_id: Option<String>, error: Option<String> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "The event log variant that carries the result into the fold and the stored log.",
+            "symbols": [
+              "SessionEvent::ExecutionFinished { id: ExecutionId, result: ExecutionResult }"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native agent loop. `run_tools` intercepts the submit tool call, `submit` validates it (policy, `validate_submit`, `doc::check_submit`, report-file check), and the loop returns an `ExecutionResult` with `submit = Some(input)`.",
+            "symbols": [
+              "async fn run_tools(&self, resp: &ChatResponse, policy: &ExecutionPolicy, env: &ToolEnv, submit_name: &str) -> TurnEnd",
+              "TurnEnd::Submitted { results, submit, status }"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/bridge.rs",
+            "purpose": "Harness path: the MCP shim's `call_tool` applies the same `validate_submit` and `doc::check_submit`, then `live.record_submit(args)` stores the payload in `LiveState.submit`.",
+            "symbols": [
+              "async fn call_tool(&self, live: &LiveExecution, params: &Value) -> Value"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/outcome.rs",
+            "purpose": "Builds the harness `ExecutionResult`; on `End::Submitted` it sets `submit: Some(state.submit)` and `status_of(&submit)`.",
+            "symbols": [
+              "pub fn result(end: End, harness: HarnessKind, agent_submit: &str, state: &LiveState, screen: &str, home: &Path, sandbox_mode: Option<SandboxMode>) -> ExecutionResult"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Runs the executor, then persists the result twice: `db.finish_execution` (SQL row) and `append(ExecutionFinished)` (event log and fold). Also holds `Engine::detail` and `Inner::append`/`load`.",
+            "symbols": [
+              "let mut result = executor.run(spec, host.clone(), token).await;",
+              "let _ = self.db.finish_execution(&id, &result);",
+              "self.append(session, SessionEvent::ExecutionFinished { id, result })?;",
+              "pub fn detail(&self, session: &SessionId) -> Result<SessionDetail, EngineError>",
+              "fn append(&self, session: &SessionId, event: SessionEvent) -> Result<StoredEvent, EngineError>",
+              "fn load(&self, id: &SessionId) -> Result<Arc<Live>, EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/executions.rs",
+            "purpose": "`Executions::finish` writes `submit` and `final_text` to the `executions` row. `COLS` and `execution()` build `ExecutionView` without them; `output()` reads them back but nothing in the server calls `WorkspaceDb::execution_output`.",
+            "symbols": [
+              "pub fn finish(&self, id: &ExecutionId, result: &ExecutionResult) -> Result<bool, StoreError>",
+              "pub struct ExecutionOutput { submit: Option<serde_json::Value>, final_text: String }",
+              "pub fn output(&self, id: &ExecutionId) -> Result<Option<(serde_json::Value, ExecutionOutput)>, StoreError>",
+              "const COLS: &str = \"id, session_id, agent, purpose, stage, project, executor, model, status, started_at, ended_at, usage, report_path, native_session_id, spawn_block, error, summary\""
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "The fold. `on_finished` parses `result.submit` into `ExploreSubmit` and stores it in `ExploreTask.result`. `ExecRecord.result` keeps the whole `ExecutionResult`.",
+            "symbols": [
+              "pub struct ExploreTask { idx, project, task, origin, exec, running, result: Option<ExploreSubmit>, failed, abandoned, retries, judged, gate }",
+              "fn on_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult)",
+              "SessionEvent::ExecutionFinished { id, result } => { ... rec.result = Some(result.clone()); ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Builds `SessionDetail` from the fold: `detail`, `stages` (the Explore card), `artifacts` (the research path), `decorate`.",
+            "symbols": [
+              "pub fn detail(s: &SessionState, db: &WorkspaceDb, workspace: &WorkspaceId, live: HashSet<ExecutionId>) -> Result<SessionDetail, EngineError>",
+              "pub fn stages(s: &SessionState) -> Vec<StageCard>",
+              "pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "API DTOs exported to TypeScript: `SessionDetail`, `StageCard`, `ExecutionView`, `ArtifactRef`, `DecisionView`.",
+            "symbols": [
+              "pub struct SessionDetail { summary, stages: Vec<StageCard>, phases, executions: Vec<ExecutionView>, gates, decisions: Vec<DecisionView>, artifacts: Vec<ArtifactRef>, completion, session_root, execution_groups, fact_checks, files, uploads, additions }",
+              "pub struct StageCard { stage, lane, label, status, project, phase, executions, gate, detail: Option<String> }",
+              "pub struct DecisionView { id, judge, subject, input_summary: String, output: serde_json::Value, reason, overridden, can_override, at }"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "Route `GET /api/sessions/{id}` to `get_session`, which returns `w.engine.detail(&sid)?`. Also `GET /api/sessions/{id}/events` returns raw `StoredEvent`s, which include the `ExecutionFinished` result and its submit.",
+            "symbols": [
+              "async fn get_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionDetail>",
+              "async fn session_events(State(app): AppState, Path(id): Path<String>, Query(q): Query<After>) -> Res<Vec<StoredEvent>>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Rule D2 in `explore_complete`: a finished task with non-empty `not_covered` and `judged == false` becomes a `Step::Judge { judge: Sufficiency, subject }`.",
+            "symbols": [
+              "fn explore_complete(&mut self) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "Builds the Sufficiency judge input from `ExploreTask.result`, including the `Not covered:` list, and the `input_summary` string `\"{n} Not covered items across {m} research documents\"`, which is stored in `DecisionMade` and shown as `DecisionView.input_summary`.",
+            "symbols": [
+              "JudgeKind::Sufficiency arm (lines 105-158)"
+            ]
+          },
+          {
+            "path": "web/src/screens/session/LanePanel.tsx",
+            "purpose": "Shows `StageCard.detail` as a label line under the picked stage; the Explore card text is built in `view.rs`.",
+            "symbols": [
+              "{picked.detail && <div style={label}>{picked.detail}</div>}"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/ExploreSubmit.ts",
+            "purpose": "Generated TypeScript for `ExploreSubmit` (exported because of `#[ts(export)]`), though `SessionDetail` does not reference it.",
+            "symbols": [
+              "export type ExploreSubmit"
+            ]
+          },
+          {
+            "path": "assets/agents/explore/prompt.md",
+            "purpose": "Tells the agent what each submit field means; says `not_covered` mirrors the research document's `not_covered` and that Ostra asks whether each item is needed.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a change is to show `not_covered` in the session detail, a research pass over `StageCard`/`SessionDetail` consumers in `web/` and the mobile views, and over the `view.rs` tests, would size the change; `CLAUDE.md` also requires a `docs/internals/pipeline.md` update and, for `web/` changes, a `/design-sync` request."
+        ],
+        "not_covered": [
+          "The web UI components that render session detail beyond `LanePanel.tsx` and the mobile `sessionView.ts`; none of them was traced to see whether any reads `StageCard.detail` for the Explore card in a way that would change if the text changed.",
+          "The `Sufficiency` judge's output schema (`judge.rs`, `assets/judges/sufficiency.md`) and how its decision adds new explore tasks, which is how `not_covered` items feed back into `SessionState.explore`.",
+          "Existing unit tests for `view::stages` and `view::detail` in `crates/ostra-engine/src/view.rs` (tests module from line 1250) and whether any asserts the Explore card `detail` text.",
+          "The WebSocket broadcast path (`EngineNotice` and the server's WS handler) beyond the fact that `Inner::append` broadcasts each stored event."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The executor returns the raw `submit` JSON in `ExecutionResult`. The runner records it twice: in the `executions` table, and as an `ExecutionFinished` event. The fold parses it into the typed struct for the agent's purpose. The planner and views read the typed struct, never the raw JSON. For explore, the typed struct is `ExploreSubmit` stored in `ExploreTask.result`.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-store/src/workspace/executions.rs"
+            ],
+            "name": "Submit payload to fold state (Hard rule 4 and pattern 1)",
+            "snippet": {
+              "code": "ExecPurpose::Explore { task } => {\n    let idx = *task as usize;\n    let parsed: Option<ExploreSubmit> = parse(&result.submit);\n    let Some(t) = self.explore.get_mut(idx) else {\n        return;\n    };\n    t.running = false;\n    match (status, parsed) {\n        (ExecutionStatus::Ok, Some(sub)) => t.result = Some(sub),\n        (ExecutionStatus::Interrupted, _) => t.exec = None,\n        (_, _) => {\n            if t.retries < ERROR_RETRIES && status == ExecutionStatus::Error {\n                t.retries += 1;\n                t.exec = None;\n            } else {\n                t.failed = Some(missing_submit(status, &error, result));\n            }\n        }\n    }\n    ...",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:3349"
+            }
+          },
+          {
+            "description": "`SessionDetail.stages` is rebuilt on each request from `SessionState`. The Explore card gets its one-line `detail` from `ExploreTask.result`. Today it formats two counters only. Any new surfaced fact from the submit would have to be added to this function or to a new DTO field, and the TypeScript is regenerated by `cargo test -p ostra-core` (CLAUDE.md, Change an API type).",
+            "files": [
+              "crates/ostra-engine/src/view.rs",
+              "crates/ostra-core/src/api.rs"
+            ],
+            "name": "Stage card built from fold state",
+            "snippet": {
+              "code": "for t in &s.explore {\n    let status = if t.result.is_some() {\n        StageStatus::Done\n    } else if t.abandoned {\n        StageStatus::Skipped\n    } else if t.failed.is_some() {\n        StageStatus::Failed\n    } else if t.running {\n        StageStatus::Running\n    } else {\n        StageStatus::Pending\n    };\n    let mut c = card(\n        StageKind::Explore,\n        format!(\"Research: {}\", first(&t.task)),\n        status,\n    );\n    c.project = Some(t.project.clone());\n    c.executions = t.exec.iter().cloned().collect();\n    c.gate = t.gate.clone();\n    c.detail = t.result.as_ref().map(|r| {\n        format!(\n            \"{} sources, {} open questions\",\n            r.sources_retrieved, r.open_questions\n        )\n    });\n    out.push(c);\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/view.rs:347"
+            }
+          },
+          {
+            "description": "Native and harness executors both run `validate_submit` (serde shape) then `ostra_core::doc::check_submit` (reads the research document and refuses on errors). Only after both pass is the payload recorded. A schema change to `ExploreSubmit` therefore reaches both executors through `submit_schema` and `validate_submit` in `ostra-core`.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs",
+              "crates/ostra-exec-harness/src/bridge.rs",
+              "crates/ostra-core/src/submit.rs"
+            ],
+            "name": "Submit validated at the tool boundary, identically on both executors",
+            "snippet": {
+              "code": "ostra_core::args::coerce_json_strings(&mut args, &submit_schema(live.agent));\nif let Err(message) = validate_submit(live.agent, &args) {\n    return tool_error(&format!(\n        \"Fix the arguments and call `{name}` again: {message}. Nothing was recorded.\"\n    ));\n}\nif let Err(message) = ostra_core::doc::check_submit(live.agent, &args) {\n    return tool_error(&format!(\"{message} Nothing was recorded.\"));\n}\nreturn if live.record_submit(args) {\n    tool_text(\n        \"Recorded. Your run is complete: end your turn now, without further tool calls.\",\n    )\n} else {\n    tool_error(\"A result was already recorded for this run. End your turn now.\")\n};",
+              "language": "rust",
+              "source": "crates/ostra-exec-harness/src/bridge.rs:229"
+            }
+          }
+        ],
+        "problem": "An explore agent ends by calling `submit_explore`, whose payload `ExploreSubmit` carries `not_covered: Vec<String>`. The engine reads that payload into fold state and the planner/judge use it, but `SessionDetail` has no field that carries the submit. The Explore stage card in `SessionDetail.stages` keeps only `sources_retrieved` and `open_questions` from it, so the `not_covered` strings do not appear in the session detail response today. Only a count of them appears, inside the Sufficiency decision's `input_summary`.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how an explore execution's submit, including `not_covered`, reaches the session detail API (`GET /api/sessions/{id}`). Covers the path from the `submit_explore` tool call to the `SessionDetail` JSON and records where `not_covered` is and is not present on that path. Does not cover the web UI rendering beyond naming the consumers of the fields, the Sufficiency judge's prompt/schema, or the research document's own `not_covered` field beyond how it differs from the submit's.",
+        "sources": [],
+        "title": "Explore submit to the session detail API"
+      },
+      "submit": {
+        "findings_summary": "Both executors validate the explore submit with `validate_submit` and `doc::check_submit`, and return it as the untyped `ExecutionResult.submit`. The runner stores it in the `executions` row and in an `ExecutionFinished` event. The fold (`state.rs::on_finished`) parses it into `ExploreTask.result: Option<ExploreSubmit>`, and the planner (Rule D2) and `judge_input.rs` read `not_covered` from there. `view::detail` builds `SessionDetail` from that fold, but the response carries no field for the submit: `ExecutionView` omits `submit`, and the Explore `StageCard.detail` is only \"N sources, M open questions\". The `not_covered` strings reach clients only through the raw `execution_finished` event (`/api/sessions/{id}/events` and the WebSocket), and as a count inside the Sufficiency `DecisionView.input_summary`.",
+        "not_covered": [
+          "Web UI components that render session detail beyond LanePanel.tsx and mobile sessionView.ts, and whether any depends on the Explore StageCard.detail text",
+          "The Sufficiency judge's output schema and prompt (judge.rs, assets/judges/sufficiency.md) and how its decision adds explore tasks",
+          "Existing view.rs unit tests for stages/detail and whether any asserts the Explore card detail text",
+          "The WebSocket broadcast handler beyond the fact that Inner::append broadcasts each stored event"
+        ],
+        "open_questions": 0,
+        "scope_covered": "Traced the explore `submit_explore` payload, including `not_covered`, from the executors through the fold to `GET /api/sessions/{id}`, and recorded what of it the session detail contains; web UI rendering and the Sufficiency judge's prompt were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How the console renders a research run card on the session board.",
+      "file": "ostra-research-20261002-085154-research-run-card-board.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine (view.rs, state.rs, plan.rs)",
+          "ostra-core (api.rs, submit.rs)",
+          "web (session board, mobile session, artifact research view)",
+          "design (StageRow)"
+        ],
+        "asks": [
+          "How the console renders a research run card on the session board."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/submit.rs:ExploreSubmit",
+            "step": "The explore agent ends by calling submit_explore with research_path, scope_covered, findings_summary, sources_retrieved, open_questions, and not_covered."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_finished",
+            "step": "When the execution finishes with status Ok and a parseable submit, the fold stores the whole payload on the task. A failure with retries left clears exec; otherwise it sets failed. An execution-failed gate later sets t.gate."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:explore_complete",
+            "step": "The planner reads not_covered from the stored result. Finished tasks whose items are unjudged make Step::Judge Sufficiency (Rule D2) until SUFFICIENCY_ROUNDS is reached; the fold sets judged and increments sufficiency_rounds when the decision applies."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:stages",
+            "step": "view::stages maps each ExploreTask to one StageCard of kind explore. Status precedence is result, abandoned, failed, running, else pending. Label is 'Research: ' plus the first line of the task, cut to 120 characters. detail is 'N sources, M open questions' only when a result exists. not_covered, scope_covered, and findings_summary are not copied onto the card. A Sufficiency card 'Check research coverage' with detail 'N rounds' follows when any Sufficiency decision exists."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:852",
+            "step": "The same view layer lists the research document as an ArtifactRef of kind research with label 'Research: <task>' and the project, once a result exists."
+          },
+          {
+            "location": "web/src/screens/SessionScreen.tsx:SessionScreen",
+            "step": "The card list travels in SessionDetail.stages (TypeScript type web/src/api/gen/StageCard.ts). SessionScreen loads it with api.session(id) and reloads on a throttled 400 ms refresh for every live session event."
+          },
+          {
+            "location": "web/src/screens/session/board.ts:laneStates",
+            "step": "laneStates folds the cards of the Research lane into one stepper entry: waiting beats running beats failed or blocked; all done gives done with the last done card's detail; some done gives 'k of n done'. defaultLane picks the lane of the current gate, else the first waiting or current lane."
+          },
+          {
+            "location": "web/src/screens/session/LanePanel.tsx:LanePanel",
+            "step": "LanePanel keeps cards whose lane equals the selected lane and renders each as a StageRow with label, status, and stageMeta. Clicking toggles the detail box (see pattern)."
+          },
+          {
+            "location": "design/src/components/pipeline/StageRow.tsx:StageRow",
+            "step": "StageRow draws the dot and label (CSS ellipsis, one line) and the meta in mono 2xs muted text. Mobile draws the same fields in LaneCard, and a tap goes to stageTarget: the gate if waiting, else the running or latest execution."
+          },
+          {
+            "location": "web/src/screens/artifact/doc/research.tsx:researchOutline",
+            "step": "The Not covered list is shown in full only in the research document view, opened from the sidebar or mobile artifact list, not from the board card: the Overview 'Not covered' stat and the 'Not covered' chapter with the attention flag."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "@ostra/design",
+            "role": "StageRow, StatusChip, Panel, Button, LaneStepper used by the board. The console imports the design system only from this package."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core TS export (web/src/api/gen/StageCard.ts)",
+            "role": "Generated by cargo test -p ostra-core from #[ts(export)] on StageCard; a field added to the Rust struct changes this file."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine view.rs",
+            "role": "Only producer of StageCard values for pipeline sessions."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Builds Vec<StageCard> from SessionState. The loop over s.explore (lines 347-374) makes one card per research task with label, status, project, executions, gate, and detail. Also builds the Sufficiency card (lines 375-384) and the research ArtifactRef (lines 852-861). first() trims the task text to its first line and 120 characters.",
+            "symbols": [
+              "pub fn stages(s: &SessionState) -> Vec<StageCard>",
+              "fn card(stage: StageKind, label: String, status: StageStatus) -> StageCard",
+              "fn first(s: &str) -> String",
+              "pub fn stage_label(k: StageKind) -> &'static str"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "API DTO for a card (StageCard, exported to TypeScript) and the status enum. SessionDetail.stages is the list the board reads. ExecutionView and ArtifactRef are what the card's execution buttons and the research artifact use.",
+            "symbols": [
+              "pub struct StageCard { stage, lane, label, status, project: Option<String>, phase: Option<u32>, executions: Vec<ExecutionId>, gate: Option<GateId>, detail: Option<String> }",
+              "pub enum StageStatus { Pending, Running, Waiting, Done, Skipped, Failed, Blocked }",
+              "pub struct SessionDetail { summary, stages, phases, executions, gates, decisions, artifacts, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/submit.rs",
+            "purpose": "ExploreSubmit is the payload the explore agent returns. It is stored on ExploreTask.result and is the only source of the card's detail text.",
+            "symbols": [
+              "pub struct ExploreSubmit { research_path, scope_covered, findings_summary, sources_retrieved: u32, open_questions: u32, not_covered: Vec<String> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "ExploreTask is the fold state behind one card. on_finished sets result, retries, or failed on the Explore purpose. Line 3794 sets t.gate when an execution-failed gate opens for the task; line 4306 clears it when answered. Line 2945 sets judged after a Sufficiency decision.",
+            "symbols": [
+              "pub struct ExploreTask { idx, project, task, origin, exec, running, result: Option<ExploreSubmit>, failed, abandoned, retries, judged, gate }",
+              "pub fn finished(&self) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "explore_complete (lines 713-753) implements Rule D2: finished tasks with unjudged non-empty not_covered trigger Step::Judge Sufficiency, up to SUFFICIENCY_ROUNDS. Lines 700-709 open the execution-failed gate for a failed task.",
+            "symbols": [
+              "fn explore_complete(&mut self) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "Builds the Sufficiency judge input. It lists each task's not_covered items (lines 127-133) and the summary string '{n} Not covered items across {k} research documents' (lines 153-156). This is the only place besides the research document where the items are shown by value.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/screens/SessionScreen.tsx",
+            "purpose": "The session board. Loads api.session(id) and api.events(id), keeps live events, and renders LaneStepper, Tabs, open GateCards, then LanePanel for the selected lane. Exposes goToGate, which scrolls to #gate-<id>.",
+            "symbols": [
+              "export function SessionScreen({ ws, id }: SessionScreenProps)",
+              "function SessionBoard({ ws, detail: d, events, onDetail, reload })"
+            ]
+          },
+          {
+            "path": "web/src/screens/session/LanePanel.tsx",
+            "purpose": "Desktop renderer of cards. Filters detail.stages by lane, draws one StageRow per card, and shows a detail box for the selected row: StatusChip, Produces and Protects against text from STAGES[stage], the detail line, one Button per execution (opens exec:<id>), and a Go to the gate button when card.gate is set.",
+            "symbols": [
+              "export function LanePanel({ detail, lane, onGate }: { detail: SessionDetail; lane: Lane; onGate: (id: string) => void })"
+            ]
+          },
+          {
+            "path": "web/src/screens/session/board.ts",
+            "purpose": "Pure helpers. stageMeta builds the right-aligned meta string of a row; stageKey makes the React key; laneStates derives the stepper state of the Research lane from its cards.",
+            "symbols": [
+              "export function stageMeta(s: StageCard, execs: Map<string, ExecutionView>): string | undefined",
+              "export const stageKey = (s: StageCard, i: number) => string",
+              "export function laneStates(d: SessionDetail): Record<Lane, LaneState>",
+              "export function defaultLane(d: SessionDetail): Lane"
+            ]
+          },
+          {
+            "path": "design/src/components/pipeline/StageRow.tsx",
+            "purpose": "The visual component: a 28px row with a status dot (done ok, running accent pulsing, waiting warn, failed or blocked bad, skipped or pending hollow), a truncated label, and a mono meta span. Row is a button only when onClick is given.",
+            "symbols": [
+              "export type StageStatus",
+              "export interface StageRowProps { label; status?; meta?; selected?; onClick? }",
+              "export function StageRow({ label, status = \"pending\", meta, selected, onClick }: StageRowProps)"
+            ]
+          },
+          {
+            "path": "design/src/tokens/components.css",
+            "purpose": "Styles .os-stage, .os-stage--selected, .os-stage--skipped, .os-stage__label (ellipsis, nowrap), .os-stage__meta (mono 2xs, muted), lines 912-943.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/content/stages.ts",
+            "purpose": "Static copy: LANES.research (title and why) and STAGES.explore and STAGES.sufficiency (produces, protects). The detail box of a selected card reads STAGES[card.stage].",
+            "symbols": [
+              "export const LANES: Record<Lane, LaneInfo>",
+              "export const STAGES: Record<StageKind, StageInfo>"
+            ]
+          },
+          {
+            "path": "web/src/mobile/screens/MSession.tsx",
+            "purpose": "Mobile renderer. LaneCard draws each card as a ms-stage row with StatusDot, label, and meta. A row is tappable when stageTarget returns a target; it opens the gate or the execution.",
+            "symbols": [
+              "function LaneCard({ d, lane, detail, onGate })"
+            ]
+          },
+          {
+            "path": "web/src/mobile/screens/sessionView.ts",
+            "purpose": "stageTarget decides where a mobile row goes: its gate when waiting, else the running or latest execution, else its gate, else nothing.",
+            "symbols": [
+              "export function stageTarget(s: StageCard, execs: Map<string, ExecutionView>): { gate: string } | { exec: string } | null"
+            ]
+          },
+          {
+            "path": "web/src/screens/artifact/doc/research.tsx",
+            "purpose": "Where Not covered is rendered in the console: the research document view. The Overview chapter has a Not covered stat (warn tone when non-zero) and a Not covered chapter with attention flag, listing d.not_covered and d.next_steps.",
+            "symbols": [
+              "export function researchOutline(d: ResearchDoc): Outline"
+            ]
+          },
+          {
+            "path": "web/src/shell/Sidebar.tsx",
+            "purpose": "Lists the session's ArtifactRef entries, including the research document, and opens them with open(`artifact:${a.path}`). This is the board's only link to the research document; the Research card itself has none.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/screens/session/board.test.ts",
+            "purpose": "Tests for stageMeta and laneStates. Line 128 asserts that a done research-lane card with no detail has undefined meta.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/api/mock/fixtures.session.ts",
+            "purpose": "Mock session fixtures. Stage specs are tuples [stage, lane, label, status, extra]; the explore cards use labels like 'Explore backend' and do not set detail, unlike the real engine's 'Research: <task>' label and 'N sources, M open questions' detail.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the card is to show Not covered, a separate pass should decide which surface carries it (StageCard field, detail text, or the selected-card box) and check the mobile LaneCard, which shows only label and meta.",
+          "A pass on the Decisions tab and the Sufficiency card to see how a user can currently learn which Not covered items were judged needed."
+        ],
+        "not_covered": [
+          "The sidebar session tree (TreeRun in view.rs, web/src/shell/Sidebar.tsx) and how it labels explore runs.",
+          "The execution screen for an explore run (exec:<id>) and the GateCard rendering of the execution-failed gate that a failed research card links to.",
+          "The Decisions tab rendering of the Sufficiency decision, which is the console's only view of how Not covered items were judged (web/src/screens/session/SidePanels.tsx).",
+          "Browser tests and docs pages that describe the board (docs/internals/pipeline.md, docs/internals/gates-and-judges.md) were only grepped for mentions, not read in full.",
+          "The design-sync target (.design-sync/NOTES.md) that applies if web/ or design/ change."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Board content is a pure projection of SessionState in ostra-engine view.rs. The console does not compute card text for the Research lane. Any new text on a card (for example a Not covered count) would be added as a StageCard field or to detail in view.rs, then regenerated into web/src/api/gen/StageCard.ts by cargo test -p ostra-core.",
+            "files": [
+              "crates/ostra-engine/src/view.rs",
+              "crates/ostra-core/src/api.rs",
+              "web/src/api/gen/StageCard.ts"
+            ],
+            "name": "Engine builds the card, console only draws it",
+            "snippet": {
+              "code": "    for t in &s.explore {\n        let status = if t.result.is_some() {\n            StageStatus::Done\n        } else if t.abandoned {\n            StageStatus::Skipped\n        } else if t.failed.is_some() {\n            StageStatus::Failed\n        } else if t.running {\n            StageStatus::Running\n        } else {\n            StageStatus::Pending\n        };\n        let mut c = card(\n            StageKind::Explore,\n            format!(\"Research: {}\", first(&t.task)),\n            status,\n        );\n        c.project = Some(t.project.clone());\n        c.executions = t.exec.iter().cloned().collect();\n        c.gate = t.gate.clone();\n        c.detail = t.result.as_ref().map(|r| {\n            format!(\n                \"{} sources, {} open questions\",\n                r.sources_retrieved, r.open_questions\n            )\n        });\n        out.push(c);\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/view.rs:347"
+            }
+          },
+          {
+            "description": "Both LanePanel and mobile LaneCard call stageMeta. While a card is running, the meta is the summary of its live execution; otherwise it is detail joined with the project key, and the project is dropped when the label already contains it. Because the Research label is 'Research: <task>' and the project is usually not in the task text, a finished card normally shows '<N> sources, <M> open questions · <project>'.",
+            "files": [
+              "web/src/screens/session/board.ts",
+              "web/src/screens/session/LanePanel.tsx",
+              "web/src/mobile/screens/MSession.tsx"
+            ],
+            "name": "Row meta from stageMeta, shared by desktop and mobile",
+            "snippet": {
+              "code": "export function stageMeta(s: StageCard, execs: Map<string, ExecutionView>): string | undefined {\n  if (s.status === \"running\") {\n    const live = s.executions.map((id) => execs.get(id)).find((x) => x?.status === \"running\" && x.summary);\n    if (live?.summary) return live.summary;\n  }\n  const parts = [s.detail, s.project && !s.label.includes(s.project) ? s.project : null].filter(Boolean);\n  return parts.length ? parts.join(\" · \") : undefined;\n}",
+              "language": "ts",
+              "source": "web/src/screens/session/board.ts:77"
+            }
+          },
+          {
+            "description": "Clicking a StageRow toggles selection by stageKey. The detail box shows the label, a StatusChip, static Produces and Protects against copy for the stage kind, card.detail again, one Button per execution that opens exec:<id>, and Go to the gate when the card has a gate. No artifact link and no Not covered text are in this box.",
+            "files": [
+              "web/src/screens/session/LanePanel.tsx"
+            ],
+            "name": "Desktop selected-card detail box",
+            "snippet": {
+              "code": "      {picked && (\n        <div className=\"os-rise\" style={{ marginTop: 10, padding: \"10px 12px\", border: \"1px solid var(--border-subtle)\", borderRadius: \"var(--radius-md)\", display: \"flex\", flexDirection: \"column\", gap: 6 }}>\n          <div style={{ display: \"flex\", gap: 8, alignItems: \"center\" }}>\n            <strong style={{ flex: 1 }}>{picked.label}</strong>\n            <StatusChip kind=\"stage\" status={picked.status} />\n          </div>\n          <div><span style={label}>Produces: </span>{STAGES[picked.stage].produces}</div>\n          <div><span style={label}>Protects against: </span>{STAGES[picked.stage].protects}</div>\n          {picked.detail && <div style={label}>{picked.detail}</div>}\n          {(picked.executions.length > 0 || picked.gate) && ( ... Buttons for executions and Go to the gate ... )}\n        </div>\n      )}",
+              "language": "tsx",
+              "source": "web/src/screens/session/LanePanel.tsx:54"
+            }
+          }
+        ],
+        "problem": "The session board has no component named for a research run card. A research run appears as a StageCard with stage kind explore, which the engine builds in view.rs and the console draws as a StageRow in the Research lane. The card shows a label, a status dot, and one meta string. It does not carry the explore run's not_covered list, even though the planner and the Sufficiency judge act on that list. This document records exactly what the card contains and where each piece comes from.",
+        "repo": "ostra",
+        "scope": "Task: how the console renders a research run card on the session board. Covers the path from an explore run's state in the engine to the stage row shown in the web console (desktop and mobile), plus how the research document's Not covered data reaches the console. It does not cover the sidebar run tree, the execution screen, or the other stage kinds beyond comparison.",
+        "sources": [],
+        "title": "Research run card on the session board"
+      },
+      "submit": {
+        "findings_summary": "The board has no dedicated research card component. ostra-engine view.rs::stages emits one StageCard (stage explore) per ExploreTask, with label 'Research: <first line of task>', a status mapped from result, abandoned, failed, and running, and a detail 'N sources, M open questions' only once a result exists. The web LanePanel draws it as a design StageRow, whose meta comes from stageMeta (live execution summary while running, otherwise detail plus project). A selected card shows static Produces and Protects text, the detail, execution buttons, and a Go to the gate button. The mobile LaneCard draws the same fields. ExploreSubmit.not_covered is never copied onto the card. The planner (Rule D2) and Sufficiency judge consume it, and the console shows it only in the research document view.",
+        "not_covered": [
+          "The sidebar session tree (TreeRun in view.rs, web/src/shell/Sidebar.tsx) and how it labels explore runs.",
+          "The execution screen for an explore run and the GateCard rendering of the execution-failed gate that a failed research card links to.",
+          "The Decisions tab rendering of the Sufficiency decision (web/src/screens/session/SidePanels.tsx).",
+          "Browser tests and docs pages that describe the board were only grepped for mentions, not read in full.",
+          "The design-sync target (.design-sync/NOTES.md) that applies if web/ or design/ change."
+        ],
+        "open_questions": 0,
+        "scope_covered": "How a research run is turned into a StageCard by the engine and drawn on the desktop and mobile session board, including where its Not covered data does and does not appear; the sidebar run tree, execution screen, and Decisions tab were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

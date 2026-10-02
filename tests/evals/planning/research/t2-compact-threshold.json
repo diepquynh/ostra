@@ -1,0 +1,510 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:47:22.224926109+00:00",
+  "docs": [
+    {
+      "task": "How the native loop decides when to compact a conversation and what constants it uses.",
+      "file": "ostra-research-20261002-084442-native-loop-compaction-threshold.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-exec-native",
+          "ostra-core (pricing)",
+          "ostra-providers (compact)"
+        ],
+        "asks": [
+          "How does the native loop decide when to compact a conversation?",
+          "What constants does it use?"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "Before the loop, the window is resolved from the models.dev catalog by the route's model id, falling back to DEFAULT_CONTEXT_WINDOW (200,000). The max output is resolved the same way with fallback DEFAULT_MAX_OUTPUT (32,000). `measured` and `measured_len` start at 0 and `failed_compaction_at` at None."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "At the top of each turn (max MAX_TURNS = 400), next = measured + estimate_tokens(messages not covered by the last response)."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "Compaction runs if next >= 0.95 * window, the retry guard passes (no earlier failure, or next >= failed_at + 0.02 * window), and the last message is a user turn."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::compact",
+            "step": "Run::compact emits a Status delta ('Compacting the conversation: about {tokens} of {window} context tokens used.'), calls provider.compact(req, COMPACT_INSTRUCTIONS, cancel), adds the summarization usage via add_usage with no call ids, and emits a result Status."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:stored_messages",
+            "step": "On a summary, the loop appends the AFTER_COMPACTION user turn, stores the new window as a `compaction` transcript record via host.record_message, and replaces `messages`. stored_messages later rebuilds from the last compaction record on resume."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "The request is sent in the same iteration, without a second threshold check. The response's usage is turned into context_tokens with context_of, and (measured, measured_len) is set to that value and the new message count, so the next iteration measures from the post-compaction size."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core::pricing",
+            "role": "context_window and max_output lookup from the installed models.dev catalog (global CATALOG)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-providers::Provider::compact",
+            "role": "Performs the summarization; default compact_on_client, overridden for Anthropic and OpenAI."
+          },
+          {
+            "kind": "external",
+            "name": "models.dev api.json",
+            "role": "Source of limit.context and limit.output per model, parsed in Catalog::from_models_dev. Not retrieved in this run; only the repo's use of it was read."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Defines the compaction constants and the decision in Run::execute (lines 531-588), the size helpers estimate_tokens and context_of, and Run::compact.",
+            "symbols": [
+              "pub const COMPACT_AT: f64 = 0.95;",
+              "pub const DEFAULT_CONTEXT_WINDOW: u64 = 200_000;",
+              "pub const DEFAULT_MAX_OUTPUT: u32 = 32_000;",
+              "const COMPACT_RETRY_GROWTH: f64 = 0.02;",
+              "const COMPACT_INSTRUCTIONS: &str",
+              "const AFTER_COMPACTION: &str",
+              "const COMPACTION_RECORD: &str = \"compaction\";",
+              "pub const MAX_TURNS: usize = 400;",
+              "pub const MAX_TOKEN_CONTINUES: usize = 3;",
+              "pub const EMIT_LIMIT: usize = 8 * 1024;",
+              "const CLEANUP_GRACE: Duration = Duration::from_secs(3);",
+              "fn estimate_tokens(messages: &[Message]) -> u64",
+              "fn context_of(u: &Usage) -> u64",
+              "async fn compact(&self, provider: &dyn Provider, req: ChatRequest, tokens: u64, window: u64) -> Result<Option<Vec<Message>>, ProviderError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/pricing.rs",
+            "purpose": "Supplies the context window and max output from the models.dev catalog (limit.context, limit.output), with the same model-id resolution as prices. Returns None for an unlisted model, which makes the loop use its defaults.",
+            "symbols": [
+              "pub fn context_window(model: &str) -> Option<u64>",
+              "pub fn max_output(model: &str) -> Option<u64>",
+              "Catalog::context_window(&self, model: &str) -> Option<u64>",
+              "Catalog::from_models_dev(json: &str)"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/lib.rs",
+            "purpose": "Provider::compact trait method with a default that calls compact_on_client; the loop calls it with COMPACT_INSTRUCTIONS. Anthropic and OpenAI override it (anthropic.rs:856, openai.rs:513).",
+            "symbols": [
+              "async fn compact(&self, req: ChatRequest, instructions: &str, cancel: CancellationToken) -> Result<Compacted, ProviderError>",
+              "pub async fn compact_on_client<P: Provider + ?Sized>(...)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "Usage struct carries context_tokens (line 55); merge keeps the latest non-zero value (lines 68-69).",
+            "symbols": [
+              "pub context_tokens: u64"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/tests.rs",
+            "purpose": "Tests for the trigger: compacts_near_the_context_window_and_continues_from_the_summary (190,000 tokens against the 200,000 default) and a_compaction_without_summary_is_not_retried_every_turn (190,000 then 191,000).",
+            "symbols": [
+              "fn compacts_near_the_context_window_and_continues_from_the_summary",
+              "fn a_compaction_without_summary_is_not_retried_every_turn",
+              "fn read_near_full(f: &Fixture, context: u64) -> ChatResponse",
+              "fn is_compaction_ask(req: &ChatRequest) -> bool"
+            ]
+          },
+          {
+            "path": "docs/internals/executors.md",
+            "purpose": "The 'Long runs' section (lines 205-234) documents this behavior for users: 95% threshold, window source, estimate at four characters a token, user-turn-last condition, provider table.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the threshold or constants change: update COMPACT_AT in lib.rs, the tests that hard-code 190,000 and 191,000 tokens in crates/ostra-exec-native/src/tests.rs, and the 95% and 200,000 statements in docs/internals/executors.md (Long runs)."
+        ],
+        "not_covered": [
+          "The provider-side compaction implementations (crates/ostra-providers/src/anthropic.rs:856, openai.rs:513) beyond their signature and the table in docs/internals/executors.md.",
+          "How the models.dev catalog is fetched and installed at server start, and the actual window values for specific models.",
+          "Harness executors (ostra-exec-harness), which rely on the harness CLI's own compaction.",
+          "Whether the web UI shows context_tokens."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "On every iteration of the turn loop (up to MAX_TURNS), before the request is sent, the loop computes `next`, the estimated size of the next request, and compares it with COMPACT_AT times the window. Three conditions must all hold: next >= 0.95 * window; the retry guard allows it; the last message is a user turn (tool results are sent as a user message, so this is true after tool results, and false right after an assistant message with no tool results). `measured` and `measured_len` are updated after every response (`(measured, measured_len) = (usage.context_tokens, messages.len())`), so `next` is the last response's context plus an estimate for only the messages added since. Outcomes: Ok(Some) replaces messages, appends the AFTER_COMPACTION user turn, records a `compaction` transcript record, and clears failed_compaction_at; Ok(None) or a non-cancel Err sets failed_compaction_at = Some(next) (the Err case also emits a Status delta); Err(Cancelled) returns a Cancelled result.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Compaction check before each request",
+            "snippet": {
+              "code": "let next = measured + estimate_tokens(&messages[measured_len.min(messages.len())..]);\nlet retry_ok = failed_compaction_at.is_none_or(|at| {\n    next as f64 >= at as f64 + COMPACT_RETRY_GROWTH * window as f64\n});\n// A user turn last means no tool call is open, as compaction requires.\nif next as f64 >= COMPACT_AT * window as f64\n    && retry_ok\n    && messages.last().is_some_and(|m| m.role == Role::User)\n{\n    let mut ask = req.clone();\n    ask.messages = messages.clone();\n    match self.compact(provider.as_ref(), ask, next, window).await {\n        Ok(Some(mut compacted)) => {\n            append_turn(&mut compacted, Message::user_text(AFTER_COMPACTION));\n            self.host.record_message(\n                COMPACTION_RECORD,\n                &serde_json::to_value(&compacted).unwrap_or(Value::Null),\n            );\n            messages = compacted;\n            failed_compaction_at = None;\n        }\n        Ok(None) => failed_compaction_at = Some(next),\n        Err(ProviderError::Cancelled) => { /* returns Cancelled with usage */ }\n        Err(e) => {\n            self.host.emit(ExecutionDelta::Status {\n                message: format!(\"Compaction failed, so the run continues without it: {e}\"),\n            });\n            failed_compaction_at = Some(next);\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:554"
+            }
+          },
+          {
+            "description": "The loop does not count tokens. context_of sums the response's input, cache read, cache write, and output tokens (the size the next request starts from) and stores it in usage.context_tokens. Messages not yet covered by a response (tool results and any appended user turns) are estimated at 4 characters per token over text, thinking, tool input JSON, tool result content, redacted thinking data, opaque JSON, and compaction summary plus value.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Size estimate without a tokenizer",
+            "snippet": {
+              "code": "fn context_of(u: &Usage) -> u64 {\n    u.input_tokens + u.cache_read_tokens + u.cache_write_tokens + u.output_tokens\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:222"
+            }
+          }
+        ],
+        "problem": "The native agent loop (crates/ostra-exec-native/src/lib.rs, Run::execute) replaces the conversation with a summary when the next request would nearly fill the model's context window. The decision depends on a size estimate, a window lookup, a 95% threshold, a retry guard after a failed compaction, and a structural condition on the last message.",
+        "repo": "ostra",
+        "scope": "Task: how the native loop decides when to compact a conversation and what constants it uses. Covers the trigger logic in ostra-exec-native, the constants it uses, and where the context window comes from. Provider-specific compaction mechanics are only noted at the interface; the web UI and harness executors are not covered.",
+        "sources": [],
+        "title": "Native loop compaction threshold and constants"
+      },
+      "submit": {
+        "findings_summary": "Before each request, Run::execute computes next = last response's context (input + cache read + cache write + output tokens) plus a 4-chars-per-token estimate of newer messages. It compacts when next >= COMPACT_AT (0.95) x window, the last message is a user turn, and the retry guard passes (after a failed or empty compaction, next must grow by COMPACT_RETRY_GROWTH = 0.02 x window). The window comes from the models.dev catalog (pricing::context_window) with DEFAULT_CONTEXT_WINDOW = 200_000 as fallback; the output limit falls back to DEFAULT_MAX_OUTPUT = 32_000. Other constants: MAX_TURNS 400, MAX_TOKEN_CONTINUES 3, EMIT_LIMIT 8 KiB, CLEANUP_GRACE 3 s, plus COMPACT_INSTRUCTIONS and AFTER_COMPACTION texts. On success the summary replaces all messages and is stored as a `compaction` transcript record; docs/internals/executors.md (Long runs) and two tests in tests.rs encode the 95% and 200k numbers.",
+        "not_covered": [
+          "Provider-side compaction implementations (anthropic.rs:856, openai.rs:513)",
+          "How the models.dev catalog is fetched and installed, and actual per-model window values",
+          "Harness executors' compaction",
+          "UI display of context_tokens"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the native loop (ostra-exec-native Run::execute) decides to compact and which constants it uses; provider-specific compaction internals, catalog fetching, harness executors and UI were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How the global config is defined, loaded, validated, and passed to the native executor.",
+      "file": "ostra-research-20261002-084444-global-config-to-native-executor.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "core",
+          "engine",
+          "native executor",
+          "server",
+          "providers",
+          "docs"
+        ],
+        "asks": [
+          "How the global config is defined",
+          "How it is loaded",
+          "How it is validated",
+          "How it is passed to the native executor"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/paths.rs:global_config_path",
+            "step": "Path: `$OSTRA_CONFIG`, else `<OS config dir>/ostra/config.toml`."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:ensure_global_config",
+            "step": "Startup: `ensure_global_config` writes `GlobalConfig::default()` with `save_toml` (atomic temp file plus rename) when the file does not exist."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:build",
+            "step": "Startup: `build` loads the file with `load_toml` (missing file gives Default; a parse error aborts startup with context), then runs `ostra_sandbox::validate::global(&global.sandbox)` and aborts on the first issue. The copy feeds `Providers::from_config`, `EnvStatus::detect`, `access`, and `Shared.global_cache`."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:build",
+            "step": "The one `NativeExecutor` is constructed once with `Arc<Providers>`, a skill resolver, and optional connectors; it stores no GlobalConfig and no config values."
+          },
+          {
+            "location": "crates/ostra-server/src/services.rs:global",
+            "step": "Per execution, the engine calls `Services::global()`, which `ServerServices` forwards to `Shared::global()` (re-read, last-good fallback)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:2417",
+            "step": "The runner resolves the route with `resolve_route(&global, &settings, RouteQuery{..})`. A `RouteError` becomes a denied execution recorded as `route: ...`, never a fallback. Tier names resolve through `global.tiers[executor.tier_table()]`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:2702",
+            "step": "The runner builds `ExecContext` (merged permissions, `enforce_tool_calls`, `sandbox_readable`, workspace sandbox choices) and `ExecutionSpec` (route, effort, prompt, capabilities, timeout, ctx), then calls `executor.run(spec, host, token)`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:execute",
+            "step": "`NativeExecutor::run` wraps the spec in `Run` and calls `Run::execute`. `execute` resolves the provider from `spec.route.model`, computes `window` from `ostra_core::pricing::context_window` (default 200,000), and compares the next request's estimated size against the constant `COMPACT_AT * window`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:sandbox_for",
+            "step": "Inside `execute`, `mcp_secret_vars(ctx)` and `sandbox_for(ctx, host)` each call `load_toml` on `global_config_path()` again to get credential variable names and the `[sandbox]` table, merged with the workspace's choices from `ctx.sandbox()`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "serde / toml",
+            "role": "Deserialize and serialize the config; `#[serde(default)]` and `toml::to_string_pretty`."
+          },
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "`#[ts(export)]` generates web/src/api/gen/GlobalConfig.ts; regenerated by `cargo test -p ostra-core`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-sandbox",
+            "role": "Provides the only global-config validator, `validate::global`, and the sandbox decision the native executor uses."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core::pricing",
+            "role": "`context_window(model)` and `max_output(model)` from the models.dev catalog, used for the compaction window."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Defines GlobalConfig and its sub-structs (ProviderConfig, TierTable, HarnessConfig, ServerConfig, SandboxConfig, ToolEnforcement), Default, route resolution, validate_workspace, and the load_toml / load_toml_required / save_toml helpers. Module doc states that route resolution and save-time validation live here.",
+            "symbols": [
+              "pub struct GlobalConfig { pub tool_enforcement: ToolEnforcement, pub providers: BTreeMap<String, ProviderConfig>, pub tiers: BTreeMap<String, TierTable>, pub harness: BTreeMap<String, HarnessConfig>, pub permissions: PermissionRules, pub server: ServerConfig, pub sandbox: SandboxConfig }",
+              "impl Default for GlobalConfig",
+              "impl GlobalConfig { pub fn harness_command(&self, harness: HarnessKind) -> String }",
+              "pub fn credential_env_names(global: &GlobalConfig, mcp_servers: &[McpServerConfig]) -> BTreeSet<String>",
+              "impl SandboxConfig { pub fn for_workspace(&self, ws: &WorkspaceSandbox) -> SandboxConfig }",
+              "pub fn resolve_route(global: &GlobalConfig, ws: &WorkspaceSettings, q: RouteQuery<'_>) -> Result<ResolvedRoute, RouteError>",
+              "pub fn validate_workspace(global: &GlobalConfig, ws: &WorkspaceSettings, env: &Environment, default_tier: impl Fn(&str) -> Tier) -> Vec<ValidationIssue>",
+              "pub fn load_toml<T: serde::de::DeserializeOwned + Default>(path: &Path) -> Result<T, ConfigError>",
+              "pub fn load_toml_required<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, ConfigError>",
+              "pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigError>",
+              "pub struct Limits { pub max_parallel_executions: u32, pub session_budget_usd: f64 }  // workspace-level, config.rs:652"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/paths.rs",
+            "purpose": "Locates the global config file: $OSTRA_CONFIG, else <OS config dir>/ostra/config.toml.",
+            "symbols": [
+              "pub fn global_config_path() -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "Executor trait inputs. ExecutionSpec and ExecContext are the only per-execution data the NativeExecutor receives from the engine; neither holds a GlobalConfig. ExecContext carries values already merged from the global config (permissions, enforce_tool_calls, sandbox_readable) and uses #[serde(default)] on added fields.",
+            "symbols": [
+              "pub struct ExecContext { ..., pub permissions: PermissionRules, pub enforce_tool_calls: bool, pub sandbox_readable: Vec<String>, ... }",
+              "pub struct ExecutionSpec { pub id, pub agent, pub route: ResolvedRoute, pub effort, pub system_prompt, pub first_message, pub capabilities, pub submit_schema, pub timeout_secs, pub ctx: ExecContext, pub resume, pub harness_session_id }"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/app.rs",
+            "purpose": "Startup load and validation (build), ensure_global_config (writes defaults when the file is missing), and Shared::global (per-call re-read with last-good cache). Shared also builds Providers and NativeExecutor from the startup copy.",
+            "symbols": [
+              "pub fn ensure_global_config() -> anyhow::Result<PathBuf>",
+              "pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>>",
+              "pub struct Shared { pub global_path: PathBuf, pub global_cache: RwLock<GlobalConfig>, pub providers: Arc<Providers>, pub native: Arc<NativeExecutor>, ... }",
+              "pub fn global(&self) -> GlobalConfig",
+              "impl WorkspaceHost for Shared { fn global(&self) -> GlobalConfig }"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/services.rs",
+            "purpose": "ServerServices implements the engine's Services trait; global() delegates to Shared::global; executor(Native) returns shared.native.",
+            "symbols": [
+              "fn global(&self) -> GlobalConfig",
+              "fn executor(&self, kind: ExecutorKind) -> Option<Arc<dyn Executor>>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/services.rs",
+            "purpose": "The Services trait, the engine's only route to settings. Doc comment: re-read on every execution.",
+            "symbols": [
+              "fn global(&self) -> GlobalConfig;"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Reads Services::global() when starting an execution: resolves the route with resolve_route, merges global and workspace permission rules, resolves enforce_tool_calls and sandbox_readable into ExecContext, builds ExecutionSpec, and calls executor.run. The same construction appears three times (inspect ~l.927-1009, spawn ~l.2403-2716, a third at ~l.2774-2848).",
+            "symbols": [
+              "let global = self.services.global();",
+              "resolve_route(&global, &settings, RouteQuery { key, default_tier, complexity, tier_override, executor_override })",
+              "permissions: PermissionRules::merged(&[&global.permissions, &settings.permissions.rules()])",
+              "enforce_tool_calls: settings.enforces_tool_calls(&global)",
+              "sandbox_readable: settings.readable_paths(&global)",
+              "let mut result = executor.run(spec, host.clone(), token).await;"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "The native loop. Holds the compaction constants and the compaction trigger; reads config.toml itself in two helpers.",
+            "symbols": [
+              "pub const COMPACT_AT: f64 = 0.95;",
+              "pub const DEFAULT_CONTEXT_WINDOW: u64 = 200_000;",
+              "const COMPACT_RETRY_GROWTH: f64 = 0.02;",
+              "impl Executor for NativeExecutor { async fn run(&self, spec: ExecutionSpec, host: Arc<dyn ExecutionHost>, cancel: CancellationToken) -> ExecutionResult }",
+              "struct Run { providers, skill_resolver, code, mcp, manage, coord, host, usage, cancel, git_repos, spec }",
+              "async fn execute(self) -> ExecutionResult  // window and COMPACT_AT check at ~l.531-565",
+              "async fn compact(&self, provider: &dyn Provider, req: ChatRequest, tokens: u64, window: u64)",
+              "fn mcp_secret_vars(ctx: &ExecContext) -> Vec<String>",
+              "fn sandbox_for(ctx: &ExecContext, host: Arc<dyn ExecutionHost>) -> Result<Sandbox, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/tests.rs",
+            "purpose": "Compaction tests build a fake provider and an ExecutionSpec; the 95% case is written as 190_000 of the 200_000 assumed window (comment at l.918). Any change to the compaction threshold changes these numbers.",
+            "symbols": [
+              "async fn compacts_near_the_context_window_and_continues_from_the_summary()",
+              "async fn a_compaction_without_summary_is_not_retried_every_turn()",
+              "fn read_near_full(f: &Fixture, context: u64) -> ChatResponse"
+            ]
+          },
+          {
+            "path": "crates/ostra-sandbox/src/validate.rs",
+            "purpose": "The only validator that runs on the global config itself: checks the [sandbox] table (absolute paths, hosts, upstream_proxy).",
+            "symbols": [
+              "pub fn global(cfg: &SandboxConfig) -> Vec<ValidationIssue>"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/lib.rs",
+            "purpose": "Providers is built from GlobalConfig at startup and rebuilt by reload when credentials change; the NativeExecutor holds the same Arc<Providers>.",
+            "symbols": [
+              "pub fn from_config(cfg: &GlobalConfig, saved: &BTreeMap<String, SavedCredentials>) -> Self",
+              "pub fn reload(&self, cfg: &GlobalConfig, saved: &BTreeMap<String, SavedCredentials>)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/tests/runner.rs",
+            "purpose": "Fake Services implementations return a GlobalConfig; the same pattern is in recover.rs, pause.rs, and ostra-server/tests/test_stage_evals.rs and coordination_evals.rs.",
+            "symbols": [
+              "fn global(&self) -> GlobalConfig"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/GlobalConfig.ts",
+            "purpose": "TypeScript type generated from GlobalConfig by ts-rs (#[ts(export)]). Adding a field to GlobalConfig changes this file after cargo test -p ostra-core.",
+            "symbols": [
+              "export type GlobalConfig"
+            ]
+          },
+          {
+            "path": "docs/internals/settings-and-routing.md",
+            "purpose": "Docs page for the global config: defaults list (section 'The global config', l.87-115), last-good fallback, 'Read fresh, every execution' (l.395). CLAUDE.md pattern 9 requires updating it with any change here.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/executors.md",
+            "purpose": "Docs page for native compaction ('Long runs', l.205-243): states the fixed 95% share and the 200,000 default window.",
+            "symbols": []
+          }
+        ],
+        "lessons": [
+          {
+            "area": "ostra-exec-native",
+            "lesson": "NativeExecutor never receives GlobalConfig; it reads config.toml itself in sandbox_for and mcp_secret_vars.",
+            "verified": "Recorded by this run after reading crates/ostra-exec-native/src/lib.rs:1092-1138."
+          },
+          {
+            "area": "ostra-core::config",
+            "lesson": "Global config has no save-time validator or API writer; only ostra_sandbox::validate::global checks it.",
+            "verified": "Recorded by this run; grep of crates/ostra-server/src/api.rs shows no global config write endpoint (only reads at l.792, 829, 848)."
+          }
+        ],
+        "next_steps": [
+          "If a native-loop value is to become configurable, a spec pass can choose between the engine path (add a field to ExecContext, filled in the three runner.rs sites) and the executor path (read GlobalConfig in the native crate), using the pattern entries above.",
+          "A research pass on the Provider::compact implementations and models.dev window sizes if the threshold is to vary by model or provider."
+        ],
+        "not_covered": [
+          "Harness executors' use of GlobalConfig (crates/ostra-exec-harness/src/executor.rs, setup.rs, and ostra-server/src/bridge.rs take &GlobalConfig for harness commands); not traced.",
+          "Whether the native tests set OSTRA_CONFIG or isolate the config path in a fixture: grep of crates/ostra-exec-native/src/tests.rs found no OSTRA_CONFIG, but the Fixture helper was not read in full.",
+          "The Provider::compact implementations in crates/ostra-providers (anthropic.rs, openai.rs) and how they would react to an earlier trigger point.",
+          "The web console: no screen edits the global config (web only has the generated type), but web usage was not traced beyond one grep.",
+          "HANDOVER.md sections on settings and on the native loop were not read."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Every section of the global config is a struct with `#[serde(default)]`, `#[ts(export)]`, and `PartialEq`. A key absent from config.toml takes the struct's Default, so a new field is backward compatible with existing files. A top-level table that is present replaces its default table as a whole (documented in settings-and-routing.md l.106). `GlobalConfig::default()` seeds providers, tier tables, harness commands, one deny rule, server, and sandbox. A round-trip test (`global_round_trip`) serializes the default and parses it back.",
+            "files": [
+              "crates/ostra-core/src/config.rs",
+              "web/src/api/gen/GlobalConfig.ts"
+            ],
+            "name": "Serde struct with #[serde(default)] and a hand-written Default",
+            "snippet": {
+              "code": "#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]\n#[serde(default)]\n#[ts(export)]\npub struct GlobalConfig {\n    /// Whether Layer 1 checks where tool calls read and write. See [`ToolEnforcement`].\n    pub tool_enforcement: ToolEnforcement,\n    pub providers: BTreeMap<String, ProviderConfig>,\n    /// Tier to model, per executor table (`native`, `claude`, `codex`, `grok`, `agy`).\n    pub tiers: BTreeMap<String, TierTable>,\n    pub harness: BTreeMap<String, HarnessConfig>,\n    pub permissions: PermissionRules,\n    pub server: ServerConfig,\n    pub sandbox: SandboxConfig,\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:18"
+            }
+          },
+          {
+            "description": "Shared::global re-reads config.toml on every call. A parse error or a failed sandbox validation logs a warning and returns the cached last good copy; a good read refreshes the cache. This is the copy the engine sees through Services::global.",
+            "files": [
+              "crates/ostra-server/src/app.rs",
+              "crates/ostra-server/src/services.rs"
+            ],
+            "name": "Per-call re-read with last-good fallback (server)",
+            "snippet": {
+              "code": "pub fn global(&self) -> GlobalConfig {\n    match load_toml::<GlobalConfig>(&self.global_path) {\n        Ok(g) if !ostra_sandbox::validate::global(&g.sandbox).is_empty() => {\n            for i in ostra_sandbox::validate::global(&g.sandbox) {\n                tracing::warn!(\n                    \"{}: {}; using the last good global config\",\n                    i.path,\n                    i.message\n                );\n            }\n            self.global_cache.read().clone()\n        }\n        Ok(g) => {\n            *self.global_cache.write() = g.clone();\n            g\n        }\n        Err(e) => {\n            tracing::warn!(\"{e}; using the last good global config\");\n            self.global_cache.read().clone()\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/app.rs:92"
+            }
+          },
+          {
+            "description": "The engine reads Services::global() once per execution start and folds the global values the executor and policy need into ExecContext (merged permissions, enforce_tool_calls, sandbox_readable) and ExecutionSpec (the ResolvedRoute). ExecContext's doc says the policy reads no config, so merged values travel in the context. Fields added later use #[serde(default)].",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-core/src/exec.rs"
+            ],
+            "name": "Engine resolves global values into ExecContext / ExecutionSpec",
+            "snippet": {
+              "code": "let global = self.services.global();\nlet settings = self.services.workspace();\n...\nlet ctx = ExecContext {\n    ...\n    permissions: PermissionRules::merged(&[\n        &global.permissions,\n        &settings.permissions.rules(),\n    ]),\n    ...\n    enforce_tool_calls: settings.enforces_tool_calls(&global),\n    ...\n    sandbox_readable: settings.readable_paths(&global),\n    ...\n};",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:927"
+            }
+          },
+          {
+            "description": "The native crate has no GlobalConfig field and receives none. Two helpers call load_toml on global_config_path() with unwrap_or_default(), so they see a parse error as defaults, not as the last good copy the server keeps. sandbox_for comment: the [sandbox] table is read fresh so a change applies to the next execution.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "NativeExecutor re-reads config.toml directly",
+            "snippet": {
+              "code": "fn sandbox_for(\n    ctx: &ostra_core::exec::ExecContext,\n    host: Arc<dyn ExecutionHost>,\n) -> Result<Sandbox, String> {\n    let global: ostra_core::config::GlobalConfig =\n        ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();\n    let sandbox = global.sandbox.for_workspace(&ctx.sandbox());",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:1109"
+            }
+          },
+          {
+            "description": "The existing precedent for a validated numeric knob is `Limits` in WorkspaceSettings: a struct with a Default (3 and 25.0), checked in validate_workspace with a message that states the rule and the reason, and listed with a label in a path table near config.rs:905. These are workspace settings, not global ones.",
+            "files": [
+              "crates/ostra-core/src/config.rs"
+            ],
+            "name": "Workspace-level numeric limits validated in validate_workspace",
+            "snippet": {
+              "code": "if ws.limits.max_parallel_executions == 0 {\n    issues.push(issue(\n        \"limits.max_parallel_executions\".into(),\n        \"Allow at least one execution at a time.\".into(),\n    ));\n}\nif !ws.limits.session_budget_usd.is_finite() || ws.limits.session_budget_usd < 0.0 {\n    issues.push(issue(\n        \"limits.session_budget_usd\".into(),\n        \"The budget is a dollar amount of 0 or more; 0 means no limit.\".into(),\n    ));\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:1424"
+            }
+          }
+        ],
+        "problem": "The global config (`config.toml`) is a serde struct in ostra-core. The server re-reads it per call with a last-good fallback, and the engine reads it per execution to resolve routes and merge permissions. The NativeExecutor is not handed a GlobalConfig: it receives an ExecutionSpec (route, ExecContext) and re-reads the file itself for the sandbox and for credential variable names. Anything the native loop needs from the global config, such as a tunable compaction threshold that is today the constant COMPACT_AT, has to reach it by one of these two paths.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the global config is defined, loaded, validated, and passed to the native executor. Covers ostra-core config types and loaders, the server's Shared::global cache, the engine's Services::global use in runner.rs, and the NativeExecutor's own reads of the config. Does not cover harness executors beyond noting they take GlobalConfig, the web UI, or the provider wire clients.",
+        "sources": [],
+        "title": "Global config: definition, loading, validation, and delivery to the native executor"
+      },
+      "submit": {
+        "findings_summary": "GlobalConfig (ostra-core/src/config.rs) is a `#[serde(default)]` struct with a hand-written Default and a ts-rs export. It is loaded with `load_toml` from `$OSTRA_CONFIG` or the OS config dir. The server validates only its `[sandbox]` table, through `ostra_sandbox::validate::global`: startup aborts on an issue, and `Shared::global()` re-reads the file per call and falls back to the last good copy. No endpoint writes the global config, and `validate_workspace` takes it as input without validating it. The engine reads `Services::global()` per execution in runner.rs, resolves the route, and folds merged values into `ExecContext` and `ExecutionSpec`. `NativeExecutor` never receives a GlobalConfig. It re-reads config.toml itself in `sandbox_for` and `mcp_secret_vars` with `unwrap_or_default`, which skips the server's last-good fallback. The compaction threshold is the constant `COMPACT_AT = 0.95` in ostra-exec-native/src/lib.rs, used in `Run::execute`, with tests and docs/internals/executors.md written around it.",
+        "not_covered": [
+          "Harness executors' use of GlobalConfig (ostra-exec-harness, ostra-server/src/bridge.rs)",
+          "Whether the native tests isolate the config path; the Fixture helper was not read in full",
+          "Provider::compact implementations in ostra-providers (anthropic.rs, openai.rs)",
+          "Web console use of the generated GlobalConfig type beyond one grep",
+          "HANDOVER.md sections on settings and the native loop"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How GlobalConfig is defined, loaded, validated and delivered to the native executor, including the hard-coded compaction constants; harness executors, web UI and provider wire clients were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

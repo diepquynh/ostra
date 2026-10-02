@@ -1,0 +1,718 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:50:21.587496264+00:00",
+  "docs": [
+    {
+      "task": "How the review loop counts iterations against its cap, including the YOLO review budget and the review-cap gate.",
+      "file": "ostra-research-20261002-084726-review-loop-cap.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine",
+          "ostra-core"
+        ],
+        "asks": [
+          "Explain how the review loop counts iterations against its cap.",
+          "Explain the YOLO review budget.",
+          "Explain the review-cap gate."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished",
+            "step": "A phase's work pass (implementer, or write-test for the test loop) finishes with status ok. loop_finished sets `LoopNext::Review` when the loop's ReviewMode says to review (Always, or IfCodeChanged and a non-instruction file changed; Never skips review)."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:LoopNext::Review arm",
+            "step": "The planner spawns the code-reviewer. The `iteration` it puts in `ExecPurpose::Review` is `l.iterations + 1`; that value is a label for the spawn, not what the fold counts."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished",
+            "step": "When the review execution finishes and its submit parses, the fold increments `l.iterations` by one (`l.iterations += 1`). This happens before the BLOCKER check, so a pass that returns BLOCKER or security_block still counts. A review that is interrupted, errors, or has no parseable submit does not increment: interrupted re-runs the step, an error retries once (ERROR_RETRIES) or becomes LoopNext::Failed, and a missing submit becomes LoopNext::Failed. Each WorkLoop (impl_loop and test_loop of a phase) has its own counter."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished",
+            "step": "BLOCKER or security_block: `blocker_open = true`, `LoopNext::Work { kind: WorkKind::BlockerFix }` and return. No cap comparison happens (Hard rule 21), so these passes never open the gate, but they raise `iterations`, which leaves fewer non-BLOCKER passes before the cap."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished",
+            "step": "Otherwise findings split into auto-fixable (apply), HIGH and MEDIUM (remaining), and LOW (leftover_low, never counted against the cap). With auto-fixable findings the loop goes to LoopNext::Autofix first; the AutofixApplied event handler in SessionState::apply later re-adds failed HIGH or MEDIUM autofixes to remaining and calls after_findings. Without auto-fixable findings, after_findings runs immediately."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:WorkLoop::after_findings",
+            "step": "Empty remaining ends the loop (Stage or Done). Otherwise, if `iterations >= effective_cap(yolo)`, the cap is reached. Below the cap the loop sends the findings to the fix agent (LoopNext::Work Fix) and a completed fix returns to LoopNext::Review."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner",
+            "step": "Non-YOLO at the cap: LoopNext::CapReached. The planner opens GatePayload::ReviewCap with `iterations`, the open findings, and the ledger path. on_gate_opened stores the gate id in `WorkLoop.gate`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_gate_answered",
+            "step": "ReviewCap answer `another-pass`: `extra_cap += 1`, then Work Fix with fix_instructions (plus the user's text; when the text is non-empty and the answer was routed it goes through LoopNext::AwaitRoute and the Route-answer judge first). One more fix and one more review follow, so each answer buys exactly one pass; if findings remain, `iterations >= cap + extra_cap` opens a new gate. Any other option: LoopNext::Blocked with the finding count and ledger path, `block_gate_answered = true`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_decision",
+            "step": "YOLO at the budget (iterations >= 10 + extra_cap): LoopNext::Resolve, so the planner asks the Resolve-review judge. Judge `fix`: resolve_rounds += 1, open_before_resolve = Some(open count), `extra_cap += 1` (one verification review), then a Fix work pass with per-finding instructions (plain fix_instructions if the list is empty). Judge `block`: LoopNext::Blocked. After the verification review, after_findings runs again: resolve again if the open count fell below open_before_resolve, else Blocked. The conformance fixture yolo_answers_gates_and_extends_review_budget confirms: review #10 -> judge, fix, review #11 (2 -> 1 open) -> judge, fix, review #12 (1 -> 1) -> blocked, with no gate."
+          },
+          {
+            "location": "crates/ostra-engine/src/judge_input.rs:yolo_plan",
+            "step": "If YOLO is toggled on while a loop waits at CapReached, the planner asks the Resolve-review judge instead of opening the gate. If a review_cap gate is already open when YOLO turns on, the YOLO answer plan gives it the fixed choice `another-pass`. The docs say the gate is rarely reached under YOLO for this reason."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_gate_answered",
+            "step": "PhaseBlocked answer `retry`: `extra_cap = (iterations + REVIEW_CAP) - REVIEW_CAP`, which equals `iterations`. The effective cap becomes iterations plus the mode's base (3 non-YOLO, 10 YOLO), so retry grants a full fresh budget of the current mode. resolve_rounds is reset to 0 and open_before_resolve to None."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "GatePayload::ReviewCap, JudgeKind::ResolveReview, PhaseView DTO, Limits config struct."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "state.rs fold, plan.rs planner, judge_input.rs YOLO handling, runner.rs answer validation."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Holds the constants, the WorkLoop counters, the cap check (after_findings), the increment in loop_finished, the ResolveReview judge fold, the ReviewCap gate answer fold, and the PhaseBlocked retry reset.",
+            "symbols": [
+              "pub const REVIEW_CAP: u32 = 3;",
+              "pub const YOLO_REVIEW_BUDGET: u32 = 10;",
+              "pub struct WorkLoop { pub iterations: u32, pub extra_cap: u32, pub resolve_rounds: u32, pub open_before_resolve: Option<usize>, ... }",
+              "pub fn effective_cap(&self, yolo: bool) -> u32",
+              "fn after_findings(&mut self, remaining: Vec<ReviewFinding>, yolo: bool, fix_ledger: &str)",
+              "fn loop_finished(&mut self, key: (u32, bool), rec: &ExecRecord, result: &ExecutionResult)",
+              "fn on_gate_opened(&mut self, id: &GateId, payload: &GatePayload)",
+              "fn on_gate_answered(&mut self, id: &GateId, payload: &GatePayload, answer: &GateAnswer, routed: bool)",
+              "pub fn answer_needs_route(payload: &GatePayload, answer: &GateAnswer) -> bool",
+              "pub enum LoopNext { ... CapReached { findings: Vec<ReviewFinding> }, Resolve { findings: Vec<ReviewFinding> }, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "The pure planner turns LoopNext::CapReached into a review_cap gate (or the Resolve-review judge if YOLO is on) and LoopNext::Resolve into the Resolve-review judge. PlanCtx carries no review cap setting.",
+            "symbols": [
+              "pub struct PlanCtx { pub format_commands: BTreeMap<String, Option<String>>, pub budget_usd: Option<f64> }",
+              "LoopNext::CapReached { findings } arm (about line 1395)",
+              "LoopNext::Resolve { .. } arm (about line 1421)",
+              "LoopNext::Review arm: let iteration = l.iterations + 1;"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "Defines the ReviewCap gate payload, its stage mapping and kind string.",
+            "symbols": [
+              "GatePayload::ReviewCap { project: String, phase: u32, tests: bool, iterations: u32, findings: Vec<ReviewFinding>, ledger_path: PathBuf }",
+              "GatePayload::ReviewCap { tests: false, .. } => StageKind::Review",
+              "GatePayload::ReviewCap { tests: true, .. } => StageKind::TestReview",
+              "GatePayload::ReviewCap { .. } => \"review_cap\"",
+              "JudgeKind::ResolveReview => \"resolve-review\""
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "Builds the Resolve-review judge input (pass and resolution round counts, open findings, ledger) and fixes the YOLO answer to a review_cap gate as another-pass.",
+            "symbols": [
+              "JudgeKind::ResolveReview arm (about line 420)",
+              "GatePayload::ReviewCap { .. } => choice(\"another-pass\", \"Under YOLO the review loop keeps its larger budget.\")",
+              "GatePayload::ReviewCap { phase, iterations, findings, .. } (gate text for judges, about line 692)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge.rs",
+            "purpose": "Output struct of the Resolve-review judge.",
+            "symbols": [
+              "pub enum ResolveAction { Fix, Block }",
+              "pub struct ResolveReviewOut { pub action: ResolveAction, pub instructions: Vec<FindingInstruction>, pub reason: String }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "validate_answer accepts only a Choice answer for ReviewCap; plan_ctx builds PlanCtx from workspace limits (session budget only).",
+            "symbols": [
+              "fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError>",
+              "fn plan_ctx(&self, st: &SessionState) -> PlanCtx"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Exposes the iteration counter to the API as PhaseView.review_iterations (impl loop only).",
+            "symbols": [
+              "review_iterations: l.iterations"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "PhaseView DTO with review_iterations, exported to TypeScript.",
+            "symbols": [
+              "pub review_iterations: u32"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Workspace Limits struct, the existing home for spend and parallelism limits. It has no review cap field. Shown for contrast with how limits are validated at save.",
+            "symbols": [
+              "pub struct Limits { pub max_parallel_executions: u32, pub session_budget_usd: f64 }",
+              "fn validate_workspace"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures for the cap: non-YOLO cap at 3 with another-pass, BLOCKER without cap, YOLO budget of 10 with resolution rounds.",
+            "symbols": [
+              "fn review_loop_splits_autofix_fix_and_caps_at_three()",
+              "fn hard21_blocker_has_no_cap()",
+              "fn yolo_answers_gates_and_extends_review_budget()"
+            ]
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Docs that state the cap numbers (review loop section near line 407, limits table row at line 840).",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "Docs for the review-cap gate (Review cap section), phase-blocked retry, the YOLO answer table row for review_cap, and the YOLO review loop section.",
+            "symbols": []
+          },
+          {
+            "path": "design/src/components/pipeline/GateCard.tsx",
+            "purpose": "Lists review_cap as a gate kind with an icon (UI only; not researched further).",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a configurable cap is wanted, a research pass on how workspace settings reach the fold (Limits in config.rs, validate_workspace, and the AUTO_FIXABLE_PARAM precedent of recording a setting in an event) would settle where the value can live."
+        ],
+        "not_covered": [
+          "The Ultracode source hooks/review-cap.js outside the repo root, which state.rs cites as the origin of YOLO_REVIEW_BUDGET and the resolution loop.",
+          "The React UI (web/) and design/ rendering of the review_cap gate and review_iterations; only GateCard.tsx was seen in a grep.",
+          "The assets/judges/resolve-review.md prompt text and the tests in crates/ostra-engine/tests/runner.rs and crates/ostra-server/tests/e2e.rs that may exercise the cap."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "WorkLoop::after_findings decides what follows a review whose HIGH and MEDIUM findings remain. It compares iterations with effective_cap(yolo) and sets LoopNext::CapReached (non-YOLO) or LoopNext::Resolve / Blocked (YOLO). The planner only reacts to the resulting LoopNext. The yolo flag is read from SessionState.yolo at the moment the review finishes, so the fold stays a pure function of the event log (YoloSet event).",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Cap check lives in the fold, not the planner",
+            "snippet": {
+              "code": "pub fn effective_cap(&self, yolo: bool) -> u32 {\n    (if yolo { YOLO_REVIEW_BUDGET } else { REVIEW_CAP }) + self.extra_cap\n}\n\nfn after_findings(&mut self, remaining: Vec<ReviewFinding>, yolo: bool, fix_ledger: &str) {\n    if remaining.is_empty() {\n        self.next = if self.stage { LoopNext::Stage } else { LoopNext::Done };\n        return;\n    }\n    if self.iterations >= self.effective_cap(yolo) {\n        if yolo {\n            // YOLO resolution repeats while it converges (review-cap.js).\n            let converging = match self.open_before_resolve {\n                None => true,\n                Some(before) => remaining.len() < before,\n            };\n            self.next = if self.resolve_rounds == 0 || converging {\n                LoopNext::Resolve { findings: remaining }\n            } else {\n                LoopNext::Blocked { reason: format!(\"The review loop stopped converging after {} resolution rounds; {} findings remain open. Ledger: {fix_ledger}\", self.resolve_rounds, remaining.len()) }\n            };\n        } else {\n            self.next = LoopNext::CapReached { findings: remaining };\n        }\n        return;\n    }\n    self.next = LoopNext::Work {\n        kind: WorkKind::Fix,\n        instructions: Some(fix_instructions(&remaining, fix_ledger)),\n    };\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:522"
+            }
+          },
+          {
+            "description": "The ReviewCap gate follows the repo's gate recipe: payload variant in event.rs with stage() and kind_str() arms, recorded in on_gate_opened (sets WorkLoop.gate), answered in on_gate_answered, opened by the planner, accepted by validate_answer as a Choice, and answered under YOLO by a fixed choice in judge_input::yolo_plan. Options are another-pass (optional text) and anything else, which blocks.",
+            "files": [
+              "crates/ostra-core/src/event.rs",
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/judge_input.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Gate recipe for the review-cap gate",
+            "snippet": {
+              "code": "LoopNext::CapReached { findings } => {\n    if s.yolo {\n        // YOLO toggled on while the loop waited at its cap.\n        self.push(Step::Judge {\n            judge: JudgeKind::ResolveReview,\n            subject: Some(loop_key_str((phase, tests))),\n        });\n    } else {\n        self.gate(\n            format!(\"Review of phase {phase} reached its cap\"),\n            format!(\n                \"{} review passes ran and {} findings are still open. Choose another fix-and-review pass, or stop and leave the phase blocked.\",\n                l.iterations,\n                findings.len()\n            ),\n            GatePayload::ReviewCap {\n                project,\n                phase,\n                tests,\n                iterations: l.iterations,\n                findings: findings.clone(),\n                ledger_path: s.ledger_path(&p.info.project, phase, tests),\n            },\n        );\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:1395"
+            }
+          },
+          {
+            "description": "CLAUDE.md pattern 1 and 2: the fold cannot read settings, so facts like auto-fixable rule IDs are recorded in the execution's params (AUTO_FIXABLE_PARAM), and planner-only settings go through PlanCtx (budget_usd, format_commands). Neither mechanism carries a review cap today; REVIEW_CAP and YOLO_REVIEW_BUDGET are constants read directly inside the fold.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Facts from outside the log travel in events or PlanCtx",
+            "snippet": {
+              "code": "fn plan_ctx(&self, st: &SessionState) -> PlanCtx {\n    let mut ctx = PlanCtx::default();\n    let budget = self.services.workspace().limits.session_budget_usd;\n    ctx.budget_usd = (budget > 0.0).then_some(budget);\n    for p in &st.projects {\n        let profile: ProjectProfile =\n            load_toml(&paths::project_profile(&p.path)).unwrap_or_default();\n        ctx.format_commands.insert(\n            p.key.clone(),\n            profile.commands.format.filter(|c| !c.trim().is_empty()),\n        );\n    }\n    ctx\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1612"
+            }
+          }
+        ],
+        "problem": "Each work loop (implement or test) keeps a review pass counter and compares it with a cap of 3, or 10 under YOLO, plus an additive extra_cap. Both limits are compile-time constants in state.rs, not settings, and several separate places adjust the cap (another-pass answer, YOLO resolution rounds, phase-blocked retry). The behavior is spread across the fold, the planner, and the YOLO gate plan, so a reader needs one trace of how a pass is counted and what happens at the limit.",
+        "repo": "ostra",
+        "scope": "Task: how the review loop counts iterations against its cap, including the YOLO review budget and the review-cap gate. Covers the Rust backend fold, planner, judge input, gate payload, tests and docs. Does not cover the React UI beyond naming where the gate kind appears, and does not cover the Ultracode source (../ultracode/hooks/review-cap.js), which is outside the repo root and was not opened.",
+        "sources": [],
+        "title": "Review loop iteration cap, YOLO review budget, and the review-cap gate"
+      },
+      "submit": {
+        "findings_summary": "Each WorkLoop (implement and test) has an `iterations` counter that the fold increments in `loop_finished` for every review whose submit parses, including BLOCKER passes. `WorkLoop::after_findings` compares it with `effective_cap(yolo)`, which is `REVIEW_CAP` (3) or `YOLO_REVIEW_BUDGET` (10) plus `extra_cap`, and both constants are compile-time values read inside the fold, not settings or PlanCtx fields. Non-YOLO at the cap yields `LoopNext::CapReached`, which the planner turns into a `GatePayload::ReviewCap` gate. `another-pass` adds 1 to `extra_cap` and anything else blocks the phase. YOLO at the budget goes to the Resolve-review judge: `fix` adds 1 to `extra_cap` and tracks convergence, and non-convergence blocks the phase. `PhaseBlocked` retry sets `extra_cap` to `iterations`. Conformance fixtures and docs pages that cover these are listed in the document.",
+        "not_covered": [
+          "Ultracode hooks/review-cap.js, the cited origin of the YOLO budget, outside the repo root",
+          "React UI (web/ and design/) rendering of the review_cap gate and review_iterations",
+          "assets/judges/resolve-review.md prompt and the runner.rs and e2e.rs tests that may exercise the cap"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the review loop counts passes against its cap, the YOLO review budget, and the review-cap gate in the Rust backend; the React UI and the Ultracode source were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How workspace `limits` settings are defined, validated, and reach the fold or planner.",
+      "file": "ostra-research-20261002-084726-workspace-limits-settings.md",
+      "document": {
+        "approaches": [
+          {
+            "best_for": "Values the fold itself must use.",
+            "concept": "If a new limit changes how an event folds (as a review-pass cap would, because `after_findings` runs inside `apply`), the runner copies the value into an event: either a new field on `SessionOptions` in `SessionCreated`, or a key in the review execution's `params` at spawn.",
+            "cons": [
+              "A value fixed at session creation does not follow later settings changes, unlike the budget.",
+              "A `params` key is carried by every review execution and read from the `ExecRecord`; a `SessionOptions` field needs a `#[serde(default)]` for old logs and must stay `Copy`.",
+              "Changing `SessionCreated` or `SessionOptions` changes API types and generated TypeScript."
+            ],
+            "name": "Record the setting in the log, read it in the fold",
+            "precedent": "crates/ostra-engine/src/state.rs:AUTO_FIXABLE_PARAM",
+            "pros": [
+              "Keeps the fold a pure function of the log (CLAUDE.md pattern 1).",
+              "Direct precedent: `AUTO_FIXABLE_PARAM` is written in `runner.rs` and read in `loop_finished`.",
+              "Replays of old logs keep their old behaviour."
+            ]
+          },
+          {
+            "best_for": "Spawn-time guards such as the budget.",
+            "concept": "Add a field to `PlanCtx`, fill it in `plan_ctx` from `services.workspace().limits`, and apply it in a planner rule. Only works when the decision can be made in `next_steps` rather than in `apply`.",
+            "cons": [
+              "The review cap decision is made in the fold (`after_findings`), so a planner-side check would have to re-derive or override `LoopNext` state, duplicating logic.",
+              "The planner output would depend on a fact the log does not record, so a replay with a different setting plans differently (accepted for the budget because it is a spawn guard, not fold state)."
+            ],
+            "name": "Pass the setting through PlanCtx to the planner",
+            "precedent": "crates/ostra-engine/src/plan.rs:PlanCtx",
+            "pros": [
+              "Settings are re-read on every planning pass, so a change applies to running sessions.",
+              "Precedent: `budget_usd`; fixtures set `h.ctx.<field>` directly in `tests/conformance/main.rs`."
+            ]
+          },
+          {
+            "best_for": "Concurrency and resource limits that the planner and fold do not need.",
+            "concept": "Like the slot limiter: the runner reads `services.workspace().limits` when it acts and records nothing.",
+            "cons": [
+              "Cannot affect fold state or planner decisions, so it does not fit a cap on review passes, which is evaluated in the fold."
+            ],
+            "name": "Read the setting in the runner only",
+            "precedent": "crates/ostra-engine/src/runner.rs:acquire_slot",
+            "pros": [
+              "Smallest change; applies immediately."
+            ]
+          }
+        ],
+        "areas": [
+          "ostra-core (config)",
+          "ostra-workspace (settings, trust, runtime)",
+          "ostra-engine (state fold, planner, runner)",
+          "web settings form",
+          "docs/internals"
+        ],
+        "asks": [
+          "Explain how workspace `limits` settings are defined.",
+          "Explain how they are validated.",
+          "Explain how they reach the fold or the planner."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/config.rs:Limits",
+            "step": "The `Limits` struct is part of `WorkspaceSettings` (`#[serde(default)]`, `#[ts(export)]`); defaults are 3 and 25.0, and `seeded()` uses `Limits::default()`."
+          },
+          {
+            "location": "web/src/screens/workspace/settingsForm.ts",
+            "step": "The user edits the two fields on the Settings General tab. `settingsForm.ts` parses the strings (whole number for parallel, decimal for budget) and reports client-side issues with the same dotted paths."
+          },
+          {
+            "location": "crates/ostra-workspace/src/runtime.rs:save_settings",
+            "step": "`POST /api/workspaces/{id}/validate` calls `WorkspaceRt::validate`; `PATCH` calls `save_settings`, which runs `validate` first and writes nothing if any issue remains."
+          },
+          {
+            "location": "crates/ostra-workspace/src/settings.rs:validate_settings",
+            "step": "`validate` calls `validate_settings`, which runs sandbox checks, `ostra_core::config::validate_workspace` (limits checks: parallel is at least 1; budget finite and 0 or more), permission rules, and project folder checks."
+          },
+          {
+            "location": "crates/ostra-workspace/src/trust.rs:save_workspace",
+            "step": "`write_settings` calls `trust::save_workspace`: `set_access` stores `limits: Some(s.limits.clone())` in the registry; `write_file` removes the `limits` table from `workspace.toml`."
+          },
+          {
+            "location": "crates/ostra-server/src/services.rs:workspace",
+            "step": "On every read, `ServerServices::workspace()` loads `workspace.toml` and passes it through `trust::effective`, whose `overlay` replaces `s.limits` from the registry (default when the record is absent)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:plan_ctx",
+            "step": "In the driver loop, `drive` calls `plan_ctx(&st)`, which reads `services.workspace().limits.session_budget_usd` and stores `Some(budget)` when greater than 0, then calls `next_steps(&st, &ctx)`."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:push",
+            "step": "In the planner's `push`, a `Step::Spawn` is replaced by a `BudgetReached` gate when `spent_usd() >= budget + budget_raised`; `spent_usd` and `budget_raised` come from the fold. The gate answer is folded into `budget_raised` in `on_gate_answered`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:acquire_slot",
+            "step": "Separately, before each execution starts, `acquire_slot` reads `limits.max_parallel_executions` and waits for a free slot. This value never enters `PlanCtx`, the fold, or the event log."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:after_findings",
+            "step": "Review-pass cap, for contrast: `loop_finished` calls `WorkLoop::after_findings(remaining, self.yolo, ledger)`, which compares `iterations` with `effective_cap(yolo)` built from constants. No setting reaches it."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns `Limits`, `WorkspaceSettings`, `SETTING_KEYS`, `validate_workspace`, `SessionOptions`, `SessionEvent`; generates TypeScript."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-workspace",
+            "role": "Registry storage and overlay of limits (Rule A2), `validate_settings`, `save_settings`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Consumes settings through `Services::workspace()`; fold, planner, runner."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "`ServerServices` implements `Services`; API routes for validate and save."
+          },
+          {
+            "kind": "internal",
+            "name": "web (settings screen)",
+            "role": "Form, client-side validation, mock validator, generated types."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Defines `Limits`, embeds it in `WorkspaceSettings`, lists dotted setting keys for search, and validates limits in `validate_workspace`.",
+            "symbols": [
+              "pub struct Limits { pub max_parallel_executions: u32, pub session_budget_usd: f64 }  // #[serde(default)], #[ts(export)], line 652",
+              "impl Default for Limits  // 3 and 25.0, line 659",
+              "pub struct WorkspaceSettings { ... pub limits: Limits ... }  // line 523, field at 531",
+              "pub const SETTING_KEYS: &[(&str, &str)]  // lines 872-948; limits entries at 904-911",
+              "WorkspaceSettings::seeded(name: &str) -> Self  // sets limits: Limits::default() at line 996",
+              "pub fn validate_workspace(...)  // line 1283; limits checks at 1424-1435"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/settings.rs",
+            "purpose": "`validate_settings` composes sandbox validation, `ostra_core::config::validate_workspace`, permission rule checks, and project folder checks.",
+            "symbols": [
+              "pub fn validate_settings(global: &GlobalConfig, env: &Environment, settings: &WorkspaceSettings) -> Vec<ValidationIssue>"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "`WorkspaceRt::validate` and `save_settings` run validation before anything is written; `settings()` applies the registry overlay.",
+            "symbols": [
+              "pub fn validate(&self, settings: &WorkspaceSettings) -> Vec<ValidationIssue>  // line 144",
+              "pub fn save_settings(&self, settings: &WorkspaceSettings) -> Result<(), Vec<ValidationIssue>>  // line 187",
+              "pub fn effective_settings(&self) -> WorkspaceSettings  // line 132"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/trust.rs",
+            "purpose": "Rule A2: limits live in the registry (`Access` record), are removed from `workspace.toml` on write, and are overlaid on read.",
+            "symbols": [
+              "struct Access { mode, yolo, limits: Option<Limits>, sandbox_*, ... }  // line 327; limits is #[serde(default)]",
+              "fn set_access(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings)  // line 360",
+              "pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings)  // line 384; s.limits = a.limits.unwrap_or_default()",
+              "pub fn effective(registry: &RegistryDb, root: &Path, mut s: WorkspaceSettings) -> WorkspaceSettings  // line 414",
+              "pub fn save_workspace(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) -> Result<(), ConfigError>  // line 437",
+              "fn write_file(root: &Path, s: &WorkspaceSettings)  // removes the `limits` table at line 464"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/create.rs",
+            "purpose": "When adopting an existing folder `workspace.toml`, resets `s.limits = Default::default()` (Rule A2).",
+            "symbols": [
+              "create flow, lines 90-105"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/services.rs",
+            "purpose": "`ServerServices` implements the engine's `Services` trait; `workspace()` re-reads settings from disk plus registry every call.",
+            "symbols": [
+              "fn workspace(&self) -> WorkspaceSettings  // line 40, calls ostra_workspace::trust::effective(...)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/services.rs",
+            "purpose": "Trait through which the engine reaches workspace settings.",
+            "symbols": [
+              "fn workspace(&self) -> WorkspaceSettings;  // line 66"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Reads limits: `plan_ctx` copies the budget into `PlanCtx`; `acquire_slot` reads the parallel limit; `drive` calls `next_steps(&st, &ctx)`; spawn code writes `AUTO_FIXABLE_PARAM` into review params.",
+            "symbols": [
+              "fn plan_ctx(&self, st: &SessionState) -> PlanCtx  // line 1612",
+              "async fn acquire_slot(self: &Arc<Self>) -> Slot  // line 2320",
+              "async fn drive(self: Arc<Self>, id: SessionId, live: Arc<Live>)  // line 1573; plan at 1580-1581",
+              "AUTO_FIXABLE_PARAM insertion for ExecPurpose::Review  // lines 2529-2541"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Pure planner. `PlanCtx` is the only way settings reach it; the budget guard in `Planner::push` turns a spawn into a `BudgetReached` gate.",
+            "symbols": [
+              "pub struct PlanCtx { pub format_commands: BTreeMap<String, Option<String>>, pub budget_usd: Option<f64> }  // line 41",
+              "pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step>  // line 363",
+              "budget guard, lines 414-440"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "The fold. Holds `REVIEW_CAP`, `YOLO_REVIEW_BUDGET`, `WorkLoop::effective_cap`, `extra_cap`, `budget_raised`, `budget_gate`; has no settings input.",
+            "symbols": [
+              "pub const REVIEW_CAP: u32 = 3;  // line 37",
+              "pub const YOLO_REVIEW_BUDGET: u32 = 10;  // line 39",
+              "pub const AUTO_FIXABLE_PARAM: &str = \"auto_fixable_ids\";  // line 45",
+              "pub fn effective_cap(&self, yolo: bool) -> u32  // WorkLoop, line 522",
+              "fn after_findings(&mut self, remaining: Vec<ReviewFinding>, yolo: bool, fix_ledger: &str)  // line 527",
+              "self.yolo = options.yolo  // SessionCreated, line 1505; SessionEvent::YoloSet at 1622",
+              "fn loop_finished(&mut self, key: (u32, bool), rec: &ExecRecord, result: &ExecutionResult)  // line 3517; reads rec.params[AUTO_FIXABLE_PARAM] at 3531",
+              "l.extra_cap += 1  // lines 3096 (Resolve fix) and 4066 (another-pass gate answer); extra_cap reset at 4158 (PhaseBlocked retry)",
+              "GatePayload::BudgetReached answer folds into budget_raised  // lines 4252-4273"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "`SessionOptions` (Copy, per-session toggles stored in `SessionCreated`) and `ExecutionStarted.params` (JSON spawn struct).",
+            "symbols": [
+              "pub struct SessionOptions { pub tests: bool, pub docs: bool, pub yolo: bool, pub track: Option<Track> }  // line 28",
+              "SessionEvent::SessionCreated { kind, request, options, projects, ... }  // line 587",
+              "SessionEvent::ExecutionStarted { ..., params: serde_json::Value, ... }  // line 669"
+            ]
+          },
+          {
+            "path": "web/src/screens/workspace/settingsForm.ts",
+            "purpose": "Form model for the Settings screen: parses `maxParallel` and `budget` strings into `limits` and reports client-side issues with the same paths.",
+            "symbols": [
+              "lines 356-357 (form from settings), 450-454 (settings from form), 523-524 (field anchors)"
+            ]
+          },
+          {
+            "path": "web/src/screens/workspace/SettingsSections.tsx",
+            "purpose": "General tab inputs for both limits, each wrapped in `Anchor id=\"limits....\"` and showing issues for that path.",
+            "symbols": [
+              "lines 108-128"
+            ]
+          },
+          {
+            "path": "web/src/api/mock/fixtures.workspace.ts",
+            "purpose": "Mock API validator that mirrors the Rust limits checks (lines 196-197 keys, 222-225 checks) and `fixtures.ts` line 83 default.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/api/gen/Limits.ts",
+            "purpose": "Generated TypeScript type for `Limits`, regenerated by `cargo test -p ostra-core`.",
+            "symbols": [
+              "max_parallel_executions: number",
+              "session_budget_usd: number"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures. `budget_pauses_spawns_until_raised` sets `h.ctx.budget_usd = Some(1.0)` on the harness `PlanCtx`; `yolo_answers_gates_and_extends_review_budget` covers the YOLO review budget.",
+            "symbols": [
+              "fn budget_pauses_spawns_until_raised  // line 2865",
+              "fn yolo_answers_gates_and_extends_review_budget  // line 2248",
+              "H { ctx: PlanCtx, ... }  // lines 19-31"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/tests/runner.rs",
+            "purpose": "Real Engine with fake Services; sets `ws.limits.max_parallel_executions = 1` at line 509 to test the slot limiter.",
+            "symbols": [
+              "impl Services ... fn workspace(&self) -> WorkspaceSettings  // line 48"
+            ]
+          },
+          {
+            "path": "docs/internals/spend-and-limits.md",
+            "purpose": "Existing user-facing page describing both limits, Rule A2 storage, the slot limiter, the budget gate, and that `plan_ctx` re-reads the budget every pass.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/settings-and-routing.md",
+            "purpose": "Lists save-time checks including Limits (line 371).",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "States the review cap (line 407-409) and a caps table with the review passes row (line 840) and the two limits (lines 834-835).",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "Describes the review cap gate (lines 93-103) and YOLO review budget (line 242).",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a review-cap setting is wanted, a spec pass can take the files listed here as the full change surface: `Limits`, `SETTING_KEYS`, `validate_workspace`, the web form, mock validator, generated TS, fold or params wiring, a conformance fixture, and the docs pages named in `files`."
+        ],
+        "not_covered": [
+          "The global config (`GlobalConfig`) was not checked for limit-like settings.",
+          "The REST handlers for PATCH on a workspace were not read; only `validate_workspace` in `crates/ostra-server/src/api.rs` (line 954) and `WorkspaceRt::save_settings` were.",
+          "Which UI strings and `SETTING_KEYS` search tests (`crates/ostra-server/src/nav/search.rs`, `crates/ostra-core/src/book_search.rs`, `web/src/lib/palette.test.ts`) would need updates for a new key were not enumerated beyond the grep hits.",
+          "The Resolve judge and YOLO review loop (`LoopNext::Resolve`) were read only where they touch `extra_cap`."
+        ],
+        "open_questions": [
+          {
+            "id": "Q1",
+            "multi_select": false,
+            "options": [
+              {
+                "description": "Copy the value into `SessionCreated` (via `SessionOptions` or a new field). Pure fold, replay-safe, but later settings changes do not affect running sessions. Matches how `yolo` is recorded.",
+                "label": "At session creation"
+              },
+              {
+                "description": "Write the value into the review execution's `params` like `AUTO_FIXABLE_PARAM`. The fold reads it from the `ExecRecord`; a settings change applies from the next review pass.",
+                "label": "At each review spawn"
+              },
+              {
+                "description": "Fill a new `PlanCtx` field in `plan_ctx`. Applies live, but the cap decision lives in `after_findings` inside the fold, so the planner would need to override fold state.",
+                "label": "Planner side via PlanCtx"
+              }
+            ],
+            "question": "If a workspace-level review-pass cap is added under `limits`, when should its value be fixed for a session?",
+            "recommended": 1,
+            "tag": "Cap timing"
+          },
+          {
+            "id": "Q2",
+            "multi_select": false,
+            "options": [
+              {
+                "description": "The setting replaces `REVIEW_CAP` (3); YOLO keeps `YOLO_REVIEW_BUDGET` (10). Smallest change to `effective_cap`.",
+                "label": "Non-YOLO cap only"
+              },
+              {
+                "description": "Two fields, one for normal and one for YOLO. More surface in validation, UI, docs, and fixtures.",
+                "label": "Both caps as settings"
+              },
+              {
+                "description": "YOLO adds a fixed amount to the configured cap. Changes today's 3 vs 10 meaning.",
+                "label": "One cap, YOLO adds to it"
+              }
+            ],
+            "question": "Should a new review-cap setting replace `YOLO_REVIEW_BUDGET` under YOLO, apply to both modes, or leave the YOLO budget alone?",
+            "recommended": 0,
+            "tag": "YOLO"
+          }
+        ],
+        "patterns": [
+          {
+            "description": "The runner reads settings fresh on every planning pass, copies the needed values into `PlanCtx`, and calls the pure `next_steps`. The planner reads only `PlanCtx` and the fold. Used by the budget.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/plan.rs",
+              "tests/conformance/main.rs"
+            ],
+            "name": "Limits delivered to the planner through PlanCtx",
+            "snippet": {
+              "code": "fn plan_ctx(&self, st: &SessionState) -> PlanCtx {\n    let mut ctx = PlanCtx::default();\n    let budget = self.services.workspace().limits.session_budget_usd;\n    ctx.budget_usd = (budget > 0.0).then_some(budget);\n    for p in &st.projects {\n        let profile: ProjectProfile =\n            load_toml(&paths::project_profile(&p.path)).unwrap_or_default();\n        ctx.format_commands.insert(\n            p.key.clone(),\n            profile.commands.format.filter(|c| !c.trim().is_empty()),\n        );\n    }\n    ctx\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1612"
+            }
+          },
+          {
+            "description": "`acquire_slot` calls `services.workspace()` on every loop iteration, so a settings change applies to waiting spawns within two seconds. Nothing is recorded in the log.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Limits read directly by the runner (slot limiter)",
+            "snippet": {
+              "code": "async fn acquire_slot(self: &Arc<Self>) -> Slot {\n    loop {\n        let limit = self\n            .services\n            .workspace()\n            .limits\n            .max_parallel_executions\n            .max(1) as usize;\n        {\n            let mut n = lock(&self.slots);\n            if *n < limit {\n                *n += 1;\n                return Slot(self.clone());\n            }\n        }\n        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), self.slot_free.notified()).await;\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2320"
+            }
+          },
+          {
+            "description": "The fold cannot read `project.toml` or settings. The runner writes the project's auto-fixable rule IDs into the review execution's `params` at spawn (the `ExecutionStarted` event), and `loop_finished` reads them back from the `ExecRecord`. This is the existing precedent for any setting-derived value the fold must use.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Outside fact recorded in the log so the fold stays pure (AUTO_FIXABLE_PARAM)",
+            "snippet": {
+              "code": "// runner.rs\nif matches!(req.purpose, ExecPurpose::Review { .. })\n    && let Value::Object(map) = &mut params\n{\n    let ids = profile\n        .as_ref()\n        .map(|p| p.auto_fixable_ids())\n        .unwrap_or_default();\n    map.insert(\n        AUTO_FIXABLE_PARAM.into(),\n        serde_json::to_value(ids).unwrap_or_default(),\n    );\n}\n\n// state.rs, loop_finished\n// Recorded at spawn from the project's Review Rule Set, so the fold stays a pure function\n// of the event log.\nlet autofix_ids: BTreeSet<String> = rec\n    .params\n    .get(AUTO_FIXABLE_PARAM)\n    .and_then(|v| serde_json::from_value(v.clone()).ok())\n    .unwrap_or_default();",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2530"
+            }
+          },
+          {
+            "description": "`validate_workspace` pushes a `ValidationIssue` with the dotted path and an instruction-first message. The same message text is duplicated in the web mock validator and the settings form.",
+            "files": [
+              "crates/ostra-core/src/config.rs",
+              "web/src/api/mock/fixtures.workspace.ts",
+              "web/src/screens/workspace/settingsForm.ts"
+            ],
+            "name": "Save-time limits validation",
+            "snippet": {
+              "code": "if ws.limits.max_parallel_executions == 0 {\n    issues.push(issue(\n        \"limits.max_parallel_executions\".into(),\n        \"Allow at least one execution at a time.\".into(),\n    ));\n}\nif !ws.limits.session_budget_usd.is_finite() || ws.limits.session_budget_usd < 0.0 {\n    issues.push(issue(\n        \"limits.session_budget_usd\".into(),\n        \"The budget is a dollar amount of 0 or more; 0 means no limit.\".into(),\n    ));\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:1424"
+            }
+          },
+          {
+            "description": "Limits are written to the registry kv record `Access` by `set_access`, stripped from `workspace.toml` by `write_file`, and overlaid on every read by `overlay`. A new field added inside `Limits` rides along automatically because `Access.limits` stores the whole struct, and `Limits` has `#[serde(default)]` so older records parse with the new field's default.",
+            "files": [
+              "crates/ostra-workspace/src/trust.rs",
+              "crates/ostra-workspace/src/create.rs"
+            ],
+            "name": "Registry-only storage of limits (Rule A2)",
+            "snippet": {
+              "code": "pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {\n    let a = access(registry, root);\n    s.permissions.mode = a.mode;\n    s.yolo.default = a.yolo;\n    s.limits = a.limits.unwrap_or_default();\n    ...\n}",
+              "language": "rust",
+              "source": "crates/ostra-workspace/src/trust.rs:384"
+            }
+          },
+          {
+            "description": "`WorkLoop::effective_cap` picks `REVIEW_CAP` (3) or `YOLO_REVIEW_BUDGET` (10) from the session's `yolo` flag and adds `extra_cap`. It is called only from `after_findings`, which `loop_finished` and the autofix result path invoke inside `apply`. Neither the planner nor `PlanCtx` is involved; the planner only acts on the resulting `LoopNext::CapReached` / `Resolve` state. The `yolo` flag comes from `SessionCreated.options` or `YoloSet`.",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Review cap today: constants inside the fold",
+            "snippet": {
+              "code": "pub fn effective_cap(&self, yolo: bool) -> u32 {\n    (if yolo { YOLO_REVIEW_BUDGET } else { REVIEW_CAP }) + self.extra_cap\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:522"
+            }
+          }
+        ],
+        "problem": "The workspace `Limits` struct holds two values. Both are read by the engine at run time through `Services::workspace()`: one inside the runner's slot limiter, the other copied into `PlanCtx` and used by a planner guard. The fold (`SessionState::apply`) has no access to settings, so any limit that the fold must apply has to be recorded in an event. The review-pass cap (`REVIEW_CAP`, `YOLO_REVIEW_BUDGET`) is currently a pair of constants applied inside the fold and is not a setting.",
+        "recommendation": "This pass was asked to explain the current mechanism, so no design is required. Where a decision is needed: the fold has no settings input, so a new limit that the fold applies should follow the `AUTO_FIXABLE_PARAM` precedent or ride in `SessionOptions`; a limit that only gates spawns should follow the `PlanCtx.budget_usd` precedent. Because the review cap is evaluated in `WorkLoop::after_findings`, the first approach fits it best. New `Limits` fields need no registry change because `Access.limits` stores the whole struct and `Limits` has `#[serde(default)]`.",
+        "repo": "ostra",
+        "scope": "Task: how workspace `limits` settings are defined, validated, and reach the fold or planner. Covers the two existing limits (`max_parallel_executions`, `session_budget_usd`), their storage, validation, UI, docs, tests, and the way each reaches the runner or planner; also records how the review-pass cap is wired today (constants in the fold) because it is the nearest neighbour that does not use a setting. It does not design a new setting and does not cover the global config.",
+        "sources": [],
+        "title": "Workspace limits settings: definition, validation, and delivery to the fold and planner"
+      },
+      "submit": {
+        "findings_summary": "`Limits` (max_parallel_executions, session_budget_usd) is defined in ostra-core config.rs and checked in `validate_workspace` during `save_settings`. Both values are stored only in the registry (Rule A2) and overlaid on every read. The engine reaches them through `Services::workspace()`: the budget is copied into `PlanCtx.budget_usd` by `plan_ctx` and applied in a planner guard, and the parallel limit is read directly in `acquire_slot`. The fold has no settings input. The review-pass cap is the constants `REVIEW_CAP` and `YOLO_REVIEW_BUDGET` in `WorkLoop::effective_cap`, called from `after_findings` inside `apply`. A setting-driven cap would need to be recorded in an event, following the `AUTO_FIXABLE_PARAM` or `SessionOptions` precedent. The document lists the web, test, and docs files a new limit would touch.",
+        "not_covered": [
+          "GlobalConfig was not checked for limit-like settings",
+          "The PATCH workspace REST handler was not read; only the validate route and WorkspaceRt::save_settings were",
+          "Search and palette tests that would need a new SETTING_KEYS entry were not enumerated beyond grep hits",
+          "The Resolve judge and YOLO review loop were read only where they touch extra_cap"
+        ],
+        "open_questions": 2,
+        "scope_covered": "How the two existing workspace `limits` settings are defined, validated, stored, and delivered to the runner or planner, plus how the review-pass cap works today in the fold; no new setting is designed and the global config is not covered.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

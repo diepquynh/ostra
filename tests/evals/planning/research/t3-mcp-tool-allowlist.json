@@ -1,0 +1,721 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T09:03:25.897320302+00:00",
+  "docs": [
+    {
+      "task": "How workspace MCP servers are configured, validated, and their tools offered to an execution.",
+      "file": "ostra-research-20261002-090054-workspace-mcp-servers-tools.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (config, mcp)",
+          "ostra-mcp",
+          "ostra-server (mcp gateway, bridge, api)",
+          "ostra-tools (mcp)",
+          "ostra-exec-native",
+          "ostra-policy",
+          "ostra-workspace (trust, settings, runtime)",
+          "web (McpSection)"
+        ],
+        "asks": [
+          "Explain how workspace MCP servers are configured.",
+          "Explain how that configuration is validated.",
+          "Explain how the servers' tools are offered to an execution."
+        ],
+        "data_flow": [
+          {
+            "location": "web/src/screens/workspace/settingsForm.ts",
+            "step": "The user edits the MCP servers tab (or `workspace.toml`). The form maps `disabledTools` to `disabled_tools` and sends the whole `WorkspaceSettings`."
+          },
+          {
+            "location": "crates/ostra-workspace/src/runtime.rs:WorkspaceRt::save_settings",
+            "step": "`POST /api/workspaces/{ws}/validate` and the PATCH save both call `WorkspaceRt::validate`, which runs `validate_settings` and so `ostra_core::config::validate_workspace`, which calls `mcp::validate`. Any issue blocks `save_settings`. `disabled_tools` entries are not checked (tool names are unknown without a connection)."
+          },
+          {
+            "location": "crates/ostra-workspace/src/trust.rs:save_workspace",
+            "step": "`save_workspace` seals literal header/env values into the encrypted registry, writes `workspace.toml` (removing registry-only fields), and, if the file was already approved, records the new Rule A1 hash. The hash covers command, env, url, headers, oauth, name, and enabled only."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:400",
+            "step": "An execution is spawned. The native executor (or the harness `Wrapped::run`) calls `McpConnector::open(&spec)` with the `ExecutionSpec`, before any model call or harness start."
+          },
+          {
+            "location": "crates/ostra-server/src/mcp.rs:Connector::open",
+            "step": "`Connector::open` returns early with no tools for a read-only inspect session; otherwise reads `workspace.toml` fresh, keeps enabled servers where `agents` is empty or contains the agent name, and calls `McpGateway::ready` for each concurrently."
+          },
+          {
+            "location": "crates/ostra-server/src/mcp.rs:McpGateway::ready",
+            "step": "`ready` reuses a live connection keyed by `(root, name)` and fingerprint, refetches `tools/list` when older than 30 seconds or after a `tools_changed` notice, honors a 20 second failure back-off, and otherwise connects from the approved copy of the file (Rule A1) and lists tools. An unreachable server yields a note, which the executor emits as one Status/Activity line."
+          },
+          {
+            "location": "crates/ostra-server/src/mcp.rs:744",
+            "step": "For each listed tool: skip names in `disabled_tools`, compute the canonical name, deduplicate, and build an `ExecTool` with its `ToolDefinition` and `read_only`. The `ExecMcp` becomes `McpOpened.tools`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:478",
+            "step": "Native: `inputs.read_only_mcp_tools` is set for the policy, the tools go into `ToolEnvConfig.mcp`, and `m.definitions()` is appended to the provider's tool list."
+          },
+          {
+            "location": "crates/ostra-server/src/bridge.rs:ServerBridge::mcp_tools",
+            "step": "Harness: the same `McpTools` is stored in the execution's `ToolEnv`. The `ostra mcp-stdio` shim asks the bridge for its tool list; `ServerBridge::mcp_tools` returns Ostra's own tools followed by `definitions()` converted to bare names (`mcp::bare`). The harness lists them once at startup, as `mcp__ostra__<server>__<tool>`."
+          },
+          {
+            "location": "crates/ostra-server/src/mcp.rs:ExecMcp::call",
+            "step": "A call arrives. Native: `ostra_tools::execute` routes `is_gateway_tool` names to `mcp::run`. Harness: the hook passes it (Rule M2); `mcp_call` maps the bare name to canonical, runs `check` (Rule M1 plus permission rules, asking the user if needed), then `execute`. Both reach `ExecMcp::call`, which finds the tool in the fixed list (else `Unknown tool`), applies `timeout_secs`, restarts a dead client once, and calls `Client::call_tool` with the server-side name."
+          },
+          {
+            "location": "crates/ostra-server/src/mcp.rs:McpGateway::server_status",
+            "step": "Separately, `GET /api/workspaces/{ws}/mcp` calls `McpGateway::status`, which connects every server in settings and returns `McpToolInfo` rows with `enabled = !cfg.disabled_tools.contains(&t.name)`. The UI renders these as switches."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Config structs, `mcp` helpers and validation, API DTOs (TypeScript-exported)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-mcp",
+            "role": "MCP client (`Client::list_tools`, `call_tool`) used by the gateway."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "`McpTools`, `McpConnector`, `McpOpened` traits and routing of gateway tool names."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "Rule M1 and permission-rule matching for `mcp__server[__tool]`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-workspace",
+            "role": "Settings validation, Rule A1 approval hash, save path."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-native / ostra-exec-harness",
+            "role": "The two executors that consume `McpOpened`; the harness side through `ostra-server/src/bridge.rs` and the `mcp-stdio` shim."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Defines `WorkspaceSettings.mcp_servers`, `McpServerConfig` (including `disabled_tools`, `agents`, `timeout_secs`), `McpOAuthConfig`, the `credential_env_names` set, and calls `crate::mcp::validate` from `validate_workspace`. `McpServerConfig` is `#[ts(export)]`, so a field change regenerates `web/src/api/gen/`.",
+            "symbols": [
+              "pub mcp_servers: Vec<McpServerConfig>  (WorkspaceSettings, line 557)",
+              "pub struct McpServerConfig { name, enabled (default true), command: Vec<String>, env: BTreeMap<String,String>, url: Option<String>, headers: BTreeMap<String,String>, oauth: Option<McpOAuthConfig>, disabled_tools: Vec<String>, agents: Vec<String>, timeout_secs: u32 (default 120) }",
+              "McpServerConfig::remote(name: &str, url: &str) -> Self",
+              "McpServerConfig::local(name: &str, command: &[&str]) -> Self",
+              "pub fn credential_env_names(global: &GlobalConfig, mcp_servers: &[McpServerConfig]) -> BTreeSet<String>",
+              "pub fn validate_workspace(...) -> Vec<ValidationIssue>  (line 1283; calls crate::mcp::validate(&ws.mcp_servers, &mut issues) at line 1423)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/mcp.rs",
+            "purpose": "Pure naming and validation helpers for external MCP servers: canonical/bare/server_of naming, `bare_name` sanitizing and hashing, `serves(server, agent)`, save-time `validate`, `${VAR}` expansion with a refused set. Has unit tests `names`, `env_expansion`, `validation`.",
+            "symbols": [
+              "pub const PREFIX: &str = \"mcp__\"; pub const SEPARATOR: &str = \"__\"",
+              "pub const MAX_BARE_NAME: usize = 52; MAX_SERVER_NAME: usize = 24; MAX_TIMEOUT_SECS: u32 = 600",
+              "pub fn is_gateway_tool(tool: &str) -> bool",
+              "pub fn is_gateway_bare(bare: &str) -> bool",
+              "pub fn canonical(bare: &str) -> String",
+              "pub fn bare(canonical: &str) -> Option<&str>",
+              "pub fn server_of(name: &str) -> Option<&str>",
+              "pub fn bare_name(server: &str, tool: &str) -> String",
+              "pub fn is_server_name(name: &str) -> bool",
+              "pub fn serves(server: &McpServerConfig, agent: AgentName) -> bool",
+              "pub fn validate(servers: &[McpServerConfig], issues: &mut Vec<ValidationIssue>)",
+              "pub const SAVED_SECRET: &str = \"${ostra_secret}\"",
+              "pub fn expand_env(value: &str, refused: &BTreeSet<String>) -> Result<String, ExpandError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/mcp.rs",
+            "purpose": "`McpGateway`: one connection per (workspace root, server name), tool listing and caching, status API data, OAuth login/callback/logout, and `Connector` (the `McpConnector` impl) whose `open` builds one execution's tool set, applying `mcp::serves` and `disabled_tools`. `ExecMcp` implements `McpTools` for the execution.",
+            "symbols": [
+              "fn settings(root: &Path) -> WorkspaceSettings  (reads workspace.toml fresh via load_toml_required)",
+              "fn fingerprint(s: &McpServerConfig, sandbox: &WorkspaceSandbox) -> String  (command, env, url, headers, oauth, sandbox fields; not disabled_tools/agents/timeout)",
+              "async fn ready(self: &Arc<Self>, root: &Path, cfg: &McpServerConfig, force: bool) -> Result<(Arc<Client>, Vec<ToolInfo>), ConnError>",
+              "pub async fn status(self: &Arc<Self>, root: &Path, force: Option<&str>) -> Vec<McpServerStatus>",
+              "async fn server_status(...) -> McpServerStatus  (sets McpToolInfo.enabled = !cfg.disabled_tools.contains(&t.name))",
+              "struct ExecTool { def: ToolDefinition, read_only: bool, server: McpServerConfig, tool: String, client: Arc<Client> }",
+              "struct ExecMcp { gateway, root, tools: Vec<ExecTool> }  impl McpTools for ExecMcp",
+              "pub struct Connector(pub Arc<McpGateway>);  impl McpConnector for Connector { async fn open(&self, spec: &ExecutionSpec) -> McpOpened }"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/mcp.rs",
+            "purpose": "Traits that decouple executors from the gateway: `McpTools` (definitions, read_only, call), `McpConnector::open`, `McpOpened { tools, notes }`, and `run`, which dispatches a canonical MCP tool call to `env.config().mcp`.",
+            "symbols": [
+              "pub trait McpTools: Send + Sync { fn definitions(&self) -> Vec<ToolDefinition>; fn read_only(&self) -> Vec<String>; async fn call(&self, tool: &str, input: &Value, cancel: CancellationToken) -> Result<String, String>; }",
+              "pub struct McpOpened { pub tools: Option<Arc<dyn McpTools>>, pub notes: Vec<String> }",
+              "pub trait McpConnector: Send + Sync { async fn open(&self, spec: &ExecutionSpec) -> McpOpened; }",
+              "pub async fn run(env: &ToolEnv, tool: &str, input: &Value, cancel: CancellationToken) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "`ToolEnvConfig.mcp: Option<Arc<dyn McpTools>>` carries the execution's tools; `execute` routes any `is_gateway_tool` name to `mcp::run` (line 313).",
+            "symbols": [
+              "pub mcp: Option<Arc<dyn McpTools>>",
+              "pub use mcp::{McpConnector, McpOpened, McpTools};"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native loop: calls `McpConnector::open(spec)` once per run (lines 400-409), emits `notes` as Status deltas, sets `inputs.read_only_mcp_tools` for the policy, passes the tools in `ToolEnvConfig.mcp`, and appends `m.definitions()` to the provider tool list (lines 478-483).",
+            "symbols": [
+              "pub fn with_mcp(mut self, mcp: Arc<dyn McpConnector>) -> Self",
+              "inputs.read_only_mcp_tools = mcp.iter().flat_map(|m| m.read_only()).collect();"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/bridge.rs",
+            "purpose": "Harness path: `Wrapped::run` opens the MCP tools before the harness starts (lines 195-207); `policy_check` lets gateway tools through the hook unchecked (Rule M2, line 329); `mcp_call` maps a bare name to canonical, runs the policy, executes (lines 403-464); `mcp_tools` lists Ostra's tools plus `r.env.config().mcp` definitions as bare names (lines 466-499).",
+            "symbols": [
+              "fn mcp_call(&self, execution: &ExecutionId, tool: &str, args: Value) -> Result<ostra_exec_harness::McpOut, String>",
+              "fn mcp_tools(&self, execution: &ExecutionId) -> Vec<(String, String, Value)>",
+              "pub fn set_mcp(&self, mcp: Arc<dyn ostra_tools::McpConnector>)"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/policy.rs",
+            "purpose": "Rule M1 in `layer2` (lines 733-744): a gateway tool is allowed unless a rule matches; in Plan mode only tools in `inputs.read_only_mcp_tools` are allowed. Also defines `PolicyInputs.read_only_mcp_tools`.",
+            "symbols": [
+              "pub read_only_mcp_tools: Vec<String>",
+              "None if mcp && mode == PermissionMode::Plan && !read_only => self.mode_default(&subject, mode)",
+              "None if known || mcp => PolicyDecision::allow()"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/perms.rs",
+            "purpose": "Permission rule matching: a rule `mcp__github` covers every tool of that server; an exact `mcp__server__tool` covers one tool (lines 268-276). `validate_rule` accepts `mcp__server__tool` (test at line 526).",
+            "symbols": [
+              "impl Rule { pub fn matches(&self, subject: &Subject<'_>, repo: &Path, home: &Path) -> bool }"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/trust.rs",
+            "purpose": "Rule A1 approval hash. `McpCanon` serializes only name, enabled, command, env, url, headers, oauth, so `disabled_tools`, `agents`, and `timeout_secs` are not part of the approved hash and editing them needs no new approval. `save_workspace` seals literal header/env values into the encrypted registry; `approved_workspace_file` is what the gateway connects from.",
+            "symbols": [
+              "pub fn workspace_hash(root: &Path, s: &WorkspaceSettings) -> Option<String>",
+              "pub fn approved_workspace_file(registry: &RegistryDb, root: &Path) -> Option<WorkspaceSettings>",
+              "pub fn save_workspace(registry: &RegistryDb, root: &Path, s: &WorkspaceSettings) -> Result<(), ConfigError>",
+              "fn seal_mcp_values(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/settings.rs",
+            "purpose": "`validate_settings` composes sandbox validation, `ostra_core::config::validate_workspace` (which includes `mcp::validate`), permission rule validation (`ostra_policy::validate_rule`), and project path checks.",
+            "symbols": [
+              "pub fn validate_settings(global: &GlobalConfig, env: &Environment, settings: &WorkspaceSettings) -> Vec<ValidationIssue>"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "`WorkspaceRt::validate` (adds Rule W3 instruction tag issues) and `save_settings`, which refuses to write when any issue exists.",
+            "symbols": [
+              "pub fn validate(&self, settings: &WorkspaceSettings) -> Vec<ValidationIssue>",
+              "pub fn save_settings(&self, settings: &WorkspaceSettings) -> Result<(), Vec<ValidationIssue>>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "Endpoints: `POST /api/workspaces/{ws}/validate` (`validate_workspace`, line 954), `GET .../mcp` (`mcp_status`), `POST .../mcp/{name}/refresh|login|logout`, and `GET /mcp/oauth/callback`.",
+            "symbols": [
+              "async fn validate_workspace(State(app): AppState, Path(id): Path<String>, Json(settings): Json<WorkspaceSettings>) -> Res<Vec<ValidationIssue>>",
+              "async fn mcp_status(State(app): AppState, Path(id): Path<String>) -> Res<Vec<McpServerStatus>>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "DTOs for the status API: `McpServerStatus`, `McpConnState`, `McpToolInfo { name, canonical, description, enabled, read_only }`, `McpLogin`. `McpToolInfo.name` is documented as the name `disabled_tools` lists.",
+            "symbols": [
+              "pub struct McpServerStatus",
+              "pub enum McpConnState { Disabled, Idle, Connected, NeedsAuth, Error }",
+              "pub struct McpToolInfo { name, canonical, description, enabled, read_only }"
+            ]
+          },
+          {
+            "path": "crates/ostra-mcp/src/lib.rs",
+            "purpose": "MCP client. `Client::list_tools` pages `tools/list` (up to 50 pages) and maps each tool to `ToolInfo`, taking `readOnlyHint` from `annotations`, with a default of false. `Client::call_tool` runs `tools/call`.",
+            "symbols": [
+              "pub struct ToolInfo { pub name: String, pub description: String, pub input_schema: Value, pub read_only: bool }",
+              "pub async fn list_tools(&self, timeout: Duration) -> Result<Vec<ToolInfo>, McpError>",
+              "pub async fn call_tool(&self, name: &str, arguments: &Value, timeout: Duration, cancel: CancellationToken) -> Result<Result<String, String>, McpError>"
+            ]
+          },
+          {
+            "path": "web/src/screens/workspace/McpSection.tsx",
+            "purpose": "Settings UI. `ToolList` shows a switch per listed tool and edits `row.disabledTools`, keeping names the server no longer lists as 'off' rows (lines 454-510). `settingsForm.ts` maps `disabled_tools` to `disabledTools` and back (lines 224, 266).",
+            "symbols": [
+              "function ToolList({ row, status, edit })"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/tests/mcp.rs",
+            "purpose": "End-to-end test `workspace_mcp_servers_end_to_end`: validation issues for a bad entry (paths `mcp_servers[0].name`, `mcp_servers[0].url`), a saved `disabled_tools: [\"secret\"]` showing `enabled=false` in the status, `agents: [\"explore\"]` hiding a server from a quick answer, and a native agent calling `mcp__fake__echo`.",
+            "symbols": [
+              "async fn workspace_mcp_servers_end_to_end()"
+            ]
+          },
+          {
+            "path": "docs/internals/mcp.md",
+            "purpose": "The user-facing deep-dive page that CLAUDE.md pattern 9 requires updating with any behavior change here (sections 'Configuring a server', 'How tools reach an agent', 'Policy'). HANDOVER.md section 10.6 holds the design table and Rules M1/M2.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If tool selection is to change (for example an allowlist beside `disabled_tools`): a spec should decide the field's semantics against `McpServerConfig`, `mcp::validate`, `Connector::open`, `server_status` (`enabled` flag), `settingsForm.ts`/`McpSection.tsx`, whether the field belongs in the Rule A1 hash (`McpCanon`), and docs (`docs/internals/mcp.md`, HANDOVER 10.6, `docs/internals/settings-and-routing.md`).",
+          "A change to `McpServerConfig` requires `cargo test -p ostra-core` to regenerate `web/src/api/gen/`, then `cd web && npm run typecheck`, and a `/design-sync` request if `web/` screens change.",
+          "Tests to extend: `crates/ostra-core/src/mcp.rs` unit tests (`validation`), `crates/ostra-server/tests/mcp.rs` (end to end), and `crates/ostra-server/src/bridge.rs` tests (`workspace_mcp_tools_through_the_shim`)."
+        ],
+        "not_covered": [
+          "OAuth discovery, registration, and token refresh internals (`crates/ostra-mcp/src/oauth.rs` and the login/callback code in `crates/ostra-server/src/mcp.rs`).",
+          "Transport details of `crates/ostra-mcp/src/http.rs` and `stdio.rs`, and result formatting in `content.rs`.",
+          "The harness-side `ostra mcp-stdio` shim in `crates/ostra-exec-harness` (`run_mcp_stdio`, `protocol.rs`) beyond the fact that it fetches tools from `ServerBridge::mcp_tools`.",
+          "Per-harness adapter specifics for registering the Ostra MCP server (`launch.rs`, `adapters/*`).",
+          "Frontend mock fixtures and the rest of `McpSection.tsx` outside the tool list."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "`ostra_core::mcp::validate` pushes `ValidationIssue { path: \"mcp_servers[i].field\", message }` for each bad field and never fails fast. It is called from `validate_workspace` and so reaches both `POST /validate` and `save_settings`. Messages follow HANDOVER section 20: instruction first, then the reason. Per CLAUDE.md pattern 7, a bad value is a validation error at save, not a silent fallback at spawn.",
+            "files": [
+              "crates/ostra-core/src/mcp.rs",
+              "crates/ostra-core/src/config.rs",
+              "crates/ostra-workspace/src/settings.rs"
+            ],
+            "name": "Save-time validation by dotted path",
+            "snippet": {
+              "code": "for a in &s.agents {\n    if !AgentName::ALL.iter().any(|n| n.as_str() == a) {\n        push(format!(\"{at}.agents\"), format!(\"`{a}` is not an agent.\"));\n    }\n}\nif s.timeout_secs == 0 || s.timeout_secs > MAX_TIMEOUT_SECS {\n    push(\n        format!(\"{at}.timeout_secs\"),\n        format!(\"Use a timeout from 1 to {MAX_TIMEOUT_SECS} seconds.\"),\n    );\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/mcp.rs:167"
+            }
+          },
+          {
+            "description": "`Connector::open` runs once per execution (native: `ostra-exec-native` run start; harness: `Wrapped::run` before the harness starts). It reads `workspace.toml` fresh, keeps servers where `mcp::serves(server, agent)`, connects each with `ready`, then for each listed tool skips `disabled_tools` entries (compared with the server-side tool name `t.name`), builds the canonical name via `mcp::canonical(mcp::bare_name(...))`, drops duplicate canonical names, and fills an empty description. The resulting `ExecMcp` is the single source for tool definitions, read-only names, and call dispatch, so a tool absent here is unknown to both executors (`ExecMcp::call` returns `Unknown tool`).",
+            "files": [
+              "crates/ostra-server/src/mcp.rs",
+              "crates/ostra-tools/src/mcp.rs"
+            ],
+            "name": "Per-execution tool set fixed at open",
+            "snippet": {
+              "code": "for t in listed {\n    if server.disabled_tools.contains(&t.name) {\n        continue;\n    }\n    let name = mcp::canonical(&mcp::bare_name(&server.name, &t.name));\n    if !seen.insert(name.clone()) {\n        continue;\n    }\n    let description = if t.description.trim().is_empty() {\n        format!(\"The `{}` tool of MCP server `{}`.\", t.name, server.name)\n    } else {\n        t.description.clone()\n    };\n    tools.push(ExecTool { /* def, read_only, server, tool: t.name, client */ });\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/mcp.rs:744"
+            }
+          },
+          {
+            "description": "`ready` re-reads the approved workspace file and finds the server entry that equals the one asked for (`.find(|c| c == cfg)`, full `McpServerConfig` equality). A server entry that differs from the approved copy in any field, including `disabled_tools`, is therefore reported as pending approval at connect time even though `disabled_tools` is outside the approval hash; this is only reachable when the file on disk changed without going through Ostra's save (which re-records the hash).",
+            "files": [
+              "crates/ostra-server/src/mcp.rs",
+              "crates/ostra-workspace/src/trust.rs"
+            ],
+            "name": "Rule A1: connect only from the approved copy",
+            "snippet": {
+              "code": "let approved = ostra_workspace::trust::approved_workspace_file(&self.registry, root)\n    .ok_or_else(|| ConnError::Other(ostra_workspace::trust::PENDING_MESSAGE.into()))?;\nlet cfg = approved\n    .mcp_servers\n    .into_iter()\n    .find(|c| c == cfg)\n    .ok_or_else(|| ConnError::Other(ostra_workspace::trust::PENDING_MESSAGE.into()))?;",
+              "language": "rust",
+              "source": "crates/ostra-server/src/mcp.rs:303"
+            }
+          },
+          {
+            "description": "Policy layer 2 allows any canonical gateway tool unless a permission rule decides, and in Plan mode only `read_only_mcp_tools` pass. Executors fill `read_only_mcp_tools` from `McpTools::read_only()`, so it contains only tools that survived `disabled_tools`.",
+            "files": [
+              "crates/ostra-policy/src/policy.rs",
+              "crates/ostra-exec-native/src/lib.rs",
+              "crates/ostra-server/src/bridge.rs"
+            ],
+            "name": "Rule M1: configured means allowed, rules narrow",
+            "snippet": {
+              "code": "let mcp = ostra_core::mcp::is_gateway_tool(tool);\nlet read_only = self.inputs.read_only_mcp_tools.iter().any(|t| t == tool);\nmatch self.rule_decision(&subject, &session_allow) {\n    Some(d) => d,\n    None if mcp && mode == PermissionMode::Plan && !read_only => {\n        self.mode_default(&subject, mode)\n    }\n    None if known || mcp => PolicyDecision::allow(),\n    None => self.mode_default(&subject, mode),\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/policy.rs:735"
+            }
+          }
+        ],
+        "problem": "Workspace servers are declared in `workspace.toml` as `[[mcp_servers]]` (`McpServerConfig`). Today the only per-tool control is `disabled_tools`, a denylist of server-side tool names: every tool a server lists is offered unless named there. The task asks how this configuration is validated at save time and how the surviving tools are collected and handed to an execution, native or harness, so that a change to tool selection (for example an allowlist) can be planned against the real code paths.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: How workspace MCP servers are configured, validated, and their tools offered to an execution. Covers the config struct, save-time validation, the approval (trust) hash, the gateway that connects and lists tools, the per-execution tool filter, the native and harness delivery paths, policy interplay, and the status API/UI toggle. It does not cover OAuth internals, the HTTP/stdio transports, or the harness MCP stdio shim protocol beyond where it fetches the tool list. No external technology lookup was needed: the task touches only MCP behavior the repo already implements.",
+        "sources": [],
+        "title": "Workspace MCP servers: configuration, validation, and tool offering"
+      },
+      "submit": {
+        "findings_summary": "Servers are `[[mcp_servers]]` entries (`McpServerConfig` in ostra-core/config.rs). `mcp::validate` checks them at save through `validate_workspace`: name, command or url, headers/oauth only on the right transport, agent names, and timeout. The Rule A1 approval hash covers only the command-bearing fields. `Connector::open` in ostra-server/src/mcp.rs builds each execution's fixed tool set. It keeps servers where `mcp::serves(server, agent)` is true, connects through `McpGateway::ready`, and drops tools named in `disabled_tools`. `disabled_tools` is the only per-tool filter. It matches the server-side tool name, is not validated at save, and is outside the approval hash. The native loop and the harness bridge (`ServerBridge::mcp_tools`/`mcp_call`) consume the same `ExecMcp`, so a filter in `open` covers both executors. Policy Rule M1 and Rule M2 govern how calls are allowed, and `server_status` plus the web `McpSection` toggle `disabled_tools`.",
+        "not_covered": [
+          "OAuth discovery, registration, and token refresh internals (ostra-mcp oauth.rs and the login/callback code in ostra-server mcp.rs)",
+          "HTTP and stdio transport details and result formatting in ostra-mcp (http.rs, stdio.rs, content.rs)",
+          "The harness-side `ostra mcp-stdio` shim protocol and per-harness adapter registration in ostra-exec-harness",
+          "Frontend mock fixtures and the rest of McpSection.tsx beyond the tool list"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How workspace MCP servers are configured, validated at save, and how their tools reach a native or harness execution; OAuth internals, transport details, and the harness stdio shim protocol were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How tool calls pass the execution policy, and where an MCP tool call could be refused.",
+      "file": "ostra-research-20261002-090051-tool-call-policy-and-mcp-refusal.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-policy",
+          "ostra-exec-native",
+          "ostra-exec-harness",
+          "ostra-server (bridge, mcp)",
+          "ostra-tools",
+          "ostra-core (mcp, config, policy)",
+          "ostra-workspace (settings)"
+        ],
+        "asks": [
+          "Explain how tool calls pass the execution policy.",
+          "Identify where an MCP tool call could be refused."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:ExecutionPolicy check call in tool_end",
+            "step": "Native loop: the model emits a tool_use block. tool_end canonicalizes the call (`env.canonical_call`), emits ToolCall, rejects invalid JSON input, sets YOLO from the host, then calls `policy.check(&call)`."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::layer1",
+            "step": "check runs `layer1`. For a workspace MCP tool name, no guard branch applies: not Report, Document, manage, submit_, PowerShell/Cmd, a file-writing or reading tool, Grep/Glob, or Bash. The one layer 1 branch that fires on any tool is `answer_only`, and it lists only write paths, Report, Document, Memory, manage tools, and shell targets, so an MCP tool is not stopped by it. layer1 returns None."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::layer2",
+            "step": "check runs `layer2`. `perms::family` gives Family::Other for mcp__ names. `known` is false for a gateway name but `mcp` is true. `rule_decision` looks at deny, ask, allow rules plus session allows. No rule: plan mode without a readOnlyHint gives Deny(`mode:plan`); otherwise Allow with no rule. A matching deny rule gives Deny(permission, rule text); a matching ask rule gives Ask."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::check",
+            "step": "check applies YOLO: Ask becomes Allow(`yolo`). Denials stand."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:tool_end",
+            "step": "tool_end handles the decision: Deny returns an error tool_result to the model; Ask calls `host.ask_permission`; Deny from the user returns 'The user denied this call'; AlwaysInWorkspace adds a session allow rule equal to the tool name."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:execute -> crates/ostra-tools/src/mcp.rs:run -> crates/ostra-server/src/mcp.rs:ExecMcp::call",
+            "step": "On Allow, `ostra_tools::execute` dispatches. A name that satisfies `is_gateway_tool` goes to `mcp::run`, which returns 'Unknown tool' when the execution opened no MCP tools, or calls `McpTools::call`. `ExecMcp::call` finds the tool in the execution's fixed list by canonical name and returns 'Unknown tool `x`.' otherwise. This is the refusal for a tool of a server that does not serve this agent, a tool in `disabled_tools`, or a name the model made up, because policy allowed it by M1 but the list does not contain it."
+          },
+          {
+            "location": "crates/ostra-server/src/bridge.rs:Wrapped::run, crates/ostra-server/src/mcp.rs:Connector::open",
+            "step": "Harness run, before the call: `Connector::open` builds the list (servers filtered by `mcp::serves`, `disabled_tools` dropped, duplicate canonical names skipped). `Wrapped::run` passes read-only names into PolicyInputs and into ToolEnv, so the harness policy knows the same list as the shim."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/bridge.rs:tool_list, crates/ostra-server/src/bridge.rs:ServerBridge::mcp_tools",
+            "step": "Harness run, the shim lists tools: `tools/list` returns the submit tool plus `ServerBridge::mcp_tools`, which exposes Ostra's own tools by capability and the gateway tools from `env.config().mcp.definitions()` under bare names (`github__search`). An inspect (read-only) session gets none."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/bridge.rs:handle_policy, crates/ostra-server/src/bridge.rs:policy_check",
+            "step": "Harness run, the PreToolUse hook: the adapter parses the payload into a canonical ToolCall (a name like `mcp__ostra__github__search` becomes `mcp__github__search`). `decide` calls `policy_check`, which returns Allow with no rule for a gateway tool (M2) and runs the real policy only for other tools. Anything the adapter cannot parse is `PreParse::Refuse` and is denied."
+          },
+          {
+            "location": "crates/ostra-server/src/bridge.rs:ServerBridge::mcp_call",
+            "step": "Harness run, `tools/call` on the shim: `call_tool` canonicalizes the bare name, calls `decide` (again Allow for gateway tools), then `mcp_call`. `mcp_call` maps the bare name to the canonical name (`is_gateway_bare`, else the MCP_TOOLS table, else 'unknown tool'), runs `self.check` (which denies everything in an inspect session, otherwise `ExecutionPolicy::check`), resolves an Ask through `resolve_ask`, runs `ostra_tools::execute`, then observes and logs. Deny returns `Denied by {layer} `{rule}`: {reason}` as a tool error."
+          },
+          {
+            "location": "crates/ostra-workspace/src/settings.rs:validate_settings, crates/ostra-policy/src/policy.rs:ExecutionPolicy::new",
+            "step": "Settings feed the policy: workspace `permissions.allow/ask/deny` and `permissions.mode` reach ExecContext and are parsed with `perms::parse_rule` in `ExecutionPolicy::new` (invalid rules are logged and skipped). At save time `validate_settings` runs `validate_rule`, which only checks the name prefix for mcp__ rules."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "ExecutionPolicy, permission rule parsing and matching, guards."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core (mcp, config, policy)",
+            "role": "Canonical names, McpServerConfig (disabled_tools, agents), PermissionRules, ToolCall and PolicyDecision."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "McpTools and McpConnector traits, execute dispatch."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server (bridge.rs, mcp.rs)",
+            "role": "Builds the policy for harness runs, serves the MCP shim calls, implements Connector and ExecMcp."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-native",
+            "role": "Native loop that calls policy.check."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-harness",
+            "role": "Hook bridge, MCP shim handler, per-harness adapters."
+          },
+          {
+            "kind": "external",
+            "name": "globset, regex",
+            "role": "Rule matching for path and Bash rules; not used for MCP rules, which match on tool name only."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-policy/src/policy.rs",
+            "purpose": "ExecutionPolicy: check, layer1 (guards), layer2 (permissions per tool family), the Family::Other branch that decides workspace MCP tools, rule_decision, mode_default, allow_rule_suggestion.",
+            "symbols": [
+              "pub struct PolicyInputs { pub build_commands: Vec<String>, pub test_commands: Vec<String>, pub read_only_mcp_tools: Vec<String> }",
+              "pub fn check(&self, call: &ToolCall) -> PolicyDecision",
+              "fn layer1(&self, call: &ToolCall, parsed: Option<&Parsed>) -> Option<Denial>",
+              "fn layer2(&self, call: &ToolCall, parsed: Option<&Parsed>) -> PolicyDecision",
+              "fn rule_decision(&self, subject: &Subject<'_>, allow_extra: &[Rule]) -> Option<PolicyDecision>",
+              "fn mode_default(&self, subject: &Subject<'_>, mode: PermissionMode) -> PolicyDecision",
+              "pub fn allow_rule_suggestion(&self, call: &ToolCall) -> Option<String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/perms.rs",
+            "purpose": "Permission rule syntax and matching. parse_rule accepts names starting mcp__, Other:, or submit_. Rule::matches treats a rule `mcp__server` as covering every tool of that server. Subject::Tool never matches a rule that carries a (spec).",
+            "symbols": [
+              "pub fn parse_rule(raw: &str) -> Result<Rule, String>",
+              "pub fn validate_rule(rule: &str) -> Result<(), String>",
+              "pub fn family(tool: &str) -> Family",
+              "pub enum Subject<'a> { Bash(&'a SimpleCommand), Path { tool, path }, Url { url }, Tool { tool: &'a str } }",
+              "pub fn matches(&self, subject: &Subject<'_>, repo: &Path, home: &Path) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/guards.rs",
+            "purpose": "Layer 1 guards. None of them inspects a workspace MCP tool call; the only layer 1 branch that touches one is answer_only, which does not list gateway tools.",
+            "symbols": [
+              "pub fn answer_only_denial() -> Denial",
+              "pub fn check_manage(...)",
+              "pub fn check_document(...)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/mcp.rs",
+            "purpose": "Canonical MCP naming and the predicates the policy and executors use. is_gateway_tool is true only for mcp__<server>__<tool>; Other:mcp__... does not count. serves() decides which agents get a server. validate() is the save-time check of mcp_servers.",
+            "symbols": [
+              "pub fn is_gateway_tool(tool: &str) -> bool",
+              "pub fn is_gateway_bare(bare: &str) -> bool",
+              "pub fn canonical(bare: &str) -> String",
+              "pub fn bare(canonical: &str) -> Option<&str>",
+              "pub fn server_of(name: &str) -> Option<&str>",
+              "pub fn bare_name(server: &str, tool: &str) -> String",
+              "pub fn serves(server: &McpServerConfig, agent: AgentName) -> bool",
+              "pub fn validate(servers: &[McpServerConfig], issues: &mut Vec<ValidationIssue>)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "McpServerConfig (disabled_tools, agents, enabled, timeout_secs) and PermissionRules / WorkspacePermissions (allow, ask, deny, mode). validate_workspace calls mcp::validate.",
+            "symbols": [
+              "pub struct McpServerConfig { name, enabled, command, env, url, headers, oauth, disabled_tools: Vec<String>, agents: Vec<String>, timeout_secs: u32 }",
+              "pub struct PermissionRules { pub allow: Vec<String>, ... }",
+              "pub struct WorkspacePermissions { pub mode: PermissionMode, pub allow: Vec<String>, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/policy.rs",
+            "purpose": "Canonical ToolCall, RuleRef (layer guard or permission), and PolicyDecision (Allow, Ask, Deny).",
+            "symbols": [
+              "pub struct ToolCall { pub tool: String, pub input: serde_json::Value }",
+              "pub enum PolicyDecision { Allow { rule }, Ask { reason, rule }, Deny { reason, rule } }"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native loop. Opens MCP tools, feeds read_only into PolicyInputs, builds the tool list from capabilities plus MCP definitions, and calls policy.check in tool_end (every tool except submit and coordination tools that route through the same function) before ostra_tools::execute.",
+            "symbols": [
+              "async fn tool_end(&self, id, name, input, policy: &ExecutionPolicy, env: &ToolEnv) -> (Block, RunEnd)",
+              "fn submit(&self, id, name, input, policy) -> Result<(Block, ExecutionStatus), Block>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/bridge.rs",
+            "purpose": "ServerBridge implements the harness BridgeServices: policy_check (hook path, passes gateway tools unchecked: Rule M2), mcp_call (the real check for gateway tools in a harness run), mcp_tools (the tool list the shim serves), and the harness-side policy_inputs/read_only wiring.",
+            "symbols": [
+              "fn check(&self, r: &Running, call: &ToolCall, id: &str, log: bool) -> PolicyDecision",
+              "fn policy_check(&self, execution: &ExecutionId, call: &ToolCall) -> PolicyDecision",
+              "async fn mcp_call(&self, execution, tool: &str, args: Value) -> Result<McpOut, String>",
+              "fn mcp_tools(&self, execution: &ExecutionId) -> Vec<(String, String, Value)>"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/bridge.rs",
+            "purpose": "HarnessBridge: handle_policy (PreToolUse hook), decide (maps PolicyDecision to hook Decision, resolves Ask), handle_mcp/call_tool (the MCP shim path).",
+            "symbols": [
+              "pub async fn handle_policy(&self, token: &str, req: PolicyRequest) -> PolicyResponse",
+              "async fn decide(&self, live: &LiveExecution, call: &ToolCall) -> Decision",
+              "async fn call_tool(&self, live: &LiveExecution, params: &Value) -> Value"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/adapters/mod.rs",
+            "purpose": "Translates each harness's MCP spelling into canonical names: ostra_mcp_tool strips the mcp__ostra__ style prefixes and canonical_ostra_tool maps a bare gateway name to mcp__<server>__<tool>.",
+            "symbols": [
+              "pub fn ostra_mcp_tool(name: &str) -> Option<String>",
+              "pub fn canonical_ostra_tool(bare: &str) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/mcp.rs",
+            "purpose": "Gateway side. Connector::open filters servers by mcp::serves, drops disabled_tools, builds ExecTool entries; ExecMcp::call refuses a name that is not in the execution's fixed tool list.",
+            "symbols": [
+              "impl McpConnector for Connector { async fn open(&self, spec: &ExecutionSpec) -> McpOpened }",
+              "impl McpTools for ExecMcp { fn definitions; fn read_only; async fn call }"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/mcp.rs",
+            "purpose": "McpTools and McpConnector traits and mcp::run, which returns 'Unknown tool' when the execution has no MCP tools.",
+            "symbols": [
+              "pub trait McpTools { fn definitions(&self); fn read_only(&self); async fn call(&self, tool, input, cancel) }",
+              "pub async fn run(env: &ToolEnv, tool: &str, input: &Value, cancel: CancellationToken) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "execute dispatches by tool name; a gateway tool goes to mcp::run, any unmatched name returns 'Unknown tool'.",
+            "symbols": [
+              "pub async fn execute(env: &ToolEnv, call_id: &str, call: &ToolCall, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/settings.rs",
+            "purpose": "validate_settings runs ostra_policy::validate_rule on every allow, ask, deny rule at save time. For an mcp__ name only the name prefix is checked; the server and tool are not checked against anything.",
+            "symbols": [
+              "pub fn validate_settings(global: &GlobalConfig, env: &Environment, settings: &WorkspaceSettings) -> Vec<ValidationIssue>"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/tests/policy.rs",
+            "purpose": "workspace_mcp_tools test is the existing fixture for Rule M1 (default allow, ask and deny rules, server-wide rule, plan mode, read-only hint, Other:mcp__ is not a workspace tool).",
+            "symbols": [
+              "fn workspace_mcp_tools()"
+            ]
+          },
+          {
+            "path": "docs/internals/mcp.md",
+            "purpose": "Docs page for the MCP gateway; section Policy states Rules M1 and M2 and section How tools reach an agent states the disabled_tools and agents filters. Must change with any behavior change here (CLAUDE.md pattern 9).",
+            "symbols": []
+          },
+          {
+            "path": "docs/security/agent-containment.md",
+            "purpose": "Security page that restates Rule M1 and M2 (around lines 383 and 520).",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-server/tests/mcp.rs",
+            "purpose": "End to end test with a fake MCP server: disabled_tools hides mcp__fake__secret from the agent's tool list; echo is offered and runs.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If an allowlist of MCP tools is wanted, a second pass should read ostra-mcp and the settings validation in crates/ostra-core/src/config.rs (validate_workspace) to see where a per-server list could be checked and how disabled_tools entries are validated (today they are not checked against the server's listed tools).",
+          "Check HANDOVER.md for the Rule M1 text, because any change to the default-allow behavior changes a cited rule and needs a fixture update in crates/ostra-policy/tests/policy.rs (workspace_mcp_tools) and the two docs pages."
+        ],
+        "not_covered": [
+          "crates/ostra-mcp (MCP client transports, OAuth, listing and readOnlyHint parsing): its tool listing feeds ExecTool.read_only but was not read.",
+          "Per-harness adapters beyond ostra_mcp_tool and canonical_ostra_tool (claude.rs, codex.rs, agy.rs parse_pre): how each harness spells a workspace MCP call in its PreToolUse payload was only checked by the unit tests that name mcp__ostra__ and Other:mcp__ cases.",
+          "The Activity/permission UI that shows Ask prompts and policy decisions (web/).",
+          "Where ExecContext.permissions is assembled from global, workspace, and project settings (ostra-engine spawn factory); the policy only sees the final lists.",
+          "ostra_tools::definitions capability filtering for Ostra's own tools; only the MCP part of the native tool list was read."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "ExecutionPolicy::check runs layer1 (guards, not overridable) and returns its denial. Otherwise it runs layer2 and, when YOLO is on, converts Ask and mode:bypass Allow into Allow(`yolo`). Deny from a guard, a deny rule, or plan mode stands under YOLO.",
+            "files": [
+              "crates/ostra-policy/src/policy.rs"
+            ],
+            "name": "Single check entry point: layer 1 then layer 2, YOLO turns ask into allow",
+            "snippet": {
+              "code": "pub fn check(&self, call: &ToolCall) -> PolicyDecision {\n    let parsed = (call.tool == \"Bash\")\n        .then(|| bash::parse(call.str_field(\"command\").unwrap_or_default()));\n    if let Some(d) = self.layer1(call, parsed.as_ref()) {\n        return from_denial(d);\n    }\n    let decision = self.layer2(call, parsed.as_ref());\n    if !self.yolo() {\n        return decision;\n    }\n    match decision {\n        PolicyDecision::Ask { .. } => PolicyDecision::Allow {\n            rule: Some(RuleRef::permission(\"yolo\")),\n        },\n        PolicyDecision::Allow { rule: Some(r) } if r.rule == \"mode:bypass\" => {\n            PolicyDecision::Allow {\n                rule: Some(RuleRef::permission(\"yolo\")),\n            }\n        }\n        d => d,\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/policy.rs:385"
+            }
+          },
+          {
+            "description": "A canonical gateway tool (mcp__<server>__<tool>) has Family::Other. rule_decision is consulted first (deny, then ask, then allow including session allows). With no matching rule: plan mode and not marked read-only gives the plan-mode deny; otherwise known-or-gateway gives Allow with no rule. Every other unknown name, including a harness's own `Other:mcp__...` tool, gets mode_default: ask in default and acceptEdits, deny in plan, allow in bypass.",
+            "files": [
+              "crates/ostra-policy/src/policy.rs",
+              "crates/ostra-policy/src/perms.rs"
+            ],
+            "name": "Workspace MCP tool decision (Rule M1) in layer2 Family::Other",
+            "snippet": {
+              "code": "// Rule M1: a workspace MCP server's tools are allowed unless a rule says\n// otherwise. Plan mode allows only those the server marks read-only.\nlet mcp = ostra_core::mcp::is_gateway_tool(tool);\nlet read_only = self.inputs.read_only_mcp_tools.iter().any(|t| t == tool);\nmatch self.rule_decision(&subject, &session_allow) {\n    Some(d) => d,\n    None if mcp && mode == PermissionMode::Plan && !read_only => {\n        self.mode_default(&subject, mode)\n    }\n    None if known || mcp => PolicyDecision::allow(),\n    None => self.mode_default(&subject, mode),\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/policy.rs:733"
+            }
+          },
+          {
+            "description": "deny first, then ask, then allow (config allow plus session allow). The deny message is 'Do not <describe>: the permission rule `<raw>` refuses it. If the task needs it, say so in your report.' with RuleRef::permission(raw). A server-wide rule `mcp__github` matches every `mcp__github__*` tool through the prefix test in Rule::matches (not for a gateway-name rule, which must match exactly).",
+            "files": [
+              "crates/ostra-policy/src/policy.rs",
+              "crates/ostra-policy/src/perms.rs"
+            ],
+            "name": "Rule precedence inside rule_decision",
+            "snippet": {
+              "code": "let same_tool = match fam {\n    // `mcp__github` covers every tool of the server, as in Claude Code.\n    Family::Other => {\n        self.tool == tool\n            || (self.tool.starts_with(ostra_core::mcp::PREFIX)\n                && !ostra_core::mcp::is_gateway_tool(&self.tool)\n                && tool\n                    .strip_prefix(self.tool.as_str())\n                    .is_some_and(|rest| rest.starts_with(ostra_core::mcp::SEPARATOR)))\n    }\n    f => {\n        f == family(tool) && (f != Family::Read || self.tool == \"Read\" || self.tool == tool)\n    }\n};",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/perms.rs:267"
+            }
+          },
+          {
+            "description": "In a harness run a workspace tool appears to the harness as mcp__ostra__<server>__<tool>. The PreToolUse hook adapter canonicalizes it to mcp__<server>__<tool>; ServerBridge::policy_check returns Allow{rule: None} for it without calling the policy (unless the session is an inspect session). The shim then calls HarnessBridge::call_tool, whose decide() goes to policy_check again (Allow again), and finally ServerBridge::mcp_call runs self.check (the real ExecutionPolicy::check), resolves an Ask with the user, executes, observes, and logs.",
+            "files": [
+              "crates/ostra-server/src/bridge.rs",
+              "crates/ostra-exec-harness/src/bridge.rs"
+            ],
+            "name": "Rule M2: harness hook passes gateway tools, the MCP handler does the real check",
+            "snippet": {
+              "code": "// Rule M2: a workspace MCP tool reaches the harness only through Ostra's MCP server,\n// which checks and logs the call when it runs it, so the hook passes it unchecked.\nif ostra_core::mcp::is_gateway_tool(&call.tool) && !r.inspect {\n    return PolicyDecision::Allow { rule: None };\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/bridge.rs:327"
+            }
+          },
+          {
+            "description": "All three surfaces treat Deny as a tool error whose text names the layer and rule and Ask as a question to the host (ask_permission or resolve_ask). The native loop and mcp_call write 'Denied by {layer} `{rule}`: {reason}'. The hook path wraps the same through denial_text. AlwaysInWorkspace answers add allow_rule_suggestion(call) to the in-memory session_allow; for a gateway tool the suggestion is the full tool name.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs",
+              "crates/ostra-server/src/bridge.rs",
+              "crates/ostra-exec-harness/src/bridge.rs"
+            ],
+            "name": "Per-surface handling of a policy decision",
+            "snippet": {
+              "code": "policy.set_yolo(self.host.yolo());\nlet decision = policy.check(&call);\nself.host.emit(ExecutionDelta::Policy {\n    call_id: id.into(),\n    decision: decision.clone(),\n});\nmatch decision {\n    PolicyDecision::Deny { reason, rule } => {\n        return err(format!(\n            \"Denied by {} `{}`: {reason}\",\n            rule.layer, rule.rule\n        ));\n    }\n    PolicyDecision::Ask { reason, rule } => {\n        match self.host.ask_permission(&call, &reason, &rule).await {",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:959"
+            }
+          }
+        ],
+        "problem": "Every tool call, including calls to workspace MCP servers, is meant to pass ExecutionPolicy::check. For MCP tools the path differs between the native loop and the harness executors, and the policy itself allows a workspace MCP tool by default (Rule M1). The only configured restrictions today are permission rules (deny, ask, allow), plan mode, a per-server disabled_tools denylist applied when the tool list is built, and a per-server agents list. There is no allowlist of tools per server.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how tool calls pass the execution policy, and where an MCP tool call could be refused. Covers the native loop, the harness hook bridge and MCP shim, ExecutionPolicy layer 1 and layer 2 for workspace MCP tools, and the non-policy places that can refuse an MCP call. It does not cover MCP client transport or OAuth (ostra-mcp), the sandbox, or the web UI.",
+        "sources": [],
+        "title": "Tool-call policy path and where an MCP tool call can be refused"
+      },
+      "submit": {
+        "findings_summary": "ExecutionPolicy::check runs layer 1 guards (none of which inspect workspace MCP tools) and then layer 2, where an mcp__server__tool name falls in Family::Other and is allowed by default under Rule M1. It is refused only by a matching deny rule (ask rules prompt), by plan mode unless the server marks the tool readOnlyHint, or by an inspect session. In harness runs the hook passes gateway tools unchecked (Rule M2) and the real check happens in ServerBridge::mcp_call. Outside the policy, a tool that is in disabled_tools, belongs to a server that does not serve the agent, or is not in the execution's fixed list is refused with 'Unknown tool' in ExecMcp::call. There is no per-server allowlist today, because allow rules do not restrict anything for MCP tools; rule validation only checks the mcp__ prefix.",
+        "not_covered": [
+          "crates/ostra-mcp client listing and readOnlyHint parsing",
+          "Per-harness adapter parse_pre spellings of workspace MCP calls (claude.rs, codex.rs, agy.rs)",
+          "Where ExecContext.permissions is assembled from global, workspace, and project settings",
+          "Web UI for Ask prompts and policy decisions"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How tool calls pass ExecutionPolicy::check (native loop and harness hook and MCP shim paths) and every place a workspace MCP tool call can be refused; MCP client transport, OAuth, sandbox, and UI were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,210 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:43:03.764869633+00:00",
+  "docs": [
+    {
+      "task": "How the Bash tool applies its default and maximum timeouts, where its description states them, and its tests.",
+      "file": "ostra-research-20261002-084143-bash-timeout.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-tools",
+          "ostra-core (docs and HANDOVER cross-references only)"
+        ],
+        "asks": [
+          "How the Bash tool applies its default and maximum timeouts",
+          "Where the tool's description states the timeouts",
+          "What tests exist for the timeouts"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-tools/src/lib.rs:execute",
+            "step": "The native agent loop hands a canonical ToolCall (tool `Bash`, input `{command, timeout?, description?}`) to ostra_tools::execute."
+          },
+          {
+            "location": "crates/ostra-core/src/args.rs:coerce_json_strings",
+            "step": "execute looks up the tool's schema with defs::input_schema and calls coerce_json_strings on the input. Only stringified objects and arrays are parsed; `timeout` is not range-checked here."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:execute",
+            "step": "execute matches `\"Bash\"` and calls bash::run (on Windows `PowerShell` and `Cmd` call winshell::run)."
+          },
+          {
+            "location": "crates/ostra-tools/src/bash.rs:run",
+            "step": "run rejects a missing or blank command, then computes timeout_ms = u64_arg(input, \"timeout\").unwrap_or(DEFAULT_TIMEOUT_MS).clamp(1, MAX_TIMEOUT_MS)."
+          },
+          {
+            "location": "crates/ostra-tools/src/bash.rs:run",
+            "step": "run spawns bash (sandboxed or not) in its own process tree, starts reader tasks for stdout and stderr, and pins a tokio sleep of timeout_ms as the deadline."
+          },
+          {
+            "location": "crates/ostra-tools/src/bash.rs:run",
+            "step": "The select loop ends with End::TimedOut when the deadline fires first. run then calls tree.kill(), waits up to KILL_WAIT for the child, drains output for DRAIN_GRACE per read (killing the tree again if pipes stay open), restores the working directory from the pwd file, and returns ToolOutput::err(\"The command timed out after {timeout_ms} ms and was stopped. Output so far:\\n{body}\"). The message reports the clamped value, not the requested one."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "tokio",
+            "role": "tokio::time::sleep for the deadline, select! for the race, time::timeout for KILL_WAIT and DRAIN_GRACE."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra_core::proctree",
+            "role": "Tree::kill and Tree::end stop the command and everything it started when the timeout fires."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra_core::args",
+            "role": "coerce_json_strings runs on the input before dispatch; does not enforce schema limits."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-tools/src/bash.rs",
+            "purpose": "Defines DEFAULT_TIMEOUT_MS and MAX_TIMEOUT_MS, resolves and clamps the timeout in run(), races it against the child in a select loop, and holds the Bash timeout tests.",
+            "symbols": [
+              "pub const DEFAULT_TIMEOUT_MS: u64 = 120_000;",
+              "pub const MAX_TIMEOUT_MS: u64 = 600_000;",
+              "pub async fn run(env: &ToolEnv, call_id: &str, input: &Value, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput",
+              "pub(crate) const KILL_WAIT: Duration = Duration::from_secs(5);",
+              "const DRAIN_GRACE: Duration = Duration::from_millis(300);"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/defs.rs",
+            "purpose": "Model-facing definitions. The BASH description const (line 47-57) states the default and maximum in prose; bash_def() (line 343) states the maximum in the input schema. POWERSHELL (355), CMD (361), powershell_def (367) and cmd_def (379) repeat the numbers. Holds unit tests for definitions but none on timeouts.",
+            "symbols": [
+              "const BASH: &str",
+              "fn bash_def() -> ToolDefinition",
+              "const POWERSHELL: &str",
+              "const CMD: &str",
+              "pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition>",
+              "pub(crate) fn input_schema(tool: &str, agent: AgentName) -> Option<Value>"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/winshell.rs",
+            "purpose": "Windows-only PowerShell and Cmd tools. run() reuses crate::bash::DEFAULT_TIMEOUT_MS and MAX_TIMEOUT_MS with the same clamp. Has one timeout test (a_timeout_stops_the_command_and_what_it_started, 6000 ms).",
+            "symbols": [
+              "pub async fn run(env: &ToolEnv, call_id: &str, input: &Value, shell: Shell, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "execute() dispatches \"Bash\" to bash::run, runs coerce_json_strings against the tool's schema first, and defines u64_arg and the test helpers env_in and run.",
+            "symbols": [
+              "pub async fn execute(env: &ToolEnv, call_id: &str, call: &ToolCall, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput",
+              "pub(crate) fn u64_arg(input: &serde_json::Value, key: &str) -> Option<u64>",
+              "pub(crate) mod testutil { pub fn env_in(dir: &Path) -> ToolEnv; pub async fn run(env: &ToolEnv, tool: &str, input: serde_json::Value) -> ToolOutput }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/args.rs",
+            "purpose": "coerce_json_strings: parses stringified objects and arrays against the schema. It does not enforce minimum or maximum, so schema limits are advisory to the model only.",
+            "symbols": [
+              "pub fn coerce_json_strings(input: &mut Value, schema: &Value) -> bool"
+            ]
+          },
+          {
+            "path": "docs/internals/tools.md",
+            "purpose": "Docs page for the tools. Line 185 states the Bash default and maximum in a table; line 226 says PowerShell and Cmd share the same timeouts."
+          },
+          {
+            "path": "HANDOVER.md",
+            "purpose": "Design brief. Line 704 states 'a 2-minute default timeout (10 maximum)' for Bash."
+          },
+          {
+            "path": "tests/evals/book_retrieval/book_split.json",
+            "purpose": "Retrieval eval fixture containing the sentence 'The tool clamps the timeout to 1 through 600000 ms, default 120000 ms.' (and the same in book_area.json). Generated book content for docs retrieval evals, not a source of truth for the code."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "A pass on the harness executors if the task needs the limits to match what Claude Code or Codex enforce.",
+          "A pass on web/ (api/gen/ToolCall.ts only documents the input shape; no timeout number) is not needed unless the UI shows the limits."
+        ],
+        "not_covered": [
+          "Harness executors (ostra-exec-harness): they drive Claude Code, Codex and other CLIs whose own Bash tools apply their own timeouts; whether Ostra constrains or restates those was not opened.",
+          "ostra-policy: whether the policy layer reads or constrains a Bash call's `timeout` field. A grep for the literal \"timeout\" in crates/ostra-policy found only the shell wrapper `timeout` command in bash.rs parsing, not the tool argument.",
+          "assets/agents prompts and skills: not searched for prose that restates the timeouts beyond a repo-wide markdown/rust/ts grep, which found none outside docs/internals/tools.md, HANDOVER.md and the eval fixtures.",
+          "Windows behavior of the winshell timeout test, which only compiles and runs on Windows."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "bash::run reads `timeout` with u64_arg, falls back to DEFAULT_TIMEOUT_MS when it is absent or not numeric, and clamps to 1..=MAX_TIMEOUT_MS. Over-limit values are therefore silently reduced to 600000 and 0 becomes 1; neither is an error. Negative floats become 0 and then 1. A string value such as \"300\" yields None from u64_arg (as_u64 and as_f64 are None for strings) and silently falls back to the default. winshell::run uses the identical expression with crate::bash:: paths.",
+            "files": [
+              "crates/ostra-tools/src/bash.rs",
+              "crates/ostra-tools/src/winshell.rs",
+              "crates/ostra-tools/src/lib.rs"
+            ],
+            "name": "Timeout resolution: optional arg, default, clamp",
+            "snippet": {
+              "code": "let timeout_ms = u64_arg(input, \"timeout\")\n    .unwrap_or(DEFAULT_TIMEOUT_MS)\n    .clamp(1, MAX_TIMEOUT_MS);",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/bash.rs:175"
+            }
+          },
+          {
+            "description": "A tokio sleep of timeout_ms is pinned and raced against output chunks, child exit, and cancellation. On TimedOut the process tree is killed, the child is reaped within KILL_WAIT (5 s), output is drained for DRAIN_GRACE (300 ms) per read, and the tool returns an error output with the configured timeout in the message.",
+            "files": [
+              "crates/ostra-tools/src/bash.rs"
+            ],
+            "name": "Deadline raced in a select loop",
+            "snippet": {
+              "code": "let deadline = tokio::time::sleep(Duration::from_millis(timeout_ms));\ntokio::pin!(deadline);\nlet end = loop {\n    tokio::select! {\n        Some(chunk) = rx.recv() => on_chunk(&chunk, &mut capture),\n        status = child.wait() => break match status {\n            Ok(s) => End::Exited(s),\n            Err(e) => End::WaitFailed(e.to_string()),\n        },\n        _ = &mut deadline => break End::TimedOut,\n        _ = cancel.cancelled() => break End::Cancelled,\n    }\n};",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/bash.rs:267"
+            }
+          },
+          {
+            "description": "The limits are not derived from the constants. The BASH description, bash_def schema, POWERSHELL, CMD, powershell_def and cmd_def each carry 120000 and/or 600000 as text. Changing a constant requires hand-editing every one of these, plus docs/internals/tools.md and HANDOVER.md. The schema has minimum 1 and maximum 600000 but no default key.",
+            "files": [
+              "crates/ostra-tools/src/defs.rs"
+            ],
+            "name": "Limits written as literals in descriptions and schemas",
+            "snippet": {
+              "code": "- Default timeout is 120000 ms (2 minutes). Pass timeout in milliseconds for longer commands, up to 600000 ms (10 minutes). A command that runs past its timeout is stopped along with every process it started.\n...\n\"timeout\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 600000, \"description\": \"Timeout in milliseconds, up to 600000\"},",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/defs.rs:51 and :349"
+            }
+          },
+          {
+            "description": "Both existing Bash timeout tests start a background subshell that would touch a marker file after 2 s, run `sleep 30` in the foreground with an explicit timeout of 300 ms, then assert: the output is an error containing 'timed out', elapsed time is under 5 s, and the marker does not appear after waiting 2.5 s (so the process group was killed). The sandbox variant returns early when no sandbox backend is available (`sandboxed` returns None).",
+            "files": [
+              "crates/ostra-tools/src/bash.rs"
+            ],
+            "name": "Timeout test shape",
+            "snippet": {
+              "code": "#[tokio::test]\nasync fn timeout_kills_process_group() {\n    let d = tempfile::tempdir().unwrap();\n    let env = env_in(d.path());\n    let marker = d.path().join(\"survived\");\n    let cmd = format!(\"(sleep 2; touch {}) & sleep 30\", marker.display());\n    let started = std::time::Instant::now();\n    let out = run_tool(&env, \"Bash\", json!({\"command\": cmd, \"timeout\": 300})).await;\n    assert!(out.is_error && out.text.contains(\"timed out\"));\n    assert!(started.elapsed() < Duration::from_secs(5));\n    tokio::time::sleep(Duration::from_millis(2500)).await;\n    assert!(!marker.exists(), \"background child outlived the timeout\");\n}",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/bash.rs:394"
+            }
+          }
+        ],
+        "problem": "The Bash tool's default (120000 ms) and maximum (600000 ms) timeouts are defined once as constants in bash.rs, but the same numbers are also written as literals in the tool descriptions and JSON input schemas in defs.rs and in three prose documents. The only tests that touch timeouts pass a small explicit value to prove a timeout kills the process tree; nothing tests the default, the clamp, the schema limits, or the description text.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the Bash tool applies its default and maximum timeouts, where its description states them, and its tests. Covers the native Bash tool in crates/ostra-tools, its Windows siblings (PowerShell, Cmd) because they share the constants, and the docs that restate the numbers. Does not cover harness executors' own shell tools or the sandbox backends beyond the timeout test.",
+        "sources": [],
+        "title": "Bash tool timeouts"
+      },
+      "submit": {
+        "findings_summary": "bash.rs defines DEFAULT_TIMEOUT_MS (120000) and MAX_TIMEOUT_MS (600000). run() resolves the timeout with u64_arg(...).unwrap_or(default).clamp(1, max) and races a tokio sleep against the child in a select loop. On expiry it kills the process tree and returns an error that names the clamped value. winshell.rs reuses the same constants and clamp. The limits are repeated as literals in defs.rs (BASH, POWERSHELL and CMD descriptions plus three timeout schemas with maximum 600000), in docs/internals/tools.md and in HANDOVER.md. The only timeout tests are timeout_kills_process_group and sandbox_timeout_stops_background_children in bash.rs (300 ms) and a Windows-only test in winshell.rs. Nothing tests the default, the clamp, the schema limits or the description wording.",
+        "not_covered": [
+          "Harness executors (ostra-exec-harness) and the timeouts of the CLIs' own shell tools",
+          "Whether ostra-policy reads the Bash timeout argument",
+          "assets/agents prompts and skills beyond a repo-wide grep",
+          "Windows-only winshell test behavior"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the native Bash tool (and its Windows siblings PowerShell and Cmd) apply default and maximum timeouts, where the descriptions and schemas state them, and the existing tests; harness executors and policy handling of the timeout argument were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,607 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:48:07.701640128+00:00",
+  "docs": [
+    {
+      "task": "How the server's session endpoints are defined and guarded, and how they read from the workspace db.",
+      "file": "ostra-research-20261002-084548-session-endpoints.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-server",
+          "ostra-store",
+          "ostra-workspace",
+          "ostra-engine"
+        ],
+        "asks": [
+          "How the server's session endpoints are defined",
+          "How those endpoints are guarded",
+          "How they read from the workspace db"
+        ],
+        "data_flow": [
+          {
+            "location": "web/src/api/client.ts",
+            "step": "Browser calls `GET /api/sessions/{id}/events?after=N` (web client `request<StoredEvent[]>`). The request first passes the single middleware layer."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:guard",
+            "step": "`guard` computes `api = path.starts_with(\"/api/\") || path == \"/ws\"`, filters the `Host` header through `app.auth.allowed_host` (421 MISDIRECTED_REQUEST when not allowed), and on a loopback-IP host redirects pages or refuses the API with 421 (`private_redirect`)."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:refusal",
+            "step": "`refusal` runs for `/api` paths: `allowed_origin(Origin)` must pass; `Sec-Fetch-Site` of `cross-site` or `same-site` is refused; `Sec-Fetch-Dest` must be absent or one of `empty`, `websocket`, `document`; any failure gives 403 'This origin is not allowed.'. Then, for every path except `/api/auth/exchange`, the session cookie is read with `cookie_value` and validated with `check_cookie`; failure gives 401 'Sign in with the URL the ostra command printed.' and an info log."
+          },
+          {
+            "location": "crates/ostra-server/src/auth.rs:check_cookie",
+            "step": "`check_cookie` hashes the cookie, uses an in-memory cache entry younger than RECHECK, otherwise reads the sign-in record from the registry kv store, deletes expired ones, and refreshes `last_seen` with `kv_replace`."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:secure_headers",
+            "step": "After the request passes, `secure_headers` adds the CSP, `nosniff`, `no-referrer`, `X-Frame-Options: DENY`, and, for API paths, `Cache-Control: no-store` to the response, including refusals."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:ws_of_session",
+            "step": "Axum dispatches to `session_events`. It builds `SessionId::from(id)` and calls `ws_of_session`, which iterates `App::all_workspaces()` and returns the first `WorkspaceRt` whose `db.get_session(id)` is Some, else 404 'No session {id}.'."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/events.rs:Events::after",
+            "step": "The handler reads straight from the db (not the engine's cached fold): `w.db.events_after(&sid, q.after.unwrap_or(0))`, which runs `Events::after` under the Db mutex: `SELECT seq, at, payload FROM events WHERE session_id = ?1 AND seq > ?2 ORDER BY seq`, and decodes `payload` JSON into `SessionEvent`. The Vec<StoredEvent> is returned as JSON."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::load",
+            "step": "Contrast, `GET /api/sessions/{id}`: `w.engine.detail(&sid)` calls `Engine::state`, which calls `Inner::load`. On first touch `load` checks `db.get_session`, calls `db.events(id)` (events_after with 0), runs `SessionState::fold`, and caches the `Live` state in `Inner.sessions`. `view::detail` then combines the folded state with `db.list_executions`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::append",
+            "step": "Writes go the other way: `Inner::append` stores via `WorkspaceDb::append_event` (assigns next seq in a transaction and touches sessions.updated_at), folds, broadcasts, and wakes the driver."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "axum",
+            "role": "Router, extractors (State, Path, Query, Json), middleware::from_fn_with_state, ConnectInfo. Path syntax is `{param}`."
+          },
+          {
+            "kind": "external",
+            "name": "rusqlite",
+            "role": "SQLite access in ostra-store behind one Mutex<Connection>; WAL mode, busy timeout 5000 ms, foreign_keys ON."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "WorkspaceDb, Events, Sessions, Db plumbing and MIGRATIONS."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-workspace",
+            "role": "WorkspaceRt exposes `db`, `engine`, `work` to handlers."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Engine::detail, state, create_session, stop_session, amend; EngineError mapped to ApiErr."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "StoredEvent, SessionEvent, SessionSummary, SessionDetail, ids, API DTOs."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "All REST routes (router), the guard middleware, ApiErr, the id-to-workspace lookup helpers, and every session handler.",
+            "symbols": [
+              "type AppState = State<Arc<App>>;",
+              "type Res<T> = Result<Json<T>, ApiErr>;",
+              "pub fn router(app: Arc<App>) -> axum::Router",
+              "async fn guard(State(app): AppState, req: Request, next: Next) -> Response",
+              "fn refusal(app: &App, req: &Request, path: &str, api: bool) -> Option<Response>",
+              "fn secure_headers(h: &mut axum::http::HeaderMap, host: Option<&str>, api: bool)",
+              "pub(crate) fn ws(app: &App, id: &str) -> Result<Arc<WorkspaceRt>, ApiErr>",
+              "async fn start_work(w: &WorkspaceRt) -> Result<tokio::sync::RwLockReadGuard<'_, bool>, ApiErr>",
+              "fn ws_of_session(app: &App, id: &SessionId) -> Result<Arc<WorkspaceRt>, ApiErr>",
+              "fn ws_of_gate(app: &App, id: &GateId)",
+              "pub fn ws_of_execution(app: &App, id: &ExecutionId)",
+              "fn ws_of_decision(app: &App, id: &DecisionId)",
+              "async fn list_sessions(State(app): AppState, Path(id): Path<String>) -> Res<Vec<SessionSummary>>",
+              "async fn create_session(State(app): AppState, Path(id): Path<String>, Json(body): Json<CreateSession>) -> Res<SessionSummary>",
+              "async fn get_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionDetail>",
+              "async fn session_events(State(app): AppState, Path(id): Path<String>, Query(q): Query<After>) -> Res<Vec<StoredEvent>>",
+              "async fn diff(State(app): AppState, Path(id): Path<String>, Query(q): Query<DiffQuery>) -> Res<Vec<DiffFile>>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/app.rs",
+            "purpose": "App state: workspaces map, auth, and the workspace lookups the handlers use. App::attach opens a WorkspaceRt, runs engine.recover(), and forwards engine notices to the hub.",
+            "symbols": [
+              "pub struct App { pub shared, pub workspaces: RwLock<HashMap<WorkspaceId, Arc<WorkspaceRt>>>, pub hub, pub auth: Auth, ... }",
+              "pub fn workspace(&self, id: &WorkspaceId) -> Option<Arc<WorkspaceRt>>",
+              "pub fn all_workspaces(&self) -> Vec<Arc<WorkspaceRt>>",
+              "pub fn stop_offline(session: &str) -> anyhow::Result<usize>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/auth.rs",
+            "purpose": "Host allowlist, Origin check, and cookie validation that guard calls.",
+            "symbols": [
+              "pub fn allowed_host(&self, host: Option<&str>) -> bool",
+              "pub fn allowed_origin(&self, origin: Option<&str>) -> bool",
+              "pub fn check_cookie(&self, value: &str) -> bool",
+              "pub fn private_redirect(&self, host: Option<&str>) -> Option<&str>",
+              "pub fn is_local_address(ip: std::net::IpAddr) -> bool",
+              "pub fn cookie_value(header: Option<&str>) -> Option<String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/ws.rs",
+            "purpose": "The /ws handler; it applies the same cookie check (close code 4401) rather than reading events from the db for session data.",
+            "symbols": [
+              "pub fn handler"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "WorkspaceRt, the per-workspace runtime that handlers reach: the db handle, the engine, and the work lock.",
+            "symbols": [
+              "pub struct WorkspaceRt { pub id: WorkspaceId, pub root: PathBuf, pub db: WorkspaceDb, pub engine: Engine, pub host: Arc<dyn WorkspaceHost>, pub cloning: parking_lot::Mutex<Vec<(String, PathBuf)>>, pub work: tokio::sync::RwLock<bool> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/mod.rs",
+            "purpose": "WorkspaceDb: the public facade over the workspace SQLite file. Each method delegates to a per-table repository inside Db::run or Db::transaction.",
+            "symbols": [
+              "pub struct WorkspaceDb { db: Db }",
+              "pub fn open(path: &Path) -> Result<Self, StoreError>",
+              "pub fn open_in_memory() -> Result<Self, StoreError>",
+              "pub fn get_session(&self, id: &SessionId) -> Result<Option<SessionSummary>, StoreError>",
+              "pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, StoreError>",
+              "pub fn append_event(&self, session: &SessionId, event: &SessionEvent) -> Result<StoredEvent, StoreError>",
+              "pub fn events(&self, session: &SessionId) -> Result<Vec<StoredEvent>, StoreError>",
+              "pub fn events_after(&self, session: &SessionId, after: i64) -> Result<Vec<StoredEvent>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/events.rs",
+            "purpose": "Events repository: the only SQL for the events table (append with next_seq, after-seq read).",
+            "symbols": [
+              "pub(crate) struct Events<'c>(pub &'c Connection);",
+              "pub fn append(&self, session: &SessionId, event: &SessionEvent) -> Result<StoredEvent, StoreError>",
+              "pub fn after(&self, session: &SessionId, after: i64) -> Result<Vec<StoredEvent>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/sessions.rs",
+            "purpose": "Sessions repository: insert, update, touch, get, list over the sessions row, with open_gates computed by subquery.",
+            "symbols": [
+              "pub(crate) struct Sessions<'c>(pub &'c Connection);",
+              "pub fn get(&self, id: &SessionId) -> Result<Option<SessionSummary>, StoreError>",
+              "pub fn list(&self) -> Result<Vec<SessionSummary>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/sqlite.rs",
+            "purpose": "Db: one rusqlite Connection behind Arc<Mutex>; run() and transaction() helpers; query_all/query_one/next_seq; RowExt typed column reads; open_file pragmas (WAL, busy timeout 5000 ms, 0600/0700 modes).",
+            "symbols": [
+              "pub(crate) struct Db { conn: Arc<Mutex<Connection>> }",
+              "pub fn run<T>(&self, f: impl FnOnce(&Connection) -> Result<T, StoreError>) -> Result<T, StoreError>",
+              "pub fn transaction<T>(&self, f: impl FnOnce(&Connection) -> Result<T, StoreError>) -> Result<T, StoreError>",
+              "pub(crate) fn next_seq(conn: &Connection, table: &'static str, parent_col: &'static str, parent: &str) -> Result<i64, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/schema.rs",
+            "purpose": "MIGRATIONS array tracked by user_version. The events table is (session_id, seq, type, payload, at) with primary key (session_id, seq).",
+            "symbols": [
+              "pub(crate) const MIGRATIONS: &[&str]"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "StoredEvent, the type session_events returns: { seq: i64, at: DateTime<Utc>, event: SessionEvent }. Module doc: the append-only log whose fold is session state.",
+            "symbols": [
+              "pub struct StoredEvent { pub seq: i64, pub at: chrono::DateTime<chrono::Utc>, pub event: SessionEvent }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Engine::detail / Engine::state / Inner::load (replays events from the db into SessionState::fold on first touch, caches in Inner.sessions) and Inner::append (the only event writer).",
+            "symbols": [
+              "pub fn detail(&self, session: &SessionId) -> Result<SessionDetail, EngineError>",
+              "pub fn state(&self, session: &SessionId) -> Result<SessionState, EngineError>",
+              "fn load(&self, id: &SessionId) -> Result<Arc<Live>, EngineError>",
+              "fn append(&self, session: &SessionId, event: SessionEvent) -> Result<StoredEvent, EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "view::detail builds SessionDetail from the folded state plus db.list_executions; gates and decisions come from the fold, executions from the db.",
+            "symbols": [
+              "pub fn detail(s: &SessionState, db: &WorkspaceDb, workspace: &WorkspaceId, live: HashSet<ExecutionId>) -> Result<SessionDetail, EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/tests/e2e.rs",
+            "purpose": "Server end to end tests that hit /api/workspaces/{ws}/sessions, /api/sessions/{id}, /stop, /diff, plus 401 and 4401 checks on auth routes. No test requests /api/sessions/{id}/events.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/api/client.ts",
+            "purpose": "Only client of GET /api/sessions/{id}/events?after= (line 222), returning StoredEvent[].",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the event log storage or read path changes, a pass on Engine::recover, stop_session_offline and Inner::load should confirm every reader of WorkspaceDb::events and events_after.",
+          "A pass on docs/architecture/storage.md and docs/architecture/server.md to see which statements about workspace.db would need updating."
+        ],
+        "not_covered": [
+          "The /ws WebSocket message protocol and which channels deliver session events live (only its cookie check was read).",
+          "The /internal harness bridge routes in crates/ostra-server/src/bridge.rs and what they read from the db.",
+          "Engine writers other than Inner::append (stop_session_offline reads db.events directly at runner.rs:1187) and recovery in Engine::recover.",
+          "Other readers of the sessions table outside api.rs: nav/mod.rs, nav/search.rs, artifacts.rs, git.rs, files/mod.rs and app.rs sweep_session_caches all call db.list_sessions().",
+          "Store tests in crates/ostra-store/tests/workspace_db.rs beyond the events_are_sequenced_per_session and concurrent_appends_get_distinct_seqs names.",
+          "Docs pages (docs/architecture/storage.md, docs/architecture/server.md) that describe the event log; not read in full."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Session ids carry no workspace, so every /api/sessions/{id}/* handler calls `ws_of_session`, which scans `app.all_workspaces()` and returns the first whose `db.get_session(id)` is `Some`. Reads that need folded state go through `w.engine`; raw reads go through `w.db`. Gate, execution, and decision handlers use the same pattern with `ws_of_gate`, `ws_of_execution`, `ws_of_decision`. Workspace-scoped routes (`/api/workspaces/{ws}/sessions`) use `ws(&app, &id)` instead, which looks up the map directly. Handlers that start work take `start_work(&w).await?` first.",
+            "files": [
+              "crates/ostra-server/src/api.rs"
+            ],
+            "name": "Session handler: resolve owning workspace by probing each workspace db, then call the engine or the db",
+            "snippet": {
+              "code": "fn ws_of_session(app: &App, id: &SessionId) -> Result<Arc<WorkspaceRt>, ApiErr> {\n    app.all_workspaces()\n        .into_iter()\n        .find(|w| w.db.get_session(id).ok().flatten().is_some())\n        .ok_or_else(|| ApiErr::not_found(format!(\"No session {id}.\")))\n}\n\nasync fn get_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionDetail> {\n    let sid = SessionId::from(id);\n    let w = ws_of_session(&app, &sid)?;\n    Ok(Json(w.engine.detail(&sid)?))\n}\n\nasync fn session_events(\n    State(app): AppState,\n    Path(id): Path<String>,\n    Query(q): Query<After>,\n) -> Res<Vec<StoredEvent>> {\n    let sid = SessionId::from(id);\n    let w = ws_of_session(&app, &sid)?;\n    Ok(Json(w.db.events_after(&sid, q.after.unwrap_or(0))?))\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/api.rs:559"
+            }
+          },
+          {
+            "description": "Every route is a `.route(path, method(handler))` on one `axum::Router` built in `router()`. Paths use axum's `{param}` syntax. One `middleware::from_fn_with_state(app.clone(), guard)` layer wraps the whole router including the static fallback, `/ws`, and the merged `/internal` routes, so a new session route is guarded by registering it and does nothing more. Session routes are registered at api.rs lines 400-420.",
+            "files": [
+              "crates/ostra-server/src/api.rs"
+            ],
+            "name": "Route registration and the single guard layer",
+            "snippet": {
+              "code": "        .route(\n            \"/api/workspaces/{ws}/sessions\",\n            get(list_sessions).post(create_session),\n        )\n        .route(\"/api/workspaces/{ws}/cost\", get(cost))\n        .route(\"/api/workspaces/{ws}/ask\", post(ask))\n        .route(\"/api/sessions/{id}\", get(get_session))\n        .route(\"/api/sessions/{id}/events\", get(session_events))\n        .route(\"/api/sessions/{id}/yolo\", post(set_yolo))\n        .route(\"/api/sessions/{id}/amend\", post(amend))\n        .route(\n            \"/api/sessions/{id}/additions/{index}/withdraw\",\n            post(withdraw_addition),\n        )\n        .route(\"/api/sessions/{id}/pause\", post(pause_session))\n        .route(\"/api/executions/{id}/inspect\", post(inspect_execution))\n        .route(\"/api/sessions/{id}/resume\", post(resume_session))\n        .route(\"/api/sessions/{id}/stop\", post(stop_session))\n        .route(\"/api/sessions/{id}/diff\", get(diff))\n...",
+              "language": "rust",
+              "source": "crates/ostra-server/src/api.rs:400"
+            }
+          },
+          {
+            "description": "Handlers return `Res<T> = Result<Json<T>, ApiErr>`. `From<EngineError>` maps NotFound to 404, Invalid and Ended to 409, Store to 500. `From<StoreError>` maps every store error to 500, so a missing session through `?` on a db call is a 500 unless the handler first resolved the session with `ws_of_session` (404).",
+            "files": [
+              "crates/ostra-server/src/api.rs"
+            ],
+            "name": "Error mapping with ApiErr",
+            "snippet": {
+              "code": "impl From<EngineError> for ApiErr {\n    fn from(e: EngineError) -> Self {\n        match e {\n            EngineError::NotFound(m) => ApiErr::not_found(m),\n            EngineError::Invalid(m) => ApiErr::new(StatusCode::CONFLICT, m),\n            EngineError::Ended => ApiErr::new(StatusCode::CONFLICT, e.to_string()),\n            EngineError::Store(e) => ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),\n        }\n    }\n}\n\nimpl From<ostra_store::StoreError> for ApiErr {\n    fn from(e: ostra_store::StoreError) -> Self {\n        ApiErr::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/api.rs:116"
+            }
+          },
+          {
+            "description": "Each table has a crate-private repository struct wrapping `&Connection` that holds its SQL and row mapping (`Events`, `Sessions`, ...). `WorkspaceDb` methods call `self.db.run(|c| Repo(c).method(..))` for single statements and `self.db.transaction(..)` (BEGIN IMMEDIATE) for multi-statement writes. `append_event` appends the event and touches `sessions.updated_at` in one transaction. Reads in `Events::after` use `query_all` with `RowExt::time` and `RowExt::json` to decode `at` and `payload`.",
+            "files": [
+              "crates/ostra-store/src/workspace/mod.rs",
+              "crates/ostra-store/src/workspace/events.rs",
+              "crates/ostra-store/src/sqlite.rs"
+            ],
+            "name": "Store repository per table behind a WorkspaceDb facade",
+            "snippet": {
+              "code": "    pub fn after(&self, session: &SessionId, after: i64) -> Result<Vec<StoredEvent>, StoreError> {\n        query_all(\n            self.0,\n            \"SELECT seq, at, payload FROM events WHERE session_id = ?1 AND seq > ?2 ORDER BY seq\",\n            params![session.as_str(), after],\n            |r| {\n                Ok(StoredEvent {\n                    seq: r.get(\"seq\")?,\n                    at: r.time(\"at\")?,\n                    event: r.json(\"payload\")?,\n                })\n            },\n        )\n    }",
+              "language": "rust",
+              "source": "crates/ostra-store/src/workspace/events.rs:36"
+            }
+          }
+        ],
+        "problem": "Session endpoints are plain axum handlers in one file that resolve a session id to the workspace that owns it by probing every open workspace db, then read either through the engine (folded in-memory state) or straight from WorkspaceDb (SQLite events and sessions tables). One middleware guards every /api route. Anything that changes where or how session events are stored has to keep these read paths, the engine load path, and the append path consistent.",
+        "repo": "ostra",
+        "scope": "Task: how the server's session endpoints are defined and guarded, and how they read from the workspace db. Covers the /api/sessions/* and /api/workspaces/{ws}/sessions REST routes, the guard middleware, the lookup helpers, and the WorkspaceDb read path (events, sessions). Does not cover the WebSocket protocol beyond its auth, the /internal harness bridge handlers, the web client, or any change to the event log's storage format.",
+        "sources": [],
+        "title": "Session endpoints: definition, guarding, and workspace db reads"
+      },
+      "submit": {
+        "findings_summary": "Session routes are registered in `router()` in crates/ostra-server/src/api.rs, and a single `guard` middleware wraps the whole router. It checks the Host allowlist, the Origin, and the Sec-Fetch headers, then the signed-in cookie (every path except /api/auth/exchange), and it adds the security headers. A session id carries no workspace, so handlers call `ws_of_session`, which probes every open workspace db with `get_session`. `GET /api/sessions/{id}/events` reads `WorkspaceDb::events_after` directly (SQL in crates/ostra-store/src/workspace/events.rs), while `GET /api/sessions/{id}` goes through `Engine::detail`. That path loads the session once with `Inner::load`, which replays `db.events` into `SessionState::fold`. The only writer is `Inner::append`, via `WorkspaceDb::append_event`. All store access shares one Mutex-guarded rusqlite connection in WAL mode. The events route has no e2e test.",
+        "not_covered": [
+          "The /ws WebSocket message protocol and which channels deliver session events live (only its cookie check was read).",
+          "The /internal harness bridge routes in crates/ostra-server/src/bridge.rs and what they read from the db.",
+          "Engine writers and readers beyond Inner::append and Inner::load (stop_session_offline at runner.rs:1187, Engine::recover).",
+          "Other readers of the sessions table (nav, search, artifacts, git, files, app.rs sweep_session_caches).",
+          "docs/architecture/storage.md and docs/architecture/server.md, which describe the event log and were not read in full."
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the server's /api/sessions/* and /api/workspaces/{ws}/sessions endpoints are defined, how the guard middleware protects them, and how they read from the workspace db; the WebSocket protocol, the /internal bridge, the web client and any change to the log's storage format were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How stored events are read from the store and serialized.",
+      "file": "ostra-research-20261002-084546-event-read-and-serialization.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-store",
+          "ostra-core",
+          "ostra-engine",
+          "ostra-server"
+        ],
+        "asks": [
+          "How stored events are read from the store",
+          "How stored events are serialized"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::append",
+            "step": "An event is appended by the engine: `Inner::append` holds the session state lock, calls the store, folds the event into state, and broadcasts an EngineNotice::Event."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/mod.rs:WorkspaceDb::append_event",
+            "step": "The store serializes SessionEvent to JSON (`serde_json::to_value`), inserts a row (session_id, seq, type, payload text, at text) inside an immediate transaction, and returns a StoredEvent."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/mod.rs:WorkspaceDb::events_after",
+            "step": "Read request: a caller invokes `WorkspaceDb::events(session)` (all rows) or `events_after(session, after)` (rows with seq greater than `after`). `Db::run` locks the shared connection for the duration."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/events.rs:Events::after",
+            "step": "`Events::after` runs `SELECT seq, at, payload FROM events WHERE session_id = ?1 AND seq > ?2 ORDER BY seq` through `query_all`, which collects every row into a Vec before returning."
+          },
+          {
+            "location": "crates/ostra-store/src/sqlite.rs:RowExt::json",
+            "step": "Each row is deserialized: `seq` as i64, `at` through `parse_time` (RFC 3339), and `payload` through `serde_json::from_str` into SessionEvent via the `type` tag. A bad timestamp gives StoreError::Invalid; a bad payload gives StoreError::Json."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::load",
+            "step": "Engine consumer: `Inner::load` reads all events once per session, folds them into SessionState, and caches the Live state. `stop_session_offline` does the same read for the CLI stop command."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:session_events",
+            "step": "REST consumer: `GET /api/sessions/{id}/events?after=N` returns `Json<Vec<StoredEvent>>`. Each element serializes as `{\"seq\":..,\"at\":\"..Z\",\"event\":{\"type\":\"snake_case_name\",...fields}}` (chrono serde output for `at`). The web client reads it in `api.events`."
+          },
+          {
+            "location": "crates/ostra-server/src/ws.rs:route",
+            "step": "Live consumer: the hub forwards EngineNotice::Event to `route` in ws.rs, which builds ServerMsg::SessionEvent with seq, at, and event, and `send` writes `serde_json::to_string(msg)` as a WebSocket text frame on channel `session:{id}`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "rusqlite",
+            "role": "SQLite access. Connection is shared behind Arc<Mutex<Connection>> in Db, so a read and a write on one workspace serialize."
+          },
+          {
+            "kind": "external",
+            "name": "serde_json",
+            "role": "Serializes SessionEvent to the payload column and deserializes it; also used by axum Json and ws.rs send."
+          },
+          {
+            "kind": "external",
+            "name": "chrono",
+            "role": "`at` is DateTime<Utc>; stored as RFC 3339 text with milliseconds, serialized to JSON by chrono's serde impl."
+          },
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "StoredEvent and SessionEvent export TypeScript types to web/src/api/gen/ via #[ts(export)]."
+          },
+          {
+            "kind": "external",
+            "name": "axum",
+            "role": "REST handler and WebSocket in ostra-server."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns StoredEvent, SessionEvent, SessionId, ServerMsg."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "Owns the events table and the read functions."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Folds events and broadcasts them."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-store/src/workspace/events.rs",
+            "purpose": "The only SQL against the events table. `append` serializes a SessionEvent to a serde_json::Value, takes `type` from the tagged value, and inserts payload as text. `after` is the only read query and deserializes each row into StoredEvent.",
+            "symbols": [
+              "pub(crate) struct Events<'c>(pub &'c Connection)",
+              "pub fn append(&self, session: &SessionId, event: &SessionEvent) -> Result<StoredEvent, StoreError>",
+              "pub fn after(&self, session: &SessionId, after: i64) -> Result<Vec<StoredEvent>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/mod.rs",
+            "purpose": "Public WorkspaceDb facade. `events` reads the whole log by calling `events_after` with 0. `events_after` runs `Events(c).after` through `Db::run` (no transaction). `append_event` wraps append and the session `touch` in a transaction.",
+            "symbols": [
+              "pub fn append_event(&self, session: &SessionId, event: &SessionEvent) -> Result<StoredEvent, StoreError>",
+              "pub fn events(&self, session: &SessionId) -> Result<Vec<StoredEvent>, StoreError>",
+              "pub fn events_after(&self, session: &SessionId, after: i64) -> Result<Vec<StoredEvent>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/schema.rs",
+            "purpose": "Defines the events table: session_id TEXT, seq INTEGER, type TEXT, payload TEXT, at TEXT, primary key (session_id, seq). The primary key index serves the `session_id = ? AND seq > ? ORDER BY seq` read."
+          },
+          {
+            "path": "crates/ostra-store/src/sqlite.rs",
+            "purpose": "Shared row helpers. `query_all` prepares, runs, and collects every row into a Vec (no streaming or cursor). `RowExt::json` reads a TEXT column and runs serde_json::from_str. `RowExt::time` parses an RFC 3339 TEXT column. `Db::run` locks the single shared connection (Arc<Mutex<Connection>>) for the call. `next_seq` computes MAX(seq)+1 per parent.",
+            "symbols": [
+              "pub(crate) fn query_all<T>(conn: &Connection, sql: &str, params: impl Params, mut map: impl FnMut(&Row<'_>) -> Result<T, StoreError>) -> Result<Vec<T>, StoreError>",
+              "fn json<T: DeserializeOwned>(&self, col: &str) -> Result<T, StoreError>",
+              "fn time(&self, col: &str) -> Result<DateTime<Utc>, StoreError>",
+              "pub fn run<T>(&self, f: impl FnOnce(&Connection) -> Result<T, StoreError>) -> Result<T, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/util.rs",
+            "purpose": "Time text form: `ts` writes RFC 3339 UTC with milliseconds and a Z suffix; `parse_time` reads it and returns StoreError::Invalid on a bad value.",
+            "symbols": [
+              "pub(crate) fn ts(t: DateTime<Utc>) -> String",
+              "pub(crate) fn parse_time(s: &str) -> Result<DateTime<Utc>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/lib.rs",
+            "purpose": "StoreError variants that a read can return: Sqlite, Io, Json (from serde_json::Error), NotFound, Invalid, Locked.",
+            "symbols": [
+              "pub enum StoreError"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "Defines the serialized shapes. SessionEvent is internally tagged with `type` in snake_case. StoredEvent is the read model: seq, at, and event. Both derive Serialize, Deserialize, and ts_rs::TS with #[ts(export)].",
+            "symbols": [
+              "#[serde(tag = \"type\", rename_all = \"snake_case\")] pub enum SessionEvent",
+              "pub struct StoredEvent { pub seq: i64, pub at: chrono::DateTime<chrono::Utc>, pub event: SessionEvent }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "ServerMsg::SessionEvent is the WebSocket frame for a live event. It carries session, seq, at, and event as separate fields rather than a StoredEvent.",
+            "symbols": [
+              "ServerMsg::SessionEvent { session: SessionId, seq: i64, at: DateTime<Utc>, event: SessionEvent }"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "REST read of the log. Route `GET /api/sessions/{id}/events` calls `session_events`, which resolves the workspace for the session and returns `w.db.events_after(&sid, q.after.unwrap_or(0))` as `Json<Vec<StoredEvent>>`, one JSON array in one response.",
+            "symbols": [
+              "async fn session_events(State(app): AppState, Path(id): Path<String>, Query(q): Query<After>) -> Res<Vec<StoredEvent>>",
+              "struct After { after: Option<i64> }",
+              "type Res<T> = Result<Json<T>, ApiErr>",
+              "fn ws_of_session(app: &App, id: &SessionId) -> Result<Arc<WorkspaceRt>, ApiErr>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/ws.rs",
+            "purpose": "Live path. `route` turns EngineNotice::Event into ServerMsg::SessionEvent on channel `session:{id}`; `send` serializes the frame with serde_json::to_string and sends it as a text message.",
+            "symbols": [
+              "fn route(msg: &HubMsg) -> Routed",
+              "async fn send(socket: &mut WebSocket, msg: &ServerMsg) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/app.rs",
+            "purpose": "Opens a workspace, subscribes to the engine's broadcast and forwards each notice to the hub. Also the CLI stop path opens WorkspaceDb directly and calls stop_session_offline (around line 227 to 233)."
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Engine consumers of the read. `Inner::load` reads `db.events(id)` and folds it into SessionState. `Inner::append` stores via `db.append_event`, applies to state, and broadcasts EngineNotice::Event. `stop_session_offline` reads `db.events(session)` for the CLI stop.",
+            "symbols": [
+              "fn load(&self, id: &SessionId) -> Result<Arc<Live>, EngineError>",
+              "fn append(&self, session: &SessionId, event: SessionEvent) -> Result<StoredEvent, EngineError>",
+              "pub enum EngineNotice { Event { session: SessionId, stored: StoredEvent }, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Folds a slice of StoredEvent into SessionState.",
+            "symbols": [
+              "pub fn fold(id: SessionId, events: &[StoredEvent]) -> Self",
+              "pub fn apply(&mut self, stored: &StoredEvent)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/tests/workspace_db.rs",
+            "purpose": "Tests of the read path: `events_are_sequenced_per_session` checks `events` and `events_after`; `concurrent_appends_get_distinct_seqs` checks that 80 appended events read back as seq 1..=80."
+          },
+          {
+            "path": "web/src/api/client.ts",
+            "purpose": "Browser caller of the REST read: `events: (id, after?) => request<StoredEvent[]>(\"GET\", `/api/sessions/${enc(id)}/events${q({ after })}`)`. The StoredEvent type is generated by ts-rs into web/src/api/gen/."
+          },
+          {
+            "path": "docs/architecture/storage.md",
+            "purpose": "Documents the events table and says the payload is the event serialized as JSON (section 'The event log'). A behavior change here must update this page and docs/internals/event-log.md (CLAUDE.md pattern 9)."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the task changes the output format of the events read, read docs/internals/event-log.md and crates/ostra-server/src/main.rs or the CLI module to see where a new command or endpoint would be registered.",
+          "Check crates/ostra-server/tests/e2e.rs and web/src/api tests for assertions on the existing /events JSON shape before changing it. A grep of e2e.rs for `/events` found no matches."
+        ],
+        "not_covered": [
+          "The materialized tables (sessions, executions, gates, decisions, activity, tool_calls) and how they are read; only the events table was covered.",
+          "docs/internals/event-log.md contents; only docs/architecture/storage.md was read, so the docs page that a change here must also update was not reviewed in full.",
+          "Web client handling of the events response (web/src/screens/session/board.ts mergeEvents and the ts-rs generated types).",
+          "The remaining SessionEvent variants and their fields; only the tagging attributes and the first and last variants were read.",
+          "The CLI subcommand layer in ostra-server beyond the offline stop call site in app.rs."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Store read queries use `query_all` with a closure that builds the value from named columns. TEXT columns that hold JSON are read with `r.json(col)`, and times with `r.time(col)`. The events read follows this exactly, so the payload text is deserialized straight into SessionEvent and the `type` column is not read on the way out (it is written only so the column can be inspected or filtered in SQL).",
+            "files": [
+              "crates/ostra-store/src/workspace/events.rs",
+              "crates/ostra-store/src/sqlite.rs"
+            ],
+            "name": "Row to typed value through RowExt",
+            "snippet": {
+              "code": "pub fn after(&self, session: &SessionId, after: i64) -> Result<Vec<StoredEvent>, StoreError> {\n    query_all(\n        self.0,\n        \"SELECT seq, at, payload FROM events WHERE session_id = ?1 AND seq > ?2 ORDER BY seq\",\n        params![session.as_str(), after],\n        |r| {\n            Ok(StoredEvent {\n                seq: r.get(\"seq\")?,\n                at: r.time(\"at\")?,\n                event: r.json(\"payload\")?,\n            })\n        },\n    )\n}",
+              "language": "rust",
+              "source": "crates/ostra-store/src/workspace/events.rs:36"
+            }
+          },
+          {
+            "description": "`append` serializes the event to a serde_json::Value first, reads the `type` tag from it for the `type` column, then stores `payload.to_string()` (compact JSON, no trailing newline). The `at` value is produced by `now()` as RFC 3339 UTC with milliseconds and parsed back to build the returned StoredEvent.",
+            "files": [
+              "crates/ostra-store/src/workspace/events.rs",
+              "crates/ostra-store/src/util.rs"
+            ],
+            "name": "Serialize on write",
+            "snippet": {
+              "code": "let seq = next_seq(self.0, \"events\", \"session_id\", session.as_str())?;\nlet payload = serde_json::to_value(event)?;\nlet kind = payload\n    .get(\"type\")\n    .and_then(|v| v.as_str())\n    .unwrap_or(\"unknown\");\nlet at = now();\nself.0.execute(\n    \"INSERT INTO events (session_id, seq, type, payload, at) VALUES (?1, ?2, ?3, ?4, ?5)\",\n    params![session.as_str(), seq, kind, payload.to_string(), at],\n)?;",
+              "language": "rust",
+              "source": "crates/ostra-store/src/workspace/events.rs:18"
+            }
+          },
+          {
+            "description": "API handlers resolve the workspace from the session id, call the store, and return `Res<T>` which axum serializes with serde. The events endpoint returns the full Vec<StoredEvent> as a single JSON array (Content-Type application/json). No handler in the repo streams newline-delimited JSON.",
+            "files": [
+              "crates/ostra-server/src/api.rs"
+            ],
+            "name": "REST handler returns Json of a core type",
+            "snippet": {
+              "code": "async fn session_events(\n    State(app): AppState,\n    Path(id): Path<String>,\n    Query(q): Query<After>,\n) -> Res<Vec<StoredEvent>> {\n    let sid = SessionId::from(id);\n    let w = ws_of_session(&app, &sid)?;\n    Ok(Json(w.db.events_after(&sid, q.after.unwrap_or(0))?))\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/api.rs:1231"
+            }
+          }
+        ],
+        "problem": "Session events are written as one JSON payload per row in the workspace SQLite database and read back through a single query, then deserialized into StoredEvent values. The same StoredEvent type is serialized to JSON for the REST endpoint and, as a ServerMsg frame, for the WebSocket. This document records the exact read and serialization path so a change to how events are read or emitted (for example a different output format) can be placed correctly.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how stored events are read from the store and serialized. Covers the SQLite events table, the read path in ostra-store, the StoredEvent and SessionEvent serde shapes, and every consumer of that read path (engine load, offline stop, REST, WebSocket). It does not cover the materialized tables, the web client rendering of events, or any export format, because none exists in the repo.",
+        "sources": [],
+        "title": "How stored events are read from the store and serialized"
+      },
+      "submit": {
+        "findings_summary": "Events live in the workspace.db `events` table (session_id, seq, type, payload JSON text, at RFC 3339 text). The only read query is `Events::after` in crates/ostra-store/src/workspace/events.rs. `WorkspaceDb::events` and `events_after` call it. It collects all matching rows into a Vec<StoredEvent> through `query_all`, using `RowExt::json` and `RowExt::time`. SessionEvent is serde-tagged with `type` in snake_case, and StoredEvent is {seq, at, event}. Consumers are the engine (`Inner::load` and offline stop), the REST endpoint `GET /api/sessions/{id}/events?after=N` (one JSON array), and the WebSocket (`ServerMsg::SessionEvent` frames from ws.rs `route` and `send`). The write side and the docs page that describes the format (docs/architecture/storage.md) are also recorded. The repo has no streaming or line-delimited event output: the only .jsonl uses are harness transcript files.",
+        "not_covered": [
+          "Materialized tables (sessions, executions, gates, decisions, activity, tool_calls) and how they are read",
+          "docs/internals/event-log.md contents; only docs/architecture/storage.md was read",
+          "Web client handling of the events response (board.ts mergeEvents and generated TS types)",
+          "The full list of SessionEvent variants and their fields",
+          "CLI subcommand layer in ostra-server beyond the offline stop call site"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How stored session events are read from the SQLite events table and serialized (store, core types, REST, WebSocket, engine consumers); materialized tables, web rendering, and any export format were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

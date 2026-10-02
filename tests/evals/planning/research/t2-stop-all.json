@@ -1,0 +1,470 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:48:55.038794281+00:00",
+  "docs": [
+    {
+      "task": "How the `ostra stop` command stops a session offline, and how the CLI is defined.",
+      "file": "ostra-research-20261002-084721-ostra-stop-offline.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-server",
+          "ostra-engine"
+        ],
+        "asks": [
+          "Explain how `ostra stop` stops a session offline",
+          "Explain how the CLI is defined"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-server/src/main.rs:main",
+            "step": "User runs `ostra stop <session-id>`. `Cli::parse()` yields `Command::Stop { session }`. Before parsing, `main` handles the hidden `sandbox-init` argument and scrubs the startup env."
+          },
+          {
+            "location": "crates/ostra-server/src/main.rs:main",
+            "step": "`main` calls `ostra_server::app::stop_offline(&session)` synchronously (no `block_on`) and prints `Stopped {session}; {n} running executions were cancelled.`"
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:stop_offline",
+            "step": "`stop_offline` bails with a message pointing to the board or `POST /api/sessions/{session}/stop` when `server_running()` is true. `server_running` reads `<data dir>/server.json`, takes `pid`, and checks the process is alive (`kill(pid, 0)`, EPERM counts as alive). A missing or unparsable file or dead pid means not running."
+          },
+          {
+            "location": "crates/ostra-server/src/app.rs:stop_offline",
+            "step": "`open_registry()` opens the registry db (creating the data dir, setting 0600 on the db and its -wal/-shm files on unix). `registry.list_workspaces()` is iterated; for each workspace, `paths::workspace_db(&w.root)` is checked for existence and opened with `WorkspaceDb::open`. The first workspace whose `db.get_session(&id)` is `Some` wins. If none, error `No registered workspace has a session {session}.`"
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:stop_session_offline",
+            "step": "`stop_session_offline(&db, &id)` folds the events. Errors: `NotFound` when the session has no events, `Invalid(\"This session has already ended.\")` when `is_terminal()` (completed or failed). It does not check `paused`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:stop_session_offline",
+            "step": "For each running execution (no result in fold): build `ExecutionResult` Cancelled with error `STOPPED_BY_USER`, copy `usage` and `native_session_id` from `db.get_execution`, call `db.finish_execution` (error ignored), append `ExecutionFinished`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:stop_session_offline",
+            "step": "Append `SessionFailed { error: STOPPED_BY_USER }`, then `db.update_session` sets status Failed, lane Done, and stage_label `Stopped: Stopped by the user.`. Returns the count of cancelled executions."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:recover",
+            "step": "On the next server start, `Engine::recover` folds each session. Because the folded state has `failed` set, `is_terminal()` is true and `ensure_driver` is not called, so the session is not driven again. Executions already finished are not marked Interrupted by `recover`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "clap",
+            "role": "Derive-based CLI parsing (`Parser`, `Subcommand`, `Args`) in main.rs. Version not read from Cargo.toml in this run."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "`WorkspaceDb` (events, get_session, get_execution, finish_execution, append_event, update_session) and `RegistryDb` (list_workspaces)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "`runner::stop_session_offline`, `SessionState::fold`, `SessionEvent`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "`paths::workspace_db`, `paths::data_dir`, `ids::SessionId`, `api::SessionStatus`, `pipeline::Lane`."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-server/src/main.rs",
+            "purpose": "The `ostra` binary entry point. Defines the clap CLI (`Cli`, `ServeArgs`, `SessionsAction`, `Command`) and dispatches each subcommand in `main`. `Command::Stop { session }` calls `ostra_server::app::stop_offline` and prints the count.",
+            "symbols": [
+              "struct Cli { command: Option<Command>, #[command(flatten)] serve: ServeArgs }",
+              "enum Command { Serve(ServeArgs), Hook{args}, McpStdio{args}, Config, Url, Sessions{action: Option<SessionsAction>}, Signout, Stop{session: String} }",
+              "fn main() -> anyhow::Result<()>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/app.rs",
+            "purpose": "Holds `stop_offline`, the CLI-side orchestration: refuse if the server runs, open the registry, find the workspace database containing the session, delegate to the engine. Also `open_registry`.",
+            "symbols": [
+              "pub fn stop_offline(session: &str) -> anyhow::Result<usize>",
+              "pub fn open_registry() -> anyhow::Result<RegistryDb>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "`stop_session_offline` does the actual offline stop against a `WorkspaceDb` with no Engine. Also holds the online `Engine::stop_session`, `Engine::recover` (what the next start would do), and `STOPPED_BY_USER`.",
+            "symbols": [
+              "pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usize, EngineError>",
+              "pub fn stop_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError>",
+              "pub fn recover(&self) -> Result<(), EngineError>",
+              "pub const STOPPED_BY_USER: &str = \"Stopped by the user.\""
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/auth.rs",
+            "purpose": "`server_running` reads `server.json` in the data dir and probes the recorded pid with `kill(pid, 0)` (Windows: OpenProcess and exit code).",
+            "symbols": [
+              "pub fn server_running() -> bool",
+              "fn process_alive(pid: i32) -> bool",
+              "pub fn write_server_file(auth: &Auth) -> anyhow::Result<()>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Session fold helpers used by the stop: `running_executions` (executions with no result) and `is_terminal` (completed or failed set).",
+            "symbols": [
+              "pub fn is_terminal(&self) -> bool  // self.completed.is_some() || self.failed.is_some()",
+              "pub fn running_executions(&self) -> impl Iterator<Item = &ExecRecord>",
+              "pub fn open_gates(&self) -> impl Iterator<Item = &GateRecord>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "The online stop: `POST /api/sessions/{id}/stop` handler calls `Engine::stop_session`.",
+            "symbols": [
+              "async fn stop_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionSummary>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/tests/recover.rs",
+            "purpose": "Test for the offline stop: runs a session, calls `stop_session_offline` on a second DB handle, builds a new Engine, calls `recover`, and asserts no execution re-ran, the execution is Cancelled, and its cost 0.5 is kept."
+          },
+          {
+            "path": "docs/architecture/server.md",
+            "purpose": "Documents `server.json`, why `ostra stop` refuses while the server is alive, and what the offline stop does (lines 80-88). Other pages naming the command: README.md, docs/start/install.md, docs/start/quick-start.md, docs/start/troubleshooting.md."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a change is planned, read `WorkspaceDb::append_event` and `update_session` in ostra-store to confirm transaction behavior.",
+          "Check whether the online `Engine::stop_session` and `stop_session_offline` should stay in step: online appends only `SessionFailed` and relies on cancel tokens to finish executions, offline appends `ExecutionFinished` first."
+        ],
+        "not_covered": [
+          "Whether `update_session` and `append_event` in ostra-store are atomic together; the offline stop issues them as separate calls, so a crash between them was not examined.",
+          "The offline stop does not answer open Permission gates, while the online `Engine::stop_session` sends Deny to their waiters. `Engine::recover` appends a Deny `GateAnswer` for every open Permission gate of every session, terminal or not (runner.rs:194-235), so such gates are closed at the next start. Non-permission open gates were not traced.",
+          "Cargo.toml clap version and features were not read.",
+          "Other subcommands (`hook`, `mcp-stdio`, `sessions`, `url`) bodies beyond the main.rs dispatch."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "`Cli` derives `Parser` with `command: Option<Command>` and flattened `ServeArgs`, so a bare `ostra` runs the server (`None => serve(cli.serve)`) and `ostra serve` runs it too. Each subcommand is a `Command` variant whose doc comment is its `--help` text. `Stop` takes one positional `session: String`. `main` is synchronous, builds a multi-thread tokio runtime, and offline commands (Stop, Config, Sessions, Signout, Url) run without `block_on`, while Hook, McpStdio and Serve use the runtime.",
+            "files": [
+              "crates/ostra-server/src/main.rs"
+            ],
+            "name": "clap derive CLI with optional subcommand and flattened serve args",
+            "snippet": {
+              "code": "    /// Stop a session while the server is not running, so the next start does not recover and\n    /// re-run its executions. With the server running, stop it from its session board instead.\n    Stop {\n        /// Session id, for example s_01a0cdab436570b0b522e10ce263a904.\n        session: String,\n    },\n...\n        Some(Command::Stop { session }) => {\n            let n = ostra_server::app::stop_offline(&session)?;\n            println!(\"Stopped {session}; {n} running executions were cancelled.\");\n            Ok(())\n        }",
+              "language": "rust",
+              "source": "crates/ostra-server/src/main.rs:76"
+            }
+          },
+          {
+            "description": "Every state change is an event (CLAUDE.md pattern 1), and the offline path appends them with `WorkspaceDb::append_event` instead of `Inner::append`, so nothing is folded in memory or broadcast, because no engine is running. The session state is rebuilt from `db.events` with `SessionState::fold`. Offline stop writes, per running execution, `finish_execution` plus an `ExecutionFinished` event with status Cancelled, then one `SessionFailed` event with `STOPPED_BY_USER`, then updates the materialized session row (status Failed, lane Done, stage_label).",
+            "files": [
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Offline stop mirrors the online stop and recovery by appending events directly to the db",
+            "snippet": {
+              "code": "pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usize, EngineError> {\n    let events = db.events(session)?;\n    if events.is_empty() {\n        return Err(EngineError::NotFound(format!(\"session {session}\")));\n    }\n    let st = SessionState::fold(session.clone(), &events);\n    if st.is_terminal() {\n        return Err(EngineError::Invalid(\n            \"This session has already ended.\".into(),\n        ));\n    }\n    let running: Vec<ExecutionId> = st.running_executions().map(|r| r.id.clone()).collect();\n    for id in &running {\n        let mut result = ExecutionResult::with_status(ExecutionStatus::Cancelled);\n        result.error = Some(STOPPED_BY_USER.into());\n        if let Ok(Some(view)) = db.get_execution(id) {\n            result.usage = view.usage;\n            result.native_session_id = view.native_session_id;\n        }\n        let _ = db.finish_execution(id, &result);\n        db.append_event(\n            session,\n            &SessionEvent::ExecutionFinished {\n                id: id.clone(),\n                result,\n            },\n        )?;\n    }\n    db.append_event(\n        session,\n        &SessionEvent::SessionFailed {\n            error: STOPPED_BY_USER.into(),\n        },\n    )?;\n    db.update_session(\n        session,\n        &SessionUpdate {\n            status: Some(ostra_core::api::SessionStatus::Failed),\n            lane: Some(ostra_core::pipeline::Lane::Done),\n            stage_label: Some(format!(\"Stopped: {STOPPED_BY_USER}\")),\n            ..Default::default()\n        },\n    )?;\n    Ok(running.len())\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1186"
+            }
+          }
+        ],
+        "problem": "`ostra stop <session>` ends a session while no server process holds it, so the next server start does not recover the session and re-run its interrupted executions. It bypasses the Engine and writes to the workspace SQLite database directly. The CLI is a single clap derive definition in the `ostra` binary crate.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the `ostra stop` command stops a session offline, and how the CLI is defined. Covers the clap definition in main.rs, the offline stop path in app.rs and runner.rs, the server-running check, the contrast with the online stop, and the existing test and docs. Does not cover other CLI subcommands beyond their place in the same enum.",
+        "sources": [],
+        "title": "ostra stop: offline session stop and CLI definition"
+      },
+      "submit": {
+        "findings_summary": "The CLI is one clap derive definition in crates/ostra-server/src/main.rs: `Cli` has an optional `Command` and flattened `ServeArgs`, and `Stop { session }` is one variant. `main` calls `app::stop_offline`, which refuses if `server.json`'s pid is alive (`auth::server_running`). Otherwise it scans registered workspaces for the one whose db holds the session and calls `runner::stop_session_offline`. That function folds the events and rejects ended sessions. It cancels each running execution, keeping its usage, appends `SessionFailed` with \"Stopped by the user.\", and updates the session row to Failed/Done. On the next start `Engine::recover` sees a terminal session and does not drive it. A test in crates/ostra-engine/tests/recover.rs and docs/architecture/server.md cover this.",
+        "not_covered": [
+          "Atomicity of append_event and update_session in ostra-store during the offline stop",
+          "Non-permission open gates of a session stopped offline",
+          "clap version and features in Cargo.toml",
+          "Bodies of the hook, mcp-stdio, sessions, and url subcommands"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How `ostra stop` stops a session offline and how the clap CLI is defined in ostra-server; other subcommand bodies and ostra-store transaction details were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How the workspace db lists sessions and their statuses.",
+      "file": "ostra-research-20261002-084721-workspace-db-session-listing.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-store",
+          "ostra-core",
+          "ostra-engine",
+          "ostra-workspace",
+          "ostra-server"
+        ],
+        "asks": [
+          "Explain how the workspace db lists sessions.",
+          "Explain how the workspace db represents and returns session statuses."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::append",
+            "step": "An event is appended for a session (user action, execution result, gate answer). `Inner::append` stores it with `db.append_event`, which also touches `sessions.updated_at` in the same transaction."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:summary",
+            "step": "The event is folded into the in-memory `SessionState`, and `view::summary` derives the `SessionSummary`, including `SessionStatus`."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/sessions.rs:Sessions::update",
+            "step": "The derived status, lane, stage label, and other fields are written to the `sessions` row with `WorkspaceDb::update_session` (one UPDATE per set column, inside a transaction). The row is re-read with `get`, then `EngineNotice::SessionUpdated` is broadcast."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/sessions.rs:Sessions::list",
+            "step": "A reader calls `WorkspaceDb::list_sessions`. It locks the connection, reads the workspace id from `meta`, and runs `SELECT {COLS} FROM sessions ORDER BY created_at DESC, id DESC`. `COLS` includes the `open_gates` subquery over `gates`."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/sessions.rs:session",
+            "step": "Each row becomes a `SessionSummary` through `session()`, where `status` is parsed from the stored string with `r.variant(\"status\")`, and `kind` and `projects` are parsed from JSON."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:list_sessions",
+            "step": "The caller uses the full list: the REST handler returns it as JSON; `WorkspaceRt::busy`, `project_busy`, `project_views`, `list_workspaces`, `git::session_in`, and `artifacts::blocked` filter by status; `Engine::recover` loads every session at server start."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Engine::stop_session",
+            "step": "Stopping: `Engine::stop_session` appends `SessionFailed { error: STOPPED_BY_USER }`, which the fold turns into status `Failed` on the row, then cancels each running execution's token and denies open permission gates. The offline path `stop_session_offline` cancels running executions in the db, appends events, and sets status `Failed` and lane `Done` directly."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "rusqlite",
+            "role": "SQLite access; `named_params!`, `params!`, `OptionalExtension`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "`SessionStatus`, `SessionSummary`, `ExecutionStatus`, `Lane`, `Category`, `SessionKind`, ids."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Derives and writes the status column (`view::summary`, `Inner::append`); owns stop, pause, resume, recover."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-workspace",
+            "role": "`WorkspaceRt` reads the list to decide busy state."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-store/src/workspace/mod.rs",
+            "purpose": "Public `WorkspaceDb` facade. `list_sessions` delegates to `Sessions(c).list()` inside `Db::run` (plain locked connection, no transaction). `update_session` runs in `Db::transaction`. `append_event` also calls `Sessions::touch` so `updated_at` moves with each event. `running_executions` lists executions with status `running`.",
+            "symbols": [
+              "pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, StoreError>",
+              "pub fn get_session(&self, id: &SessionId) -> Result<Option<SessionSummary>, StoreError>",
+              "pub fn update_session(&self, id: &SessionId, update: &SessionUpdate) -> Result<SessionSummary, StoreError>",
+              "pub fn create_session(&self, new: &NewSession) -> Result<SessionSummary, StoreError>",
+              "pub fn running_executions(&self) -> Result<Vec<ExecutionView>, StoreError>",
+              "pub fn list_executions(&self, session: &SessionId) -> Result<Vec<ExecutionView>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/sessions.rs",
+            "purpose": "The SQL for the sessions table: insert, per-column update, get, list, row mapping. `COLS` adds a computed `open_gates` subquery (count of gates with no answer). `list` has no WHERE clause and orders `created_at DESC, id DESC`. Insert always writes status `running` and lane `research`.",
+            "symbols": [
+              "pub struct NewSession { id, kind, request, category, projects, yolo }",
+              "pub struct SessionUpdate { request, category, status, lane, stage_label, projects, yolo, cost_usd, title }",
+              "const COLS: &str",
+              "pub fn list(&self) -> Result<Vec<SessionSummary>, StoreError>",
+              "fn session(r: &Row<'_>, ws: &WorkspaceId) -> Result<SessionSummary, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/schema.rs",
+            "purpose": "Migrations. `sessions` has `status TEXT NOT NULL` (the enum name as a snake_case string, no CHECK constraint and no index on it); a later migration adds `title`. `executions` has `status TEXT NOT NULL` with index `executions_status` and index `executions_session`. `gates` supplies the `answer IS NULL` test for open gates.",
+            "symbols": [
+              "pub(crate) const MIGRATIONS: &[&str]"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "DTOs exported to TypeScript: `SessionStatus` (session level) and `SessionSummary` (the row the list returns). `StageStatus` is a separate per-stage enum for board cards.",
+            "symbols": [
+              "pub enum SessionStatus { Running, Waiting, Completed, Failed, Stalled, Paused }",
+              "pub struct SessionSummary { id, workspace, kind, request, category, status, lane, stage_label, yolo, open_gates, projects, cost_usd, created_at, updated_at, title }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "`ExecutionStatus` is the per-execution status that the executions table stores. `is_terminal` is true for everything except `Running`.",
+            "symbols": [
+              "pub enum ExecutionStatus { Running, Ok, Stuck, Handoff, Waiting, Error, Denied, Interrupted, Cancelled }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "`summary` derives `SessionSummary` (including status) from a folded `SessionState`. This is the only place that decides which `SessionStatus` a session has.",
+            "symbols": [
+              "pub fn summary(s: &SessionState, workspace: &WorkspaceId, judge_cost: f64) -> SessionSummary",
+              "pub fn inferred_stage(s: &SessionState) -> (Lane, String)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "`Inner::append` stores the event, folds it, then writes the derived summary to the sessions row via `update_session` and broadcasts `EngineNotice::SessionUpdated`. `Engine::recover` iterates `list_sessions` at server start. `pause_session`, `resume_session`, `stop_session` append events (`SessionPaused`, `SessionResumed`, `SessionFailed`) and return the row through `db.get_session`. `stop_session_offline` writes the Failed status directly when no server runs.",
+            "symbols": [
+              "pub fn recover(&self) -> Result<(), EngineError>",
+              "pub fn pause_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError>",
+              "pub fn resume_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError>",
+              "pub fn stop_session(&self, session: &SessionId) -> Result<SessionSummary, EngineError>",
+              "pub fn cancel_execution(&self, id: &ExecutionId) -> Result<(), EngineError>",
+              "pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usize, EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "`SessionState` fields that drive status: `completed`, `failed`, `paused`, `contained`, open gates, running executions. `is_terminal` is `completed.is_some() || failed.is_some()`.",
+            "symbols": [
+              "pub fn is_terminal(&self) -> bool",
+              "pub fn running_executions(&self) -> impl Iterator<Item = &ExecRecord>"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "`WorkspaceRt` callers that filter the list for live sessions (Running, Waiting, Paused): `project_views` (Initializing state of init sessions), `project_busy`, `busy` (blocks workspace delete).",
+            "symbols": [
+              "pub fn project_views(&self) -> Vec<ProjectView>",
+              "pub fn project_busy(&self, key: &str) -> Result<Option<String>, ostra_store::StoreError>",
+              "pub fn busy(&self) -> Result<Option<String>, ostra_store::StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "REST surface. `GET /api/workspaces/{ws}/sessions` returns `db.list_sessions()` as JSON. `list_workspaces` counts live sessions into `active_sessions`. Session control routes `pause`, `resume`, `stop` (per session) and `/api/executions/{id}/cancel` exist; no route stops all sessions of a workspace.",
+            "symbols": [
+              "async fn list_sessions(State(app): AppState, Path(id): Path<String>) -> Res<Vec<SessionSummary>>",
+              "async fn list_workspaces(State(app): AppState) -> Res<Vec<WorkspaceSummary>>",
+              "async fn stop_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionSummary>",
+              "async fn pause_session(State(app): AppState, Path(id): Path<String>) -> Res<SessionSummary>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/app.rs",
+            "purpose": "`stop_offline` (the `ostra stop <session>` CLI) scans registered workspaces for the session id with `get_session`, then calls `stop_session_offline`. `sweep_session_caches` filters the list for Completed or Failed.",
+            "symbols": [
+              "pub fn stop_offline(session: &str) -> anyhow::Result<usize>",
+              "pub fn sweep_session_caches(app: &App)"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/artifacts.rs",
+            "purpose": "`blocked` filters listed sessions for Running, Waiting, Stalled, or Paused before artifact edits.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-server/src/git.rs",
+            "purpose": "`session_in` filters listed sessions for Running, Waiting, or Paused.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-store/tests/workspace_db.rs",
+            "purpose": "Store tests for the list: `sessions_create_update_list` (newest first, update of status and stage) and `session_title_is_stored`.",
+            "symbols": [
+              "fn sessions_create_update_list",
+              "fn session_title_is_stored"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/tests/recover.rs",
+            "purpose": "Recovery tests including the offline stop of a session (`stop_session_offline`).",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a change must act on all live sessions of a workspace, a research pass could cover the engine's execution registry (`Inner::execs`, cancellation tokens) and `Inner::interrupt`, plus the docs pages for session control."
+        ],
+        "not_covered": [
+          "The web UI that renders the session list (`web/`), including how it consumes `SessionUpdated` notices.",
+          "The `Inner::materialize` step and other tables written inside `Inner::append`.",
+          "Docs pages under `docs/` that describe sessions and statuses.",
+          "The WebSocket/event push path that delivers session updates to the browser.",
+          "Per-session `pause` interrupt mechanics (`Inner::interrupt`) and the `contained` (Rule P3) pause path."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The `sessions` table is a projection. `Inner::append` appends the event, applies it to the in-memory `SessionState`, computes `view::summary`, and writes status, lane, stage label, projects, yolo, cost, category, and title back with `update_session`. Errors from that write are ignored (`let _ =`). The list therefore returns what the last event produced, not a live recomputation. `SessionStatus` is chosen in `view::summary` in this order: completed, failed, paused, waiting (open gates and no running execution), otherwise running. `Stalled` is declared in the enum but no code in `crates` assigns it.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/view.rs"
+            ],
+            "name": "Materialized session row, derived from the fold",
+            "snippet": {
+              "code": "let status = if s.completed.is_some() {\n    SessionStatus::Completed\n} else if s.failed.is_some() {\n    SessionStatus::Failed\n} else if s.paused {\n    SessionStatus::Paused\n} else if open > 0 && running == 0 {\n    SessionStatus::Waiting\n} else {\n    SessionStatus::Running\n};",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/view.rs:33"
+            }
+          },
+          {
+            "description": "The db exposes no status filter. Every caller that needs live sessions calls `list_sessions()` and matches on `Running | Waiting | Paused` (some add `Stalled`; the sweep uses `Completed | Failed`). The set of live statuses is repeated at each site rather than named once.",
+            "files": [
+              "crates/ostra-workspace/src/runtime.rs",
+              "crates/ostra-server/src/api.rs",
+              "crates/ostra-server/src/git.rs",
+              "crates/ostra-server/src/artifacts.rs",
+              "crates/ostra-server/src/app.rs"
+            ],
+            "name": "List everything, filter in the caller",
+            "snippet": {
+              "code": "pub fn busy(&self) -> Result<Option<String>, ostra_store::StoreError> {\n    if let Some(s) = self.db.list_sessions()?.into_iter().find(|s| {\n        matches!(\n            s.status,\n            SessionStatus::Running | SessionStatus::Waiting | SessionStatus::Paused\n        )\n    }) {",
+              "language": "rust",
+              "source": "crates/ostra-workspace/src/runtime.rs:363"
+            }
+          },
+          {
+            "description": "Each table has a `pub(crate) struct X<'c>(pub &'c Connection)` with SQL, and `WorkspaceDb` has one public method per operation that calls it through `self.db.run` (read or single write) or `self.db.transaction` (multi-statement, immediate lock).",
+            "files": [
+              "crates/ostra-store/src/workspace/mod.rs",
+              "crates/ostra-store/src/workspace/sessions.rs"
+            ],
+            "name": "Store module layout: facade method over a per-table struct",
+            "snippet": {
+              "code": "/// Newest first.\npub fn list(&self) -> Result<Vec<SessionSummary>, StoreError> {\n    let ws = Meta(self.0).workspace_id()?;\n    query_all(\n        self.0,\n        &format!(\"SELECT {COLS} FROM sessions ORDER BY created_at DESC, id DESC\"),\n        [],\n        |r| session(r, &ws),\n    )\n}",
+              "language": "rust",
+              "source": "crates/ostra-store/src/workspace/sessions.rs:136"
+            }
+          }
+        ],
+        "problem": "The workspace db keeps one row per session in a materialized `sessions` table and returns the whole table as `Vec<SessionSummary>`, newest first, with no filtering. Callers that need only live sessions fetch every row and filter on `status` in Rust. The status column is a projection of the event-sourced session state that the engine rewrites on every appended event, so the column is only as fresh as the last event.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the workspace db lists sessions and their statuses. Covers the SQLite sessions table, WorkspaceDb::list_sessions, the SessionStatus enum, how the status column is written, and every caller that filters the list by status. It does not cover the web UI, the registry db, or the planner and fold internals beyond the status projection.",
+        "sources": [],
+        "title": "Workspace db session listing and statuses"
+      },
+      "submit": {
+        "findings_summary": "WorkspaceDb::list_sessions runs `SELECT ... FROM sessions ORDER BY created_at DESC, id DESC` with no filter. It computes `open_gates` with a subquery over `gates` and returns `Vec<SessionSummary>`. The `sessions.status` column holds a snake_case `SessionStatus` string. The engine rewrites it on every appended event: `view::summary` derives it from the fold (completed, failed, paused, waiting, else running), and `Inner::append` writes it with `update_session`. `Stalled` is declared but never assigned. Callers such as `WorkspaceRt::busy`, `project_busy`, `project_views`, `list_workspaces`, `git::session_in`, and `artifacts::blocked` fetch all rows and filter on Running, Waiting, and Paused in Rust. Stopping is per session only (`Engine::stop_session`, which appends `SessionFailed`, and `stop_session_offline`). No route stops every session in a workspace.",
+        "not_covered": [
+          "The web UI that renders the session list and consumes SessionUpdated notices",
+          "Inner::materialize and the other tables written during Inner::append",
+          "Docs pages under docs/ that describe sessions and statuses",
+          "The WebSocket push path to the browser",
+          "Inner::interrupt and the Rule P3 containment pause path"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the workspace db lists sessions and stores and returns their statuses, with every caller that filters by status. The web UI, the registry db, and the docs pages were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -2366,6 +2366,17 @@ impl Inner {
         if req.inputs.context_files.contains(&st.session_context_path()) {
             self.write_session_context(session)?;
         }
+        // Rule D4a: rendered for each spawn, so every mark reflects the files as they are now.
+        if req.inputs.wants_code_facts_file() {
+            let path = st.code_facts_path();
+            std::fs::write(
+                &path,
+                ostra_core::doc::render_code_facts(&req.inputs.code_facts),
+            )
+            .map_err(|e| {
+                EngineError::Invalid(format!("Could not write {}: {e}", path.display()))
+            })?;
+        }
         // Rule P2: a run the pause interrupted continues under its own id, where it stopped.
         let paused = req
             .resumes

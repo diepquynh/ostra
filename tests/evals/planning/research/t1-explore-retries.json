@@ -1,0 +1,174 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:41:39.416698304+00:00",
+  "docs": [
+    {
+      "task": "How a failed explore execution is retried before the execution-failed gate opens, which constant sets it, and which other stages share it.",
+      "file": "ostra-research-20261002-083945-explore-retries.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine"
+        ],
+        "asks": [
+          "How a failed explore execution is retried before the execution-failed gate opens",
+          "Which constant sets the retry limit",
+          "Which other stages share that constant"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/plan.rs:explore_tasks",
+            "step": "The planner spawns an explore for a task with no exec (Rule M1). `on_started` sets `t.exec`, `t.running = true`, and `t.failed = None`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::on_finished",
+            "step": "The execution ends with status Error. `on_finished` sets `running = false`. `t.retries` is 0 and below `ERROR_RETRIES` (1), so `retries` becomes 1 and `exec` becomes None."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:explore_tasks",
+            "step": "The next planner pass sees `exec.is_none() && !abandoned && failed.is_none()` and spawns a fresh explore for the same task. The task text carries `s.added_context()` again."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::on_finished",
+            "step": "If the retry also ends in Error, `retries` (1) is not below `ERROR_RETRIES`, so `failed` is set to the `missing_submit` message. `exec` still points at the second execution."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:exec_failed_gate",
+            "step": "The planner's second branch calls `exec_failed_gate`. It opens `GatePayload::ExecutionFailed { execution, agent, project, error }`, titled `explore failed` (or `You stopped explore` if the user stopped it). An error starting with `harness-` opens `HarnessFailure` instead. An `Ask`-origin task opens no gate."
+          },
+          {
+            "location": "crates/ostra-engine/src/judge_input.rs:yolo_plan",
+            "step": "Under YOLO, `yolo_plan` answers retry when fewer than 2 earlier answered ExecutionFailed gates exist for the same agent, and abandon from the third. A user-stopped execution is left open (`yolo_leaves_open`)."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::exec_gate_answered",
+            "step": "`exec_gate_answered` with retry resets `failed`, `exec`, and `retries`, so the cycle restarts. With abandon it sets `abandoned`, which counts the task as finished."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core (ExecutionStatus, GatePayload::ExecutionFailed, ExploreSubmit)",
+            "role": "Status values and gate payload the fold and planner use."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Defines ERROR_RETRIES and holds every fold rule that counts retries: ExploreTask.retries, on_finished for Explore, and the same constant in the Epa, loop, init, spec/plan artifact and fact-check paths. exec_gate_answered resets the explore counter when the user answers retry.",
+            "symbols": [
+              "pub const ERROR_RETRIES: u32 = 1;",
+              "pub struct ExploreTask { pub exec: Option<ExecutionId>, pub running: bool, pub result: Option<ExploreSubmit>, pub failed: Option<String>, pub abandoned: bool, pub retries: u32, pub judged: bool, pub gate: Option<GateId>, .. }",
+              "fn on_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult)",
+              "fn on_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose, loop_key: Option<(u32, bool)>, resumed: bool)",
+              "fn exec_gate_answered(&mut self, execution: &ExecutionId, retry: bool)",
+              "fn artifact_error<T>(t: &mut ArtifactTrack<T>, status: ExecutionStatus, msg: String)",
+              "fn fact_finished<T>(t: &mut ArtifactTrack<T>, exec: &ExecutionId, status: ExecutionStatus, result: Option<FactCheckSubmit>, failed_msg: String)",
+              "fn init_finished(&mut self, id: &ExecutionId, mode: ostra_core::InitializerMode, item: Option<String>, status: ExecutionStatus, result: &ExecutionResult, error: String)",
+              "fn loop_finished(&mut self, key: (u32, bool), rec: &ExecRecord, result: &ExecutionResult)",
+              "fn stage_run<T>(status: ExecutionStatus, submit: Option<T>, exec: &ExecutionId, error: String) -> StageRun<T>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Pure planner. explore_tasks respawns a task whose exec is None and opens the gate once failed is set. exec_failed_gate builds the ExecutionFailed or HarnessFailure gate.",
+            "symbols": [
+              "fn explore_tasks(&mut self)",
+              "fn exec_failed_gate(&mut self, exec: &ExecutionId, agent: AgentName, project: &str, error: &str)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "yolo_plan: under YOLO the ExecutionFailed gate is answered retry for the first two prior answered gates of the same agent, then abandon.",
+            "symbols": [
+              "GatePayload::ExecutionFailed { execution, .. } arm in yolo_plan (lines 1017-1031)"
+            ]
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Documents the retry once rule for research tasks (line 118) and lists ERROR_RETRIES in the limits table (line 841).",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the retry limit changes, update the fold sites listed in the Constant users table below and docs/internals/pipeline.md lines 118 and 841, and add a conformance fixture (project rule 3).",
+          "Check the Epa retry counter (see Constant users) if its behavior matters to the spec."
+        ],
+        "not_covered": [
+          "The runner's execution lifecycle (how Error statuses are produced) in crates/ostra-engine/src/runner.rs.",
+          "Advisor flow for init steps (Rule O5) and loop_fix_finished / loop_advice_finished / advice_finished retry handling, which were not read.",
+          "Whether tests assert the explore retry: no test in tests/conformance/main.rs or crates/ostra-engine/tests matched retry or ExecutionFailed searches, so a fixture may be missing."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The fold decides the retry; the planner only sees the result. On an Error status with `retries < ERROR_RETRIES`, the task's `retries` is incremented and `exec` is set to None. `explore_tasks` in plan.rs spawns any task with `exec.is_none() && !abandoned && failed.is_none()`, so the next planner pass starts a new execution for it (a new execution id). When the budget is spent, `failed` is set from `missing_submit(status, &error, result)` and the planner's second branch opens the gate through `exec_failed_gate`. Only status Error is retried. Interrupted clears `exec` without counting. Cancelled, Stuck, Handoff, or an Ok status with no parseable submit goes straight to `failed`. Unlike the work loops, the explore branch does not exclude `harness-` errors from the retry; a harness error is retried once, and after that `exec_failed_gate` opens HarnessFailure instead of ExecutionFailed.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Explore retry: counter on the task, exec cleared, planner respawns",
+            "snippet": {
+              "code": "match (status, parsed) {\n    (ExecutionStatus::Ok, Some(sub)) => t.result = Some(sub),\n    (ExecutionStatus::Interrupted, _) => t.exec = None,\n    (_, _) => {\n        if t.retries < ERROR_RETRIES && status == ExecutionStatus::Error {\n            t.retries += 1;\n            t.exec = None;\n        } else {\n            t.failed = Some(missing_submit(status, &error, result));\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:3356"
+            }
+          },
+          {
+            "description": "First branch respawns a task with no exec (Rule M1, fan-out). Second branch opens the gate when `failed` is set, no gate is open, an exec exists, the task is not abandoned, and the origin is not `Ask` (Rule H3: a helper's failure is its asker's answer, not a gate). `exec_failed_gate` turns an error starting with `harness-` into a HarnessFailure gate instead of ExecutionFailed.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Planner respawn and gate branches for explore",
+            "snippet": {
+              "code": "fn explore_tasks(&mut self) {\n    let s = self.s;\n    for t in &s.explore {\n        if t.exec.is_none() && !t.abandoned && t.failed.is_none() {\n            // Rule M1: read-only stages fan out; every ready explore spawns at once.\n            let inputs = SpawnInputs {\n                task: Some(format!(\"{}{}\", t.task, s.added_context())),\n                ..Default::default()\n            };\n            self.spawn(\n                AgentName::Explore,\n                ExploreRef(t.idx).purpose(),\n                &t.project,\n                s.project_session_dir(&t.project),\n                inputs,\n            );\n        } else if let (Some(err), None, Some(exec), false, false) = (\n            &t.failed,\n            &t.gate,\n            &t.exec,\n            t.abandoned,\n            // Rule H3: a helper's failure is its asker's answer, not a gate.\n            matches!(t.origin, ExploreOrigin::Ask { .. }),\n        ) {\n            self.exec_failed_gate(exec, AgentName::Explore, &t.project, err);\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:684"
+            }
+          },
+          {
+            "description": "Answering the ExecutionFailed gate with retry clears `failed` and `exec` and sets `retries = 0`, so the task gets a fresh automatic retry. Answering abandon sets `abandoned`.",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Gate answer resets the explore budget",
+            "snippet": {
+              "code": "ExecPurpose::Explore { task } => {\n    if let Some(t) = self.explore.get_mut(*task as usize) {\n        t.gate = None;\n        if retry {\n            t.failed = None;\n            t.exec = None;\n            t.retries = 0;\n        } else {\n            t.abandoned = true;\n        }\n    }\n    ..\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:4304"
+            }
+          },
+          {
+            "description": "`pub const ERROR_RETRIES: u32 = 1;` at state.rs:41 (doc comment: automatic retries of an execution that ended in an error, before a gate). Each stage keeps its own counter, so the budget is per stage and per item, not shared as a pool. Readers of the constant:\n\n1. **Explore** (state.rs:3360): `ExploreTask.retries`, per research task, reset to 0 by a retry gate answer.\n2. **Epa** (state.rs:3454): `ExecutionStatus::Error if retries < ERROR_RETRIES => EpaState::NotStarted`, else `EpaState::Failed { retries: retries + 1, .. }`. Code observation, not run: `retries` is read from `p.epa` only when it is already `Failed`, but `on_started` (state.rs:3279) sets it to `Running`, so at finish the value is 0 and an Error appears to always return to `NotStarted`.\n3. **Implement, test and review work loops** (state.rs:3602, `loop_finished`): `LoopState.error_retries`; the retry is skipped when the error starts with `harness-`. Reset to 0 after a review result (3634) and on a retry gate answer (4286). Next step becomes `WorkKind::Rerun`; otherwise `LoopNext::Failed`.\n4. **Spec and plan generation** (state.rs:4823, `artifact_error`): `ArtifactTrack.error_retries`, sets `needs_run = true`. Reset on success (3402, 3420) and in `exec_retry`.\n5. **Spec and plan fact-check** (state.rs:4874, `fact_finished`): same `error_retries` counter on the track, retried on Error; reset on a valid result (4858).\n6. **Init steps** (state.rs:4537, `init_finished`): `InitTrack.retries` map keyed `mode:item`; Error retried once, Interrupted reset without counting.\n\nStages that do not read it: **QuickAnswer** sets `quick.failed` on any non-Ok status with no retry (3492). **Docs and Architecture** use `stage_run` (state.rs:1062), which builds `StageRun::Failed { retries: 1, .. }` with a literal 1 and so fails to the gate without an automatic retry. Advisor and unblock paths (`loop_advice_finished`, `advice_finished`, `loop_fix_finished`) were not read. docs/internals/pipeline.md:118 documents the explore case and line 841 lists the constant in the limits table.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "docs/internals/pipeline.md"
+            ],
+            "name": "Constant users: every stage that reads ERROR_RETRIES (state.rs)"
+          }
+        ],
+        "problem": "A failed explore execution must not open a user-facing gate on the first error. The engine gives it one automatic retry, then sets a failed message that the planner turns into an ExecutionFailed gate. The retry limit is a single engine-wide constant that several other stages also read, each with its own counter.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how a failed explore execution is retried before the execution-failed gate opens, which constant sets it, and which other stages share it. Covers the fold (state.rs), the planner rules that respawn and open the gate (plan.rs), and the YOLO answer to that gate (judge_input.rs). It does not cover the runner's execution lifecycle, the web UI, or the advisor flow for init steps beyond the retry count.",
+        "sources": [],
+        "title": "Explore execution retry before the execution-failed gate"
+      },
+      "submit": {
+        "findings_summary": "`ERROR_RETRIES: u32 = 1` (crates/ostra-engine/src/state.rs:41) allows one automatic retry. On an Error status, `on_finished` increments `ExploreTask.retries` and clears `exec`, and `plan.rs:explore_tasks` then spawns a fresh execution for the same task. A second Error sets `failed`, and the planner opens an ExecutionFailed gate through `exec_failed_gate`; `harness-` errors open HarnessFailure instead, and `Ask`-origin helpers get no gate. Interrupted is not counted, and a retry gate answer resets the counter to 0. The same constant is read by Epa, the implement/test/review loops, spec and plan generation, spec and plan fact-check, and init steps, each with its own counter. QuickAnswer, Docs and Architecture do not retry automatically. The Epa counter appears never to advance, because `on_started` overwrites the state it is read from.",
+        "not_covered": [
+          "Runner execution lifecycle (how Error statuses are produced) in crates/ostra-engine/src/runner.rs",
+          "Advisor and unblock retry paths (loop_fix_finished, loop_advice_finished, advice_finished) for init and loops",
+          "Whether a conformance fixture or runner test covers the explore retry; none matched searches"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How a failed explore execution is retried before the ExecutionFailed gate opens, the constant that sets it, and the other stages that read it; the runner lifecycle and advisor flows were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,646 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:45:42.574563431+00:00",
+  "docs": [
+    {
+      "task": "How the native loop counts tool calls and accumulates usage for a run.",
+      "file": "ostra-research-20261002-084307-native-loop-usage.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-exec-native",
+          "ostra-core (exec.rs)",
+          "ostra-engine (runner.rs EngineHost)",
+          "ostra-store (executions usage, costs)"
+        ],
+        "asks": [
+          "Explain how the native loop counts tool calls",
+          "Explain how the native loop accumulates usage for a run"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:NativeExecutor::run",
+            "step": "NativeExecutor::run creates `usage = Arc<Mutex<Usage::default()>>` and moves a clone into `Run`. It races `run.execute()` against cancel and a timeout of spec.timeout_secs; on cancel or timeout it cancels the inner token, waits CLEANUP_GRACE, and returns a result with `usage = *usage.lock()`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute, Run::compact",
+            "step": "execute loops up to MAX_TURNS. Each iteration builds a ChatRequest and, if the estimated context reaches COMPACT_AT of the window and the last message is a user turn, calls compact, which calls add_usage(&out.usage, vec![]) so compaction cost joins the total as a Turn with no call ids."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "After each provider response, `usage = resp.usage; usage.context_tokens = context_of(&usage)` (input + cache read + cache write + output). `call_ids` are the ids of every tool_use block in the response, including the submit call. add_usage is called, so this happens before the response's tool calls run."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::add_usage",
+            "step": "add_usage emits ExecutionDelta::Turn { usage: this response's own usage, call_ids }, then adds into the shared total under the lock and emits ExecutionDelta::Usage { usage: snapshot of the total }. The snapshot may already include tool_calls from earlier turns."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "Stop-reason handling: PauseTurn, MaxTokens without tools, and a no-tool reply before the reminder all `continue` the loop. Refusal returns self.fail. A second no-tool reply ends with Ok and `usage = *self.usage.lock()`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::run_tools",
+            "step": "run_tools walks the calls in order. A call named submit_name goes to submit (not counted; on success the remaining calls get a 'Not run' result and the run returns TurnEnd::Submitted). Consecutive read-only tools (is_concurrent) run together with join_all, so their increments interleave under the mutex. Coordination tools run one by one, and every other tool runs one by one."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::tool_end",
+            "step": "tool_end increments tool_calls first. After execution, for a Bash call whose command is_build_command against the profile's configured build and test commands, it adds out.duration_ms to build_ms. It then emits ToolResult with duration_ms (this per-call duration is not added to Usage)."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::fail, Run::execute",
+            "step": "On return from execute, the result carries `usage = *self.usage.lock()`: the sum of all responses and compactions plus the tool_calls and build_ms counters. Failure paths (`fail`, cancelled) copy the same mutex."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:EngineHost::emit",
+            "step": "EngineHost::emit receives each delta. For Usage it computes usage_base + run total (usage_base is Usage::default() for a fresh execution and the stored row's usage when resuming a paused one), writes it with update_execution_usage, recomputes the session's cost as the sum of all executions' cost_usd plus the judge cost, and sends SessionUpdated. Every delta, including Turn, is appended to the activity log through append_activity."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs (around line 2719), crates/ostra-store/src/workspace/costs.rs:cost_row",
+            "step": "After executor.run returns, the engine computes `usage_base + result.usage` and stores it with finish_execution. Cost reports then sum Usage per group and derive cache_reads_per_tool_call from tool_calls."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Usage, ExecutionDelta, ExecutionHost, ExecutionResult"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-providers",
+            "role": "Provides ChatResponse.usage per response (tokens, cost_usd) and compact() usage; provider usage always has tool_calls = 0 as far as the loop relies on it"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "execute() returns out.duration_ms used for build_ms, and the tool outcome"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "policy.check on each call; is_build_command classifies Bash commands for build_ms"
+          },
+          {
+            "kind": "external",
+            "name": "parking_lot",
+            "role": "Mutex around the shared Usage"
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "The native agent loop. Owns the run-wide usage accumulator (Run.usage), add_usage (per-response accumulation), tool_end (tool_calls and build_ms increments), run_tools (dispatch order), submit (does not count), compact (adds compaction usage), and the final result assembly.",
+            "symbols": [
+              "struct Run { usage: Arc<Mutex<Usage>>, host: Arc<dyn ExecutionHost>, .. }",
+              "fn add_usage(&self, u: &Usage, call_ids: Vec<String>)",
+              "async fn execute(self) -> ExecutionResult",
+              "async fn compact(&self, provider: &dyn Provider, req: ChatRequest, tokens: u64, window: u64) -> Result<Option<Vec<Message>>, ProviderError>",
+              "async fn run_tools(&self, resp: &ChatResponse, policy: &ExecutionPolicy, env: &ToolEnv, submit_name: &str) -> TurnEnd",
+              "fn submit(&self, id: &str, name: &str, input: &Value, policy: &ExecutionPolicy) -> Result<(Block, ExecutionStatus), Block>",
+              "async fn tool_end(&self, id: &str, name: &str, input: &Value, policy: &ExecutionPolicy, env: &ToolEnv) -> (Block, RunEnd)",
+              "fn context_of(u: &Usage) -> u64",
+              "fn is_concurrent(name: &str) -> bool",
+              "const MAX_TURNS"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "Defines Usage (fields, add merge rule), ExecutionDelta::Usage (running total) and ExecutionDelta::Turn (one response's own usage plus its call ids), and the ExecutionHost trait.",
+            "symbols": [
+              "pub struct Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, cost_usd: f64, tool_calls: u64, build_ms: u64, context_tokens: u64 }",
+              "pub fn add(&mut self, other: &Usage)",
+              "ExecutionDelta::Usage { usage: Usage }",
+              "ExecutionDelta::Turn { usage: Usage, call_ids: Vec<String> }",
+              "ExecutionDelta::ToolCall { call_id: String, call: ToolCall }",
+              "ExecutionDelta::ToolResult { call_id, output, is_error, duration_ms }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "EngineHost::emit rebases Usage deltas on usage_base (nonzero only for resumed executions), persists live usage, and refreshes the session cost; the run function adds usage_base to the executor's final result.usage before finish_execution.",
+            "symbols": [
+              "impl ExecutionHost for EngineHost { fn emit(&self, delta: ExecutionDelta) }",
+              "usage_base: Usage",
+              "let mut usage = usage_base; usage.add(&result.usage); result.usage = usage;"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/mod.rs",
+            "purpose": "update_execution_usage writes the live usage row while an execution runs.",
+            "symbols": [
+              "pub fn update_execution_usage(&self, id: &ExecutionId, usage: &Usage) -> Result<(), StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/costs.rs",
+            "purpose": "Sums Usage across executions per group and derives cache_reads_per_tool_call from cache_read_tokens / tool_calls, so the native count feeds a reported metric.",
+            "symbols": [
+              "fn cost_row(key: String, executions: u32, usage: Usage) -> CostRow"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/tests.rs",
+            "purpose": "Existing tests that pin the counting and accumulation behavior: tool_calls == 3 for Read, a denied Write, and Report (submit not counted); Turn deltas carry per-response cost and call ids and precede the ToolCall deltas.",
+            "symbols": [
+              "async fn each_response_reports_its_own_cost_before_its_tool_calls()"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If per-tool-call usage attribution is wanted, a pass over how the web and store layers read Turn deltas, and over the provider usage-parsing code, would settle where a per-call figure could be recorded."
+        ],
+        "not_covered": [
+          "How the harness executors count tool calls (crates/ostra-exec-harness/src/live.rs, usage_watch.rs, outcome.rs), which differ: they take max(usage.tool_calls, state.tool_calls).",
+          "How ostra-providers fill ChatResponse.usage and cost_usd, and whether any provider sets tool_calls.",
+          "How the web UI consumes Turn and Usage deltas (web/src), and how activity rows for Turn deltas are stored and read back in ostra-store.",
+          "Whether anything reads per-call usage from the Turn call_ids; the only consumers found in crates/ are the delta definition, the emitter, and one native test."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Run.usage is a single Arc<Mutex<Usage>> created in NativeExecutor::run and cloned into Run. Writer 1 is add_usage, called once per model response (and once per compaction) with the provider's usage. Writer 2 is tool_end, which bumps tool_calls and, for build and test Bash commands, build_ms. Every exit path of execute reads the same mutex into ExecutionResult.usage. On timeout or cancel, NativeExecutor::run reads the mutex after a CLEANUP_GRACE wait, so partial usage survives.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "One shared Usage, two writers",
+            "snippet": {
+              "code": "fn add_usage(&self, u: &Usage, call_ids: Vec<String>) {\n    self.host.emit(ExecutionDelta::Turn {\n        usage: *u,\n        call_ids,\n    });\n    let snapshot = {\n        let mut total = self.usage.lock();\n        total.add(u);\n        *total\n    };\n    self.host.emit(ExecutionDelta::Usage { usage: snapshot });\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:377"
+            }
+          },
+          {
+            "description": "tool_end emits ExecutionDelta::ToolCall and increments tool_calls immediately, before the invalid-JSON check, the policy check, the permission ask, and execution. A call that is denied by policy, denied by the user, or has invalid JSON is therefore still counted. The submit tool goes through the separate submit method, which emits ToolCall but never increments tool_calls, so a run's count excludes its final submit call. Coordination tools (SubagentAsk and the like) go through coord_tool -> tool_end and are counted.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Tool call counted at the start of tool_end, before any validation",
+            "snippet": {
+              "code": "let call = env.canonical_call(&ToolCall::new(name, input.clone()));\nself.host.emit(ExecutionDelta::ToolCall {\n    call_id: id.into(),\n    call: call.clone(),\n});\nself.usage.lock().tool_calls += 1;",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:938"
+            }
+          },
+          {
+            "description": "All numeric fields are summed (tokens, cost_usd, tool_calls, build_ms). context_tokens is the exception: it is overwritten by the other value only when that value is nonzero, because it is the latest request's context size, not a total.",
+            "files": [
+              "crates/ostra-core/src/exec.rs"
+            ],
+            "name": "Usage::add merge rule",
+            "snippet": {
+              "code": "pub fn add(&mut self, other: &Usage) {\n    self.input_tokens += other.input_tokens;\n    self.output_tokens += other.output_tokens;\n    self.cache_read_tokens += other.cache_read_tokens;\n    self.cache_write_tokens += other.cache_write_tokens;\n    self.cache_write_1h_tokens += other.cache_write_1h_tokens;\n    self.cost_usd += other.cost_usd;\n    self.tool_calls += other.tool_calls;\n    self.build_ms += other.build_ms;\n    if other.context_tokens > 0 {\n        self.context_tokens = other.context_tokens;\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/exec.rs:58"
+            }
+          }
+        ],
+        "problem": "The native loop keeps one run-wide Usage behind an Arc<Mutex<_>>. Token and cost figures arrive per model response and are added in; the tool_calls figure is incremented separately, one call at a time, inside the tool executor. The per-response (Turn) usage and the run total therefore carry different information: a Turn delta has tool_calls always 0 but lists call ids, while the running total has tool_calls but no per-call attribution.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the native loop counts tool calls and accumulates usage for a run. Covers crates/ostra-exec-native/src/lib.rs, the Usage type in ostra-core, and the engine and store code that receives the native loop's usage deltas and final result. Does not cover the harness executors' counting (only noted for contrast), provider-side usage parsing and cost computation in ostra-providers, or the web UI's rendering of Turn and Usage deltas.",
+        "sources": [],
+        "title": "Native loop tool-call counting and usage accumulation"
+      },
+      "submit": {
+        "findings_summary": "The native loop keeps one Arc<Mutex<Usage>> in Run. add_usage runs once per model response and once per compaction. It emits a Turn delta (that response's own usage and its tool call ids) and then a Usage delta (the running total). tool_calls is incremented at the top of tool_end, before the JSON, policy and permission checks, so denied calls count. The submit call goes through a separate method and is not counted. build_ms is added in tool_end for Bash build and test commands. EngineHost::emit rebases Usage deltas on usage_base (nonzero only for resumed executions) and persists them. After the run, the engine adds usage_base to the executor's result.usage before finish_execution.",
+        "not_covered": [
+          "How the harness executors count tool calls (crates/ostra-exec-harness live.rs, usage_watch.rs, outcome.rs)",
+          "How ostra-providers fill ChatResponse.usage and cost_usd",
+          "How the web UI and the activity store read Turn and Usage deltas, and whether anything uses Turn call_ids"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the native loop (ostra-exec-native) counts tool calls and accumulates usage, plus how the engine and store receive it; harness executors, provider usage parsing and web rendering were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How an execution's usage reaches the store and the execution detail API, including the exported TypeScript types.",
+      "file": "ostra-research-20261002-084307-execution-usage-flow.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (exec, api, pricing)",
+          "ostra-engine (runner, view)",
+          "ostra-store (workspace)",
+          "ostra-exec-native",
+          "ostra-exec-harness",
+          "ostra-server (api, ws)",
+          "web (api/gen, lib/events)"
+        ],
+        "asks": [
+          "How an execution's usage reaches the store",
+          "How it reaches the execution detail API",
+          "Which TypeScript types are exported for it"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:add_usage",
+            "step": "Native executor: after each provider response, `usage = resp.usage` with `context_tokens = context_of(&usage)` (cost already computed by the provider client via `pricing::cost`). `add_usage` emits `Turn { usage, call_ids }`, adds the response to the shared running total, and emits `Usage { usage: total }`. Tool calls bump `total.tool_calls`; Bash build/test commands add `duration_ms` to `total.build_ms`."
+          },
+          {
+            "location": "crates/ostra-exec-harness/src/usage_watch.rs:follow",
+            "step": "Harness executor (Claude Code, Codex, Grok; not Antigravity): `usage_watch::follow` watches the CLI session file, builds `Usage` from `TranscriptReader::facts()`, replaces `tool_calls` with the live hook count, and emits `ExecutionDelta::Usage` when the value changed. No `Turn` delta is emitted by harness runs."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:EngineHost::emit",
+            "step": "`EngineHost::emit` receives the delta. For `Usage` it adds `usage_base` (zero for a new run, the stored usage for a resumed one, Rule P2), then `WorkspaceDb::update_execution_usage` -> `Executions::set_usage` overwrites `executions.usage` (JSON) and `executions.cost_usd`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:EngineHost::emit",
+            "step": "Same call: re-sums `cost_usd` of all session executions plus judge cost into `sessions.cost_usd` and sends `EngineNotice::SessionUpdated`; then `append_activity` stores the delta (Usage and Turn alike) as JSON in `activity` and `EngineNotice::Delta` goes to WebSocket clients (`ws.rs`)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:2716-2745",
+            "step": "Run end: `executor.run` returns `ExecutionResult` with its own final usage (native: `*usage.lock()`; harness: `outcome::result` using the transcript facts). The runner computes `usage_base + result.usage`, calls `finish_execution` (writes `usage`, `cost_usd`, `status`, `submit`, `final_text`, `ended_at`), and appends `SessionEvent::ExecutionFinished { id, result }` to the event log. The fold keeps the result; `spent_usd` sums its `cost_usd` for the budget gate."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:212, 1201",
+            "step": "Crash and stop paths: `recover` and `stop_session_offline` read the stored view (`get_execution`) and put `view.usage` into the synthesized `ExecutionResult`, so usage stored by earlier deltas survives."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:get_execution",
+            "step": "Detail API: `GET /api/executions/{id}` -> `get_execution` -> `Engine::execution` -> `WorkspaceDb::get_execution` -> `Executions::get` -> `execution()` row mapper (`usage: r.json(\"usage\")?`). The engine then sets `has_terminal` and, for session executions, `view::decorate` fills the fold-derived fields; the handler ORs in `harness.has_terminal`. `usage` goes out unchanged as `ExecutionView.usage`. Cancel, skip, steer, withdraw, resume, and inspect return the same view."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:activity",
+            "step": "Activity API: `GET /api/executions/{id}/activity?after=N` returns the stored `ActivityItem`s, which include every `usage` and `turn` delta; the browser folds them with `applyDelta` in `web/src/lib/events.ts`, which is where per-turn cost and an even per-call share of it appear."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/costs.rs:Costs::report",
+            "step": "Cost report: `Costs::report` selects `usage` JSON of executions since a time, groups by session, stage, agent, executor with `Usage::add`, and returns `CostReport` of `CostRow { key, executions, usage, cache_reads_per_tool_call }`."
+          },
+          {
+            "location": "web/src/api/gen/Usage.ts",
+            "step": "TypeScript: ts-rs derives `Usage`, `ExecutionView`, `ExecutionResult`, `ExecutionDelta`, `CostRow`, `CostReport` into `web/src/api/gen/*.ts`; `web/src/api/types.ts` re-exports them; `web/src/api/client.ts` and the screens consume them."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "Derives `TS` and writes generated types to `TS_RS_EXPORT_DIR` (`web/src/api/gen`); version pinned in the workspace Cargo.toml, not read in this pass."
+          },
+          {
+            "kind": "external",
+            "name": "serde / serde_json",
+            "role": "Usage is stored as JSON text in SQLite and in activity rows; `#[serde(default)]` on `Usage` lets old JSON load after a field is added."
+          },
+          {
+            "kind": "external",
+            "name": "rusqlite",
+            "role": "SQLite access in `ostra-store` (`named_params!`, `params!`)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns `Usage`, `ExecutionDelta`, `ExecutionResult`, `ExecutionView`, `CostRow`, and `pricing::cost`; has no internal dependencies."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "Persists usage in `executions` and deltas in `activity`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "`EngineHost::emit` and the run-end code in `runner.rs` are the only writers of execution usage."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-native / ostra-exec-harness",
+            "role": "Produce usage through `ExecutionHost::emit` and `ExecutionResult`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "Serves `ExecutionView` and activity over REST and WebSocket."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "Defines `Usage` (the aggregate), `ExecutionResult.usage`, and the `ExecutionDelta` variants `Usage` (running total) and `Turn` (one model response with its tool call ids). All are `#[ts(export)]`.",
+            "symbols": [
+              "#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)] #[serde(default)] #[ts(export)] pub struct Usage { input_tokens: u64, output_tokens: u64, cache_read_tokens: u64, cache_write_tokens: u64, cache_write_1h_tokens: u64, cost_usd: f64, tool_calls: u64, build_ms: u64, context_tokens: u64 }",
+              "impl Usage { pub fn add(&mut self, other: &Usage) }",
+              "pub struct ExecutionResult { status, submit, final_text, usage: Usage, native_session_id, error }",
+              "ExecutionDelta::Usage { usage: Usage }",
+              "ExecutionDelta::Turn { usage: Usage, call_ids: Vec<String> }",
+              "ExecutionDelta::ToolResult { call_id, output, is_error, duration_ms }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "`ExecutionView` is the execution detail DTO and carries `usage: Usage` (line 850). `CostRow` and `CostReport` carry `usage: Usage` too (lines 1318-1337). Header comment says the file is exported to `web/src/api/gen/` by ts-rs.",
+            "symbols": [
+              "pub struct ExecutionView { id, session, agent, purpose, stage, project, executor, model, status, started_at, ended_at, usage: Usage, report_path, native_session_id, spawn_block, error, can_resume, can_skip, can_steer, queued_steer, has_terminal, group, spans_session, run_label, stream, summary, has_transcript, pending_gate, repo_root }",
+              "pub struct CostRow { key: String, executions: u32, usage: Usage, cache_reads_per_tool_call: f64 }",
+              "pub struct CostReport { since, by_session, by_stage, by_agent, by_executor, total: CostRow }",
+              "pub struct ActivityItem { seq, at, delta: ExecutionDelta }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/pricing.rs",
+            "purpose": "Computes `Usage.cost_usd` from tokens. Reads the token fields of `Usage`; sets nothing else.",
+            "symbols": [
+              "pub fn cost(model: &str, usage: &Usage, web_searches: u64) -> f64"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native loop. Keeps `usage: Arc<Mutex<Usage>>`. Per model response it sets `context_tokens`, emits `Turn` then `Usage` (running total). Increments `tool_calls` per tool call (line 943) and adds Bash build/test wall time to `build_ms` (line 1008). Sets `result.usage = *self.usage.lock()` on every return path.",
+            "symbols": [
+              "fn add_usage(&self, u: &Usage, call_ids: Vec<String>)",
+              "fn context_of(u: &Usage) -> u64",
+              "self.usage.lock().tool_calls += 1",
+              "self.usage.lock().build_ms += out.duration_ms"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/usage_watch.rs",
+            "purpose": "Harness live usage. `follow` watches the CLI session file, reads `reader.facts().usage`, overwrites `tool_calls` with `live.snapshot().tool_calls`, and emits `ExecutionDelta::Usage` when it changed. Antigravity (`Agy`) returns at once and reports nothing.",
+            "symbols": [
+              "pub async fn follow(harness: HarnessKind, home: PathBuf, live: Arc<LiveExecution>, host: Arc<dyn ExecutionHost>, stop: CancellationToken)"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/transcript.rs",
+            "purpose": "Parses each CLI's session file into `Usage` (tokens and cost per Claude message id, Codex running totals, Grok per-turn cost). Builds `Usage { .. }` literals at lines 108, 164, 173, 201.",
+            "symbols": [
+              "pub fn facts(...)",
+              "TranscriptReader::poll",
+              "TranscriptReader::facts"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-harness/src/outcome.rs",
+            "purpose": "Builds the harness `ExecutionResult` at the end of a run: `usage = facts.usage` from the transcript, with `tool_calls = max(transcript, live state)`.",
+            "symbols": [
+              "pub fn result(end: End, harness: HarnessKind, agent_submit: &str, state: &LiveState, screen: &str, home: &Path, sandbox_mode: Option<SandboxMode>) -> ExecutionResult"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "`EngineHost::emit` is the one place a delta becomes stored usage: adds `usage_base` (resume baseline) to a `Usage` delta, calls `update_execution_usage`, recomputes the session cost, appends the delta to `activity`, and broadcasts `EngineNotice::Delta`. After `executor.run` returns, the result usage is `usage_base + result.usage`, stored by `finish_execution`, and the `ExecutionFinished` event carries the same result. Recovery paths copy the stored view usage into a synthesized result.",
+            "symbols": [
+              "pub struct EngineHost { inner, session, execution, repo_root, usage_base: Usage, slot }",
+              "fn emit(&self, delta: ExecutionDelta)  // runner.rs:2975",
+              "let usage_base = if paused.is_some() { ... self.db.reopen_execution(&id)?.usage } else { ... Usage::default() }  // runner.rs:2622-2667",
+              "let mut usage = usage_base; usage.add(&result.usage); result.usage = usage;  // runner.rs:2719-2721",
+              "pub fn execution(&self, id: &ExecutionId) -> Result<ExecutionView, EngineError>  // runner.rs:3150",
+              "pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId)  // runner.rs:1186, copies view.usage into the result"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "`decorate` fills the non-stored `ExecutionView` fields (run_label, has_transcript, repo_root, can_skip, can_steer, queued_steer, pending_gate). It does not touch `usage`. `execution_groups` and other builders sum `e.usage.cost_usd`.",
+            "symbols": [
+              "pub fn decorate(s: &SessionState, labels: &HashMap<ExecutionId, String>, e: &mut ExecutionView)",
+              "pub fn execution_groups(executions: &[ExecutionView]) -> Vec<ExecutionGroupView>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "The fold holds each execution's `ExecutionResult` from `SessionEvent::ExecutionFinished`; `spent_usd` sums `r.usage.cost_usd` for finished executions (line 1347) and feeds the budget gate.",
+            "symbols": [
+              "pub fn spent_usd(&self) -> f64"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "`SessionEvent::ExecutionFinished { id: ExecutionId, result: ExecutionResult }` writes the final usage into the event log (the session's source of truth).",
+            "symbols": [
+              "SessionEvent::ExecutionFinished { id, result }"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/schema.rs",
+            "purpose": "Migration 1 creates `executions` with `usage TEXT NOT NULL` (JSON of `Usage`) and `cost_usd REAL NOT NULL DEFAULT 0` (denormalized for SQL sums), and the `activity` table (execution_id, seq, delta TEXT, at). Further migrations follow in the same `MIGRATIONS` array, tracked by `user_version`.",
+            "symbols": [
+              "pub(crate) const MIGRATIONS: &[&str]"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/executions.rs",
+            "purpose": "SQL for the `executions` table. `insert` writes `Usage::default()` JSON and `cost_usd = 0`. `finish` and `set_usage` write `serde_json::to_string(usage)` and `usage.cost_usd`. `execution()` row mapper reads `usage` back with `r.json(\"usage\")?` into `ExecutionView.usage`.",
+            "symbols": [
+              "const COLS: &str = \"id, session_id, agent, purpose, stage, project, executor, model, status, started_at, ended_at, usage, report_path, native_session_id, spawn_block, error, summary\"",
+              "pub fn finish(&self, id: &ExecutionId, result: &ExecutionResult) -> Result<bool, StoreError>",
+              "pub fn set_usage(&self, id: &ExecutionId, usage: &Usage) -> Result<(), StoreError>",
+              "pub fn get(&self, id: &ExecutionId) -> Result<Option<ExecutionView>, StoreError>",
+              "fn execution(r: &Row<'_>) -> Result<ExecutionView, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/mod.rs",
+            "purpose": "`WorkspaceDb` facade over the executions and activity tables.",
+            "symbols": [
+              "pub fn update_execution_usage(&self, id: &ExecutionId, usage: &Usage) -> Result<(), StoreError>",
+              "pub fn finish_execution(&self, id: &ExecutionId, result: &ExecutionResult) -> Result<ExecutionView, StoreError>",
+              "pub fn reopen_execution(&self, id: &ExecutionId) -> Result<ExecutionView, StoreError>",
+              "pub fn get_execution(&self, id: &ExecutionId) -> Result<Option<ExecutionView>, StoreError>",
+              "pub fn append_activity(...)",
+              "pub fn activity_after(...)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/activity.rs",
+            "purpose": "Stores every `ExecutionDelta` (including `Usage` and `Turn`) as JSON in `activity`, with a per-execution `seq`, and returns `ActivityItem`s after a seq.",
+            "symbols": [
+              "Activity::append",
+              "Activity::after"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/costs.rs",
+            "purpose": "Cost report: selects `usage` JSON of every execution since a time, groups by session, stage, agent, executor, and sums with `Usage::add`. `cost_row` derives `cache_reads_per_tool_call` from `tool_calls`. No per-tool grouping exists.",
+            "symbols": [
+              "Costs::report(&self, since: Option<DateTime<Utc>>) -> Result<CostReport, StoreError>",
+              "fn cost_row(key: String, executions: u32, usage: Usage) -> CostRow"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "Routes: `GET /api/executions/{id}` -> `get_execution`, `GET /api/executions/{id}/activity` -> `activity`; `cancel`, `skip`, `steer`, `withdraw_steer`, `resume`, `inspect` return `ExecutionView` from `w.engine.execution(&eid)`.",
+            "symbols": [
+              "async fn get_execution(State(app): AppState, Path(id): Path<String>) -> Res<ExecutionView>  // api.rs:1334",
+              "async fn activity(State(app): AppState, Path(id): Path<String>, Query(q): Query<After>) -> Res<Vec<ActivityItem>>  // api.rs:1342"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/ws.rs",
+            "purpose": "Forwards `EngineNotice::Delta { execution, item }` (usage and turn deltas included) and `EngineNotice::ExecutionStatus` to WebSocket subscribers; the ExecutionView itself is not pushed per usage change.",
+            "symbols": [
+              "EngineNotice::Delta",
+              "EngineNotice::ExecutionStatus"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/Usage.ts",
+            "purpose": "Generated TS for `Usage`. All fields are `number`. Regenerated by `cargo test -p ostra-core`; never edited by hand.",
+            "symbols": [
+              "export type Usage = { input_tokens: number, output_tokens: number, cache_read_tokens: number, cache_write_tokens: number, cache_write_1h_tokens: number, cost_usd: number, tool_calls: number, build_ms: number, context_tokens: number, }"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/ExecutionView.ts",
+            "purpose": "Generated TS for `ExecutionView`; imports `Usage` and has `usage: Usage`.",
+            "symbols": [
+              "export type ExecutionView = { ..., usage: Usage, ... }"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/ExecutionDelta.ts",
+            "purpose": "Generated tagged union on `kind`, including `{ \"kind\": \"usage\", usage: Usage }` and `{ \"kind\": \"turn\", usage: Usage, call_ids: Array<string> }`.",
+            "symbols": [
+              "export type ExecutionDelta"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/ExecutionResult.ts",
+            "purpose": "Generated TS for `ExecutionResult` (`usage: Usage`).",
+            "symbols": [
+              "export type ExecutionResult"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/CostRow.ts",
+            "purpose": "Generated TS for `CostRow` (`usage: Usage`); `CostReport.ts` sits beside it.",
+            "symbols": [
+              "export type CostRow"
+            ]
+          },
+          {
+            "path": "web/src/api/types.ts",
+            "purpose": "Barrel that re-exports every generated type with `export type * from \"./gen/<Name>\"`; `Usage` at line 226, `ExecutionDelta` at line 89, `ExecutionView` at line 92. A new exported Rust type needs a matching line here to be importable through `types.ts`.",
+            "symbols": [
+              "export type * from \"./gen/Usage\"",
+              "export type * from \"./gen/ExecutionView\"",
+              "export type * from \"./gen/ExecutionDelta\""
+            ]
+          },
+          {
+            "path": "web/src/lib/events.ts",
+            "purpose": "Folds activity deltas into `ActivityState`. `usage` delta replaces `state.usage`. `turn` delta sets a `TurnCost` on the latest thinking entry and sets `pending = { ids: call_ids, share: cost / calls }`; each later `tool_call` in `pending.ids` gets `cost: pending.share`, an even split of the response cost. This is the only per-tool cost today, computed in the browser.",
+            "symbols": [
+              "export type ToolEntry",
+              "export type TurnCost = { cost: number; calls: number }",
+              "export type ActivityState",
+              "export function applyDelta(state: ActivityState, seq: number, delta: ExecutionDelta): ActivityState"
+            ]
+          },
+          {
+            "path": "web/src/mobile/screens/MExecution.tsx",
+            "purpose": "Reads `act.usage ?? e.usage`: live usage from the activity fold, falling back to the view (line 140). `web/src/screens/ExecutionScreen.tsx` also reads usage.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/executors.md",
+            "purpose": "Docs section `### Usage and cost` (line 508) describes harness usage_watch behavior. Per CLAUDE.md pattern 9, a behavior change updates the matching docs page; `docs/internals/spend-and-limits.md` documents `pricing::cost`.",
+            "symbols": []
+          },
+          {
+            "path": ".cargo/config.toml",
+            "purpose": "Sets `TS_RS_EXPORT_DIR = { value = \"web/src/api/gen\", relative = true }`, which is why `cargo test -p ostra-core` writes the generated files into `web/src/api/gen/`.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If usage is to be broken down by tool, a pass should read the provider response types and `ostra-tools::execute` to see what per-call data (duration, output size) is available at the point `tool_calls` is incremented in `ostra-exec-native/src/lib.rs`, and the harness hook path in `live.rs` for harness runs.",
+          "A pass over the web consumers of `ExecutionView.usage` and `CostRow.usage` would list what `npm run typecheck` could break after a type change."
+        ],
+        "not_covered": [
+          "Provider clients (`crates/ostra-providers/src/anthropic.rs`, `openai.rs`) that fill `Response.usage` and call `pricing::cost`: only their `Usage` struct literal at openai.rs:238 was noted.",
+          "Judge and advisor usage (`Services` returns `(Value, Usage)`; the runner adds judge cost to `judge_cost` per session): not traced beyond the lines found.",
+          "Web screens that render usage (`ExecutionScreen.tsx`, `MExecution.tsx`, `CostScreen.tsx`, `costTable.ts`, mock fixtures under `web/src/api/mock/`): only listed, not read, apart from `web/src/lib/events.ts`.",
+          "Existing tests that build `Usage` literals (`crates/ostra-store/tests/workspace_db.rs`, `crates/ostra-engine/tests/{runner,recover,pause}.rs`, `crates/ostra-engine/src/view.rs:1332`, `crates/ostra-core/src/pricing.rs:341`): located but not read for whether they use `..Default::default()`.",
+          "The harness hook bridge and `LiveExecution` that count `tool_calls` for harness runs (`crates/ostra-exec-harness/src/live.rs`)."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Executors never write the store. They call `host.emit(ExecutionDelta::Usage { usage })` with their own running total counted from zero. `EngineHost::emit` adds the resume baseline `usage_base`, persists the sum to `executions.usage` and `cost_usd`, refreshes the session cost, appends the delta to `activity`, and broadcasts it. The final `ExecutionResult.usage` gets the same `usage_base` added before `finish_execution`.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-exec-native/src/lib.rs",
+              "crates/ostra-exec-harness/src/usage_watch.rs"
+            ],
+            "name": "Executor reports cumulative usage through ExecutionHost::emit; the engine stores it",
+            "snippet": {
+              "code": "        let delta = match delta {\n            ExecutionDelta::Usage { usage: run } => {\n                let mut usage = self.usage_base;\n                usage.add(&run);\n                ExecutionDelta::Usage { usage }\n            }\n            other => other,\n        };\n        if let ExecutionDelta::Usage { usage } = &delta {\n            let _ = self.inner.db.update_execution_usage(&self.execution, usage);\n            // Keep the session list's cost current while executions run, not only when they end.\n            if let Some(session) = &self.session\n                && let Ok(execs) = self.inner.db.list_executions(session)\n            {\n                let judge = lock(&self.inner.judge_cost)\n                    .get(session)\n                    .copied()\n                    .unwrap_or(0.0);\n                let cost = execs.iter().map(|e| e.usage.cost_usd).sum::<f64>() + judge;\n                if let Ok(summary) = self.inner.db.update_session(\n                    session,\n                    &SessionUpdate {\n                        cost_usd: Some(cost),\n                        ..Default::default()\n                    },\n                ) {\n                    let _ = self.inner.tx.send(EngineNotice::SessionUpdated { summary });\n                }\n            }\n        }\n        if let Ok(item) = self.inner.db.append_activity(&self.execution, &delta) {\n            let _ = self.inner.tx.send(EngineNotice::Delta {\n                execution: self.execution.clone(),\n                item,\n            });\n        }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2990"
+            }
+          },
+          {
+            "description": "The whole `Usage` struct is serialized into `executions.usage` (TEXT NOT NULL) and read back with `RowExt::json`; only `cost_usd` is also kept in its own SQL column for sums. `Usage` has `#[serde(default)]`, so a JSON row written before a new field existed still deserializes (missing numbers become 0). The cost report and session views read the JSON, not columns, so a field added to `Usage` flows into `CostRow.usage` and `ExecutionView.usage` with no migration.",
+            "files": [
+              "crates/ostra-store/src/workspace/executions.rs",
+              "crates/ostra-store/src/workspace/costs.rs",
+              "crates/ostra-store/src/workspace/schema.rs"
+            ],
+            "name": "Usage stored as a JSON column plus a denormalized cost column",
+            "snippet": {
+              "code": "    pub fn set_usage(&self, id: &ExecutionId, usage: &Usage) -> Result<(), StoreError> {\n        self.0.execute(\n            \"UPDATE executions SET usage = ?1, cost_usd = ?2 WHERE id = ?3\",\n            params![serde_json::to_string(usage)?, usage.cost_usd, id.as_str()],\n        )?;\n        Ok(())\n    }",
+              "language": "rust",
+              "source": "crates/ostra-store/src/workspace/executions.rs:101"
+            }
+          },
+          {
+            "description": "`add_usage` emits the response's own usage as `Turn` (with the ids of the tool calls it made), then folds it into the running total and emits `Usage`. Counters that do not come from the provider (`tool_calls`, `build_ms`) are mutated directly on the shared total when a tool call runs, so they reach the store with the next `Usage` delta or with the final result.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Native executor accumulates a per-execution Usage under a mutex and emits Turn then Usage per model response",
+            "snippet": {
+              "code": "    fn add_usage(&self, u: &Usage, call_ids: Vec<String>) {\n        self.host.emit(ExecutionDelta::Turn {\n            usage: *u,\n            call_ids,\n        });\n        let snapshot = {\n            let mut total = self.usage.lock();\n            total.add(u);\n            *total\n        };\n        self.host.emit(ExecutionDelta::Usage { usage: snapshot });\n    }",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:377"
+            }
+          },
+          {
+            "description": "Types in ostra-core carry `#[ts(export)]`; `cargo test -p ostra-core` regenerates `web/src/api/gen/*.ts` (target dir from `.cargo/config.toml`). `web/src/api/types.ts` re-exports each generated file by name. Per CLAUDE.md, then run `cd web && npm run typecheck` and fix only what breaks. `Usage` already uses the pattern with doc comments that ts-rs copies into the generated file.",
+            "files": [
+              "crates/ostra-core/src/exec.rs",
+              "web/src/api/gen/Usage.ts",
+              "web/src/api/types.ts",
+              ".cargo/config.toml"
+            ],
+            "name": "API type change: #[ts(export)] on the Rust type, regenerate, typecheck",
+            "snippet": {
+              "code": "#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS, Default)]\n#[serde(default)]\n#[ts(export)]\npub struct Usage {\n    pub input_tokens: u64,\n    pub output_tokens: u64,\n    pub cache_read_tokens: u64,\n    /// Every cache write, 5-minute and 1-hour TTL together.\n    pub cache_write_tokens: u64,\n    /// The part of `cache_write_tokens` written with the 1-hour TTL, which costs more.\n    pub cache_write_1h_tokens: u64,\n    pub cost_usd: f64,\n    pub tool_calls: u64,\n    /// Wall time spent in build and test commands, for the build-loop metric.\n    pub build_ms: u64,\n    /// Size of the latest request's context: its prompt plus its output, which the next request\n    /// sends again. The latest value, not a sum.\n    pub context_tokens: u64,\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/exec.rs:38"
+            }
+          }
+        ],
+        "problem": "An execution's usage is one aggregate `Usage` struct per execution. It is built by an executor, passed to the engine through `ExecutionDelta::Usage` and `ExecutionResult.usage`, stored as a JSON column on the `executions` row, and served as `ExecutionView.usage`. Per-model-response usage exists only as `ExecutionDelta::Turn` rows in the `activity` table, with tool calls tied to a turn by id only. Nothing in the stored or served usage is broken down by tool. A change to the usage shape has to follow this whole chain, and `Usage` is `Copy` and built with struct literals in several crates.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how an execution's usage reaches the store and the execution detail API, including the exported TypeScript types. Covers the Rust path from the executors to the `executions` table and `GET /api/executions/{id}`, the activity log that carries usage deltas, the cost report, and the generated TS types plus the web code that reads them. It does not design any change, and it does not cover the web UI screens beyond naming which files read usage.",
+        "sources": [],
+        "title": "Execution usage: from executor to store, execution detail API, and TypeScript types"
+      },
+      "submit": {
+        "findings_summary": "Usage is a single aggregate `ostra_core::exec::Usage`. Native and harness executors report it through `ExecutionHost::emit` as `ExecutionDelta::Usage` and in the final `ExecutionResult.usage`. `EngineHost::emit` in `runner.rs` adds the resume baseline `usage_base`, writes it to `executions.usage` (JSON) and `cost_usd`, and appends the delta to `activity`. At run end `finish_execution` stores the final result and `SessionEvent::ExecutionFinished` logs it. `GET /api/executions/{id}` returns `ExecutionView.usage` read straight from the JSON column, and `view::decorate` does not touch it. `Usage`, `ExecutionView`, `ExecutionDelta`, `ExecutionResult`, `CostRow` and `CostReport` are `#[ts(export)]` and regenerate into `web/src/api/gen/`, re-exported by `web/src/api/types.ts`. No breakdown by tool exists in the stored or served data. `ExecutionDelta::Turn` (usage plus call ids) lives only in `activity`, and the browser splits a turn's cost evenly across its calls in `web/src/lib/events.ts`. `Usage` is `Copy` and built as struct literals across crates, so a non-Copy field would break it.",
+        "not_covered": [
+          "Provider clients (ostra-providers anthropic.rs and openai.rs) that fill Response.usage and call pricing::cost",
+          "Judge and advisor usage (Services returns (Value, Usage); judge_cost per session)",
+          "Web screens that render usage (ExecutionScreen.tsx, MExecution.tsx, CostScreen.tsx, costTable.ts, mock fixtures)",
+          "Existing tests that build Usage struct literals, not checked for ..Default::default()",
+          "Harness LiveExecution and hook bridge that count tool_calls for harness runs (ostra-exec-harness live.rs)"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How an execution's usage travels from the executors to the `executions` table, `GET /api/executions/{id}`, the activity log, the cost report, and the generated TypeScript types. It does not design a change and does not cover the web screens that render usage.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

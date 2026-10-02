@@ -19,7 +19,7 @@ agent definitions from disk and a user cannot swap one out by editing a file.
 | `explore` | Research | advanced | Researches one task and writes one research document. It is the only pipeline agent that searches the web, and every external page it relies on is cited by URL and date. It reports findings, never requirements. |
 | `generate-spec` | Spec | advanced | Reads every research document for the request and writes one spec: requirements in EARS notation with Given/When/Then criteria, grouped into ordered deliverables. It states what to build, never how. A new codebase gets a new project key in it, which Ostra creates only after the plan is approved. |
 | `fact-check` | Fact-check | advanced | Checks a spec or a plan for claims that would break the implementer and for external facts that no longer trace to a cited page. It runs after every spec and every plan, and Ostra refuses approval without a recorded `PASS`. |
-| `plan` | Plan | advanced | Turns an approved spec into a master plan plus one file per phase. Each step names an exact path, an action, the skills to load, and a verification command. It reads the spec and nothing else. It lists a new project the spec names in `new_projects`. |
+| `plan` | Plan | advanced | Turns an approved spec into a master plan plus one file per phase. Each step names an exact path, an action, the skills to load, and a verification command. It takes every requirement from the spec and reads no research document, only the code facts Ostra extracts from them. It lists a new project the spec names in `new_projects`. |
 | `implementer` | Build | balanced | Writes the code for one plan phase, one review fix, one inline change, or the fix for a stuck run the user sent it to (rule O8), and verifies each step with the project's build command. It never writes tests. |
 | `code-reviewer` | Review | balanced | Reviews the unstaged changes of one review loop against the project's rule set and the phase's requirements, and runs a security scan whose BLOCKER findings no instruction can override. |
 | `execution-path-analyzer` | Test | balanced | Plans how a phase is verified. It traces every path through the functions the phase changed (branches, early returns, error paths, boundaries), the system flows that reach them (from a route, a CLI command, a screen, a job, or a consumer of a changed contract), and the existing tests that cover them, and gives each check a test level from the project's test types. `write-test` turns each path and flow into one test. |
@@ -150,13 +150,16 @@ Every agent, and every initializer mode, has its own spawn struct in `crates/ost
 Required parameters are plain fields and optional ones are `Option`:
 
 ```rust
-/// Rule D4, Hard rule 16: the plan agent gets the spec and nothing else. The only other inputs are
-/// the fact-check findings of a re-pass (Rule D5) and the master plan being revised.
+/// Rule D4, Hard rule 16: the plan agent gets the spec and no research document. Its other inputs
+/// are the code facts file (Rule D4a), and on a re-spawn the fact-check findings (Rule D5), the
+/// phases they name (Rule D4b), and the master plan being revised.
 pub struct PlanParams {
     pub common: Common,
     pub spec_file: PathBuf,
     pub projects_in_scope: Vec<(String, PathBuf)>,
+    pub code_facts: Option<PathBuf>,
     pub findings: Option<String>,
+    pub phases_to_revise: Vec<u32>,
     pub master_plan: Option<PathBuf>,
 }
 ```
@@ -166,9 +169,11 @@ from, the same contract was a JSON file checked by a hook at spawn time, so a mi
 failed run. Here it surfaces as a build error.
 
 The struct also enforces what an agent must *not* see. `PlanParams` has no field for research documents,
-because Rule D4 says the plan is built from the approved spec alone. Research that did not make it into the
-spec cannot leak into the plan, since there is nowhere to put it. `FactCheckParams` carries research documents
-only on a spec target, for the same reason (Rule D5).
+because Rule D4 says the plan takes its requirements from the approved spec alone. A requirement that did not make
+it into the spec cannot leak into the plan, since there is nowhere to put it. What research found about the code
+arrives as `code_facts`, a file the engine writes with files, symbols, patterns, and flows, and no request text
+(Rule D4a). `FactCheckParams` carries research documents only on a spec target, for the same reason (Rule D5),
+and the code facts file on a plan target.
 
 A few shapes recur:
 
@@ -601,6 +606,7 @@ checked live by `harness_probe wake`: the agent asks twice, and must submit both
 | The coordination prompt section | `assets/coordination.md` |
 | Coordination evals | `tests/evals/coordination.toml`, `crates/ostra-server/tests/coordination_evals.rs` |
 | Test stage evals | `tests/evals/test_stage.toml`, `tests/evals/test_stage/`, `crates/ostra-server/tests/test_stage_evals.rs` |
+| Planning evals | `tests/evals/planning.toml`, `tests/evals/planning/research/`, `crates/ostra-server/tests/planning_evals.rs` |
 | Report file names | `crates/ostra-core/src/paths.rs` (`report`) |
 | Submit handling, native | `crates/ostra-exec-native/src/lib.rs` |
 | Submit handling, harness | `crates/ostra-exec-harness/src/bridge.rs`, `live.rs` |

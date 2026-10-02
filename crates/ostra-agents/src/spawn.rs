@@ -166,6 +166,14 @@ impl Block {
         }
     }
 
+    fn changed(&mut self, value: Option<&[String]>) {
+        match value {
+            Some([]) => self.line("Changed since research", "none"),
+            Some(lines) => self.list("Changed since research", lines),
+            None => {}
+        }
+    }
+
     fn common(&mut self, c: &Common) {
         self.path("Workspace root", &c.workspace_root);
         self.path("Repo root", &c.repo_root);
@@ -246,6 +254,8 @@ pub struct GenerateSpecParams {
     pub new_research_docs: Vec<PathBuf>,
     /// Requirement changes from the user that the spec does not reflect yet.
     pub requirement_changes: Vec<String>,
+    /// Rule D2a: the cited files that changed since their research document; empty is `none`.
+    pub changed_since_research: Option<Vec<String>>,
     pub extra: Extras,
 }
 
@@ -260,16 +270,23 @@ pub struct FactCheckParams {
     pub source_check: SourceCheck,
     /// Research documents, on a spec target only (Rule D5 withholds them from a plan target).
     pub research_docs: Vec<PathBuf>,
+    /// Rule D2a, on a spec target: the cited files that changed since their research document.
+    pub changed_since_research: Option<Vec<String>>,
+    /// Rule D4a, on a plan target: the engine-written code facts file.
+    pub code_facts: Option<PathBuf>,
 }
 
-/// Rule D4, Hard rule 16: the plan agent gets the spec and nothing else. The only other inputs are
-/// the fact-check findings of a re-pass (Rule D5) and the master plan being revised.
+/// Rule D4, Hard rule 16: the plan agent gets the spec and no research document. Its other inputs
+/// are the code facts file (Rule D4a), and on a re-spawn the fact-check findings (Rule D5), the
+/// phases they name (Rule D4b), and the master plan being revised.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlanParams {
     pub common: Common,
     pub spec_file: PathBuf,
     pub projects_in_scope: Vec<(String, PathBuf)>,
+    pub code_facts: Option<PathBuf>,
     pub findings: Option<String>,
+    pub phases_to_revise: Vec<u32>,
     pub master_plan: Option<PathBuf>,
 }
 
@@ -433,6 +450,7 @@ impl SpawnParams for GenerateSpecParams {
         b.opt_path("Spec file", self.spec_file.as_deref());
         b.paths("New research docs", &self.new_research_docs);
         b.list("Requirement changes", &self.requirement_changes);
+        b.changed(self.changed_since_research.as_deref());
         b.extras(&self.extra);
         b.finish()
     }
@@ -457,6 +475,8 @@ impl SpawnParams for FactCheckParams {
         b.line("Source check", self.source_check.as_str());
         b.common(&self.common);
         b.paths("Research docs", &self.research_docs);
+        b.changed(self.changed_since_research.as_deref());
+        b.opt_path("Code facts", self.code_facts.as_deref());
         b.finish()
     }
     fn to_json(&self) -> Value {
@@ -476,7 +496,12 @@ impl SpawnParams for PlanParams {
         b.path("Spec file", &self.spec_file);
         b.common(&self.common);
         b.scope(&self.projects_in_scope);
+        b.opt_path("Code facts", self.code_facts.as_deref());
         b.opt("Findings", self.findings.as_deref());
+        if !self.phases_to_revise.is_empty() {
+            let ids: Vec<String> = self.phases_to_revise.iter().map(u32::to_string).collect();
+            b.line("Phases to revise", &ids.join(", "));
+        }
         b.opt_path("Master plan", self.master_plan.as_deref());
         b.finish()
     }

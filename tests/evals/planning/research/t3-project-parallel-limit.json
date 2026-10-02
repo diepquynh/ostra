@@ -1,0 +1,466 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:57:01.502321064+00:00",
+  "docs": [
+    {
+      "task": "How the runner's slot limiter caps concurrent executions per workspace.",
+      "file": "ostra-research-20261002-085456-slot-limiter.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine",
+          "ostra-core",
+          "ostra-workspace"
+        ],
+        "asks": [
+          "Explain how the runner's slot limiter caps concurrent executions per workspace."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::drive",
+            "step": "The planner returns `Step::Spawn(req)` steps from the session's fold. `drive` inserts each step key into `Live.inflight` and spawns a tokio task per new key."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::perform",
+            "step": "`perform` matches `Step::Spawn(req)` and calls `perform_spawn`. This is the only caller of `perform_spawn`. `Step::Judge` goes to `perform_judge` and takes no slot."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::acquire_slot",
+            "step": "`perform_spawn` first awaits `acquire_slot()`. The loop re-reads `limits.max_parallel_executions` from the live workspace settings, compares it with `slots`, and either increments and returns a `Slot` or waits up to 2 s for `slot_free` and retries. No event is appended while it waits (none is appended in `acquire_slot` or before it in `perform_spawn`)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::perform_spawn",
+            "step": "With the slot held, `perform_spawn` snapshots the session. If the session is terminal or paused, or the explore task was abandoned while waiting (Rule U1), it returns `Ok(())` and the local `slot` drops, freeing the count with nothing started."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::perform_spawn",
+            "step": "Otherwise it records the execution as running, creates the `EngineHost` with `slot: Mutex::new(Some(slot))`, and awaits `executor.run(spec, host.clone(), token)`. The slot is held for the whole run, for native and harness executors alike."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:EngineHost::wait_for_wake",
+            "step": "A harness run that asks another subagent calls `EngineHost::wait_for_wake`, which drops its slot, awaits its message, then calls `acquire_slot` again and stores the new slot (Rule H2)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Slot::drop",
+            "step": "After the run, `perform_spawn` appends `ExecutionFinished` (and a `SecurityBlock` if a review set one), then `drop(lock(&host.slot).take())` releases the slot. `Slot::drop` decrements `slots` and calls `slot_free.notify_waiters()`, waking waiting spawns, which also poll every 2 s."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "tokio::sync::Notify and tokio::time::timeout",
+            "role": "Wake waiting spawns when a slot frees, with a 2-second fallback poll. Version not read from Cargo.toml in this run."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core Limits and WorkspaceSettings",
+            "role": "Source of `max_parallel_executions` (u32, default 3), read through `Services::workspace()` on every acquire loop iteration."
+          },
+          {
+            "kind": "internal",
+            "name": "Services trait (ostra-engine)",
+            "role": "`self.services.workspace()` returns current workspace settings, so the limit is never cached in the engine."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Holds the limiter: the `slots` counter and `slot_free` notifier on `Inner` (lines 102-104), the `Slot` guard (115-125), `acquire_slot` (2320-2339), its caller `perform_spawn` (2350, slot taken at 2355, moved into `EngineHost.slot` at 2684, released at 2762), and `EngineHost::wait_for_wake` (3129-3146) which releases and re-acquires the slot for Rule H2. Also `drive` (1573-1610), which spawns one tokio task per planner step.",
+            "symbols": [
+              "struct Inner { ... slots: Mutex<usize>, slot_free: Notify, ... }",
+              "struct Slot(Arc<Inner>);",
+              "impl Drop for Slot { fn drop(&mut self) }",
+              "async fn acquire_slot(self: &Arc<Self>) -> Slot",
+              "async fn perform_spawn(self: &Arc<Self>, session: &SessionId, req: SpawnRequest) -> Result<(), EngineError>",
+              "pub struct EngineHost { ... slot: Mutex<Option<Slot>> }",
+              "async fn wait_for_wake(&self) -> Option<Wake>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Defines the setting: `Limits.max_parallel_executions: u32` with default 3 (line 662), its settings-key listing (905), and save-time validation that rejects 0 (1424-1428).",
+            "symbols": [
+              "pub struct Limits { pub max_parallel_executions: u32, pub session_budget_usd: f64 }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/tests/runner.rs",
+            "purpose": "The only test touching the limiter: sets `ws.limits.max_parallel_executions = 1` (line 509) in `subagents_wake_each_other_and_pair_loops_continue_conversations` to prove an asking harness run frees its slot while it waits (Rule H2). No test asserts that N+1 executions queue.",
+            "symbols": [
+              "async fn subagents_wake_each_other_and_pair_loops_continue_conversations()"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "Builds exactly one `Engine` per workspace (`Engine::new(root, id, db, services)` at line 103). Because the counter lives on the engine, this is what makes the limit per workspace.",
+            "symbols": [
+              "Engine::new(root.to_path_buf(), id.clone(), db.clone(), services)"
+            ]
+          },
+          {
+            "path": "docs/internals/spend-and-limits.md",
+            "purpose": "User-facing documentation of the limiter (section 'Parallel executions: the slot limiter'): what holds a slot, what does not, release semantics, and live re-reading of the limit."
+          },
+          {
+            "path": "docs/internals/workspaces.md",
+            "purpose": "States that the limit is counted per engine, so two workspaces with the default of 3 can run 6 executions (line 455)."
+          },
+          {
+            "path": "docs/internals/agents.md",
+            "purpose": "Line 486 explains why Rule H2 frees the slot: with a limit of 1 an asker holding the slot would wait forever for its helper."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the limit's scope or dimension changes (for example per project), the single `Mutex<usize>` counter has no project or session key, and `SpawnRequest.project` is available in `perform_spawn` at acquire time, so a research pass on `SpawnRequest` and project fields would be needed.",
+          "Observed facts for spec writers: `acquire_slot` is not FIFO (waiters race after `notify_waiters`), and `notify_waiters` only wakes tasks already awaiting, which is the likely reason for the 2-second timeout loop. This is an inference from the code, not stated in a comment.",
+          "The doc comment 'Wait for a slot under the workspace's parallelism limit...' (runner.rs lines 2304-2305) sits above `deliver_mail`, not above `acquire_slot` (line 2320), so `acquire_slot` is undocumented in code. `docs/internals/spend-and-limits.md` quotes the comment as if it were on `acquire_slot`."
+        ],
+        "not_covered": [
+          "How `Services::workspace()` is implemented in ostra-workspace/ostra-server and whether it reads the registry or the file on each call (the limiter only relies on it returning current settings).",
+          "session_budget_usd and BudgetReached gating, which is the other half of CLAUDE.md pattern 8.",
+          "Fan-out caps such as `init::MAX_SCOUTS` and `init::MAX_DEFAULT_GENERATE`.",
+          "The status-bar running-executions UI and any API that reports slot usage (no code was found that exposes the `slots` count; only `execs` is exposed through `Engine::execution`, not verified for the list endpoint).",
+          "The tokio and Cargo dependency versions."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The limiter is not a semaphore. `Inner.slots` is a `Mutex<usize>` of executions currently holding a slot and `slot_free` is a `tokio::sync::Notify`. `acquire_slot` loops: it reads the limit fresh from `self.services.workspace().limits.max_parallel_executions` (clamped with `.max(1)`), takes the std mutex, and if the count is below the limit increments it and returns a `Slot`. Otherwise it waits on `slot_free.notified()` with a 2-second timeout and loops again. `Slot` holds an `Arc<Inner>`; its `Drop` decrements the counter with `saturating_sub(1)` and calls `notify_waiters()`, so release happens on success, error, cancellation or panic. The mutex guard is dropped before any `.await`. The limit value is never stored, only compared, so a settings change applies to waiting spawns and never cancels running ones.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Counter plus Notify slot guard",
+            "snippet": {
+              "code": "async fn acquire_slot(self: &Arc<Self>) -> Slot {\n    loop {\n        let limit = self\n            .services\n            .workspace()\n            .limits\n            .max_parallel_executions\n            .max(1) as usize;\n        {\n            let mut n = lock(&self.slots);\n            if *n < limit {\n                *n += 1;\n                return Slot(self.clone());\n            }\n        }\n        let _ =\n            tokio::time::timeout(std::time::Duration::from_secs(2), self.slot_free.notified())\n                .await;\n    }\n}\n\n/// A held execution slot; dropping it frees the slot.\nstruct Slot(Arc<Inner>);\n\nimpl Drop for Slot {\n    fn drop(&mut self) {\n        let mut n = lock(&self.0.slots);\n        *n = n.saturating_sub(1);\n        drop(n);\n        self.0.slot_free.notify_waiters();\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2320"
+            }
+          },
+          {
+            "description": "`perform_spawn` moves the `Slot` into `EngineHost.slot: Mutex<Option<Slot>>`. The host, not the spawn function, owns it while the executor runs, so `wait_for_wake` can `take()` it out (Rule H2) and put a new one in after `acquire_slot().await`. After `ExecutionFinished` is appended, `perform_spawn` drops the slot explicitly. Hosts for inspect and quick-answer runs are built with `slot: Mutex::new(None)`.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Slot handed to the execution host so the executor can release it",
+            "snippet": {
+              "code": "// Rule H2: a waiting run holds no slot, so the run it waits for can start.\ndrop(lock(&self.slot).take());\nlet note = rx.await.ok();\nlet slot = self.inner.acquire_slot().await;\n*lock(&self.slot) = Some(slot);\nnote",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:3140"
+            }
+          },
+          {
+            "description": "`next_steps` is pure and `PlanCtx` carries only the budget and format commands, not the parallel limit. `drive` starts a tokio task for every new step key, and each `Step::Spawn` task blocks inside `perform_spawn` at `acquire_slot`. So a stage that plans N spawns creates N tasks immediately, of which at most `limit` proceed. The step key stays in `inflight` while a task waits, so the waiting spawn is not started twice.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Planner is unaware of the limit; the runner throttles",
+            "snippet": {
+              "code": "for step in steps {\n    let key = step.key();\n    if !lock(&live.inflight).insert(key.clone()) {\n        continue;\n    }\n    let inner = self.clone();\n    let sid = id.clone();\n    let l = live.clone();\n    tokio::spawn(async move {\n        if let Err(e) = inner.perform(&sid, step).await\n            && !matches!(e, EngineError::Ended)\n        {\n            ...\n        }\n        lock(&l.inflight).remove(&key);\n        l.wake.notify_one();\n    });\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1583"
+            }
+          }
+        ],
+        "problem": "Ostra bounds concurrent agent executions per workspace with a counter-based slot limiter inside the engine's runner. Any change that adds a fan-out, a new kind of execution, or a different scope for the limit (for example per project) must know exactly where a slot is taken, where it is given back, what is exempt, and which setting value the limiter reads.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the runner's slot limiter caps concurrent executions per workspace. Covers the counter, its acquire and release paths, which execution kinds hold a slot, the setting that feeds it, its validation, and its tests and docs. It does not cover session_budget_usd, fan-out caps, or the UI.",
+        "sources": [],
+        "title": "Runner slot limiter (max_parallel_executions)"
+      },
+      "submit": {
+        "findings_summary": "The limiter is a `Mutex<usize>` counter plus a `Notify` on `Inner` in `crates/ostra-engine/src/runner.rs`. Each workspace has one Engine, so the cap applies per workspace across all its sessions. `acquire_slot` re-reads `limits.max_parallel_executions` (default 3, clamped to at least 1, 0 rejected at save) on every loop and polls every 2 s. `perform_spawn` is the only caller that takes a slot for a planned spawn. The `Slot` guard frees the count on drop and is handed to `EngineHost` so a waiting harness run can release and re-acquire it (Rule H2). Judges, quick answers and inspect runs hold no slot. The counter has no project or session key, and only one test uses the limit (set to 1, for H2).",
+        "not_covered": [
+          "How Services::workspace() reads settings per call (registry vs file)",
+          "session_budget_usd and BudgetReached gating",
+          "Fan-out caps (init::MAX_SCOUTS, MAX_DEFAULT_GENERATE)",
+          "Status-bar or API exposure of slot usage",
+          "Pinned tokio and Cargo dependency versions"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the runner's slot limiter caps concurrent executions per workspace: the counter, acquire and release paths, exemptions, the feeding setting, its validation, tests and docs. Budget gating, fan-out caps and UI were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How project entries in workspace settings are defined and validated, and how the runner knows a spawn's project.",
+      "file": "ostra-research-20261002-085454-project-entries-and-spawn-project.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (config)",
+          "ostra-workspace (settings, runtime)",
+          "ostra-engine (plan, runner, state)"
+        ],
+        "asks": [
+          "How project entries in workspace settings are defined",
+          "How project entries are validated",
+          "How the runner knows which project a spawn belongs to"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/config.rs:WorkspaceSettings",
+            "step": "The user edits settings. `workspace.toml` deserializes into `WorkspaceSettings` (`#[serde(default)]`), so `projects` is a list of `ProjectEntry` (`[[projects]]` tables)."
+          },
+          {
+            "location": "crates/ostra-workspace/src/runtime.rs:WorkspaceRt::validate",
+            "step": "Save or live check: `WorkspaceRt::validate` calls `validate_settings`, which runs `ostra_sandbox::validate::workspace`, then `validate_workspace` (key syntax, key uniqueness, absolute path, stack text, code provider command and timeout 1-120, language server command, languages from `code::NAV_LANGUAGES`, one server per language, timeout 1-120, routes, MCP, limits), then permission-rule parsing, then the folder-exists check (`p.path.is_absolute() && !p.path.is_dir()`). `WorkspaceRt::validate` adds instruction tag checks (Rule W3). The REST endpoint `validate_workspace` returns the issues without saving."
+          },
+          {
+            "location": "crates/ostra-workspace/src/runtime.rs:WorkspaceRt::save_settings",
+            "step": "`save_settings` returns `Err(issues)` when any issue exists; otherwise it writes through `trust::save_workspace` and calls `sync_projects`, which upserts a `ProjectRow` (key, path, init status from whether the project's inventory file exists) and deletes rows for removed keys."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::start_session",
+            "step": "A session starts: `start_session` reads `services.workspace()` and maps every `ProjectEntry` to `ProjectRef { key, path }`. For a pipeline session it keeps only projects whose inventory exists, rejects unknown pinned keys, and keeps only pinned ones (Rule O6). The list is written into the session-created event."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::apply",
+            "step": "The fold stores the list in `SessionState.projects` (and `scope` for init sessions). From then on the session sees the project list as it was at creation, not later edits to settings. `ProjectCreated` can append a project (Rule O3)."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::spawn",
+            "step": "The pure planner emits `Step::Spawn(Box<SpawnRequest>)`; `Planner::spawn` fills `project` from its `project: &str` argument (cross-project stages use `SessionState::primary()`, per-project stages use that project's key). The `Step::key()` guards against double start."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::drive",
+            "step": "The driver loop calls `next_steps(&st, &plan_ctx)`, inserts each step key into `inflight`, and runs `perform` in its own tokio task. `Step::Spawn` goes to `perform_spawn`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::perform_spawn",
+            "step": "`perform_spawn` first awaits `acquire_slot()` (workspace-wide), then snapshots state, resolves the route, and resolves `repo_root`: the session dir when the implementer creates a project (Rule O2), otherwise `st.project_path(&req.project)`, falling back to the workspace root when the key is not in the session list."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::perform_spawn",
+            "step": "The runner loads that project's `project.toml` and inventory, builds the spawn through the factory, appends `ExecutionStarted { project: req.project.clone(), ... }` (folded into `ExecRecord.project`), inserts the db row with the same project, and builds `ExecContext { project_key: req.project.clone(), repo_root, ... }` for the executor. The slot moves into `EngineHost.slot` and is freed when the host drops it or the run waits for a message."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "ProjectEntry, Limits, validate_workspace, ProjectRef, ExecContext, key and stack rules"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-workspace",
+            "role": "Save-time validation wrapper, folder checks, sync of projects into the workspace db"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "SpawnRequest, planner, runner slot limiter, session state"
+          },
+          {
+            "kind": "external",
+            "name": "ts-rs (#[ts(export)])",
+            "role": "Regenerates web/src/api/gen/*.ts when core types change (`cargo test -p ostra-core`); not looked up in this run because the repo already uses it as described in CLAUDE.md"
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Defines WorkspaceSettings, ProjectEntry, Limits, the code provider and language server config structs, SETTING_KEYS, and validate_workspace (the project, limits, route and MCP checks).",
+            "symbols": [
+              "pub struct WorkspaceSettings { pub name: String, pub projects: Vec<ProjectEntry>, pub limits: Limits, ... }  (L520-558, #[serde(default)])",
+              "pub struct ProjectEntry { pub key: String, pub path: PathBuf, pub stack: Option<String>, pub code_provider: Option<CodeProviderConfig>, pub language_servers: Vec<LanguageServerConfig> }  (L668-687)",
+              "pub struct Limits { pub max_parallel_executions: u32, pub session_budget_usd: f64 }  (L649-657, #[serde(default)], defaults 3 and 25.0)",
+              "pub const MAX_PROVIDER_TIMEOUT: u32 = 120;",
+              "pub fn project(&self, key: &str) -> Option<&ProjectEntry>  (L1032, on WorkspaceSettings)",
+              "pub const SETTING_KEYS: &[(&str, &str)]  (L872, dotted keys with one-line labels; a test checks each key names a field)",
+              "pub fn validate_workspace(global: &GlobalConfig, ws: &WorkspaceSettings, env: &Environment, default_tier: impl Fn(&str) -> Tier) -> Vec<ValidationIssue>  (L1283)",
+              "pub struct ValidationIssue { pub path: String, pub message: String }  (L1266)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/slug.rs",
+            "purpose": "Key and stack syntax rules used by project validation.",
+            "symbols": [
+              "pub fn is_project_key(value: &str) -> bool  // [a-z0-9][a-z0-9-]*",
+              "pub const MAX_STACK_LEN: usize = 64;",
+              "pub fn is_stack_name(value: &str) -> bool",
+              "pub fn stack_issue(value: &str) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/settings.rs",
+            "purpose": "validate_settings adds sandbox, permission-rule, and project folder-exists checks on top of validate_workspace.",
+            "symbols": [
+              "pub fn validate_settings(global: &GlobalConfig, env: &Environment, settings: &WorkspaceSettings) -> Vec<ValidationIssue>",
+              "pub fn field_issue(path: &str, message: String) -> ValidationIssue"
+            ]
+          },
+          {
+            "path": "crates/ostra-workspace/src/runtime.rs",
+            "purpose": "WorkspaceRt: reads settings from workspace.toml, runs validate (validate_settings plus instruction tag checks), save_settings refuses on any issue, sync_projects mirrors projects into the workspace db.",
+            "symbols": [
+              "pub fn settings(&self) -> WorkspaceSettings",
+              "pub fn effective_settings(&self) -> WorkspaceSettings",
+              "pub fn validate(&self, settings: &WorkspaceSettings) -> Vec<ValidationIssue>",
+              "pub fn save_settings(&self, settings: &WorkspaceSettings) -> Result<(), Vec<ValidationIssue>>",
+              "fn sync_projects(&self)"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "REST endpoint that validates a posted WorkspaceSettings without saving.",
+            "symbols": [
+              "async fn validate_workspace(State(app): AppState, Path(id): Path<String>, Json(settings): Json<WorkspaceSettings>) -> Res<Vec<ValidationIssue>>  (L954)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "ProjectRef, the key and path pair stored in the session-created event.",
+            "symbols": [
+              "pub struct ProjectRef { pub key: String, pub path: PathBuf }  (L85)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/services.rs",
+            "purpose": "Services trait the runner reads settings through; SpawnEnv handed to the factory.",
+            "symbols": [
+              "fn workspace(&self) -> WorkspaceSettings;  // re-read on every execution",
+              "pub struct SpawnEnv<'a> { pub state: &'a SessionState, pub executor: ExecutorKind, pub settings: &'a WorkspaceSettings, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "SpawnRequest carries `project: String`; the planner's spawn helper sets it from the caller's project argument.",
+            "symbols": [
+              "pub struct SpawnRequest { pub agent: AgentName, pub purpose: ExecPurpose, pub stage: StageKind, pub project: String, pub session_dir: PathBuf, pub inputs: SpawnInputs, pub resumes: Option<ExecutionId>, pub continues: Option<ExecutionId> }  (L96)",
+              "fn spawn(&mut self, agent: AgentName, purpose: ExecPurpose, project: &str, session_dir: PathBuf, inputs: SpawnInputs)  (L447)",
+              "pub struct PlanCtx { pub format_commands: BTreeMap<String, Option<String>>, pub budget_usd: Option<f64> }  (L41)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "SessionState holds the frozen project list (from SessionCreated), resolves key to path, defines the primary project, and records each execution's project from ExecutionStarted.",
+            "symbols": [
+              "pub fn project_path(&self, key: &str) -> Option<PathBuf>  (L1306)",
+              "pub fn primary(&self) -> String  (L1314: first of scope, else first of projects, else empty)",
+              "fn valid_project(&self, key) -> bool  (L2060 area: projects.iter().any(|p| p.key == key))",
+              "ExecRecord { project, ... } inserted in apply(SessionEvent::ExecutionStarted)  (L1656-1694)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Session start builds the project list from settings; the driver runs planner steps; perform_spawn takes a slot, resolves the repo root from req.project, appends ExecutionStarted with the project, and builds ExecContext.project_key.",
+            "symbols": [
+              "slots: Mutex<usize>, slot_free: Notify  (Inner, L102-104)",
+              "struct Slot(Arc<Inner>)  // Drop decrements and notifies (L116-125)",
+              "async fn acquire_slot(self: &Arc<Self>) -> Slot  (L2320)",
+              "async fn perform_spawn(self: &Arc<Self>, session: &SessionId, req: SpawnRequest) -> Result<(), EngineError>  (L2350)",
+              "fn start_session(...)  (L356)",
+              "fn plan_ctx(&self, st: &SessionState) -> PlanCtx  (L1612)",
+              "async fn drive(self: Arc<Self>, id: SessionId, live: Arc<Live>)  (L1573)",
+              "async fn wait_for_wake(&self) -> Option<Wake>  (EngineHost, L3129: drops the slot, reacquires after the wake)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "ExecContext carries project_key to executors and guards.",
+            "symbols": [
+              "pub project_key: String  (L85)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/tests/runner.rs",
+            "purpose": "Existing test of the slot limiter with max_parallel_executions = 1 and a ProjectEntry built field by field (also shows every ProjectEntry literal must list all five fields).",
+            "symbols": [
+              "subagents_wake_each_other_and_pair_loops_continue_conversations (L503)"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a per-project spawn limit is wanted, a design pass should decide where the limit is stored (a ProjectEntry field or Limits) and whether it counts spawns by req.project at acquire_slot time; this document records only the current structure.",
+          "Check tests/conformance and ostra-engine/tests/runner.rs for how slot behavior is tested before adding a fixture."
+        ],
+        "not_covered": [
+          "Which planner call sites pass which project to Planner::spawn (cross-project stages use primary(); per-project stages use the project key); I saw the helper and several call sites by grep but did not enumerate each stage.",
+          "Judge calls (`perform_judge`), init and advisor spawns outside `perform_spawn`: whether they hold slots was not traced, only that `prepare_quick` takes none (L2846).",
+          "ostra-workspace create/import paths (`create.rs`, import_project) and `trust.rs` overlay beyond the fact they call `validate_settings`.",
+          "The web Settings UI for projects and the docs pages that would need edits (docs/internals/settings-and-routing.md L366 'Projects' and L371 'Limits', docs/internals/spend-and-limits.md L16 and L39, docs/internals/planner.md L252, docs/internals/pipeline.md L834)."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "`validate_workspace` pushes `ValidationIssue { path, message }` for each bad field, using indexed paths like `projects[i].key`. Messages follow the instruction-first, reason-with-because style from HANDOVER 20. `WorkspaceRt::save_settings` calls `validate` and writes nothing when any issue exists. The server's validate endpoint returns the same list without saving. Per-project checks live in one loop over `ws.projects`; limits checks sit after the routing checks.",
+            "files": [
+              "crates/ostra-core/src/config.rs",
+              "crates/ostra-workspace/src/runtime.rs",
+              "crates/ostra-workspace/src/settings.rs"
+            ],
+            "name": "Settings validated at save, one ValidationIssue per problem with a dotted path",
+            "snippet": {
+              "code": "    let mut seen = std::collections::BTreeSet::new();\n    for (i, p) in ws.projects.iter().enumerate() {\n        if !is_project_key(&p.key) {\n            issues.push(issue(\n                format!(\"projects[{i}].key\"),\n                format!(\"`{}` is not a project key. Use lowercase letters, digits, and dashes, starting with a letter or digit.\", p.key),\n            ));\n        }\n        if !seen.insert(p.key.clone()) {\n            issues.push(issue(\n                format!(\"projects[{i}].key\"),\n                format!(\"Project key `{}` is used twice.\", p.key),\n            ));\n        }\n        if !p.path.is_absolute() && !p.path.has_root() {\n            issues.push(issue(\n                format!(\"projects[{i}].path\"),\n                \"Project paths must be absolute.\".into(),\n            ));\n        }\n        ...",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:1295"
+            }
+          },
+          {
+            "description": "The existing limits checks, which a new numeric limit would sit beside.",
+            "files": [
+              "crates/ostra-core/src/config.rs"
+            ],
+            "name": "Limits validation",
+            "snippet": {
+              "code": "    if ws.limits.max_parallel_executions == 0 {\n        issues.push(issue(\n            \"limits.max_parallel_executions\".into(),\n            \"Allow at least one execution at a time.\".into(),\n        ));\n    }",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:1424"
+            }
+          },
+          {
+            "description": "Every later-added ProjectEntry field is `#[serde(default, skip_serializing_if = ...)]` so old `workspace.toml` files still load and unset values are not written back; TypeScript export uses `#[ts(optional)]` or `#[ts(as = ...)]`. `ProjectEntry` has no `Default` impl and no `#[serde(default)]` at struct level, and it is constructed by literal in at least: config.rs tests (L2008), ostra-engine tests runner.rs/recover.rs/pause.rs, ostra-server tests test_stage_evals.rs and coordination_evals.rs. Adding a field means updating those literals. Changing the type means regenerating `web/src/api/gen/ProjectEntry.ts` with `cargo test -p ostra-core`.",
+            "files": [
+              "crates/ostra-core/src/config.rs",
+              "web/src/api/gen/ProjectEntry.ts"
+            ],
+            "name": "Optional fields on ProjectEntry: serde default, skip when empty, ts optional",
+            "snippet": {
+              "code": "#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]\n#[ts(export)]\npub struct ProjectEntry {\n    pub key: String,\n    #[ts(type = \"string\")]\n    pub path: PathBuf,\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    pub stack: Option<String>,\n    #[serde(default, skip_serializing_if = \"Option::is_none\")]\n    #[ts(optional)]\n    pub code_provider: Option<CodeProviderConfig>,\n    #[serde(default, skip_serializing_if = \"Vec::is_empty\")]\n    #[ts(as = \"Option<Vec<LanguageServerConfig>>\", optional)]\n    pub language_servers: Vec<LanguageServerConfig>,\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/config.rs:668"
+            }
+          },
+          {
+            "description": "`Inner.slots` counts executions holding a slot. `acquire_slot` re-reads `services.workspace().limits.max_parallel_executions` on every loop, takes a slot when the count is below the limit, and otherwise waits on `slot_free` for up to 2 seconds before looping. `Slot::drop` decrements and calls `notify_waiters`. `perform_spawn` calls `acquire_slot` first, before it looks at the session state or `req.project`. A harness run that waits for a message drops its slot and reacquires one after the wake (Rule H2), so a limit of 1 cannot deadlock. The counter has no per-project or per-session breakdown. `prepare_quick` (side-panel ask) builds its `EngineHost` with `slot: Mutex::new(None)` and takes no slot. CLAUDE.md pattern 8: any new fan-out must go through the slot limiter.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Execution slot limiter (workspace-wide counter, re-read limit each loop)",
+            "snippet": {
+              "code": "    async fn acquire_slot(self: &Arc<Self>) -> Slot {\n        loop {\n            let limit = self\n                .services\n                .workspace()\n                .limits\n                .max_parallel_executions\n                .max(1) as usize;\n            {\n                let mut n = lock(&self.slots);\n                if *n < limit {\n                    *n += 1;\n                    return Slot(self.clone());\n                }\n            }\n            let _ =\n                tokio::time::timeout(std::time::Duration::from_secs(2), self.slot_free.notified())\n                    .await;\n        }\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2320"
+            }
+          }
+        ],
+        "problem": "A workspace lists projects in `workspace.toml` as `ProjectEntry` values. Settings are checked at save time by `validate_workspace` plus extra checks in `ostra-workspace`. Every spawn carries a project key chosen by the planner, and the runner resolves that key to a folder through the session's frozen project list. The only concurrency cap today is one counter per workspace (`limits.max_parallel_executions`), which does not look at the spawn's project.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how project entries in workspace settings are defined and validated, and how the runner knows a spawn's project. Covers the ProjectEntry type, save-time validation, the path from settings into session state, SpawnRequest.project, and the current execution slot limiter as the code that consumes the spawn's project. It does not design a per-project limit and does not cover the web UI, the code-navigation providers beyond their validation rules, or docs wording.",
+        "sources": [],
+        "title": "Project entries in workspace settings and the spawn's project"
+      },
+      "submit": {
+        "findings_summary": "ProjectEntry (ostra-core config.rs) has key, path, optional stack, code_provider and language_servers; it has no Default and is built by literal in several tests. validate_workspace checks key syntax and uniqueness, absolute path, stack text, and provider and language-server rules. ostra-workspace adds a folder-exists check and runs everything in save_settings, which refuses to write when any issue exists. At session start the runner copies settings.projects into a frozen ProjectRef list in the session-created event. The planner sets SpawnRequest.project, and perform_spawn resolves its path through SessionState::project_path, then records it in ExecutionStarted and ExecContext.project_key. Concurrency is capped by one workspace-wide counter (acquire_slot, limits.max_parallel_executions) that is taken before the project is read and has no per-project breakdown.",
+        "not_covered": [
+          "Which planner call sites pass which project to Planner::spawn, stage by stage",
+          "Whether judge calls and init or advisor spawns hold slots (only prepare_quick was confirmed to take none)",
+          "ostra-workspace create, import and trust overlay paths beyond their calls to validate_settings",
+          "The web Settings UI for projects and the exact docs pages that would need edits"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How ProjectEntry is defined and validated in workspace settings and how a spawn's project reaches the runner, including the current workspace-wide slot limiter; no design of a per-project limit, no web UI.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

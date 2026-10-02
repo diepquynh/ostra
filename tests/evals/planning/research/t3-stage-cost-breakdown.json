@@ -1,0 +1,729 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:59:24.828701571+00:00",
+  "docs": [
+    {
+      "task": "How execution costs are recorded and summed into a session's cost, and how executions map to stages.",
+      "file": "ostra-research-20261002-085546-execution-cost-and-stage-mapping.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core",
+          "ostra-store",
+          "ostra-engine",
+          "ostra-server",
+          "web"
+        ],
+        "asks": [
+          "Explain how execution costs are recorded.",
+          "Explain how they are summed into a session's cost.",
+          "Explain how executions map to stages."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::spawn",
+            "step": "The planner decides a spawn. `Planner::spawn` computes `stage_of(&purpose)` and stores it in the `SpawnRequest`. Consult spawns set `stage: rec.stage` from the asking run instead."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:2622",
+            "step": "The runner (after getting a slot and passing the budget check in the planner) appends `ExecutionStarted { stage: req.stage, ... }` to the event log, then inserts the `executions` row with `stage: Some(req.stage)`, `usage` default, `cost_usd` 0. A resumed (paused) execution appends `ExecutionResumed` instead, reopens the row, and takes its stored usage as `usage_base`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::apply",
+            "step": "The fold records the run: `ExecutionStarted` inserts an `ExecRecord` with `stage` and `result: None`. `ExecutionResumed` clears `result`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:EngineHost::emit",
+            "step": "While the executor runs it sends `ExecutionDelta::Usage` to `EngineHost::emit`. The host adds the delta to `usage_base`, writes the cumulative usage and `cost_usd` column with `update_execution_usage` (`Executions::set_usage`), and recomputes the session's cost as the sum of `cost_usd` over `list_executions(session)` plus the in-memory judge tally, writing it to `sessions.cost_usd` and broadcasting `SessionUpdated`. Running executions are therefore counted here."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:1984",
+            "step": "Judge calls (not executions) add their `usage.cost_usd` to `Inner::judge_cost[session]` after each successful call. No row, no event carries it."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:2716",
+            "step": "When the executor returns, `result.usage = usage_base + result.usage`, `finish_execution` writes status, usage, and `cost_usd`, and `ExecutionFinished { id, result }` is appended. The fold sets `ExecRecord.result`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:1398",
+            "step": "`Inner::append` runs for every event: stores, materializes, folds, then calls `view::summary(&st, ws, judge_cost)` for the other fields and overwrites `cost_usd` with `list_executions(session)` sum plus judge cost (falling back to the summary value on a DB error)."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:detail",
+            "step": "Reads: `view::detail` loads `db.list_executions`, builds `summary(s, ws, 0.0)` (finished executions from the fold, no judge cost) and sets `summary.cost_usd = max(that, sum of DB execution costs)`. `view::tree_session` does the same with `max(summary.cost_usd, spent)`. `GET /api/workspaces/{ws}/cost` runs `Costs::report` across all sessions."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:416",
+            "step": "Budget: the planner calls `SessionState::spent_usd()` (finished executions only, from the fold, no judge cost) and opens `GatePayload::BudgetReached` when it is at least `budget + budget_raised`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Usage, ExecutionResult, StageKind, ExecPurpose, SessionEvent, CostReport/CostRow/ExecutionView/SessionSummary DTOs (TypeScript exported)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "executions and sessions tables, Costs aggregation."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "fold, planner, runner, view."
+          },
+          {
+            "kind": "external",
+            "name": "rusqlite",
+            "role": "SQL access for the executions table and Costs::report."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "Defines Usage (the unit of cost recording, with Usage::add summing field by field) and ExecutionResult (carries the final Usage). cost_usd is an f64 in dollars.",
+            "symbols": [
+              "pub struct Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, cost_usd: f64, tool_calls, build_ms, context_tokens }",
+              "impl Usage { pub fn add(&mut self, other: &Usage) }",
+              "pub struct ExecutionResult { status, submit, final_text, usage: Usage, native_session_id, error }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/pricing.rs",
+            "purpose": "Computes cost_usd from usage and the models.dev price table. A model with no price costs 0.",
+            "symbols": [
+              "pub fn cost(model: &str, usage: &Usage, web_searches: u64) -> f64"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "SessionEvent::ExecutionStarted carries stage: StageKind; ExecutionFinished carries the ExecutionResult with usage. ExecPurpose lists every kind of run. GatePayload::BudgetReached holds spent_usd and budget_usd.",
+            "symbols": [
+              "SessionEvent::ExecutionStarted { id, agent, purpose: ExecPurpose, stage: StageKind, project, executor, model, params, spawn_block, report_path, resumes }",
+              "SessionEvent::ExecutionFinished { id, result }",
+              "SessionEvent::ExecutionResumed { id }",
+              "pub enum ExecPurpose"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/pipeline.rs",
+            "purpose": "StageKind (38 variants, kebab-case serde) and StageKind::lane() grouping stages into the nine Lane values.",
+            "symbols": [
+              "pub enum StageKind",
+              "impl StageKind { pub fn lane(self) -> Lane }",
+              "pub enum Lane"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "DTOs: SessionSummary.cost_usd, ExecutionView (stage: Option<StageKind>, usage), StageCard (stage, executions: Vec<ExecutionId>, no cost field), CostRow, CostReport (by_session, by_stage, by_agent, by_executor, total).",
+            "symbols": [
+              "pub struct SessionSummary { ..., pub cost_usd: f64, ... }",
+              "pub struct ExecutionView { ..., pub stage: Option<StageKind>, ..., pub usage: Usage, ... }",
+              "pub struct StageCard { stage, lane, label, status, project, phase, executions: Vec<ExecutionId>, gate, detail }",
+              "pub struct CostRow { key: String, executions: u32, usage: Usage, cache_reads_per_tool_call: f64 }",
+              "pub struct CostReport { since, by_session, by_stage, by_agent, by_executor, total: CostRow }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Planner assigns a stage to every SpawnRequest via stage_of(&purpose), except consult spawns, which copy the asker's stage. The budget guard compares SessionState::spent_usd() with budget plus raises before any Step::Spawn.",
+            "symbols": [
+              "pub struct SpawnRequest { agent, purpose, stage: StageKind, project, session_dir, inputs, resumes, continues }",
+              "fn spawn(&mut self, agent, purpose, project, session_dir, inputs)",
+              "PlanCtx.budget_usd: Option<f64>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "ExecRecord keeps stage and result (with usage) per execution in the fold. stage_of maps ExecPurpose to StageKind. SessionState::spent_usd sums finished executions only. The fold applies ExecutionStarted, ExecutionResumed (clears result), ExecutionFinished (sets result).",
+            "symbols": [
+              "pub struct ExecRecord { id, agent, purpose, stage: StageKind, project, report_path, params, result: Option<ExecutionResult>, resumes, loop_key, started_at, ended_at, executor, model, spawn_block }",
+              "pub fn stage_of(purpose: &ExecPurpose) -> StageKind",
+              "pub fn spent_usd(&self) -> f64"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Records cost. EngineHost::emit stores each Usage delta, refreshes the session row's cost live. Inner::append refreshes the session row on every event. The spawn path inserts the execution row, runs the executor, adds usage_base, finishes the row, appends ExecutionFinished. judge_cost is an in-memory per-session tally. Recovery keeps stored usage.",
+            "symbols": [
+              "judge_cost: Mutex<HashMap<SessionId, f64>> (Inner field, line 100)",
+              "fn append (session event store, fold, session row update) around line 1380-1434",
+              "fn emit(&self, delta: ExecutionDelta) on EngineHost, line 2975",
+              "usage_base handling around lines 2622-2721",
+              "pub fn recover(&self)",
+              "fn plan_ctx(&self, st: &SessionState) -> PlanCtx"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Read-side session totals: summary() (fold results plus judge cost), detail() (max of summary and the DB sum), tree_session(), execution_groups() (per agent and project cost). view::stages builds StageCards from fold state, not from ExecRecord.stage.",
+            "symbols": [
+              "pub fn summary(s: &SessionState, workspace: &WorkspaceId, judge_cost: f64) -> SessionSummary",
+              "pub fn detail(s, db, workspace, live) -> Result<SessionDetail, EngineError>",
+              "pub fn tree_session(s, summary, executions) -> TreeSession",
+              "pub fn execution_groups(executions: &[ExecutionView]) -> Vec<ExecutionGroupView>",
+              "pub fn stages(s: &SessionState) -> Vec<StageCard>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/executions.rs",
+            "purpose": "executions table access. insert writes stage (kebab string), usage JSON, cost_usd 0. finish and set_usage write usage JSON and the cost_usd column together. of_session lists a session's executions.",
+            "symbols": [
+              "pub struct NewExecution { id, session: Option<SessionId>, agent, purpose, stage: Option<StageKind>, project, executor, model, params, spawn_block, report_path, native_session_id }",
+              "pub fn insert(&self, new: &NewExecution)",
+              "pub fn finish(&self, id: &ExecutionId, result: &ExecutionResult) -> Result<bool, StoreError>",
+              "pub fn set_usage(&self, id: &ExecutionId, usage: &Usage)",
+              "pub fn of_session(&self, session: &SessionId) -> Result<Vec<ExecutionView>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/costs.rs",
+            "purpose": "SQL-side cost aggregation over the executions table. report() groups by session_id, stage, agent, executor across the whole workspace (optionally since a start time). Null session becomes 'side-panel', null stage becomes 'none'. since() sums cost_usd for the week figure.",
+            "symbols": [
+              "pub fn since(&self, since: DateTime<Utc>) -> Result<f64, StoreError>",
+              "pub fn report(&self, since: Option<DateTime<Utc>>) -> Result<CostReport, StoreError>",
+              "type Groups = BTreeMap<String, (u32, Usage)>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/schema.rs",
+            "purpose": "Schema: sessions.cost_usd REAL, executions.stage TEXT (nullable), executions.usage TEXT (JSON), executions.cost_usd REAL.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/sessions.rs",
+            "purpose": "SessionUpdate.cost_usd writes sessions.cost_usd. The session row stores the total, with no per-stage split.",
+            "symbols": [
+              "SessionUpdate { cost_usd: Option<f64>, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/mod.rs",
+            "purpose": "WorkspaceDb facade: cost_report and the since sum delegate to Costs.",
+            "symbols": [
+              "pub fn cost_report(&self, since: Option<DateTime<Utc>>) -> Result<CostReport, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "GET /api/workspaces/{ws}/cost handler: parses optional RFC 3339 since and returns db.cost_report(since). No session-scoped cost endpoint exists.",
+            "symbols": [
+              "async fn cost(State(app), Path(id), Query(q): Query<CostQuery>) -> Res<CostReport>"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/tests/workspace_db.rs",
+            "purpose": "cost_report_groups test: the existing fixture for the grouped report, asserts by_stage[0].key == 'implement'.",
+            "symbols": [
+              "fn cost_report_groups()"
+            ]
+          },
+          {
+            "path": "web/src/screens/workspace/costTable.ts",
+            "purpose": "UI side of the report: COST_GROUPS includes a 'stage' group reading by_stage, with label lookup from STAGES and 'none' shown as 'No stage'. costLines turns CostRows into table lines.",
+            "symbols": [
+              "export const COST_GROUPS",
+              "export function costLines(rows, group, total, sessions)",
+              "export function costTotals(report: CostReport)"
+            ]
+          },
+          {
+            "path": "web/src/screens/CostScreen.tsx",
+            "purpose": "Workspace Cost screen calling api.cost(ws, since), rendering one table per COST_GROUPS entry.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/spend-and-limits.md",
+            "purpose": "Existing doc section 'How cost is counted' and 'The session budget'. States that judge calls show in displayed session cost but do not count against the budget, and that spent means finished executions. Must be updated by any change to this behavior (CLAUDE.md pattern 9).",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a per-session stage cost view is wanted, a follow-up pass should check where the session detail DTO and the web session screen would carry it, and whether StageCard (which has no cost field) or a separate list is the better home.",
+          "Decide whether judge cost belongs in any per-stage figure: it is an in-memory per-session total with no stage, and it is not rebuilt after a server restart (see the pattern 'Four places compute a session total')."
+        ],
+        "not_covered": [
+          "crates/ostra-core/src/pricing.rs internals and how each provider client or harness transcript parser produces Usage (documented in docs/internals/spend-and-limits.md; not re-verified against the code here).",
+          "Event-log replay and load path (Inner::load) beyond confirming that judge_cost is not rebuilt from the log: grep found judge_cost only at runner.rs lines 100, 157, 1408, 1984, 3004, and no code that reseeds it on load or recover.",
+          "web/ session screens that display per-group cost (sessionView.ts, MSession.tsx), and the STAGES content table in web/src/content/stages.",
+          "The init-flow sessions (SessionKind::Init): stages map the same way through stage_of, but their summaries were not traced separately."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "An execution's Usage is a running total. A resumed execution (Rule P2) starts from the stored usage of its earlier part (usage_base). EngineHost::emit adds each executor delta to usage_base, stores it, and recomputes the session cost. After the executor returns, the result's usage is usage_base plus the run's usage, so the last ExecutionFinished already includes earlier parts and must not be summed with them.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-core/src/exec.rs"
+            ],
+            "name": "Usage accumulation with usage_base",
+            "snippet": {
+              "code": "let delta = match delta {\n    ExecutionDelta::Usage { usage: run } => {\n        let mut usage = self.usage_base;\n        usage.add(&run);\n        ExecutionDelta::Usage { usage }\n    }\n    other => other,\n};\nif let ExecutionDelta::Usage { usage } = &delta {\n    let _ = self.inner.db.update_execution_usage(&self.execution, usage);\n    // Keep the session list's cost current while executions run, not only when they end.\n    if let Some(session) = &self.session\n        && let Ok(execs) = self.inner.db.list_executions(session)\n    {\n        let judge = lock(&self.inner.judge_cost).get(session).copied().unwrap_or(0.0);\n        let cost = execs.iter().map(|e| e.usage.cost_usd).sum::<f64>() + judge;\n        if let Ok(summary) = self.inner.db.update_session(\n            session,\n            &SessionUpdate { cost_usd: Some(cost), ..Default::default() },\n        ) {\n            let _ = self.inner.tx.send(EngineNotice::SessionUpdated { summary });\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2990"
+            }
+          },
+          {
+            "description": "(1) `EngineHost::emit` (runner.rs:3008): sum of `executions.cost_usd` over `list_executions(session)` (includes running executions) plus `judge_cost`. (2) `Inner::append` (runner.rs:1419): the same sum plus `judge_cost`, on every event; falls back to `view::summary` when the DB read fails. (3) `view::summary` (view.rs:24): fold-side sum of finished executions' `result.usage.cost_usd` plus the judge cost passed in; `view::detail` passes 0.0 and then takes `max(summary, DB sum)` (view.rs:1194-1196); `view::tree_session` takes `max(summary.cost_usd, spent)` (view.rs:1068). (4) `SessionState::spent_usd` (state.rs:1343): finished executions only, no judge cost, used only by the budget guard in plan.rs. `judge_cost` is `Mutex<HashMap<SessionId, f64>>` on `Inner`, incremented at runner.rs:1984, never written to the log or a table, and not reseeded in `recover` or `load` (grep finds only the uses listed in the files entry). So judge cost is lost on a server restart, and `sessions.cost_usd` drops by it at the next refresh. Judge spend belongs to no execution row and has no stage. Executions with `session_id` NULL (side-panel quick answers at runner.rs:2824 and inspect runs at runner.rs:962) both insert `stage: None`, so they appear under `side-panel` and `none` in the workspace report and under no session total.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/view.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Four places compute a session total"
+          },
+          {
+            "description": "The planner's spawn helper calls stage_of(&purpose) once, so the stage is part of the SpawnRequest. The runner copies req.stage into both ExecutionStarted (log) and NewExecution (table). The fold stores it in ExecRecord.stage. The one override is a consult spawn (Rule H3, plan.rs:516-528), which keeps the stage of the run that asked (rec.stage), although stage_of would give Handoff for Consult. A resume (ExecutionResumed) keeps the stage of the original start. Several StageKind values (Intake, Track, Sufficiency, Stakes, Staging, Format, Autofix, ImplementationReview, ClosingGate, Completion, SkillApproval, and the approval stages) are never produced by stage_of, so they never appear as an execution's stage. Several purposes map to one stage (Advise and Unblock to Rescue; Consult and handoff PromptGen to Handoff; QuickAnswer and Inspect to QuickAnswer; Detect and Adopt to Detect), and stages map to lanes via StageKind::lane().",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-core/src/pipeline.rs"
+            ],
+            "name": "Stage chosen by the planner from the purpose, stored on start",
+            "snippet": {
+              "code": "pub fn stage_of(purpose: &ExecPurpose) -> StageKind {\n    match purpose {\n        ExecPurpose::Advise { .. } | ExecPurpose::Unblock { .. } => StageKind::Rescue,\n        ExecPurpose::Consult { .. } => StageKind::Handoff,\n        ExecPurpose::Explore { .. } => StageKind::Explore,\n        ExecPurpose::Spec { .. } => StageKind::Spec,\n        ExecPurpose::FactCheck { target: FactTarget::Spec, .. } => StageKind::FactCheckSpec,\n        ExecPurpose::FactCheck { target: FactTarget::Plan, .. } => StageKind::FactCheckPlan,\n        ExecPurpose::Plan { .. } => StageKind::Plan,\n        ExecPurpose::Implement { .. } => StageKind::Implement,\n        ExecPurpose::Review { tests: false, .. } => StageKind::Review,\n        ExecPurpose::Review { tests: true, .. } => StageKind::TestReview,\n        ExecPurpose::Epa { .. } => StageKind::Epa,\n        ExecPurpose::WriteTest { .. } => StageKind::WriteTest,\n        ExecPurpose::Docs { .. } => StageKind::Documentation,\n        ExecPurpose::Architecture => StageKind::Architecture,\n        ExecPurpose::PromptGen { handoff_for: Some(_) } => StageKind::Handoff,\n        ExecPurpose::PromptGen { handoff_for: None } => StageKind::PromptGen,\n        ExecPurpose::Verify { .. } => StageKind::Verify,\n        ExecPurpose::QuickAnswer | ExecPurpose::Inspect { .. } => StageKind::QuickAnswer,\n        ExecPurpose::Init { mode, .. } => match mode { /* Detect|Adopt => Detect, Scout, Propose, GenerateSkill, GenerateInventory */ },\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:1111"
+            }
+          },
+          {
+            "description": "Costs::report loads (session_id, stage, agent, executor, usage) for every execution since a time and folds them into four BTreeMaps keyed by string, then sorts each most expensive first with ties by key. Null session_id is the key 'side-panel' and null stage is the key 'none'. Stage keys are the kebab-case serde strings written by enum_str. The report is workspace-wide: there is no session filter.",
+            "files": [
+              "crates/ostra-store/src/workspace/costs.rs"
+            ],
+            "name": "SQL grouping with null buckets",
+            "snippet": {
+              "code": "let rows = query_all(\n    self.0,\n    \"SELECT session_id, stage, agent, executor, usage FROM executions WHERE started_at >= ?1\",\n    [since.map(ts).unwrap_or_default()],\n    |r| { /* session_id, stage, agent, executor, usage JSON */ },\n)?;\nfor (session, stage, agent, executor, usage) in rows {\n    add(&mut by_session, session.unwrap_or_else(|| \"side-panel\".into()), &usage);\n    add(&mut by_stage, stage.unwrap_or_else(|| \"none\".into()), &usage);\n    add(&mut by_agent, agent, &usage);\n    add(&mut by_executor, executor, &usage);\n    total.0 += 1;\n    total.1.add(&usage);\n}",
+              "language": "rust",
+              "source": "crates/ostra-store/src/workspace/costs.rs:25"
+            }
+          }
+        ],
+        "problem": "A session's cost is the sum of its executions' cost_usd plus an in-memory tally of judge-call cost, and it is computed in four separate places that do not all agree on what they include. Each execution carries a StageKind from the moment it starts, in the event log and in the executions table, but the only stage-grouped cost view is a workspace-wide report that spans all sessions. Nothing today groups one session's cost by stage.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how execution costs are recorded and summed into a session's cost, and how executions map to stages. Covers the write path (usage deltas, finish, event log, executions table), every place a session total is computed, the stage assignment of each execution, and the existing workspace-wide by-stage cost report with its UI. Does not design or recommend a per-session stage breakdown, and did not open provider pricing internals beyond the Usage struct.",
+        "sources": [],
+        "title": "Execution cost recording, session cost summation, and execution-to-stage mapping"
+      },
+      "submit": {
+        "findings_summary": "Each execution's Usage (including cost_usd) is stored as it runs in the executions table (usage JSON plus a cost_usd column) and in the final ExecutionFinished event; resumed runs start from a usage_base so the last result is already cumulative. A session's cost is computed in four places (EngineHost::emit, Inner::append, view::summary/detail/tree_session, and SessionState::spent_usd for the budget guard); the first three add an in-memory judge-cost tally that is not persisted and is lost on restart, and spent_usd counts finished executions only. Every execution gets a StageKind from stage_of(&ExecPurpose) in the planner (consult spawns keep the asker's stage), stored in ExecutionStarted, ExecRecord.stage, and executions.stage. The only stage-grouped cost view is Costs::report's workspace-wide by_stage (NULL stage becomes 'none'), shown on the Cost screen; no per-session stage cost exists, and StageCard has no cost field.",
+        "not_covered": [
+          "Pricing internals and how each provider client or harness transcript parser produces Usage",
+          "Inner::load and event replay beyond confirming judge_cost is not reseeded",
+          "Web session screens that display per-group cost and the STAGES content table",
+          "Init-flow session summaries"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How execution cost is recorded, how it is summed into a session's cost, and how executions map to stages, including the existing workspace-wide by-stage report; no design for a per-session stage breakdown and no provider pricing internals.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How the completion report is written and how the session board shows cost.",
+      "file": "ostra-research-20261002-085547-completion-report-and-session-board-cost.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine (planner, runner, view, judge_input)",
+          "ostra-core (API DTOs, ExecPurpose, StageKind, Usage)",
+          "ostra-store (cost report)",
+          "assets/judges",
+          "web (session board, mobile session, cost screen)",
+          "docs/internals"
+        ],
+        "asks": [
+          "Explain how the completion report is written.",
+          "Explain how the session board shows cost."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::completion",
+            "step": "Every state change goes through `SessionState::fold`. When no execution runs, no project init is unfinished, and no subagent question is open, the planner's `completion` rule runs (called from the flows for each category at plan.rs lines 602 to 665)."
+          },
+          {
+            "location": "crates/ostra-engine/src/judge_input.rs:completion_input",
+            "step": "With no `completion_decision` the planner emits `Step::Judge{Completion}`. The runner's `perform_judge` builds the input with `judge_input::judge_input(&st, JudgeKind::Completion, ...)`, which calls `completion_input`: a markdown digest of request, category, track, feedback rounds, research summaries, spec, plan, phases and their outcomes, per-project closing stages, YOLO decisions, and notes. It contains no cost."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:call_judge",
+            "step": "`call_judge` resolves the judge route (tier Advanced, effort Low), calls `Services::judge` up to 3 times with the schema `{report_markdown, reason}`, adds the returned `Usage.cost_usd` to the in-memory `judge_cost[session]`, validates against `CompletionOut`, and appends `DecisionMade{judge: Completion, output}`. The system prompt is `assets/judges/completion.md`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform_judge",
+            "step": "If the judge fails after retries, `perform_judge` appends a fallback `DecisionMade` whose `report_markdown` is '# Session complete', the error, and the raw `completion_input` text, so a report still exists."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:3210",
+            "step": "The fold sets `completion_decision = Some(id)`. On the next planning pass the planner reads `report_markdown` from the decision output, appends `created_projects_section(s)`, and emits `Step::Complete{report_markdown}`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:1779",
+            "step": "`Step::Complete` writes `<session_root>/ostra-completion.md` (default body '# Session complete\\n' if none), for an init session checks `init_problem` and sets the project init status, derives `summary` from the first non-empty line with leading `#` stripped, and appends `SessionCompleted{report_path, summary}`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::append",
+            "step": "The fold stores `completed = Some((report_path, summary))`. `Inner::append` then recomputes the session summary and writes `cost_usd` (db execution sum + judge cost), status, lane to the sessions row and broadcasts `EngineNotice::SessionUpdated`."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:detail",
+            "step": "The browser calls the session detail endpoint, which runs `view::detail`: it reads the report file into `SessionDetail.completion`, builds `stages` (the Completion card is Done once `completed` is set), `execution_groups` with per-group cost, and `summary.cost_usd`."
+          },
+          {
+            "location": "web/src/screens/SessionScreen.tsx:SessionBoard",
+            "step": "Desktop board: `SessionScreen` renders the header (total cost via `formatCost(s.cost_usd)`), `LaneStepper`, and, when `d.completion` is set, a 'Completion report' Panel from `splitDecidedForYou(d.completion).body` plus a 'Decided for you' panel. `LanePanel` renders `StageRow`s whose `meta` comes from `stageMeta`, with no cost. Live updates arrive as `session_updated` (replaces `summary`, so the header cost moves) and `session_event` (throttled reload of detail)."
+          },
+          {
+            "location": "web/src/mobile/screens/MSession.tsx",
+            "step": "Mobile board: `MSession` shows total cost, the report cards, `LaneCard` stage rows (no cost), and an Executions tab that renders `execGroups(d)` with a cost per agent/project group and per execution."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns `Usage`, `StageKind`, `ExecPurpose`, and the API DTOs (`SessionSummary`, `StageCard`, `SessionDetail`, `ExecutionGroupView`, `CostReport`) with `#[ts(export)]`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Planner rule, runner steps, judge input, fold state, and the `view` projections that fill the DTOs."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "`executions` table with `stage` and `usage` columns; `Costs::report` aggregates by stage workspace-wide."
+          },
+          {
+            "kind": "internal",
+            "name": "@ostra/design",
+            "role": "`StageRow`, `Panel`, `Chip`, `LaneStepper` used by the board; `StageRow` has no cost prop."
+          },
+          {
+            "kind": "internal",
+            "name": "web/src/api/gen",
+            "role": "Generated TypeScript for the DTOs; regenerated by `cargo test -p ostra-core`."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Planner rule that decides the completion report. `Planner::completion` emits `Step::Judge{Completion}` until a `completion_decision` exists, then `Step::Complete{report_markdown}` with the judge's markdown plus the engine-appended 'Projects created' section (Rule O3). `quick_answer` completes with the quick answer text instead.",
+            "symbols": [
+              "fn completion(&mut self)",
+              "fn quick_answer(&mut self)",
+              "fn created_projects_section(s: &SessionState) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Performs the steps. `Step::Complete` writes `<session_root>/ostra-completion.md` and appends `SessionCompleted{report_path, summary}`. `perform_judge`/`call_judge` run the Completion judge (3 attempts, adds the judge's `usage.cost_usd` to an in-memory per-session `judge_cost` map, appends `DecisionMade`). On judge failure a fallback report is built from the judge input. `Inner::append` recomputes the session cost and writes it to the sessions row after every event. The usage-delta handler also rewrites the session cost live while executions run.",
+            "symbols": [
+              "judge_cost: Mutex<HashMap<SessionId, f64>>",
+              "Step::Complete { report_markdown } (about line 1779)",
+              "async fn call_judge(&self, session: &SessionId, kind: JudgeKind, subject: Option<String>, input: String, summary: String, schema: Value, validate: impl Fn(&Value) -> bool) -> Result<Value, EngineError>",
+              "async fn perform_judge(self: &Arc<Self>, session: &SessionId, kind: JudgeKind, subject: Option<String>) -> Result<(), EngineError>",
+              "Inner::append (cost recompute at about line 1408 to 1431)",
+              "execution usage handler (cost update at about line 2998 to 3018)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "Builds the Completion judge's user message. `completion_input` writes request, category, YOLO, track, feedback rounds, research summaries, spec, plan, phases with outcomes, LOW findings, per-project closing stages (format, closing gate, docs), YOLO decisions, and notes. It writes no cost, token, or per-stage spend figure.",
+            "symbols": [
+              "fn completion_input(s: &SessionState) -> (String, String)",
+              "pub fn judge_input(...) with arm JudgeKind::Completion => completion_input(s)"
+            ]
+          },
+          {
+            "path": "assets/judges/completion.md",
+            "purpose": "System prompt of the Completion judge. Defines the required report sections in order (Summary, Phases, Checks, Not run, Blocked, Decided for you under YOLO), cites Rule T7, says to report only what the input records, bans em dashes, and ends by calling `decide` with `report_markdown` and `reason`. Its Input paragraph lists what the input holds; cost is not listed."
+          },
+          {
+            "path": "crates/ostra-engine/src/judge.rs",
+            "purpose": "Output struct and JSON schema of the Completion judge.",
+            "symbols": [
+              "pub struct CompletionOut { pub report_markdown: String, #[serde(default)] pub reason: String }",
+              "JudgeKind::Completion => json!({ properties: { report_markdown, reason }, required: [report_markdown, reason] })"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/paths.rs",
+            "purpose": "The engine names the report file.",
+            "symbols": [
+              "pub mod report { pub fn completion() -> String { \"ostra-completion.md\".into() } }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Fold state. `completion_decision` is set when a Completion `DecisionMade` folds; `completed: Option<(PathBuf, String)>` is set by `SessionCompleted`. `ExecRecord` holds `stage: StageKind`, `purpose`, `result` (with usage). `spent_usd()` sums finished executions only (used by the budget gate, excludes judge cost). `stage_of(&ExecPurpose) -> StageKind` maps each execution purpose to its stage.",
+            "symbols": [
+              "pub struct ExecRecord { id, agent, purpose: ExecPurpose, stage: StageKind, project, report_path, params, result: Option<ExecutionResult>, resumes, loop_key, started_at, ended_at, executor, model, spawn_block }",
+              "pub fn spent_usd(&self) -> f64",
+              "pub fn stage_of(purpose: &ExecPurpose) -> StageKind",
+              "self.completed = Some((report_path.clone(), summary.clone())) (line 1980)",
+              "JudgeKind::Completion => self.completion_decision = Some(id.clone()) (line 3210)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Projections for the browser. `summary` computes `SessionSummary.cost_usd` = finished execution costs + judge_cost argument. `detail` builds `SessionDetail`: reads the report file into `completion`, sums execution view costs, passes judge cost 0.0 and takes `max(summary, execution sum)`. `stages` builds `StageCard`s (no cost field); `completion_card` is the Done-lane card. `execution_groups` sums `usage.cost_usd` per agent/project group. `tree_session` builds the Sessions-tree node with group costs.",
+            "symbols": [
+              "pub fn summary(s: &SessionState, workspace: &WorkspaceId, judge_cost: f64) -> SessionSummary",
+              "pub fn stages(s: &SessionState) -> Vec<StageCard>",
+              "fn completion_card(s: &SessionState) -> StageCard",
+              "pub fn execution_groups(executions: &[ExecutionView]) -> Vec<ExecutionGroupView>",
+              "pub fn tree_session(s: &SessionState, summary: &SessionSummary, mut executions: Vec<ExecutionView>) -> TreeSession",
+              "pub fn detail(s: &SessionState, db: &WorkspaceDb, workspace: &WorkspaceId, live: HashSet<ExecutionId>) -> Result<SessionDetail, EngineError>",
+              "pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef> (adds 'completion' artifact at line 930)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "API DTOs (exported to TypeScript). `SessionSummary.cost_usd`, `StageCard` (one card on the session board, no cost field), `SessionDetail.completion: Option<String>`, `ExecutionView.usage/stage/group/run_label`, `ExecutionGroupView.cost_usd`, `TreeSession.cost_usd`, `TreeGroup.cost_usd`, `CostRow`, `CostReport.by_stage`.",
+            "symbols": [
+              "pub struct SessionSummary { ..., pub cost_usd: f64, ... }",
+              "pub struct StageCard { stage: StageKind, lane: Lane, label: String, status: StageStatus, project: Option<String>, phase: Option<u32>, executions: Vec<ExecutionId>, gate: Option<GateId>, detail: Option<String> }",
+              "pub struct SessionDetail { summary, stages, phases, executions, gates, decisions, artifacts, completion: Option<String>, session_root, execution_groups, fact_checks, files, uploads, additions }",
+              "pub struct ExecutionView { ..., stage: Option<StageKind>, usage: Usage, group: String, spans_session: bool, run_label: String, ... }",
+              "pub struct ExecutionGroupView { group, agent, project, status, cost_usd: f64, executions }",
+              "pub struct CostRow { key: String, executions: u32, usage: Usage, cache_reads_per_tool_call: f64 }",
+              "pub struct CostReport { since, by_session, by_stage, by_agent, by_executor, total }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "`Usage` carries tokens, `cost_usd`, tool calls, build_ms; `Usage::add` sums all fields.",
+            "symbols": [
+              "pub struct Usage { input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cache_write_1h_tokens, cost_usd: f64, tool_calls, build_ms, context_tokens }",
+              "pub fn add(&mut self, other: &Usage)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/pipeline.rs",
+            "purpose": "`StageKind` (kebab-case, 38 variants including `Completion`) and `StageKind::lane()` map stages to the nine board lanes.",
+            "symbols": [
+              "pub enum StageKind",
+              "pub fn lane(self) -> Lane",
+              "pub enum Lane { Research, Requirements, Verification, Design, Build, Review, Test, Docs, Done }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "`ExecPurpose` (what an execution was for) and `run_label()`; `spans_session()`.",
+            "symbols": [
+              "pub enum ExecPurpose",
+              "pub fn run_label(&self) -> String",
+              "pub fn spans_session(&self) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/costs.rs",
+            "purpose": "Workspace-wide cost report read from the `executions` table: groups by session_id, stage, agent, executor with `Usage::add`; executions without a stage group under 'none', without a session under 'side-panel'. Judge calls are not rows in `executions`, so they are absent here.",
+            "symbols": [
+              "pub fn report(&self, since: Option<DateTime<Utc>>) -> Result<CostReport, StoreError>",
+              "fn rows_of(groups: Groups) -> Vec<CostRow>",
+              "fn cost_row(key: String, executions: u32, usage: Usage) -> CostRow"
+            ]
+          },
+          {
+            "path": "web/src/screens/SessionScreen.tsx",
+            "purpose": "Desktop session board. Renders `SessionHeader`, `LaneStepper`, tabs (Overview, Decisions), gates, the 'Completion report' Panel (markdown from `detail.completion` via `splitDecidedForYou`, and a separate 'Decided for you' panel), `LanePanel`, phase graph, event log. It shows no per-stage or per-group cost."
+          },
+          {
+            "path": "web/src/screens/session/Header.tsx",
+            "purpose": "The only desktop board cost display: `formatCost(s.cost_usd)` in a mono span in the chip row (line 128).",
+            "symbols": [
+              "<span style={{ fontFamily: \"var(--font-mono)\" }}>{formatCost(s.cost_usd)}</span>"
+            ]
+          },
+          {
+            "path": "web/src/screens/session/LanePanel.tsx",
+            "purpose": "Lists the selected lane's stage cards as design `StageRow`s with `meta={stageMeta(s, execs)}`; selecting one shows Produces/Protects, detail, and buttons to its executions. No cost is shown.",
+            "symbols": [
+              "export function LanePanel({ detail, lane, onGate }: {...})"
+            ]
+          },
+          {
+            "path": "web/src/screens/session/board.ts",
+            "purpose": "Pure board helpers. `stageMeta(s, execs)` returns the right-aligned text of a stage row: a running execution's summary, else the card detail and project.",
+            "symbols": [
+              "export function stageMeta(s: StageCard, execs: Map<string, ExecutionView>): string | undefined",
+              "export const stageKey",
+              "export function laneStates(d: SessionDetail): Record<Lane, LaneState>"
+            ]
+          },
+          {
+            "path": "design/src/components/pipeline/StageRow.tsx",
+            "purpose": "Design-system row used by the board. Props are label, status, meta, selected, onClick; there is no cost prop.",
+            "symbols": [
+              "export function StageRow({ label, status = \"pending\", meta, selected, onClick }: StageRowProps)"
+            ]
+          },
+          {
+            "path": "web/src/mobile/screens/MSession.tsx",
+            "purpose": "Mobile session board. Shows total cost (`ms-cost`, line 229), the completion report cards (lines 264 to 284), `LaneCard` stage rows, and an 'Executions' tab listing `execGroups(d)` with a cost per group and per execution (lines 369 to 393)."
+          },
+          {
+            "path": "web/src/mobile/screens/sessionView.ts",
+            "purpose": "Mobile view model. `execGroups` maps `d.execution_groups` to rows with `formatCost(g.cost_usd)` and `formatCost(x.usage.cost_usd)`.",
+            "symbols": [
+              "export function execGroups(d: SessionDetail, nowMs = Date.now()): ExecGroup[]",
+              "export function stageTarget(...)"
+            ]
+          },
+          {
+            "path": "web/src/shell/Sidebar.tsx",
+            "purpose": "Sessions tree: each session row shows `formatCost(s.cost_usd)` as meta when no gate is open (line 181); groups are listed under 'Executions' via `GroupRows`."
+          },
+          {
+            "path": "web/src/lib/format.ts",
+            "purpose": "Cost formatting used everywhere on the board.",
+            "symbols": [
+              "export function formatCost(usd: number): string  // $0, <$0.01, else $x.xx"
+            ]
+          },
+          {
+            "path": "web/src/lib/events.ts",
+            "purpose": "`splitDecidedForYou` splits the report markdown at a heading matching `Decided for you` (levels 1 to 3) so the board shows it in its own panel; this means the board parses the report text by heading.",
+            "symbols": [
+              "export function splitDecidedForYou(markdown: string): { body: string; decided: string | null }"
+            ]
+          },
+          {
+            "path": "web/src/screens/workspace/costTable.ts",
+            "purpose": "Cost screen helper: `COST_GROUPS` (session, stage, agent, executor), `costLines`, `costTotals`; resolves stage keys to labels. Precedent for rendering a by-stage cost table.",
+            "symbols": [
+              "export type CostGroup = \"session\" | \"stage\" | \"agent\" | \"executor\"",
+              "export function costLines(rows: CostRow[], group: CostGroup, total: number, sessions?)",
+              "export function costTotals(report: CostReport)"
+            ]
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Section 'The completion report' (line 815) describes the report; must be updated with any behavior change (CLAUDE.md pattern 9)."
+          },
+          {
+            "path": "docs/internals/spend-and-limits.md",
+            "purpose": "Section 'How cost is counted' and 'The session budget'. States that judge calls appear in the session's displayed cost but do not trip the budget gate, and that the Cost screen breaks spend down per session, stage, agent, executor."
+          },
+          {
+            "path": "crates/ostra-engine/tests/runner.rs",
+            "purpose": "Runner test `implement_session_runs_to_completion_under_yolo` drives a session to completion with a scripted judge returning `report_markdown: \"# Done\\n\\nEverything ran.\"`; asserts `summary.cost_usd > 0.0`, the execution groups, and `detail.completion` content (lines 340 to 397)."
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures. The only completion fixture found is `h9_a_waiting_subagent_holds_completion` (asserts no 'completion' summary while a subagent waits). Step summaries include 'complete' (plan.rs lines 229 and 262)."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a spec asks for cost per stage, decide where the figure is computed (engine `view::stages` from `ExecutionView.usage` and `ExecutionView.stage`, versus the web from `detail.executions`) and whether judge cost is attributed anywhere.",
+          "If the report itself must carry costs, decide between a model-written section (add cost lines to `completion_input` and the prompt) and an engine-appended section like `created_projects_section`; the second needs the cost to be available in the fold or passed through `PlanCtx`.",
+          "A separate pass on the server layer (api.rs session detail handler, WebSocket notices) and on web mock fixtures if the DTO changes."
+        ],
+        "not_covered": [
+          "The server HTTP handler for session detail and the WebSocket `session_updated` path in crates/ostra-server (only the engine and web ends were read).",
+          "How `ExecutionStarted` materializes the `stage` column in ostra-store (the column is read by the cost report; the write path was not traced).",
+          "The init and quick-answer variants of completion beyond noting that `Step::Complete` is shared (crates/ostra-engine/src/init.rs line 523).",
+          "Mock fixtures in web/src/api/mock/ and the design/ Gallery, which would need updates for any new DTO field.",
+          "Whether judge calls other than Completion (Classify, Stakes, and so on) should be attributed to a stage: they are not executions and have no StageKind."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The planner asks the Completion judge once (`Step::Judge`), the judge's answer is recorded as a `DecisionMade` and folded into `completion_decision`, the planner then emits `Step::Complete` carrying the judge's markdown, and the runner writes the file and appends `SessionCompleted`. The markdown reaches the planner only through the decision output in the log, so the fold stays a pure function of the log. Any fact the report needs that is not in the log (for example judge cost, kept in a runner-side map) is not visible to `completion_input`.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/judge_input.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Completion is judge, then step, then event",
+            "snippet": {
+              "code": "fn completion(&mut self) {\n    let s = self.s;\n    // Rule H9: nothing completes while a subagent waits for an answer.\n    if !self.nothing_running()\n        || s.project_inits.values().any(|i| !i.finished)\n        || s.coordination_open()\n    {\n        return;\n    }\n    match &s.completion_decision {\n        None => self.push(Step::Judge {\n            judge: JudgeKind::Completion,\n            subject: None,\n        }),\n        Some(id) => {\n            let md = s\n                .decisions\n                .get(id)\n                .and_then(|d| {\n                    d.output\n                        .get(\"report_markdown\")\n                        .and_then(|v| v.as_str())\n                        .map(String::from)\n                })\n                .map(|md| md + &created_projects_section(s));\n            self.push(Step::Complete {\n                report_markdown: md,\n            });\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:1965"
+            }
+          },
+          {
+            "description": "Rule O3: `created_projects_section(s)` is appended in the planner to the judge's markdown, so a fact the engine knows exactly does not depend on the model repeating it. This is the existing precedent for adding exact data (such as a cost table) to the report without asking the judge to copy numbers. The section is built from fold state, so it stays pure.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Engine appends deterministic report sections after the judge's prose",
+            "snippet": {
+              "code": "/// Rule O3: the completion report names every project an agent created and how its init ended.\nfn created_projects_section(s: &SessionState) -> String {\n    if s.created_projects.is_empty() {\n        return String::new();\n    }\n    let rows: Vec<String> = s\n        .created_projects\n        .iter()\n        .map(|p| {\n            let init = match s.project_inits.get(&p.key).and_then(|i| i.note.as_deref()) {\n                Some(note) => format!(\"not initialized: {note} Initialize it from the project list before its next session.\"),\n                None => \"initialized\".into(),\n            };\n            format!(\"- `{}` at `{}` ({}), {init}\", p.key, p.path.display(), p.stack)\n        })\n        .collect();\n    format!(\"\\n\\n## Projects created\\n\\n{}\\n\", rows.join(\"\\n\"))\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:2055"
+            }
+          },
+          {
+            "description": "Two precedents sum `usage.cost_usd` over executions grouped by a key: `view::execution_groups` (group = agent:project, per session, from `ExecutionView`s) and `Costs::report` in ostra-store (stage, agent, executor, session; workspace-wide, from the `executions` table). `ExecutionView.stage` and `ExecRecord.stage` already give the stage key, so a per-stage sum needs no new data. Mobile `execGroups` and the Sessions tree show the per-group figure; the desktop board does not.",
+            "files": [
+              "crates/ostra-engine/src/view.rs",
+              "crates/ostra-store/src/workspace/costs.rs",
+              "web/src/mobile/screens/sessionView.ts"
+            ],
+            "name": "Sum execution cost by a key, oldest first",
+            "snippet": {
+              "code": "let g = &mut out[i];\ng.executions.push(e.id.clone());\ng.cost_usd += e.usage.cost_usd;\nrunning[i] |= e.status == ExecutionStatus::Running;",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/view.rs:1009"
+            }
+          },
+          {
+            "description": "The sessions row's `cost_usd` is rewritten from `db.list_executions` sum + `judge_cost[session]` on every appended event and on every usage delta. `view::detail` instead sums the execution views, passes 0.0 for judge cost, and takes the larger of that and the summary figure. The `SessionSummary.cost_usd` the board header shows is therefore executions plus judge calls; the per-execution and per-group figures exclude judge calls.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/view.rs"
+            ],
+            "name": "Session cost: DB-backed sum plus in-memory judge cost, with a max() guard",
+            "snippet": {
+              "code": "let cost: f64 = executions.iter().map(|e| e.usage.cost_usd).sum();\nlet mut summary = summary(s, workspace, 0.0);\nsummary.cost_usd = summary.cost_usd.max(cost);",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/view.rs:1194"
+            }
+          },
+          {
+            "description": "DTOs in ostra-core carry `#[ts(export)]`; `cargo test -p ostra-core` regenerates `web/src/api/gen/`, then `cd web && npm run typecheck`. `web/src/api/mock/fixtures*.ts` build `SessionDetail`/`StageCard` values and would need the new field. Frontend changes require asking the user to run /design-sync (CLAUDE.md).",
+            "files": [
+              "crates/ostra-core/src/api.rs",
+              "web/src/api/gen/",
+              "web/src/api/mock/fixtures.ts"
+            ],
+            "name": "API type change regenerates TypeScript"
+          }
+        ],
+        "problem": "The task name ('stage cost breakdown') implies showing cost per stage and possibly putting it in the completion report. Today the completion report is prose written by the Completion judge from a text digest of session state that contains no cost figures, and the session board shows cost only as one session total (header) plus, on mobile, per execution group. Stage cards carry execution IDs but no cost. The workspace Cost screen already aggregates spend by stage from the executions table, so a stage key and a summing precedent exist, but none of it reaches the session board or the report.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "How the completion report is written (from the planner step to the file and the event) and how the session board shows cost (backend projections and web components). Investigative only. It does not cover the workspace Cost screen beyond noting that it already groups by stage, the budget gate, or any design for a per-stage cost breakdown.",
+        "sources": [],
+        "title": "Completion report and session board cost"
+      },
+      "submit": {
+        "findings_summary": "The completion report is produced by Planner::completion, which asks the Completion judge once. The judge sees a text digest (completion_input) with no cost data. The planner appends engine-built sections (Rule O3), and Step::Complete writes ostra-completion.md and appends SessionCompleted. The session board shows cost only as the session total (Header.tsx, from SessionSummary.cost_usd = execution sum + in-memory judge cost) and, on mobile, per execution group and per execution (execution_groups, execGroups). StageCard has no cost field and StageRow has no cost prop, but ExecRecord and ExecutionView carry stage and usage, and the workspace Cost screen already groups spend by stage from the executions table. Judge cost is held only in the runner's in-memory map, so it is absent from stage and group sums and lost on restart.",
+        "not_covered": [
+          "Server HTTP handler for session detail and the WebSocket session_updated path in crates/ostra-server",
+          "Write path that materializes the executions.stage column in ostra-store",
+          "Init and quick-answer completion variants beyond the shared Step::Complete",
+          "Web mock fixtures and design Gallery that a DTO change would touch",
+          "Attribution of non-Completion judge calls (Classify, Stakes, and so on) to a stage"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the completion report is written (planner rule, Completion judge, Step::Complete, file and event) and how the session board shows cost (engine projections, DTOs, desktop and mobile web); no design for a per-stage breakdown and no server HTTP layer.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -64,7 +64,7 @@ fn spec_renders_the_sections_downstream_agents_read() {
 fn plan_writes_master_and_phase_files() {
     let dir = tempfile_dir();
     let md = dir.join("ostra-plan-20260728-141530-order-cancellation.md");
-    let w = write(DocKind::Plan, &md, &value(PLAN)).unwrap();
+    let w = write(DocKind::Plan, &md, &value(PLAN), None).unwrap();
     assert_eq!(w.errors(), 0);
     let phase1 = phase_path(&md, 1);
     assert_eq!(
@@ -98,7 +98,7 @@ fn plan_writes_master_and_phase_files() {
 
     // A revision that removes phase 2 also removes its files.
     let merged = apply_update(load(&md), &json!({}), &["2".into()]).unwrap();
-    write(DocKind::Plan, &md, &merged).unwrap();
+    write(DocKind::Plan, &md, &merged.value, None).unwrap();
     assert!(!phase_path(&md, 2).exists());
     assert!(!json_path(&phase_path(&md, 2)).exists());
     assert!(phase1.exists());
@@ -167,7 +167,7 @@ fn submit_needs_a_clean_document_that_matches() {
         err.contains("Write the spec with the Document tool"),
         "{err}"
     );
-    write(DocKind::Spec, &md, &value(SPEC)).unwrap();
+    write(DocKind::Spec, &md, &value(SPEC), None).unwrap();
     check_submit(AgentName::GenerateSpec, &submit).unwrap();
     let mut wrong = submit.clone();
     wrong["requirements"] = json!(5);
@@ -249,7 +249,7 @@ fn inventory_submit_needs_a_profile_that_parses() {
 fn plan_submit_must_match_the_phases() {
     let dir = tempfile_dir();
     let md = dir.join("ostra-plan-1.md");
-    write(DocKind::Plan, &md, &value(PLAN)).unwrap();
+    write(DocKind::Plan, &md, &value(PLAN), None).unwrap();
     let phase = |id: u32, deliverable: &str, project: &str, complexity: &str, deps: Vec<u32>| json!({"id": id, "deliverable": deliverable, "project": project, "title": "t", "complexity": complexity, "test_policy": "Required", "depends_on": deps, "file": phase_path(&md, id)});
     let mut submit = json!({"spec_path": "/s", "master_plan_path": md, "phases": [phase(1, "D1", "backend", "Medium", vec![]), phase(2, "D2", "web", "Low", vec![1])], "stakes": "Medium", "summary": "s", "step_count": 3, "requirement_coverage": "4 of 4"});
     check_submit(AgentName::Plan, &submit).unwrap();
@@ -338,4 +338,218 @@ fn a_phase_lists_every_skill_its_steps_name() {
         Path::new("/s/ostra-plan-1-phase-1.md"),
     );
     assert!(md.contains("`backend-service`"), "{md}");
+}
+
+/// The repos the fixtures name, on disk under `dir`: `backend` and `web`.
+fn shop(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let backend = dir.join("backend");
+    let web = dir.join("web");
+    for (path, text) in [
+        (
+            backend.join("src/orders/service.ts"),
+            "export class OrderService {\n  refund() {}\n}\n",
+        ),
+        (
+            backend.join("src/orders/routes.ts"),
+            "export const refundRoute = 1;\n",
+        ),
+        (
+            backend.join("src/orders/repository.ts"),
+            "export class OrderRepository {\n  save() {}\n}\n",
+        ),
+        (
+            backend.join("src/events/publisher.ts"),
+            "export function publish() {}\n",
+        ),
+        (web.join("src/orders/OrderPage.tsx"), "export const Page = 1;\n"),
+    ] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    (backend, web)
+}
+
+fn issue_lines(w: &Written) -> Vec<String> {
+    w.issues.iter().map(|i| i.line()).collect()
+}
+
+// Rule Hard 4: references are checked on every write and submit, never in the browser view.
+#[test]
+fn spec_groundings_and_consumed_sources_must_exist() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (backend, web) = shop(tmp.path());
+    let mut v = value(SPEC);
+    v["repos"] = json!([{"key": "backend", "root": backend}, {"key": "web", "root": web}]);
+    let md = tmp.path().join("ostra-spec-1.md");
+    // A web criterion may rest on the backend code it consumes.
+    v["criteria"][3]["grounding"] = json!("src/events/publisher.ts:publish");
+    let w = write(DocKind::Spec, &md, &v, None).unwrap();
+    assert!(w.issues.is_empty(), "{:?}", issue_lines(&w));
+
+    v["criteria"][0]["grounding"] = json!("src/orders/missing.ts:OrderService.refund");
+    v["criteria"][1]["grounding"] = json!("src/orders/service.ts:OrderService.cancel");
+    v["contracts_consumed"][0]["source"] = json!("src/events/publisher.ts:emit");
+    let w = write(DocKind::Spec, &md, &v, None).unwrap();
+    let lines = issue_lines(&w);
+    assert_eq!(w.errors(), 3, "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("(C1)")
+            && l.contains("`src/orders/missing.ts` is not in `backend` or another repo")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("(C2)") && l.contains("`cancel` does not appear")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("(Event publisher)") && l.contains("`emit` does not appear")),
+        "{lines:?}"
+    );
+    assert!(
+        load_view(&md).unwrap().issues.is_empty(),
+        "the browser view does not check the code"
+    );
+    let submit = json!({"spec_path": md, "open_questions": [], "external_evidence_rows": 1, "deliverables": 2, "requirements": 4, "summary": "s"});
+    let err = check_submit(AgentName::GenerateSpec, &submit).unwrap_err();
+    assert!(err.contains("`cancel` does not appear"), "{err}");
+}
+
+#[test]
+fn plan_steps_change_and_read_files_that_exist_or_an_earlier_step_creates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (backend, web) = shop(tmp.path());
+    let mut v = value(PLAN);
+    v["phases"][0]["repo_root"] = json!(backend);
+    v["phases"][1]["repo_root"] = json!(web);
+    let md = tmp.path().join("ostra-plan-1.md");
+    let w = write(DocKind::Plan, &md, &v, None).unwrap();
+    assert!(w.issues.is_empty(), "{:?}", issue_lines(&w));
+
+    let mut create = v["phases"][0]["steps"][1].clone();
+    create["id"] = json!("1.3");
+    create["file"] = json!("src/orders/cancel.ts");
+    create["change"] = json!("Create");
+    create["read_first"] = json!(["src/orders/cancel.ts", "src/orders/service.ts"]);
+    v["phases"][0]["steps"].as_array_mut().unwrap().push(create);
+    // Step 1.1 modifies the service, so a symbol it adds is not looked for there.
+    v["phases"][0]["steps"][1]["read_first"] = json!([
+        "src/orders/routes.ts:refundRouteX",
+        "src/orders/service.ts:OrderService.cancel"
+    ]);
+    // Another repo's file counts, including one an earlier phase creates.
+    v["phases"][1]["steps"][0]["read_first"] =
+        json!(["src/orders/OrderPage.tsx", "src/orders/cancel.ts", "src/orders/nope.ts"]);
+    let w = write(DocKind::Plan, &md, &v, None).unwrap();
+    let lines = issue_lines(&w);
+    assert_eq!(w.errors(), 1, "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.contains("(step 2.1)")
+            && l.contains("`src/orders/nope.ts` is not in `web`")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with("- warning (step 1.2)")
+            && l.contains("`refundRouteX` does not appear")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("`cancel` does not appear")),
+        "{lines:?}"
+    );
+
+    v["phases"][0]["steps"][1]["file"] = json!("src/orders/gone.ts");
+    let w = write(DocKind::Plan, &md, &v, None).unwrap();
+    assert!(
+        issue_lines(&w).iter().any(|l| l.contains("(step 1.2)")
+            && l.contains("Use `Create`, or fix the path")),
+        "{:?}",
+        issue_lines(&w)
+    );
+}
+
+#[test]
+fn a_research_document_records_its_files_and_cites_only_real_ones() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (backend, _) = shop(tmp.path());
+    let md = tmp.path().join("ostra-research-1.md");
+    let w = write(DocKind::Research, &md, &value(RESEARCH), Some(&backend)).unwrap();
+    assert!(w.issues.is_empty(), "{:?}", issue_lines(&w));
+    let stored = load(&md).unwrap();
+    assert_eq!(stored["snapshot"]["root"], json!(backend.display().to_string()));
+    let files = stored["snapshot"]["files"].as_object().unwrap();
+    assert_eq!(
+        files.keys().cloned().collect::<Vec<_>>(),
+        [
+            "src/events/publisher.ts",
+            "src/orders/repository.ts",
+            "src/orders/routes.ts",
+            "src/orders/service.ts"
+        ]
+    );
+    assert!(files.values().all(|h| h.as_str().unwrap().len() == 16));
+
+    let mut v = value(RESEARCH);
+    v["files"][1]["path"] = json!("src/orders/nope.ts");
+    let w = write(DocKind::Research, &md, &v, Some(&backend)).unwrap();
+    assert!(
+        issue_lines(&w)
+            .iter()
+            .any(|l| l.contains("`src/orders/nope.ts` is not there")),
+        "{:?}",
+        issue_lines(&w)
+    );
+    let err = check_submit(AgentName::Explore, &json!({"research_path": md})).unwrap_err();
+    assert!(err.contains("is not there"), "{err}");
+}
+
+// Rules D2a and D4a: the stages after research learn which cited files changed since.
+#[test]
+fn code_facts_mark_what_changed_since_research() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (backend, _) = shop(tmp.path());
+    let md = tmp.path().join("ostra-research-1.md");
+    write(DocKind::Research, &md, &value(RESEARCH), Some(&backend)).unwrap();
+    let docs = vec![md.clone()];
+    assert!(changed_since_research(&docs).is_empty());
+
+    std::fs::write(backend.join("src/orders/service.ts"), "export class OrderService {}\n").unwrap();
+    std::fs::remove_file(backend.join("src/orders/repository.ts")).unwrap();
+    assert_eq!(
+        changed_since_research(&docs),
+        [
+            "`src/orders/repository.ts` in backend: gone since ostra-research-1.md was written",
+            "`src/orders/service.ts` in backend: changed since ostra-research-1.md was written"
+        ]
+    );
+    let facts = render_code_facts(&docs);
+    for line in [
+        "## Repo `backend`",
+        "- `src/orders/service.ts` (changed):",
+        "- `src/orders/repository.ts` (gone):",
+        "- `src/events/publisher.ts` (unchanged):",
+        "From `src/orders/service.ts:48` (changed):",
+        "(`src/orders/routes.ts:refundRoute`, unchanged)",
+    ] {
+        assert!(facts.contains(line), "missing {line}\n{facts}");
+    }
+    assert!(
+        !facts.contains("What the request asks") && !facts.contains("Recommendation"),
+        "no request text reaches the plan through the facts: {facts}"
+    );
+
+    // A document written before fingerprints says so instead of claiming the files are current.
+    let old = tmp.path().join("ostra-research-0.md");
+    write(DocKind::Research, &old, &value(RESEARCH), None).unwrap();
+    let lines = changed_since_research(&[old.clone(), md.clone()]);
+    assert!(
+        lines
+            .last()
+            .unwrap()
+            .starts_with("ostra-research-0.md: written before Ostra recorded file fingerprints"),
+        "{lines:?}"
+    );
 }

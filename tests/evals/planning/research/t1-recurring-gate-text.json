@@ -1,0 +1,177 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:40:37.121351945+00:00",
+  "docs": [
+    {
+      "task": "Where the planner opens the fact-check-recurring gate for the spec and the plan, the limit it compares against, and the explanation text.",
+      "file": "ostra-research-20261002-083940-recurring-gate-text.md",
+      "document": {
+        "areas": [
+          "ostra-engine",
+          "ostra-core"
+        ],
+        "asks": [
+          "Where the planner opens the fact-check-recurring gate for the spec",
+          "Where the planner opens the fact-check-recurring gate for the plan",
+          "The limit the planner compares against",
+          "The explanation text of the gate"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/state.rs:fact_finished",
+            "step": "A fact-check execution finishes. On a FAIL (any verdict other than Pass), consecutive_fails is incremented, pending_findings is set to the findings text, and needs_run is set. A PASS sets consecutive_fails to 0."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:spec_flow",
+            "step": "next_steps runs spec_flow or plan_flow. If a recurring gate is already open (recurring_gate is Some) the flow returns early. Otherwise, when the author needs a rerun, pending_findings is Some and consecutive_fails >= FACTCHECK_RECURRING_LIMIT + fail_limit_extra, the planner calls self.gate(title, explanation, GatePayload::FactCheckRecurring {...}) instead of spawning the author."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:gate",
+            "step": "Planner::gate pushes Step::OpenGate { title, explanation, payload }. The runner turns it into a gate-opened event; the fold stores the gate id in spec.recurring_gate or plan.recurring_gate by target (state.rs lines 3857-3859). gate_owner returns the target string as the dedupe key part."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_gate_answered",
+            "step": "On answer, the fold clears the recurring gate; 'stop' sets stopped (the next planner pass emits Step::Fail 'The spec stage was stopped.' or 'The plan stage was stopped.'); any other choice calls allow_more, and optional guidance text becomes a spec change (spec.changes + needs_run) or goes through requirement_change for the plan, via the Route-answer judge when routed."
+          },
+          {
+            "location": "crates/ostra-engine/src/judge_input.rs:yolo_plan",
+            "step": "Under YOLO the gate is answered by a fixed plan: another-round while passes < 6, else stop."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Defines GatePayload::FactCheckRecurring and FactTarget used by the planner."
+          },
+          {
+            "kind": "internal",
+            "name": "FACTCHECK_RECURRING_LIMIT",
+            "role": "Constant 3 in crates/ostra-engine/src/state.rs, imported into plan.rs."
+          }
+        ],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Pure planner. spec_flow (line 761) opens the spec gate at lines 798-815; plan_flow (line 930) opens the plan gate at lines 969-984. Planner::gate (line 468) wraps Step::OpenGate with title and explanation.",
+            "symbols": [
+              "fn gate(&mut self, title: impl Into<String>, explanation: impl Into<String>, payload: GatePayload)",
+              "fn spec_flow(&mut self, needs_approval: bool) -> bool",
+              "fn plan_flow(&mut self) -> bool",
+              "fn gate_owner(p: &GatePayload) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Defines FACTCHECK_RECURRING_LIMIT (line 35), the ArtifactTrack fields consecutive_fails and fail_limit_extra (lines 237-238), the fold of FAIL/PASS in fact_finished (line 4844), the gate bookkeeping (recurring_gate set at line 3857, cleared and answered at line 4002), and RecurringTrack (line 4804).",
+            "symbols": [
+              "pub const FACTCHECK_RECURRING_LIMIT: u32 = 3;",
+              "pub consecutive_fails: u32",
+              "pub fail_limit_extra: u32",
+              "trait RecurringTrack { fn clear_recurring_gate(&mut self); fn stop(&mut self); fn allow_more(&mut self); }",
+              "fn fact_finished<T>(t: &mut ArtifactTrack<T>, exec: &ExecutionId, status: ExecutionStatus, result: Option<FactCheckSubmit>, failed_msg: String)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "GatePayload::FactCheckRecurring variant (line 358), its stage() and kind_str() arms (lines 441-468; kind string fact_check_recurring), and the answer options note at line 529.",
+            "symbols": [
+              "FactCheckRecurring { target: FactTarget, passes: u32, findings: Vec<FactCheckFinding> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "YOLO plan for the gate (line 1008): fixed another-round while passes < 6, then stop. Also the judge-facing text at line 680 that restates passes and finding count.",
+            "symbols": [
+              "GatePayload::FactCheckRecurring { passes, .. } => { if *passes < 6 { choice(\"another-round\", ...) } else { choice(\"stop\", ...) } }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Line 1252 references FactCheckRecurring in answer handling (not read in detail)."
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Only fixture that touches the gate: h6_a_conversation_stops_continuing_at_its_run_cap (line 4206) opens and answers fact_check_recurring via a past_recurring_gate helper. The explanation text is not asserted anywhere in tests/ (grep for 'keeps failing' in tests/ found nothing).",
+            "symbols": [
+              "fn h6_a_conversation_stops_continuing_at_its_run_cap()"
+            ]
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "Documents the gate (section 'Fact-check recurring', line 81; gate table line 48; YOLO table line 206). Says another-round allows three more FAILs."
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Mentions the limit at lines 252, 303 and 839 (table row 'Consecutive fact-check FAILs before a gate | 3 | FACTCHECK_RECURRING_LIMIT')."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the text or limit changes, the two explanation strings in plan.rs (lines 808-811 and 980) and the docs sentences in docs/internals/gates-and-judges.md and pipeline.md are the places that repeat it; the YOLO literal 6 in judge_input.rs also depends on the limit of 3 doubling."
+        ],
+        "not_covered": [
+          "Web UI rendering of the gate (web/ was not opened).",
+          "runner.rs line 1252 and validate_answer handling of the fact_check_recurring answer shape were only located, not read.",
+          "Whether the hard-coded 6 in judge_input.rs yolo_plan is derived from FACTCHECK_RECURRING_LIMIT: it is a literal, not an expression of the constant (lines 1009-1012), so the two can drift."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "In spec_flow, inside the branch that runs when the spec has no current version or needs a rerun, the planner checks that findings are pending and that consecutive_fails has reached the limit plus the extension. It then opens the gate with the findings of the current check and returns false, so no spawn happens. The spec explanation has an extra sentence ('Another round may not converge.') that the plan explanation lacks.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Spec gate open site",
+            "snippet": {
+              "code": "if t.current.is_none() || t.needs_run {\n    if t.pending_findings.is_some()\n        && t.consecutive_fails >= FACTCHECK_RECURRING_LIMIT + t.fail_limit_extra\n    {\n        let findings = t\n            .check_for_current()\n            .map(|c| c.findings.clone())\n            .unwrap_or_default();\n        self.gate(\n            \"The spec fact-check keeps failing\",\n            format!(\n                \"The fact-check has failed {} times in a row. Another round may not converge. Choose whether to run another round, add guidance, or stop.\",\n                t.consecutive_fails\n            ),\n            GatePayload::FactCheckRecurring { target: FactTarget::Spec, passes: t.consecutive_fails, findings },\n        );\n        return false;\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:798"
+            }
+          },
+          {
+            "description": "In plan_flow, same condition with an extra !t.invalidated guard (a plan invalidated by a spec change reruns without the gate and without findings). Title and explanation are plan-specific; the explanation omits the 'may not converge' sentence.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Plan gate open site",
+            "snippet": {
+              "code": "if t.current.is_none() || t.needs_run || t.invalidated {\n    if t.pending_findings.is_some()\n        && !t.invalidated\n        && t.consecutive_fails >= FACTCHECK_RECURRING_LIMIT + t.fail_limit_extra\n    {\n        let findings = t\n            .check_for_current()\n            .map(|c| c.findings.clone())\n            .unwrap_or_default();\n        self.gate(\n            \"The plan fact-check keeps failing\",\n            format!(\"The fact-check has failed {} times in a row. Choose whether to run another round, add guidance, or stop.\", t.consecutive_fails),\n            GatePayload::FactCheckRecurring { target: FactTarget::Plan, passes: t.consecutive_fails, findings },\n        );\n        return false;\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:969"
+            }
+          },
+          {
+            "description": "The limit is a constant of 3, but the compared threshold is 3 + fail_limit_extra. Answering anything other than stop calls allow_more, which sets fail_limit_extra to the current consecutive_fails. The next gate therefore opens after three further FAILs (6, 9, ...), as the docs say. Only a PASS resets consecutive_fails to 0 and the extension is not reset with it (fact_finished sets consecutive_fails = 0 on PASS and leaves fail_limit_extra alone).",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Limit extension on another-round",
+            "snippet": {
+              "code": "impl<T> RecurringTrack for ArtifactTrack<T> {\n    fn clear_recurring_gate(&mut self) {\n        self.recurring_gate = None;\n    }\n    fn stop(&mut self) {\n        self.stopped = true;\n    }\n    fn allow_more(&mut self) {\n        self.fail_limit_extra = self.consecutive_fails;\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:4810"
+            }
+          }
+        ],
+        "problem": "The planner opens a FactCheckRecurring gate from two separate places, one in spec_flow and one in plan_flow, each with its own title and explanation string. Both compare the track's consecutive FAIL count against FACTCHECK_RECURRING_LIMIT plus a per-track extension. The two explanation strings differ in wording.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: where the planner opens the fact-check-recurring gate for the spec and the plan, the limit it compares against, and the explanation text. Covers the planner call sites, the limit constant and its extension counter, the gate payload, and the places that repeat the numbers. It does not cover the web UI rendering of the gate or the fact-check agent.",
+        "title": "Fact-check recurring gate: where the planner opens it, the limit, and the explanation text"
+      },
+      "submit": {
+        "findings_summary": "The planner opens the gate in crates/ostra-engine/src/plan.rs: spec_flow (lines 798-815) and plan_flow (lines 969-984), through Planner::gate(title, explanation, payload). Both open it when pending_findings is Some and consecutive_fails >= FACTCHECK_RECURRING_LIMIT (3, defined in state.rs:35) + fail_limit_extra. plan_flow also requires !t.invalidated. The spec explanation is \"The fact-check has failed {n} times in a row. Another round may not converge. Choose whether to run another round, add guidance, or stop.\" The plan explanation is the same without the \"may not converge\" sentence. Titles are \"The spec fact-check keeps failing\" and \"The plan fact-check keeps failing\". Answering another-round sets fail_limit_extra = consecutive_fails (state.rs:4818), so the next gate opens three FAILs later. YOLO answers another-round while passes < 6 using a literal 6 in judge_input.rs:1009. The docs in docs/internals/gates-and-judges.md and pipeline.md repeat the limit.",
+        "not_covered": [
+          "Web UI rendering of the gate",
+          "runner.rs validate_answer handling of the fact_check_recurring answer (located at runner.rs:1252, not read)"
+        ],
+        "open_questions": 0,
+        "scope_covered": "Where the planner opens the fact-check-recurring gate for spec and plan, the limit compared, and the explanation text; web UI rendering and the fact-check agent were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -2863,6 +2863,11 @@ impl SessionState {
         self.session_root.join(paths::report::session_context())
     }
 
+    /// Rule D4a: where the runner writes the code facts before a spawn that gets them.
+    pub fn code_facts_path(&self) -> PathBuf {
+        self.session_root.join(paths::report::code_facts())
+    }
+
     fn insert_phase(&mut self, info: PhaseInfo, impl_loop: WorkLoop) {
         self.project_tracks.entry(info.project.clone()).or_default();
         self.phases.insert(

@@ -1,0 +1,744 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:54:50.642739298+00:00",
+  "docs": [
+    {
+      "task": "How the session budget is enforced: where spend is summed, how the BudgetReached gate opens and is answered, and how YOLO treats it.",
+      "file": "ostra-research-20261002-085025-session-budget-gate.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine",
+          "ostra-core",
+          "web (gate UI only)"
+        ],
+        "asks": [
+          "Explain where session spend is summed.",
+          "Explain how the BudgetReached gate opens and how it is answered.",
+          "Explain how YOLO treats the BudgetReached gate."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/config.rs:Limits",
+            "step": "The setting `limits.session_budget_usd` (default 25.0, validated finite and not negative at save) lives in the workspace limits."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:plan_ctx",
+            "step": "On each planning pass the runner reads it fresh into `PlanCtx.budget_usd`, with 0 mapped to None (no limit)."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::push",
+            "step": "The planner builds spawn steps. Each `Step::Spawn` goes through `Planner::push`. Before the budget guard, push applies the awaiting-init hold (Rule O4) and the resume, continuation, and busy-conversation handling (Rules H2, P2, H5, H6, H7)."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::spent_usd",
+            "step": "The guard computes `limit = budget + state.budget_raised` and `spent = state.spent_usd()`. `spent_usd` sums the cost of executions whose result is set, so running executions and judge calls are not in it."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::push",
+            "step": "If `spent >= limit`, the spawn is dropped. When `state.budget_gate` is None, one `Step::OpenGate` with `GatePayload::BudgetReached { spent_usd, budget_usd: limit }` is pushed (deduplicated by step key `gate:budget_reached:`). While a budget gate is open, further spawns are dropped silently."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform",
+            "step": "The runner performs `Step::OpenGate` by appending `SessionEvent::GateOpened` with a new GateId. `Inner::append` stores, folds, and broadcasts it."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_gate_opened",
+            "step": "The fold records `budget_gate = Some(id)`. The gate's stage is `StageKind::Intake` and its kind string is `budget_reached`."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::flows; crates/ostra-engine/src/judge_input.rs:yolo_leaves_open, yolo_plan",
+            "step": "Under YOLO, `Planner::flows` iterates open gates and skips this one because `yolo_leaves_open` is true. If a `Step::YoloAnswer` were ever emitted, `perform_yolo` would find `yolo_plan` returning None and return without answering. A paused session plans nothing at all (Rule P1)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:answer_gate, validate_answer; crates/ostra-engine/src/state.rs:answer_needs_route",
+            "step": "The user answers through `Engine::answer_gate`, which checks the gate is unanswered and that `validate_answer` accepts the answer. For BudgetReached only `GateAnswer::Choice` fits. It appends `GateAnswered { source: User, routed: answer_needs_route(..) }`. `answer_needs_route` is false for a budget answer, so no judge routes it."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_gate_answered",
+            "step": "The fold clears `budget_gate`. 'raise' adds to `budget_raised` (typed dollars, or the gate's limit with a floor of 1.0, plus any overshoot). Any other option sets `state.failed`, so the session ends as failed with 'Stopped at the session budget after spending $X.'"
+          },
+          {
+            "location": "tests/conformance/main.rs:budget_pauses_spawns_until_raised",
+            "step": "After a raise the next planning pass recomputes `limit` with the larger `budget_raised`, the guard passes, and the dropped spawn is emitted again (fixture asserts `spawn generate-spec spec#1` after the raise)."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Limits setting, GatePayload::BudgetReached, GateAnswer, SessionEvent."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Fold, planner, runner, and YOLO plan that enforce the budget."
+          },
+          {
+            "kind": "internal",
+            "name": "web (gateAnswers.ts, ChoiceGate.tsx, generated GatePayload.ts)",
+            "role": "Console rendering and answer shape for budget_reached; must keep compiling after payload changes."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Defines the setting: Limits.session_budget_usd (default 25.0) and its save-time validation (finite, not negative). 0 means no limit.",
+            "symbols": [
+              "pub session_budget_usd: f64 (line 656)",
+              "session_budget_usd: 25.0 (line 663, Default)",
+              "validate_workspace check at line 1430"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "GatePayload::BudgetReached variant with its stage() and kind_str() arms. Doc comment states the answers raise (extra dollars as text) or stop, and that YOLO never answers it.",
+            "symbols": [
+              "GatePayload::BudgetReached { spent_usd: f64, budget_usd: f64 } (line 429)",
+              "stage() => StageKind::Intake (line 458)",
+              "kind_str() => \"budget_reached\" (line 477)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Fold state for the budget: spent_usd sums finished executions, budget_raised accumulates raises, budget_gate marks the open gate. on_gate_opened and on_gate_answered fold the gate.",
+            "symbols": [
+              "pub budget_raised: f64 (line 1023)",
+              "pub budget_gate: Option<GateId> (line 1024)",
+              "pub fn spent_usd(&self) -> f64 (line 1343)",
+              "fn on_gate_opened (line 3838; BudgetReached arm line 3890)",
+              "fn on_gate_answered (line 3895; BudgetReached arm lines 4252-4273)",
+              "pub fn answer_needs_route(payload: &GatePayload, answer: &GateAnswer) -> bool (line 139)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "PlanCtx carries the budget into the pure planner. Planner::push is the budget guard that replaces a Spawn with a BudgetReached OpenGate. Planner::flows emits Step::YoloAnswer for open gates except those yolo_leaves_open reports.",
+            "symbols": [
+              "pub struct PlanCtx { pub format_commands, pub budget_usd: Option<f64> } (line 41)",
+              "fn push(&mut self, mut step: Step) (line 374; budget guard lines 414-440)",
+              "fn flows(&mut self) (line 543; YOLO loop lines 551-560)",
+              "Step::OpenGate { title, explanation, payload }",
+              "Step::YoloAnswer { gate: GateId }",
+              "gate_owner(): BudgetReached => String::new() (line 351), so the gate key is \"gate:budget_reached:\""
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "YOLO handling of each gate. yolo_leaves_open lists the gates YOLO never answers; yolo_plan returns None for BudgetReached.",
+            "symbols": [
+              "pub fn yolo_leaves_open(s: &SessionState, payload: &GatePayload) -> bool (line 943)",
+              "pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> (line 951; BudgetReached => return None, line 1047)",
+              "pub enum YoloPlan { Fixed { answer, reason }, Judge { schema } }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Reads the setting into PlanCtx on every planning pass, performs Step::OpenGate by appending GateOpened, validates and appends user answers, and performs YoloAnswer. Also computes judge cost for the session summary.",
+            "symbols": [
+              "fn plan_ctx(&self, st: &SessionState) -> PlanCtx (line 1612)",
+              "async fn perform(...) Step::OpenGate arm (line 1678)",
+              "pub fn answer_gate(&self, gate: &GateId, answer: GateAnswer) -> Result<GateView, EngineError> (line 490)",
+              "fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError> (line 1242; BudgetReached accepts only GateAnswer::Choice)",
+              "async fn perform_yolo (line 2087)",
+              "judge_cost: Mutex<HashMap<SessionId, f64>> (line 100)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Displayed session cost: summary() adds execution cost and judge cost, so the displayed total can exceed the figure the budget guard compares.",
+            "symbols": [
+              "pub fn summary(s: &SessionState, workspace: &WorkspaceId, judge_cost: f64) -> SessionSummary (line 23)"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Conformance fixtures that pin the budget behavior, using the H helper and h.ctx.budget_usd.",
+            "symbols": [
+              "fn budget_pauses_spawns_until_raised (line 2865, YOLO on)",
+              "fn budget_stop_ends_the_session (line 2894)",
+              "fn j1_only_answers_with_content_are_routed (line 3533; budget raise is not routed)",
+              "no_budget_means_no_limit (named in docs; not opened)"
+            ]
+          },
+          {
+            "path": "docs/internals/spend-and-limits.md",
+            "purpose": "The docs page that describes the budget guard, the gate, and YOLO handling. Must be updated with any behavior change (CLAUDE.md pattern 9). Also mentioned in docs/start/troubleshooting.md (line 166), docs/start/first-session.md (lines 75, 159), docs/internals/pipeline.md (lines 835, 854), docs/security/threat-model.md (lines 21, 130), docs/security/agent-containment.md (line 659)."
+          },
+          {
+            "path": "web/src/lib/gateAnswers.ts",
+            "purpose": "Console side of the gate answer: budget_reached is a choice gate with options raise and stop; a raise with typed text must parse as dollars. Kept compiling only (web/ is not polished).",
+            "symbols": [
+              "budget_reached: \"choice\" (line 30)",
+              "budget_reached: [ ... ] options (line 150)",
+              "parseDollars check (line 184)"
+            ]
+          },
+          {
+            "path": "web/src/features/gates/ChoiceGate.tsx",
+            "purpose": "Renders the budget_reached choice gate (cases at lines 38 and 137)."
+          },
+          {
+            "path": "web/src/api/gen/GatePayload.ts",
+            "purpose": "Generated TypeScript for the payload: { kind: \"budget_reached\", spent_usd: number, budget_usd: number }. Regenerated by cargo test -p ostra-core after any GatePayload change."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the task changes the guard threshold or adds a warning state, a follow-up pass should check how Planner::push, SessionState (budget_gate, budget_raised), view.rs summary cost, and the generated TypeScript would carry it.",
+          "A pass on docs/internals/spend-and-limits.md and the pages listed in its files entry shows which text would need an update."
+        ],
+        "not_covered": [
+          "The server REST handler that receives gate answers and the WebSocket notices (crates/ostra-server/src/api.rs) were not opened.",
+          "Push notification on gate open (docs say an open budget gate sends one) was not traced in code.",
+          "Price computation (crates/ostra-core/src/pricing.rs) and how Usage.cost_usd is filled for native and harness executions were not read; only the docs page description was seen.",
+          "The init flow (crates/ostra-engine/src/init.rs) was not checked for whether all its spawns pass through Planner::push.",
+          "The no_budget_means_no_limit fixture and the runner/e2e tests that touch the budget were not opened.",
+          "web/src/features/gates/ChoiceGate.tsx rendering details were not read."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Every Step::Spawn passes through Planner::push. When ctx.budget_usd is Some, the planner compares state.spent_usd() with budget + state.budget_raised. At or above the limit it drops the spawn and, if no budget gate is open (state.budget_gate is None), pushes one OpenGate step with a BudgetReached payload. Only Step::Spawn is guarded: Judge, Command, Deliver, and OpenGate steps are not. The check uses >=, not >.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Budget guard inside Planner::push",
+            "snippet": {
+              "code": "// Budget guard: once the session has spent its budget, no new execution starts until\n// the user raises it. Running executions finish.\nif matches!(step, Step::Spawn(_))\n    && let Some(budget) = self.ctx.budget_usd\n{\n    let limit = budget + self.s.budget_raised;\n    let spent = self.s.spent_usd();\n    if spent >= limit {\n        if self.s.budget_gate.is_none() {\n            let step = Step::OpenGate {\n                title: \"The session reached its budget\".into(),\n                explanation: format!(\n                    \"This session has spent ${spent:.2} of its ${limit:.2} budget, so no new execution starts. Raise the budget to continue, or stop the session.\"\n                ),\n                payload: GatePayload::BudgetReached {\n                    spent_usd: spent,\n                    budget_usd: limit,\n                },\n            };\n            let key = step.key();\n            if !self.out.iter().any(|s| s.key() == key) {\n                self.out.push(step);\n            }\n        }\n        return;\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:414"
+            }
+          },
+          {
+            "description": "SessionState::spent_usd sums usage.cost_usd over executions whose result is Some. Running executions are not counted until they finish. Judge cost is not included. The raise is also fold state (budget_raised), so the planner stays pure and a raise survives a restart.",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Spend as a fold over finished executions",
+            "snippet": {
+              "code": "/// What finished executions spent. Running executions are counted when they finish.\npub fn spent_usd(&self) -> f64 {\n    self.executions\n        .values()\n        .filter_map(|e| e.result.as_ref())\n        .map(|r| r.usage.cost_usd)\n        .sum()\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:1342"
+            }
+          },
+          {
+            "description": "The runner reads the workspace limit fresh on every planning pass. A value of 0 or below becomes None, which disables the guard.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Settings reach the planner only through PlanCtx",
+            "snippet": {
+              "code": "fn plan_ctx(&self, st: &SessionState) -> PlanCtx {\n    let mut ctx = PlanCtx::default();\n    let budget = self.services.workspace().limits.session_budget_usd;\n    ctx.budget_usd = (budget > 0.0).then_some(budget);\n    ...",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1612"
+            }
+          },
+          {
+            "description": "On any answer the fold clears budget_gate. A choice 'raise' parses text (trimmed, leading $ stripped) as a positive finite f64; otherwise the extra amount is budget_usd.max(1.0), where budget_usd is the limit recorded in the gate. budget_raised grows by extra plus any overshoot (spent_usd - budget_usd, floored at 0), so the new ceiling is spent plus extra. Any other answer, including 'stop', sets state.failed, which ends the session.",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Gate answer folded in on_gate_answered",
+            "snippet": {
+              "code": "GatePayload::BudgetReached {\n    spent_usd,\n    budget_usd,\n} => {\n    self.budget_gate = None;\n    match choice {\n        Some((\"raise\", text)) => {\n            // The default raise is the budget again, so the session can spend as much\n            // once more before the next pause.\n            let extra = text\n                .and_then(|t| t.trim().trim_start_matches('$').parse::<f64>().ok())\n                .filter(|v| v.is_finite() && *v > 0.0)\n                .unwrap_or(budget_usd.max(1.0));\n            self.budget_raised += extra + (spent_usd - budget_usd).max(0.0);\n        }\n        _ => {\n            self.failed = Some(format!(\n                \"Stopped at the session budget after spending ${spent_usd:.2}.\"\n            ))\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:4252"
+            }
+          },
+          {
+            "description": "Planner::flows skips any open gate for which yolo_leaves_open is true, so no Step::YoloAnswer is emitted. As a second guard, yolo_plan returns None for BudgetReached, and perform_yolo returns Ok(()) when yolo_plan is None. A new gate kind decides its YOLO handling in yolo_plan (CLAUDE.md recipe).",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/judge_input.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "YOLO leaves the budget gate open, in two places",
+            "snippet": {
+              "code": "/// Gates YOLO never answers: spending more, and retrying an execution the user stopped (Rule P4).\npub fn yolo_leaves_open(s: &SessionState, payload: &GatePayload) -> bool {\n    match payload {\n        GatePayload::BudgetReached { .. } => true,\n        GatePayload::ExecutionFailed { execution, .. } => s.stopped_by_user(execution),\n        _ => false,\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/judge_input.rs:942"
+            }
+          },
+          {
+            "description": "A fixture sets h.ctx.budget_usd, finishes an execution with a cost through spend(), and asserts Step::summary() strings. Any new or changed budget rule needs a fixture of this shape.",
+            "files": [
+              "tests/conformance/main.rs"
+            ],
+            "name": "Conformance fixture for the budget",
+            "snippet": {
+              "code": "#[test]\nfn budget_pauses_spawns_until_raised() {\n    let mut h = H::new(&[\"p\"], SessionOptions { yolo: true, track: Some(Track::Full), ..Default::default() });\n    h.ctx.budget_usd = Some(1.0);\n    h.classify(\"IMPLEMENT\", &[\"p\"]);\n    spend(&mut h, \"spawn explore\", explore_submit(0, &[]), 1.5);\n    // The spec spawn becomes a budget gate, and YOLO leaves it open.\n    assert_eq!(h.summaries(), vec![\"gate budget_reached\"]);\n    let g = h.open_gate(\"budget_reached\");\n    assert_eq!(h.summaries(), Vec::<String>::new(), \"no yolo-answer for a budget gate\");\n    h.answer(&g, GateAnswer::Choice { option: \"raise\".into(), text: Some(\"5\".into()) });\n    assert_eq!(h.summaries(), vec![\"spawn generate-spec spec#1\"]);\n}",
+              "language": "rust",
+              "source": "tests/conformance/main.rs:2865"
+            }
+          }
+        ],
+        "problem": "The workspace setting limits.session_budget_usd caps what one session spends. Enforcement is spread over four places: the fold sums spend and holds the raise, the planner turns a spawn into a gate, the runner answers and validates gates, and the YOLO code refuses to answer the gate. A change to this behavior has to touch each place consistently and update the fixture and docs page that pin it.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the session budget is enforced: where spend is summed, how the BudgetReached gate opens and is answered, and how YOLO treats it. Covers the Rust engine and core code paths, the existing conformance fixtures and the existing docs page. It does not cover price computation, the server API handlers for gates, push notifications, or the React gate components beyond naming them.",
+        "sources": [],
+        "title": "Session budget enforcement and the BudgetReached gate"
+      },
+      "submit": {
+        "findings_summary": "The budget is enforced by the pure planner. In Planner::push (plan.rs), each Step::Spawn is compared with limit = ctx.budget_usd + state.budget_raised against SessionState::spent_usd(), which sums only finished executions and excludes judge cost. At or above the limit the spawn is dropped and one BudgetReached gate (stage Intake, kind budget_reached) opens if state.budget_gate is None. The user answers with a Choice: raise adds the typed dollars (default is the gate's limit, min 1) plus any overshoot to budget_raised, and any other choice sets state.failed. YOLO never answers it: Planner::flows skips it via yolo_leaves_open, and yolo_plan returns None. The conformance fixtures budget_pauses_spawns_until_raised and budget_stop_ends_the_session pin this, and docs/internals/spend-and-limits.md describes it.",
+        "not_covered": [
+          "Server REST handler for gate answers and WebSocket notices (crates/ostra-server/src/api.rs)",
+          "Push notification on gate open",
+          "Pricing and how Usage.cost_usd is filled (crates/ostra-core/src/pricing.rs)",
+          "Whether all init-flow spawns pass through Planner::push",
+          "The no_budget_means_no_limit fixture and runner/e2e budget tests",
+          "Web ChoiceGate.tsx rendering details"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the session budget is enforced (spend summing, BudgetReached gate open and answer, YOLO handling) in the engine and core crates, with the existing fixtures and docs; server API handlers, pricing, push, and web rendering were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How a gate kind is added end to end: GatePayload, the fold, the planner, yolo_plan, validate_answer, TypeScript types, and the console's gate cards.",
+      "file": "ostra-research-20261002-085025-add-a-gate-kind.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core",
+          "ostra-engine",
+          "ostra-store",
+          "ostra-server",
+          "web",
+          "design",
+          "docs",
+          "tests/conformance"
+        ],
+        "asks": [
+          "Explain how a gate kind is added end to end.",
+          "Cover GatePayload, the fold, the planner, yolo_plan, validate_answer, the TypeScript types, and the console's gate cards."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::push",
+            "step": "A planner rule decides a gate is needed. For BudgetReached it is Planner::push, which replaces a Spawn step with Step::OpenGate once state.spent_usd() >= ctx.budget_usd + state.budget_raised and state.budget_gate is None. Other kinds call Planner::gate(title, explanation, payload). Planner output is deduplicated by Step::key() = \"gate:{kind_str}:{gate_owner}\"."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform",
+            "step": "The runner's driver performs the step. perform() matches Step::OpenGate and appends SessionEvent::GateOpened { id: GateId::new(), title, explanation, payload } through Inner::append (store, fold, broadcast, wake). ImplementationReview first writes the session context file; no other kind has pre-open work."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_gate_opened",
+            "step": "Inner::append stores the event and folds it. SessionState::apply inserts a GateRecord (answer None) and calls on_gate_opened, which records the gate id in the owning track (budget_gate for BudgetReached)."
+          },
+          {
+            "location": "crates/ostra-store/src/workspace/gates.rs:upsert",
+            "step": "The same append materializes the gate into the workspace db gates table (payload as JSON). No schema change is needed for a new variant."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:push_for",
+            "step": "The same append calls push_for (L1441 calls, L1489 defines). For a GateOpened event it returns early with no notice when the session is YOLO and the payload is not HarnessFailure (L1494). BudgetReached is a gate YOLO leaves open, yet a YOLO session gets no push for it, which differs from docs/internals/spend-and-limits.md (\"With push notifications on, the open gate sends one\"). A non-YOLO gate gets the generic body \"A step is waiting for your decision.\" unless it is HarnessFailure or Permission, which have their own body."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:inferred_stage",
+            "step": "The server sends GateView { id, session, title, explanation, payload, answer, source, reason, opened_at, answered_at } over REST and WebSocket. view.rs derives the waiting label from payload.stage().lane() (L83-84) and PendingGate.kind from payload.kind_str() (L978); the activity feed in ostra-server/src/nav/activity.rs uses kind_str() too."
+          },
+          {
+            "location": "web/src/features/gates/ChoiceGate.tsx:ChoiceGate",
+            "step": "The console renders it: GateCard.OpenForm checks isChoiceKind(p.kind) (ANSWER_KIND[kind] === \"choice\"), then ChoiceGate renders body(payload), the optional text field, and one Button per CHOICES[kind] entry. A click calls choiceAnswer (checks required text, and for budget raise parses dollars) and submits { kind: \"choice\", option, text } with api.answerGate(gate.id, { answer })."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform_yolo",
+            "step": "Under YOLO, instead, Planner::flows emits Step::YoloAnswer for the open gate unless it is Permission or yolo_leaves_open; perform_yolo calls yolo_plan and appends GateAnswered with source Yolo for a Fixed plan, or calls the YOLO-answer judge for a Judge plan. A None plan returns without doing anything."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:answer_gate",
+            "step": "Runner::answer_gate loads the gate row, rejects an already answered gate, runs validate_answer(payload, answer) (shape plus per-kind content checks), then appends GateAnswered { id, source: User, answer, reason: None, routed: answer_needs_route(payload, answer) }."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_gate_answered",
+            "step": "The fold applies GateAnswered once (ignores an unknown or already answered gate), stores the answer on the GateRecord, then on_gate_answered clears the track's gate id and updates state (budget_raised grows on raise; failed is set on stop). The next next_steps call sees the new state and the planner resumes, here by emitting the spawn it had held back."
+          },
+          {
+            "location": "web/src/features/gates/GateCard.tsx:GateCard",
+            "step": "The answered card in the console is DesignGateCard with answerSummary(gate), which uses the CHOICES label of the chosen option."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "Generates web/src/api/gen/*.ts from #[ts(export)] types when cargo test -p ostra-core runs; TS_RS_EXPORT_DIR and TS_RS_LARGE_INT come from .cargo/config.toml. Fields with #[ts(type = \"string\")] (PathBuf) and f64 map to string and number.",
+            "version": "12"
+          },
+          {
+            "kind": "external",
+            "name": "serde",
+            "role": "GatePayload and GateAnswer are internally tagged (tag = \"kind\", rename_all = snake_case); the log and the gates table store them as JSON, so an older log without a new variant replays unchanged, and a variant renamed or removed would break replay of stored sessions."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns GatePayload, GateAnswer, StageKind, and the generated TS types."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Fold (state.rs), planner (plan.rs), YOLO (judge_input.rs), runner (validate_answer, answer_gate, perform_yolo)."
+          },
+          {
+            "kind": "internal",
+            "name": "@ostra/design",
+            "role": "GateCard shell, GateKind union and KIND_ICON used by web gate cards."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "Defines GatePayload (serde tag \"kind\", snake_case, #[ts(export)]), its stage(), kind_str(), execution() methods, and GateAnswer (Questions, Approval, Choice, Closing, Permission, Skills). The GateAnswer::Choice doc comment lists the option strings per gate kind. BudgetReached is the last variant (L429-432), ImplementationReview is just before it.",
+            "symbols": [
+              "pub enum GatePayload",
+              "pub fn stage(&self) -> StageKind",
+              "pub fn kind_str(&self) -> &'static str",
+              "pub fn execution(&self) -> Option<&ExecutionId>",
+              "pub enum GateAnswer { Questions, Approval, Choice { option: String, text: Option<String> }, Closing, Permission, Skills }",
+              "BudgetReached { spent_usd: f64, budget_usd: f64 }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/pipeline.rs",
+            "purpose": "StageKind and StageKind::lane(). GatePayload::stage() must return a StageKind; the lane decides where the open gate shows on the board and in the session summary (view.rs:84). BudgetReached maps to StageKind::Intake (lane Research).",
+            "symbols": [
+              "pub enum StageKind",
+              "pub fn lane(self) -> Lane"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "API DTOs exported to TypeScript. Holds the export_bindings test that regenerates web/src/api/gen, and a unit test (agent_labels_and_gate_executions, L1993) that calls GatePayload::execution() on BudgetReached.",
+            "symbols": [
+              "fn export_bindings()",
+              "fn agent_labels_and_gate_executions()"
+            ]
+          },
+          {
+            "path": ".cargo/config.toml",
+            "purpose": "Sets TS_RS_EXPORT_DIR to web/src/api/gen (relative) and TS_RS_LARGE_INT to number, which is why cargo test -p ostra-core writes the generated files.",
+            "symbols": [
+              "TS_RS_EXPORT_DIR = { value = \"web/src/api/gen\", relative = true }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "The fold. SessionState::apply handles SessionEvent::GateOpened (inserts a GateRecord, then on_gate_opened) and SessionEvent::GateAnswered (ignores unknown or already answered gates, stores the answer, then on_gate_answered). on_gate_opened and on_gate_answered are exhaustive matches over GatePayload with no wildcard arm. Also holds answer_needs_route (default false), budget_raised and budget_gate fields, spent_usd(), open_gates().",
+            "symbols": [
+              "fn on_gate_opened(&mut self, id: &GateId, payload: &GatePayload)",
+              "fn on_gate_answered(&mut self, id: &GateId, payload: &GatePayload, answer: &GateAnswer, routed: bool)",
+              "pub fn answer_needs_route(payload: &GatePayload, answer: &GateAnswer) -> bool",
+              "pub struct GateRecord",
+              "pub budget_raised: f64",
+              "pub budget_gate: Option<GateId>",
+              "pub fn open_gates(&self) -> impl Iterator<Item = &GateRecord>",
+              "pub fn spent_usd(&self) -> f64"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "The pure planner. Step::OpenGate { title, explanation, payload }; Step::key() builds \"gate:{kind_str}:{gate_owner}\" and Step::summary() builds \"gate {kind_str}\"; gate_owner is an exhaustive match over GatePayload. Planner::gate() opens a gate through push(); Planner::push() holds the budget guard that emits BudgetReached. Planner::flows() emits Step::YoloAnswer for open gates under YOLO except Permission and yolo_leaves_open gates. PlanCtx carries budget_usd.",
+            "symbols": [
+              "pub struct PlanCtx { pub format_commands: BTreeMap<String, Option<String>>, pub budget_usd: Option<f64> }",
+              "pub enum Step { Judge, Spawn, OpenGate { title, explanation, payload }, YoloAnswer { gate }, Command, Autofix, ... }",
+              "fn gate_owner(p: &GatePayload) -> String",
+              "fn push(&mut self, mut step: Step)",
+              "fn gate(&mut self, title: impl Into<String>, explanation: impl Into<String>, payload: GatePayload)",
+              "pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "YOLO handling. yolo_leaves_open (gates the planner never gives a YoloAnswer step), yolo_plan (exhaustive match returning Fixed, Judge, or None), yolo_answer_from_judge (wildcard arm: \"this gate is answered without the judge\"), the YoloAnswer judge input (wildcard for extra context), gate_facts (wildcard, for the Route answer judge).",
+            "symbols": [
+              "pub enum YoloPlan { Fixed { answer: GateAnswer, reason: String }, Judge { schema: Value } }",
+              "pub fn yolo_leaves_open(s: &SessionState, payload: &GatePayload) -> bool",
+              "pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan>",
+              "pub fn yolo_answer_from_judge(s: &SessionState, gate: &GateId, answer: &Value) -> Result<GateAnswer, String>",
+              "fn gate_facts(m: &mut String, payload: &GatePayload)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "The runner. answer_gate (L490) loads the gate from the db, rejects an answered gate, calls validate_answer, appends GateAnswered with routed = answer_needs_route. perform() turns Step::OpenGate into a GateOpened event (L1678; ImplementationReview additionally writes the session context first). perform_yolo (L2087) runs yolo_plan. plan_ctx (L1612) turns limits.session_budget_usd into PlanCtx.budget_usd. push_for (L1489) builds the web push for GateOpened.",
+            "symbols": [
+              "fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError>",
+              "pub fn answer_gate(&self, gate: &GateId, answer: GateAnswer) -> Result<GateView, EngineError>",
+              "async fn perform_yolo(self: &Arc<Self>, session: &SessionId, gate: GateId) -> Result<(), EngineError>",
+              "fn plan_ctx(&self, st: &SessionState) -> PlanCtx",
+              "fn push_for(&self, session: &SessionId, event: &SessionEvent)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Builds the session view. Uses GatePayload::stage().lane() for the waiting label (L84), GatePayload::kind_str() and execution() for PendingGate (L973-980). No per-kind match, so a new kind needs no change here.",
+            "symbols": [
+              "fn gate_for(s: &SessionState, f: impl Fn(&GatePayload) -> bool)"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/gates.rs",
+            "purpose": "Materialized gates table. The payload is stored as a JSON string (serde_json::to_string(payload)) and read back through serde, so a new variant needs no migration or store change.",
+            "symbols": [
+              "pub fn upsert(&self, session, id, title, explanation, payload: &GatePayload)",
+              "pub fn answer(&self, id, source, answer: &GateAnswer, reason)"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/nav/activity.rs",
+            "purpose": "Builds OpenGateRef for the activity feed from GatePayload::kind_str(). No per-kind match.",
+            "symbols": [
+              "kind: g.payload.kind_str().to_string()"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures. The H helper builds an event history; H::open_gate(kind) finds the planner step whose summary is \"gate {kind}\" and appends GateOpened; H::answer(gate, answer) appends GateAnswered with routed computed by answer_needs_route; H::summaries() returns Step::summary() strings. Budget fixtures: budget_pauses_spawns_until_raised (L2865), budget_stop_ends_the_session (L2894), no_budget_means_no_limit (L2916), j1_only_answers_with_content_are_routed (L3533). The harness runs neither validate_answer nor yolo_plan (those are in ostra-engine runner and judge_input), so those two need their own tests.",
+            "symbols": [
+              "fn open_gate(&mut self, kind: &str) -> GateId",
+              "fn answer(&mut self, gate: &GateId, answer: GateAnswer)",
+              "fn spend(h: &mut H, prefix: &str, submit: Value, cost: f64)",
+              "h.ctx.budget_usd = Some(1.0)"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/GatePayload.ts",
+            "purpose": "Generated by ts-rs from GatePayload; a discriminated union on kind with the same variant order as the Rust enum. Do not edit by hand; regenerate with cargo test -p ostra-core.",
+            "symbols": [
+              "export type GatePayload = { \"kind\": \"open_questions\", ... } | ... | { \"kind\": \"budget_reached\", spent_usd: number, budget_usd: number, }"
+            ]
+          },
+          {
+            "path": "web/src/api/types.ts",
+            "purpose": "Re-exports each generated type (export type * from \"./gen/GatePayload\" at L106). A new payload variant needs no change here; a new exported struct used by the payload needs a line.",
+            "symbols": [
+              "export type * from \"./gen/GatePayload\";"
+            ]
+          },
+          {
+            "path": "web/src/lib/gateAnswers.ts",
+            "purpose": "Client mirror of validate_answer. ANSWER_KIND is Record<GateKindName, AnswerKind> (compiler-checked: a new kind fails to typecheck until added). ChoiceGateKind is a hand-written union and CHOICES is Record<ChoiceGateKind, ChoiceOption[]> (option strings the fold matches, labels, variants, text rule). isChoiceKind, choiceAnswer (checks required text, parses budget dollars), answerSummary (one line for the answered card; budget special case).",
+            "symbols": [
+              "export type GateKindName = GatePayload[\"kind\"]",
+              "export const ANSWER_KIND: Record<GateKindName, AnswerKind>",
+              "export type ChoiceGateKind = \"fact_check_recurring\" | \"review_cap\" | ... | \"budget_reached\" | \"implementation_review\"",
+              "export const CHOICES: Record<ChoiceGateKind, ChoiceOption[]>",
+              "export const isChoiceKind = (kind: GateKindName): kind is ChoiceGateKind",
+              "export function choiceAnswer(kind: ChoiceGateKind, option: string, text = \"\")",
+              "export function answerSummary(gate: Pick<GateView, \"payload\" | \"answer\">): string"
+            ]
+          },
+          {
+            "path": "web/src/features/gates/GateCard.tsx",
+            "purpose": "Dispatch. OpenForm sends every kind where isChoiceKind is true to ChoiceGate; the rest go through a switch (open_questions, spec/plan approval, closing_gate, permission, skill_approval). The switch default renders only the design GateCard with title and explanation and no actions, so a kind with no branch shows a card that cannot be answered. The answered state renders DesignGateCard with answerSummary.",
+            "symbols": [
+              "function OpenForm({ gate, ...rest }: Common)",
+              "export function GateCard({ gate, onAnswered })"
+            ]
+          },
+          {
+            "path": "web/src/features/gates/ChoiceGate.tsx",
+            "purpose": "Card for every Choice gate. Three per-kind switches: textField(p) (optional or required text input, label, hint, placeholder), body(p) (payload display; the switch has no default, so TypeScript requires a case for every ChoiceGateKind), and the buttons come from CHOICES[payload.kind]. The budget_reached branch shows spent and budget chips and a YOLO note.",
+            "symbols": [
+              "function textField(p: ChoicePayload): TextField | null",
+              "function body(p: ChoicePayload): ReactNode",
+              "export function ChoiceGate({ gate, payload, submit, fail, busy, error }: Props)"
+            ]
+          },
+          {
+            "path": "web/src/features/gates/kit.tsx",
+            "purpose": "Shared gate pieces: GateFormProps<K> (payload narrowed with Extract<GatePayload, { kind: K }>), OpenGate shell (design GateCard with children, error line, actions), ArtifactLink, ExecutionLink, style constants.",
+            "symbols": [
+              "export type GateFormProps<K extends GatePayload[\"kind\"]>",
+              "export function OpenGate({ gate, error, actions, children })"
+            ]
+          },
+          {
+            "path": "design/src/components/pipeline/GateCard.tsx",
+            "purpose": "Design-system shell. Its GateKind union and KIND_ICON: Record<GateKind, IconName> map a kind to an icon; kind is typed GateKind | (string & {}), so an unlisted kind compiles and falls back to the circle-pause icon. The union currently lacks implementation_review (it falls back to the circle-pause icon today).",
+            "symbols": [
+              "export type GateKind",
+              "const KIND_ICON: Record<GateKind, IconName>",
+              "export function GateCard({ kind, title, explanation, answered, answeredBy, answer, reason, actions, children }: GateCardProps)"
+            ]
+          },
+          {
+            "path": "web/src/api/mock/fixtures.session.ts",
+            "purpose": "Mock-mode data. A GateSpec carries a typed GatePayload (budget gate at L1352). stageOfGate(p) is a switch with default null; phaseOfGate reads a phase field if present.",
+            "symbols": [
+              "type GateSpec = { id: string; title: string; explanation: string; payload: GatePayload; opened: number }",
+              "function stageOfGate(p: GatePayload): StageKind | null"
+            ]
+          },
+          {
+            "path": "web/src/lib/gateAnswers.test.ts",
+            "purpose": "Vitest tests that pin the full ANSWER_KIND map and the full CHOICES option map with toEqual, so adding a kind fails them until the expected objects change. Also tests choiceAnswer and answerSummary for budget_reached.",
+            "symbols": [
+              "describe(\"answer shapes per gate kind\")"
+            ]
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "Gate documentation: the table Every gate kind (L43-58), a section per gate (Budget reached at L181), the YOLO table (L200-213), a Where to look table (L482-487). Must be updated for a new kind (CLAUDE.md pattern 9).",
+            "symbols": [
+              "## Every gate kind",
+              "## YOLO: the engine answers"
+            ]
+          },
+          {
+            "path": "docs/internals/spend-and-limits.md",
+            "purpose": "Describes the budget gate and the claim that, with push notifications on, an open budget gate sends one (L178-210). Also names Planner::push and yolo_plan as where the behavior lives.",
+            "symbols": [
+              "### The budget gate",
+              "### YOLO never answers it"
+            ]
+          },
+          {
+            "path": "docs/internals/planner.md",
+            "purpose": "Planner walk-through. L158 lists the gates YOLO never answers (permission, budget, execution you stopped).",
+            "symbols": [
+              "## How the planner walks a session"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "Once a specific new gate is chosen, a research or spec pass should decide its payload fields, its answer options, its StageKind, whether YOLO answers it, and the planner condition that opens it.",
+          "Decide whether the YOLO push gap belongs to the same change: runner.rs push_for returns early for every gate in a YOLO session except HarnessFailure, so a BudgetReached gate that YOLO leaves open sends no push, although docs/internals/spend-and-limits.md says it does. A new gate that YOLO also leaves open has the same gap.",
+          "Check HANDOVER.md for the rule ID the new gate should cite in its planner and fold comments, and add a conformance fixture next to the budget fixtures at tests/conformance/main.rs:2843-2927.",
+          "Decide whether to add implementation_review to the GateKind union in design/src/components/pipeline/GateCard.tsx (it is absent today, so its card shows the fallback icon); this is unrelated to a new kind but is in the same union that a new kind must join."
+        ],
+        "not_covered": [
+          "tests/browser (browser security suite) and the site/ docs model test, which read docs pages and the console shot; not opened.",
+          "The .design-sync/NOTES.md file (hidden by an ignore file, search denied); CLAUDE.md says a web/ or design/ change finishes by asking the user to run /design-sync and listing the changed screens.",
+          "Whether a Route answer judge (gate_facts, judge_input.rs:666) should receive facts for a new kind: it has a wildcard arm, so a Choice gate whose text can carry instructions may need an arm; not analyzed for any particular new gate.",
+          "HANDOVER.md gate sections and the Ultracode plugin rules, which CLAUDE.md names as the behavior spec; not read for this task.",
+          "The YOLO-answer judge prompt assets/judges/yolo-answer.md, relevant only if a new gate uses a Judge plan."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "A gate is one variant of the serde-tagged enum GatePayload (tag \"kind\", snake_case, ts-rs exported). Both stage() and kind_str() are exhaustive matches, so a missing arm is a compile error. kind_str() is the string the web, the store views, PendingGate, Step::summary(), Step::key(), and conformance fixtures use. stage() chooses the StageKind (and so the lane) shown for the open gate. The doc comment on the variant states the answers. The variant is placed last so the generated TypeScript union and serialized order stay stable.",
+            "files": [
+              "crates/ostra-core/src/event.rs",
+              "crates/ostra-core/src/pipeline.rs"
+            ],
+            "name": "GatePayload variant with stage() and kind_str() arms",
+            "snippet": {
+              "code": "    /// The session reached its budget. Answer `raise` (with the extra dollars as `text`) or `stop`.\n    /// YOLO never answers it, because spending more is the user's decision.\n    BudgetReached {\n        spent_usd: f64,\n        budget_usd: f64,\n    },\n}\n\nimpl GatePayload {\n    pub fn stage(&self) -> StageKind {\n        match self {\n            ...\n            GatePayload::BudgetReached { .. } => StageKind::Intake,\n            GatePayload::ImplementationReview { .. } => StageKind::ImplementationReview,\n        }\n    }\n\n    pub fn kind_str(&self) -> &'static str {\n        match self {\n            ...\n            GatePayload::BudgetReached { .. } => \"budget_reached\",\n            GatePayload::ImplementationReview { .. } => \"implementation_review\",\n        }\n    }\n",
+              "language": "rust",
+              "source": "crates/ostra-core/src/event.rs:427"
+            }
+          },
+          {
+            "description": "on_gate_opened stores the new gate id in the track the gate belongs to (for BudgetReached, SessionState::budget_gate), so the planner can tell the gate is already open and does not emit it twice. on_gate_answered clears that id and applies the answer as state change. Both are exhaustive over GatePayload. For a Choice answer, `choice` is (option, text trimmed and empty filtered); any option string that is not matched falls into the `_` arm, which for BudgetReached means stop. The fold reads only the event and the payload (pure); the raise parses `text` in the fold, so the validation of the amount is client-side only. A fact from outside the log must be recorded in the event (CLAUDE.md pattern 1).",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Fold: record the open gate, apply the answer",
+            "snippet": {
+              "code": "            GatePayload::BudgetReached {\n                spent_usd,\n                budget_usd,\n            } => {\n                self.budget_gate = None;\n                match choice {\n                    Some((\"raise\", text)) => {\n                        // The default raise is the budget again, so the session can spend as much\n                        // once more before the next pause.\n                        let extra = text\n                            .and_then(|t| t.trim().trim_start_matches('$').parse::<f64>().ok())\n                            .filter(|v| v.is_finite() && *v > 0.0)\n                            .unwrap_or(budget_usd.max(1.0));\n                        self.budget_raised += extra + (spent_usd - budget_usd).max(0.0);\n                    }\n                    _ => {\n                        self.failed = Some(format!(\n                            \"Stopped at the session budget after spending ${spent_usd:.2}.\"\n                        ))\n                    }\n                }\n            }\n\n// opened:\n            GatePayload::BudgetReached { .. } => self.budget_gate = Some(id.clone()),",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:4252"
+            }
+          },
+          {
+            "description": "Planner rules call self.gate(title, explanation, payload) or push Step::OpenGate directly. push() deduplicates on Step::key(), which for a gate is \"gate:{kind_str}:{gate_owner(payload)}\". gate_owner is an exhaustive match that returns the identity of the thing the gate is about (the phase, execution, project, round, or an empty string for a per-session singleton like BudgetReached). The planner must not re-emit a gate that is already open: the budget rule checks `self.s.budget_gate.is_none()` (fold state set by on_gate_opened). Settings reach the planner only through PlanCtx (budget_usd), set in Runner::plan_ctx from workspace limits.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Planner opens a gate through push(), keyed by kind and owner",
+            "snippet": {
+              "code": "        // Budget guard: once the session has spent its budget, no new execution starts until\n        // the user raises it. Running executions finish.\n        if matches!(step, Step::Spawn(_))\n            && let Some(budget) = self.ctx.budget_usd\n        {\n            let limit = budget + self.s.budget_raised;\n            let spent = self.s.spent_usd();\n            if spent >= limit {\n                if self.s.budget_gate.is_none() {\n                    let step = Step::OpenGate {\n                        title: \"The session reached its budget\".into(),\n                        explanation: format!(\n                            \"This session has spent ${spent:.2} of its ${limit:.2} budget, so no new execution starts. Raise the budget to continue, or stop the session.\"\n                        ),\n                        payload: GatePayload::BudgetReached {\n                            spent_usd: spent,\n                            budget_usd: limit,\n                        },\n                    };\n                    let key = step.key();\n                    if !self.out.iter().any(|s| s.key() == key) {\n                        self.out.push(step);\n                    }\n                }\n                return;\n            }\n        }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:414"
+            }
+          },
+          {
+            "description": "Planner::flows pushes Step::YoloAnswer for every open gate except Permission and any gate for which yolo_leaves_open is true. Then perform_yolo calls yolo_plan, an exhaustive match that returns Fixed (a fixed GateAnswer with a reason), Judge (a JSON schema for the YOLO-answer judge, whose output goes through yolo_answer_from_judge), or None (nothing happens). A gate YOLO must not answer needs both: add it to yolo_leaves_open so the planner emits no step, and return None in yolo_plan (the arm is required by exhaustiveness anyway). docs/internals/spend-and-limits.md says the rule is enforced in two places for this reason. A Judge plan additionally needs a branch in yolo_answer_from_judge, whose wildcard returns an error (\"this gate is answered without the judge\") and so makes a YOLO Judge gate wait for the user with a Note.",
+            "files": [
+              "crates/ostra-engine/src/judge_input.rs",
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "YOLO decision is made in two places",
+            "snippet": {
+              "code": "/// Gates YOLO never answers: spending more, and retrying an execution the user stopped (Rule P4).\npub fn yolo_leaves_open(s: &SessionState, payload: &GatePayload) -> bool {\n    match payload {\n        GatePayload::BudgetReached { .. } => true,\n        GatePayload::ExecutionFailed { execution, .. } => s.stopped_by_user(execution),\n        _ => false,\n    }\n}\n\n// in yolo_plan, a fixed answer:\n        GatePayload::PhaseBlocked { .. } => choice(\"leave\", \"Under YOLO a blocked phase is recorded and independent work continues (Rule D9).\"),\n// and a gate YOLO leaves open:\n        // Spending more is the user's decision, so YOLO leaves a budget gate open.\n        GatePayload::BudgetReached { .. } => return None,",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/judge_input.rs:942"
+            }
+          },
+          {
+            "description": "validate_answer pairs each payload with the GateAnswer variants it accepts in one matches! expression. It is not an exhaustive match: a payload missing from it compiles and then every answer is refused with \"That answer does not fit this gate.\" at run time. All Choice gates are listed in one or-pattern. Per-kind content checks follow as separate if-let blocks (open questions all answered; spec/plan rejection needs feedback; ImplementationReview option must be done or feedback with text). BudgetReached has no content check: any option string and any text is accepted, and the fold treats anything other than raise as stop. The web mirrors the shape check in ANSWER_KIND and the content checks in choiceAnswer.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "web/src/lib/gateAnswers.ts"
+            ],
+            "name": "validate_answer: shape check by matches! with a default of rejection",
+            "snippet": {
+              "code": "fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError> {\n    let ok = matches!(\n        (payload, answer),\n        (\n            GatePayload::OpenQuestions { .. },\n            GateAnswer::Questions { .. }\n        ) | (\n            GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. },\n            GateAnswer::Approval { .. }\n        ) | (\n            GatePayload::FactCheckRecurring { .. }\n                | GatePayload::ReviewCap { .. }\n                | GatePayload::Stuck { .. }\n                | GatePayload::PhaseBlocked { .. }\n                | GatePayload::HarnessFailure { .. }\n                | GatePayload::ExecutionFailed { .. }\n                | GatePayload::BudgetReached { .. }\n                | GatePayload::ImplementationReview { .. },\n            GateAnswer::Choice { .. }\n        ) | (GatePayload::ClosingGate { .. }, GateAnswer::Closing { .. })\n            | (\n                GatePayload::Permission { .. },\n                GateAnswer::Permission { .. }\n            )\n            | (GatePayload::SkillApproval { .. }, GateAnswer::Skills { .. })\n    );\n    if !ok {\n        return Err(EngineError::Invalid(\n            \"That answer does not fit this gate.\".into(),\n        ));\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1242"
+            }
+          },
+          {
+            "description": "A gate answered by picking one option is added to the web in four hand-synchronized places: the ChoiceGateKind union and CHOICES entry in lib/gateAnswers.ts (option strings must equal what the fold matches; exactly one primary per kind, enforced by a test), a case in ChoiceGate.tsx body() (compiler-enforced because the switch has no default), an optional case in textField(), and the ANSWER_KIND entry (compiler-enforced by Record<GateKindName, AnswerKind>). GateCard.OpenForm routes by isChoiceKind, which reads ANSWER_KIND, so nothing else changes. A gate with a different answer shape (Questions, Approval, Closing, Permission, Skills) needs a new component and a case in GateCard.OpenForm; without one the default branch renders a card with no actions.",
+            "files": [
+              "web/src/lib/gateAnswers.ts",
+              "web/src/features/gates/ChoiceGate.tsx",
+              "web/src/features/gates/GateCard.tsx",
+              "web/src/lib/gateAnswers.test.ts"
+            ],
+            "name": "Web: Choice gate registry",
+            "snippet": {
+              "code": "  budget_reached: [\n    { option: \"raise\", label: \"Raise the budget\", variant: \"primary\", text: \"optional\" },\n    { option: \"stop\", label: \"Stop the session\", variant: \"danger\", text: \"none\" },\n  ],\n\n// ChoiceGate.tsx body():\n    case \"budget_reached\":\n      return (\n        <>\n          <div style={row}>\n            <Chip mono tone=\"warn\">\n              spent {formatCost(p.spent_usd)}\n            </Chip>\n            <Chip mono outline>\n              budget {formatCost(p.budget_usd)}\n            </Chip>\n          </div>\n          <p style={muted}>YOLO never answers this gate, because spending more is your call.</p>\n        </>\n      );",
+              "language": "typescript",
+              "source": "web/src/lib/gateAnswers.ts:150"
+            }
+          },
+          {
+            "description": "A planner or fold change is tested with the H helper: build an event history, call h.open_gate(kind) to append the GateOpened the planner asked for, h.answer(...) to append GateAnswered, and compare h.summaries() with expected Step::summary() strings (for a gate, \"gate {kind_str}\"). The budget fixtures also set h.ctx.budget_usd and use spend() to add a finished execution with a cost. The YOLO case checks that no yolo-answer step is emitted.",
+            "files": [
+              "tests/conformance/main.rs"
+            ],
+            "name": "Fixture per rule in tests/conformance",
+            "snippet": {
+              "code": "#[test]\nfn budget_pauses_spawns_until_raised() {\n    let mut h = H::new(&[\"p\"], SessionOptions {\n            yolo: true,\n            track: Some(Track::Full),\n            ..Default::default()\n        },\n    );\n    h.ctx.budget_usd = Some(1.0);\n    h.classify(\"IMPLEMENT\", &[\"p\"]);\n    spend(&mut h, \"spawn explore\", explore_submit(0, &[]), 1.5);\n    // The spec spawn becomes a budget gate, and YOLO leaves it open.\n    assert_eq!(h.summaries(), vec![\"gate budget_reached\"]);\n    let g = h.open_gate(\"budget_reached\");\n    assert_eq!(\n        h.summaries(),\n        Vec::<String>::new(),\n        \"no yolo-answer for a budget gate\"\n    );\n    h.answer(\n        &g,\n        GateAnswer::Choice {\n            option: \"raise\".into(),\n            text: Some(\"5\".into()),\n        },\n    );\n    assert_eq!(h.summaries(), vec![\"spawn generate-spec spec#1\"]);\n}",
+              "language": "rust",
+              "source": "tests/conformance/main.rs:2865"
+            }
+          }
+        ],
+        "problem": "CLAUDE.md gives a one-line recipe for a new gate kind: variant in GatePayload with stage() and kind_str() arms, fold in on_gate_opened and on_gate_answered, a planner step, a yolo_plan decision, a validate_answer arm, a fixture, and regenerated TypeScript. The recipe omits several places that either fail at compile time (exhaustive matches) or silently fail at run time (default-false matches, default fallbacks in the web). This document records every site, which are compiler-checked, and what the existing BudgetReached gate does at each, so a new kind can be added without missing one.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how a gate kind is added end to end: GatePayload, the fold, the planner, yolo_plan, validate_answer, TypeScript types, and the console's gate cards. Covers the Rust path from the enum to the answer fold, the generated TypeScript, the web gate cards, the design GateCard, the fixtures that test it, and the docs pages that list gate kinds. Uses the existing BudgetReached gate as the worked example. It does not design any specific new gate and does not cover the browser tests under tests/browser or the site.",
+        "sources": [],
+        "title": "Adding a gate kind end to end"
+      },
+      "submit": {
+        "findings_summary": "A gate kind is a GatePayload variant with exhaustive stage() and kind_str() arms. The fold records it in on_gate_opened and applies the answer in on_gate_answered. The planner opens it through Planner::push or Planner::gate, deduplicated by Step::key() via gate_owner. judge_input::yolo_plan and yolo_leaves_open decide the YOLO handling, and the shape of the answer is checked in runner::validate_answer. Several sites are not compiler-checked: validate_answer and answer_needs_route use default-reject or default-false matches, the web OpenForm default renders a card with no buttons, and the hand-written ChoiceGateKind and design GateKind unions. The TypeScript in web/src/api/gen is regenerated by cargo test -p ostra-core through TS_RS_EXPORT_DIR. The web side needs ANSWER_KIND, CHOICES, ChoiceGate body and textField, mock fixtures, and gateAnswers.test.ts, which pins the full maps. Two drift findings: runner push_for sends no push for any gate in a YOLO session except HarnessFailure, contradicting docs/internals/spend-and-limits.md, and the design GateKind lacks implementation_review.",
+        "not_covered": [
+          "tests/browser security suite and the site docs model test",
+          ".design-sync/NOTES.md (hidden by an ignore file)",
+          "HANDOVER.md gate sections and Ultracode rule IDs",
+          "Route answer judge handling (gate_facts) for a new kind with free text",
+          "YOLO-answer judge prompt assets/judges/yolo-answer.md"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How a gate kind is added end to end (GatePayload, fold, planner, yolo_plan, validate_answer, generated TypeScript, console gate cards, fixtures, docs), using BudgetReached as the worked example; no specific new gate was designed and the browser tests and site were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

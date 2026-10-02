@@ -63,7 +63,7 @@ The spec's open questions are asked before any fact-check (Rule D3). The Route-a
 first (Rule J1). The ones it delivers are added to the spec's pending input, and generate-spec runs again to
 write them into the spec, after any research the judge queued. The plan's clarifying questions are handled
 differently: the delivered answers are treated as a requirement change and go into the spec first (Rule D10),
-because the plan agent reads only the spec.
+because the plan agent takes requirements only from the spec.
 
 ![The open questions gate with a single-choice and a multiple-choice question](../images/console/gate-open-questions.png)
 
@@ -343,7 +343,7 @@ that names stages is kept as a note. On a gate with one text, every item is abou
 A remembered note is kept in the fold (`user_notes`) with an ID, `N1`, `N2`, and so on, and reaches later agents
 as a `User notes:` line: `implement`
 notes reach the implementer and fix passes, `tests` notes the path analyzer and the test writer, and `docs` notes
-the documentation writers and the system architecture agent. Nothing can be kept for the plan agent, which reads only the spec (Rule D4); an
+the documentation writers and the system architecture agent. Nothing can be kept for the plan agent, which takes requirements only from the spec (Rule D4); an
 answer the plan needs is delivered, so it lands in the spec. A delivered answer can name stages too, when part of
 it is also an instruction for later.
 

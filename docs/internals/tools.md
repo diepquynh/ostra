@@ -339,8 +339,8 @@ schema.
 | --- | --- |
 | `path` | The document's `.md` path in the session dir: `ostra-research-*`, `ostra-spec-*`, or the master `ostra-plan-*`. |
 | `document` | The whole document. It replaces what is stored. |
-| `update` | A partial revision. Each top-level field it names replaces the stored one, except lists whose items carry an `id`, which merge by id. |
-| `remove` | Ids to drop, and plan phases by number. |
+| `update` | A partial revision. Each top-level field it names replaces the stored one, except lists whose items carry an `id`, which merge by id. An item the update names takes the fields it sends and keeps the rest, and the keyed lists inside it merge the same way, so one step's `action` can be sent alone. |
+| `remove` | Ids to drop at any depth: a requirement, a phase by number, a step. An id that sits in more than one item is named with its parent, such as `2.3/E1`. |
 
 The JSON is stored beside the path, and the markdown is rendered from it with the section names the downstream
 prompts and the fact-check read. A plan also gets one `-phase-{N}.md` file per phase. Ostra computes the parts code
@@ -351,6 +351,13 @@ Every write runs the document checks and returns their results. Errors are thing
 requirement or criterion id, an uncovered criterion, a cycle between phases, broken `AC{n}.{m}` numbering. Warnings
 are judgment calls, such as more than one `SHALL` in a statement. The submit call is refused while an error remains,
 so an agent cannot hand the next stage a broken spec.
+
+Writes and submits also check the code the document names (Hard rule 4): a research document's paths, a spec's
+criterion groundings and consumed contract sources, and a plan's step files and `read_first` paths must exist, and a
+`path:Symbol` must name a word the file contains. A plan step may name a file an earlier step creates. A research
+document's write also records a hash of each file it names, which later stages compare against (Rule D2a). The
+result names the nested items an `update` kept without sending them, so the agent sees what a partial update left
+in place.
 
 These files can only be written through `Document`. A `Write`, `Edit`, or shell write to them is refused with the
 correction to call `Document`, because the next render would overwrite the change and the browser would not show it.

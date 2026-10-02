@@ -1,0 +1,727 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T09:07:25.854528222+00:00",
+  "docs": [
+    {
+      "task": "How explore tasks are created and run, and how research documents are stored per session.",
+      "file": "ostra-research-20261002-090232-explore-tasks-and-research-docs.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "engine",
+          "core",
+          "agents",
+          "tools",
+          "policy",
+          "store",
+          "server"
+        ],
+        "asks": [
+          "How explore tasks are created",
+          "How explore tasks are run",
+          "How research documents are stored per session"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Engine::create_session (lines 405-445)",
+            "step": "A session is created. The runner makes `<workspace>/.ostra/sessions/<session id>/`, writes `sessions/.gitignore` (`*`) once, and creates one subfolder per project in the session. It appends `SessionCreated` carrying `session_root`; the fold copies it into `SessionState.session_root`. The row goes to the `sessions` table and every event to the `events` table of `<workspace>/.ostra/workspace.db`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::apply_classify",
+            "step": "The planner finds no category and pushes `Step::Judge { Classify }`. The Classify decision is folded by `apply_classify`: for Research, Spec, Plan and Implement it drops earlier Classify-origin tasks and calls `push_explore(project, task, ExploreOrigin::Classify)` for each valid `explore_tasks` entry. When the judge returned none, it makes one task per project in scope with the full request as text (Rule D1)."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::queue_research",
+            "step": "Later tasks come from other events: the Sufficiency judge (up to `MAX_SUFFICIENCY_RESEARCH = 3` per round, `SUFFICIENCY_ROUNDS = 3` rounds, duplicates of an unfinished same-project same-text task skipped); `Amended` context (Amendment origin, for Research, Spec, Plan, Implement); the Route answer / Feedback judges through `queue_research` (up to `MAX_ANSWER_RESEARCH = 3`); the Rescue judge's `Explore` action (Rescue origin, loop-bound); and an `AgentAsked` event whose target is `agent: explore` (Ask origin, loop-bound)."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::explore_tasks",
+            "step": "`next_steps` runs `flows`, which calls `explore_tasks` for every category before the category match. Each unstarted, non-abandoned, non-failed task becomes a `Step::Spawn` with `ExecPurpose::Explore { task: idx }`, `project`, and `session_dir = project_session_dir(project)` (`<session root>/<project key>`). The task text is `t.task` plus `added_context()`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::drive",
+            "step": "The driver loop in the runner inserts `step.key()` into `inflight` and spawns a tokio task per step; a key already in flight is skipped. `perform` routes `Step::Spawn` to `perform_spawn`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::perform_spawn",
+            "step": "`perform_spawn` acquires an execution slot (`limits.max_parallel_executions`), returns early for a terminal or paused session, and returns early for a task already marked abandoned while the spawn waited for a slot (Rule U1). It resolves the route for agent key `explore` (default tier advanced), loads the project's profile and inventory, creates `req.session_dir`, and calls `factory.build`, which fills `ExploreParams { common, task, extra: Extras::default() }`. The rendered block has `Task:`, `Workspace root:`, `Repo root:`, `Session dir:` and `Repo key:`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::on_started",
+            "step": "The runner appends `ExecutionStarted` (agent, purpose, stage, project, executor, model, params, spawn_block) and inserts a row in `executions`. The fold's `on_started` sets `task.exec`, `task.running = true`, `task.failed = None`. The executor (native or harness) then runs the agent with the `Document` capability, a `submit_explore` tool whose schema is `ExploreSubmit`, and a timeout of 1800 s."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs:document",
+            "step": "The agent calls `Document` with `path = <session dir>/ostra-research-<YYYYMMDD-HHmmss>-<slug>.md`. The tool validates prefix, suffix and parent directory, parses the value as `ResearchDoc`, and `doc::write` stores `<name>.json` (pretty JSON source) and `<name>.md` (rendered). Direct Write/Edit of `ostra-research-*` is denied by the `ARTIFACTS` guard for every agent except explore, and the explore prompt tells it to use only `Document`."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check_submit",
+            "step": "The agent calls `submit_explore`. `check_submit` reads `research_path`, requires a loadable document with no error-level issues, and `validate_submit` checks the `ExploreSubmit` shape. A refused submit returns the problem to the agent so it can fix the document and submit again."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::on_finished",
+            "step": "The runner stores the result in `executions.submit` and appends `ExecutionFinished`. `on_finished` sets `task.result = Some(sub)` on an OK submit; an Interrupted run clears `task.exec` so the task respawns; an Error with `retries < ERROR_RETRIES (1)` clears `exec` and increments `retries`; otherwise `task.failed` is set and the planner opens an execution-failed gate (except Ask origin). A Rescue-origin result also moves its loop to `Work` with the findings summary and `research_path` as the fact."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::explore_complete",
+            "step": "`explore_complete` returns true when every non-loop-bound task is finished, no finished task has an unjudged non-empty `not_covered` (otherwise it pushes a Sufficiency judge, up to 3 rounds), and `research_docs()` is non-empty. With no document in a Research, Spec, Plan or Implement session it pushes `Step::Fail` (Rule D1). The spec spawn receives `research_docs: s.research_docs()`; on a spec revision `new_research_docs` is the subset not yet in `applied.docs`."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:artifact",
+            "step": "The console reads documents through `/api/artifacts?path=`, which accepts only files inside a workspace's `sessions` root and attaches `ostra_core::doc::load_view(&path)` (typed document plus check issues) when the file name has a research, spec or plan prefix. The board lists each finished task's path as an `ArtifactRef` with kind `research` and the task's project."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Ids, `ExecPurpose::Explore`, `ExploreSubmit`, `DocKind`/`doc::write`, `paths` layout."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Fold (`state.rs`), pure planner (`plan.rs`), runner and spawn path, judges."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents",
+            "role": "Embedded explore prompt and `agent.toml`, `ExploreParams` spawn block."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "`Document` tool implementation."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "Artifact-ownership and write-scope guards for `ostra-research-*`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "SQLite `events` and `executions` tables in `workspace.db`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "`/api/artifacts` to open session files."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Event-sourced session state. Holds the explore task list (`SessionState.explore`), the origin of each task, every place a task is created (`push_explore`), and the fold arms that move a task through start, finish, failure, retry, skip and abandon. `research_docs()` derives the list of document paths from task results.",
+            "symbols": [
+              "pub enum ExploreOrigin { Classify, Sufficiency, Amendment, Rescue { phase: u32, tests: bool }, Answer, LoopAnswer { phase: u32, tests: bool }, Ask { ask: MessageId } }",
+              "pub fn loop_bound(&self) -> bool",
+              "pub struct ExploreTask { pub idx: u32, pub project: String, pub task: String, pub origin: ExploreOrigin, pub exec: Option<ExecutionId>, pub running: bool, pub result: Option<ExploreSubmit>, pub failed: Option<String>, pub abandoned: bool, pub retries: u32, pub judged: bool, pub gate: Option<GateId> }",
+              "pub(crate) fn push_explore(&mut self, project: String, task: String, origin: ExploreOrigin) -> u32",
+              "pub fn project_session_dir(&self, key: &str) -> PathBuf",
+              "pub fn research_docs(&self) -> Vec<PathBuf>",
+              "pub fn added_context(&self) -> String",
+              "pub const ERROR_RETRIES: u32 = 1",
+              "pub const SUFFICIENCY_ROUNDS: u32 = 3",
+              "fn apply_classify(&mut self, out: &ClassifyOut)",
+              "fn on_amended(&mut self, text: &str)",
+              "fn queue_research(&mut self, tasks: &[ExploreTaskSpec], origin: ExploreOrigin) -> Vec<u32>",
+              "fn on_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose, loop_key: Option<(u32, bool)>, resumed: bool)",
+              "fn on_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Pure planner. `explore_tasks` turns each unstarted task into a `Step::Spawn`; `explore_complete` gates the spec (Rules D1, D2); `flows` calls `explore_tasks` for every category before the category match.",
+            "symbols": [
+              "fn explore_tasks(&mut self)",
+              "fn explore_complete(&mut self) -> bool",
+              "fn flows(&mut self)",
+              "fn spawn(&mut self, agent: AgentName, purpose: ExecPurpose, project: &str, session_dir: PathBuf, inputs: SpawnInputs)",
+              "pub struct SpawnRequest { pub agent: AgentName, pub purpose: ExecPurpose, pub stage: StageKind, pub project: String, pub session_dir: PathBuf, pub inputs: SpawnInputs, pub resumes: Option<ExecutionId>, pub continues: Option<ExecutionId> }",
+              "pub fn key(&self) -> String",
+              "struct ExploreRef(u32)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Creates the session directory tree, drives the planner loop, and performs spawn steps: slot acquisition, route resolution, spawn-block build, ExecutionStarted/ExecutionFinished appends. `Inner::append` is the only writer of events.",
+            "symbols": [
+              "async fn drive(self: Arc<Self>, id: SessionId, live: Arc<Live>)",
+              "async fn perform(self: &Arc<Self>, session: &SessionId, step: Step) -> Result<(), EngineError>",
+              "async fn perform_spawn(self: &Arc<Self>, session: &SessionId, req: SpawnRequest) -> Result<(), EngineError>",
+              "fn append(&self, session: &SessionId, event: SessionEvent) -> Result<StoredEvent, EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge.rs",
+            "purpose": "Judge output structs that carry explore tasks: Classify (initial tasks), Sufficiency (follow-up tasks), Rescue (targeted explore). Defines the per-round caps.",
+            "symbols": [
+              "pub struct ExploreTaskSpec { pub project: String, pub task: String }",
+              "pub struct ClassifyOut { pub category: Category, pub projects: Vec<String>, pub explore_tasks: Vec<ExploreTaskSpec>, pub opts_in: OptsIn, pub reason: String, pub title: String }",
+              "pub const MAX_ANSWER_RESEARCH: usize = 3",
+              "pub const MAX_SUFFICIENCY_RESEARCH: usize = 3"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/coord.rs",
+            "purpose": "Agent-to-agent coordination fold. An `AgentAsked` event aimed at `agent: explore` pushes an `ExploreOrigin::Ask` task. `session_dir_of` states which agents work in the session root and which in a project subfolder.",
+            "symbols": [
+              "pub(crate) fn on_coord_event(&mut self, event: &SessionEvent, at: DateTime<Utc>)",
+              "pub fn session_dir_of(&self, rec: &ExecRecord) -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "Maps planner `SpawnInputs` onto the typed `ExploreParams`; the Explore arm requires `task` and passes empty `Extras`.",
+            "symbols": [
+              "fn build(&self, req: &SpawnRequest, env: &SpawnEnv<'_>) -> Result<BuiltSpawn, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/spawn.rs",
+            "purpose": "Typed spawn structs. `ExploreParams` renders the `Task:` line plus the common block (`Workspace root:`, `Repo root:`, `Session dir:`, `Repo key:`).",
+            "symbols": [
+              "pub struct ExploreParams { pub common: Common, pub task: String, pub extra: Extras }",
+              "impl SpawnParams for ExploreParams"
+            ]
+          },
+          {
+            "path": "assets/agents/explore/agent.toml",
+            "purpose": "Explore agent configuration: advanced tier, 1800 s timeout, capabilities including `document`, `web_search`, `web_fetch`, `memory_recall`, `memory`, `coordinate`, `docs_search`.",
+            "symbols": [
+              "default_tier = \"advanced\"",
+              "timeout_seconds = 1800"
+            ]
+          },
+          {
+            "path": "assets/agents/explore/prompt.md",
+            "purpose": "Explore prompt: file name rule `{session-dir}/ostra-research-{run-stamp}-{topic-slug}.md`, written only through the Document tool, then `submit_explore`.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-core/src/submit.rs",
+            "purpose": "Explore's structured return and its validation entry point.",
+            "symbols": [
+              "pub struct ExploreSubmit { pub research_path: String, pub scope_covered: String, pub findings_summary: String, pub sources_retrieved: u32, pub open_questions: u32, pub not_covered: Vec<String> }",
+              "pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/store.rs",
+            "purpose": "Where typed documents live: `<name>.json` is the source and `<name>.md` beside it is rendered. Defines the research file prefix, the agent-to-kind mapping, and the write, load and view functions.",
+            "symbols": [
+              "pub enum DocKind { Research, Spec, Plan }",
+              "pub fn for_agent(agent: AgentName) -> Option<DocKind>",
+              "pub fn prefix(self) -> &'static str",
+              "pub fn doc_kind_for(path: &Path) -> Option<DocKind>",
+              "pub fn json_path(md: &Path) -> PathBuf",
+              "pub fn load(md: &Path) -> Option<Value>",
+              "pub fn load_view(md: &Path) -> Option<DocumentView>",
+              "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "Submit-time check: the path in `research_path` must hold a document with no error-level issues.",
+            "symbols": [
+              "pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/doc.rs",
+            "purpose": "The `Document` tool. Enforces the file name prefix, `.md` extension, and that the file sits directly in the execution's `session_dir`; accepts `document` (whole) or `update` and `remove`; writes JSON and markdown.",
+            "symbols": [
+              "pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/paths.rs",
+            "purpose": "Path layout: workspace runtime dir, sessions root, session root, per-project session dir, report names. The engine's own `SessionState::project_session_dir` computes `session_root.join(key)`, the same location as `session_project_dir`.",
+            "symbols": [
+              "pub fn sessions_root(workspace: &Path) -> PathBuf",
+              "pub fn session_root(workspace: &Path, session_id: &str) -> PathBuf",
+              "pub fn session_project_dir(workspace: &Path, session_id: &str, project_key: &str) -> PathBuf",
+              "pub fn session_uploads(session_root: &Path) -> PathBuf",
+              "pub fn workspace_db(workspace: &Path) -> PathBuf",
+              "pub mod report"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/guards.rs",
+            "purpose": "Layer 1 guards. `ARTIFACTS` makes `ostra-research-*.md|json` writable only by the explore agent; write scope for explore is the session dir, session root and OS temp.",
+            "symbols": [
+              "static ARTIFACTS: LazyLock<Vec<(Regex, AgentName, &'static str)>>",
+              "pub fn in_session(&self, p: &Path) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/schema.rs",
+            "purpose": "Workspace database schema: `events` (session_id, seq, type, payload, at), `executions` (including `submit`, `report_path`, `params`, `spawn_block`), `sessions`, `gates`, `decisions`.",
+            "symbols": [
+              "pub(crate) const MIGRATIONS: &[&str]"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Builds the session board from the fold: one stage card per explore task, and the artifact list that includes each finished task's research path with kind `research`.",
+            "symbols": [
+              "pub fn artifacts(s: &SessionState) -> Vec<ArtifactRef>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/context.rs",
+            "purpose": "Renders `ostra-session-context.md` from the fold, which lists the research document paths for revisions (Rule F2).",
+            "symbols": [
+              "pub fn render(s: &SessionState) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "`/api/artifacts` serves any file inside any workspace's sessions root and returns the typed document view for research, spec and plan files.",
+            "symbols": [
+              "fn session_file(app: &App, raw: &str) -> Result<(PathBuf, std::fs::Metadata), ApiErr>",
+              "async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artifact>"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures for the explore rules: D1 (no research means no spec), D2 (spec waits for explores and Sufficiency), M1 (fan-out), plus the `explore_submit` helper that builds a submit payload.",
+            "symbols": [
+              "fn explore_submit(i: usize, not_covered: &[&str]) -> Value",
+              "fn d1_implement_with_no_tasks_still_explores()",
+              "fn d2_spec_waits_for_running_explore()"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the spec concerns reusing research across sessions, a follow-up pass should cover the workspace artifacts store (crates/ostra-server/src/artifacts.rs, crates/ostra-core/src/artifacts.rs) and project memory (crates/ostra-store/src/memory.rs) as the two existing cross-session stores.",
+          "A follow-up pass should read crates/ostra-engine/tests/recover.rs and the runner's recovery path to establish what happens to an explore task whose run was cut by a restart.",
+          "Documentation note for the spec: docs/start/first-session.md line 212 says research documents sit at the session root, but the code writes them to `<session root>/<project key>/`. Spec and plan documents are at the session root (`session_dir_of` in coord.rs returns `session_root` for Spec, Plan and spec/plan fact-check). docs/internals/pipeline.md should be checked for the same wording."
+        ],
+        "not_covered": [
+          "Judge prompt wording for Classify, Sufficiency, Route answer and Rescue (assets/judges/*.md), which decides what tasks the judges emit.",
+          "Native and harness executor internals that enforce Document and submit ordering at run time (crates/ostra-exec-native, crates/ostra-exec-harness).",
+          "Recovery after a server restart (crates/ostra-engine/tests/recover.rs) and how orphaned research files from interrupted or re-run tasks are treated on disk.",
+          "Web console rendering of research documents (web/src), and the workspace artifacts folder (`<workspace>/.ostra/artifacts/`), which is a separate per-workspace store rather than a per-session one.",
+          "Whether any consumer reads research from other sessions: this pass found none in crates/, but did not search web/ or the judges' assets."
+        ],
+        "patterns": [
+          {
+            "description": "Explore tasks are fold state. The pure planner walks `s.explore` and emits one `Step::Spawn` for each task with no execution yet that is neither abandoned nor failed. The step's `key()` is `spawn:` plus the serialized `ExecPurpose::Explore { task }`, so the runner's `inflight` set never starts a task twice. The spawn's `session_dir` is the project's folder under the session root, and the task text is the stored task plus any delivered added context. A failed task whose origin is not `Ask` opens an execution-failed gate; for `Ask` origin the failure is the asker's answer (Rule H3).",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Planner emits a spawn per unstarted explore task",
+            "snippet": {
+              "code": "fn explore_tasks(&mut self) {\n    let s = self.s;\n    for t in &s.explore {\n        if t.exec.is_none() && !t.abandoned && t.failed.is_none() {\n            // Rule M1: read-only stages fan out; every ready explore spawns at once.\n            let inputs = SpawnInputs {\n                task: Some(format!(\"{}{}\", t.task, s.added_context())),\n                ..Default::default()\n            };\n            self.spawn(\n                AgentName::Explore,\n                ExploreRef(t.idx).purpose(),\n                &t.project,\n                s.project_session_dir(&t.project),\n                inputs,\n            );\n        } else if let (Some(err), None, Some(exec), false, false) = (\n            &t.failed,\n            &t.gate,\n            &t.exec,\n            t.abandoned,\n            // Rule H3: a helper's failure is its asker's answer, not a gate.\n            matches!(t.origin, ExploreOrigin::Ask { .. }),\n        ) {\n            self.exec_failed_gate(exec, AgentName::Explore, &t.project, err);\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:684"
+            }
+          },
+          {
+            "description": "Every explore task is created by `SessionState::push_explore` while folding an event: the index is the current length of the `explore` vector, and `ExecPurpose::Explore { task }` carries that index. Callers are `apply_classify` (origin Classify), the Sufficiency judge decision (Sufficiency), `on_amended` (Amendment), `queue_research` (Answer, LoopAnswer, Amendment), the Rescue judge decision (Rescue), and the `AgentAsked` coordination event (Ask).",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/coord.rs"
+            ],
+            "name": "Task creation only inside the fold through push_explore",
+            "snippet": {
+              "code": "pub(crate) fn push_explore(&mut self, project: String, task: String, origin: ExploreOrigin) -> u32 {\n    let idx = self.explore.len() as u32;\n    self.explore.push(ExploreTask {\n        idx,\n        project,\n        task,\n        origin,\n        exec: None,\n        running: false,\n        result: None,\n        failed: None,\n        abandoned: false,\n        retries: 0,\n        judged: false,\n        gate: None,\n    });\n    idx\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:1986"
+            }
+          },
+          {
+            "description": "The fold stores no separate document registry. `research_docs()` maps each task's `ExploreSubmit.research_path` in task order. Spec receives this list as `Research docs:`; the session context file, the board artifact list, and several judge inputs read the same function or the same `result` field.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/context.rs",
+              "crates/ostra-engine/src/view.rs",
+              "crates/ostra-engine/src/judge_input.rs"
+            ],
+            "name": "Research document list is derived from task results",
+            "snippet": {
+              "code": "/// Research documents, oldest run first, including superseded ones (Rule D2).\npub fn research_docs(&self) -> Vec<PathBuf> {\n    self.explore\n        .iter()\n        .filter_map(|t| t.result.as_ref().map(|r| PathBuf::from(&r.research_path)))\n        .collect()\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:1326"
+            }
+          },
+          {
+            "description": "The explore agent can only produce a research document through `Document`. The tool checks the `ostra-research-` prefix and `.md` suffix, then that the file's parent equals `ctx.session_dir` (the spawn's `Session dir:`, which for explore is `<session root>/<project key>`). Then `doc::write` stores `<name>.json` and renders `<name>.md`. The Layer 1 guard `ARTIFACTS` separately stops any other agent from writing those names.",
+            "files": [
+              "crates/ostra-tools/src/doc.rs",
+              "crates/ostra-core/src/doc/store.rs",
+              "crates/ostra-policy/src/guards.rs"
+            ],
+            "name": "Document tool confines a research file to the execution's session dir",
+            "snippet": {
+              "code": "let name = md\n    .file_name()\n    .map(|n| n.to_string_lossy().to_string())\n    .unwrap_or_default();\nif !name.starts_with(kind.prefix())\n    || !name.ends_with(\".md\")\n    || (kind == DocKind::Plan && name.contains(\"-phase-\"))\n{\n    return ToolOutput::err(format!(\n        \"Name the {} `{}{{run-stamp}}-{{topic-slug}}.md`: `{name}` is not that shape, and later stages find the file by it.\",\n        kind.label(),\n        kind.prefix()\n    ));\n}\nlet session = &env.config().session_dir;\nlet same_dir = md.parent().is_some_and(|p| {\n    ostra_core::paths::fold(p) == ostra_core::paths::fold(session)\n});",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/doc.rs:16"
+            }
+          },
+          {
+            "description": "Each explore rule has a fixture in `tests/conformance/main.rs` built with the `H` helper. Explore results are injected with `explore_submit(i, not_covered)`, whose `research_path` is `/ws/.ostra/sessions/s1/p/ostra-research-{i}.md`, matching the `<session root>/<project>/` layout.",
+            "files": [
+              "tests/conformance/main.rs"
+            ],
+            "name": "Conformance fixture per explore rule",
+            "snippet": {
+              "code": "#[test]\nfn d1_implement_with_no_tasks_still_explores() {\n    let mut h = H::new(&[\"p\"], SessionOptions::default());\n    h.decide(JudgeKind::Classify, None, json!({\"category\": \"IMPLEMENT\", \"projects\": [\"p\"], \"explore_tasks\": [], \"opts_in\": {\"tests\": false, \"docs\": false}, \"reason\": \"r\"}));\n    assert_eq!(h.summaries(), vec![\"spawn explore explore#0\"]);\n}",
+              "language": "rust",
+              "source": "tests/conformance/main.rs:438"
+            }
+          }
+        ],
+        "problem": "Research is produced by explore executions that each write one typed research document. The questions are where an explore task comes from, what runs it, where its document lands on disk and in the event log, and how later stages find it. Nothing in the code reads research from an earlier session; every lookup is scoped to the current session's fold.",
+        "repo": "ostra",
+        "scope": "Task: how explore tasks are created and run, and how research documents are stored per session. Covers the engine fold and planner, the spawn path, the Document tool and its guards, and the on-disk and database layout. It does not cover the judge prompts' wording, the harness executors' internals, or the web UI rendering of research documents.",
+        "title": "Explore tasks and per-session research documents"
+      },
+      "submit": {
+        "findings_summary": "Explore tasks are fold state: SessionState::push_explore appends an ExploreTask (index = vector position) from Classify, Sufficiency, Amendment, Route answer/Feedback, Rescue, and agent-asked helper events. The pure planner's explore_tasks emits one Step::Spawn per unstarted task, and the runner's perform_spawn takes an execution slot, builds ExploreParams, and appends ExecutionStarted and ExecutionFinished. Each run's Session dir is `<workspace>/.ostra/sessions/<id>/<project key>/`. The Document tool accepts a file only directly in that dir, named `ostra-research-<stamp>-<slug>.md`, and writes a `.json` source plus a rendered `.md`. The session has no research registry: research_docs() maps each finished task's research_path, events and executions go to workspace.db, and nothing reads research from other sessions. docs/start/first-session.md says research sits at the session root, which the code contradicts; only spec and plan use the root.",
+        "not_covered": [
+          "Judge prompt wording for Classify, Sufficiency, Route answer and Rescue (assets/judges/*.md)",
+          "Native and harness executor internals that enforce Document and submit ordering at run time",
+          "Restart recovery and handling of orphaned research files from interrupted or re-run tasks (crates/ostra-engine/tests/recover.rs)",
+          "Web console rendering of research documents and the separate workspace artifacts store (<workspace>/.ostra/artifacts/)",
+          "Whether web/ or the judge assets read research from other sessions; crates/ shows no such consumer"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How explore tasks are created and run, and how research documents are stored per session, in the engine fold and planner, the spawn path, the Document tool and guards, and the DB and disk layout; judge prompt wording, executor internals, restart recovery and web rendering were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How a session could find an earlier session's research documents and decide they still apply.",
+      "file": "ostra-research-20261002-090232-research-reuse.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (doc, paths, artifacts, book)",
+          "ostra-engine (state, factory)",
+          "ostra-policy (guards)",
+          "ostra-sandbox (profile)",
+          "ostra-agents (spawn)",
+          "assets/agents/explore"
+        ],
+        "asks": [
+          "How a session could find an earlier session's research documents",
+          "How a session could decide those documents still apply"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-tools/src/doc.rs:document",
+            "step": "An explore agent calls Document with path set to <session dir>/ostra-research-{run-stamp}-{slug}.md. The tool refuses any directory other than the calling session's Session dir."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:write",
+            "step": "doc::write validates the typed ResearchDoc, runs check, writes the .json sibling and renders the .md. No hash, commit id, or file fingerprint is stored."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:research_docs",
+            "step": "The explore agent submits research_path, scope_covered, findings_summary, and not_covered. The fold stores the path on the explore task's result."
+          },
+          {
+            "location": "crates/ostra-engine/src/factory.rs:work_extras",
+            "step": "The Sufficiency judge, the Track judge, generate-spec, the light-track implementers, and the session context file all receive paths from that same session-only list (Rule D2, Rule F2)."
+          },
+          {
+            "location": "crates/ostra-sandbox/src/profile.rs:workspace_state",
+            "step": "When the session ends, the files stay under .ostra/sessions/<session-id>/. A later session's sandboxed shell and harness tools cannot see them because .ostra/sessions/ is hidden and only the running session is bound back. A native-executor Read is not refused by check_read, because the sessions folder is not in Roots.secret. The console can open any file in any session folder of the workspace."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/mod.rs:ResearchDoc",
+            "step": "A reader who has the earlier document's path (from the console, an upload, or a tagged artifact copy) reads the .md or its .json and judges currency with the facts it records: date, file paths, symbols, snippet sources, versions, lessons marked verified, and not_covered. The judgment is made against the current repo with Read, Grep, CodeOutline, CodeFind, and git in the shell."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Document schema and store, paths, artifacts, book model."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "Session fold and spawn factory that build the research document list handed to later stages."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "Layer 1 read guard for native executions; decides whether another session's folder is readable."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-sandbox",
+            "role": "Hides other sessions from harness and shell executions."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-code",
+            "role": "Code index (CodeOutline, CodeFind, CodeCallers) an explore agent can use to check whether a recorded file or symbol still exists."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/paths.rs",
+            "purpose": "Defines where session files live: <workspace>/.ostra/sessions/<session-id>/ for cross-project artifacts (research, spec, plan) and .../<project-key>/ for per-project reports. A session id is the only key to an earlier session's folder.",
+            "symbols": [
+              "pub fn sessions_root(workspace: &Path) -> PathBuf",
+              "pub fn session_root(workspace: &Path, session_id: &str) -> PathBuf",
+              "pub fn session_project_dir(workspace: &Path, session_id: &str, project_key: &str) -> PathBuf",
+              "pub fn session_state_dir(session_root: &Path) -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/store.rs",
+            "purpose": "Stores a research document as a .md rendered from a .json sibling, named ostra-research-{run-stamp}-{slug}. The write path stores no file hashes, commit id, or other currency marker; load and load_view read the JSON back and re-run check on it.",
+            "symbols": [
+              "pub fn doc_kind_for(path: &Path) -> Option<DocKind>",
+              "pub fn json_path(md: &Path) -> PathBuf",
+              "pub fn load(md: &Path) -> Option<Value>",
+              "pub fn load_view(md: &Path) -> Option<DocumentView>",
+              "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/mod.rs",
+            "purpose": "ResearchDoc schema. The fields a reader can use to judge currency are date (free string), files (path, purpose, symbols), patterns (with snippet.source path:line), data_flow locations, dependencies with version, sources with version, lessons with verified, scope, and not_covered. There is no commit, revision, or content-hash field.",
+            "symbols": [
+              "pub struct ResearchDoc",
+              "pub struct FileRef { path, purpose, symbols }",
+              "pub struct Snippet { language, code, source }",
+              "pub struct LessonUsed { area, lesson, verified }",
+              "pub struct Source { url, version, established }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "Checks a research document when it is written: external facts must cite a retrieved source, source URLs should be http(s), at most one approach is recommended, and open questions are well formed. It never compares the document with the current repo.",
+            "symbols": [
+              "pub fn check(doc: &Document) -> Vec<DocIssue>",
+              "fn research(d: &ResearchDoc, out: &mut Issues)"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/doc.rs",
+            "purpose": "The Document tool. Writes only inside the calling session's Session dir, with the name prefix ostra-research-, and marks the written files as read. A document of another session can neither be created nor updated through it.",
+            "symbols": [
+              "pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "SessionState.research_docs builds the list of research documents from this session's explore tasks only, oldest first, including superseded ones (Rule D2). This is the only list handed to later stages, so documents of another session are never in it.",
+            "symbols": [
+              "pub fn research_docs(&self) -> Vec<PathBuf>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "Maps planner SpawnInputs onto typed spawn structs. Research docs, prior reports, and context files reach agents as Research docs:, Prior phase reports:, and Context files: lines. existing_book shows the one precedent in which an earlier session's output is looked up on disk at spawn time, outside the fold.",
+            "symbols": [
+              "fn work_extras(inputs: &SpawnInputs) -> Extras",
+              "fn existing_book(s: &SessionState) -> Option<PathBuf>"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/spawn.rs",
+            "purpose": "Typed spawn blocks. An explore spawn carries Task:, Workspace root:, Repo root:, Session dir:, Repo key:, plus Extras (Research docs:, Context files:, User notes:, ...). Nothing in ExploreParams names another session.",
+            "symbols": [
+              "pub struct ExploreParams { common, task, extra }",
+              "pub struct Extras { research_docs, context_files, user_notes, task_note, ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/guards.rs",
+            "purpose": "Native-executor read policy. check_read refuses only secrets (data dir, credentials, workspace db, process memory, harness dirs). Another session's research folder is not in Roots.secret, so a native Read of it is not refused by this guard. is_engine_state covers any session's .state dir.",
+            "symbols": [
+              "pub fn check_read(roots: &Roots, target: &Path, raw: &str) -> Option<Denial>",
+              "pub fn is_secret(&self, p: &Path) -> bool",
+              "pub fn is_engine_state(&self, p: &Path) -> bool"
+            ]
+          },
+          {
+            "path": "crates/ostra-sandbox/src/profile.rs",
+            "purpose": "Sandbox profile for harness and shell executions: workspace_state hides .ostra/sessions/ and the execution's own session is bound back below it, so a sandboxed shell or harness tool cannot read another session's folder.",
+            "symbols": [
+              "fn workspace_state(mut self, ws: &Path) -> Profile",
+              "pub fn for_execution(ctx: &ExecContext, cfg: &SandboxConfig, home: &Path) -> Profile"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/artifacts.rs",
+            "purpose": "Workspace artifacts (<workspace>/.ostra/artifacts/): visible files every agent can read and none can write, tagged in a request as @_artifacts/<path> (Rule W3). The user-controlled way to make a research document readable in every session.",
+            "symbols": [
+              "pub fn tagged_files(text: &str, workspace: &Path, projects: &[(String, PathBuf)]) -> Vec<(String, PathBuf)>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/book.rs",
+            "purpose": "The documentation book is the one cross-session store of agent-written knowledge: .ostra/docs/<book id>/book.json, named by project set (Rule B6), with per-area parts and updated_at, searched by DocsSearch. It is the closest precedent for reuse plus staleness (Rule B9: areas the part records versus areas this session's changed files touch).",
+            "symbols": [
+              "pub fn book_json(workspace: &Path, id: &str) -> PathBuf",
+              "pub fn book_id(projects: &[String]) -> String",
+              "pub struct BookPart { project, overview, sections, updated_at, areas }"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "session_file lets the console open any file inside any workspace's sessions folder, so a user can read an earlier session's research document and copy its path or contents into a new request.",
+            "symbols": [
+              "fn session_file(app: &App, raw: &str) -> Result<(PathBuf, std::fs::Metadata), ApiErr>"
+            ]
+          },
+          {
+            "path": "assets/agents/explore/agent.toml",
+            "purpose": "Explore capabilities: read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document, code, coordinate, docs_search. No capability lists sessions or reads another session's documents.",
+            "symbols": [
+              "capabilities = [\"read\", \"shell\", \"search_text\", \"glob\", \"web_search\", \"web_fetch\", \"memory_recall\", \"memory\", \"document\", \"code\", \"coordinate\", \"docs_search\"]"
+            ]
+          },
+          {
+            "path": "docs/internals/project-memory.md",
+            "purpose": "States that research, spec, plan, and reports are kept with the session only, and that a later session needs the spec or plan brought in as input.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "Check how the Classify judge assigns uploads and tagged artifacts to research tasks (HANDOVER Rule C3, assets/judges) if the answer to Q1 is user-supplied.",
+          "If an engine-side listing is chosen, read plan.rs and runner.rs for where spawn inputs are built and which event would record the reuse.",
+          "If a recorded revision is chosen, read crates/ostra-core/src/doc/tests.rs and the explore prompt's Step 6 field table, which a schema change must keep in step."
+        ],
+        "not_covered": [
+          "How the web console presents earlier sessions' artifacts (web/src/) and whether it can copy a research document path into a new task.",
+          "How the Classify judge and Route answer judge treat a path to an earlier research document that appears in a request or an addition.",
+          "Git history needed to date a document's claims: this pass did not check how the project's staging and commits (Rule S-series) relate to a session's run stamp.",
+          "Harness executors' handling of a Read outside the sandbox profile (per-harness adapters), beyond the sandbox profile and the native policy."
+        ],
+        "open_questions": [
+          {
+            "id": "Q1",
+            "multi_select": false,
+            "options": [
+              {
+                "description": "The user names a path or attaches the document as an upload or workspace artifact. Works today with Rule C3 and Rule W1 and needs no engine change, but depends on the user remembering it.",
+                "label": "User supplies it"
+              },
+              {
+                "description": "The engine scans .ostra/sessions/ at spawn time, as existing_book does for the book (crates/ostra-engine/src/factory.rs), and hands matching paths to explore. Fits the existing spawn-time lookup precedent but must record the choice in an event so the fold stays pure.",
+                "label": "Engine lists candidates"
+              },
+              {
+                "description": "An explore agent reads the sessions folder itself. Blocked for harness and shell executions by the sandbox (crates/ostra-sandbox/src/profile.rs:workspace_state) and not blocked for the native executor, so behavior would differ by executor.",
+                "label": "Agent searches"
+              }
+            ],
+            "question": "Which side should locate an earlier session's research documents: the user (naming or attaching a document), the engine (listing earlier sessions' documents for the same projects), or an agent (searching the sessions folder)?",
+            "recommended": 0,
+            "tag": "Discovery"
+          },
+          {
+            "id": "Q2",
+            "multi_select": false,
+            "options": [
+              {
+                "description": "The new explore agent re-reads each recorded file and symbol (Read, CodeOutline, CodeFind) and uses git log since the document's run stamp, treating each recorded fact as a hypothesis. Needs no schema change and matches how recalled memory lessons are handled (docs/internals/project-memory.md).",
+                "label": "Reader checks against code"
+              },
+              {
+                "description": "Add a commit id or per-file hashes to ResearchDoc at write time so a later session can diff mechanically. Requires a change to crates/ostra-core/src/doc/mod.rs and store.rs and to the explore prompt.",
+                "label": "Record a revision in the document"
+              },
+              {
+                "description": "Compare the document's areas and files with module-map areas touched by later changes, as Rule B9 does for the book. Coarser than per-file checks and relies on the same INVENTORY.md map.",
+                "label": "Area-level check"
+              }
+            ],
+            "question": "How should currency of an earlier research document be decided, given that the stored document records no commit or file hash?",
+            "recommended": 0,
+            "tag": "Currency"
+          }
+        ],
+        "patterns": [
+          {
+            "description": "Every stage after explore receives research documents as a list of paths built from the session's own explore results. A path from another session would have to be added to that list or typed into a task, because the fold only knows this session's explore tasks.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/factory.rs",
+              "crates/ostra-agents/src/spawn.rs"
+            ],
+            "name": "Research documents are session-scoped and handed down by the engine",
+            "snippet": {
+              "code": "/// Research documents, oldest run first, including superseded ones (Rule D2).\npub fn research_docs(&self) -> Vec<PathBuf> {\n    self.explore\n        .iter()\n        .filter_map(|t| t.result.as_ref().map(|r| PathBuf::from(&r.research_path)))\n        .collect()\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:1326"
+            }
+          },
+          {
+            "description": "The documentation stage looks for a book written by an earlier session of the same project set and passes it as Existing book:. The lookup is a filesystem check at spawn time, so the fold stays a pure function of the log (CLAUDE.md pattern 1). Any reuse of research documents from another session would face the same constraint: the fact that it was reused must be recorded in an event if it changes how later events fold.",
+            "files": [
+              "crates/ostra-engine/src/factory.rs",
+              "crates/ostra-core/src/book.rs"
+            ],
+            "name": "Reading an earlier session's output at spawn time, outside the fold",
+            "snippet": {
+              "code": "/// The session's book, when an earlier session already wrote it. Read at spawn time, outside the fold.\nfn existing_book(s: &SessionState) -> Option<PathBuf> {\n    let path = ostra_core::book::book_json(&s.workspace_root, &s.book_id());\n    path.is_file().then_some(path)\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/factory.rs:37"
+            }
+          },
+          {
+            "description": "Rule B9 decides which parts of the earlier book to keep by comparing the areas the existing part records with the areas this session's changed files touch (module-map areas from INVENTORY.md). Untouched areas keep their sections. This is the repo's only logic that decides whether earlier agent output still applies, and it works at module-map-area granularity using the session's changed files.",
+            "files": [
+              "crates/ostra-core/src/book.rs",
+              "HANDOVER.md"
+            ],
+            "name": "Currency by touched areas, not by hash",
+            "snippet": {
+              "code": "pub struct BookPart {\n    pub project: String,\n    pub overview: String,\n    pub sections: Vec<DocSection>,\n    #[ts(type = \"string\")]\n    pub updated_at: DateTime<Utc>,\n    /// Rule B9: the areas that wrote the part, in order, when more than one writer did.\n    #[serde(default)]\n    pub areas: Vec<BookArea>,\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/book.rs:260"
+            }
+          },
+          {
+            "description": "Paths reach an agent as labeled lines in its first message. Context files: is the generic carrier for a path an agent should read and that is not a research document, a prior report, or a phase file. The Classify judge names uploads and tagged artifacts in research tasks, because a researcher reads only its task (Rule C3).",
+            "files": [
+              "crates/ostra-agents/src/spawn.rs"
+            ],
+            "name": "Typed spawn lines as the carrier for paths",
+            "snippet": {
+              "code": "self.paths(\"Research docs\", &e.research_docs);\nself.scope(&e.projects_in_scope);\n...\nself.paths(\"Prior phase reports\", &e.prior_reports);\nself.paths(\"Context files\", &e.context_files);\nself.list(\"User notes\", &e.user_notes);",
+              "language": "rust",
+              "source": "crates/ostra-agents/src/spawn.rs:192"
+            }
+          }
+        ],
+        "problem": "A research document is written by the explore agent into one session's directory and is only ever handed to later stages of that same session. Nothing in the engine lists, searches, or injects research documents from another session. Reuse today therefore depends on a path reaching the new session some other way, and on the reader judging currency against the code, because the stored document carries no commit, hash, or per-file fingerprint.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how a session could find an earlier session's research documents and decide they still apply. Covers what Ostra does today in the Rust backend for locating, reading, and validating a research document that belongs to another session. It does not cover the web console, the harness adapters beyond the sandbox profile, or any design for a new feature. No external technology is involved, so no web sources were retrieved.",
+        "sources": [],
+        "title": "Reusing an earlier session's research documents"
+      },
+      "submit": {
+        "findings_summary": "Research documents are written by the Document tool into one session's folder under .ostra/sessions/<id>/ as a .md rendered from a .json sibling. The engine hands them only to later stages of the same session (SessionState::research_docs), so nothing lists or injects another session's documents. The sandbox hides other sessions from harness and shell executions, while the native read policy does not refuse that folder, so behavior differs by executor. The stored ResearchDoc has no commit, hash, or per-file fingerprint, so currency can only be judged against the current repo with Read, the code index, and git. The closest precedents are the cross-session documentation book (existing_book at spawn time, Rule B9 touched-areas check) and recalled memory lessons, which the explore prompt already tells agents to verify against current code.",
+        "not_covered": [
+          "How the web console presents earlier sessions' artifacts and whether it can copy a research document path into a new task.",
+          "How the Classify judge and Route answer judge treat a path to an earlier research document in a request or an addition.",
+          "How git staging and commits relate to a session's run stamp, which would date a document's claims.",
+          "Harness executors' handling of a Read outside the sandbox profile, beyond the sandbox profile and the native policy."
+        ],
+        "open_questions": 2,
+        "scope_covered": "How a session could find an earlier session's research documents and decide they still apply, as the Rust backend does it today; the web console, harness adapters, and any design for a new feature were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

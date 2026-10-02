@@ -1,7 +1,8 @@
 //! Where documents live and how they are read and written: `<name>.json` is the source, and
 //! `<name>.md` beside it is rendered from it for the agents that read markdown.
 
-use super::check::{DocIssue, IssueLevel, check};
+use super::check::{DocIssue, IssueLevel, check, check_written};
+use super::refs::snapshot;
 use super::render::render;
 use super::{Document, DocumentView, PhaseDoc, PlanDoc, ResearchDoc, SpecDoc};
 use crate::agent::AgentName;
@@ -178,11 +179,29 @@ fn pretty(v: &impl serde::Serialize) -> String {
 
 /// Validate `value` as a `kind` document and write it to `md` (rendered) and its JSON sibling.
 /// A plan also writes one phase file pair per phase and removes phase files it no longer has.
-pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String> {
-    let document = kind.parse(value)?;
-    let issues = check(&document);
+/// `repo_root` is the writing agent's repo: a research document records its files' fingerprints
+/// against it (Rule D2a).
+pub fn write(
+    kind: DocKind,
+    md: &Path,
+    value: &Value,
+    repo_root: Option<&Path>,
+) -> Result<Written, String> {
+    let mut document = kind.parse(value)?;
+    let mut value = value.clone();
+    if let (Document::Research(d), Some(root)) = (&mut document, repo_root) {
+        let snap = snapshot(d, root);
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "snapshot".into(),
+                serde_json::to_value(&snap).unwrap_or(Value::Null),
+            );
+        }
+        d.snapshot = Some(snap);
+    }
+    let issues = check_written(&document);
     let dir = md.parent().ok_or("The document path has no directory.")?;
-    put(&json_path(md), &pretty(value))?;
+    put(&json_path(md), &pretty(&value))?;
     put(md, &render(&document, md))?;
     let mut files = vec![md.to_path_buf()];
     if let Document::Plan(plan) = &document {

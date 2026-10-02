@@ -337,6 +337,24 @@ async fn implement_session_runs_to_completion_under_yolo() {
     let imp = &exec.runs.lock().unwrap()[5].2.clone();
     assert!(imp.contains("Phase file:"), "{imp}");
     assert!(imp.contains("Report file:"), "{imp}");
+    // Rules D2a and D4a: the spec learns what changed since research, and the plan gets the
+    // facts file the runner wrote before it started.
+    let spec_block = exec.runs.lock().unwrap()[1].2.clone();
+    assert!(
+        spec_block.contains("\nChanged since research: none\n"),
+        "{spec_block}"
+    );
+    let plan_block = exec.runs.lock().unwrap()[3].2.clone();
+    let facts = plan_block
+        .lines()
+        .find_map(|l| l.strip_prefix("Code facts: "))
+        .unwrap_or_else(|| panic!("{plan_block}"));
+    assert!(
+        std::fs::read_to_string(facts)
+            .unwrap()
+            .starts_with("# Code facts"),
+        "{facts}"
+    );
     let summary = engine.db().get_session(&summary.id).unwrap().unwrap();
     assert_eq!(summary.status, SessionStatus::Completed);
     assert!(summary.cost_usd > 0.0);

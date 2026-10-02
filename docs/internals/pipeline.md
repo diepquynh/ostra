@@ -104,7 +104,14 @@ M1). The only limit on fan-out here is the workspace's `limits.max_parallel_exec
 runner, which every execution in Ostra goes through.
 
 An explore agent writes a research document and submits its scope and a `Not covered` list: things it touched
-but could not investigate. Explore tasks can also appear later. When a user adds context to a running session,
+but could not investigate.
+
+When explore writes the document, the Document tool records a content hash of every repo file it names: its
+files, the files its patterns use and copy from, its data-flow hops, and its approaches' precedents (Rule D2a).
+The hashes sit in the document's JSON, in a `snapshot` field that Ostra writes and the model's schema leaves
+out. The stages after research compare them with the files as they are now, so they take what the research
+says about an unchanged file as current instead of reading the file again. The same write checks that each of
+those paths exists in the repo, and the submit is refused while one does not (Hard rule 4). Explore tasks can also appear later. When a user adds context to a running session,
 the Route answer judge decides what research it needs and in which project (Rule C2), and the Rescue judge can
 start a targeted explore in the middle of a build. Every explore spawn gets the context the user added beside
 its task, so a task written before the addition, or re-run after Send now interrupted it, still sees it.
@@ -196,11 +203,19 @@ then both tracks through the phases.
 ## Spec: what should change
 
 One `generate-spec` agent runs for the whole session, in the primary project. It receives the full request,
-every research document (oldest first, including superseded ones), and the projects in scope. It writes the
-spec file and submits its summary, counts, external evidence rows, and any open questions.
+every research document (oldest first, including superseded ones), and the projects in scope. It also gets
+`Changed since research:`: the cited files whose content changed, or that are gone, since the newest document
+naming them, or `none` (Rule D2a). For every file the line does not list, the prompt has the agent take current
+behavior from the research documents instead of reading the code again. It writes the spec file and submits its
+summary, counts, external evidence rows, and any open questions.
 
-The spec is a typed document. The Document tool checks its structure, and the submit call is refused while the
-file has a check error or its counts disagree with the submit (Hard rule 4). The engine never edits the spec
+The spec is a typed document. The Document tool checks its structure and the code it cites: every criterion
+grounding that names a `path:Symbol`, and every consumed contract source, must name a file in its repo that
+contains the symbol. The submit call is refused while the file has a check error or its counts disagree with the
+submit (Hard rule 4), so a wrong reference is fixed by the agent that wrote it, in the same run, rather than sent
+back by a fact-check round. The checks live in
+[`refs.rs`](../../crates/ostra-core/src/doc/refs.rs). The browser view does not run them, because a build later
+creates and deletes the files they name. The engine never edits the spec
 itself; every change goes back through the agent.
 
 The spec renders from its typed document. Each requirement shows its EARS type, the deliverable and criterion it
@@ -238,6 +253,10 @@ behavior:
 - **`Prior findings:`** is `none` on the first pass. On a re-pass it is the previous pass's findings verbatim,
   or `no findings on the previous pass` when that pass was clean, so a revision after a clean pass is still
   treated as a re-pass (Rule D3a).
+
+The checker does not re-verify the references Ostra already checked when the document was written. On a spec
+target it gets the research documents and `Changed since research:`, and on a plan target the code facts file
+(below), so it checks a claim about an unchanged file against what research recorded before it opens the file.
 
 A fact-check on a spec's first pass runs with `Source check: refetch`, so it fetches the External Evidence source
 again:
@@ -282,9 +301,29 @@ research straight to a plan.
 
 ## Plan: sequencing the work
 
-One `plan` agent reads the approved spec and the projects in scope, and nothing else (Rule D4, Hard rule 16).
-Its parameter struct has no field for anything more, so the engine cannot leak other context into it by
-accident. On a re-run it also receives its earlier master plan and the fact-check findings.
+One `plan` agent reads the approved spec and the projects in scope, and never a research document (Rule D4, Hard
+rule 16): a request can have several, written while the user changed what they wanted, and only the spec
+reconciles them. Its parameter struct has no field for a research document, so the engine cannot leak one into
+it by accident.
+
+What research found about the code reaches the plan as `Code facts:` instead (Rule D4a). The runner writes
+`ostra-code-facts.md` in the session root just before the spawn, from every research document: per repo, each
+cited file with its purpose and symbols, the patterns with their code, the traced flows, and the dependencies.
+Each file carries a mark from comparing it with the hash its document recorded: `unchanged`, `changed`, `gone`,
+or `not checked` for a document older than the hashes. Where documents overlap, the newest stands. The plan
+prompt has the agent plan from unchanged entries and read only the files that changed or that the facts do not
+cover. The file holds no request text, asks, approaches, recommendation, or external fact, so requirements still
+reach the plan only through the spec ([`facts.rs`](../../crates/ostra-core/src/doc/facts.rs)).
+
+The Document tool checks the steps against the code (Hard rule 4): a `Modify` or `Delete` step must name a file
+that exists or that an earlier step creates, and each `read_first` path must exist in a repo of the plan or be
+created by an earlier step or by the step itself. A phase in a project that does not exist yet is not checked.
+
+On a re-run after a fact-check FAIL, the plan also receives its earlier master plan, the findings, and `Phases to
+revise:` (Rule D4b): the plan's phases that the findings' elements and locations name, such as `step 2.3` or
+`...-phase-2.md`. The agent reads and changes only those phases. Its `update` sends only the steps and fields
+that change, because an item an update names takes the fields it sends and keeps the rest, at every level, so a
+revision never re-sends a whole phase to change one step.
 
 The plan is a master plan plus one file per phase. Each phase has an ID, a project, a deliverable, a
 complexity, a test policy (`Required` or `Skip` with a rationale), and the phases it depends on. Each step names
@@ -300,7 +339,8 @@ does not hold is accepted only when `new_projects` names that key (`SessionState
 other stays blocked, as a phase in an unknown project always was.
 
 The plan then goes through the same loop as the spec: clarifying questions, a fact-check that always uses
-`citations` and receives the approved spec (Rule D5), the recurring-FAIL limit, and approval.
+`citations` and receives the approved spec and the code facts file (Rules D5, D4a), the recurring-FAIL limit,
+and approval.
 
 The master plan opens on its overview, with the phase count, the stakes, and the success criteria:
 
@@ -320,8 +360,45 @@ The plan approval gate lists the phases with their project, complexity, test pol
 A requirement-level answer at any point after the spec exists goes into the spec first (Rule D10). The
 engine revokes both approvals, marks the plan invalidated, re-runs generate-spec with the change, asks for spec
 approval again, and then revises the plan in place against the spec's diff. This includes answers to the
-plan's own clarifying questions: they are requirement changes, because the plan agent reads only the spec, so
-an answer that lives anywhere else never reaches it.
+plan's own clarifying questions: they are requirement changes, because the plan agent takes requirements only
+from the spec, so an answer that lives anywhere else never reaches it.
+
+### Measuring the planning stages
+
+Conformance fixtures prove which inputs each planning stage gets; they cannot say how much of the code a model reads
+again with them, or whether the plan still holds. The planning evals do that.
+[`tests/evals/planning.toml`](../../tests/evals/planning.toml) holds 30 change requests against Ostra's own source, in
+three tiers: a change in one place, a change across a few files or crates, and a feature across several crates with more
+than one deliverable. The file pins one upstream commit, and every run plans against that commit's tracked files,
+extracted with `git archive` into a fresh repository, so a result does not move when the code under development does.
+
+Each case's research is recorded once: explore runs live on the model under test, and its typed documents are saved
+under `tests/evals/planning/research/`, with the scenario's paths turned into placeholders. Every later run replays them
+through the native loop and the real Document tool, from a scripted provider, so the engine under test records and
+checks a replayed document the way it treats any research document, and two engines compared on one case read the same
+research.
+
+[`crates/ostra-server/tests/planning_evals.rs`](../../crates/ostra-server/tests/planning_evals.rs) runs each case as a
+real session of a real `Engine` on YOLO, with scripted judges: the case's research tasks, the full track, high stakes,
+every approval, and the recommended option for every open question. Generate-spec, both fact-checks, and the plan run
+live on the native loop with the policy, the sandbox, and a code index, until the plan is approved and the first
+implementer would start. The report gives, per stage, the cost, the tool calls, the code files read, and how many of
+those files the research had already described, plus the plan rounds, the fact-check FAILs, the reference errors the
+Document tool caught, and the size of the plan's Document calls. It then checks the approved plan against the approved
+spec: every requirement delivered by a step, every deliverable planned, and every `Modify` or `Delete` step naming a
+file that exists or that an earlier step creates.
+
+The harness uses only engine APIs that exist at the pinned commit, so the same file runs on an unchanged engine in a
+git worktree at that commit, and a second test compares two reports case by case. An offline test replays every case
+with stand-ins for the live stages in the normal suite. Record, run, and compare with:
+
+```bash
+OSTRA_EVAL_MODE=record cargo test -p ostra-server --test planning_evals planning_evals -- --ignored --nocapture
+OSTRA_EVAL_MODEL=anthropic:claude-sonnet-5-5 OSTRA_EVAL_BUDGET=150 \
+  cargo test -p ostra-server --test planning_evals planning_evals -- --ignored --nocapture
+OSTRA_EVAL_BASELINE=<report.json> OSTRA_EVAL_CANDIDATE=<report.json> \
+  cargo test -p ostra-server --test planning_evals planning_compare -- --ignored --nocapture
+```
 
 ## Phases: building in reviewed steps
 

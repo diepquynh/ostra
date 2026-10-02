@@ -52,8 +52,8 @@ pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput {
             .collect(),
         Some(_) => return ToolOutput::err("`remove` must be a list of ids."),
     };
-    let value = match (input.get("document"), input.get("update")) {
-        (Some(d), None) if remove.is_empty() => d.clone(),
+    let (value, kept) = match (input.get("document"), input.get("update")) {
+        (Some(d), None) if remove.is_empty() => (d.clone(), vec![]),
         (Some(_), _) => {
             return ToolOutput::err(
                 "Send either `document` (the whole document) or `update` with `remove`, not both.",
@@ -70,12 +70,12 @@ pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput {
             }
             let empty = Value::Object(Default::default());
             match doc::apply_update(existing, update.unwrap_or(&empty), &remove) {
-                Ok(v) => v,
+                Ok(m) => (m.value, m.kept),
                 Err(e) => return ToolOutput::err(e.0),
             }
         }
     };
-    let written = match doc::write(kind, &md, &value) {
+    let written = match doc::write(kind, &md, &value, Some(&env.config().repo_root)) {
         Ok(w) => w,
         Err(e) => {
             return ToolOutput::err(format!(
@@ -88,10 +88,10 @@ pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput {
         env.mark_read(f);
         env.mark_read(&doc::json_path(f));
     }
-    ToolOutput::ok(summary(&written))
+    ToolOutput::ok(summary(&written, &kept))
 }
 
-fn summary(w: &doc::Written) -> String {
+fn summary(w: &doc::Written, kept: &[String]) -> String {
     let mut out = String::new();
     let what = match &w.document {
         Document::Research(d) => format!(
@@ -129,6 +129,13 @@ fn summary(w: &doc::Written) -> String {
     );
     for f in &w.files {
         let _ = writeln!(out, "- {}", f.display());
+    }
+    if !kept.is_empty() {
+        let _ = writeln!(
+            out,
+            "Kept, because this update did not send them: {}. Remove any that no longer applies with `remove`.",
+            kept.join("; ")
+        );
     }
     if w.issues.is_empty() {
         let _ = writeln!(out, "Ostra's checks found nothing to fix.");
@@ -207,6 +214,37 @@ mod tests {
         assert_eq!(
             ostra_core::doc::load(&md).unwrap()["open_questions"],
             json!([])
+        );
+    }
+
+    // Rules D2a and Hard 4: a research document is fingerprinted against the agent's repo, and a
+    // file it names that the repo lacks is an error.
+    #[tokio::test]
+    async fn research_files_are_fingerprinted_and_checked_against_the_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = env_for(dir.path(), AgentName::Explore);
+        let repo = env.config().repo_root.clone();
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::write(repo.join("src/a.rs"), "fn a() {}").unwrap();
+        let md = env.config().session_dir.join("ostra-research-1-t.md");
+        let mut doc = research();
+        doc["files"] = json!([
+            {"path": "src/a.rs", "purpose": "p"},
+            {"path": "src/b.rs", "purpose": "p"}
+        ]);
+        let out = run(&env, "Document", json!({"path": md, "document": doc})).await;
+        assert!(!out.is_error, "{}", out.text);
+        assert!(
+            out.text.contains("Fix the 1 errors") && out.text.contains("`src/b.rs` is not there"),
+            "{}",
+            out.text
+        );
+        let stored = ostra_core::doc::load(&md).unwrap();
+        assert_eq!(stored["snapshot"]["root"], json!(repo.display().to_string()));
+        assert_eq!(stored["snapshot"]["files"]["src/b.rs"], "missing");
+        assert_eq!(
+            stored["snapshot"]["files"]["src/a.rs"].as_str().unwrap().len(),
+            16
         );
     }
 

@@ -69,6 +69,20 @@ fn work_extras(inputs: &SpawnInputs) -> Extras {
     e
 }
 
+/// Rules D2a and D4a: the code facts an agent gets, as the changed files or the facts file.
+fn code_facts(i: &SpawnInputs, s: &SessionState) -> (Option<Vec<String>>, Option<PathBuf>) {
+    if i.code_facts.is_empty() {
+        (None, None)
+    } else if i.wants_code_facts_file() {
+        (None, Some(s.code_facts_path()))
+    } else {
+        (
+            Some(ostra_core::doc::changed_since_research(&i.code_facts)),
+            None,
+        )
+    }
+}
+
 fn required(value: Option<PathBuf>, what: &str) -> Result<PathBuf, String> {
     value.ok_or_else(|| format!("missing {what}"))
 }
@@ -121,6 +135,7 @@ impl SpawnFactory for AgentsFactory {
             session_dir: req.session_dir.clone(),
             repo_key: req.project.clone(),
         };
+        let (changed_since_research, facts_file) = code_facts(i, s);
         let params: Box<dyn SpawnParams> = match req.agent {
             agent if matches!(req.purpose, ExecPurpose::Consult { .. }) => Box::new(ConsultParams {
                 common,
@@ -139,6 +154,7 @@ impl SpawnFactory for AgentsFactory {
                 spec_file: i.spec_file.clone(),
                 new_research_docs: i.new_research_docs.clone(),
                 requirement_changes: i.changes.clone(),
+                changed_since_research,
                 extra: Extras {
                     research_docs: i.research_docs.clone(),
                     projects_in_scope: i.projects_in_scope.clone(),
@@ -162,12 +178,16 @@ impl SpawnFactory for AgentsFactory {
                     SourceCheck::Citations
                 },
                 research_docs: i.research_docs.clone(),
+                changed_since_research,
+                code_facts: facts_file,
             }),
             AgentName::Plan => Box::new(PlanParams {
                 common,
                 spec_file: required(i.spec_file.clone(), "spec file")?,
                 projects_in_scope: i.projects_in_scope.clone(),
+                code_facts: facts_file,
                 findings: i.findings.clone(),
+                phases_to_revise: i.revise_phases.clone(),
                 master_plan: i.target.clone(),
             }),
             // Rule O8: an implementer the user sent to a stuck run fixes only what stopped it.

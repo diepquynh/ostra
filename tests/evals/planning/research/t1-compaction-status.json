@@ -1,0 +1,217 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:39:41.162267864+00:00",
+  "docs": [
+    {
+      "task": "How the native agent loop decides to compact a conversation and which status messages it emits around it.",
+      "file": "ostra-research-20261002-083831-native-loop-compaction-status.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-exec-native",
+          "ostra-providers",
+          "ostra-core (ExecutionDelta)",
+          "ostra-engine (EngineHost.emit)"
+        ],
+        "asks": [
+          "How the native agent loop decides to compact a conversation",
+          "Which status messages it emits around compaction"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "Run::execute resolves the window: `ostra_core::pricing::context_window(&spec.route.model).unwrap_or(DEFAULT_CONTEXT_WINDOW)`. It starts `measured = 0`, `measured_len = 0`, `failed_compaction_at = None`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "At the top of each of up to MAX_TURNS (400) iterations it checks cancellation, builds the ChatRequest, and computes `next` (measured context plus 4-chars-per-token estimate of messages since `measured_len`)."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "Compaction runs only if all three hold: `next >= 0.95 * window`; the retry gate is open (`failed_compaction_at` is None, or `next >= at + 0.02 * window`); the last message has role User."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::compact",
+            "step": "Run::compact emits Status 'Compacting the conversation: about {tokens} of {window} context tokens used.' where tokens is `next` (an estimate, not a measured value)."
+          },
+          {
+            "location": "crates/ostra-providers/src/lib.rs:compact_on_client",
+            "step": "provider.compact(req, COMPACT_INSTRUCTIONS, cancel) runs. Anthropic: server-side summarize with beta compact-2026-09-04 on models whose caps allow it, else client-side fallback. OpenAI: /v1/responses/compact. Either falls back to compact_on_client on InvalidRequest. compact_on_client appends the instructions as a user turn, sets ToolChoice::None, and treats a non-empty EndTurn text answer as the summary."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::compact",
+            "step": "On Ok, add_usage emits Turn (no call ids) and Usage deltas for the compaction request. Then Status 'Compacted the conversation into a summary.' when messages is Some, or 'Compaction returned no summary, so the run continues without it.' when None."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "Some(window): AFTER_COMPACTION is appended as a user turn (merged into the last user message if the window ends on a user role), the window is stored via host.record_message(\"compaction\", ...), `messages` is replaced, and failed_compaction_at is reset. No status is emitted at this step. None: failed_compaction_at = Some(next). Err(Cancelled): returns a Cancelled result with no further status. Other Err: Status 'Compaction failed, so the run continues without it: {e}', failed_compaction_at = Some(next)."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:Run::execute",
+            "step": "The chat request for the turn then goes out with the (possibly compacted) messages. After the response, `measured` becomes the response's context_of(usage), which re-baselines the next estimate."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:EngineHost::emit",
+            "step": "Every Status delta reaches EngineHost::emit, which stores summary_line(message) (whitespace collapsed, max 120 chars with an ellipsis) as the execution's summary via set_execution_summary, then forwards the delta unchanged."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-providers",
+            "role": "Provider::compact, Compacted, compact_on_client, Block::Compaction"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "ExecutionDelta, ExecutionHost, Usage, pricing::context_window (models.dev catalog)"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "EngineHost implements ExecutionHost and persists the status summary"
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native loop. Holds the compaction constants, the trigger check inside Run::execute (lines 554-588), Run::compact which emits the Compacting and result statuses (691-714), token estimation, and the stored `compaction` transcript record.",
+            "symbols": [
+              "pub const COMPACT_AT: f64 = 0.95;",
+              "pub const DEFAULT_CONTEXT_WINDOW: u64 = 200_000;",
+              "const COMPACT_RETRY_GROWTH: f64 = 0.02;",
+              "const COMPACT_INSTRUCTIONS: &str",
+              "const AFTER_COMPACTION: &str",
+              "const COMPACTION_RECORD: &str = \"compaction\";",
+              "fn estimate_tokens(messages: &[Message]) -> u64",
+              "fn context_of(u: &Usage) -> u64",
+              "async fn execute(self) -> ExecutionResult  // impl Run",
+              "async fn compact(&self, provider: &dyn Provider, req: ChatRequest, tokens: u64, window: u64) -> Result<Option<Vec<Message>>, ProviderError>",
+              "fn stored_messages(transcript: &[(String, Value)]) -> Vec<Message>",
+              "fn add_usage(&self, u: &Usage, call_ids: Vec<String>)",
+              "fn fail(&self, message: String) -> ExecutionResult"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/tests.rs",
+            "purpose": "Existing tests: compacts_near_the_context_window_and_continues_from_the_summary (line 915), a_compaction_without_summary_is_not_retried_every_turn (956), a_stored_compaction_replaces_the_messages_before_it (973). None asserts the status messages.",
+            "symbols": [
+              "fn is_compaction_ask(req: &ChatRequest) -> bool",
+              "fn read_near_full(f: &Fixture, context: u64)"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/lib.rs",
+            "purpose": "Provider trait with the default compact method, Compacted result type, and the client-side fallback compact_on_client.",
+            "symbols": [
+              "pub struct Compacted { pub messages: Option<Vec<Message>>, pub usage: Usage }",
+              "async fn compact(&self, req: ChatRequest, instructions: &str, cancel: CancellationToken) -> Result<Compacted, ProviderError>",
+              "pub async fn compact_on_client<P: Provider + ?Sized>(provider: &P, req: ChatRequest, instructions: &str, cancel: CancellationToken) -> Result<Compacted, ProviderError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/anthropic.rs",
+            "purpose": "Anthropic compact: server-side form with beta compact-2026-09-04 when caps(model).compaction, else or on InvalidRequest falls back to compact_on_client. Returns None unless a signed compaction block arrives with stop reason `compaction`.",
+            "symbols": [
+              "const COMPACT_BETA: &str = \"compact-2026-09-04\";",
+              "pub(crate) fn compaction_body(req: &ChatRequest, instructions: &str) -> (Value, Vec<&'static str>)"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/openai.rs",
+            "purpose": "OpenAI compact: POST /v1/responses/compact; InvalidRequest falls back to compact_on_client; messages are None unless the output holds a compaction item.",
+            "symbols": [
+              "fn compacted_messages(output: &[Value]) -> Vec<Message>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "ExecutionDelta::Status { message: String } is the only status channel; the Turn and Usage deltas carry the compaction request's usage.",
+            "symbols": [
+              "ExecutionDelta::Status { message: String }",
+              "ExecutionDelta::Turn { usage: Usage, call_ids: Vec<String> }",
+              "ExecutionDelta::Usage { usage: Usage }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "EngineHost::emit turns each Status delta into the execution's one-line summary (ostra_core::api::summary_line, 120 chars) and then forwards the delta.",
+            "symbols": [
+              "impl ExecutionHost for EngineHost { fn emit(&self, delta: ExecutionDelta) }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "summary_line collapses whitespace and cuts to SUMMARY_CHARS.",
+            "symbols": [
+              "pub const SUMMARY_CHARS: usize = 120;",
+              "pub fn summary_line(text: &str) -> String"
+            ]
+          },
+          {
+            "path": "docs/internals/executors.md",
+            "purpose": "The 'Long runs' section (lines 205-243) documents compaction behavior. It does not list the status messages. Project rule 9 requires doc updates with behavior changes.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the status messages change, the docs page docs/internals/executors.md 'Long runs' section and crates/ostra-exec-native/src/tests.rs (no test asserts status strings today) are the places that follow.",
+          "A separate pass on web rendering of Status deltas if the user wants UI-facing wording changes."
+        ],
+        "not_covered": [
+          "How the web console renders Status deltas (web/src/api/mock/fixtures.execution.ts shows a `status` kind exists in the UI fixtures; the real renderer was not opened).",
+          "The pricing catalog loader behind ostra_core::pricing::context_window.",
+          "Anthropic caps(model).compaction model list and compaction_body details beyond the beta name and request fields."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Each turn, before the chat request, the loop computes `next` as the last measured context plus an estimate of messages added since. It compacts when `next >= 0.95 * window`, the retry gate allows it, and the last message is a user turn (no open tool call). The window comes from `ostra_core::pricing::context_window(model)` or 200,000 when unlisted. `measured` is set after each response to `context_of(usage)` (input + cache read + cache write + output tokens) and `measured_len` to the message count then. Unmeasured messages are estimated at 4 characters per token.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Compaction trigger in the turn loop",
+            "snippet": {
+              "code": "let next = measured + estimate_tokens(&messages[measured_len.min(messages.len())..]);\nlet retry_ok = failed_compaction_at.is_none_or(|at| {\n    next as f64 >= at as f64 + COMPACT_RETRY_GROWTH * window as f64\n});\n// A user turn last means no tool call is open, as compaction requires.\nif next as f64 >= COMPACT_AT * window as f64\n    && retry_ok\n    && messages.last().is_some_and(|m| m.role == Role::User)\n{\n    let mut ask = req.clone();\n    ask.messages = messages.clone();\n    match self.compact(provider.as_ref(), ask, next, window).await {\n        Ok(Some(mut compacted)) => {\n            append_turn(&mut compacted, Message::user_text(AFTER_COMPACTION));\n            self.host.record_message(\n                COMPACTION_RECORD,\n                &serde_json::to_value(&compacted).unwrap_or(Value::Null),\n            );\n            messages = compacted;\n            failed_compaction_at = None;\n        }\n        Ok(None) => failed_compaction_at = Some(next),\n        Err(ProviderError::Cancelled) => {\n            let mut r = ExecutionResult::with_status(ExecutionStatus::Cancelled);\n            r.usage = *self.usage.lock();\n            return r;\n        }\n        Err(e) => {\n            self.host.emit(ExecutionDelta::Status {\n                message: format!(\"Compaction failed, so the run continues without it: {e}\"),\n            });\n            failed_compaction_at = Some(next);\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:554"
+            }
+          },
+          {
+            "description": "Run::compact emits one Status before calling the provider and one after it returns Ok. Between them it calls add_usage(&out.usage, vec![]), which emits a Turn delta with empty call_ids and a Usage delta, so the summarization request is billed in the execution total and appears as a call-less turn. On a provider Err, the `?` returns before the second Status and add_usage, so only the first Status and the caller's failure Status appear.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Status emission inside Run::compact",
+            "snippet": {
+              "code": "async fn compact(\n    &self,\n    provider: &dyn Provider,\n    req: ChatRequest,\n    tokens: u64,\n    window: u64,\n) -> Result<Option<Vec<Message>>, ProviderError> {\n    self.host.emit(ExecutionDelta::Status {\n        message: format!(\n            \"Compacting the conversation: about {tokens} of {window} context tokens used.\"\n        ),\n    });\n    let out = provider\n        .compact(req, COMPACT_INSTRUCTIONS, self.cancel.clone())\n        .await?;\n    self.add_usage(&out.usage, vec![]);\n    self.host.emit(ExecutionDelta::Status {\n        message: match out.messages {\n            Some(_) => \"Compacted the conversation into a summary.\".into(),\n            None => \"Compaction returned no summary, so the run continues without it.\".into(),\n        },\n    });\n    Ok(out.messages)\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:691"
+            }
+          }
+        ],
+        "problem": "The native loop (Run::execute) summarizes the conversation when the next request would fill 95% of the model's context window. Around that call it emits ExecutionDelta::Status messages through the ExecutionHost. The exact trigger conditions, the retry rule after a failed attempt, and the set and order of status strings are spread over Run::execute and Run::compact.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the native agent loop decides to compact a conversation and which status messages it emits around it. Covers the trigger in crates/ostra-exec-native/src/lib.rs, the provider compact hook it calls, and where Status deltas go in the engine. Does not cover the web UI rendering of status lines or pricing catalog internals.",
+        "sources": [],
+        "title": "Native agent loop compaction and its status messages"
+      },
+      "submit": {
+        "findings_summary": "Each turn the loop estimates the next request size as the last measured context plus 4-chars-per-token for newer messages. It compacts when that reaches 95% of the model's window (200k if unlisted), the last message is a user turn, and, after a failed attempt, the context has grown by 2% of the window. Run::compact emits 'Compacting the conversation: about {tokens} of {window} context tokens used.' before the provider call, then either 'Compacted the conversation into a summary.' or 'Compaction returned no summary, so the run continues without it.'. A provider error instead gives 'Compaction failed, so the run continues without it: {e}' from Run::execute, and cancellation returns Cancelled with no status. EngineHost::emit stores each status as a 120-character summary line, no existing test asserts the strings, and docs/internals/executors.md covers the behavior but not the messages.",
+        "not_covered": [
+          "Web console rendering of Status deltas",
+          "Pricing catalog loader behind context_window",
+          "Anthropic model capability list for server-side compaction"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How Run::execute in ostra-exec-native decides to compact and which ExecutionDelta::Status messages surround it, plus the provider compact hook and the engine host's handling of Status; web UI rendering was left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

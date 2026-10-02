@@ -1,0 +1,581 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T09:04:15.694912012+00:00",
+  "docs": [
+    {
+      "task": "How a failed phase removes its dependents from the queue (Rule D9) in the fold and the planner, and its conformance fixture.",
+      "file": "ostra-research-20261002-090038-rule-d9-dependent-removal.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine (state fold, planner, view, judge_input)",
+          "tests/conformance",
+          "docs/internals"
+        ],
+        "asks": [
+          "How a failed phase removes its dependents from the queue (Rule D9) in the fold",
+          "How the same rule works in the planner",
+          "Its conformance fixture"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/state.rs:adopt_plan_phases",
+            "step": "The plan is approved. `adopt_plan_phases` builds one `PhaseRun` per plan phase with a fresh `WorkLoop` (`next = Idle`). `depends_on` is `Some(list)` when every listed id exists and is not the phase itself, else `None` (Rule M5: depends on every earlier phase). A phase naming a project not in the workspace starts as `Blocked` with a reason."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:exec_gate_answered",
+            "step": "A phase's impl loop reaches `LoopNext::Blocked` in the fold by one of several routes: the user abandons a failed execution (`exec_gate_answered` with `retry == false`, reason `<agent> failed and the user abandoned it.`), the stuck gate answered `block` or an unrouted `fact` (`Stuck: <need>`), the review cap gate answered other than another pass, the Resolve-review judge returns `Block`, a discarded RouteAnswer falls back to Blocked, a requirement change (Rule D10) sets Blocked with `announced_block` and `block_gate_answered` already true, or the `PhaseBlocked` event itself."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:removed_phases",
+            "step": "Next planner pass: `Planner::phases` calls `removed_phases(s)`. Blocked impl loops seed `failed`. Each idle phase whose dependency list (or, for `None`, every lower id) contains a failed or already removed id is added to `removed`, repeated to a fixpoint, so removal is transitive. Phases that are not idle (already running or terminal) are never added."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:phases",
+            "step": "`Planner::phases` skips every removed phase, so no spawn step is produced for it. Independent idle phases still start through the M2 and `deps_passed` checks. For the blocked phase, `loop_steps` hits the `Blocked` arm."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:1762",
+            "step": "First pass on the blocked loop emits `Step::AnnounceBlocked`. The runner appends `SessionEvent::PhaseBlocked`; the fold sets `announced_block = true`."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:1452",
+            "step": "Next pass, outside YOLO with `block_gate_answered == false` and `blocked_gate.is_none()`, the planner emits `Step::OpenGate` with `GatePayload::PhaseBlocked`. The fold's gate-opened arm sets `PhaseRun.blocked_gate`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:4146",
+            "step": "The user answers. `answer_needs_route` is true only for `retry` with non-blank text. The fold's gate-answered arm clears `blocked_gate`, sets `block_gate_answered = true`, and for `retry` resets `announced_block`/`block_gate_answered` to false, sets `extra_cap`, `resolve_rounds = 0`, and replaces `next` with `Work { kind: Fix, .. }` (or `AwaitRoute` when text was given). Because `next` leaves `Blocked`, `removed_phases` no longer seeds that phase, and its dependents return to the queue on the following pass. Any other choice (`leave`) keeps it blocked and its dependents removed. The gate-answered arm picks the test loop only if the test loop is blocked and the impl loop is not."
+          },
+          {
+            "location": "crates/ostra-engine/src/view.rs:781",
+            "step": "Readers of the removed set: `implementation_review` and `project_code_done` count removed phases as finished so the session proceeds; `view::phases` reports `PhaseStatus::Removed` and the board card `StageStatus::Skipped`; `judge_input` describes the phase as removed because a dependency failed."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Supplies `GatePayload::PhaseBlocked`, `SessionEvent::PhaseBlocked`, `GateAnswer::Choice`, and `PhaseStatus::Removed` (api.rs:822)."
+          },
+          {
+            "kind": "external",
+            "name": "pretty_assertions, serde_json",
+            "role": "Used by tests/conformance/main.rs to build phase JSON and compare step summaries. No lookup was needed; the task touches no external technology the repo does not already use."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "HANDOVER.md",
+            "purpose": "Rule text. Line 496: `D9 | A failed phase removes every phase that depends on it from the queue. Independent phases continue.`",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Planner. Holds `removed_phases` (the D9 closure), `deps_passed` (D6/M3/M5), `Planner::phases` (skips removed phases), `loop_steps` (announce and open the PhaseBlocked gate), and every other reader of the removed set (implementation_review, project_code_done, test stage).",
+            "symbols": [
+              "pub fn removed_phases(s: &SessionState) -> BTreeSet<u32>  // plan.rs:2130",
+              "pub fn deps_passed(s: &SessionState, p: &PhaseRun) -> bool  // plan.rs:2114",
+              "fn phases(&mut self)  // plan.rs:1068",
+              "fn loop_steps(&mut self, p: &PhaseRun, tests: bool)  // plan.rs:1183, LoopNext::Blocked arm at 1444",
+              "fn implementation_review(&mut self) -> bool  // plan.rs:1511",
+              "fn project_code_done(&self, project: &str, removed: &BTreeSet<u32>) -> bool  // plan.rs:1576",
+              "Step::AnnounceBlocked { project, phase, tests, reason }  // plan.rs:150, key `blocked:{phase}:{tests}` at 223, summary `blocked phase {phase}` at 257"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Fold. Defines `LoopNext::Blocked`, `WorkLoop::{is_blocked,is_idle,is_terminal,is_done}`, the `announced_block` and `block_gate_answered` flags, `PhaseRun.blocked_gate`, the `SessionEvent::PhaseBlocked` arm, the gate-opened and gate-answered arms for `GatePayload::PhaseBlocked`, `exec_gate_answered` (abandon becomes Blocked), and `adopt_plan_phases` (dependency parsing, invalid project becomes Blocked). There is no stored 'removed' field.",
+            "symbols": [
+              "LoopNext::Blocked { reason: String }  // state.rs:428",
+              "WorkLoop { announced_block: bool, block_gate_answered: bool, .. }  // state.rs:458-459",
+              "WorkLoop::is_terminal / is_done / is_blocked / is_idle  // state.rs:506-520",
+              "PhaseRun { info, impl_loop, test_loop, epa, implementer_report, blocked_gate: Option<GateId>, revision }  // state.rs:615",
+              "SessionEvent::PhaseBlocked arm in apply  // state.rs:1960",
+              "GatePayload::PhaseBlocked arm in on_gate_opened  // state.rs:3866",
+              "GatePayload::PhaseBlocked arm in on_gate_answered  // state.rs:4146",
+              "fn exec_gate_answered(&mut self, execution: &ExecutionId, retry: bool)  // state.rs:4277",
+              "fn adopt_plan_phases(&mut self)  // state.rs:4404",
+              "pub fn answer_needs_route(payload, answer) -> bool  // state.rs ~140, PhaseBlocked needs route only for `retry` with text"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Performs `Step::AnnounceBlocked` by appending `SessionEvent::PhaseBlocked`; also lists PhaseBlocked among gate payloads at line 1255 and maps the event to a Notice at 1523.",
+            "symbols": [
+              "Step::AnnounceBlocked { .. } arm  // runner.rs:1762"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Reads `removed_phases` for the board (removed phase card gets `StageStatus::Skipped`) and for phase progress (`PhaseStatus::Removed`).",
+            "symbols": [
+              "fn phases(s: &SessionState) -> Vec<PhaseView>  // view.rs:781",
+              "removed card status at view.rs:588-595"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "Tells judges that a removed phase is `removed because a phase it depends on failed` (line 816); YOLO answer for the phase_blocked gate is the fixed choice `leave` (line 1016, cites D9).",
+            "symbols": [
+              "GatePayload::PhaseBlocked { .. } => choice(\"leave\", ...)  // judge_input.rs:1016"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "`PhaseStatus::Removed` DTO variant with the D9 doc comment (line 821-822); exported to web/src/api/gen/PhaseStatus.ts.",
+            "symbols": [
+              "PhaseStatus::Removed  // api.rs:822"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Conformance harness `H` and the D9 fixture `d9_blocked_phase_removes_dependents` (lines 1001-1027). Helpers: `H::plan_approved`, `start`, `finish`, `open_gate`, `answer`, `summaries`, `state`, free fn `phase(id, project, deps, test_policy)`.",
+            "symbols": [
+              "fn d9_blocked_phase_removes_dependents()  // main.rs:1005",
+              "fn phase(id: u32, project: &str, deps: &[u32], test_policy: &str) -> Value  // main.rs:349",
+              "fn plan_approved(projects: &[&str], phases: Value, options: SessionOptions) -> H  // main.rs:272",
+              "fn answer(&mut self, gate: &GateId, answer: GateAnswer)  // main.rs:189"
+            ]
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Describes D9 at lines 336-338 (removal computed fresh each planner pass by `removed_phases`) and the blocked test phase at 574.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "`### Phase blocked` at lines 122-126 (retry restores review budget and runs the fix agent; with text goes through the Route-answer judge) and the YOLO table row at 208 (`phase_blocked` fixed `leave`).",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/planner.md",
+            "purpose": "Line 199: 'A phase whose dependency failed is in `removed` (Rule D9)'. The pseudo-code listing above it mirrors `Planner::phases`.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "Fixture coverage observed in tests/conformance/main.rs (a Grep for `phase_blocked`, `removed_phases`, and `PhaseBlocked` found these uses): `d9_blocked_phase_removes_dependents` covers a direct dependent (phase 2 on phase 1), an independent phase in another project (phase 3), and the `execution_failed` abandon route. It does not cover: transitive removal (a chain 1 <- 2 <- 3), a dependency list that is `None` (Rule M5) combined with D9, the `phase_blocked` gate being opened outside YOLO, YOLO not opening it, a `retry` answer un-removing dependents, a dependent that is already running or terminal staying out of `removed`, or a blocked test loop (which does not seed `removed_phases`, because it reads only `impl_loop`). The existing `a`-series fixture at main.rs:926 injects `SessionEvent::PhaseBlocked` for a test loop and asserts `judge completion`, but not the D9 gate or removal.",
+          "Behavior worth confirming before changing D9: `removed_phases` reads only `impl_loop.is_blocked()`, so a phase whose test loop is blocked does not remove its dependents, and `deps_passed` tests `impl_loop.is_done()` so those dependents can still start.",
+          "A change to D9 needs a new or changed fixture in tests/conformance/main.rs in the same change (CLAUDE.md pattern 3), plus edits to docs/internals/pipeline.md (336-338), planner.md (199), and gates-and-judges.md (122-126, 208) when behavior shifts."
+        ],
+        "not_covered": [
+          "The web UI screens that render removed or blocked phases (web/src/features/gates/ChoiceGate.tsx, design/src/components/pipeline/PhaseNode.tsx, GateCard.tsx).",
+          "The Stuck, rescue judge, and advisor paths (Rules O7, O8) except where they reach `LoopNext::Blocked`.",
+          "The runner's end-to-end handling of steps (crates/ostra-engine/tests/runner.rs, recover.rs) and any e2e coverage of blocked phases in crates/ostra-server/tests/e2e.rs.",
+          "The judge eval case for `phase_blocked` in crates/ostra-server/tests/judge_evals.rs:642 and tests/evals/judges.toml."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Rule D9 adds no event and no field to `SessionState`. The fold sets a phase's `impl_loop.next` to `LoopNext::Blocked`. `removed_phases` computes, on every call, the transitive closure of idle phases whose dependencies are blocked or already removed. Because nothing is stored, a retry that moves a loop out of `Blocked` un-removes the dependents on the next pass with no extra event. Fold purity (CLAUDE.md pattern 1) and planner purity (pattern 2) both hold.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/view.rs",
+              "crates/ostra-engine/src/judge_input.rs"
+            ],
+            "name": "Derived, not stored: the removed set is a pure function of the fold",
+            "snippet": {
+              "code": "/// Rule D9: every phase that depends, directly or transitively, on a blocked phase is removed\n/// from the queue. Independent phases continue.\npub fn removed_phases(s: &SessionState) -> BTreeSet<u32> {\n    let mut failed: BTreeSet<u32> = s\n        .phases\n        .values()\n        .filter(|p| p.impl_loop.is_blocked())\n        .map(|p| p.info.id)\n        .collect();\n    let mut removed = BTreeSet::new();\n    loop {\n        let mut changed = false;\n        for p in s.phases.values() {\n            if failed.contains(&p.info.id) || removed.contains(&p.info.id) || !p.impl_loop.is_idle()\n            {\n                continue;\n            }\n            let deps: Vec<u32> = match &p.info.depends_on {\n                Some(d) => d.clone(),\n                None => s\n                    .phases\n                    .keys()\n                    .copied()\n                    .filter(|id| *id < p.info.id)\n                    .collect(),\n            };\n            if deps\n                .iter()\n                .any(|d| failed.contains(d) || removed.contains(d))\n            {\n                removed.insert(p.info.id);\n                changed = true;\n            }\n        }\n        if !changed {\n            break;\n        }\n    }\n    failed.clear();\n    removed\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:2128"
+            }
+          },
+          {
+            "description": "`Planner::phases` computes the set once and `continue`s over a removed phase, so no spawn step is produced for it. A phase that is not removed and idle starts only if its project has no busy loop (Rule M2) and `deps_passed`. Completion gates treat a removed phase as finished: `implementation_review` and `project_code_done` accept `removed.contains(id) || impl_loop.is_terminal()`, so a session with removed phases still reaches the review gate, closing stages, and completion.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs"
+            ],
+            "name": "Planner skips removed phases and consults the set in completion checks",
+            "snippet": {
+              "code": "    fn phases(&mut self) {\n        let s = self.s;\n        let removed = removed_phases(s);\n        let mut busy: BTreeSet<String> = BTreeSet::new();\n        for p in s.phases.values() {\n            let l = &p.impl_loop;\n            if !l.is_idle() && !l.is_terminal() {\n                busy.insert(p.info.project.clone());\n            }\n        }\n        for p in s.phases.values() {\n            if removed.contains(&p.info.id) {\n                continue;\n            }\n            let l = &p.impl_loop;\n            if l.is_idle() {\n                // Rule M2: one implement pipeline per project at a time.\n                if busy.contains(&p.info.project) || !deps_passed(s, p) {\n                    continue;\n                }\n                busy.insert(p.info.project.clone());\n                self.loop_work(p, false, WorkKind::Initial, None);\n                continue;\n            }\n            self.loop_steps(p, false);\n        }\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:1068"
+            }
+          },
+          {
+            "description": "When a loop's `next` is `Blocked`, `loop_steps` first emits `Step::AnnounceBlocked` (key `blocked:{phase}:{tests}`) until the fold sets `announced_block`. The runner turns the step into `SessionEvent::PhaseBlocked`, whose fold arm sets `announced_block = true` and, if the loop was not already blocked, sets `next = Blocked`. After the announcement, outside YOLO and with no earlier answer (`block_gate_answered` false) and no open gate (`blocked_gate` none), the planner opens `GatePayload::PhaseBlocked`. Under YOLO the gate is never opened (the `!s.yolo` condition), and `judge_input` records `leave` as the fixed YOLO answer for a gate that was open when YOLO switched on.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Blocked announcement and gate: planner step, runner event, fold flag",
+            "snippet": {
+              "code": "            LoopNext::Blocked { reason } => {\n                if !l.announced_block {\n                    self.push(Step::AnnounceBlocked {\n                        project: project.clone(),\n                        phase,\n                        tests,\n                        reason: reason.clone(),\n                    });\n                } else if !s.yolo && !l.block_gate_answered && p.blocked_gate.is_none() {\n                    // Rule D9: report the blocked phase and ask how to proceed.\n                    self.gate(\n                        format!(\"Phase {phase} is blocked\"),\n                        \"Phases that depend on it are removed from the queue; independent phases keep running. Retry with instructions, or leave it blocked.\",\n                        GatePayload::PhaseBlocked { project, phase, reason: reason.clone() },\n                    );\n                }\n            }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:1444"
+            }
+          },
+          {
+            "description": "One `#[test]` per rule in `tests/conformance/main.rs`, with a comment banner naming the rule. It builds events with `H` (canned flow `plan_approved` with a `phases` JSON from `phase(id, project, deps, policy)`), drives an execution with `start` and `finish`, opens and answers gates, then asserts on `h.summaries()` (the `Step::summary()` strings) and on the folded state.",
+            "files": [
+              "tests/conformance/main.rs"
+            ],
+            "name": "Conformance fixture shape",
+            "snippet": {
+              "code": "// D9: a failed phase removes its dependents; independent phases continue.\n\n#[test]\nfn d9_blocked_phase_removes_dependents() {\n    let phases = json!([\n        phase(1, \"a\", &[], \"Required\"),\n        phase(2, \"a\", &[1], \"Required\"),\n        phase(3, \"b\", &[], \"Required\")\n    ]);\n    let mut h = H::plan_approved(&[\"a\", \"b\"], phases, SessionOptions::default());\n    let (id, _) = h.start(\"spawn implementer phase 1\");\n    h.finish(&id, ExecutionStatus::Denied, None);\n    let g = h.open_gate(\"execution_failed\");\n    h.answer(\n        &g,\n        GateAnswer::Choice {\n            option: \"abandon\".into(),\n            text: None,\n        },\n    );\n    let s = h.summaries();\n    assert!(s.contains(&\"blocked phase 1\".to_string()));\n    assert!(s.contains(&\"spawn implementer phase 3 initial\".to_string()));\n    assert!(!s.iter().any(|x| x.contains(\"phase 2\")));\n    assert!(ostra_engine::plan::removed_phases(&h.state()).contains(&2));\n}",
+              "language": "rust",
+              "source": "tests/conformance/main.rs:1001"
+            }
+          }
+        ],
+        "problem": "Rule D9 (HANDOVER.md line 496) says a failed phase removes every phase that depends on it from the queue and independent phases continue. Ostra implements this as derived state: the fold records only that a phase's loop is `Blocked`, and the planner computes the removed set from the phase graph on every pass with `removed_phases`. The task is to document exactly where that happens, how a phase reaches and leaves the blocked state, and what the single conformance fixture does and does not assert.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how a failed phase removes its dependents from the queue (Rule D9) in the fold and the planner, and its conformance fixture. Covers the engine fold (state.rs), the planner (plan.rs), the readers of the removed set (view.rs, judge_input.rs), the one D9 fixture, and the docs that describe it. Does not cover the web UI rendering, the Stuck/rescue judge path beyond where it reaches Blocked, or the runner's execution of steps beyond AnnounceBlocked.",
+        "sources": [],
+        "title": "Rule D9: a failed phase removes its dependents from the queue"
+      },
+      "submit": {
+        "findings_summary": "Rule D9 is derived state. The fold only sets a phase's impl loop to `LoopNext::Blocked`, by abandoning a failed execution, a stuck gate, the review cap, the Resolve judge, or the `PhaseBlocked` event. The pure `removed_phases` in plan.rs recomputes the transitive closure of idle dependents on every pass, and `Planner::phases`, the completion checks, the view, and judge_input all read it. A `retry` answer on the phase_blocked gate moves the loop out of Blocked, so dependents return to the queue on the next pass. The only fixture, `d9_blocked_phase_removes_dependents` (tests/conformance/main.rs:1005), covers one direct dependent and one independent phase. It does not cover transitive removal, M5 default dependencies, the phase_blocked gate, YOLO, retry un-removing dependents, or a blocked test loop, which does not seed removal.",
+        "not_covered": [
+          "Web UI screens that render removed or blocked phases (web/src/features/gates/ChoiceGate.tsx, design PhaseNode.tsx and GateCard.tsx)",
+          "Stuck, rescue judge, and advisor paths (Rules O7, O8) beyond where they reach LoopNext::Blocked",
+          "Runner and e2e tests for blocked phases (crates/ostra-engine/tests/runner.rs, recover.rs, crates/ostra-server/tests/e2e.rs)",
+          "The phase_blocked judge eval case (crates/ostra-server/tests/judge_evals.rs:642, tests/evals/judges.toml)"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How Rule D9 removes dependents of a failed phase in the fold, the planner, and the readers of the removed set, plus the one D9 conformance fixture and its docs; web UI rendering and the stuck/rescue paths were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How gates are opened, answered, and handled under YOLO.",
+      "file": "ostra-research-20261002-090037-gates-open-answer-yolo.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (event.rs)",
+          "ostra-engine (plan.rs, state.rs, runner.rs, judge_input.rs)",
+          "ostra-store (workspace/gates.rs)",
+          "ostra-server (api.rs)",
+          "tests/conformance"
+        ],
+        "asks": [
+          "How gates are opened",
+          "How gates are answered",
+          "How gates are handled under YOLO"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner::gate",
+            "step": "A Planner method decides a gate is due and calls `self.gate(title, explanation, payload)`, which pushes `Step::OpenGate`. `Planner::push` first applies the Rule O4 hold and, for spawns only, the budget guard, which opens `BudgetReached` once `spent_usd >= budget + budget_raised`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform",
+            "step": "The runner's driver performs the step: `perform` appends `SessionEvent::GateOpened { id: GateId::new(), title, explanation, payload }`. For `ImplementationReview` it first writes the session context file (Rule F2)."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:materialize",
+            "step": "`Inner::append` stores the event, folds it, broadcasts it, and wakes the driver. `materialize` upserts the gate into the gates table, and `push_for` sends a Web Push notice unless the session is YOLO (the one exception is HarnessFailure)."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::on_gate_opened",
+            "step": "The fold inserts a `GateRecord` (answer None) and calls `on_gate_opened`, which stores the gate id on the owning track, loop, phase, project track, or session field (for a PhaseBlocked gate: `phases[phase].blocked_gate`)."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:answer_gate",
+            "step": "User path: the browser POSTs `AnswerGate { answer }`; the handler calls `Engine::answer_gate`, which validates, appends `GateAnswered { source: User, routed }`, and wakes a Permission waiter if there is one."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform_yolo",
+            "step": "YOLO path: on the next planning pass `Planner::flows` sees `s.yolo` and an open gate and emits `Step::YoloAnswer { gate }` (key `yolo:{gate}`). `perform_yolo` calls `yolo_plan`; a Fixed plan appends `GateAnswered { source: Yolo, reason }` directly, a Judge plan calls the YoloAnswer judge first and validates with `yolo_answer_from_judge`. Failures append a `Note` and leave the gate open."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::apply",
+            "step": "The fold handles `GateAnswered`: the first answer wins (a gate with an answer is skipped), the record gets answer, source, reason and answered_at, then `on_gate_answered(id, payload, answer, routed)` updates loop, spec, plan, closing, init, or budget state. A routed answer parks in `held_answers` or `LoopNext::AwaitRoute` until the Route answer judge decides."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:next_steps",
+            "step": "The next `next_steps` call reads the new state and the planner emits the follow-up (a spawn, a judge, the next gate, or completion)."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "GatePayload, GateAnswer, AnswerSource, SessionEvent, AnswerGate DTO, TypeScript export"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "planner, fold, runner, YOLO policy, judges"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "gates table (upsert, answer, get, open) written by Inner::materialize"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "POST handler for answering a gate and the set-YOLO endpoint"
+          },
+          {
+            "kind": "internal",
+            "name": "web/src/api/gen/GatePayload.ts",
+            "role": "Generated TypeScript for GatePayload; regenerated by cargo test -p ostra-core when the enum changes"
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "Defines GatePayload (14 variants) with stage(), kind_str(), execution(); GateAnswer (Questions, Approval, Choice, Closing, Permission, Skills); AnswerSource (User, Yolo, Engine); and the GateOpened and GateAnswered session events. GateAnswered carries source, answer, optional reason (the YOLO judge's why) and routed (Rule J1).",
+            "symbols": [
+              "pub enum GatePayload { OpenQuestions, SpecApproval, PlanApproval, FactCheckRecurring, ReviewCap, Stuck, PhaseBlocked, ClosingGate, Permission, HarnessFailure, SkillApproval, ExecutionFailed, ImplementationReview, BudgetReached }",
+              "pub fn stage(&self) -> StageKind",
+              "pub fn kind_str(&self) -> &'static str",
+              "pub fn execution(&self) -> Option<&ExecutionId>",
+              "pub enum GateAnswer { Questions{answers}, Approval{approved, feedback}, Choice{option, text}, Closing{items}, Permission{answer}, Skills{decisions} }",
+              "pub enum AnswerSource { User, Yolo, Engine }",
+              "SessionEvent::GateOpened { id, title, explanation, payload }",
+              "SessionEvent::GateAnswered { id, source, answer, reason: Option<String>, routed: bool }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "The pure planner. Step::OpenGate and Step::YoloAnswer; Planner::gate() wraps OpenGate; Planner::flows() emits YoloAnswer steps for open gates under YOLO; every gate kind except Permission is opened from a Planner method; Planner::push applies the budget guard; gate_owner and Step::key dedupe in-flight gate steps.",
+            "symbols": [
+              "Step::OpenGate { title, explanation, payload }",
+              "Step::YoloAnswer { gate: GateId }",
+              "fn gate(&mut self, title: impl Into<String>, explanation: impl Into<String>, payload: GatePayload)",
+              "fn flows(&mut self)",
+              "fn spec_flow(&mut self, needs_approval: bool) -> bool",
+              "fn plan_flow(&mut self) -> bool",
+              "fn loop_steps(&mut self, p: &PhaseRun, tests: bool)",
+              "fn exec_failed_gate(&mut self, exec: &ExecutionId, agent: AgentName, project: &str, error: &str)",
+              "fn implementation_review(&mut self) -> bool",
+              "fn closing_stages(&mut self)",
+              "fn gate_owner(p: &GatePayload) -> String",
+              "pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "The fold. GateRecord is inserted on GateOpened and completed on GateAnswered (a second answer to the same gate is ignored). on_gate_opened records which track or loop owns the gate; on_gate_answered turns the answer into loop, spec, plan, closing, or budget state. answer_needs_route decides which answers wait for the Route answer judge (Rule J1). open_gates, stopped_by_user, WorkLoop, LoopNext, after_findings, exec_gate_answered live here.",
+            "symbols": [
+              "pub fn open_gates(&self) -> impl Iterator<Item = &GateRecord>",
+              "fn on_gate_opened(&mut self, id: &GateId, payload: &GatePayload)",
+              "fn on_gate_answered(&mut self, id: &GateId, payload: &GatePayload, answer: &GateAnswer, routed: bool)",
+              "fn exec_gate_answered(&mut self, execution: &ExecutionId, retry: bool)",
+              "pub fn answer_needs_route(payload: &GatePayload, answer: &GateAnswer) -> bool",
+              "pub fn stopped_by_user(&self, exec: &ExecutionId) -> bool",
+              "pub fn effective_cap(&self, yolo: bool) -> u32",
+              "fn after_findings(&mut self, remaining: Vec<ReviewFinding>, yolo: bool, fix_ledger: &str)",
+              "pub const FACTCHECK_RECURRING_LIMIT: u32 = 3",
+              "pub const REVIEW_CAP: u32 = 3",
+              "pub const YOLO_REVIEW_BUDGET: u32 = 10",
+              "pub const ERROR_RETRIES: u32 = 1"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Performs steps and appends events. perform() turns Step::OpenGate into GateOpened (writing the session context file first for ImplementationReview) and Step::YoloAnswer into perform_yolo. Engine::answer_gate is the user entry point (validate_answer, approval PASS check, always-rule add, GateAnswered with source User, wakes a permission waiter). set_yolo answers open permission gates immediately. ask_permission opens and answers permission gates inline for a live execution. recover denies stale permission gates. push_for suppresses gate notifications under YOLO except HarnessFailure. materialize writes gates to the db. resume_execution answers a failure gate with retry.",
+            "symbols": [
+              "pub fn answer_gate(&self, gate: &GateId, answer: GateAnswer) -> Result<GateView, EngineError>",
+              "fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError>",
+              "pub fn set_yolo(&self, session: &SessionId, enabled: bool) -> Result<SessionSummary, EngineError>",
+              "async fn perform_yolo(self: &Arc<Self>, session: &SessionId, gate: GateId) -> Result<(), EngineError>",
+              "async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer",
+              "pub fn resume_execution(&self, id: &ExecutionId) -> Result<(), EngineError>",
+              "pub fn recover(&self) -> Result<(), EngineError>",
+              "fn push_for(&self, session: &SessionId, event: &SessionEvent)",
+              "fn materialize(&self, session: &SessionId, event: &SessionEvent) -> Result<(), EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "YOLO policy per gate. yolo_plan returns Fixed (answer plus reason), Judge (schema for the YOLO-answer judge), or None. yolo_leaves_open lists gates YOLO must not answer. yolo_answer_from_judge converts and guards the judge's output. judge_input for JudgeKind::YoloAnswer builds the judge's input (request, gate title and explanation, payload JSON, research findings or spec or plan excerpt).",
+            "symbols": [
+              "pub enum YoloPlan { Fixed { answer: GateAnswer, reason: String }, Judge { schema: Value } }",
+              "pub fn yolo_leaves_open(s: &SessionState, payload: &GatePayload) -> bool",
+              "pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan>",
+              "pub fn yolo_answer_from_judge(s: &SessionState, gate: &GateId, answer: &Value) -> Result<GateAnswer, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/init.rs",
+            "purpose": "Opens SkillApproval (line ~440) and ExecutionFailed (line ~540) for init sessions.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/gates.rs",
+            "purpose": "Materialized gates table: upsert on GateOpened, answer on GateAnswered, get, of_session, open. Used by Engine::answer_gate to find a gate's session and payload.",
+            "symbols": [
+              "Gates::upsert",
+              "Gates::answer",
+              "Gates::get",
+              "Gates::of_session",
+              "Gates::open"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "REST endpoint for answering a gate; passes the AnswerGate body straight to Engine::answer_gate.",
+            "symbols": [
+              "async fn answer_gate(State(app): AppState, Path(id): Path<String>, Json(body): Json<AnswerGate>) -> Res<GateView>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "API DTO for the answer body and the GateView returned to clients.",
+            "symbols": [
+              "pub struct AnswerGate { pub answer: GateAnswer }",
+              "pub struct SetYolo { pub enabled: bool }"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures for gates and YOLO: p4_yolo_leaves_a_stopped_execution_to_the_user, yolo_gate_gets_a_yolo_answer_step, yolo_answers_gates_and_extends_review_budget (ends in 'blocked phase 1' with no gate), t2_yolo_answers_the_closing_gate, o8_yolo_always_sends_a_fix, the budget fixture near line 2843, and the stuck/block fixture near line 915.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "The existing docs page for gates, YOLO and judges. Project rule 9 requires an update in the same change when behavior changes. Its YOLO table lists phase_blocked as 'Fixed: leave', which the planner reaches only when YOLO is toggled on while the gate is open (see findings).",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the task is to change phase retry behavior, a follow-up pass should trace LoopNext transitions after a Blocked loop (plan.rs loop_steps Blocked arm, state.rs PhaseBlocked event fold, removed_phases and dependents under Rule D9) and the conformance fixtures d9_blocked_phase_removes_dependents and the 'blocked phase 1' fixtures.",
+          "A follow-up pass on the Rescue judge and Unblock flow would cover the stuck gate in full."
+        ],
+        "not_covered": [
+          "The web console cards for each gate (web/src) and how the UI renders payloads and sends answers.",
+          "The text of the judge prompts (assets/judges/yolo-answer.md, route-answer.md, resolve-review.md, rescue.md).",
+          "The e2e test crates/ostra-server/tests/e2e.rs and runner.rs/recover.rs tests that exercise gates with a real Engine.",
+          "Init-session gate flow beyond the two opening sites in init.rs (init_flow, advisor rounds).",
+          "How the Rescue judge decides to open a stuck gate (LoopNext::Rescue, on_decision) and the Unblock implementer run behind the stuck `fix` answer."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The planner never writes events. A Planner method calls self.gate(title, explanation, payload), which pushes Step::OpenGate. Step::key() for a gate is `gate:{kind_str}:{gate_owner(payload)}`, so one planning pass never emits the same gate twice and the runner does not start a step already in flight. The planner also guards re-opening with fold state (`t.approval_asked_version != t.version || t.approval_gate.is_none()`, `p.blocked_gate.is_none()`, `track.closing_gate.is_none()`). The runner performs OpenGate by appending GateOpened with a fresh GateId; the fold stores a GateRecord and on_gate_opened records the gate id on its owner (spec.approval_gate, plan.questions_gate, loop.gate, phase.blocked_gate, budget_gate, feedback.gate, project closing_gate, init approval_gate).",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Open a gate: planner step, runner event, fold state",
+            "snippet": {
+              "code": "Step::OpenGate {\n    title,\n    explanation,\n    payload,\n} => {\n    if let GatePayload::ImplementationReview { .. } = &payload {\n        self.write_session_context(session)?;\n    }\n    self.append(\n        session,\n        SessionEvent::GateOpened {\n            id: GateId::new(),\n            title,\n            explanation,\n            payload,\n        },\n    )?;\n    Ok(())\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:1678"
+            }
+          },
+          {
+            "description": "open_questions: spec_flow (~852) when spec.open_questions is non-empty and questions_asked_version != version; plan_flow (~1015) for plan.clarifying_questions. spec_approval: spec_flow (~903) after a fact-check PASS when needs_approval. plan_approval: plan_flow (~1053). fact_check_recurring: spec_flow (~806) and plan_flow (~978) when consecutive_fails >= FACTCHECK_RECURRING_LIMIT (3) + fail_limit_extra. review_cap: loop_steps LoopNext::CapReached (~1395) only when NOT s.yolo; under YOLO the same state emits a Judge ResolveReview step instead, and after_findings sends a YOLO loop to LoopNext::Resolve at effective_cap(yolo)=10 + extra_cap. stuck: loop_steps LoopNext::RescueGate (~1349), after the Rescue judge decides `gate`. phase_blocked: loop_steps LoopNext::Blocked (~1444) opens it only when announced_block is true AND !s.yolo AND !l.block_gate_answered AND p.blocked_gate.is_none(); the first pass after Blocked pushes Step::AnnounceBlocked, which the runner turns into a PhaseBlocked event (announced_block = true, push notification). So under YOLO a blocked phase is announced and no gate is ever opened by the planner; the `phase_blocked => leave` arm of yolo_plan runs only for a gate that was already open when YOLO was switched on. test_stage (~1713) also lets the completion report proceed once a blocked test loop is announced and (s.yolo || block_gate_answered). execution_failed / harness_failure: exec_failed_gate (~1464), called from explore_tasks, spec_flow, plan_flow, loop_steps LoopNext::Failed, test_stage, docs_stage, book_stage, quick_answer; an error starting `harness-` becomes HarnessFailure; a Cancelled execution gets the title 'You stopped {agent}'. Automatic retry first: state.rs loop_finished retries an Error once (ERROR_RETRIES = 1, not for harness-) before LoopNext::Failed. implementation_review: implementation_review (~1547) when every phase loop is terminal and nothing runs. closing_gate: closing_stages (~1643), one batch per planning pass for projects whose track.closing is None. skill_approval: init.rs ~440. budget_reached: Planner::push (~416) in place of a Spawn once spent_usd >= budget + budget_raised, only when budget_gate is None. permission: not planner-opened; runner.rs ask_permission opens it inside a live execution.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/init.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Where each gate opens (plan.rs unless noted) and when it is skipped under YOLO",
+            "snippet": {
+              "code": "LoopNext::Blocked { reason } => {\n    if !l.announced_block {\n        self.push(Step::AnnounceBlocked {\n            project: project.clone(),\n            phase,\n            tests,\n            reason: reason.clone(),\n        });\n    } else if !s.yolo && !l.block_gate_answered && p.blocked_gate.is_none() {\n        // Rule D9: report the blocked phase and ask how to proceed.\n        self.gate(\n            format!(\"Phase {phase} is blocked\"),\n            \"Phases that depend on it are removed from the queue; independent phases keep running. Retry with instructions, or leave it blocked.\",\n            GatePayload::PhaseBlocked { project, phase, reason: reason.clone() },\n        );\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:1444"
+            }
+          },
+          {
+            "description": "In Planner::flows, when `s.yolo` is true, every open gate that is not a Permission gate and not `yolo_leaves_open` gets a Step::YoloAnswer. Rule P1 returns before this block when the session is paused, so a paused session gets no YOLO answers. perform_yolo calls judge_input::yolo_plan: Fixed answers are appended directly; Judge plans (open_questions, spec_approval, plan_approval) call the YoloAnswer judge with a per-gate output schema and pass its answer through yolo_answer_from_judge (all questions answered, approval only with a fact-check PASS, rejection needs feedback); a judge call error or a refused answer appends a Note ('The gate waits for you.') and leaves the gate open, and the planner will emit YoloAnswer again on the next pass. The final GateAnswered has source Yolo, a reason, and routed computed by answer_needs_route. YOLO answers come out as: stuck=fix, implementation_review=done, closing_gate=defaults (tests/docs only if the request asked), fact_check_recurring=another-round while passes < 6 then stop, review_cap=another-pass, phase_blocked=leave, execution_failed=retry while fewer than 2 earlier answered ExecutionFailed gates exist for the same agent anywhere in the session (counted by agent, not by execution or phase), then abandon, harness_failure=native, skill_approval=proposal defaults, permission=AllowOnce, budget_reached=None (left open).",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/judge_input.rs"
+            ],
+            "name": "Planner decides that YOLO answers; yolo_plan decides how",
+            "snippet": {
+              "code": "if s.yolo {\n    for g in s.open_gates() {\n        // A budget is never raised by YOLO: spending more is the user's decision.\n        if !matches!(g.payload, GatePayload::Permission { .. })\n            && !crate::judge_input::yolo_leaves_open(s, &g.payload)\n        {\n            self.push(Step::YoloAnswer { gate: g.id.clone() });\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:551"
+            }
+          },
+          {
+            "description": "Most gates have a fixed YOLO answer built with a local `choice(option, reason)` closure. The reason is stored on the GateAnswered event and listed in the completion report's 'Decided for you' section. yolo_leaves_open returns true for BudgetReached and for ExecutionFailed whose execution was stopped by the user (status Cancelled, Rule P4).",
+            "files": [
+              "crates/ostra-engine/src/judge_input.rs"
+            ],
+            "name": "Fixed YOLO answer with a stated reason",
+            "snippet": {
+              "code": "GatePayload::PhaseBlocked { .. } => choice(\"leave\", \"Under YOLO a blocked phase is recorded and independent work continues (Rule D9).\"),\nGatePayload::ExecutionFailed { .. } if yolo_leaves_open(s, &g.payload) => return None,\nGatePayload::ExecutionFailed { execution, .. } => {\n    let agent = s.executions.get(execution).map(|r| r.agent);\n    let prior = s\n        .gates\n        .values()\n        .filter(|x| x.answer.is_some())\n        .filter(|x| matches!(&x.payload, GatePayload::ExecutionFailed { execution: e, .. } if s.executions.get(e).map(|r| r.agent) == agent))\n        .count();\n    if prior < 2 {\n        choice(\"retry\", \"Under YOLO a failed execution is retried.\")\n    } else {\n        choice(\"abandon\", \"This agent failed three times, so the engine abandoned the step instead of retrying again.\")\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/judge_input.rs:1016"
+            }
+          },
+          {
+            "description": "POST handler -> Engine::answer_gate: loads the gate from the db, rejects an already answered gate, runs validate_answer (shape match, all questions answered, rejection needs feedback, ImplementationReview option check), checks that an approval has a fact-check PASS on the current version, adds an allow rule for 'always in this workspace', appends GateAnswered with source User and routed = answer_needs_route(payload, answer), and for a Permission gate sends the answer on the oneshot channel the waiting execution holds. validate_answer does not check the `option` string of any Choice gate except ImplementationReview; the fold treats an unknown option as the default branch (for PhaseBlocked, anything other than `retry` leaves the phase blocked). Other answer sources: set_yolo(enabled) answers open Permission gates at once with AllowOnce; recover() denies open Permission gates as source Engine at server start; the interrupt path denies the Permission gates of ended executions as source Engine; resume_execution answers an ExecutionFailed or HarnessFailure gate with `retry` after stashing a resume hint.",
+            "files": [
+              "crates/ostra-server/src/api.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "User answer path",
+            "snippet": {
+              "code": "self.inner.append(\n    &view.session,\n    SessionEvent::GateAnswered {\n        id: gate.clone(),\n        source: AnswerSource::User,\n        answer: answer.clone(),\n        reason: None,\n        routed: crate::state::answer_needs_route(&view.payload, &answer),\n    },\n)?;",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:525"
+            }
+          },
+          {
+            "description": "on_gate_answered for PhaseBlocked clears phase.blocked_gate, sets block_gate_answered, and on `retry` restores the review budget (extra_cap = iterations), clears announced_block and block_gate_answered, resets resolve_rounds and open_before_resolve, and sets loop.next to Work{Fix} with the last review's BLOCKER, HIGH and MEDIUM findings, or to AwaitRoute (Route answer judge, then Work{Fix}) when the answer has text. Which loop is retried is chosen by `tests`: the test loop when it is blocked and the implementation loop is not. A `leave` or any other option keeps the loop Blocked with block_gate_answered = true, so the gate is not reopened.",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Fold of an answer into loop state (phase_blocked retry)",
+            "snippet": {
+              "code": "GatePayload::PhaseBlocked { phase, .. } => {\n    let tests = self\n        .phases\n        .get(phase)\n        .is_some_and(|p| p.test_loop.is_blocked() && !p.impl_loop.is_blocked());\n    if let Some(p) = self.phases.get_mut(phase) {\n        p.blocked_gate = None;\n    }\n    if let Some(l) = self.loop_mut((*phase, tests)) {\n        l.block_gate_answered = true;\n        if let Some((\"retry\", text)) = choice {\n            let iterations = l.iterations;\n            l.extra_cap = (iterations + REVIEW_CAP).saturating_sub(REVIEW_CAP);\n            l.announced_block = false;\n            l.block_gate_answered = false;\n            l.resolve_rounds = 0;\n            l.open_before_resolve = None;",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:4146"
+            }
+          },
+          {
+            "description": "answer_needs_route is the single place that decides whether an answer waits for the Route answer judge. Bare choices (approve, stop, retry or leave without text, done, raise) are applied at once. Text on a spec or plan approval, fact-check recurring (not stop), review_cap another-pass, stuck fact, phase_blocked retry, and implementation_review feedback is routed. The flag is stored on GateAnswered so the fold stays pure. A Stuck `fix` is never routed (Rule O8).",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Rule J1 routing flag on the event",
+            "snippet": {
+              "code": "(GatePayload::PhaseBlocked { .. }, GateAnswer::Choice { option, text: t }) => {\n    option == \"retry\" && text(t)\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:158"
+            }
+          },
+          {
+            "description": "CLAUDE.md recipe: add the variant to GatePayload with stage() and kind_str() arms; record it in the fold (on_gate_opened, on_gate_answered); open it from the planner; decide its YOLO handling in judge_input::yolo_plan; accept its answer shape in runner::validate_answer; add a conformance fixture; regenerate TypeScript with cargo test -p ostra-core. Every match on GatePayload is exhaustive, so the compiler also forces arms in gate_owner (plan.rs), on_gate_opened and on_gate_answered (state.rs), yolo_plan (judge_input.rs), and the validate_answer matches! list, and stage() and kind_str() in event.rs. Also required by project rules: a rule citation comment, and an update of docs/internals/gates-and-judges.md (its 'Every gate kind' and YOLO tables).",
+            "files": [
+              "CLAUDE.md"
+            ],
+            "name": "Adding a gate kind (project recipe)"
+          }
+        ],
+        "problem": "Ostra holds every pipeline decision behind a typed gate. A gate is opened by a pure planner step, recorded as an event, folded into session state, and answered by a user, by YOLO, or by the engine. Under YOLO some gates are answered by a fixed answer, some by a judge, some are never opened, and some are left to the user. A reader changing gate behavior (for example adding or changing a retry gate for a phase) needs the exact places that must change and the exact YOLO semantics, including cases where the code and the docs page differ.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: How gates are opened, answered, and handled under YOLO. This document covers the engine path of a gate (planner step, event, fold, answer validation, YOLO plan) and the per-kind behavior, with extra detail on the phase_blocked, execution_failed, stuck and review_cap gates because they govern phase retry. It does not cover the web UI cards, the push notification payloads beyond the YOLO suppression rule, or the judge prompts.",
+        "sources": [],
+        "title": "How gates are opened, answered, and handled under YOLO"
+      },
+      "submit": {
+        "findings_summary": "A gate is opened by a pure planner step (Planner::gate -> Step::OpenGate), recorded by the runner as GateOpened, and folded into a GateRecord plus an owner field by on_gate_opened. A user answer goes through Engine::answer_gate (validate_answer, fact-check PASS check, GateAnswered with source User and the Rule J1 routed flag). Under YOLO, Planner::flows emits Step::YoloAnswer for every open gate except Permission, BudgetReached, and a stopped-by-user ExecutionFailed, and judge_input::yolo_plan returns a fixed answer, a judge schema, or None. Several gates are never opened under YOLO. A phase_blocked gate is not opened because the planner requires !s.yolo, so YOLO only announces the block and its `leave` arm applies only to a gate already open when YOLO was toggled on. review_cap is replaced by the Resolve-review judge, and permission asks are answered inline. The docs page docs/internals/gates-and-judges.md already covers these gates, but its YOLO table implies that phase_blocked is answered `leave`. The document lists each gate's open site with line numbers, the fold behavior for phase_blocked `retry`, and the files and fixtures to update.",
+        "not_covered": [
+          "The web console cards for each gate (web/src) and how they send answers",
+          "The judge prompt texts (assets/judges/yolo-answer.md, route-answer.md, resolve-review.md, rescue.md)",
+          "The server e2e, runner.rs and recover.rs tests that exercise gates with a real Engine",
+          "Init-session gate flow beyond the two opening sites in init.rs",
+          "How the Rescue judge decides to open a stuck gate and the Unblock implementer run behind the stuck `fix` answer"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How gates are opened (planner step, runner event, fold), answered (user, YOLO, engine), and handled under YOLO, with extra detail on phase_blocked, execution_failed, stuck and review_cap; web UI cards and judge prompt text were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

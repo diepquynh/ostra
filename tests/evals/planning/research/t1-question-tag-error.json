@@ -1,0 +1,161 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:31:55.440069856+00:00",
+  "docs": [
+    {
+      "task": "How the typed document checks treat open questions: where a question's tag length is checked, at what level, and which tests cover it.",
+      "file": "ostra-research-20261002-083127-question-tag-check.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (doc)",
+          "ostra-tools (Document tool)"
+        ],
+        "asks": [
+          "Where is a question's tag length checked?",
+          "At what level (error or warning) is it checked?",
+          "Which tests cover it?"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-tools/src/doc.rs",
+            "step": "The agent calls the Document tool with a research, spec or plan document containing questions."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:write",
+            "step": "write() parses the JSON into the typed document, then calls check(&document)."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check",
+            "step": "check() dispatches on the document kind and calls Issues::questions on open_questions (research, spec) or clarifying_questions (plan)."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:Issues::questions",
+            "step": "Issues::questions counts chars (not bytes) of the tag; above 12 it pushes a Warning DocIssue with element set to the question id."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs",
+            "step": "Issues::done sorts issues by level, errors first, and the tool prints them. With no errors the heading is 'Warnings to review:'."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check_submit",
+            "step": "At submit time the native and harness executors call check_submit, which calls blocking(); blocking drops warnings, so a long tag never refuses a submit."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns Question, the document checks and the fixtures."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "Prints check results back to the agent."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-exec-native / ostra-exec-harness",
+            "role": "Call ostra_core::doc::check_submit at submit time (exec-native/src/lib.rs:879, exec-harness/src/bridge.rs:235)."
+          }
+        ],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "Holds the document checks. Issues::questions (L76-99) validates every Question list: unique ids, 2 to 4 options (error), recommended index in range (error), tag over 12 chars (warning). It is called for ResearchDoc.open_questions (L119), SpecDoc.open_questions (L166), and PlanDoc.clarifying_questions (L465). blocking (L630) keeps only IssueLevel::Error items, so check_submit (L648) never refuses a submit for a long tag.",
+            "symbols": [
+              "fn questions(&mut self, qs: &[Question])",
+              "fn warn(&mut self, element: impl Into<Option<String>>, message: String)",
+              "fn error(&mut self, element: impl Into<Option<String>>, message: String)",
+              "pub fn check(doc: &Document) -> Vec<DocIssue>",
+              "fn blocking(doc: &Document) -> Result<(), String>",
+              "pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>",
+              "pub enum IssueLevel { Error, Warning }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/pipeline.rs",
+            "purpose": "Defines Question. The tag field carries only a doc comment, '12 characters or fewer.'; no serde or schemars constraint enforces it. The question_tests module (L281) covers display_options and answer_in_context only, with tag 't'.",
+            "symbols": [
+              "pub struct Question { pub id: String, pub question: String, pub tag: String, pub options: Vec<QuestionOption>, pub recommended: usize, pub multi_select: bool }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/tests.rs",
+            "purpose": "The document tests. fixtures_parse_and_pass asserts check() returns no issues at all for the research, spec and plan fixtures, whose question tags are short. No test builds a tag over 12 characters. The errors() helper filters to IssueLevel::Error, so warnings are invisible to every other test here.",
+            "symbols": [
+              "fn errors(kind: DocKind, v: &Value) -> Vec<String>",
+              "fn fixtures_parse_and_pass()",
+              "fn submit_needs_a_clean_document_that_matches()"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/fixtures/research.json",
+            "purpose": "Research fixture. Q1 has tag 'Scope' (5 chars), line 72. The spec fixture has the same tag at line 78 of fixtures/spec.json.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-core/src/doc/store.rs",
+            "purpose": "write() and load_view() both call check() and return the issues (Written.issues, DocumentView.issues), so a long tag appears as a warning on every document write and in the browser view.",
+            "symbols": [
+              "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>",
+              "pub fn load_view(md: &Path) -> Option<DocumentView>"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/doc.rs",
+            "purpose": "The Document tool result. With no errors it prints 'Warnings to review:' followed by each issue line, so the agent sees the tag warning but is not forced to fix it (L133-148).",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-core/src/submit.rs",
+            "purpose": "validate_submit checks submit payload shapes by deserialization only. ExploreSubmit.open_questions is a u32 count; GenerateSpecSubmit.open_questions and PlanSubmit.clarifying_questions are Vec<Question>. It has no tag length rule.",
+            "symbols": [
+              "pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the level or coverage should change, the spec needs a decision on warning versus error, because errors would refuse the submit call and the prompts (assets/agents/explore, generate-spec, plan) already tell agents to keep tags at 12 characters or fewer."
+        ],
+        "not_covered": [
+          "How the web console and the question gate render or clip a long tag (web/src/screens/artifact/doc/parts.tsx, web/src/features/gates/QuestionsGate.tsx).",
+          "Whether the explore agent's ExploreSubmit.open_questions count is checked against the research document's question list; check_submit has no Research count comparison.",
+          "A grep of the full workspace tests for a long question tag was limited to crates/*.rs; JSON eval fixtures under tests/ were seen only as book retrieval text, not as tests of this check."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The module header of check.rs states the split: errors are broken references and rules code can decide, and they block the submit call; warnings are shown to the agent and the reader. The tag length rule is on the warning side of that split, next to 'provisional names a question that does not exist' and 'cite the page by its full URL'. The other question rules (option count, recommended index, duplicate ids) are errors.",
+            "files": [
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Errors block the submit, warnings only inform",
+            "snippet": {
+              "code": "fn questions(&mut self, qs: &[Question]) {\n    self.unique(\"question\", qs.iter().map(|q| q.id.as_str()));\n    for q in qs {\n        let at = Some(q.id.clone());\n        if !(2..=4).contains(&q.options.len()) {\n            self.error(\n                at.clone(),\n                format!(\n                    \"Give the question 2 to 4 options; it has {}.\",\n                    q.options.len()\n                ),\n            );\n        }\n        if q.recommended >= q.options.len().max(1) {\n            self.error(\n                at.clone(),\n                \"Point `recommended` at one of the options by its index.\".into(),\n            );\n        }\n        if q.tag.chars().count() > 12 {\n            self.warn(at, format!(\"Shorten the tag `{}` to 12 characters or fewer, because the question card clips it.\", q.tag));\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/check.rs:76"
+            }
+          }
+        ],
+        "problem": "A Question card's tag must be 12 characters or fewer. The only code that enforces this is one branch in Issues::questions in crates/ostra-core/src/doc/check.rs, and it raises a warning, not an error. The warning does not block the submit call. No test sets a long tag, so the check has no direct coverage.",
+        "repo": "ostra",
+        "scope": "How the typed document checks (crates/ostra-core/src/doc) treat open questions: where a question's tag length is checked, at what level (error or warning), and which tests cover it. Does not cover the web rendering of tags or the prompts beyond noting they state the 12-character limit.",
+        "title": "Open question tag length check in the typed document checks"
+      },
+      "submit": {
+        "findings_summary": "The only tag-length check is in Issues::questions in crates/ostra-core/src/doc/check.rs (line 95). It raises a Warning when the tag has more than 12 characters. The same function is used for research and spec open_questions and for plan clarifying_questions. Option count and the recommended index in the same function are Errors. blocking() keeps only errors, so check_submit never refuses a submit for a long tag. The Document tool shows the warning under 'Warnings to review:'. No test uses a tag over 12 characters. fixtures_parse_and_pass only shows that the short 'Scope' tags in the fixtures give no issues, and the other doc tests filter to errors.",
+        "not_covered": [
+          "Web console rendering and clipping of long tags",
+          "Whether ExploreSubmit.open_questions count is compared with the research document"
+        ],
+        "open_questions": 0,
+        "scope_covered": "Where the typed document checks test an open question's tag length, at what level, and which tests cover it; web rendering was left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

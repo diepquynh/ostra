@@ -174,6 +174,12 @@ cd tests/browser && npm test                # browser security suite: the consol
   and runs with the normal suite: 221 questions about Ostra against `book.json`, a book an Opus docs run wrote about a
   snapshot of this repository, graded by `labels/` (the sections that state each answer) with floors on hit@1, hit@5,
   and MRR. `OSTRA_EVAL_REPORT=1 ... -- --nocapture` prints every miss. A new `book.json` needs new labels.
+- Planning evals (`tests/evals/planning.toml`, run by `crates/ostra-server/tests/planning_evals.rs`) run generate-spec,
+  plan, and both fact-checks live on 30 change requests against Ostra pinned to one upstream commit, on research
+  recorded once into `tests/evals/planning/research/` (`OSTRA_EVAL_MODE=record`) and replayed through the Document
+  tool, and report cost, code files read again, plan rounds, and plan coverage per stage. `OSTRA_EVAL_BUDGET` caps the
+  run. The same file runs on an unchanged engine in a worktree at the pin, and `planning_compare` diffs two reports:
+  `OSTRA_EVAL_MODEL=anthropic:claude-sonnet-5-5 cargo test -p ostra-server --test planning_evals planning_evals -- --ignored --nocapture`.
 - Test stage evals (`tests/evals/test_stage.toml`, run by `crates/ostra-server/tests/test_stage_evals.rs`) run the live
   analyzer, write-test, or both in real sessions on the small projects in `tests/evals/test_stage/`, and grade write-test
   by planted mutants its tests must catch. Tiers 1 to 3, 3 runs per model by default (Opus, Sonnet, and Haiku):

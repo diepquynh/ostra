@@ -419,6 +419,10 @@ pub mod report {
     pub fn session_context() -> String {
         "ostra-session-context.md".into()
     }
+    /// Rule D4a: the engine-written code facts from the research documents, in the session root.
+    pub fn code_facts() -> String {
+        "ostra-code-facts.md".into()
+    }
     /// The review ledger a loop belongs to, from its `Phase:` value (`N`, `N-tests`, or `none`).
     pub fn review_ledger(phase: &str) -> String {
         let v = phase.trim().to_ascii_lowercase();

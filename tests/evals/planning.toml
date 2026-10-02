@@ -1,0 +1,374 @@
+# Planning evals: the stages after research on Ostra's own source, pinned to one upstream commit so every run plans
+# against the same code. `crates/ostra-server/tests/planning_evals.rs` runs them. Each case is a change request
+# through the full track: research, spec, its fact-check, the plan, and its fact-check, until the plan is approved.
+#
+# The research is recorded once (`OSTRA_EVAL_MODE=record`) into `planning/research/<case>.json` and replayed in every
+# later run through the Document tool, so two engines compared on the same case read the same research. Tier 1 is a
+# change in one place, tier 2 a change across a few files or crates, tier 3 a feature across several crates with more
+# than one deliverable.
+
+# Upstream master when the evals were written.
+pin = "7bba9116377953b1e3b8dda6befb24b07fec32c7"
+
+[project]
+key = "ostra"
+profile = """
+schema_version = 1
+stack = "rust"
+build_tool = "cargo"
+test_framework = "cargo test"
+
+[commands]
+build = "cargo build --workspace"
+test = "cargo test --workspace"
+format = "cargo fmt --all"
+lint = "cargo clippy --workspace --all-targets -- -D warnings"
+typecheck = "cd web && npm run typecheck"
+
+[[module_map]]
+glob = "crates/ostra-core/**"
+area = "core: ids, settings, pipeline enums, submit schemas, typed documents, the event log, API DTOs"
+
+[[module_map]]
+glob = "crates/ostra-engine/**"
+area = "engine: session fold, planner, judges, runner, spawn factory"
+
+[[module_map]]
+glob = "crates/ostra-agents/**"
+area = "agents: prompts, spawn structs, repo brief"
+
+[[module_map]]
+glob = "crates/ostra-tools/**"
+area = "tools: native tool implementations"
+
+[[module_map]]
+glob = "crates/ostra-policy/**"
+area = "policy: guards and permissions"
+
+[[module_map]]
+glob = "crates/ostra-exec-native/**"
+area = "native executor: the agent loop"
+
+[[module_map]]
+glob = "crates/ostra-exec-harness/**"
+area = "harness executors: PTY, adapters, hook bridge"
+
+[[module_map]]
+glob = "crates/ostra-providers/**"
+area = "providers: Anthropic and OpenAI clients"
+
+[[module_map]]
+glob = "crates/ostra-store/**"
+area = "store: SQLite workspace db, registry, memory"
+
+[[module_map]]
+glob = "crates/ostra-server/**"
+area = "server: the ostra binary, REST, WebSocket, CLI"
+
+[[module_map]]
+glob = "crates/ostra-workspace/**"
+area = "workspace: settings checks, projects, approvals"
+
+[[module_map]]
+glob = "crates/ostra-mcp/**"
+area = "mcp: MCP client for workspace servers"
+
+[[module_map]]
+glob = "web/**"
+area = "web: the React console"
+
+[[module_map]]
+glob = "assets/**"
+area = "assets: agent prompts, judge prompts, skills"
+
+[[module_map]]
+glob = "docs/**"
+area = "docs: the internals pages"
+"""
+inventory = """
+# Inventory: ostra
+
+Ostra is a Rust workspace (`crates/*`, one crate per concern) with a React console in `web/`. `CLAUDE.md` describes the
+crates, the direction of their dependencies, and the patterns every change follows. `HANDOVER.md` is the design brief.
+
+## Module/Area Map
+
+| Area | Path glob |
+| --- | --- |
+| core | `crates/ostra-core/**` |
+| engine | `crates/ostra-engine/**` |
+| agents | `crates/ostra-agents/**` |
+| tools | `crates/ostra-tools/**` |
+| policy | `crates/ostra-policy/**` |
+| native executor | `crates/ostra-exec-native/**` |
+| harness executors | `crates/ostra-exec-harness/**` |
+| providers | `crates/ostra-providers/**` |
+| store | `crates/ostra-store/**` |
+| server | `crates/ostra-server/**` |
+| workspace | `crates/ostra-workspace/**` |
+| mcp | `crates/ostra-mcp/**` |
+| web | `web/**` |
+| assets | `assets/**` |
+| docs | `docs/**` |
+
+## Skill Application Mapping
+
+No skills are installed in this repo. Steps name no skills.
+
+## Review Rule Set
+
+Follow `CLAUDE.md`: clippy clean with `-D warnings`, rule citations on rule code, a conformance fixture per rule, and
+docs updated in the same change.
+"""
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Tier 1: one change in one place
+# ---------------------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "t1-question-tag-error"
+tier = 1
+request = "In the document checks, make a question tag longer than 12 characters an error instead of a warning, because the question card clips it and the user never sees the full tag."
+explore = ["How the typed document checks treat open questions: where a question's tag length is checked, at what level, and which tests cover it."]
+
+[[case]]
+id = "t1-brief-limit"
+tier = 1
+request = "Raise the repo brief's character limit from 3600 to 6000, and make the truncation note say how many characters were cut."
+explore = ["How the repo brief is built and capped: its character limit, where it is truncated, the note it adds, and its tests."]
+
+[[case]]
+id = "t1-compaction-status"
+tier = 1
+request = "Name the model in the native loop's status message when it compacts a conversation, so the activity view shows which model's context filled up."
+explore = ["How the native agent loop decides to compact a conversation and which status messages it emits around it."]
+
+[[case]]
+id = "t1-output-limit-message"
+tier = 1
+request = "When the native loop gives up because the model kept hitting its output limit, say in the failure message how many times it asked the model to continue."
+explore = ["How the native agent loop handles a response that stops at the output limit: the continue prompt, the retry count, and the failure it ends with."]
+
+[[case]]
+id = "t1-recurring-gate-text"
+tier = 1
+request = "Have the fact-check-recurring gate's explanation state the limit as well as the count, for example 'failed 3 times in a row; the limit is 3', for both the spec and the plan."
+explore = ["Where the planner opens the fact-check-recurring gate for the spec and the plan, the limit it compares against, and the explanation text."]
+
+[[case]]
+id = "t1-document-summary"
+tier = 1
+request = "In the Document tool's result, count warnings separately from errors on the summary line, so an agent sees '2 errors, 3 warnings' before the list."
+explore = ["How the Document tool reports a write: the summary it returns, how it lists the check results, and its tests."]
+
+[[case]]
+id = "t1-explore-retries"
+tier = 1
+request = "Let a failed research task retry twice before Ostra opens the execution-failed gate, instead of once, without changing how other stages retry."
+explore = ["How a failed explore execution is retried before the execution-failed gate opens, which constant sets it, and which other stages share it."]
+
+[[case]]
+id = "t1-context-title"
+tier = 1
+request = "Put the session's title at the top of the engine-written session context file, above the request."
+explore = ["How the engine renders the session context file a revision reads, and where the session title is kept in the fold."]
+
+[[case]]
+id = "t1-recall-limit"
+tier = 1
+request = "Let MemoryRecall return up to 100 lessons and default to 10 instead of 8, and update its tool description to match."
+explore = ["How the MemoryRecall tool applies its default and maximum limits, where its description states them, and its tests."]
+
+[[case]]
+id = "t1-bash-timeout"
+tier = 1
+request = "Raise the Bash tool's maximum timeout from 10 to 20 minutes and keep the 2-minute default."
+explore = ["How the Bash tool applies its default and maximum timeouts, where its description states them, and its tests."]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Tier 2: a change across a few files or crates
+# ---------------------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "t2-recurring-limit-setting"
+tier = 2
+request = "Make the fact-check recurring limit a workspace setting under `limits`, default 3, validated when settings are saved, and used for both the spec and the plan."
+explore = [
+  "How the planner counts consecutive fact-check FAILs and opens the recurring gate, and how a gate answer raises the limit.",
+  "How workspace `limits` settings are defined, validated at save, and passed to the planner through PlanCtx.",
+]
+
+[[case]]
+id = "t2-brief-books-setting"
+tier = 2
+request = "Let a workspace choose how many books the repo brief lists, instead of the fixed 20, with the setting validated at save."
+explore = [
+  "How the repo brief lists the workspace's books and caps the list.",
+  "How workspace settings reach the spawn factory and the brief, and how a setting is validated at save.",
+]
+
+[[case]]
+id = "t2-usage-per-tool"
+tier = 2
+request = "Record how many calls a native run makes to each tool in its usage, and return the counts in the execution detail API."
+explore = [
+  "How the native loop counts tool calls and accumulates usage for a run.",
+  "How an execution's usage reaches the store and the execution detail API, including the exported TypeScript types.",
+]
+
+[[case]]
+id = "t2-compact-threshold"
+tier = 2
+request = "Make the native loop's compaction threshold a global config setting, default 95% of the context window, validated to lie between 50% and 99%."
+explore = [
+  "How the native loop decides when to compact a conversation and what constants it uses.",
+  "How the global config is defined, loaded, validated, and passed to the native executor.",
+]
+
+[[case]]
+id = "t2-phase-size-warning"
+tier = 2
+request = "Warn in the plan checks when a phase has more than 12 steps, and tell the plan agent in its prompt to split such a phase."
+explore = [
+  "How the plan document's checks run and report warnings per phase and step.",
+  "What the plan agent's prompt says about phase and step sizes, and where it lists the checks Ostra runs.",
+]
+
+[[case]]
+id = "t2-events-jsonl"
+tier = 2
+request = "Add an endpoint that streams a session's event log as JSON lines, one stored event per line, behind the same checks as the other session endpoints."
+explore = [
+  "How the server's session endpoints are defined and guarded, and how they read from the workspace db.",
+  "How stored events are read from the store and serialized.",
+]
+
+[[case]]
+id = "t2-stop-all"
+tier = 2
+request = "Let `ostra stop` take `--all` to stop every running session of the workspace while the server is down, and print what it stopped."
+explore = [
+  "How the `ostra stop` command stops a session offline, and how the CLI is defined.",
+  "How the workspace db lists sessions and their statuses.",
+]
+
+[[case]]
+id = "t2-review-cap-setting"
+tier = 2
+request = "Make the review loop's iteration cap a workspace setting under `limits`, default 3, without changing the YOLO review budget."
+explore = [
+  "How the review loop counts iterations against its cap, including the YOLO review budget and the review-cap gate.",
+  "How workspace `limits` settings are defined, validated, and reach the fold or planner.",
+]
+
+[[case]]
+id = "t2-not-covered-card"
+tier = 2
+request = "Show a research document's Not covered items as a list on its research run card in the console, from the explore submit."
+explore = [
+  "How an explore execution's submit, including `not_covered`, reaches the session detail API.",
+  "How the console renders a research run card on the session board.",
+]
+
+[[case]]
+id = "t2-file-size-guard"
+tier = 2
+request = "Add a guard that denies a Write whose content is larger than 1 MB inside a project, with the correction first in the reason and a policy test."
+explore = [
+  "How Layer 1 guards are defined, ordered, and tested in ostra-policy, and how a denial reason is written.",
+  "How a Write tool call reaches the policy as a canonical ToolCall.",
+]
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Tier 3: a feature across several crates, with more than one deliverable
+# ---------------------------------------------------------------------------------------------------------------------
+
+[[case]]
+id = "t3-budget-warning-gate"
+tier = 3
+request = "Open a gate when a session's spend reaches 80% of its budget, where the user can continue or raise the budget; YOLO continues. Show it in the console like the other gates."
+explore = [
+  "How the session budget is enforced: where spend is summed, how the BudgetReached gate opens and is answered, and how YOLO treats it.",
+  "How a gate kind is added end to end: GatePayload, the fold, the planner, yolo_plan, validate_answer, TypeScript types, and the console's gate cards.",
+]
+
+[[case]]
+id = "t3-false-positive-judge"
+tier = 3
+request = "Add a judge that decides whether a HIGH or MEDIUM code-review finding is a false positive before it goes to the fix agent, record its decision, and let the user override it."
+explore = [
+  "How review findings are split and sent to the fix agent, including the resolve-review judge and the auto-fixable path.",
+  "How a judge is added: its output struct and schema, input builder, prompt asset, the planner step, the fold, and overrides.",
+]
+
+[[case]]
+id = "t3-project-parallel-limit"
+tier = 3
+request = "Add a per-project limit on concurrent executions on top of the workspace's max_parallel_executions, set in each project's workspace entry and validated at save."
+explore = [
+  "How the runner's slot limiter caps concurrent executions per workspace.",
+  "How project entries in workspace settings are defined and validated, and how the runner knows a spawn's project.",
+]
+
+[[case]]
+id = "t3-stage-cost-breakdown"
+tier = 3
+request = "Show cost per stage (research, spec, plan, build, review, tests, docs) in the session API and the completion report, and as a table on the session board."
+explore = [
+  "How execution costs are recorded and summed into a session's cost, and how executions map to stages.",
+  "How the completion report is written and how the session board shows cost.",
+]
+
+[[case]]
+id = "t3-diff-tool"
+tier = 3
+request = "Add a native Diff tool that shows the project's unstaged diff, for the implementer and the code reviewer, classified as a read by the policy."
+explore = [
+  "How a native tool is added: its implementation, its definition, its capability mapping, and its policy classification.",
+  "How the implementer and the code reviewer get their capabilities, and how harness adapters map tool names.",
+]
+
+[[case]]
+id = "t3-session-retention"
+tier = 3
+request = "Delete finished sessions older than a workspace's retention setting (default off), with their events and executions, on server start and through a CLI command."
+explore = [
+  "How sessions, events, executions, and messages are stored in the workspace db, and how a session is deleted today.",
+  "How the server starts a workspace and how the CLI commands are defined.",
+]
+
+[[case]]
+id = "t3-spec-versions"
+tier = 3
+request = "Keep every version of a session's spec when it is revised, and let the console show what changed between two versions."
+explore = [
+  "How the spec document is written and revised in place, and where its JSON and markdown are stored.",
+  "How the console shows a typed document and fetches it from the API.",
+]
+
+[[case]]
+id = "t3-phase-retry-gate"
+tier = 3
+request = "When a phase fails, open a gate that lets the user retry it with guidance or drop it with its dependents, instead of always dropping its dependents (Rule D9). YOLO retries once."
+explore = [
+  "How a failed phase removes its dependents from the queue (Rule D9) in the fold and the planner, and its conformance fixture.",
+  "How gates are opened, answered, and handled under YOLO.",
+]
+
+[[case]]
+id = "t3-mcp-tool-allowlist"
+tier = 3
+request = "Let a workspace limit which MCP server tools each agent may call, set per server, validated at save, and enforced before the call runs."
+explore = [
+  "How workspace MCP servers are configured, validated, and their tools offered to an execution.",
+  "How tool calls pass the execution policy, and where an MCP tool call could be refused.",
+]
+
+[[case]]
+id = "t3-research-reuse"
+tier = 3
+request = "Reuse a research document from an earlier session of the same workspace when the files it cites are unchanged, instead of running explore again for the same task."
+explore = [
+  "How explore tasks are created and run, and how research documents are stored per session.",
+  "How a session could find an earlier session's research documents and decide they still apply.",
+]

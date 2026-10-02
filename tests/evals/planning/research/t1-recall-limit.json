@@ -1,0 +1,211 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:42:13.098686641+00:00",
+  "docs": [
+    {
+      "task": "How the MemoryRecall tool applies its default and maximum limits, where its description states them, and its tests.",
+      "file": "ostra-research-20261002-084114-memory-recall-limit.md",
+      "document": {
+        "areas": [
+          "ostra-tools",
+          "ostra-store",
+          "docs/internals"
+        ],
+        "asks": [
+          "How the MemoryRecall tool applies its default and maximum limits",
+          "Where its description states them",
+          "Its tests"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-server/src/bridge.rs:MCP_TOOLS",
+            "step": "A native agent, or a harness agent through the MCP tool memory_recall, issues MemoryRecall with optional query, area, limit. The harness name memory_recall maps to MemoryRecall through MCP_TOOLS."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:run",
+            "step": "The tool dispatcher routes the name to misc::memory_recall."
+          },
+          {
+            "location": "crates/ostra-tools/src/misc.rs:memory_recall",
+            "step": "memory_recall reads query and area with str_arg and limit with u64_arg. A missing limit becomes DEFAULT_RECALL_LIMIT (8, from ostra-store). The value is clamped to 1..=50 by the local const MAX_RECALL_LIMIT. u64_arg accepts a JSON float and truncates it, with negative floats becoming 0 and then clamped to 1. A negative integer is not u64, and a non-number value is None, so both fall back to the default."
+          },
+          {
+            "location": "crates/ostra-store/src/memory.rs:MemoryStore::recall",
+            "step": "On spawn_blocking it opens MemoryStore and calls recall(area, query, limit). recall uses limit as the SQL LIMIT of each bucket and stops merging deduplicated lessons at limit. The store applies no maximum, so a direct caller could pass any value."
+          },
+          {
+            "location": "crates/ostra-tools/src/misc.rs:memory_recall",
+            "step": "The tool formats '{n} lesson(s) recalled, most relevant first:' followed by numbered lines, or returns 'No lessons recorded for this query.' when empty."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "Provides DEFAULT_RECALL_LIMIT and MemoryStore::recall."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools testutil (env_in, run)",
+            "role": "Test harness for tool-level tests."
+          }
+        ],
+        "files": [
+          {
+            "path": "crates/ostra-tools/src/misc.rs",
+            "purpose": "Implements memory_recall. Holds MAX_RECALL_LIMIT, applies the default and the clamp, and holds the tool tests (memory_round_trip is the only one that calls MemoryRecall).",
+            "symbols": [
+              "const MAX_RECALL_LIMIT: usize = 50;",
+              "pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "async fn memory_round_trip()"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/defs.rs",
+            "purpose": "Holds the MemoryRecall description string (MEMORY_RECALL) and the input schema in memory_recall_def. The description states the default only; the schema states minimum 1, maximum 50, and the default in the limit property description.",
+            "symbols": [
+              "const MEMORY_RECALL: &str",
+              "fn memory_recall_def() -> ToolDefinition"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/memory.rs",
+            "purpose": "Owns DEFAULT_RECALL_LIMIT = 8 and MemoryStore::recall, which uses limit as the per-bucket SQL LIMIT and as the cap on merged output. It does not clamp or validate limit. Its tests always pass 8.",
+            "symbols": [
+              "pub const DEFAULT_RECALL_LIMIT: usize = 8;",
+              "pub fn recall(&self, area: Option<&str>, query: Option<&str>, limit: usize) -> Result<Vec<Lesson>, StoreError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "Dispatches the MemoryRecall tool name to misc::memory_recall and defines u64_arg, which parses the limit.",
+            "symbols": [
+              "\"MemoryRecall\" => misc::memory_recall(env, input).await",
+              "pub(crate) fn u64_arg(input: &serde_json::Value, key: &str) -> Option<u64>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/bridge.rs",
+            "purpose": "Registers memory_recall in MCP_TOOLS so harness executors reach the same native tool; also calls MemoryStore::recall directly with a fixed 5 for the hook path.",
+            "symbols": [
+              "static MCP_TOOLS"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Calls m.recall(None, Some(&query), 5) directly for the build-streak lesson append, bypassing the tool's default and clamp."
+          },
+          {
+            "path": "docs/internals/project-memory.md",
+            "purpose": "Docs section 'Recalling lessons' states limit is 8 by default, 50 at most."
+          },
+          {
+            "path": "docs/internals/tools.md",
+            "purpose": "Docs section 'Memory and MemoryRecall' states limit default 8, at most 50."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a change is planned, locate any test or docs eval that asserts the exact MemoryRecall description text before editing MEMORY_RECALL.",
+          "Check docs/internals/project-memory.md and docs/internals/tools.md after any change, since both restate 8 and 50."
+        ],
+        "not_covered": [
+          "The DocsSearch schema bounds were not read in full; only its description and its clamp (book_search::DEFAULT_LIMIT, MAX_LIMIT = 15) were seen.",
+          "Whether provider clients enforce the JSON schema minimum and maximum before dispatch was not traced.",
+          "Whether defs.rs has a test that checks description text for any tool was not searched beyond the capability-list tests near line 650."
+        ],
+        "open_questions": [
+          {
+            "id": "Q1",
+            "options": [
+              {
+                "description": "Add MAX_RECALL_LIMIT beside DEFAULT_RECALL_LIMIT in crates/ostra-store/src/memory.rs, as book_search keeps DEFAULT_LIMIT and MAX_LIMIT together in crates/ostra-core/src/book_search.rs.",
+                "label": "Move MAX to ostra-store"
+              },
+              {
+                "description": "Keep the default in ostra-store and the maximum in crates/ostra-tools/src/misc.rs, which is the current layout.",
+                "label": "Leave split"
+              }
+            ],
+            "question": "Should the maximum of 50 be moved next to the default so both constants live in one place?",
+            "recommended": 0,
+            "tag": "Constants"
+          },
+          {
+            "id": "Q2",
+            "options": [
+              {
+                "description": "Change 'limit defaults to 8.' to also say the maximum is 50, so the model sees it in the description as well as in the schema.",
+                "label": "State both"
+              },
+              {
+                "description": "Matches the DocsSearch description, whose prose says only 'limit defaults to 5.' and whose maximum of 15 sits in the schema.",
+                "label": "Keep default only"
+              }
+            ],
+            "question": "Should the MemoryRecall description prose state the maximum, or only the default?",
+            "recommended": 0,
+            "tag": "Description"
+          }
+        ],
+        "patterns": [
+          {
+            "description": "MemoryRecall and DocsSearch both parse limit with u64_arg, default it, and clamp it in the tool function. Neither returns an error for an out-of-range value: 0 becomes 1, anything above the maximum becomes the maximum. The code tools do the same with MAX_LIMIT = 300 in crates/ostra-code/src/tools.rs. The JSON schema repeats the bounds as minimum and maximum, so a provider that enforces the schema rejects out-of-range values before the clamp runs.",
+            "files": [
+              "crates/ostra-tools/src/misc.rs",
+              "crates/ostra-code/src/tools.rs"
+            ],
+            "name": "Optional limit: unwrap_or(default).clamp(1, MAX) in the tool layer",
+            "snippet": {
+              "code": "let limit = u64_arg(input, \"limit\")\n    .map(|l| l as usize)\n    .unwrap_or(DEFAULT_RECALL_LIMIT)\n    .clamp(1, MAX_RECALL_LIMIT);",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/misc.rs:123"
+            }
+          },
+          {
+            "description": "Tool descriptions end the Usage list with a line such as 'limit defaults to 8.' (MemoryRecall) or 'limit defaults to 5.' (DocsSearch). Neither description states the maximum in prose. The maximum is in the input schema of each definition.",
+            "files": [
+              "crates/ostra-tools/src/defs.rs"
+            ],
+            "name": "Description states the default in prose; schema states the bounds",
+            "snippet": {
+              "code": "const MEMORY_RECALL: &str = \"Recalls lessons earlier runs recorded for this project.\n\nUsage:\n- Call it before you start work in an area, with query describing the task, and again with the error text as query when you hit a failure.\n- area narrows recall to a module and its sub-scopes. Lessons from other areas that match the query fill the remaining slots.\n- limit defaults to 8.\";\n\n\"limit\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 50, \"description\": \"Maximum lessons to return. Defaults to 8\"}",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/defs.rs:119"
+            }
+          },
+          {
+            "description": "Tool tests in misc.rs build an env with crate::testutil::env_in(dir) and call run(&env, ToolName, json!({...})), then assert on out.text or out.is_error. A limit test would follow this shape and could seed lessons with the Memory tool in the same env.",
+            "files": [
+              "crates/ostra-tools/src/misc.rs"
+            ],
+            "name": "Tool tests use testutil run against a tempdir env",
+            "snippet": {
+              "code": "let out = run(&env, \"MemoryRecall\", json!({\"query\": \"ownership\", \"area\": \"orders\"})).await;\nassert!(out.text.contains(\"1. [orders] cancel checks ownership first (source: implementer x_test\"), \"{}\", out.text);",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/misc.rs:307"
+            }
+          }
+        ],
+        "problem": "MemoryRecall has a default limit of 8 and a maximum of 50. The default lives in ostra-store, the maximum lives in ostra-tools, and the tool description text states only the default. The maximum appears in the JSON input schema and in docs, but not in the description prose. No test exercises the default, the clamp, or the schema bounds.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "How the MemoryRecall tool applies its default and maximum limits, where its description states them, and its tests. Covers the native tool, its definition, the store method it calls, and the docs pages that restate the numbers. Does not cover the harness MCP shim transport beyond confirming it reuses the same native tool.",
+        "title": "MemoryRecall default and maximum limit"
+      },
+      "submit": {
+        "findings_summary": "The default of 8 is DEFAULT_RECALL_LIMIT in crates/ostra-store/src/memory.rs. The maximum of 50 is a separate const, MAX_RECALL_LIMIT, in crates/ostra-tools/src/misc.rs, where memory_recall applies `u64_arg(...).unwrap_or(DEFAULT).clamp(1, 50)`; MemoryStore::recall itself does no clamping. The MEMORY_RECALL description in crates/ostra-tools/src/defs.rs states only \"limit defaults to 8.\" The maximum appears only in the input schema (minimum 1, maximum 50) and in docs/internals/project-memory.md and tools.md. The only test that calls MemoryRecall is memory_round_trip in misc.rs, which passes no limit. The store tests always pass 8. No test covers the default, the clamp, or the schema bounds.",
+        "not_covered": [
+          "DocsSearch schema bounds were only partially read",
+          "Whether provider clients enforce the JSON schema min/max before dispatch",
+          "Whether any test or eval asserts exact tool description text"
+        ],
+        "open_questions": 2,
+        "scope_covered": "How MemoryRecall applies its default and maximum limits, where its description and schema state them, and which tests touch it; the harness MCP transport and provider-side schema enforcement were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

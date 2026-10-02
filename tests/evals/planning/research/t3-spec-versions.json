@@ -1,0 +1,763 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T09:02:27.993059652+00:00",
+  "docs": [
+    {
+      "task": "How the spec document is written and revised in place, and where its JSON and markdown are stored.",
+      "file": "ostra-research-20261002-085929-spec-write-and-revise.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (doc)",
+          "ostra-tools",
+          "ostra-policy",
+          "ostra-engine",
+          "ostra-server",
+          "assets/agents/generate-spec"
+        ],
+        "asks": [
+          "How the spec document is written",
+          "How the spec document is revised in place",
+          "Where its JSON and markdown are stored"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/plan.rs:next_steps (spec stage, around line 816)",
+            "step": "The planner decides to run generate-spec. On the first run `spec_file` is `None`. On a revision it is the path of the current spec, and `answers`, `changes`, `new_research_docs`, and `findings` hold only what the spec does not reflect yet. The spawn runs with `s.session_root` as its session dir."
+          },
+          {
+            "location": "assets/agents/generate-spec/prompt.md:Step 1 and Step 8",
+            "step": "The generate-spec prompt computes the run stamp once (a revision keeps the stamp already in the file name) and names the file `{session-dir}/ostra-spec-{run-stamp}-{topic-slug}.md`. On a revision the agent reads the spec file first, redoes only the affected steps, and sends an `update`."
+          },
+          {
+            "location": "crates/ostra-tools/src/defs.rs:document_tool_definition",
+            "step": "The agent calls `Document` with `path`, and either `document` (first write) or `update`/`remove` (revision or parts). The native loop and the harness MCP bridge expose the same tool definition, whose `document` schema is `SpecDoc`."
+          },
+          {
+            "location": "crates/ostra-policy/src/policy.rs:ExecutionPolicy::layer1",
+            "step": "Layer 1 policy runs `check_document` on the resolved `path` before the tool executes."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:execute",
+            "step": "`execute` coerces any argument sent as JSON text into a value using the tool schema, then calls `doc::document`."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs:document",
+            "step": "`document` maps the agent to `DocKind::Spec`, requires the file name to start with `ostra-spec-` and end in `.md`, and requires the parent dir to equal the execution's session dir (compared through `paths::fold`)."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/merge.rs:apply_update",
+            "step": "For `update`/`remove`, the stored JSON is loaded from `<stem>.json` and `apply_update` merges. A keyed list merges by id and sorts naturally. `remove` ids that match nothing fail the whole call before any write."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:write",
+            "step": "`doc::write` parses the merged value as `SpecDoc` (naming the failing field path on error), runs `check`, writes `<stem>.json` then `<stem>.md` in the same directory, and returns `Written` with the issues."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs:summary",
+            "step": "The tool marks both files as read for the agent and returns a summary: counts of criteria, deliverables, requirements, acceptance criteria, evidence rows, and open questions, the file paths, and the check issues. It tells the agent to fix errors with an `update` before submitting."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check_submit",
+            "step": "The agent calls `submit_generate_spec`. The tool boundary runs `check_submit`, which loads the JSON at `spec_path`, refuses on any error-level issue, and refuses when the submitted `external_evidence_rows`, `deliverables`, or `requirements` differ from the spec."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::apply (ExecPurpose::Spec branch, line 3393)",
+            "step": "The fold records the result: `spec.current = Some(sub)`, `spec.applied = spec.sent`, `spec.version += 1`, pending findings cleared, approval revoked. The planner then asks open questions (Rule D3) before any fact-check, and a later revision reuses `spec.current.spec_path` as `spec_file`."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:artifact",
+            "step": "The console reads the file through the artifact endpoint, which returns the markdown content plus `load_view(&path)`, the typed document and its check results parsed from the stored JSON."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "external",
+            "name": "serde_json",
+            "role": "Value-based merge and pretty-printed JSON storage"
+          },
+          {
+            "kind": "external",
+            "name": "serde_path_to_error",
+            "role": "Names the failing field path in schema errors, for example `requirements[3].acceptance[0]: missing field then`"
+          },
+          {
+            "kind": "external",
+            "name": "schemars",
+            "role": "Derives the JSON schema of SpecDoc for the Document tool definition"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "Owns `doc` (types, store, merge, render, check) and `paths`"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "Implements and defines the Document tool"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-policy",
+            "role": "Guards document files against direct writes and scopes the Document target"
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/doc/store.rs",
+            "purpose": "Defines where documents live and how they are read and written. `<name>.json` is the source of truth and `<name>.md` beside it is rendered from it. `write` validates, writes the JSON, then the rendered markdown. `load` reads the stored JSON for a markdown path. `DocKind` maps an agent to a document kind, file-name prefix, label, and JSON schema.",
+            "symbols": [
+              "pub enum DocKind { Research, Spec, Plan }",
+              "pub fn for_agent(agent: AgentName) -> Option<DocKind>",
+              "pub fn prefix(self) -> &'static str",
+              "pub fn schema(self) -> Value",
+              "pub fn parse(self, value: &Value) -> Result<Document, String>",
+              "pub fn doc_kind_for(path: &Path) -> Option<DocKind>",
+              "pub fn json_path(md: &Path) -> PathBuf",
+              "pub fn phase_path(master: &Path, id: u32) -> PathBuf",
+              "pub fn load(md: &Path) -> Option<Value>",
+              "pub fn load_view(md: &Path) -> Option<DocumentView>",
+              "pub struct Written { pub document: Document, pub files: Vec<PathBuf>, pub issues: Vec<DocIssue> }",
+              "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/merge.rs",
+            "purpose": "In-place revision logic. `apply_update` merges an `update` object into the stored JSON and drops keyed items named in `remove`. Keyed lists merge by `id` and end in natural id order.",
+            "symbols": [
+              "pub fn apply_update(base: Option<Value>, update: &Value, remove: &[String]) -> Result<Value, MergeError>",
+              "pub(crate) fn natural_cmp(a: &str, b: &str) -> Ordering",
+              "pub struct MergeError(pub String)"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/mod.rs",
+            "purpose": "Typed document structs. `SpecDoc` is the spec schema (title, date, research, repos, objective, current_behavior, in_scope, out_of_scope, criteria, deliverables, requirements, contracts, evidence, data_impact, assumptions, open_questions, notes). Re-exports the store, merge, check, and render functions. `Document` is an enum of Research, Spec, Plan, and Phase.",
+            "symbols": [
+              "pub struct SpecDoc",
+              "pub enum Document",
+              "pub struct DocumentView { pub document: Document, pub issues: Vec<DocIssue> }",
+              "pub use merge::{MergeError, apply_update};",
+              "pub use store::{DocKind, Written, doc_kind_for, json_path, load, load_view, phase_path, write};"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/render.rs",
+            "purpose": "Renders the markdown from a typed document. Section names match the templates the downstream prompts and the fact-check read. Derived tables (delivery order, traceability, counts) are computed here, not written by the model.",
+            "symbols": [
+              "pub fn render(doc: &Document, md: &Path) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "Document checks run on every write (`check`) and the submit gate `check_submit`, which reads the stored JSON at the submitted path, refuses on any error-level issue, and compares the submit's `external_evidence_rows`, `deliverables`, and `requirements` counts with the spec.",
+            "symbols": [
+              "pub fn check(doc: &Document) -> Vec<DocIssue>",
+              "pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>",
+              "fn read_doc(kind: DocKind, path: &str) -> Result<Document, String>",
+              "fn blocking(doc: &Document) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/doc.rs",
+            "purpose": "The native `Document` tool implementation: agent-to-kind mapping, file-name and directory validation, `document` versus `update`/`remove` selection, merge, write, and the result summary. Contains the tests `writes_json_and_markdown_then_updates_in_place` and `refuses_bad_paths_schema_errors_and_other_agents`.",
+            "symbols": [
+              "pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "fn summary(w: &doc::Written) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/defs.rs",
+            "purpose": "The `Document` tool description and per-agent input schema. The `document` property is a `$ref` to the agent's own schema (SpecDoc for generate-spec). `update` is a free object; `remove` is an array of string ids.",
+            "symbols": [
+              "const DOCUMENT: &str",
+              "pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition>",
+              "pub(crate) fn input_schema(tool: &str, agent: AgentName) -> Option<Value>"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "Tool dispatch. `execute` coerces JSON-text arguments against the tool's schema (`coerce_json_strings`), then routes `\"Document\"` to `doc::document`. Path arguments for `Document` are made absolute at line 211.",
+            "symbols": [
+              "pub async fn execute(env: &ToolEnv, call_id: &str, call: &ToolCall, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/guards.rs",
+            "purpose": "Layer 1 guards for document files. `check_document` gates the Document tool's target (artifact owner, inside the session dir when strict). The write guard denies Write, Edit, and shell writes to any session-dir file whose name matches a document prefix, with the correction to use the Document tool.",
+            "symbols": [
+              "pub const DOCUMENT_TOOL: &str = \"document-tool\"",
+              "pub fn check_document(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial>"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/src/policy.rs",
+            "purpose": "Routes a `Document` tool call to `guards::check_document` in `ExecutionPolicy::layer1` (line 438 to 442).",
+            "symbols": [
+              "ExecutionPolicy::layer1"
+            ]
+          },
+          {
+            "path": "crates/ostra-policy/tests/policy.rs",
+            "purpose": "Test `documents_change_only_through_the_document_tool` asserts that Write and shell writes to `ostra-spec-*.md`, its `.json`, and plan phase files are denied with guard `document-tool`.",
+            "symbols": [
+              "fn documents_change_only_through_the_document_tool()"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Planner rule that spawns generate-spec. On a rerun it passes `spec_file` (the existing spec path), only the pending answers, changes, findings, and the new research docs, so the agent edits in place. The spawn runs in the session root.",
+            "symbols": [
+              "SpawnInputs { spec_file: t.current.as_ref().map(|c| PathBuf::from(&c.spec_path)), .. }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Fold of the spec execution result. A successful `ExecPurpose::Spec` run stores the submit as `spec.current`, sets `applied = sent`, increments `spec.version`, clears pending findings, and revokes approval. The session root path and the per-project session dir are derived here.",
+            "symbols": [
+              "ExecPurpose::Spec { .. } => { self.spec.current = Some(sub); self.spec.version += 1; self.spec.revoke_approval(); }",
+              "pub fn project_session_dir(&self, key: &str) -> PathBuf",
+              "pub session_root: PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/coord.rs",
+            "purpose": "`session_dir_of` returns the session root for Spec, Plan, and spec/plan fact-check executions, and the per-project session dir for every other purpose.",
+            "symbols": [
+              "pub fn session_dir_of(&self, rec: &ExecRecord) -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/paths.rs",
+            "purpose": "Path derivations: `.ostra` runtime dir, `sessions` root, session root, per-project session dir, and the engine-owned `.state` dir.",
+            "symbols": [
+              "pub const RUNTIME_DIR: &str = \".ostra\"",
+              "pub fn sessions_root(workspace: &Path) -> PathBuf",
+              "pub fn session_root(workspace: &Path, session_id: &str) -> PathBuf",
+              "pub fn session_project_dir(workspace: &Path, session_id: &str, project_key: &str) -> PathBuf",
+              "pub fn session_state_dir(session_root: &Path) -> PathBuf"
+            ]
+          },
+          {
+            "path": "assets/agents/generate-spec/prompt.md",
+            "purpose": "Prompt for generate-spec. Line 76 onward defines a revision: a `Spec file:` line means revise in place with the same `path`, keep requirement IDs, do not compute a new run stamp. Step 8 (line 487) defines the Document call, writing in parts, and sending only changed entries with `remove`."
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "The artifact endpoint reads a session-dir file and, for a document file, attaches `ostra_core::doc::load_view(&path)` so the UI shows the typed document beside the raw content.",
+            "symbols": [
+              "async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artifact>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/tests.rs",
+            "purpose": "Core tests for write, load_view, phase file cleanup on `remove`, and `check_submit` for spec and plan.",
+            "symbols": [
+              "fn plan_writes_master_and_phase_files()",
+              "fn submit_needs_a_clean_document_that_matches()"
+            ]
+          },
+          {
+            "path": "docs/internals/tools.md",
+            "purpose": "User-facing docs for the Document tool (section `### Document`, line 332): inputs, JSON beside the path, rendered markdown, checks, and the write refusal."
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Docs for the spec stage (section `## Spec: what should change`, line 196), including that a revision gets only unapplied input plus the current spec path and edits the file in place."
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a task changes revision semantics (for example a field-level merge inside a keyed item), trace the plan document, whose phases contain keyed `steps`, because `apply_update` replaces a whole phase when its id is sent.",
+          "Trace the spec fact-check re-pass against the markdown snapshot if spec versioning or file naming changes."
+        ],
+        "not_covered": [
+          "The fact-check agent's snapshot and diff procedure beyond the fact that `cp` copies only the markdown file (assets/agents/fact-check/prompt.md lines 78 and 303 to 304) and that guards exempt `factcheck-snapshot-*` directories.",
+          "The harness MCP shim path for the Document tool (crates/ostra-server/src/bridge.rs line 287 and line 480; crates/ostra-exec-harness/src/bridge.rs line 235): it uses the same tool definition and `check_submit`, but its transport was not traced.",
+          "The `SpecDoc` field-level check rules in crates/ostra-core/src/doc/check.rs lines 1 to 600 and the spec markdown section layout in render.rs.",
+          "How the web console and mobile views render a `DocumentView`."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The spec is a session-level artifact. The generate-spec execution runs with the session root as its session dir (`ExecRecord` purposes Spec, Plan, and spec/plan fact-check use `session_root`; every other purpose uses `session_root/<project key>`). The session root is `<workspace>/.ostra/sessions/<session_id>`. So the spec lives at `<workspace>/.ostra/sessions/<session_id>/ostra-spec-{YYYYMMDD-HHmmss}-{topic-slug}.md`, with its source JSON at the same path with extension `.json` (`json_path` is `md.with_extension(\"json\")`). Both files sit directly in that directory: the tool rejects a path in a subdirectory. Research documents, by contrast, sit in the per-project subdir `<session root>/<project key>/ostra-research-*.md` plus `.json`. A plan adds `ostra-plan-*-phase-{N}.md` and `.json` pairs beside the master. The engine does not store the spec content in its event log: the `GenerateSpecSubmit` payload (with `spec_path`, counts, summary, open questions) goes into the log and `SessionState.spec.current`, and the file content stays on disk. The engine-owned `.state` dir in the session root is separate and no agent may write there. The fact-check agent copies only the `.md` into `factcheck-snapshot-spec/` in the session dir, which is why a revision must keep the file name.",
+            "files": [
+              "crates/ostra-core/src/paths.rs",
+              "crates/ostra-engine/src/coord.rs",
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-core/src/doc/store.rs"
+            ],
+            "name": "Storage layout of the spec",
+            "snippet": {
+              "code": "pub fn sessions_root(workspace: &Path) -> PathBuf {\n    workspace_runtime(workspace).join(\"sessions\")\n}\n\n/// The session's root dir. Cross-project artifacts (spec, plan) live here.\npub fn session_root(workspace: &Path, session_id: &str) -> PathBuf {\n    sessions_root(workspace).join(session_id)\n}\n\npub fn json_path(md: &Path) -> PathBuf {\n    md.with_extension(\"json\")\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/paths.rs:289"
+            }
+          },
+          {
+            "description": "`store::write` parses and checks the value first. Only if parsing succeeds does it write `<stem>.json` (pretty-printed with a trailing newline) and then `<stem>.md` (rendered). A schema failure writes nothing. Check errors do not block the write; they are returned to the agent and block the later submit. A plan additionally writes `-phase-{N}` pairs and deletes stale phase files; the spec writes one pair only.",
+            "files": [
+              "crates/ostra-core/src/doc/store.rs",
+              "crates/ostra-core/src/doc/render.rs"
+            ],
+            "name": "JSON is the source, markdown is rendered",
+            "snippet": {
+              "code": "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String> {\n    let document = kind.parse(value)?;\n    let issues = check(&document);\n    let dir = md.parent().ok_or(\"The document path has no directory.\")?;\n    put(&json_path(md), &pretty(value))?;\n    put(md, &render(&document, md))?;\n    let mut files = vec![md.to_path_buf()];\n    if let Document::Plan(plan) = &document {\n        // ... phase files and stale-file removal ...\n    }\n    Ok(Written { document, files, issues })\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/store.rs:181"
+            }
+          },
+          {
+            "description": "`apply_update` replaces each top-level field named in `update`. When both the stored value and the new value are arrays and every item has an `id` (string or number), items merge by id: a known id replaces the stored item whole (shallow, not a field-level merge inside the item), a new id is appended, and the list is re-sorted in natural id order (`R2` before `R10`). Any other field, including an array without ids such as `notes`, is replaced. `remove` then drops items by id from every keyed list in the document, and fails with `Nothing to remove for ...` and no write if an id matches nothing. The generate-spec prompt states the same rule: a known id replaces the stored entry whole, and a changed requirement is sent whole with all its acceptance criteria. Note: the Document tool description shown to some agent runs says a merged item 'keeps the rest, at every level'; the repo's `DOCUMENT` constant in defs.rs:101 and `apply_update` do not do that, so the code is authoritative here.",
+            "files": [
+              "crates/ostra-core/src/doc/merge.rs",
+              "assets/agents/generate-spec/prompt.md",
+              "crates/ostra-tools/src/defs.rs"
+            ],
+            "name": "Keyed-list merge for revisions",
+            "snippet": {
+              "code": "for (key, new) in update {\n    match (doc.get_mut(key), new) {\n        (Some(Value::Array(old)), Value::Array(items))\n            if (keyed(old) || old.is_empty()) && keyed(items) =>\n        {\n            for item in items {\n                let id = id_of(item);\n                match old.iter_mut().find(|o| id_of(o) == id) {\n                    Some(slot) => *slot = item.clone(),\n                    None => old.push(item.clone()),\n                }\n            }\n            old.sort_by(|a, b| {\n                natural_cmp(&id_of(a).unwrap_or_default(), &id_of(b).unwrap_or_default())\n            });\n        }\n        _ => {\n            doc.insert(key.clone(), new.clone());\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/merge.rs:67"
+            }
+          },
+          {
+            "description": "The tool accepts exactly one of two shapes. `document` alone writes the whole document and replaces what is stored. `update` and/or `remove` without `document` load the stored JSON (`doc::load(&md)`), apply the merge, and write the result through the same `doc::write`. `document` together with `update` or `remove` is an error. `remove` with no stored document is an error. The merged value is validated as a whole, so a revision that leaves the spec invalid is rejected and nothing is written. Arguments sent as JSON text are coerced to values against the tool schema in `execute` before this runs.",
+            "files": [
+              "crates/ostra-tools/src/doc.rs",
+              "crates/ostra-tools/src/lib.rs"
+            ],
+            "name": "Document tool input resolution",
+            "snippet": {
+              "code": "let value = match (input.get(\"document\"), input.get(\"update\")) {\n    (Some(d), None) if remove.is_empty() => d.clone(),\n    (Some(_), _) => {\n        return ToolOutput::err(\n            \"Send either `document` (the whole document) or `update` with `remove`, not both.\",\n        );\n    }\n    (None, update) => {\n        let existing = doc::load(&md);\n        if existing.is_none() && !remove.is_empty() {\n            return ToolOutput::err(format!(\n                \"There is no {} at {} yet, so there is nothing to remove.\",\n                kind.label(),\n                md.display()\n            ));\n        }\n        let empty = Value::Object(Default::default());\n        match doc::apply_update(existing, update.unwrap_or(&empty), &remove) {\n            Ok(v) => v,\n            Err(e) => return ToolOutput::err(e.0),\n        }\n    }\n};",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/doc.rs:55"
+            }
+          },
+          {
+            "description": "The write guard (Layer 1) refuses Write, Edit, and shell writes to any file in the session dir whose name starts with `ostra-research-`, `ostra-spec-`, or `ostra-plan-` and ends in `.md` or `.json`, with the correction to use `Document`. Snapshot copies under `factcheck-snapshot-*` are exempt. The Document tool call itself is checked by `check_document`: the target must match the agent's owned artifact pattern, and with tool enforcement it must lie inside the execution's session dir.",
+            "files": [
+              "crates/ostra-policy/src/guards.rs",
+              "crates/ostra-policy/src/policy.rs"
+            ],
+            "name": "Documents change only through the Document tool",
+            "snippet": {
+              "code": "if roots.in_session(target) && ostra_core::doc::doc_kind_for(target).is_some() {\n    return Some(deny(\n        DOCUMENT_TOOL,\n        format!(\n            \"Change \\\"{base}\\\" with the Document tool instead, sending `update` for a revision: Ostra renders \\\n             this file from its typed document, so a direct write would be overwritten and the browser would not \\\n             show it.\"\n        ),\n    ));\n}",
+              "language": "rust",
+              "source": "crates/ostra-policy/src/guards.rs:604"
+            }
+          }
+        ],
+        "problem": "The spec is a typed document (`SpecDoc`) that the generate-spec agent writes through one tool, `Document`. Ostra stores the JSON as the source and renders the markdown from it. A revision must edit the same file in place and send only what changed. This document records exactly how each of those steps works in the code today, because the spec and plan stages depend on the file name, the merge semantics, and the JSON/markdown pairing.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "How the spec document is written and revised in place, and where its JSON and markdown are stored. Covers the Document tool path for the generate-spec agent, the merge rules for `update` and `remove`, the on-disk layout, the guards that protect the files, the submit check, and how the engine drives a revision. It does not cover the fact-check agent's internals, the research and plan documents beyond where they share code, or the web UI rendering of a document.",
+        "sources": [],
+        "title": "Spec document: write, in-place revision, and storage"
+      },
+      "submit": {
+        "findings_summary": "The spec is a typed SpecDoc. The Document tool (crates/ostra-tools/src/doc.rs) validates the name (`ostra-spec-{stamp}-{slug}.md`, directly in the session dir) and calls `doc::write`. That writes `<stem>.json` as the source and renders `<stem>.md` beside it. Both live in the session root `<workspace>/.ostra/sessions/<session_id>/`. A revision sends `update`/`remove` against the stored JSON; `apply_update` merges keyed lists by id with whole-item replacement (not a field-level merge) and sorts them naturally. The planner passes `spec_file` on a rerun so the agent edits the same path, and the fold increments `spec.version`. Layer 1 guards deny direct writes to these files, and `check_submit` refuses a submit when the stored spec has errors or its counts disagree.",
+        "not_covered": [
+          "Fact-check snapshot and diff procedure (only the .md is copied to factcheck-snapshot-spec/)",
+          "Harness MCP shim transport for the Document tool",
+          "SpecDoc check rules in check.rs and the spec markdown layout in render.rs",
+          "Web console and mobile rendering of a DocumentView"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How generate-spec writes and revises the spec through the Document tool, and where the spec's JSON and markdown are stored; fact-check internals, the harness MCP transport, and UI rendering were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How the console shows a typed document and fetches it from the API.",
+      "file": "ostra-research-20261002-085929-console-typed-document.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (doc, api)",
+          "ostra-server (api.rs)",
+          "web (api, screens/artifact, mobile)"
+        ],
+        "asks": [
+          "How the console shows a typed document",
+          "How the console fetches it from the API"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:write",
+            "step": "An agent calls the `Document` tool; `store::write` validates the value with `DocKind::parse`, runs `check`, writes `<name>.json` (pretty JSON of the submitted value) and renders `<name>.md`. A plan also writes `-phase-N` json and md pairs and deletes stale phase files."
+          },
+          {
+            "location": "web/src/screens/index.tsx",
+            "step": "The user opens a file. The tab resource is `artifact:<absolute md path>` (or route `/w/:ws/artifact?path=`). `screens/index.tsx` renders `ArtifactScreen` for resource type `artifact`."
+          },
+          {
+            "location": "web/src/screens/ArtifactScreen.tsx:ArtifactScreen",
+            "step": "`ArtifactScreen` calls `api.artifact(path)` through `useAsync(..., [path])`. `api` is `httpApi` unless `VITE_MOCK=1`."
+          },
+          {
+            "location": "web/src/api/client.ts:request",
+            "step": "`httpApi.artifact` issues `GET /api/artifacts?path=<encoded>` via `request`, with same-origin cookies. A 401 fires the `onUnauthorized` listeners; other non-2xx responses throw `HttpError(status, error, issues)`."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:guard",
+            "step": "The server middleware `guard` checks Host, Origin, and the cookie for everything under `/api/`."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:session_file",
+            "step": "Route `/api/artifacts` calls `artifact`. `session_file` canonicalizes the path, requires it to sit inside some workspace's sessions root (403 otherwise, 404 if missing, 400 if not a file)."
+          },
+          {
+            "location": "crates/ostra-server/src/api.rs:artifact",
+            "step": "If the file is at most 4 MiB and reads as UTF-8, the handler computes `headings` and calls `ostra_core::doc::load_view(&path)`. Otherwise it returns `binary: true` with empty content and `document: None`."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:load_view",
+            "step": "`load_view` maps the file name prefix to a `DocKind`, reads `json_path(md)`, parses it (`PhaseDoc` for phase files, `DocKind::parse` otherwise), runs `check`, and returns `DocumentView { document, issues }`; any failure returns `None`."
+          },
+          {
+            "location": "web/src/screens/ArtifactScreen.tsx:ArtifactScreen",
+            "step": "Back in `ArtifactScreen`, `typed = art.data?.document`. It looks up the owning session in the live workspace tree, fetches `api.session(owner.id)`, and `pickFactCheck(detail.data?.fact_checks, target)` selects the spec or plan fact-check (research and no-owner documents get none)."
+          },
+          {
+            "location": "web/src/screens/ArtifactScreen.tsx",
+            "step": "When `typed` is present and the Markdown toggle is off, `ArtifactScreen` renders `DocumentView` with the toolbar/title/EARS note as `header`. Otherwise it renders the markdown outline and `ArtifactMarkdown` from `art.data.content` and `headings`."
+          },
+          {
+            "location": "web/src/screens/artifact/doc/DocumentView.tsx:DocumentView",
+            "step": "`DocumentView` builds marks from `view.issues` and the fact-check (`buildMarks`), builds chapters with `outlineOf`/`docChapters`, picks the current chapter from the URL hash (`parseAnchor`), and renders the menu, issue banner (Overview only), the chapter's `render()`, and the pager. Navigation calls `nav.open('artifact:<path>', { anchor })`, so chapter and element are stored in the URL hash."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core (doc, api modules)",
+            "role": "Defines the document structs, `Document`, `DocumentView`, `Artifact`, and exports TypeScript via ts-rs."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-server",
+            "role": "Serves `/api/artifacts` and `/api/artifacts/download`; owns the path restriction and the 4 MiB limit."
+          },
+          {
+            "kind": "internal",
+            "name": "@ostra/design",
+            "role": "Banner, Button, Chip, TreeItem, CodeView, Icon components used by the document view."
+          },
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "Generates `web/src/api/gen/*.ts` from Rust types."
+          },
+          {
+            "kind": "external",
+            "name": "serde_path_to_error",
+            "role": "Names the failing field when `DocKind::parse` rejects a document."
+          },
+          {
+            "kind": "external",
+            "name": "react-router",
+            "role": "`useLocation` hash drives the chapter and element shown."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/doc/store.rs",
+            "purpose": "Storage layout and read path. `<name>.json` is the source, `<name>.md` is rendered from it. `load_view` builds the DocumentView the API returns; `write` validates, writes JSON then markdown, and writes phase file pairs for a plan.",
+            "symbols": [
+              "pub enum DocKind { Research, Spec, Plan }",
+              "pub fn doc_kind_for(path: &Path) -> Option<DocKind>",
+              "pub fn json_path(md: &Path) -> PathBuf",
+              "pub fn load(md: &Path) -> Option<Value>",
+              "pub fn load_view(md: &Path) -> Option<DocumentView>",
+              "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>",
+              "pub fn phase_path(master: &Path, id: u32) -> PathBuf",
+              "DocKind::parse(self, value: &Value) -> Result<Document, String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/mod.rs",
+            "purpose": "Document types (ResearchDoc, SpecDoc, PlanDoc, PhaseDoc) and the wire enum `Document` (adjacently tagged `kind`/`doc`) and `DocumentView { document, issues }`, both `#[ts(export)]`.",
+            "symbols": [
+              "pub enum Document { Research(ResearchDoc), Spec(SpecDoc), Plan(PlanDoc), Phase(PhaseDoc) }",
+              "pub struct DocumentView { pub document: Document, pub issues: Vec<DocIssue> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "Ostra's document checks. `check(&Document)` runs at read time in `load_view` and at write time, so the console shows issues computed from the current rules, not stored ones.",
+            "symbols": [
+              "pub fn check(doc: &Document) -> Vec<DocIssue>",
+              "pub struct DocIssue { level: IssueLevel, element: Option<String>, message: String }",
+              "pub enum IssueLevel { Error, Warning }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "API DTOs. `Artifact` is the response of `GET /api/artifacts`; its `document: Option<DocumentView>` carries the typed document. `FactCheckView` is attached to the session detail, not to the artifact.",
+            "symbols": [
+              "pub struct Artifact { path: PathBuf, content: String, headings: Vec<Heading>, document: Option<crate::doc::DocumentView>, binary: bool, size: u64 }",
+              "pub struct FactCheckView { execution, target: String, version: u32, current: bool, verdict: Option<Verdict>, findings: Vec<FactCheckFinding> }",
+              "pub struct Heading { id: String, level: u8, title: String }"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "Routes and handlers. `/api/artifacts` returns the Artifact; `/api/artifacts/download` returns raw bytes. `session_file` restricts both to files inside some workspace's sessions folder.",
+            "symbols": [
+              "const ARTIFACT_LIMIT: u64 = 4 * 1024 * 1024",
+              "fn session_file(app: &App, raw: &str) -> Result<(PathBuf, std::fs::Metadata), ApiErr>",
+              "async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artifact>",
+              "async fn artifact_download(State(app): AppState, Query(q): Query<PathQuery>) -> Result<Response, ApiErr>",
+              ".route(\"/api/artifacts\", get(artifact))",
+              ".route(\"/api/artifacts/download\", get(artifact_download))",
+              "async fn guard(State(app): AppState, req: Request, next: Next) -> Response"
+            ]
+          },
+          {
+            "path": "web/src/api/client.ts",
+            "purpose": "HTTP client. `request<T>` does `fetch` with same-origin credentials, raises `HttpError` with the server's `{error, issues}`, and notifies listeners on 401. `httpApi.artifact` is the fetch call.",
+            "symbols": [
+              "artifact: (path: string) => request<ArtifactWithHeadings>(\"GET\", `/api/artifacts${q({ path })}`)",
+              "async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T>",
+              "export class HttpError extends Error"
+            ]
+          },
+          {
+            "path": "web/src/api/index.ts",
+            "purpose": "Selects `httpApi` or the mock API (`VITE_MOCK=1`) and defines `downloadUrl`.",
+            "symbols": [
+              "export const api: Api = isMock ? (await import(\"./mock/mockApi\")).mockApi : httpApi",
+              "export const downloadUrl = (path: string) => `/api/artifacts/download?path=${encodeURIComponent(path)}`"
+            ]
+          },
+          {
+            "path": "web/src/api/nav.ts",
+            "purpose": "Aliases `ArtifactWithHeadings = Artifact` (generated type) used as the `artifact` return type.",
+            "symbols": [
+              "export type ArtifactWithHeadings = Artifact"
+            ]
+          },
+          {
+            "path": "web/src/api/gen/Artifact.ts",
+            "purpose": "ts-rs generated TypeScript of `Artifact`; do not edit, regenerate with `cargo test -p ostra-core`.",
+            "symbols": [
+              "export type Artifact = { path, content, headings: Array<Heading>, document: DocumentView | null, binary: boolean, size: number }"
+            ]
+          },
+          {
+            "path": "web/src/lib/hooks.ts",
+            "purpose": "`useAsync(load, deps)` runs the loader in an effect keyed on `[...deps, tick]` and exposes `data`, `error`, `loading`, `reload`.",
+            "symbols": [
+              "export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): Async<T>"
+            ]
+          },
+          {
+            "path": "web/src/lib/resource.ts",
+            "purpose": "Resource ids. The tab resource for a file is `artifact:<absolute path>`; routes `/w/:ws/artifact?path=`.",
+            "symbols": [
+              "{ type: \"artifact\"; path: string }"
+            ]
+          },
+          {
+            "path": "web/src/screens/index.tsx",
+            "purpose": "Maps the `artifact` resource type to `ArtifactScreen`.",
+            "symbols": [
+              "case \"artifact\": return <ArtifactScreen key={id} ws={ws} path={r.path} />;"
+            ]
+          },
+          {
+            "path": "web/src/screens/ArtifactScreen.tsx",
+            "purpose": "Fetches the artifact with `api.artifact(path)`, finds the owning session from the workspace tree, fetches `api.session(owner.id)` for fact-checks, and renders `DocumentView` when `art.data.document` is set and the user has not chosen Markdown. Otherwise it renders the markdown outline plus `ArtifactMarkdown`, a binary banner, or an error banner.",
+            "symbols": [
+              "export function ArtifactScreen({ ws, path }: ArtifactScreenProps)",
+              "const art = useAsync(() => api.artifact(path), [path])",
+              "const target = typed?.document.kind === \"spec\" ? \"spec\" : typed && typed.document.kind !== \"research\" ? \"plan\" : null",
+              "const check = target ? pickFactCheck(detail.data?.fact_checks, target) : null"
+            ]
+          },
+          {
+            "path": "web/src/screens/artifact/doc/DocumentView.tsx",
+            "purpose": "Renders a typed document as paged chapters: left menu of chapters (TreeItem, with count and attention dot), one chapter at a time on the right, previous/next pager, issue banner on the Overview chapter, `#chapter` or `#chapter/element` deep links.",
+            "symbols": [
+              "export function outlineOf(doc: Document): Outline",
+              "export function docChapters(doc: Document, check: FactCheckView | null, marks: Map<string, Mark[]>): { chapters: Chapter[]; where: Map<string, string> }",
+              "export interface DocumentViewProps { path: string; view: DocView; check: FactCheckView | null; header: ReactNode }",
+              "export function DocumentView({ path, view, check, header }: DocumentViewProps)"
+            ]
+          },
+          {
+            "path": "web/src/screens/artifact/doc/model.ts",
+            "purpose": "Chapter/Outline types, `OutlineBuilder`, element-id normalisation, marker building from Ostra issues and fact-check findings, fact-check pass selection, anchor parsing.",
+            "symbols": [
+              "export type Chapter = { id; title; count?; depth?; tone?; attention?; render: () => ReactNode }",
+              "export type Outline = { chapters: Chapter[]; where: Map<string, string> }",
+              "export function buildMarks(issues: DocIssue[], check: FactCheckView | null): Map<string, Mark[]>",
+              "export function pickFactCheck(all: FactCheckView[] | undefined, target: \"spec\" | \"plan\"): FactCheckView | null",
+              "export function parseAnchor(hash: string)",
+              "export class OutlineBuilder { chapter(c, elements?); maybe(show, c, elements?); done(): Outline }"
+            ]
+          },
+          {
+            "path": "web/src/screens/artifact/doc/research.tsx",
+            "purpose": "Chapters of a research document: Overview, Files, Patterns, Data flow, Dependencies, External technology, Approaches, Open questions, Sources, Lessons used, Not covered. Optional chapters use `b.maybe`, always-present ones use `b.chapter`.",
+            "symbols": [
+              "export function researchOutline(d: ResearchDoc): Outline"
+            ]
+          },
+          {
+            "path": "web/src/screens/artifact/doc/spec.tsx",
+            "purpose": "Chapters of a spec document.",
+            "symbols": [
+              "export function specOutline(d: SpecDoc): Outline"
+            ]
+          },
+          {
+            "path": "web/src/screens/artifact/doc/plan.tsx",
+            "purpose": "Chapters of a plan and of one phase file.",
+            "symbols": [
+              "export function planOutline(d: PlanDoc): Outline",
+              "export function phaseOutline(d: PhaseDoc): Outline"
+            ]
+          },
+          {
+            "path": "web/src/screens/artifact/doc/parts.tsx",
+            "purpose": "Shared render pieces and the `DocContext` (go, open, marks, focus, known) used by chapters for cross-references.",
+            "symbols": [
+              "export const DocContext",
+              "export function FactCheckChapter({ check }: { check: FactCheckView })",
+              "export function Questions({ items, empty }: { items: Question[]; empty: string })",
+              "export function Grid",
+              "export function Card",
+              "export function El"
+            ]
+          },
+          {
+            "path": "web/src/mobile/screens/MArtifact.tsx",
+            "purpose": "Mobile screen. Same fetch (`useAsync(() => api.artifact(path), [path])`) and the same `docChapters` model, rendered as chapter chips by `MDocument`.",
+            "symbols": [
+              "import { docChapters } from \"../../screens/artifact/doc/DocumentView\"",
+              "body = <MDocument path={path} view={typed} check={check} root={root} note={note} />"
+            ]
+          },
+          {
+            "path": "web/src/api/mock/fixtures.documents.ts",
+            "purpose": "Mock typed documents for `VITE_MOCK=1`; `documentFor(path)` plays the server's `document` field.",
+            "symbols": [
+              "export function documentFor(path: string): DocumentView | null"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/tests/e2e.rs",
+            "purpose": "End-to-end tests that GET `/api/artifacts` and deserialize `ostra_core::api::Artifact` (around lines 572, 659, 2811).",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a change targets document versions, a research pass on how versions and fact-check `version`/`current` map to files on disk would be needed, since `GET /api/artifacts` returns only the current file contents and no version field.",
+          "If a change targets live refresh, a pass on how `useWorkspaceTree` and socket events announce artifact rewrites would be needed, since `ArtifactScreen` fetches once per path."
+        ],
+        "not_covered": [
+          "How `Document` tool calls are handled in the executors and the policy (ostra-exec-native, ostra-policy, MCP/harness bridge), and `merge::apply_update`.",
+          "The fact-check pipeline that produces `FactCheckView` and the `SessionDetail.fact_checks` API.",
+          "The plain markdown path (`ArtifactMarkdown`, `Markdown`, `LedgerView`) and `exportHtml.ts`.",
+          "Chapter-by-chapter rendering of spec and plan (`spec.tsx`, `plan.tsx`) beyond their entry points; the mobile `MDocument` layout; `web/src/screens/artifact/artifact.test.tsx` coverage.",
+          "The workspace artifact list endpoints (`/api/workspaces/:id/artifacts`) that are separate from session-dir artifacts."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "The console addresses a document by the absolute path of its rendered `.md` file. The server reads that file as text for `content` and `headings`, then calls `load_view(&path)`, which derives the kind from the file name prefix (`ostra-research-`, `ostra-spec-`, `ostra-plan-`), reads the `.json` sibling, parses it, and runs `check`. A file with no JSON sibling, an unknown prefix, or JSON that no longer parses gives `document: None`, and the console falls back to rendering markdown. A phase file (`...-phase-N`) parses as `PhaseDoc` instead of the plan type.",
+            "files": [
+              "crates/ostra-server/src/api.rs",
+              "crates/ostra-core/src/doc/store.rs"
+            ],
+            "name": "Markdown path as the document's identity; typed view piggybacks on the artifact response",
+            "snippet": {
+              "code": "async fn artifact(State(app): AppState, Query(q): Query<PathQuery>) -> Res<Artifact> {\n    let (path, meta) = session_file(&app, &q.path)?;\n    let text = (meta.len() <= ARTIFACT_LIMIT)\n        .then(|| std::fs::read_to_string(&path).ok())\n        .flatten();\n    let Some(content) = text else {\n        return Ok(Json(Artifact {\n            path,\n            content: String::new(),\n            headings: vec![],\n            document: None,\n            binary: true,\n            size: meta.len(),\n        }));\n    };\n    let headings = ostra_core::outline::headings(&content);\n    let document = ostra_core::doc::load_view(&path);\n    Ok(Json(Artifact {\n        path,\n        content,\n        headings,\n        document,\n        binary: false,\n        size: meta.len(),\n    }))\n}",
+              "language": "rust",
+              "source": "crates/ostra-server/src/api.rs:1421"
+            }
+          },
+          {
+            "description": "Each kind has a function returning `Outline { chapters, where }`. `chapters` are paged views with a `render` closure; `where` maps normalised element ids (`R3`, `Q1`, `phase-2`, `step-2.3`) to the chapter holding them, which powers cross-reference links, markers, and `#chapter/element` deep links. `DocumentView` adds a Fact-check chapter when a pass exists and propagates the worst marker tone to the chapter and its parent.",
+            "files": [
+              "web/src/screens/artifact/doc/research.tsx",
+              "web/src/screens/artifact/doc/spec.tsx",
+              "web/src/screens/artifact/doc/plan.tsx",
+              "web/src/screens/artifact/doc/model.ts"
+            ],
+            "name": "Outline builder per document kind",
+            "snippet": {
+              "code": "  b.chapter(\n    {\n      id: \"questions\",\n      title: \"Open questions\",\n      count: d.open_questions.length,\n      attention: d.open_questions.length > 0,\n      render: () => (\n        <Questions\n          items={d.open_questions}\n          empty=\"None: every ambiguity was resolved from the code or a retrieved page.\"\n        />\n      ),\n    },\n    d.open_questions.map((q) => q.id),\n  );",
+              "language": "tsx",
+              "source": "web/src/screens/artifact/doc/research.tsx:210"
+            }
+          },
+          {
+            "description": "`Document` serializes as `{ kind: \"research\" | \"spec\" | \"plan\" | \"phase\", doc: {...} }`. The web switches on `kind` in `outlineOf`, so a new kind needs a Rust variant, regenerated TypeScript, and a new case here and in the `target` computation in `ArtifactScreen`/`MArtifact`.",
+            "files": [
+              "web/src/screens/artifact/doc/DocumentView.tsx",
+              "crates/ostra-core/src/doc/mod.rs"
+            ],
+            "name": "Dispatch on the adjacently tagged Document enum",
+            "snippet": {
+              "code": "export function outlineOf(doc: Document): Outline {\n  switch (doc.kind) {\n    case \"research\":\n      return researchOutline(doc.doc);\n    case \"spec\":\n      return specOutline(doc.doc);\n    case \"plan\":\n      return planOutline(doc.doc);\n    case \"phase\":\n      return phaseOutline(doc.doc);\n  }\n}",
+              "language": "tsx",
+              "source": "web/src/screens/artifact/doc/DocumentView.tsx:13"
+            }
+          },
+          {
+            "description": "Screens call `api.<method>` inside `useAsync` keyed on the resource. The only dependency is the path, so the artifact is re-fetched only when the path changes or `reload` is called (the Reload button). The screen does not subscribe to document rewrites; the workspace tree (`useWorkspaceTree`) is live and supplies the owning session and artifact label.",
+            "files": [
+              "web/src/screens/ArtifactScreen.tsx",
+              "web/src/mobile/screens/MArtifact.tsx",
+              "web/src/lib/hooks.ts"
+            ],
+            "name": "Fetch through useAsync and the typed api object",
+            "snippet": {
+              "code": "const art = useAsync(() => api.artifact(path), [path]);\nconst tree = useWorkspaceTree(ws);\nconst owner = tree.sessions.find((s) => s.artifacts.some((a) => a.path === path)) ?? null;\nconst ref = owner?.artifacts.find((a) => a.path === path) ?? null;\nconst kind = artifactKind(path, ref?.kind);\nconst detail = useAsync(() => (owner ? api.session(owner.id) : Promise.resolve(null)), [owner?.id]);",
+              "language": "tsx",
+              "source": "web/src/screens/ArtifactScreen.tsx:37"
+            }
+          },
+          {
+            "description": "`Artifact`, `DocumentView`, `Document`, `DocIssue` and the document structs carry `#[ts(export)]`. The web imports them from `web/src/api/gen/` through `web/src/api/types.ts` re-exports. Per CLAUDE.md, run `cargo test -p ostra-core` after a Rust type change, then `cd web && npm run typecheck`.",
+            "files": [
+              "crates/ostra-core/src/api.rs",
+              "crates/ostra-core/src/doc/mod.rs",
+              "web/src/api/types.ts",
+              "web/src/api/gen/Artifact.ts"
+            ],
+            "name": "Generated API types"
+          }
+        ],
+        "problem": "Typed documents are stored as JSON beside a rendered markdown file. The console never requests the JSON directly: it requests the markdown file by path and receives the parsed document inside the same response. This document records that path so a change to document shape, versioning, or fetching starts from the real code.",
+        "repo": "ostra",
+        "scope": "Task: how the console shows a typed document (research, spec, plan, phase) and fetches it from the API. Covers the server read path, the DTOs, the web fetch and render path, and the mobile reuse. It does not cover how agents write documents (the Document tool), the fact-check pipeline, or the markdown renderer.",
+        "sources": [],
+        "title": "Console display and fetch of a typed document"
+      },
+      "submit": {
+        "findings_summary": "The console fetches a typed document through GET /api/artifacts?path=<md path>. The handler returns Artifact, whose document field is a DocumentView (document plus issues) built by ostra_core::doc::load_view from the .json sibling of the rendered markdown. ArtifactScreen calls it once per path with useAsync, and gets fact-checks from the owning session's detail. DocumentView turns the Document enum (research, spec, plan, phase) into paged chapters through per-kind outline builders, with marks from issues and fact-check findings and #chapter/element deep links. When document is null or the user toggles Markdown, the screen falls back to the markdown view. The mobile screen reuses docChapters.",
+        "not_covered": [
+          "How agents write documents through the Document tool, and merge::apply_update",
+          "The fact-check pipeline and SessionDetail.fact_checks",
+          "The plain markdown rendering path (ArtifactMarkdown, LedgerView, exportHtml)",
+          "Chapter-level rendering of spec and plan beyond their entry points, and the mobile MDocument layout",
+          "Workspace artifact endpoints under /api/workspaces/:id/artifacts"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the console shows a typed document and fetches it from the API: server read path, DTOs, web fetch and chapter rendering, mobile reuse. Left out: the Document write tool, fact-check pipeline, and plain markdown rendering.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

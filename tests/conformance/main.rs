@@ -640,11 +640,71 @@ fn d4_plan_gets_only_the_spec() {
     assert!(plan.inputs.research_docs.is_empty());
     assert!(plan.inputs.answers.is_empty());
     assert!(plan.inputs.task.is_none());
+    // Rule D4a: what research found about the code arrives as the facts file, never the documents.
+    assert_eq!(plan.inputs.code_facts, h.state().research_docs());
+    assert!(plan.inputs.wants_code_facts_file());
+    assert!(plan.inputs.revise_phases.is_empty());
     assert_eq!(
         plan.inputs.spec_file,
         Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md"))
     );
     assert_eq!(plan.session_dir, root());
+}
+
+// ------------------------------------------------------------------------------------------
+// D2a: the spec side reads the research documents and learns which cited files changed since.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn d2a_spec_side_gets_what_changed_since_research() {
+    let mut h = H::explored(&["p"], SessionOptions::default());
+    let docs = h.state().research_docs();
+    assert_eq!(docs.len(), 1);
+    let spec = h.spawn_step("spawn generate-spec");
+    assert_eq!(spec.inputs.research_docs, docs);
+    assert_eq!(spec.inputs.code_facts, docs);
+    assert!(
+        !spec.inputs.wants_code_facts_file(),
+        "an agent that reads the documents gets only what changed"
+    );
+    h.run("spawn generate-spec", spec_submit(0, 0));
+    let fc = h.spawn_step("spawn fact-check");
+    assert_eq!(fc.inputs.code_facts, docs);
+    assert!(!fc.inputs.wants_code_facts_file());
+}
+
+// ------------------------------------------------------------------------------------------
+// D4b: a plan re-spawn on fact-check findings gets the phases the findings name.
+// ------------------------------------------------------------------------------------------
+
+#[test]
+fn d4b_plan_revision_gets_the_phases_the_findings_name() {
+    let mut h = H::spec_approved(&["p"], SessionOptions::default());
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "high", "reason": "r"}),
+    );
+    h.run(
+        "spawn plan",
+        plan_submit(json!([
+            phase(1, "p", &[], "Required"),
+            phase(2, "p", &[1], "Required"),
+            phase(3, "p", &[2], "Required")
+        ])),
+    );
+    h.run(
+        "spawn fact-check fact-check-plan",
+        json!({"verdict": "FAIL", "target": "plan", "findings": [
+            {"severity": "HIGH", "location": "ostra-plan-1-phase-3.md, Step 3.2 Action", "claim": "c", "issue": "i"},
+            {"severity": "MEDIUM", "location": "Phase Index", "element": "step 1.4", "claim": "c", "issue": "i"},
+            {"severity": "HIGH", "location": "phase 9", "claim": "c", "issue": "a phase the plan does not have"}
+        ]}),
+    );
+    let rerun = h.spawn_step("spawn plan");
+    assert_eq!(rerun.inputs.revise_phases, vec![1, 3]);
+    assert!(rerun.inputs.findings.is_some());
+    assert!(rerun.inputs.wants_code_facts_file());
 }
 
 #[test]
@@ -684,6 +744,8 @@ fn d5_plan_fact_check_and_approval() {
         Some(PathBuf::from("/ws/.ostra/sessions/s1/ostra-spec-1.md"))
     );
     assert!(fc.inputs.research_docs.is_empty());
+    // Rule D4a: the plan fact-check checks against the facts the plan had.
+    assert!(fc.inputs.wants_code_facts_file());
     h.run(
         "spawn fact-check fact-check-plan",
         fact("FAIL", "plan", &["phase 5 missing"]),

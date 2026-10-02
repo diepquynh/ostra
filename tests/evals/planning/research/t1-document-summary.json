@@ -1,0 +1,241 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:41:08.672047821+00:00",
+  "docs": [
+    {
+      "task": "How the Document tool reports a write: the summary it returns, how it lists the check results, and its tests.",
+      "file": "ostra-research-20261002-083942-document-tool-write-summary.md",
+      "document": {
+        "areas": [
+          "ostra-tools",
+          "ostra-core (doc module)",
+          "ostra-exec-native",
+          "ostra-server (bridge)"
+        ],
+        "asks": [
+          "How the Document tool reports a write: the summary it returns",
+          "How it lists the check results",
+          "Its tests"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:996 and crates/ostra-server/src/bridge.rs:437",
+            "step": "An agent with the Document capability (explore, generate-spec, plan) calls `Document` with `path` and `document` or `update`/`remove`. Native: the executor calls ostra_tools::execute; harness: the server bridge calls the same function."
+          },
+          {
+            "location": "crates/ostra-tools/src/lib.rs:execute",
+            "step": "execute() coerces JSON-string arguments against the tool schema, then dispatches the `Document` name."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs:document",
+            "step": "document() maps the agent to a DocKind (error text otherwise), checks the file name prefix, the `.md` suffix, that a plan master is not a `-phase-` file, and that the parent dir equals the session dir. It parses `remove`, then picks the value: the `document` as given, or doc::apply_update over the stored JSON."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:write",
+            "step": "doc::write parses the value into the typed Document (schema errors return Err and nothing is written, which the tool turns into an is_error result), runs check(), writes the .json and rendered .md, and for a plan writes phase file pairs and removes stale ones."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check",
+            "step": "check() dispatches to research(), spec(), plan() or phase_file(), and Issues::done sorts by level so errors come first."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs:document",
+            "step": "document() marks each written .md and .json as read, so the agent may Read them without a separate read-first gate, then returns ToolOutput::ok(summary(&written)). The result is not an error even when issues contain errors."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs:summary",
+            "step": "summary() formats the counts line, the file list, and the check outcome; each issue is DocIssue::line()."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check_submit",
+            "step": "Later, a submit_* call runs check_submit, which re-reads the stored JSON, re-runs check, and refuses while errors remain, using the same line format under a different heading."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core::doc",
+            "role": "Document, DocKind, Written, DocIssue, IssueLevel, check, write, load, json_path"
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools testutil",
+            "role": "env_in and run helpers used by the doc.rs tests (cfg(test) only)"
+          },
+          {
+            "kind": "external",
+            "name": "tempfile, tokio (test), serde_json",
+            "role": "Test fixtures, async test runtime, JSON values for tool input"
+          }
+        ],
+        "files": [
+          {
+            "path": "crates/ostra-tools/src/doc.rs",
+            "purpose": "The Document tool: validates agent, file name, directory, and update/remove arguments, calls doc::write, marks the written files as read, and returns summary(&written) as a non-error ToolOutput. Holds the summary() formatter and the tool's unit tests.",
+            "symbols": [
+              "pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "fn summary(w: &doc::Written) -> String",
+              "mod tests { fn env_for(dir: &Path, agent: AgentName) -> ToolEnv; fn research() -> Value; async fn writes_json_and_markdown_then_updates_in_place(); async fn a_document_sent_as_json_text_is_accepted(); async fn refuses_bad_paths_schema_errors_and_other_agents() }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/store.rs",
+            "purpose": "doc::write validates the value, runs check(), writes the .json and rendered .md (and per-phase files for a plan), and returns Written. Written carries the parsed document, the files written (main one first) and the issues; Written::errors counts Error-level issues.",
+            "symbols": [
+              "pub struct Written { pub document: Document, pub files: Vec<PathBuf>, pub issues: Vec<DocIssue> }",
+              "impl Written { pub fn errors(&self) -> usize }",
+              "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>",
+              "pub fn load(md: &Path) -> Option<Value>",
+              "pub fn load_view(md: &Path) -> Option<DocumentView>",
+              "pub fn json_path(md: &Path) -> PathBuf",
+              "pub fn phase_path(master: &Path, id: u32) -> PathBuf"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "Defines IssueLevel, DocIssue and DocIssue::line (the one-line format the tool prints), the Issues collector whose done() sorts errors before warnings, check(), and check_submit()/blocking(), which reuse DocIssue::line to refuse a submit while errors remain.",
+            "symbols": [
+              "pub enum IssueLevel { Error, Warning }",
+              "pub struct DocIssue { pub level: IssueLevel, pub element: Option<String>, pub message: String }",
+              "impl DocIssue { pub fn line(&self) -> String }",
+              "pub fn check(doc: &Document) -> Vec<DocIssue>",
+              "fn blocking(doc: &Document) -> Result<(), String>",
+              "pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/mod.rs",
+            "purpose": "Document enum (Research, Spec, Plan, Phase variants, whose fields summary() counts) and DocumentView { document, issues } used by the browser, which shows the same issue list.",
+            "symbols": [
+              "pub enum Document { Research(ResearchDoc), Spec(SpecDoc), Plan(PlanDoc), Phase(PhaseDoc) }",
+              "pub struct DocumentView { pub document: Document, pub issues: Vec<DocIssue> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/tests.rs",
+            "purpose": "Core doc tests: fixtures parse with zero issues, plan write returns master plus phase files in Written.files, broken references produce error lines in the `(element): message` form, check_submit behavior. Uses fixtures/research.json, spec.json, plan.json.",
+            "symbols": [
+              "fn errors(kind: DocKind, v: &Value) -> Vec<String>",
+              "fn fixtures_parse_and_pass()",
+              "fn plan_writes_master_and_phase_files()",
+              "fn broken_references_are_errors()",
+              "fn submit_needs_a_clean_document_that_matches()"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/defs.rs",
+            "purpose": "The DOCUMENT tool description string tells the agent that the result lists what Ostra's checks found and that errors block submit. document_tool_definition builds the schema. document_tests only checks schema refs and the absence of em dashes in the description.",
+            "symbols": [
+              "const DOCUMENT: &str",
+              "pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition>",
+              "mod document_tests { fn document_schema_refs_resolve() }"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/lib.rs",
+            "purpose": "execute() dispatches \"Document\" to doc::document; ToolOutput::ok builds the result; testutil::env_in and testutil::run are the helpers the tool tests use.",
+            "symbols": [
+              "pub struct ToolOutput { pub text: String, pub is_error: bool, .. }",
+              "pub(crate) fn ok(text: impl Into<String>) -> Self",
+              "pub(crate) fn err(text: impl Into<String>) -> Self",
+              "pub async fn execute(env: &ToolEnv, call_id: &str, call: &ToolCall, live: Option<LiveOutput>, cancel: CancellationToken) -> ToolOutput",
+              "pub fn mark_read(&self, path: &Path)",
+              "testutil::env_in(dir: &Path) -> ToolEnv",
+              "testutil::run(env: &ToolEnv, tool: &str, input: serde_json::Value) -> ToolOutput"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/tests.rs",
+            "purpose": "explore_submits_only_after_its_document drives the native loop with a ScriptedProvider and asserts the Document tool result is not an error and contains \"Wrote the research document\".",
+            "symbols": [
+              "async fn explore_submits_only_after_its_document()"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/bridge.rs",
+            "purpose": "Harness executors reach the same tool through ostra_tools::execute at line 437, so one summary format serves native and harness runs.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/tools.md",
+            "purpose": "The Document section (about lines 335 to 356) states that every write runs the document checks and returns their results, and describes errors versus warnings. It does not describe the summary layout. Project rule 9 requires docs updates with a behavior change.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a change alters summary wording, grep the three substring assertions (`nothing to fix`, `(Q1): Give the question 2 to 4 options`, `Wrote the research document`) in crates/ostra-tools/src/doc.rs and crates/ostra-exec-native/src/tests.rs.",
+          "Note that no existing test exercises the spec or plan summary lines, the error preamble, the `Warnings to review:` branch, or the Files list, so those branches are untested today.",
+          "Update docs/internals/tools.md (Document section) and the DOCUMENT string in crates/ostra-tools/src/defs.rs together if the reported behavior changes, and keep prose free of em dashes (document_schema_refs_resolve asserts it for the description)."
+        ],
+        "not_covered": [
+          "The individual check rules in research(), spec(), plan(), phase_file() and their message wording, beyond the three examples the tool tests assert on.",
+          "Rendering of the markdown (crates/ostra-core/src/doc/render.rs) and the fixtures under crates/ostra-core/src/doc/fixtures.",
+          "The browser issue card beyond noting that it takes DocumentView.issues directly.",
+          "The policy guard that refuses Write/Edit on document files (crates/ostra-policy/src/guards.rs check_document).",
+          "Whether the repo's test suite currently passes; no tests were run."
+        ],
+        "patterns": [
+          {
+            "description": "summary() builds the result with `let _ = writeln!(out, ...)`. The first line `Wrote the {what}.` comes from a match on the Document variant, so each kind gets its own count list. Research counts files, patterns, external facts, sources, open questions. Spec counts criteria, deliverables, requirements, total acceptance criteria, evidence rows, open questions. Plan counts phases, total steps, clarifying questions. Phase is the bare word `phase` (a Phase variant is only produced by load_view, not by doc::write, so it is not reached from the tool). Then a `Files (markdown rendered from the document, with a .json beside each):` header and one `- {path}` line per entry of Written.files (master first, then phase files for a plan). Then three outcomes: no issues gives `Ostra's checks found nothing to fix.`; issues with at least one error gives `Fix the {errors} errors below with an `update` before you submit, because the submit call is refused while any remain:`; issues with zero errors gives `Warnings to review:`. Each issue follows as `DocIssue::line()`. Issues are already sorted errors first by Issues::done. The wording `{errors} errors` is not pluralized, so one error prints `Fix the 1 errors below`. The header counts only errors, while the list below it also contains the warnings.",
+            "files": [
+              "crates/ostra-tools/src/doc.rs",
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Summary built line by line with writeln! into a String",
+            "snippet": {
+              "code": "    let _ = writeln!(out, \"Wrote the {what}.\");\n    let _ = writeln!(\n        out,\n        \"Files (markdown rendered from the document, with a .json beside each):\"\n    );\n    for f in &w.files {\n        let _ = writeln!(out, \"- {}\", f.display());\n    }\n    if w.issues.is_empty() {\n        let _ = writeln!(out, \"Ostra's checks found nothing to fix.\");\n    } else {\n        let errors = w.errors();\n        if errors > 0 {\n            let _ = writeln!(\n                out,\n                \"Fix the {errors} errors below with an `update` before you submit, because the submit call is refused while any remain:\"\n            );\n        } else {\n            let _ = writeln!(out, \"Warnings to review:\");\n        }\n        for i in &w.issues {\n            let _ = writeln!(out, \"{}\", i.line());\n        }\n    }\n    out",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/doc.rs:125"
+            }
+          },
+          {
+            "description": "DocIssue::line renders `- error (R3): message`, `- warning (step 2.1): message`, or `- error: message` when element is None. The same function feeds the Document tool result (doc.rs) and the submit refusal in check.rs::blocking, which filters to errors and joins with newlines under the heading `Fix these in the document with the Document tool, then submit again:`. The browser does not use line(): it receives DocumentView.issues as structured DocIssue values (level, element, message) and renders its own card titled `Ostra's checks found N issue(s)` in web/src/screens/artifact/doc/DocumentView.tsx and web/src/mobile/screens/MArtifact.tsx.",
+            "files": [
+              "crates/ostra-core/src/doc/check.rs",
+              "crates/ostra-tools/src/doc.rs",
+              "web/src/screens/artifact/doc/DocumentView.tsx"
+            ],
+            "name": "Issue line format shared by the tool result and the submit refusal",
+            "snippet": {
+              "code": "impl DocIssue {\n    pub fn line(&self) -> String {\n        let level = match self.level {\n            IssueLevel::Error => \"error\",\n            IssueLevel::Warning => \"warning\",\n        };\n        match &self.element {\n            Some(e) => format!(\"- {level} ({e}): {}\", self.message),\n            None => format!(\"- {level}: {}\", self.message),\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/check.rs:31"
+            }
+          },
+          {
+            "description": "Tests in doc.rs build a tempdir, make a ToolEnv with env_for(dir, AgentName::Explore) (copies env_in's config, sets agent, clears report_file), write to session_dir.join(\"ostra-research-1-t.md\"), call testutil::run(&env, \"Document\", json!(...)), and assert on `out.is_error` and `out.text.contains(...)`, always passing `out.text` as the assert message. They never compare the whole summary, only substrings: `nothing to fix`, `(Q1): Give the question 2 to 4 options`, `ostra-research-`, `session dir`, ``missing field `scope` ``. The minimal valid research JSON is {title, date, repo, scope, problem}.",
+            "files": [
+              "crates/ostra-tools/src/doc.rs",
+              "crates/ostra-tools/src/lib.rs"
+            ],
+            "name": "Tool tests: temp dir, env_for(agent), run(\"Document\", json), substring asserts on out.text",
+            "snippet": {
+              "code": "    #[tokio::test]\n    async fn writes_json_and_markdown_then_updates_in_place() {\n        let dir = tempfile::tempdir().unwrap();\n        let env = env_for(dir.path(), AgentName::Explore);\n        let md = env.config().session_dir.join(\"ostra-research-1-t.md\");\n        let out = run(\n            &env,\n            \"Document\",\n            json!({\"path\": md, \"document\": research()}),\n        )\n        .await;\n        assert!(!out.is_error, \"{}\", out.text);\n        assert!(out.text.contains(\"nothing to fix\"), \"{}\", out.text);\n        ...\n        let q = json!({\"id\": \"Q1\", \"question\": \"Which?\", \"tag\": \"Scope\", \"options\": [{\"label\": \"A\", \"description\": \"a\"}], \"recommended\": 0});\n        let out = run(\n            &env,\n            \"Document\",\n            json!({\"path\": md, \"update\": {\"open_questions\": [q]}}),\n        )\n        .await;\n        assert!(!out.is_error, \"{}\", out.text);\n        assert!(\n            out.text.contains(\"(Q1): Give the question 2 to 4 options\"),\n            \"{}\",\n            out.text\n        );",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/doc.rs:171"
+            }
+          }
+        ],
+        "problem": "The Document tool (crates/ostra-tools/src/doc.rs) returns one text result after every write. Its first line counts the elements of the written document by kind, then it lists the files written, then either a clean statement, an error preamble with issues, or a warning preamble with issues. The issue lines are formatted by DocIssue::line in ostra-core. A change to this output has to keep the tests that match on its substrings passing and has to keep the DOCUMENT tool description and docs/internals/tools.md consistent.",
+        "repo": "ostra",
+        "scope": "Task: how the Document tool reports a write: the summary it returns, how it lists the check results, and its tests. Covers the tool's result text, the DocIssue line format, the Written struct, and the existing tests that assert on that text. Does not cover document rendering, the schema of each document kind, the individual check rules, or the browser view beyond noting that it shares the issue list.",
+        "title": "Document tool write summary"
+      },
+      "submit": {
+        "findings_summary": "summary() in crates/ostra-tools/src/doc.rs builds the result: a per-kind count line (\"Wrote the research document: N files, ...\"), a list of written files, then one of three outcomes: \"nothing to fix\", an error header followed by issue lines, or \"Warnings to review:\" followed by issue lines. Each issue line comes from DocIssue::line in ostra-core/src/doc/check.rs, in the form `- error (element): message`. Issues are sorted errors first, and the same line format is reused for the submit refusal. The error header says \"Fix the {n} errors\" without pluralization, and its count covers errors only while the list also holds warnings. Tests are three tokio tests in doc.rs plus one in ostra-exec-native/src/tests.rs, and all of them match on substrings. No test covers the spec or plan count lines, the error or warning headers, or the file list.",
+        "not_covered": [
+          "Individual check rules in research(), spec(), plan(), phase_file() and their message wording",
+          "Markdown rendering (doc/render.rs) and the JSON fixtures",
+          "Policy guard that refuses Write/Edit on document files (guards.rs check_document)",
+          "Whether the test suite currently passes; no tests were run"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the Document tool reports a write (summary text, issue-line format, Written struct) and the tests that assert on it; rendering, individual check rules, and the browser view were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

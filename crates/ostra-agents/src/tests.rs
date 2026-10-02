@@ -381,11 +381,13 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         spec_file: None,
         new_research_docs: vec![],
         requirement_changes: vec![],
+        changed_since_research: Some(vec![]),
         extra: extras,
     };
     let v = roundtrip(&spec);
     assert_eq!(v["task"], "Add cancel\nwith refunds");
     assert!(v["research_docs"].contains("ostra-research-1.md"));
+    assert!(spec.render().contains("\nChanged since research: none\n"));
 
     let fc = FactCheckParams {
         common: common(),
@@ -395,20 +397,32 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         spec_file: "/ws/s/ostra-spec-1.md".into(),
         source_check: SourceCheck::Refetch,
         research_docs: vec![],
+        changed_since_research: Some(vec![
+            "`src/a.rs` in backend: changed since ostra-research-1.md was written".into(),
+        ]),
+        code_facts: None,
     };
     assert_eq!(roundtrip(&fc)["source_check"], "refetch");
+    assert!(fc.render().contains(
+        "Changed since research:\n  `src/a.rs` in backend: changed since ostra-research-1.md was written\n"
+    ));
 
     let plan = PlanParams {
         common: common(),
         spec_file: "/ws/s/ostra-spec-1.md".into(),
         projects_in_scope: vec![("backend".into(), "/ws/backend".into())],
-        findings: None,
-        master_plan: None,
+        code_facts: Some("/ws/s/ostra-code-facts.md".into()),
+        findings: Some("HIGH, phase 3: c i".into()),
+        phases_to_revise: vec![1, 3],
+        master_plan: Some("/ws/s/ostra-plan-1.md".into()),
     };
     assert_eq!(
         roundtrip(&plan)["projects_in_scope"],
         "backend -> /ws/backend"
     );
+    let block = plan.render();
+    assert!(block.contains("\nCode facts: /ws/s/ostra-code-facts.md\n"), "{block}");
+    assert!(block.contains("\nPhases to revise: 1, 3\n"), "{block}");
 
     let imp = ImplementerParams {
         common: common(),

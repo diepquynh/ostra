@@ -1,0 +1,238 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:42:23.910196471+00:00",
+  "docs": [
+    {
+      "task": "How the engine renders the session context file a revision reads, and where the session title is kept in the fold.",
+      "file": "ostra-research-20261002-084042-context-file-and-title.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine",
+          "ostra-core (paths)",
+          "ostra-store (sessions table)"
+        ],
+        "asks": [
+          "How the engine renders the session context file a revision reads",
+          "Where the session title is kept in the fold"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/state.rs:SessionState::apply",
+            "step": "Session created. For an Init session the fold sets `title = Some(\"Initialize {project}\")`; otherwise `title` stays `None`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_decision",
+            "step": "Classify judge decision is appended. `on_decision` deserialises `ClassifyOut` and calls `apply_classify`, which sets `category` and, if `clean_title(&out.title)` is non-empty, `title`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:Inner::append",
+            "step": "After each append the runner folds, builds `view::summary` (which copies `s.title`) and writes it to the sessions table with `SessionUpdate { title: Some(summary.title.clone()), .. }`, then broadcasts `EngineNotice::SessionUpdated`."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs; crates/ostra-engine/src/runner.rs:perform",
+            "step": "All phases finish. The planner opens the `ImplementationReview` gate with `context_path: s.session_context_path()`. Before appending `GateOpened`, `perform` calls `write_session_context`."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:1164",
+            "step": "The user sends feedback. The fold adds a `feedback.rounds` entry and a revision phase (`Revision N`). The planner emits a spawn for the implementer with `inputs.context_files = [session_context_path]`, `prior_reports`, and the round's instruction as the task."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform_spawn",
+            "step": "`perform_spawn` takes a slot, snapshots the fold, and if `context_files` contains the context path calls `write_session_context`, which runs `context::render(&st)` and overwrites `ostra-session-context.md` in `session_root`."
+          },
+          {
+            "location": "crates/ostra-engine/src/context.rs:render",
+            "step": "`render` emits: `# Session context`, an explanatory note, `## Request` (from `full_request()`), `## Route` (category, track, scope), then `## Research documents`, `## Spec`, `## Plan`, `## Phases` (status from `impl_loop.next`, implementer report, review ledger when `iterations > 0`), and `## Feedback rounds` (round text, awaiting-spec note, built phase ids)."
+          },
+          {
+            "location": "crates/ostra-agents/src/spawn.rs:210",
+            "step": "The spawn block prints `Context files:` from `Extras.context_files`, so the implementer reads the file as a normal path."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core (paths::report::session_context)",
+            "role": "File name `ostra-session-context.md`."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store (SessionUpdate, sessions table)",
+            "role": "Persists the title; the title is not read back by the fold."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents (Extras.context_files)",
+            "role": "Renders `Context files:` in the spawn block."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/context.rs",
+            "purpose": "The whole renderer: `render(&SessionState) -> String` builds the Markdown. 88 lines, one function. Sections in order: heading and note, Request, Route, Research documents (if any), Spec (if current), Plan (if current), Phases (if any), Feedback rounds (if any). It never reads `s.title`.",
+            "symbols": [
+              "pub fn render(s: &SessionState) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Writes the file. `write_session_context` snapshots the fold, renders, and `std::fs::write`s to `session_context_path()`. Called from `perform` for `Step::OpenGate` with `GatePayload::ImplementationReview`, and from `perform_spawn` when the spawn's `inputs.context_files` contains the context path. `Inner::append` (about line 1410) copies `summary.title` into the sessions table via `SessionUpdate`.",
+            "symbols": [
+              "fn write_session_context(&self, session: &SessionId) -> Result<(), EngineError>",
+              "async fn perform_spawn(self: &Arc<Self>, session: &SessionId, req: SpawnRequest) -> Result<(), EngineError>",
+              "title: Some(summary.title.clone())"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "The fold. `SessionState.title: Option<String>` (line 1057) is initialised to `None` in `new` (line 1216). Set in `apply` on `SessionCreated` for an Init session (`Initialize {project}`, line 1512) and in `apply_classify` (line 2619) from `ClassifyOut.title` through `clean_title`. `on_decision` (line 2912) calls `apply_classify` for `JudgeKind::Classify`. Also holds `session_context_path`, `full_request`, `research_docs`, `ledger_path`, and the `feedback.rounds` data the renderer reads.",
+            "symbols": [
+              "pub title: Option<String>",
+              "fn apply_classify(&mut self, out: &ClassifyOut)",
+              "pub fn session_context_path(&self) -> PathBuf",
+              "pub fn full_request(&self) -> String",
+              "pub fn research_docs(&self) -> Vec<PathBuf>",
+              "pub fn ledger_path(&self, project: &str, phase: u32, tests: bool) -> PathBuf",
+              "pub fn fold(id: SessionId, events: &[StoredEvent]) -> Self"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge.rs",
+            "purpose": "`ClassifyOut.title` (serde default empty, 'A 2 to 5 word label', older decisions have none) and `clean_title` (collapses whitespace, strips wrapping quotes and a final period, truncates to `TITLE_CHARS = 60`, returns `None` if empty).",
+            "symbols": [
+              "pub struct ClassifyOut { ..., pub title: String }",
+              "pub const TITLE_CHARS: usize = 60",
+              "pub fn clean_title(raw: &str) -> Option<String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Planner. For a phase with `p.revision`, sets `inputs.revision`, `inputs.task = revision_task(...)`, `inputs.context_files = vec![s.session_context_path()]` and `inputs.prior_reports` (Rule F2). The implementation review gate payload carries `context_path: s.session_context_path()`.",
+            "symbols": [
+              "fn revision_task(r: &Revision, request: &str) -> String",
+              "GatePayload::ImplementationReview { round, context_path, reports, blocked }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "`summary` maps `s.title.clone()` into `SessionSummary.title`, which the runner then stores in the sessions table.",
+            "symbols": [
+              "title: s.title.clone()"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/paths.rs",
+            "purpose": "File name constant: `report::session_context()` returns `ostra-session-context.md`; joined to `session_root` by `session_context_path`.",
+            "symbols": [
+              "pub fn session_context() -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-store/src/workspace/sessions.rs",
+            "purpose": "`SessionUpdate.title: Option<Option<String>>` is how the title is persisted; the column is `title TEXT` added by an ALTER in `schema.rs:113`, and an FTS trigger indexes it as the search label.",
+            "symbols": [
+              "pub title: Option<Option<String>>"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/spawn.rs",
+            "purpose": "Spawn block renders `Context files:` from `Extras.context_files`; `factory.rs` maps `SpawnInputs.context_files` onto it.",
+            "symbols": [
+              "pub context_files: Vec<PathBuf>"
+            ]
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Docs page with 'The session context file' section (line 504) listing what the file holds; it does not mention the title. HANDOVER.md line 486 holds Rule F2 text with the same list.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the title should appear in the context file, `render` can read `s.title` directly because it is already fold state; no new event is needed. Check `docs/internals/pipeline.md:504` and HANDOVER.md Rule F2 (line 486) for the doc text to keep in line.",
+          "A research pass on how `Revision` and `FeedbackRound` are folded would complete the picture of what `render` shows in the Feedback rounds section."
+        ],
+        "not_covered": [
+          "The Feedback judge and how `Revision` and `feedback.rounds` are created in the fold (only the fields `render` reads were checked).",
+          "The web UI and the API consumers of `SessionSummary.title` (`ostra-server/src/nav/*`, `web/`).",
+          "Whether `tests/conformance/main.rs` or any test asserts on the rendered context text: a grep for `Session context` and `ostra-session-context` found no test assertion on `render` output; only `judge_evals.rs:473` builds the path."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "`context::render` is a pure function of `SessionState`. The runner snapshots the fold (`self.snapshot`) and overwrites the file every time; nothing is appended and nothing is stored in the log. Because the fold is the only source, any fact the file should show must already be fold state (CLAUDE.md pattern 1).",
+            "files": [
+              "crates/ostra-engine/src/context.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Derived file rendered from the fold, written by the runner just before use",
+            "snippet": {
+              "code": "/// Rule F2: the session context file is rewritten from the fold before anything reads it.\nfn write_session_context(&self, session: &SessionId) -> Result<(), EngineError> {\n    let st = self.snapshot(session)?;\n    let path = st.session_context_path();\n    std::fs::write(&path, crate::context::render(&st)).map_err(|e| {\n        EngineError::Invalid(format!(\"Could not write {}: {e}\", path.display()))\n    })\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2341"
+            }
+          },
+          {
+            "description": "Each section after Route is guarded by an emptiness or `Some` check, and written with `writeln!` into a `String`.",
+            "files": [
+              "crates/ostra-engine/src/context.rs"
+            ],
+            "name": "Optional section written only when the fold has the data",
+            "snippet": {
+              "code": "let docs = s.research_docs();\nif !docs.is_empty() {\n    let _ = writeln!(m, \"## Research documents\\n\");\n    for d in docs {\n        let _ = writeln!(m, \"- `{}`\", d.display());\n    }\n    m.push('\\n');\n}\nif let Some(spec) = &s.spec.current {\n    let _ = writeln!(\n        m,\n        \"## Spec\\n\\n- `{}`: {} (approved: {})\\n\",\n        spec.spec_path, spec.summary, s.spec.approved\n    );\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/context.rs:23"
+            }
+          },
+          {
+            "description": "The Classify judge output carries the raw title. The fold applies `clean_title` and only overwrites the title when the result is non-empty, so an empty or older decision keeps any earlier title. An Init session gets a fixed title at `SessionCreated`. `on_decision` also runs for an override of Classify (when `can_override_classify_now`), so a later Classify decision can replace the title.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/judge.rs"
+            ],
+            "name": "Title set by the Classify decision, with the cleaner applied in the fold",
+            "snippet": {
+              "code": "fn apply_classify(&mut self, out: &ClassifyOut) {\n    self.category = Some(out.category);\n    if let Some(t) = clean_title(&out.title) {\n        self.title = Some(t);\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:2619"
+            }
+          },
+          {
+            "description": "Rule F2 in `plan.rs`: for a phase with a `Revision`, the planner puts the context path in `inputs.context_files`. The runner checks that list before spawning and rewrites the file first. No other spawn lists the path, so only revisions trigger a spawn-time rewrite; the review gate triggers the other write.",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Revision spawn is pointed at the context file by the planner",
+            "snippet": {
+              "code": "if let Some(r) = &p.revision {\n    // Rule F2: a revision reads the session context file, not a conversation.\n    inputs.revision = Some(r.round);\n    inputs.task = Some(revision_task(r, &s.full_request()));\n    inputs.context_files = vec![s.session_context_path()];\n    inputs.prior_reports = s\n        .phases\n        .values()\n        .filter(|q| q.info.project == project && q.info.id != phase)\n        .filter_map(|q| q.implementer_report.clone())\n        .collect();\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:1164"
+            }
+          }
+        ],
+        "problem": "A revision implementer reads `ostra-session-context.md` instead of a conversation (Rule F2). The file is a pure render of `SessionState`. The session title is a separate piece of fold state (`SessionState.title`). The render function does not read the title today, so the file and the title are currently unconnected.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the engine renders the session context file a revision reads, and where the session title is kept in the fold. Covers the render function, when and by whom the file is written, how a revision is pointed at it, and the title's path from the Classify judge through the fold to the sessions table. Does not cover the UI, the Feedback judge, or revision phase scheduling beyond what feeds the file.",
+        "sources": [],
+        "title": "Session context file and session title in the fold"
+      },
+      "submit": {
+        "findings_summary": "`crates/ostra-engine/src/context.rs::render(&SessionState)` is a pure 88-line function that builds the Markdown: request, route, research docs, spec, plan, phases with reports and ledgers, and feedback rounds. The runner's `write_session_context` overwrites `ostra-session-context.md` from a fresh fold snapshot, in two cases: before the ImplementationReview gate opens, and in `perform_spawn` when the spawn's `context_files` contains that path. The planner adds the path for revision phases (Rule F2, `plan.rs:1164`). The session title is `SessionState.title: Option<String>` (`state.rs:1057`). It is set to \"Initialize {project}\" for Init sessions and by `apply_classify` from `ClassifyOut.title` through `clean_title` (60 characters), and `view::summary` then copies it to the sessions table via `SessionUpdate`. `render` does not read `title`, and no test asserts on its output.",
+        "not_covered": [
+          "The Feedback judge and how Revision and feedback.rounds are created in the fold",
+          "Web UI and server consumers of SessionSummary.title",
+          "Whether any test asserts on the rendered context text (a grep found none)"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How `context::render` builds the session context file, who writes it and when, how a revision spawn is pointed at it, and where the title lives in the fold; the UI, the Feedback judge internals, and revision scheduling were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

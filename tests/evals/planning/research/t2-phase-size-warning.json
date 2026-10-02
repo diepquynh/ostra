@@ -1,0 +1,428 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:47:17.777843120+00:00",
+  "docs": [
+    {
+      "task": "How the plan document's checks run and report warnings per phase and step.",
+      "file": "ostra-research-20261002-084523-plan-document-checks.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-core (doc module)",
+          "ostra-tools (Document tool)",
+          "assets/agents/plan",
+          "web artifact document view",
+          "docs/internals"
+        ],
+        "asks": [
+          "How the plan document's checks run.",
+          "How they report warnings per phase and per step."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-tools/src/doc.rs:document",
+            "step": "The plan agent calls the Document tool with `document` or `update`/`remove`; the tool resolves the path, checks the name prefix `ostra-plan-` and that it is not a `-phase-` file, merges updates with `doc::apply_update`."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:write",
+            "step": "`doc::write(kind, &md, &value)` parses the JSON with `DocKind::parse` (schema errors abort the write; for a plan it also fills each phase's `skills` from its steps, Rule P7), then calls `check(&document)` on the typed PlanDoc."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:plan",
+            "step": "`check` dispatches to `plan()`: question checks, `plan_skills`, unique phase ids, P10 sequence, then per phase the depends_on and deliverable checks and `phase_body`, which checks P12, steps non-empty, unique step ids, step id shape, P11, P13, P5. Then cycle detection. `Issues::done` sorts errors first."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:write",
+            "step": "`write` stores the JSON, renders the master markdown and one phase file pair per phase, deletes stale phase files, and returns `Written { document, files, issues }`. Issues are not persisted."
+          },
+          {
+            "location": "crates/ostra-tools/src/doc.rs:summary",
+            "step": "The tool formats the result in `summary`: a 'Wrote the plan: N phases, M steps, K clarifying questions.' line, the file list, and the issue lines. This text is what the agent sees."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check_submit",
+            "step": "At submit, `check_submit` reloads the stored JSON via `read_doc`, runs `blocking` which keeps only Error-level issues, and refuses the submit if any exist. Warnings never block. It then compares the submit's `step_count`, `phases`, and per-phase fields with the document."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/store.rs:load_view",
+            "step": "For the browser, `load_view` re-parses the stored JSON and calls `check` again (for a phase file it builds `Document::Phase(PhaseDoc)` so only `phase_body` rules run), returning `DocumentView { document, issues }`. The web `buildMarks` keys each issue by `normId(element)` and shows warnings with tone `warn` on the matching phase or step element, or on the overview if the element is null."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core::doc",
+            "role": "Owns the document types, `check`, `write`, `load_view`, and rendering."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-tools",
+            "role": "The `Document` tool that calls `doc::write` and formats issues for the agent."
+          },
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "`DocIssue` and `IssueLevel` carry `#[ts(export)]`; a change to their shape regenerates `web/src/api/gen/` via `cargo test -p ostra-core`."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "All document checks. `check(&Document)` dispatches by document kind; `plan` runs plan-level checks and calls `phase_body` for each phase; `phase_body` holds the per-phase and per-step rules (P5, P11, P12, P13, step id shape). `Issues` collects DocIssue values with `error` and `warn`. `check_submit` runs at the submit tool boundary and blocks only on errors.",
+            "symbols": [
+              "pub enum IssueLevel { Error, Warning }",
+              "pub struct DocIssue { pub level: IssueLevel, pub element: Option<String>, pub message: String }",
+              "impl DocIssue { pub fn line(&self) -> String }",
+              "struct Issues(Vec<DocIssue>)",
+              "fn Issues::error(&mut self, element: impl Into<Option<String>>, message: String)",
+              "fn Issues::warn(&mut self, element: impl Into<Option<String>>, message: String)",
+              "fn Issues::done(mut self) -> Vec<DocIssue>",
+              "pub fn check(doc: &Document) -> Vec<DocIssue>",
+              "fn plan(d: &PlanDoc, out: &mut Issues)",
+              "fn plan_skills(d: &PlanDoc, out: &mut Issues, installed: &dyn Fn(&str) -> BTreeSet<String>)",
+              "fn phase_file(d: &PhaseDoc, out: &mut Issues)",
+              "fn phase_body(p: &super::Phase, out: &mut Issues)",
+              "fn blocking(doc: &Document) -> Result<(), String>",
+              "pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/mod.rs",
+            "purpose": "Typed document structs. PlanDoc holds `phases: Vec<Phase>`; Phase holds `steps: Vec<PlanStep>`, `complexity: Level`, `test_policy`, `requirements`, `constraints`. PlanStep has `size: StepSize` (Small, Medium, Large). DocumentView carries the document plus issues to the browser. The `check` items are re-exported here.",
+            "symbols": [
+              "pub use check::{DocIssue, IssueLevel, check, check_submit};",
+              "pub struct PlanDoc { ..., pub phases: Vec<Phase>, ... }",
+              "pub struct Phase { pub id: u32, ..., pub steps: Vec<PlanStep>, pub verification: String }",
+              "pub struct PlanStep { pub id: String, ..., pub delivers: Vec<String>, pub verify: String, pub size: StepSize }",
+              "pub enum StepSize { Small, Medium, Large }",
+              "pub struct PhaseDoc { pub plan: String, pub date: String, pub spec: String, pub deliverable_title: Option<String>, pub phase: Phase }",
+              "pub struct DocumentView { pub document: Document, pub issues: Vec<DocIssue> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/store.rs",
+            "purpose": "Calls `check` in two places: `write` (every Document tool write, result returned in `Written.issues`) and `load_view` (the browser view, recomputed at read time, not stored). `write` also emits one phase file pair per phase.",
+            "symbols": [
+              "pub fn write(kind: DocKind, md: &Path, value: &Value) -> Result<Written, String>",
+              "pub fn load_view(md: &Path) -> Option<DocumentView>",
+              "pub struct Written { pub document: Document, pub files: Vec<PathBuf>, pub issues: Vec<DocIssue> }",
+              "impl Written { pub fn errors(&self) -> usize }",
+              "pub fn phase_path(master: &Path, id: u32) -> PathBuf",
+              "DocKind::parse (applies Rule P7: merges step skills into the phase's skills)"
+            ]
+          },
+          {
+            "path": "crates/ostra-tools/src/doc.rs",
+            "purpose": "The Document tool. Calls `doc::write` and formats the result in `summary`: counts line, file list, then either 'Ostra's checks found nothing to fix.', or a heading plus every issue as `DocIssue::line()`.",
+            "symbols": [
+              "pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput",
+              "fn summary(w: &doc::Written) -> String"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/tests.rs",
+            "purpose": "Unit tests for the checks. `fixtures_parse_and_pass` requires the research, spec, and plan fixtures to yield zero issues of any level (warnings included). `errors(kind, &Value)` helper filters to errors only and returns `line()` strings. No test currently asserts a plan warning.",
+            "symbols": [
+              "fn errors(kind: DocKind, v: &Value) -> Vec<String>",
+              "fn fixtures_parse_and_pass()",
+              "fn plan_writes_master_and_phase_files()",
+              "fn broken_references_are_errors()",
+              "fn plan_steps_name_skills_installed_in_their_repo()"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/fixtures/plan.json",
+            "purpose": "Plan fixture used by the tests. Phase 1 has 2 steps (1.1 Medium, 1.2 Small), phase 2 has 1 step (2.1 Small). Any new warning must not fire on it, or `fixtures_parse_and_pass` fails.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-core/src/doc/render.rs",
+            "purpose": "Renders the phase file markdown. Each step prints `- **Complexity**: {:?}` from `PlanStep.size` (line 980). Issues are not rendered into markdown; they go only to the tool result and the browser view.",
+            "symbols": [
+              "fn render(doc: &Document, md: &Path) -> String"
+            ]
+          },
+          {
+            "path": "assets/agents/plan/prompt.md",
+            "purpose": "The plan agent prompt. Lines 477-490 list what Ostra checks on every Document call, split into errors and a 'Warnings:' bullet. Line 370 documents the step `size` field. Line 72 distinguishes phase complexity (Low/Medium/High) from step Complexity (Small/Medium/Large). P0 (line 249) says phases derive from deliverables and a deliverable needing several milestones gets several phases. The prompt must describe the same checks the code runs (project rule 4).",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "The 'Plan: sequencing the work' section (from line 283) describes the plan's phases and the skill check (Rules P6, P7). It does not list the warning rules. Project rule 9 requires updating docs when behavior changes.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/screens/artifact/doc/model.ts",
+            "purpose": "Browser side. `buildMarks(issues, check)` groups issues by `normId(i.element)` into Mark values, tone `warn` for warnings and `bad` for errors. `normId` maps `phase N`/`pN` to key `phase-N` and `step N.M` to `step-N.M`, so the element strings in check.rs attach to the phase and step elements in the plan view.",
+            "symbols": [
+              "export function normId(raw: string): string",
+              "export function buildMarks(issues: DocIssue[], check: FactCheckView | null): Map<string, Mark[]>"
+            ]
+          },
+          {
+            "path": "web/src/mobile/screens/MArtifact.tsx",
+            "purpose": "Mobile artifact view. Shows 'Ostra's checks found N issue(s)' on the overview chapter, with tone `bad` if any error, else `warn`.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a phase-size warning is added, decide whether a limit counts steps, weights steps by `size`, or both; the code has no existing threshold or constant for either.",
+          "Check that the plan fixture stays at zero issues, and update the plan prompt 'Warnings:' bullet (assets/agents/plan/prompt.md:486) and docs/internals/pipeline.md in the same change."
+        ],
+        "not_covered": [
+          "How the web plan view lays out phase and step elements beyond `normId` and `buildMarks` (web/src/screens/artifact/doc/plan.tsx was not opened).",
+          "The fact-check agent's findings on a plan, which are a separate mark source (`source: fact-check`) from the document checks.",
+          "The conformance fixtures in tests/conformance/main.rs; the document checks run in tool and fold-free code, not in the planner.",
+          "Where HANDOVER.md defines rules P0 to P13 beyond what the plan prompt states."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Every rule calls `out.error(element, message)` or `out.warn(element, message)`. The element is a free-text label: `phase {id}` for phase-level issues, `step {id}` for step-level issues, `None` for document-level issues. Messages start with the instruction, then the reason in a `because` clause, per the repo prose rules, and cite the rule ID in parentheses where one exists. `done()` stable-sorts by level so errors come before warnings; order within a level is the order rules ran.",
+            "files": [
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Issue collection with a labelled element",
+            "snippet": {
+              "code": "fn warn(&mut self, element: impl Into<Option<String>>, message: String) {\n    self.0.push(DocIssue {\n        level: IssueLevel::Warning,\n        element: element.into(),\n        message,\n    });\n}\n\nfn done(mut self) -> Vec<DocIssue> {\n    self.0.sort_by_key(|i| i.level);\n    self.0\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/check.rs:56"
+            }
+          },
+          {
+            "description": "`check` matches on Document. For a `Plan`, `plan()` runs clarifying-question checks, `plan_skills` (P6/P7 errors), unique phase ids, the P10 sequence check, then loops over phases: `depends_on` checks, a deliverable-index warning, and `phase_body(p, out)`. For a `Phase` document (one phase file loaded in the browser), `phase_file` calls only `phase_body`. Therefore a rule placed in `phase_body` appears on both the master plan view and the phase file view; a rule placed in `plan()` appears only on the master plan view.",
+            "files": [
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Plan check composition: plan-level rules, then phase_body per phase",
+            "snippet": {
+              "code": "pub fn check(doc: &Document) -> Vec<DocIssue> {\n    let mut out = Issues::default();\n    match doc {\n        Document::Research(d) => research(d, &mut out),\n        Document::Spec(d) => spec(d, &mut out),\n        Document::Plan(d) => plan(d, &mut out),\n        Document::Phase(d) => phase_file(d, &mut out),\n    }\n    out.done()\n}\n\nfn phase_file(d: &PhaseDoc, out: &mut Issues) {\n    phase_body(&d.phase, out);\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/check.rs:107"
+            }
+          },
+          {
+            "description": "Plan warnings today, all in check.rs: (1) phase `depends_on` names a phase with id >= this one (element `phase N`, in `plan`); (2) a phase's deliverable is not in `deliverables` when `deliverables` is non-empty (element `phase N`, in `plan`); (3) a step with empty `delivers` (P11, element `step N.M`, in `phase_body`); (4) a delivered requirement id not in the phase's `requirements` (element `step N.M`, in `phase_body`). Plan errors are: missing test rationale (P12), zero steps, step id not `{phase}.{n}`, binding rule not in `constraints` or not verbatim or empty (P13), empty `verify` (P5), phase id sequence (P10), nonexistent depends_on, cycles, skills (P6, P7), duplicate ids. No existing rule inspects the number of steps in a phase or the `size` of a step.",
+            "files": [
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Existing per-phase and per-step warnings",
+            "snippet": {
+              "code": "// Rule P11: every step cites what it delivers.\nif s.delivers.is_empty() {\n    out.warn(\n        at.clone(),\n        \"Name the requirement IDs this step delivers (P11).\".into(),\n    );\n}\nfor r in &s.delivers {\n    if !quoted.contains(r.as_str()) {\n        out.warn(at.clone(), format!(\"Quote `{r}` in the phase's `requirements`, because the implementer never reads the spec.\"));\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/check.rs:564"
+            }
+          },
+          {
+            "description": "`phase_body` builds the phase label with a closure `at = || Some(format!(\"phase {}\", p.id))` for phase-level issues, and `Some(format!(\"step {}\", s.id))` inside the step loop. A phase-level rule added to `phase_body` reuses `at()`.",
+            "files": [
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Per-phase element label in phase_body",
+            "snippet": {
+              "code": "fn phase_body(p: &super::Phase, out: &mut Issues) {\n    let at = || Some(format!(\"phase {}\", p.id));\n    // Rule P12: `Skip` carries a rationale naming what each step contains.\n    if p.test_rationale.trim().is_empty() {\n        out.error(\n            at(),\n            \"Write the one-sentence test policy rationale (P12).\".into(),\n        );\n    }\n    if p.steps.is_empty() {\n        out.error(at(), \"Give the phase at least one step.\".into());\n    }\n    out.unique(\"step\", p.steps.iter().map(|s| s.id.as_str()));",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/check.rs:532"
+            }
+          },
+          {
+            "description": "The Document tool prints every issue with `DocIssue::line()`, which renders `- warning (phase 2): message` or `- error (step 1.1): message`. With no errors the heading is 'Warnings to review:'. With one or more errors the heading names the error count and the list still includes the warnings.",
+            "files": [
+              "crates/ostra-tools/src/doc.rs",
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Tool result formatting of issues",
+            "snippet": {
+              "code": "if w.issues.is_empty() {\n    let _ = writeln!(out, \"Ostra's checks found nothing to fix.\");\n} else {\n    let errors = w.errors();\n    if errors > 0 {\n        let _ = writeln!(\n            out,\n            \"Fix the {errors} errors below with an `update` before you submit, because the submit call is refused while any remain:\"\n        );\n    } else {\n        let _ = writeln!(out, \"Warnings to review:\");\n    }\n    for i in &w.issues {\n        let _ = writeln!(out, \"{}\", i.line());\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-tools/src/doc.rs:133"
+            }
+          },
+          {
+            "description": "Existing plan tests mutate the fixture JSON and assert on `line()` substrings of errors via the `errors` helper. There is no analogous helper for warnings; a warning test would filter on `IssueLevel::Warning` the same way. The Document tool test asserts on the tool's text, for example `out.text.contains(\"(Q1): Give the question 2 to 4 options\")`.",
+            "files": [
+              "crates/ostra-core/src/doc/tests.rs",
+              "crates/ostra-tools/src/doc.rs"
+            ],
+            "name": "Test for check messages",
+            "snippet": {
+              "code": "fn errors(kind: DocKind, v: &Value) -> Vec<String> {\n    let doc = kind.parse(v).unwrap();\n    check(&doc)\n        .into_iter()\n        .filter(|i| i.level == IssueLevel::Error)\n        .map(|i| i.line())\n        .collect()\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/tests.rs:14"
+            }
+          }
+        ],
+        "problem": "The plan agent writes a typed PlanDoc through the Document tool, and Ostra runs `check` on every write. Issues come back as a flat list of DocIssue values (level, optional element label, message), and warnings do not block submit. This document records where plan checks live, how phase and step issues are labelled and reported, and what already exists around phase and step size, so a change that adds a phase-level warning can follow the existing pattern.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how the plan document's checks run and report warnings per phase and step. Covers the Rust check code, where it is called, how issues reach the agent and the browser, existing warning rules and tests, and the plan prompt and docs text that describe them. It does not design or recommend a new check.",
+        "sources": [],
+        "title": "Plan document checks and per-phase, per-step warnings"
+      },
+      "submit": {
+        "findings_summary": "The check code is `check()` in crates/ostra-core/src/doc/check.rs. For a plan it runs `plan()`, which calls `phase_body()` per phase. Issues are DocIssue values with a level, an optional element label (`phase N` or `step N.M`) and a message, and errors sort first. The check runs on every Document tool write (`store::write`, formatted by `summary` in ostra-tools/src/doc.rs) and again in `store::load_view` for the browser. `check_submit` blocks only on errors, so warnings never block. Four plan warnings exist today (depends_on on a later phase, deliverable missing from the index, step without `delivers`, delivered requirement not quoted in the phase). No rule inspects the step count of a phase or a step's `size`. The plan prompt's 'Warnings:' bullet (assets/agents/plan/prompt.md:486) and docs/internals/pipeline.md would need to change with any new warning, and the plan fixture must keep producing zero issues.",
+        "not_covered": [
+          "web/src/screens/artifact/doc/plan.tsx layout of phase and step elements",
+          "fact-check findings on a plan, a separate mark source from document checks",
+          "HANDOVER.md definitions of rules P0 to P13"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How plan document checks run and report warnings per phase and step: the Rust check code, its callers, the issue reporting to the agent and the browser, existing rules and tests, and the prompt and docs text describing them. It does not design a new check.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "What the plan agent's prompt says about phase and step sizes, and where it lists the checks Ostra runs.",
+      "file": "ostra-research-20261002-084522-plan-prompt-sizes-and-checks.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-agents (assets/agents/plan)",
+          "ostra-core (doc checks)"
+        ],
+        "asks": [
+          "What the plan agent's prompt says about phase and step sizes.",
+          "Where the plan agent's prompt lists the checks Ostra runs."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check",
+            "step": "The plan agent calls Document with the plan; Ostra renders the files and runs `check`, returning errors and warnings in the result."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:plan",
+            "step": "`plan` runs the plan-level checks (skills, phase numbering, depends_on, cycle, deliverables) and calls `phase_body` for each phase, which runs the per-step checks."
+          },
+          {
+            "location": "crates/ostra-core/src/doc/check.rs:check_submit",
+            "step": "At submit, `check_submit` re-reads the stored plan and refuses the call on an error or when `step_count` differs from the real step count."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core doc module",
+            "role": "Holds the PlanDoc/Phase/Step types and the checks the prompt lists."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "assets/agents/plan/prompt.md",
+            "purpose": "The plan agent prompt. All size guidance and the list of Ostra checks live here.",
+            "symbols": [
+              "line 69: step definition 'One atomic unit: one file, one action, one verification command.'",
+              "line 70: phase definition 'A group of related steps forming one logical milestone ... One file each. A phase belongs to exactly one deliverable.'",
+              "lines 186-194: Step 3 stakes table (Low 3 to 5 steps, Medium 5 to 15, High 10 to 30)",
+              "line 262: P2 'One step is one file.'",
+              "lines 308-317: P9 phase complexity Low/Medium/High",
+              "lines 356-370: step field table including `size` (Small, Medium, Large)",
+              "lines 477-487: 'Ostra checks these on every Document call' list",
+              "lines 495-557: Step 8 mechanical pre-checks 8A, 8B, 8C, 8D",
+              "line 646: Constraint 14 (never return a plan whose Step 8 checks were not run)"
+            ]
+          },
+          {
+            "path": "assets/agents/plan/agent.toml",
+            "purpose": "Plan agent config: advanced tier, 1800 second timeout, high effort. States no size limit.",
+            "symbols": [
+              "default_tier = \"advanced\"",
+              "timeout_seconds = 1800"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/check.rs",
+            "purpose": "Implements the checks the prompt lists: `plan`, `plan_skills`, `phase_body`, `find_cycle`. It contains no step-count or phase-size check.",
+            "symbols": [
+              "fn plan(d: &PlanDoc, out: &mut Issues)",
+              "fn plan_skills(d: &PlanDoc, out: &mut Issues, installed: &dyn Fn(&str) -> BTreeSet<String>)",
+              "fn phase_body(p: &super::Phase, out: &mut Issues)",
+              "fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/doc/mod.rs",
+            "purpose": "Defines the step `size` field type.",
+            "symbols": [
+              "pub enum StepSize { Small, Medium, Large }",
+              "line 687: pub size: StepSize"
+            ]
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a phase-size limit is wanted, the prompt places would be Step 3 or Step 5 rules and the Step 7 checks list (lines 477-487), with a matching warning in `phase_body` or `plan` in crates/ostra-core/src/doc/check.rs.",
+          "Check docs/ for a page that lists the plan checks, because CLAUDE.md pattern 9 requires docs to follow behavior changes."
+        ],
+        "not_covered": [
+          "How the `{{tool_document}}` and similar placeholders in the prompt are rendered per executor (crates/ostra-agents).",
+          "Whether the fact-check agent's prompt or the implementer's prompt states any phase or step size expectation.",
+          "docs/ pages that describe the plan stage and whether they repeat the size ranges."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Size is stated in four places, all in `assets/agents/plan/prompt.md`. (1) Step 3 ties the number of steps to the stakes level: Low is 3 to 5 steps, Medium 5 to 15, High 10 to 30. These ranges count steps for the whole change, not per phase. (2) Step 5 rule P2 makes a step exactly one file, and the Definitions table calls a step 'one atomic unit: one file, one action, one verification command'. (3) The step field table has a `size` field of `Small`, `Medium`, or `Large`, with no definition of the three values beyond the names. The prompt says this step size is separate from the phase `complexity` tier (P9), and the code stores it as `StepSize`. (4) The phase is defined only as 'a group of related steps forming one logical milestone', owned by exactly one deliverable (P0), with example milestones 'data layer, service layer, endpoints'. P0 says a deliverable that needs several milestones gets several phases and a small deliverable may be one phase. There is no maximum number of steps or files per phase, and no instruction to split a phase that grows large.",
+            "files": [
+              "assets/agents/plan/prompt.md",
+              "crates/ostra-core/src/doc/mod.rs"
+            ],
+            "name": "Size guidance in the plan prompt",
+            "snippet": {
+              "code": "| **Low** | Isolated change in one file, easy revert, no schema or data change, no API-contract change. | 3 to 5 steps, minimal risk section. |\n| **Medium** | Several files in one area, or a change to an existing contract, or new integration points. | 5 to 15 steps, risk section with mitigations. |\n| **High** | Architectural change, schema or data migration, cross-module change, shared-library change, or change to an external integration. | 10 to 30 steps, full risk matrix, rollback strategy. |",
+              "language": "markdown",
+              "source": "assets/agents/plan/prompt.md:190"
+            }
+          },
+          {
+            "description": "Two lists. The first is the paragraph that begins 'Ostra checks these on every Document call and lists each failure in the result. An error blocks the submit call. A warning does not, but fix it:', in Step 7 (`Write the plan with Document`), `prompt.md` lines 477-487. It names these errors: phases numbered 1..N with no gap or repeat (P10); every `depends_on` names an existing phase; no cycle in the phase graph (P8); every phase has at least one step and a test policy rationale (P12); every step id is `{phase}.{n}`; every `binding_rules` entry names a `constraints` row of the same phase and copies its rule word for word (P13); every step has a `verify` command (P5). It names these warnings: a step with no `delivers` (P11), a delivered requirement not quoted in the phase's `requirements`, a phase that depends on a later phase, and a phase whose deliverable is missing from `deliverables`. The list sits between the Step 7 plan field tables and the 'Pass' line. Right after it, the prompt says what code cannot check and stays with the agent: total delivery of the requirement ledger (P11), the test policy verdict (P12), and self-containment. Other Ostra checks are mentioned outside that list: Step 5 P6 says Ostra refuses the plan when a step names a skill not installed in its repo, or when a phase with code steps names no skill in a repo that has skills; the Step 9 intro says the submit call is refused while the plan has an error, while `step_count` differs from the plan's step count, or while `phases` differs from the plan's phases; Step 7 says Ostra refuses a Write, edit, or shell write to any `ostra-plan-*` file; P7/New projects says Ostra accepts a phase in an unknown project only when `new_projects` names it. The second list is Step 8 (`Run the mechanical pre-checks`), lines 495-557: 8A surviving callers, 8B imports against the target classpath, 8C record results in `pre_checks`, 8D save the spec snapshot. Those are checks the agent runs by command, not checks Ostra runs.",
+            "files": [
+              "assets/agents/plan/prompt.md"
+            ],
+            "name": "Where the prompt lists the checks Ostra runs",
+            "snippet": {
+              "code": "- Phases are numbered `1`...`{N}` in order with no gap or repeat (P10), every `depends_on` names an existing\n  phase, and the phase graph has no cycle (P8).\n- Every phase has at least one step and a test policy rationale (P12), and every step id is `{phase}.{n}`.\n- Every `binding_rules` entry names a `constraints` row of the same phase and copies its rule word for word\n  (P13).\n- Every step has a `verify` command (P5).\n- Warnings: a step with no `delivers` (P11), a delivered requirement not quoted in the phase's `requirements`,\n  a phase that depends on a later phase, and a phase whose deliverable is missing from `deliverables`.",
+              "language": "markdown",
+              "source": "assets/agents/plan/prompt.md:480"
+            }
+          },
+          {
+            "description": "`plan` in `check.rs` emits: unique phase ids, P10 ordering error, `depends_on` unknown-phase error, later-phase warning, missing-deliverable warning, cycle error, and `plan_skills` errors for P6/P7. `phase_body` emits: empty test rationale error (P12), no steps error, duplicate step id, step id prefix error, no-`delivers` warning, unquoted requirement warning, P13 binding-rule errors, empty `verify` error (P5). `check_submit` compares `step_count` with the plan's real step count (check.rs line 697). A grep over `crates/` for step-count limits, max steps, or oversized phases finds no check on the number of steps in a phase or the size of a step. The prompt's list and the code are consistent: neither has a size check. The `Issues` struct has `error` and `warn` methods (check.rs lines 48 and 56), so a warning kind exists for a future check.",
+            "files": [
+              "crates/ostra-core/src/doc/check.rs"
+            ],
+            "name": "Check implementation in code matches the prompt list and has no size check",
+            "snippet": {
+              "code": "        if s.delivers.is_empty() {\n            out.warn(\n                at.clone(),\n                \"Name the requirement IDs this step delivers (P11).\".into(),\n            );\n        }",
+              "language": "rust",
+              "source": "crates/ostra-core/src/doc/check.rs:565"
+            }
+          }
+        ],
+        "problem": "The plan agent prompt gives size guidance in a few places (a stakes table with step-count ranges, a per-step size field, and the one-step-one-file rule) but states no limit on how large a phase may be. The checks Ostra runs on every Document call are listed in one place in Step 7, and the Step 8 pre-checks are listed separately. No size or step-count check exists in the prompt's list or in the code.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: what the plan agent's prompt says about phase and step sizes, and where it lists the checks Ostra runs. Covers assets/agents/plan/prompt.md and, for comparison, the code that implements the checks in crates/ostra-core/src/doc/check.rs. Does not cover other agents' prompts or how the prompt template placeholders are rendered.",
+        "sources": [],
+        "title": "Plan agent prompt: phase and step sizes, and the list of Ostra checks"
+      },
+      "submit": {
+        "findings_summary": "The plan prompt gives size guidance in three places and no phase-size limit. Step 3 (lines 186-194) ties total step count to stakes (Low 3 to 5, Medium 5 to 15, High 10 to 30). P2 makes a step one file, and the step table has a `size` field (Small/Medium/Large) with no definition. A phase is only 'a group of related steps forming one logical milestone' within one deliverable (P0). The checks Ostra runs on every Document call are listed in Step 7, lines 477-487, as errors and warnings. Other refusals are mentioned in P6, the Step 9 intro, and Step 7. Step 8 holds the agent-run pre-checks, not Ostra's. check.rs implements that list and has no step-count or phase-size check, though `Issues::warn` exists.",
+        "not_covered": [
+          "How the {{tool_document}} placeholders in the prompt are rendered per executor (crates/ostra-agents)",
+          "Whether the fact-check or implementer prompts state any phase or step size expectation",
+          "docs/ pages describing the plan stage and whether they repeat the size ranges"
+        ],
+        "open_questions": 0,
+        "scope_covered": "What assets/agents/plan/prompt.md says about phase and step sizes and where it lists the checks Ostra runs, compared with the checks in crates/ostra-core/src/doc/check.rs; other agents' prompts and docs/ were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

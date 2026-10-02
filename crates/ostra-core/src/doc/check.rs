@@ -1,6 +1,7 @@
 //! Checks Ostra runs on every document write. Errors are broken references and rules code can
 //! decide; they block the submit call. Warnings are shown to the agent and the reader.
 
+use super::refs;
 use super::store::{DocKind, load, phase_path};
 use super::{Document, PhaseDoc, PlanDoc, ResearchDoc, SpecDoc};
 use crate::agent::AgentName;
@@ -42,10 +43,10 @@ impl DocIssue {
 }
 
 #[derive(Default)]
-struct Issues(Vec<DocIssue>);
+pub(super) struct Issues(Vec<DocIssue>);
 
 impl Issues {
-    fn error(&mut self, element: impl Into<Option<String>>, message: String) {
+    pub(super) fn error(&mut self, element: impl Into<Option<String>>, message: String) {
         self.0.push(DocIssue {
             level: IssueLevel::Error,
             element: element.into(),
@@ -53,7 +54,7 @@ impl Issues {
         });
     }
 
-    fn warn(&mut self, element: impl Into<Option<String>>, message: String) {
+    pub(super) fn warn(&mut self, element: impl Into<Option<String>>, message: String) {
         self.0.push(DocIssue {
             level: IssueLevel::Warning,
             element: element.into(),
@@ -106,11 +107,29 @@ impl Issues {
 
 pub fn check(doc: &Document) -> Vec<DocIssue> {
     let mut out = Issues::default();
+    checks(doc, &mut out);
+    out.done()
+}
+
+fn checks(doc: &Document, out: &mut Issues) {
     match doc {
-        Document::Research(d) => research(d, &mut out),
-        Document::Spec(d) => spec(d, &mut out),
-        Document::Plan(d) => plan(d, &mut out),
-        Document::Phase(d) => phase_file(d, &mut out),
+        Document::Research(d) => research(d, out),
+        Document::Spec(d) => spec(d, out),
+        Document::Plan(d) => plan(d, out),
+        Document::Phase(d) => phase_file(d, out),
+    }
+}
+
+/// [`check`] plus the checks of the code the document names, which hold only until a build
+/// changes the repo. Every write and every submit runs these (Rule Hard 4).
+pub fn check_written(doc: &Document) -> Vec<DocIssue> {
+    let mut out = Issues::default();
+    checks(doc, &mut out);
+    match doc {
+        Document::Research(d) => refs::research(d, &mut out),
+        Document::Spec(d) => refs::spec(d, &mut out),
+        Document::Plan(d) => refs::plan(d, &mut out),
+        Document::Phase(_) => {}
     }
     out.done()
 }
@@ -628,7 +647,7 @@ fn read_doc(kind: DocKind, path: &str) -> Result<Document, String> {
 }
 
 fn blocking(doc: &Document) -> Result<(), String> {
-    let errors: Vec<String> = check(doc)
+    let errors: Vec<String> = check_written(doc)
         .into_iter()
         .filter(|i| i.level == IssueLevel::Error)
         .map(|i| i.line())

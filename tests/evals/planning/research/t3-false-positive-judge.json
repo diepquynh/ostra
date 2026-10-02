@@ -1,0 +1,725 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:58:06.113163882+00:00",
+  "docs": [
+    {
+      "task": "How review findings are split and sent to the fix agent, including the resolve-review judge and the auto-fixable path.",
+      "file": "ostra-research-20261002-085445-review-findings-split-and-fix-routing.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine",
+          "ostra-core",
+          "ostra-agents (assets)",
+          "tests/conformance",
+          "docs/internals"
+        ],
+        "asks": [
+          "Explain how review findings are split.",
+          "Explain how findings are sent to the fix agent.",
+          "Explain the resolve-review judge.",
+          "Explain the auto-fixable path."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/runner.rs:spawn (params insertion near L2529)",
+            "step": "The planner spawns `code-reviewer` for the loop (LoopNext::Review). The runner records the project's auto-fixable rule IDs in the execution's `params` under `auto_fixable_ids`, excluding IDs starting `SEC-BLOCK` or `PHASE-REQ`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished",
+            "step": "The reviewer submits `CodeReviewerSubmit { findings, security_block, ledger_path, summary }`. ExecutionFinished is folded; `on_finished` calls `loop_finished` for any execution with a loop key."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished",
+            "step": "Errors, interruptions and a missing submit are handled first (retry once, rerun, or LoopNext::Failed). For a readable review: `iterations += 1`, `last_review` is stored."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:blocker_instructions",
+            "step": "BLOCKER branch: if `security_block` or any finding has severity Blocker, `blocker_open = true` and the next step is a `BlockerFix` work pass whose instructions are only the BLOCKER findings plus a removal instruction. No cap, nothing else is sent (HIGH, MEDIUM, and auto-fixable findings in the same pass are dropped and re-found by the next review)."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished",
+            "step": "Otherwise each finding is classified by `auto_fixable()` into `apply`, HIGH or MEDIUM `remaining`, or LOW `low` (stored as `leftover_low`)."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:loop_steps, crates/ostra-engine/src/runner.rs (Step::Autofix)",
+            "step": "Auto-fixable path: when `apply` is non-empty, `LoopNext::Autofix { apply, remaining }`. The planner emits `Step::Autofix`, and the runner calls `autofix::apply_findings(project_root, findings)` on a blocking thread, then appends `SessionEvent::AutofixApplied { applied, failed }`. No agent runs and the ledger is not written."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:apply (SessionEvent::AutofixApplied arm, about L1929)",
+            "step": "The fold of AutofixApplied: for each failed (rule_line, reason) it finds the matching `apply` finding by `f.line()`; only those with severity High or Medium are appended to `remaining` (a failed LOW auto-fixable finding is dropped silently, and the failure reason is not passed on). It then calls `after_findings(rem, ...)`."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:WorkLoop::after_findings",
+            "step": "`after_findings`: empty remaining means Stage (or Done when staging is off), with no re-review of the engine's own edits. Iterations at or above `effective_cap` (3, or 10 under YOLO, plus `extra_cap`) means CapReached (non-YOLO) or Resolve (YOLO). Otherwise `LoopNext::Work { kind: Fix, instructions: fix_instructions(remaining, ledger) }`."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:loop_work, crates/ostra-engine/src/factory.rs:work_extras",
+            "step": "Planner `loop_work` picks the agent: `work_agent` for Initial (and a first Rerun/Resume), otherwise `fix_agent` (Implementer for the build loop, WriteTest for the test loop). It sets `SpawnInputs.work`, `instructions`, and `ledger_file` for Fix and BlockerFix. `factory::work_extras` maps `instructions` into the spawn's findings text. Per CLAUDE.md and the pipeline docs a fix continues the last worker's conversation when the agent is the same (Rule H5)."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:loop_finished (work-pass tail, about L3756)",
+            "step": "The fix agent edits code and writes FIXED or WONTFIX lines with rationale into the review ledger, then submits an ImplementerSubmit. On `SubmitStatus::Ok` the loop goes to `LoopNext::Review` again, and `l.rationale` keeps the fix instructions for the next reviewer spawn."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:loop_steps (CapReached, Resolve), crates/ostra-engine/src/state.rs:on_decision (ResolveReview), crates/ostra-engine/src/judge_input.rs",
+            "step": "Cap and Resolve path: at the cap a non-YOLO session opens a `ReviewCap` gate with the open findings; `another-pass` bumps `extra_cap` and sends the same fix_instructions (plus optional user text, routed through the Route answer judge when routed); any other answer blocks the phase. Under YOLO the planner asks the Resolve-review judge (`Step::Judge`, subject `phase:N` or `phase:N-tests` via loop_key_str). The judge input is the open findings, review ledger excerpt, phase file excerpt and counts. `fix` leads to one fix pass with the judge's per-finding instructions and one extra verification review; after that review, `after_findings` re-enters Resolve only while open count is below `open_before_resolve` (converging), else Blocked."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "ReviewFinding, CodeReviewerSubmit, Severity, WorkKind, JudgeKind, SessionEvent::AutofixApplied, ProjectProfile::auto_fixable_ids."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-engine",
+            "role": "state.rs fold, plan.rs planner, runner.rs step performer, autofix.rs, judge.rs, judge_input.rs, factory.rs."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents",
+            "role": "Typed spawn structs and prompt rendering for implementer and code-reviewer; embedded assets under assets/."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "Fold. loop_finished (about L3517-3671) does the split when a review execution finishes. WorkLoop::after_findings decides what follows. fix_instructions and blocker_instructions build the fix agent text. The AutofixApplied arm of apply and the ResolveReview arm of on_decision (about L3071) apply the results. Gate answer for ReviewCap builds fix text for another pass.",
+            "symbols": [
+              "pub const REVIEW_CAP: u32 = 3;",
+              "pub const YOLO_REVIEW_BUDGET: u32 = 10;",
+              "pub const AUTO_FIXABLE_PARAM: &str = \"auto_fixable_ids\";",
+              "LoopNext::{Review, Autofix { apply: Vec<ReviewFinding>, remaining: Vec<ReviewFinding> }, Work { kind: WorkKind, instructions: Option<String> }, CapReached { findings }, Resolve { findings }, Blocked { reason }, Stage, Done}",
+              "fn auto_fixable(&self, _project: &str, finding: &ReviewFinding, autofix_ids: &BTreeSet<String>) -> bool",
+              "fn loop_finished(&mut self, key: (u32, bool), rec: &ExecRecord, result: &ExecutionResult)",
+              "fn after_findings(&mut self, remaining: Vec<ReviewFinding>, yolo: bool, fix_ledger: &str)",
+              "pub fn fix_instructions(findings: &[ReviewFinding], ledger: &str) -> String",
+              "pub fn blocker_instructions(findings: &[ReviewFinding], ledger: &str) -> String",
+              "WorkLoop { fix_agent, leftover_low, blocker_open, resolve_rounds, open_before_resolve, extra_cap, iterations, last_review, rationale }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Pure planner. loop_steps turns each LoopNext into a Step: Autofix, Judge(ResolveReview), the ReviewCap gate (or a Resolve judge when YOLO toggled on while waiting). loop_work picks the agent and builds SpawnInputs for Fix and BlockerFix work, including the ledger file.",
+            "symbols": [
+              "fn loop_work(&mut self, p: &PhaseRun, tests: bool, kind: WorkKind, instructions: Option<String>)",
+              "fn loop_steps(&mut self, p: &PhaseRun, tests: bool)",
+              "Step::Autofix { project, phase, tests, findings }",
+              "Step::Judge { judge: JudgeKind::ResolveReview, subject: Some(loop_key_str((phase, tests))) }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Performs steps and appends events. Step::Autofix runs autofix::apply_findings on a blocking thread and appends AutofixApplied. At spawn of a Review execution it writes the project's auto-fixable IDs into params under AUTO_FIXABLE_PARAM (about L2529-2541). Validates ResolveReviewOut shape (about L2038).",
+            "symbols": [
+              "Step::Autofix { project, phase, tests, findings } => { ... autofix::apply_findings(&root, &findings) ... SessionEvent::AutofixApplied { project, phase, tests, applied, failed } }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/autofix.rs",
+            "purpose": "Mechanical applier for auto-fixable findings. Parses the finding's fix text into Replace or Add, applies bottom-up per file with +-2 line drift tolerance, rejects files outside the project.",
+            "symbols": [
+              "pub enum Fix { Replace { old, new, line }, Add { text, line, anchor } }",
+              "pub fn parse_fix(fix: &str) -> Option<Fix>",
+              "pub fn apply_fix(content: &str, fix: &Fix) -> Result<String, String>",
+              "pub fn apply_findings(repo_root: &Path, findings: &[ReviewFinding]) -> (Vec<String>, Vec<(String, String)>)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge.rs",
+            "purpose": "Output structs and JSON schema of the Resolve-review judge.",
+            "symbols": [
+              "pub enum ResolveAction { Fix, Block }",
+              "pub struct FindingInstruction { pub finding: String, pub instruction: String }",
+              "pub struct ResolveReviewOut { pub action: ResolveAction, #[serde(default)] pub instructions: Vec<FindingInstruction>, #[serde(default)] pub reason: String }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "Builds the Resolve-review judge input: loop header, open findings (f.line()), ledger excerpt, phase file excerpt. Also lists leftover LOW findings in the completion judge input (about L835). yolo_plan answers the ReviewCap gate with another-pass under YOLO.",
+            "symbols": [
+              "JudgeKind::ResolveReview arm of the input builder (about L420-455)",
+              "pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan>"
+            ]
+          },
+          {
+            "path": "assets/judges/resolve-review.md",
+            "purpose": "Prompt of the Resolve-review judge: decides fix (one exact instruction per open finding) or block; BLOCKER findings never reach it.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-core/src/submit.rs",
+            "purpose": "ReviewFinding and CodeReviewerSubmit, the reviewer's structured return. ReviewFinding::line() is the one-line format used in ledgers, fix instructions, and the judge input.",
+            "symbols": [
+              "pub struct ReviewFinding { pub severity: Severity, pub file: String, pub rule: String, pub description: String, pub fix: String, pub guidance: Option<String> }",
+              "pub fn line(&self) -> String",
+              "pub struct CodeReviewerSubmit { pub findings: Vec<ReviewFinding>, pub security_block: bool, pub ledger_path: String, pub summary: String }"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/config.rs",
+            "purpose": "Project profile review rules and the auto-fixable ID list.",
+            "symbols": [
+              "pub struct ReviewRule { pub id: String, pub rule: String, pub severity: String, pub auto_fixable: bool }",
+              "pub fn auto_fixable_ids(&self) -> Vec<String>  // excludes ids starting SEC-BLOCK and PHASE-REQ"
+            ]
+          },
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "JudgeKind::ResolveReview ('resolve-review'), WorkKind (Initial, Fix, BlockerFix, Resume, Rescue, Rerun), SessionEvent::AutofixApplied.",
+            "symbols": [
+              "pub enum WorkKind",
+              "SessionEvent::AutofixApplied { project: String, phase: u32, tests: bool, applied: Vec<String>, failed: Vec<(String, String)> }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "Maps SpawnInputs onto the typed spawn: for Fix and BlockerFix the instructions string becomes the spawn's findings text (Extras.findings) and the ledger file is passed.",
+            "symbols": [
+              "fn work_extras(inputs: &SpawnInputs) -> Extras"
+            ]
+          },
+          {
+            "path": "assets/agents/code-reviewer/prompt.md",
+            "purpose": "Tells the reviewer the exact one-line finding format, that auto-fixable rules must use the two exact fix forms, one finding per violation site, and that BLOCKER and PHASE-REQ-* are never auto-fixable. Also the ledger rules: sound WONTFIX is dropped on re-review, BLOCKER ignores WONTFIX (about L327-332, L390-406).",
+            "symbols": []
+          },
+          {
+            "path": "assets/agents/implementer/prompt.md",
+            "purpose": "The fix agent's prompt (fix agent is the implementer, or write-test for the test loop). Defines FIXED and WONTFIX ledger lines; WONTFIX needs a rationale (about L313).",
+            "symbols": []
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures for the split. review_loop_splits_autofix_fix_and_caps_at_three (L1773), only_low_findings_exit_the_loop (L1838), hard21_blocker_has_no_cap (L1850), yolo_answers_gates_and_extends_review_budget (L2248, covers the Resolve judge and non-convergence). The H helper records params {\"auto_fixable_ids\": [\"C1\"]} on every spawn (about L135).",
+            "symbols": [
+              "fn review_loop_splits_autofix_fix_and_caps_at_three()",
+              "fn finding(sev, rule) -> Value",
+              "fn review(findings) -> Value"
+            ]
+          },
+          {
+            "path": "docs/internals/pipeline.md",
+            "purpose": "Docs of the implement and review loop (section 'The implement and review loop', about L384-410), which describes the three-way split. Must be updated by any change to this behavior (CLAUDE.md pattern 9).",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "Docs of the YOLO review loop and the Resolve-review judge (about L240-252) and the judge table (L272).",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/event-log.md",
+            "purpose": "Explains why the auto-fixable IDs travel in params (fold purity), about L86-118.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a judge or filter is to run before findings reach the fix agent, check it against the Add or change a judge recipe in CLAUDE.md: judge.rs output struct and schema arm, judge_input.rs builder, assets/judges/<name>.md, a planner step in plan.rs loop_steps, the fold arm in on_decision, can_override, the runner validation arm (about runner.rs:2038), a conformance fixture, docs in gates-and-judges.md and pipeline.md, and an eval case in tests/evals/judges.toml.",
+          "Investigate the exact spawn block fields the fix agent receives (Findings:, Ledger file:) in crates/ostra-agents/src/spawn.rs."
+        ],
+        "not_covered": [
+          "How the web UI (web/src/features/gates/Findings.tsx) renders findings and the review-cap gate.",
+          "The native and harness executors' handling of the fix agent's tool calls and the spawn-block rendering in ostra-agents/src/spawn.rs and prompt rendering.",
+          "Exact judge routing, model tier and retry behavior for judge calls in runner.rs (only the ResolveReview output validation at about L2038 was seen) and the Resolve-review judge's eval cases, of which none exist in tests/evals/judges.toml.",
+          "The Rescue, Route answer, and Feedback judges that also feed fix text, other than where they hand text to the fix pass."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "When a Review execution finishes, SessionState::loop_finished (in the pure fold) reads the project's auto-fixable rule IDs from the execution's recorded params, computes a per-finding auto flag, then partitions: BLOCKER (or security_block) short-circuits to a BlockerFix; otherwise each finding goes to `apply` (auto), `remaining` (HIGH or MEDIUM, not auto), or `low` (everything else). LOW non-auto findings are stored in `leftover_low` for the completion report. If `apply` is non-empty the loop goes to LoopNext::Autofix { apply, remaining }; otherwise WorkLoop::after_findings(remaining, ...) decides: empty remaining means Stage or Done; iterations at the cap means CapReached (or Resolve under YOLO); otherwise LoopNext::Work { kind: Fix, instructions: fix_instructions(...) }.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Fold-time split of findings, using a fact recorded in the spawn event",
+            "snippet": {
+              "code": "            if review.security_block\n                || review\n                    .findings\n                    .iter()\n                    .any(|f| f.severity == Severity::Blocker)\n            {\n                // Hard rule 21: BLOCKER findings go alone to the fix agent, with no cap.\n                l.blocker_open = true;\n                l.next = LoopNext::Work {\n                    kind: WorkKind::BlockerFix,\n                    instructions: Some(blocker_instructions(&review.findings, &ledger)),\n                };\n                return;\n            }\n            l.blocker_open = false;\n            let mut apply = vec![];\n            let mut remaining = vec![];\n            let mut low = vec![];\n            for (f, is_auto) in review.findings.iter().zip(auto) {\n                if is_auto {\n                    apply.push(f.clone());\n                } else if matches!(f.severity, Severity::High | Severity::Medium) {\n                    remaining.push(f.clone());\n                } else {\n                    low.push(f.clone());\n                }\n            }\n            l.leftover_low = low;\n            if !apply.is_empty() {\n                l.next = LoopNext::Autofix { apply, remaining };\n            } else {\n                l.after_findings(remaining, yolo, &ledger);\n            }\n            return;",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:3637"
+            }
+          },
+          {
+            "description": "A finding is auto-fixable only when it is not BLOCKER, its rule does not start with SEC-BLOCK or PHASE-REQ, and its rule ID is in the project's list. The same exclusions are applied a second time when the list is built (ProjectProfile::auto_fixable_ids). Severity is not otherwise considered, so an auto-fixable HIGH, MEDIUM, or LOW finding is all applied by the engine.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-core/src/config.rs"
+            ],
+            "name": "Auto-fixable predicate",
+            "snippet": {
+              "code": "    fn auto_fixable(\n        &self,\n        _project: &str,\n        finding: &ReviewFinding,\n        autofix_ids: &BTreeSet<String>,\n    ) -> bool {\n        finding.severity != Severity::Blocker\n            && !finding.rule.starts_with(\"SEC-BLOCK\")\n            && !finding.rule.starts_with(\"PHASE-REQ\")\n            && autofix_ids.contains(&finding.rule)\n    }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:1463"
+            }
+          },
+          {
+            "description": "The runner, at spawn of a Review execution, inserts the profile's auto-fixable IDs into the ExecutionStarted params so the fold does not have to read project.toml.",
+            "files": [
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Auto-fixable IDs recorded in params at spawn (pattern 1 in CLAUDE.md)",
+            "snippet": {
+              "code": "        let mut params = built.params.clone();\n        if matches!(req.purpose, ExecPurpose::Review { .. })\n            && let Value::Object(map) = &mut params\n        {\n            let ids = profile\n                .as_ref()\n                .map(|p| p.auto_fixable_ids())\n                .unwrap_or_default();\n            map.insert(\n                AUTO_FIXABLE_PARAM.into(),\n                serde_json::to_value(ids).unwrap_or_default(),\n            );\n        }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/runner.rs:2529"
+            }
+          },
+          {
+            "description": "HIGH and MEDIUM findings go verbatim (ReviewFinding::line()) in one block, with the ledger path and an instruction to record FIXED or WONTFIX with rationale per finding. BLOCKER text is different: only BLOCKER findings, with an instruction to remove the code, not rewrite it. The planner passes the string as SpawnInputs.instructions with the ledger path; factory::work_extras maps it to the spawn's findings field.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/factory.rs"
+            ],
+            "name": "Fix text sent to the fix agent",
+            "snippet": {
+              "code": "pub fn fix_instructions(findings: &[ReviewFinding], ledger: &str) -> String {\n    let mut s = String::from(\"Fix exactly these review findings, and nothing else:\\n\");\n    for f in findings {\n        s.push_str(\"- \");\n        s.push_str(&f.line());\n        s.push('\\n');\n    }\n    s.push_str(&format!(\n        \"\\nRecord a FIXED or WONTFIX line with your rationale for each finding in the review ledger at {ledger}, because the reviewer reads it on the next pass.\"\n    ));\n    s\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:571"
+            }
+          },
+          {
+            "description": "A decision event for JudgeKind::ResolveReview is applied in SessionState::on_decision, only while the loop is in LoopNext::Resolve. `fix` increments resolve_rounds, records open_before_resolve, raises extra_cap by 1 (one verification review), and sets LoopNext::Work { Fix } whose text is the judge's per-finding instructions (or fix_instructions of the open findings when the judge returned no instructions). `block` sets LoopNext::Blocked with the judge's reason and the ledger path. The decision cannot be overridden (can_override returns false for it).",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Resolve-review judge applied in the fold",
+            "snippet": {
+              "code": "                match out.action {\n                    ResolveAction::Fix => {\n                        l.resolve_rounds += 1;\n                        l.open_before_resolve = Some(findings.len());\n                        // One verification pass per resolution round (review-cap.js).\n                        l.extra_cap += 1;\n                        let mut text = String::from(\n                            \"Resolve these review findings with the instructions given for each:\\n\",\n                        );\n                        for i in &out.instructions {\n                            text.push_str(&format!(\n                                \"- Finding: {}\\n  Instruction: {}\\n\",\n                                i.finding, i.instruction\n                            ));\n                        }\n                        if out.instructions.is_empty() {\n                            text = fix_instructions(&findings, &ledger);\n                        } else {\n                            text.push_str(&format!(\"\\nRecord a FIXED or WONTFIX line for each in the review ledger at {ledger}.\"));\n                        }\n                        l.next = LoopNext::Work {\n                            kind: WorkKind::Fix,\n                            instructions: Some(text),\n                        };\n                    }\n                    ResolveAction::Block => {\n                        l.next = LoopNext::Blocked {\n                            reason: format!(\n                                \"The engine could not resolve the open review findings: {}. Ledger: {ledger}\",\n                                out.reason\n                            ),\n                        };\n                    }\n                }",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:3091"
+            }
+          },
+          {
+            "description": "Each rule has an event-history fixture in tests/conformance/main.rs using the H helper and asserting Step::summary() strings. A change to the split needs a changed or new fixture in the same change.",
+            "files": [
+              "tests/conformance/main.rs"
+            ],
+            "name": "Conformance fixture for a rule",
+            "snippet": {
+              "code": "#[test]\nfn review_loop_splits_autofix_fix_and_caps_at_three() {\n    let mut h = H::plan_approved(&[\"p\"], one_phase(), SessionOptions::default());\n    h.run(\"spawn implementer\", impl_submit(1, &[\"src/a.rs\"]));\n    // C1 is auto-fixable in this project; PHASE-REQ never is, whatever its Fix text.\n    h.run(\n        \"spawn code-reviewer\",\n        review(&[\n            finding(\"LOW\", \"C1\"),\n            finding(\"HIGH\", \"PHASE-REQ-1\"),\n            finding(\"LOW\", \"C9\"),\n        ]),\n    );\n    assert_eq!(h.summaries(), vec![\"autofix phase 1\"]);\n    h.ev(SessionEvent::AutofixApplied {\n        project: \"p\".into(),\n        phase: 1,\n        tests: false,\n        applied: vec![\"x\".into()],\n        failed: vec![],\n    });\n    let fix = h.spawn_step(\"spawn implementer phase 1 fix\");\n    let text = fix.inputs.instructions.unwrap();\n    assert!(\n        text.contains(\"PHASE-REQ-1\") && !text.contains(\"C9\"),\n        \"only HIGH and MEDIUM go to the fix agent\"\n    );",
+              "language": "rust",
+              "source": "tests/conformance/main.rs:1773"
+            }
+          }
+        ],
+        "problem": "After a code-reviewer pass, the engine partitions the findings by severity, rule and the project's auto-fixable rule IDs, applies some mechanically, sends HIGH and MEDIUM to a fix agent verbatim, and keeps LOW ones for the report. Only at the review budget under YOLO does a model (the Resolve-review judge) look at the open findings. No step between the reviewer's submit and the fix agent evaluates whether a finding is correct, so a false-positive HIGH or MEDIUM finding always reaches the fix agent.",
+        "repo": "ostra",
+        "scope": "Task: how review findings are split and sent to the fix agent, including the resolve-review judge and the auto-fixable path. Covers the engine fold, planner, runner, autofix applier, judge, prompts, tests, and docs for the implement and test review loops. It does not cover the web UI rendering of findings, the Rescue/Route-answer judges beyond where they touch the fix text, or any proposed new judge.",
+        "title": "Review findings split, fix-agent routing, resolve-review judge, and the auto-fixable path"
+      },
+      "submit": {
+        "findings_summary": "The split happens in the pure fold, `SessionState::loop_finished` in state.rs. BLOCKER findings go alone to a BlockerFix pass. The rest are split into auto-fixable (rule ID recorded in the review's params, excluding SEC-BLOCK and PHASE-REQ), HIGH/MEDIUM (sent verbatim to the fix agent via `fix_instructions`, with the ledger path), and LOW (kept as `leftover_low`). Auto-fixable findings are applied by `autofix::apply_findings` through `Step::Autofix`, with no agent run. Failed HIGH/MEDIUM ones rejoin the fix list, but a failed LOW one is dropped. If nothing remains after the autofix, the loop stages without re-review. At the cap, a non-YOLO session gets a ReviewCap gate. Under YOLO the Resolve-review judge returns `fix` (per-finding instructions plus one verification review) or `block`, and it repeats only while the open count falls. Nothing before the fix agent checks whether a finding is a false positive. Conformance fixtures, prompts, and docs that cover this are listed in the document.",
+        "not_covered": [
+          "Web UI rendering of findings and the review-cap gate (web/src/features/gates/Findings.tsx)",
+          "Spawn-block rendering and the typed spawn struct fields the fix agent receives (crates/ostra-agents/src/spawn.rs)",
+          "Judge call routing, retry behavior, and eval coverage for Resolve-review in runner.rs and tests/evals/judges.toml"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How review findings are split after a code-reviewer pass, sent to the fix agent, handled by the auto-fixable path, and resolved by the Resolve-review judge in the engine; web UI and any new judge were left out.",
+        "sources_retrieved": 0
+      }
+    },
+    {
+      "task": "How a judge is added: its output struct and schema, input builder, prompt asset, the planner step, the fold, and overrides.",
+      "file": "ostra-research-20261002-085445-adding-a-judge.md",
+      "document": {
+        "approaches": [],
+        "areas": [
+          "ostra-engine",
+          "ostra-core",
+          "ostra-agents",
+          "ostra-server tests",
+          "docs",
+          "web"
+        ],
+        "asks": [
+          "Describe how a judge's output struct and JSON schema are defined.",
+          "Describe how the judge input builder works.",
+          "Describe the prompt asset and how it is found.",
+          "Describe the planner step that asks a judge.",
+          "Describe the fold that applies the decision.",
+          "Describe how a judge decision can be overridden."
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner",
+            "step": "The planner finds a missing fact and returns `Step::Judge { judge, subject }` from `next_steps(&SessionState, &PlanCtx)`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform_judge",
+            "step": "The runner dispatches the step by `Step::Judge { judge, subject } => self.perform_judge(session, judge, subject)`."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:perform_judge",
+            "step": "perform_judge takes a state snapshot, builds `(input, summary)` with `judge_input::judge_input(&st, kind, subject, &self.project_facts())` and the schema with `output_schema(kind, None)`, and defines the per-kind `validate` closure."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:call_judge",
+            "step": "call_judge loads the system prompt with `factory.judge_prompt(kind.as_str())` (error 'No prompt for the <kind> judge.' when missing) and resolves the `judge` route at `Tier::Advanced` via `resolve_route`."
+          },
+          {
+            "location": "crates/ostra-server/src/services.rs:judge",
+            "step": "`Services::judge(route, system, input, schema, Effort::Low)` runs one forced `decide` tool call through `ostra_providers::structured`; usage cost is added to `judge_cost` for the session. Up to 3 attempts; a result that fails `validate` or a provider error is retried."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:call_judge",
+            "step": "On a valid value, `append(SessionEvent::DecisionMade { id: DecisionId::new(), judge, subject, input_summary, output, reason: reason_of(&value) })`. Inner::append stores, folds, broadcasts, and wakes the driver."
+          },
+          {
+            "location": "crates/ostra-engine/src/state.rs:on_decision",
+            "step": "The fold records the decision and calls `on_decision(..., overriding = false)`, which deserializes `output` into the Out struct and updates session state (for example `self.stakes = Some((id, out.stakes))`, `self.set_track(out.track)`, `self.completion_decision = Some(id)`)."
+          },
+          {
+            "location": "crates/ostra-engine/src/plan.rs:Planner",
+            "step": "On the next `next_steps` call the planner sees the new state and no longer pushes the judge, and proceeds to the next rule."
+          },
+          {
+            "location": "crates/ostra-engine/src/runner.rs:override_decision",
+            "step": "Override path: POST /api/decisions/{id}/override calls `Engine::override_decision`, which checks `can_override`, validates the new output against the Out struct for the kinds listed, writes `mark_overridden` to the db, and appends `DecisionOverridden`; the fold calls `on_decision(..., overriding = true)`."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "JudgeKind, SessionEvent::DecisionMade/DecisionOverridden, DecisionView, JUDGE_ROUTE, pipeline enums used inside Out structs (Stakes, Track, Category)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-agents",
+            "role": "Embeds assets/ and serves judge_prompt(name)."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-providers",
+            "role": "structured(): the forced `decide` call; reached only through the Services trait."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-store",
+            "role": "decisions table and mark_overridden, set_can_override."
+          },
+          {
+            "kind": "external",
+            "name": "serde / serde_json",
+            "role": "Out structs and hand-written json! schemas."
+          },
+          {
+            "kind": "external",
+            "name": "ts-rs",
+            "role": "Generates web/src/api/gen/JudgeKind.ts and DecisionView.ts from #[ts(export)]."
+          }
+        ],
+        "external": [],
+        "files": [
+          {
+            "path": "crates/ostra-core/src/event.rs",
+            "purpose": "Defines JudgeKind (the closed enum of judges, TS-exported), its as_str (kebab-case, used as the prompt file name), and the SessionEvent::DecisionMade and DecisionOverridden events.",
+            "symbols": [
+              "pub enum JudgeKind { Classify, Sufficiency, Stakes, Track, RouteAnswer, Feedback, Rescue, ResolveReview, YoloAnswer, Completion }",
+              "impl JudgeKind { pub fn as_str(self) -> &'static str }",
+              "SessionEvent::DecisionMade { id: DecisionId, judge: JudgeKind, subject: Option<String>, input_summary: String, output: Value, reason: String }"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge.rs",
+            "purpose": "Output structs (ClassifyOut, SufficiencyOut, StakesOut, TrackOut, FeedbackOut, RouteAnswerOut, RescueOut, ResolveReviewOut, YoloAnswerOut, CompletionOut), shared sub-schemas, reason_of, prompt_name, and output_schema(kind, answer_schema) which returns the JSON schema of the forced `decide` call per kind.",
+            "symbols": [
+              "pub fn output_schema(kind: JudgeKind, answer_schema: Option<Value>) -> Value",
+              "pub fn reason_of(output: &Value) -> String",
+              "pub struct StakesOut { pub stakes: Stakes, #[serde(default)] pub reason: String }",
+              "pub struct ResolveReviewOut { pub action: ResolveAction, #[serde(default)] pub instructions: Vec<FindingInstruction>, #[serde(default)] pub reason: String }",
+              "pub const MAX_SUFFICIENCY_RESEARCH: usize = 3",
+              "pub const MAX_ANSWER_RESEARCH: usize = 3"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/judge_input.rs",
+            "purpose": "judge_input builds the single user message and a short input_summary per kind from SessionState; also holds yolo_plan and yolo_answer_from_judge for the YolloAnswer judge and per-gate YOLO handling.",
+            "symbols": [
+              "pub fn judge_input(s: &SessionState, kind: JudgeKind, subject: Option<&str>, projects: &[ProjectFacts]) -> (String, String)",
+              "pub struct ProjectFacts { key, path, initialized, stack, areas }",
+              "fn excerpt(path: &Path) -> String",
+              "fn excerpt_n(path: &Path, n: usize) -> String",
+              "pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan>"
+            ]
+          },
+          {
+            "path": "assets/judges/stakes.md",
+            "purpose": "Example prompt asset: sections Input, Decide, Output; ends with 'Call `decide` once with ...' naming the output fields. Prompts for all ten judges live in assets/judges/<as_str>.md (classify, sufficiency, stakes, track, feedback, route-answer, rescue, resolve-review, yolo-answer, completion).",
+            "symbols": []
+          },
+          {
+            "path": "assets/judges/resolve-review.md",
+            "purpose": "Example prompt asset for a judge that returns an action plus per-item instructions (fix or block).",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-agents/src/lib.rs",
+            "purpose": "judge_prompt(name) loads every embedded `judges/<stem>.md` asset into a cache keyed by file stem; no registration list exists, so a new file is found automatically.",
+            "symbols": [
+              "pub fn judge_prompt(name: &str) -> Option<&'static str>"
+            ]
+          },
+          {
+            "path": "crates/ostra-agents/src/tests.rs",
+            "purpose": "judges_and_references_resolve holds a hard-coded list of judge names and asserts each prompt exists and contains the text `decide`; a new judge is added to this list by hand.",
+            "symbols": [
+              "fn judges_and_references_resolve()"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/factory.rs",
+            "purpose": "SpawnFactory::judge_prompt forwards to ostra_agents::judge_prompt (line 107 to 112).",
+            "symbols": [
+              "fn judge_prompt(&self, name: &str) -> Option<String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/plan.rs",
+            "purpose": "Step::Judge { judge, subject }, its key() ('judge:<as_str>:<subject>') and summary() ('judge <as_str> [subject]'); every Planner rule that pushes a judge step.",
+            "symbols": [
+              "Step::Judge { judge: JudgeKind, subject: Option<String> }",
+              "pub fn key(&self) -> String",
+              "pub fn summary(&self) -> String",
+              "fn explore_complete(&mut self) -> bool",
+              "fn completion(&mut self)"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/state.rs",
+            "purpose": "The fold. SessionEvent::DecisionMade stores a DecisionRecord then calls on_decision(..., overriding=false); DecisionOverridden updates the record and calls on_decision(..., overriding=true). can_override decides per kind whether an override is still allowed.",
+            "symbols": [
+              "pub fn can_override(&self, id: &DecisionId) -> bool",
+              "fn on_decision(&mut self, id: &DecisionId, judge: JudgeKind, subject: Option<&str>, output: &Value, overriding: bool)",
+              "fn can_override_classify_now(&self) -> bool",
+              "pub decisions: map of DecisionId to a record with judge, subject, input_summary, output, reason, overridden, at"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/runner.rs",
+            "purpose": "Performs Step::Judge: perform_judge builds input and schema and a per-kind validate closure, call_judge resolves the `judge` route, retries 3 times and appends DecisionMade; override_decision validates an override and appends DecisionOverridden.",
+            "symbols": [
+              "async fn perform_judge(self: &Arc<Self>, session: &SessionId, kind: JudgeKind, subject: Option<String>) -> Result<(), EngineError>",
+              "async fn call_judge(&self, session, kind, subject, input, summary, schema, validate: impl Fn(&Value) -> bool) -> Result<Value, EngineError>",
+              "pub fn override_decision(&self, id: &DecisionId, output: Value, reason: String) -> Result<(), EngineError>"
+            ]
+          },
+          {
+            "path": "crates/ostra-engine/src/services.rs",
+            "purpose": "Services trait: judge(route, system, user, schema, effort) -> (Value, Usage); judge_prompt on SpawnFactory. The engine reaches the model only through these (crate boundary rule).",
+            "symbols": [
+              "async fn judge(&self, route: &ResolvedRoute, system: &str, user: &str, schema: Value, effort: Effort) -> Result<(Value, Usage), String>"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/services.rs",
+            "purpose": "Real Services::judge: providers.for_model(route.model) then ostra_providers::structured(...), the forced tool call.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-engine/src/view.rs",
+            "purpose": "Builds DecisionView for the API; can_override comes from SessionState::can_override, so the UI override button follows the fold's rule with no extra code.",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-core/src/api.rs",
+            "purpose": "DecisionView DTO (TS-exported) with judge, output, reason, overridden, can_override.",
+            "symbols": [
+              "pub struct DecisionView"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/src/api.rs",
+            "purpose": "POST /api/decisions/{id}/override handler calls engine.override_decision(&did, body.output, body.reason).",
+            "symbols": [
+              "async fn override_decision"
+            ]
+          },
+          {
+            "path": "tests/conformance/main.rs",
+            "purpose": "Planner fixtures. H::decide(judge, subject, output) appends DecisionMade; fixtures assert Step::summary() lists such as vec![\"judge track\"].",
+            "symbols": [
+              "fn decide(&mut self, judge: JudgeKind, subject: Option<&str>, output: Value) -> DecisionId",
+              "fn track_is_judged_after_research_and_light_skips_spec_and_plan()"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/tests/judge_evals.rs",
+            "purpose": "Live (ignored) routing evals over tests/evals/judges.toml, plus an offline test eval_cases_build_their_sessions. kind(judge: &str) maps a case's judge name to JudgeKind, and per-kind subjects are built in two match blocks; covers classify, track, feedback, sufficiency, stakes, route_answer, rescue only.",
+            "symbols": [
+              "fn kind(judge: &str) -> JudgeKind",
+              "async fn judge_routing_evals()",
+              "fn eval_cases_build_their_sessions()"
+            ]
+          },
+          {
+            "path": "crates/ostra-server/tests/e2e.rs",
+            "purpose": "ScriptedProvider judge() answers forced `decide` calls by sniffing which property the schema has (category, track, stakes, report_markdown, answer); a new judge the e2e run reaches needs a branch here.",
+            "symbols": [
+              "fn judge(req: &ChatRequest) -> Value"
+            ]
+          },
+          {
+            "path": "web/src/lib/events.ts",
+            "purpose": "A switch on the snake_case judge name that turns a decision's output into the 'Ostra chose X' phrase; one case per JudgeKind.",
+            "symbols": []
+          },
+          {
+            "path": "web/src/api/gen/JudgeKind.ts",
+            "purpose": "Generated TS union of the snake_case judge names; regenerated by cargo test -p ostra-core.",
+            "symbols": []
+          },
+          {
+            "path": "docs/internals/gates-and-judges.md",
+            "purpose": "Docs page that must be updated with any judge change: the 'Every judge' table, the lean-direction bullets, the 'Overriding a judge' table, the 'Measuring the judges' paragraph, and 'Where to look in the code'.",
+            "symbols": []
+          },
+          {
+            "path": "HANDOVER.md",
+            "purpose": "Section 8.3 'Judge calls' holds the judge table that is the behavior spec.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If a specific new judge is requested, a follow-up pass should identify the trigger point in plan.rs, the fold state field the planner will guard on, and whether the decision must be overridable.",
+          "Read apply_held/apply_loop_route in state.rs if the new judge applies its decision to held answers or review loops.",
+          "Check tests/evals/judges.toml and judge_evals.rs if the new judge needs an eval case."
+        ],
+        "not_covered": [
+          "ostra_providers::structured internals (how the forced `decide` tool is built from the schema, provider-specific schema limits).",
+          "The remaining judge_input helpers (amendment_facts, session_facts, research_facts, notes_facts, gate_facts, completion_input, yolo_plan) in detail; only the arms for Classify, Sufficiency, Stakes, Track, Feedback, RouteAnswer, Rescue, ResolveReview, YoloAnswer were read.",
+          "The fold branches that apply RouteAnswer and Feedback decisions (apply_held, apply_loop_route, apply_amendment_route, route_feedback, remember_parts) beyond the dispatch lines.",
+          "tests/evals/judges.toml case format and the full scoring code in judge_evals.rs.",
+          "Rule IDs and any HANDOVER section 20 details beyond what CLAUDE.md summarizes."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "JudgeKind serializes as snake_case (`route_answer`, `resolve_review`, `yolo_answer`) in events, the DecisionView, and the TS union. `as_str` returns kebab-case (`route-answer`, `resolve-review`, `yolo-answer`). `as_str` is used for the prompt file name (`assets/judges/<as_str>.md`), the Step key, and the Step summary. The eval TOML uses the snake_case spelling (`route_answer`). Single-word judges are the same in both.",
+            "files": [
+              "crates/ostra-core/src/event.rs",
+              "crates/ostra-engine/src/plan.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "JudgeKind naming: serde snake_case in the log and API, kebab-case for the prompt file",
+            "snippet": {
+              "code": "#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]\n#[serde(rename_all = \"snake_case\")]\n#[ts(export)]\npub enum JudgeKind {\n    Classify,\n    Sufficiency,\n    Stakes,\n    Track,\n    RouteAnswer,\n    Feedback,\n    Rescue,\n    ResolveReview,\n    YoloAnswer,\n    Completion,\n}\n\nimpl JudgeKind {\n    pub fn as_str(self) -> &'static str {\n        match self {\n            JudgeKind::RouteAnswer => \"route-answer\",\n            JudgeKind::ResolveReview => \"resolve-review\",\n            JudgeKind::YoloAnswer => \"yolo-answer\",\n            /* other arms are the lower-case name */\n        }\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-core/src/event.rs:91"
+            }
+          },
+          {
+            "description": "A judge's shape exists three times and nothing ties them together except tests: (1) the serde struct in judge.rs with `#[serde(default)] reason: String` (every output carries `reason`, read by reason_of); (2) an arm in `output_schema` with `required` listing every field the model must send; (3) an arm in the `validate` closure in `perform_judge` that does `serde_json::from_value::<XOut>(v.clone()).is_ok()` (Feedback additionally requires non-empty targets; YoloAnswer returns true). A value failing validate is retried up to 3 attempts total with 500 ms times attempt back-off, then the session fails (Completion falls back to a state-only report; YoloAnswer leaves the gate open with a Note). Fields the fold treats as optional are `#[serde(default)]` in the struct but still listed in `required` in the schema (see Stakes, Track).",
+            "files": [
+              "crates/ostra-engine/src/judge.rs",
+              "crates/ostra-engine/src/runner.rs"
+            ],
+            "name": "Output struct plus hand-written JSON schema plus runner validator (three copies of one shape)",
+            "snippet": {
+              "code": "// judge.rs\n#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]\npub struct StakesOut {\n    pub stakes: ostra_core::pipeline::Stakes,\n    #[serde(default)]\n    pub reason: String,\n}\n\n// output_schema(kind, ..)\nJudgeKind::Stakes => json!({\n    \"type\": \"object\",\n    \"properties\": {\"stakes\": {\"type\": \"string\", \"enum\": [\"low\",\"medium\",\"high\"]}, \"reason\": reason},\n    \"required\": [\"stakes\", \"reason\"]\n}),\n\n// runner.rs perform_judge validate closure\nJudgeKind::Stakes => serde_json::from_value::<judge::StakesOut>(v.clone()).is_ok(),",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/judge.rs:56"
+            }
+          },
+          {
+            "description": "`judge_input` is a single `match kind` with no wildcard arm, so a new JudgeKind fails to compile until an arm is added. Each arm writes Markdown sections with `writeln!` into one String (`# Request`, facts about the session, excerpts of files on disk via `excerpt`/`excerpt_n`) and returns a short summary stored on the decision as input_summary. The subject string carries the thing the judge is about (a gate id, an execution id, 'phase,tests' loop key via parse_loop_key, a comma list of explore task indexes, an amendment index, a feedback round index). The prompt describes the same sections in its `## Input` paragraph.",
+            "files": [
+              "crates/ostra-engine/src/judge_input.rs"
+            ],
+            "name": "Input builder: one match arm returns (user message, input_summary)",
+            "snippet": {
+              "code": "JudgeKind::Stakes => {\n    let _ = writeln!(m, \"# Request\\n\\n{request}\\n\");\n    if let Some(spec) = &s.spec.current {\n        let _ = writeln!(\n            m,\n            \"# Approved spec\\n\\n{} deliverables, {} requirements.\\nSummary: {}\\n\\n{}\",\n            spec.deliverables,\n            spec.requirements,\n            spec.summary,\n            excerpt(Path::new(&spec.spec_path))\n        );\n    }\n    let _ = writeln!(m, \"\\nProjects in scope: {}\", s.scope.join(\", \"));\n    (m, \"Approved spec and request\".into())\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/judge_input.rs:159"
+            }
+          },
+          {
+            "description": "`assets/judges/<as_str>.md`. Structure used by stakes.md and resolve-review.md: H1 '<Name> judge', one paragraph on the situation and why, `## Input` (what the user message holds), `## Decide` (table or bullets of the choices, then the lean direction with a 'because' clause), `## Output` ('Call `decide` once with <fields> and `reason`: one or two sentences for the user'). The prompt must name `decide`, which the test judges_and_references_resolve asserts. Rule IDs are cited in the prompt when the judge implements a rule. Prose follows HANDOVER section 20 (no em dashes, sentence-case headings, keep 'because'). Assets are embedded and loaded by file stem with no registry.",
+            "files": [
+              "assets/judges/stakes.md",
+              "assets/judges/resolve-review.md",
+              "crates/ostra-agents/src/lib.rs",
+              "crates/ostra-agents/src/tests.rs"
+            ],
+            "name": "Prompt asset: short Markdown with Input, Decide, Output and a `decide` instruction",
+            "snippet": {
+              "code": "## Output\n\nCall `decide` once with `stakes` (`low`, `medium`, or `high`) and `reason`: one or two sentences for the user\nnaming the spec facts that decided it.",
+              "language": "markdown",
+              "source": "assets/judges/stakes.md:24"
+            }
+          },
+          {
+            "description": "The planner pushes `Step::Judge { judge, subject }` when a fact the next step needs is missing from fold state, and stops pushing once the fold has recorded it. The guard is fold state, not the event log: Classify checks `s.classify.is_none()`, Track checks `s.track` is `None`, Stakes checks `s.stakes` is `None`, Completion checks `s.completion_decision`, Sufficiency checks per-task `judged` flags and `sufficiency_rounds < SUFFICIENCY_ROUNDS`, Rescue/ResolveReview/RouteAnswer are keyed by the loop's `LoopNext` variant (`Rescue`, `Resolve`/`CapReached` under YOLO, `AwaitRoute`). Step::key() is 'judge:<kebab>:<subject>' so the runner does not start the same judge twice while one is in flight. The step carries no input; the runner builds it from a state snapshot. A new rule needs a fixture in tests/conformance/main.rs (Rule citation in a one-line comment).",
+            "files": [
+              "crates/ostra-engine/src/plan.rs",
+              "tests/conformance/main.rs"
+            ],
+            "name": "Planner step: a pure rule that pushes Step::Judge until fold state records the decision",
+            "snippet": {
+              "code": "// Light by default: the Track judge escalates to the full track on evidence.\nlet Some(track) = s.track else {\n    self.push(Step::Judge {\n        judge: JudgeKind::Track,\n        subject: None,\n    });\n    return;\n};\n\n// conformance fixture\nh.run(\"spawn explore explore#0\", explore_submit(0, &[]));\nassert_eq!(h.summaries(), vec![\"judge track\"]);\nh.decide(\n    JudgeKind::Track,\n    None,\n    json!({\"track\": \"light\", \"reason\": \"r\"}),\n);",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/plan.rs:619 and tests/conformance/main.rs:3055"
+            }
+          },
+          {
+            "description": "`SessionEvent::DecisionMade` inserts a decision record (overridden: false) and calls `on_decision(id, judge, subject, output, false)`. `on_decision` is an exhaustive `match judge`. Each arm deserializes the stored `output` into the `XOut` struct and applies it; an output that does not parse is ignored (Stakes, Track, Rescue, ResolveReview, RouteAnswer, Feedback) except Classify, which sets `failed`. Arms also check that the decision is still relevant (Rescue requires `LoopNext::Rescue` for the same exec; ResolveReview requires `LoopNext::Resolve`; Feedback requires round route to be `None`) so a stale decision is dropped. The fold must stay a pure function of the log: any outside fact must be recorded in the event.",
+            "files": [
+              "crates/ostra-engine/src/state.rs"
+            ],
+            "name": "Fold: on_decision matches on JudgeKind and tolerates bad output",
+            "snippet": {
+              "code": "SessionEvent::DecisionMade { id, judge, subject, input_summary, output, reason } => {\n    self.decisions.insert(id.clone(), /* record, overridden: false */);\n    self.on_decision(id, *judge, subject.as_deref(), output, false);\n}\nSessionEvent::DecisionOverridden { id, output, reason } => {\n    let Some(d) = self.decisions.get_mut(id) else { return; };\n    d.output = output.clone();\n    d.reason = reason.clone();\n    d.overridden = true;\n    let (judge, subject) = (d.judge, d.subject.clone());\n    self.on_decision(id, judge, subject.as_deref(), output, true);\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:1623"
+            }
+          },
+          {
+            "description": "An override is allowed only for Classify, Stakes, Track, and Sufficiency; every other kind returns `false` from the `_ =>` arm of `SessionState::can_override`. Overriding needs edits in these places: (1) `can_override` arm (the `_ => false` arm is a wildcard so a new kind is silently non-overridable); (2) the `valid` match in `Engine::override_decision` in runner.rs, whose `_ => false` arm makes the API return 'The override does not match the decision's output shape.' for any kind not listed; (3) the `overriding` branch of the kind's arm in `on_decision`, which re-checks the same condition because a late override event may arrive (Classify uses can_override_classify_now, Stakes and Track re-check, Sufficiency removes unstarted Sufficiency-origin explore tasks). `DecisionView.can_override` is computed from `can_override`, so the UI button needs no change. The `decisions` table also has a `can_override` column with `set_can_override` in ostra-store; the view value comes from the fold.",
+            "files": [
+              "crates/ostra-engine/src/state.rs",
+              "crates/ostra-engine/src/runner.rs",
+              "crates/ostra-engine/src/view.rs",
+              "crates/ostra-server/src/api.rs"
+            ],
+            "name": "Override: three gates must all agree",
+            "snippet": {
+              "code": "pub fn can_override(&self, id: &DecisionId) -> bool {\n    let Some(d) = self.decisions.get(id) else { return false; };\n    if self.is_terminal() { return false; }\n    match d.judge {\n        JudgeKind::Classify => {\n            !self.any_explore_started()\n                && self.phases.values().all(|p| p.impl_loop.work_count == 0)\n        }\n        JudgeKind::Stakes => self.plan.runs.is_empty() && !self.any_phase_started(),\n        JudgeKind::Track => self.spec.runs.is_empty() && !self.any_phase_started(),\n        JudgeKind::Sufficiency => self.spec.runs.is_empty(),\n        _ => false,\n    }\n}",
+              "language": "rust",
+              "source": "crates/ostra-engine/src/state.rs:2893"
+            }
+          }
+        ],
+        "problem": "A judge is a single forced-schema model call whose result is stored as a DecisionMade event and applied by the fold. Adding one touches a closed enum in ostra-core, three files in ostra-engine (judge.rs, judge_input.rs, plan.rs/state.rs/runner.rs), one embedded prompt asset, tests, evals, docs and a TypeScript switch. Several of these places are exhaustive matches that fail to compile for a new variant, and several are not (override, validation of overrides, docs tables, evals), so the full list has to be known.",
+        "recommendation": null,
+        "repo": "ostra",
+        "scope": "Task: how a judge is added: its output struct and schema, input builder, prompt asset, the planner step, the fold, and overrides. Covers the existing code path for the ten JudgeKind variants and every place a new variant must be handled. It does not design any specific new judge and did not open the provider-level structured() implementation or the web UI beyond the exhaustive switch.",
+        "sources": [],
+        "title": "Adding a judge"
+      },
+      "submit": {
+        "findings_summary": "A judge is a JudgeKind variant (ostra-core event.rs) with an Out struct and a hand-written output_schema arm (judge.rs), a judge_input arm (judge_input.rs, an exhaustive match returning the user message and input_summary), and a prompt at assets/judges/<kebab-name>.md that must name `decide` (found by file stem, no registry). The planner pushes Step::Judge until fold state records the decision. The runner's perform_judge builds the input, schema and a validate closure, and call_judge retries 3 times and appends DecisionMade. The fold's on_decision (exhaustive match) applies the decision. Overrides are opt-in in three non-compiler-enforced places: can_override, the `valid` match in Engine::override_decision, and the `overriding` branch of on_decision. Other places to touch: a conformance fixture, the web events.ts switch, the regenerated JudgeKind.ts, the hand-listed prompt test, the e2e scripted judge, the evals, and docs/internals/gates-and-judges.md.",
+        "not_covered": [
+          "ostra_providers::structured internals and provider-specific schema limits",
+          "Most judge_input helper functions beyond the per-kind arms",
+          "The fold functions that apply RouteAnswer and Feedback decisions (apply_held, apply_loop_route, route_feedback, remember_parts)",
+          "tests/evals/judges.toml case format and judge_evals.rs scoring",
+          "HANDOVER section 20 prose rules beyond the CLAUDE.md summary"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How a judge is added in ostra-engine, ostra-core and ostra-agents: output struct and schema, input builder, prompt asset, planner step, fold, and overrides, plus the tests, evals, docs and web places that follow. It does not design a specific new judge.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

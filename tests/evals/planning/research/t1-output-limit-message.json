@@ -1,0 +1,170 @@
+{
+  "pin": "7bba9116377953b1e3b8dda6befb24b07fec32c7",
+  "model": "anthropic:claude-sonnet-5-5",
+  "recorded": "2026-10-02T08:39:38.041975195+00:00",
+  "docs": [
+    {
+      "task": "How the native agent loop handles a response that stops at the output limit: the continue prompt, the retry count, and the failure it ends with.",
+      "file": "ostra-research-20261002-083831-native-loop-output-limit.md",
+      "document": {
+        "areas": [
+          "ostra-exec-native",
+          "ostra-providers",
+          "ostra-core"
+        ],
+        "asks": [
+          "The continue prompt the loop sends after an output-limit stop",
+          "The retry count",
+          "The failure the loop ends with"
+        ],
+        "data_flow": [
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:535",
+            "step": "Each turn builds a ChatRequest with `max_tokens` set to the model's whole output limit: `ostra_core::pricing::max_output(model)` from models.dev, or DEFAULT_MAX_OUTPUT (32,000) when unlisted, clamped to u32::MAX."
+          },
+          {
+            "location": "crates/ostra-providers/src/anthropic.rs:finish",
+            "step": "The provider streams the response. Anthropic maps stop reasons `max_tokens` and `model_context_window_exceeded` to StopReason::MaxTokens; OpenAI maps an incomplete response with `max_output_tokens` to the same."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:600",
+            "step": "The loop records usage, saves non-blank text as `final_text`, records the assistant message and pushes it onto `messages`, and computes `has_tools` from `resp.tool_uses()`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:630",
+            "step": "`match &resp.stop` reaches `StopReason::MaxTokens if !has_tools`. If `continues >= MAX_TOKEN_CONTINUES` (3), the run returns `self.fail(\"The model kept hitting its output limit without finishing.\")`."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:636",
+            "step": "Otherwise `continues` is incremented, the user message \"You reached the output limit. Continue from exactly where you stopped.\" is recorded to the transcript (host.record_message) and pushed, and the loop `continue`s to the next turn, which sends the whole conversation including the truncated assistant message and the prompt. A turn from the loop counts toward MAX_TURNS (400)."
+          },
+          {
+            "location": "crates/ostra-exec-native/src/lib.rs:363",
+            "step": "On the failure, Run::fail emits a Status delta with the message and returns ExecutionResult { status: Error, error: Some(message), submit: None, usage: total so far }. final_text is not set on this path, so the text of the truncated responses is not returned."
+          }
+        ],
+        "date": "2026-10-02",
+        "dependencies": [
+          {
+            "kind": "internal",
+            "name": "ostra-providers",
+            "role": "StopReason, ChatRequest.max_tokens, ChatResponse, provider stop-reason mapping."
+          },
+          {
+            "kind": "internal",
+            "name": "ostra-core",
+            "role": "pricing::max_output (models.dev catalog), ExecutionResult, ExecutionDelta."
+          }
+        ],
+        "files": [
+          {
+            "path": "crates/ostra-exec-native/src/lib.rs",
+            "purpose": "Native loop. Defines MAX_TOKEN_CONTINUES, the per-run `continues` counter, the MaxTokens match arm with the continue prompt and the failure, and Run::fail.",
+            "symbols": [
+              "pub const MAX_TOKEN_CONTINUES: usize = 3;",
+              "pub const MAX_TURNS: usize = 400;",
+              "pub const DEFAULT_MAX_OUTPUT: u32 = 32_000;",
+              "fn fail(&self, message: String) -> ExecutionResult",
+              "StopReason::MaxTokens if !has_tools => { ... }"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/lib.rs",
+            "purpose": "Defines StopReason, the provider-neutral stop reason the loop matches on.",
+            "symbols": [
+              "pub enum StopReason { EndTurn, ToolUse, MaxTokens, PauseTurn, Refusal, Other(String) }"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/anthropic.rs",
+            "purpose": "Maps Anthropic stop reasons to StopReason in finish(). Both `max_tokens` and `model_context_window_exceeded` become MaxTokens (line 761).",
+            "symbols": [
+              "fn finish(self, requested_model: &str) -> ChatResponse"
+            ]
+          },
+          {
+            "path": "crates/ostra-providers/src/openai.rs",
+            "purpose": "Maps an incomplete response with reason `max_output_tokens` to StopReason::MaxTokens (line 384).",
+            "symbols": []
+          },
+          {
+            "path": "crates/ostra-core/src/exec.rs",
+            "purpose": "ExecutionResult::error builds the Error-status result carrying the failure message in `error`.",
+            "symbols": [
+              "pub struct ExecutionResult { status, submit, final_text, usage, native_session_id, error }",
+              "pub fn error(message: impl Into<String>) -> Self"
+            ]
+          },
+          {
+            "path": "crates/ostra-exec-native/src/tests.rs",
+            "purpose": "Tests. asks_for_the_whole_output_limit_of_the_model covers max_tokens on the request. No test asserts the continue prompt, the count of 3, or the failure message; a_compaction_without_summary_is_not_retried_every_turn pushes a MaxTokens response with no content only as filler.",
+            "symbols": [
+              "async fn asks_for_the_whole_output_limit_of_the_model()",
+              "async fn a_compaction_without_summary_is_not_retried_every_turn()"
+            ]
+          },
+          {
+            "path": "docs/internals/executors.md",
+            "purpose": "Docs page with the stop-reason table (line 157: output limit, no tool call, asks to continue at most 3 times). Pattern 9 of CLAUDE.md requires a change in this behavior to update it.",
+            "symbols": []
+          },
+          {
+            "path": "tests/evals/coordination.toml",
+            "purpose": "Eval fixtures that state MAX_TOKEN_CONTINUES = 3 as a fact-check target (lines 29, 55, 62, 346-387). They would be stale if the constant changes.",
+            "symbols": []
+          }
+        ],
+        "lessons": [],
+        "next_steps": [
+          "If the message or count must change, the locations to recheck are crates/ostra-exec-native/src/lib.rs:32 and :630-643, docs/internals/executors.md:157, tests/evals/coordination.toml, and a new test in crates/ostra-exec-native/src/tests.rs, since none exists for this arm."
+        ],
+        "not_covered": [
+          "How the engine and runner treat the Error ExecutionResult (the execution_failed gate and its retry policy are documented in docs/internals/gates-and-judges.md line 209, not traced here).",
+          "The harness executors, whose Stop hook has a separate limit of two blocked stops.",
+          "ScriptedProvider test helpers beyond the tests named in files."
+        ],
+        "open_questions": [],
+        "patterns": [
+          {
+            "description": "Inside the per-turn loop, after the assistant response is recorded and pushed onto `messages`, the loop matches `resp.stop`. A MaxTokens stop with no tool_use blocks either fails the run (counter at the cap) or increments `continues`, records and pushes a fixed user message, and starts the next turn. `continues` is declared once before the `for _ in 0..MAX_TURNS` loop and is never reset, so the cap of 3 is per execution, not per consecutive run of truncations. A MaxTokens stop that has tool calls does not enter this arm: it falls to `_ => {}` and the tools run.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Output-limit continue arm in the native loop",
+            "snippet": {
+              "code": "StopReason::MaxTokens if !has_tools => {\n    if continues >= MAX_TOKEN_CONTINUES {\n        return self.fail(\n            \"The model kept hitting its output limit without finishing.\".into(),\n        );\n    }\n    continues += 1;\n    let m = Message::user_text(\n        \"You reached the output limit. Continue from exactly where you stopped.\",\n    );\n    self.record(&m);\n    messages.push(m);\n    continue;\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:630"
+            }
+          },
+          {
+            "description": "The same helper ends the run for refusal, model-call failure, and the turn ceiling. It emits ExecutionDelta::Status with the message, then returns ExecutionResult::error(message) with the accumulated usage.",
+            "files": [
+              "crates/ostra-exec-native/src/lib.rs"
+            ],
+            "name": "Run::fail ends a run as an error and emits the message as a Status delta",
+            "snippet": {
+              "code": "fn fail(&self, message: String) -> ExecutionResult {\n    self.host.emit(ExecutionDelta::Status {\n        message: message.clone(),\n    });\n    let mut r = ExecutionResult::error(message);\n    r.usage = *self.usage.lock();\n    r\n}",
+              "language": "rust",
+              "source": "crates/ostra-exec-native/src/lib.rs:363"
+            }
+          }
+        ],
+        "problem": "When a model response ends because it hit the output limit and contains no tool call, the native loop in crates/ostra-exec-native/src/lib.rs sends a fixed user message asking the model to continue, up to a fixed number of times per execution, and then ends the run as an error with a fixed message. The exact text, the count, and the conditions that trigger and count the retries are spread over a constant, one match arm, and the Run::fail helper.",
+        "repo": "ostra",
+        "scope": "Task: how the native agent loop handles a response that stops at the output limit: the continue prompt, the retry count, and the failure it ends with. Covers crates/ostra-exec-native, the provider stop-reason mapping, ExecutionResult, and the executors doc page. Does not cover how the engine reacts to the resulting error execution, or the harness executors.",
+        "title": "Native agent loop: response that stops at the output limit"
+      },
+      "submit": {
+        "findings_summary": "In crates/ostra-exec-native/src/lib.rs (line 630), a StopReason::MaxTokens response with no tool calls makes the loop push the user message \"You reached the output limit. Continue from exactly where you stopped.\" and start another turn. This happens at most MAX_TOKEN_CONTINUES = 3 times per execution; the `continues` counter is never reset. On the fourth such stop, Run::fail ends the run as ExecutionStatus::Error with the message \"The model kept hitting its output limit without finishing.\" It also emits that message as a Status delta. A MaxTokens stop that carries tool calls skips this arm and runs the tools. Anthropic's `max_tokens` and `model_context_window_exceeded` and OpenAI's `max_output_tokens` all map to MaxTokens. The docs page docs/internals/executors.md line 157 and the eval fixtures in tests/evals/coordination.toml state the count of 3, and no unit test covers the continue arm.",
+        "not_covered": [
+          "How the engine and runner handle the resulting Error ExecutionResult (execution_failed gate and retry policy)",
+          "Harness executors' separate Stop-hook limit"
+        ],
+        "open_questions": 0,
+        "scope_covered": "How the native loop handles an output-limit stop (continue prompt, retry cap, terminal failure) in crates/ostra-exec-native and the provider stop-reason mapping; the engine's reaction to the error result and harness executors were left out.",
+        "sources_retrieved": 0
+      }
+    }
+  ]
+}

@@ -6,18 +6,22 @@
 //! instructions.
 
 mod check;
+mod facts;
 mod merge;
+mod refs;
 mod render;
 mod store;
 
-pub use check::{DocIssue, IssueLevel, check, check_submit};
-pub use merge::{MergeError, apply_update};
+pub use check::{DocIssue, IssueLevel, check, check_submit, check_written};
+pub use facts::{changed_since_research, render_code_facts};
+pub use merge::{MergeError, Merged, apply_update};
 pub use render::render;
 pub use store::{DocKind, Written, doc_kind_for, json_path, load, load_view, phase_path, write};
 
 use crate::pipeline::Question;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use ts_rs::TS;
 
 // ---------------------------------------------------------------------------------------------
@@ -127,6 +131,22 @@ pub struct ResearchDoc {
     pub not_covered: Vec<String>,
     #[serde(default)]
     pub next_steps: Vec<String>,
+    /// Written by Ostra, never by the agent, so the schema the model sees leaves it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub snapshot: Option<FileSnapshot>,
+}
+
+/// Rule D2a: the repo files a research document names, as they were when it was written, so a
+/// later stage can tell which of them changed since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileSnapshot {
+    /// Absolute root of the repo the paths are relative to.
+    pub root: String,
+    /// Repo-relative path to its content hash, `dir` for a directory, or `missing`.
+    pub files: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]

@@ -55,8 +55,13 @@ pub struct SpawnInputs {
     pub projects_in_scope: Vec<(String, PathBuf)>,
     pub answers: Vec<QuestionAnswer>,
     pub changes: Vec<String>,
+    /// Rules D2a and D4a: the research documents whose code facts the agent gets. One that reads
+    /// the documents gets the files that changed since; one that may not gets the facts file.
+    pub code_facts: Vec<PathBuf>,
     /// Fact-check findings a generator must resolve, or fix instructions.
     pub findings: Option<String>,
+    /// Rule D4b: the plan phases a failed fact-check's findings name.
+    pub revise_phases: Vec<u32>,
     pub target: Option<PathBuf>,
     pub target_type: Option<FactTarget>,
     pub prior_findings: Option<String>,
@@ -90,6 +95,14 @@ pub struct SpawnInputs {
     pub docs_area: Option<ostra_core::book::DocsArea>,
     pub docs_areas: Vec<ostra_core::book::DocsArea>,
     pub init_item: Option<String>,
+}
+
+impl SpawnInputs {
+    /// Rules D2a and D4a: an agent that may not read the research documents gets their code
+    /// facts as a file the runner writes; one that reads them gets only what changed since.
+    pub fn wants_code_facts_file(&self) -> bool {
+        !self.code_facts.is_empty() && self.research_docs.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -816,6 +829,8 @@ impl<'a> Planner<'a> {
             let inputs = SpawnInputs {
                 task: Some(s.full_request()),
                 research_docs: s.research_docs(),
+                // Rule D2a: the spec learns which cited files changed since research.
+                code_facts: s.research_docs(),
                 projects_in_scope: self.scope_paths(),
                 // A revision gets only the input its spec does not reflect yet, so it edits
                 // instead of rewriting.
@@ -877,6 +892,7 @@ impl<'a> Planner<'a> {
                     spec_file: Some(spec_path),
                     source_check: Some(source_check.into()),
                     research_docs: s.research_docs(),
+                    code_facts: s.research_docs(),
                     ..Default::default()
                 };
                 self.spawn(
@@ -982,17 +998,25 @@ impl<'a> Planner<'a> {
                 );
                 return false;
             }
-            // Rule D4: the plan reads the spec and its own earlier plan, nothing else. Findings are
-            // the one addition, on a FAIL re-run (Rule D5). After a spec change (Rule D10) the
-            // earlier plan is revised in place against the spec's diff.
+            // Rule D4: the plan reads the spec and its own earlier plan, never a research
+            // document. It gets the code facts the engine extracts from them (Rule D4a), and on a
+            // FAIL re-run the findings (Rule D5) and the phases they name (Rule D4b). After a spec
+            // change (Rule D10) the earlier plan is revised in place against the spec's diff.
+            let findings = if t.invalidated {
+                None
+            } else {
+                t.pending_findings.clone()
+            };
+            let revise_phases = match (&findings, t.check_for_current(), &t.current) {
+                (Some(_), Some(check), Some(plan)) => phases_named(&check.findings, plan),
+                _ => vec![],
+            };
             let inputs = SpawnInputs {
                 spec_file: Some(spec_path),
                 projects_in_scope: self.scope_paths(),
-                findings: if t.invalidated {
-                    None
-                } else {
-                    t.pending_findings.clone()
-                },
+                code_facts: s.research_docs(),
+                findings,
+                revise_phases,
                 target: t
                     .current
                     .as_ref()
@@ -1022,13 +1046,15 @@ impl<'a> Planner<'a> {
         match t.check_for_current() {
             None => {
                 let pass = t.checks.len() as u32 + 1;
-                // Rules D3b and D5: a plan target always uses citations and gets the approved spec.
+                // Rules D3b and D5: a plan target always uses citations and gets the approved spec,
+                // and the code facts the plan had (Rule D4a).
                 let inputs = SpawnInputs {
                     target: Some(plan_path),
                     target_type: Some(FactTarget::Plan),
                     prior_findings: Some(t.prior_findings()),
                     spec_file: Some(spec_path),
                     source_check: Some("citations".into()),
+                    code_facts: s.research_docs(),
                     ..Default::default()
                 };
                 self.spawn(
@@ -2088,6 +2114,36 @@ fn last_exec_of(s: &SessionState, f: impl Fn(&ExecPurpose) -> bool) -> Option<Ex
 }
 
 /// Phase Index rows as the approval card shows them.
+/// Rule D4b: the plan's phases that a failed fact-check's findings name, from each finding's
+/// element (`phase 2`, `step 2.3`) or location (`...-phase-2.md`, `Phase 2, Step 2.3`).
+fn phases_named(
+    findings: &[ostra_core::submit::FactCheckFinding],
+    plan: &ostra_core::submit::PlanSubmit,
+) -> Vec<u32> {
+    let mut named = BTreeSet::new();
+    for f in findings {
+        for text in f.element.iter().chain([&f.location]) {
+            let lower = text.to_ascii_lowercase();
+            for marker in ["phase-", "phase ", "step "] {
+                for (i, _) in lower.match_indices(marker) {
+                    let digits: String = lower[i + marker.len()..]
+                        .chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect();
+                    if let Ok(n) = digits.parse::<u32>() {
+                        named.insert(n);
+                    }
+                }
+            }
+        }
+    }
+    plan.phases
+        .iter()
+        .map(|p| p.id)
+        .filter(|id| named.contains(id))
+        .collect()
+}
+
 pub fn plan_phase_infos(plan: &ostra_core::submit::PlanSubmit) -> Vec<PhaseInfo> {
     plan.phases
         .iter()
