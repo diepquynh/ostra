@@ -8,7 +8,7 @@ it, and every command the binary accepts.
 
 | Tool | Why Ostra needs it |
 | --- | --- |
-| [rustup](https://rustup.rs) | `rust-toolchain.toml` pins Rust 1.98.1 with `rustfmt` and `clippy`. rustup reads that file and installs the version on the first `cargo` call, so you never pick a version yourself. |
+| [rustup](https://rustup.rs) | `rust-toolchain.toml` pins Rust 1.99.0 with `rustfmt` and `clippy`. rustup reads that file and installs the version on the first `cargo` call, so you never pick a version yourself. |
 | Node.js 24 with npm | Builds the console in `web/`. The binary embeds the built files at compile time, so the console must be built before the binary. |
 | A C compiler | A few dependencies compile C code, SQLite among them. Use `build-essential` on Debian and Ubuntu, `gcc` and `make` on Fedora, or `xcode-select --install` on macOS. |
 | `git` | Ostra clones, branches, stages, and commits in your projects. |
@@ -214,7 +214,7 @@ You need:
 
 | Tool | Why |
 | --- | --- |
-| [rustup](https://rustup.rs) | Installs the pinned Rust 1.98.1 for the `x86_64-pc-windows-msvc` target on the first `cargo` call. |
+| [rustup](https://rustup.rs) | Installs the pinned Rust 1.99.0 for the `x86_64-pc-windows-msvc` target on the first `cargo` call. |
 | Visual Studio Build Tools with the C++ workload and a Windows SDK | The MSVC linker and the C compiler for SQLite and the TLS library. |
 | Node.js 24 with npm | Builds the console in `web/`. |
 | [Git for Windows](https://git-scm.com/download/win) | Git itself, and Git Bash, which the Bash tool runs. Ostra refuses the WSL `bash.exe`. |

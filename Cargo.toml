@@ -9,7 +9,7 @@ exclude = ["tests/windows-probes"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-rust-version = "1.98"
+rust-version = "1.99"
 
 [workspace.dependencies]
 ostra-core = { path = "crates/ostra-core" }
