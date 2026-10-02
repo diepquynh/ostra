@@ -2900,7 +2900,10 @@ async fn folder_commands_run_only_after_approval() {
         app_dir.join(".ostra/project.toml"),
         format!(
             "[commands]\nformat = \"touch {}\"\n",
-            root.join("fmt-ran").display().to_string().replace('\\', "/")
+            root.join("fmt-ran")
+                .display()
+                .to_string()
+                .replace('\\', "/")
         ),
     )
     .unwrap();
@@ -4350,7 +4353,11 @@ async fn a_missing_route_is_fixed_in_one_call() {
     assert_eq!(detail.fixes.len(), 1);
     assert_eq!(detail.fixes[0].path, "routing.model.byAgent.advisor");
     assert_eq!(detail.fixes[0].value, "default");
-    assert!(detail.fixes[0].label.contains("advanced"), "{}", detail.fixes[0].label);
+    assert!(
+        detail.fixes[0].label.contains("advanced"),
+        "{}",
+        detail.fixes[0].label
+    );
 
     let fixed: WorkspaceDetail = client
         .post(format!("{base}/api/workspaces/{}/settings/fix", ws.id))
@@ -4398,7 +4405,14 @@ async fn workspace_books_are_listed_read_and_deleted() {
     let book = ostra_core::book::merge(None, "api", &update, chrono::Utc::now());
     ostra_core::book::write(&root.join("ws"), &book).unwrap();
     let docs = format!("{base}/api/workspaces/{}/docs", ws.id);
-    let list: Vec<BookSummary> = client.get(&docs).send().await.unwrap().json().await.unwrap();
+    let list: Vec<BookSummary> = client
+        .get(&docs)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!((list[0].id.as_str(), list[0].sections), ("api", 1));
     let got: Book = client

@@ -1412,7 +1412,7 @@ fn git_lists_ignored(args: &[bash::Word]) -> Option<String> {
         Some("status") => find(&["--ignored"]),
         Some("grep") => find(&["--no-exclude-standard"]),
         Some("ls-files") => find(&["--ignored"])
-            .or_else(|| words.iter().any(|w| *w == "-i").then(|| "-i".to_string()))
+            .or_else(|| words.contains(&"-i").then(|| "-i".to_string()))
             .or_else(|| {
                 let others = words.iter().any(|w| *w == "-o" || *w == "--others");
                 let excluded = words

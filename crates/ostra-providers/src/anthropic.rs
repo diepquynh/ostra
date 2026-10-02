@@ -403,7 +403,12 @@ pub(crate) fn request_body(req: &ChatRequest) -> (Value, Vec<&'static str>) {
     if let Some(effort) = effort_str(req.effort, caps.effort) {
         body["output_config"] = json!({"effort": effort});
     }
-    if req.messages.iter().flat_map(|m| &m.content).any(is_signed_compaction) {
+    if req
+        .messages
+        .iter()
+        .flat_map(|m| &m.content)
+        .any(is_signed_compaction)
+    {
         betas.push(COMPACT_BETA);
     }
     if req.refusal_fallback && caps.fallbacks {
@@ -850,7 +855,8 @@ impl Provider for Anthropic {
         cancel: CancellationToken,
     ) -> Result<ChatResponse, ProviderError> {
         let (body, betas) = request_body(&req);
-        self.send(&body, &betas, &req.model, on_event, &cancel).await
+        self.send(&body, &betas, &req.model, on_event, &cancel)
+            .await
     }
 
     async fn compact(
@@ -1010,7 +1016,11 @@ mod tests {
                 r.tools.clear();
             }
             let (b, betas) = request_body(&r);
-            (b["max_tokens"].as_u64(), b["thinking"]["budget_tokens"].as_u64(), betas)
+            (
+                b["max_tokens"].as_u64(),
+                b["thinking"]["budget_tokens"].as_u64(),
+                betas,
+            )
         };
         // Haiku 4.5, whose 64k limit models.dev lists, asked for all of it as the native loop does.
         let haiku = "claude-haiku-4-5-20251001";
@@ -1029,17 +1039,28 @@ mod tests {
         // Sonnet 4.5 is not in the sample, so what the caller asked is its limit. With tools it
         // interleaves, and the budget spans the turn.
         let (max_tokens, b, betas) = budget("claude-sonnet-4-5", Effort::Max, 64_000, true);
-        assert_eq!((max_tokens, b, betas), (Some(64_000), Some(48_000), vec![INTERLEAVED_BETA]));
+        assert_eq!(
+            (max_tokens, b, betas),
+            (Some(64_000), Some(48_000), vec![INTERLEAVED_BETA])
+        );
         let (_, b, betas) = budget("claude-sonnet-4-5", Effort::Max, 64_000, false);
         assert_eq!((b, betas), (Some(48_000), vec![]));
         // Before Claude 4.5, input plus max_tokens past the window needs a beta to be accepted.
-        assert_eq!(budget("claude-opus-4-1-20250805", Effort::High, 32_000, false).2, vec![WINDOW_BETA]);
+        assert_eq!(
+            budget("claude-opus-4-1-20250805", Effort::High, 32_000, false).2,
+            vec![WINDOW_BETA]
+        );
     }
 
     #[test]
     fn adaptive_models_get_their_whole_output_and_no_budget() {
         ostra_core::pricing::install_test_prices();
-        for model in ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5", "claude-fable-5-1"] {
+        for model in [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-opus-5",
+            "claude-fable-5-1",
+        ] {
             let mut r = req(model);
             r.effort = Effort::Max;
             r.max_tokens = 1_000_000;
@@ -1052,7 +1073,10 @@ mod tests {
         let mut r = req("claude-opus-4-6");
         r.max_tokens = 32_000;
         let b = request_body(&r).0;
-        assert_eq!((b["max_tokens"].as_u64(), b["thinking"]["type"].as_str()), (Some(32_000), Some("adaptive")));
+        assert_eq!(
+            (b["max_tokens"].as_u64(), b["thinking"]["type"].as_str()),
+            (Some(32_000), Some("adaptive"))
+        );
     }
 
     #[test]
@@ -1219,7 +1243,10 @@ mod tests {
         let (b, betas) = request_body(&r);
         let content = b["messages"][0]["content"].as_array().unwrap();
         assert_eq!(content.len(), 2, "an unreadable foreign block is dropped");
-        assert_eq!(content[0], json!({"type": "text", "text": "client summary"}));
+        assert_eq!(
+            content[0],
+            json!({"type": "text", "text": "client summary"})
+        );
         assert!(!betas.contains(&COMPACT_BETA));
     }
 
@@ -1244,9 +1271,16 @@ mod tests {
         }
         let resp = acc.finish("claude-opus-5-5");
         assert_eq!(resp.stop, StopReason::Other("compaction".into()));
-        assert_eq!(resp.content, vec![compaction("anthropic", "sum", Some(block))]);
         assert_eq!(
-            (resp.usage.input_tokens, resp.usage.output_tokens, resp.usage.cache_read_tokens),
+            resp.content,
+            vec![compaction("anthropic", "sum", Some(block))]
+        );
+        assert_eq!(
+            (
+                resp.usage.input_tokens,
+                resp.usage.output_tokens,
+                resp.usage.cache_read_tokens
+            ),
             (144, 276, 1000),
             "counted once, although usage arrives twice"
         );

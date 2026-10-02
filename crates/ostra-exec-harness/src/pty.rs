@@ -788,7 +788,11 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        assert!(pty.screen_text().contains("conpty-ok"), "{}", pty.screen_text());
+        assert!(
+            pty.screen_text().contains("conpty-ok"),
+            "{}",
+            pty.screen_text()
+        );
         pty.terminate(Duration::from_millis(500)).await;
         assert!(pty.exit_info().is_some());
     }

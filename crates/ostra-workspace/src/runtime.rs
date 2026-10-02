@@ -406,9 +406,7 @@ impl WorkspaceRt {
             stacks: ostra_agents::stack_names(),
             global_permissions: global.permissions.clone(),
             pending_commands: crate::trust::pending(self.host.registry(), &self.root, &settings),
-            sandbox: ostra_sandbox::status(
-                &global.sandbox.for_workspace(&settings.sandbox()),
-            ),
+            sandbox: ostra_sandbox::status(&global.sandbox.for_workspace(&settings.sandbox())),
             global_sandbox: ostra_core::api::GlobalSandbox {
                 network: global.sandbox.network,
                 allowed_hosts: global.sandbox.allowed_hosts.clone(),

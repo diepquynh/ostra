@@ -461,10 +461,13 @@ fn d2_spec_waits_for_running_explore() {
 
 #[test]
 fn d2_not_covered_goes_to_sufficiency_and_spec_gets_every_doc() {
-    let mut h = H::new(&["p"], SessionOptions {
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
             track: Some(Track::Full),
             ..Default::default()
-        });
+        },
+    );
     h.classify("IMPLEMENT", &["p"]);
     h.run(
         "spawn explore explore#0",
@@ -1254,10 +1257,13 @@ fn amendment_with_research(h: &mut H, i: usize, project: &str, task: &str) {
 
 #[test]
 fn attached_files_reach_the_agents_as_absolute_paths() {
-    let mut h = H::new(&["p"], SessionOptions {
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
             track: Some(Track::Full),
             ..Default::default()
-        });
+        },
+    );
     if let SessionEvent::SessionCreated { files, .. } = &mut h.events[0].event {
         *files = vec![file("p", "docs/orders.md")];
     }
@@ -1272,10 +1278,13 @@ fn attached_files_reach_the_agents_as_absolute_paths() {
 
 #[test]
 fn uploads_reach_the_agents_as_their_copies_in_the_session() {
-    let mut h = H::new(&["p"], SessionOptions {
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
             track: Some(Track::Full),
             ..Default::default()
-        });
+        },
+    );
     let upload = UploadedFile {
         name: "notes.pdf".into(),
         path: root().join("uploads/notes.pdf"),
@@ -1501,12 +1510,18 @@ fn u2_a_correction_resumes_the_run_in_place() {
     );
     h.finish(&spec, ExecutionStatus::Interrupted, None);
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#2"]);
-    assert_eq!(h.spawn_step("spawn generate-spec").resumes, Some(spec.clone()));
+    assert_eq!(
+        h.spawn_step("spawn generate-spec").resumes,
+        Some(spec.clone())
+    );
     assert_eq!(
         h.state().steers.get(&spec).map(|x| x.text.as_str()),
         Some("Read src/refund.rs, not src/order.rs.")
     );
-    assert!(!h.state().steer_queued(&spec), "sent to a running run, it cannot be withdrawn");
+    assert!(
+        !h.state().steer_queued(&spec),
+        "sent to a running run, it cannot be withdrawn"
+    );
     h.ev(SessionEvent::ExecutionResumed { id: spec.clone() });
     let st = h.state();
     assert!(st.steers.is_empty());
@@ -1539,7 +1554,10 @@ fn u2_a_correction_to_a_paused_run_waits_and_can_be_withdrawn() {
     assert!(h.state().steers.is_empty());
     steer(&mut h, &spec, "Use diesel.");
     h.ev(SessionEvent::SessionResumed);
-    assert_eq!(h.spawn_step("spawn generate-spec").resumes, Some(spec.clone()));
+    assert_eq!(
+        h.spawn_step("spawn generate-spec").resumes,
+        Some(spec.clone())
+    );
     assert_eq!(
         h.state().steers.get(&spec).map(|x| x.text.as_str()),
         Some("Use diesel.")
@@ -1571,7 +1589,10 @@ fn u2_context_sent_now_replaces_a_correction() {
     );
     assert!(st.steers.is_empty());
     h.finish(&spec, ExecutionStatus::Interrupted, None);
-    assert!(h.state().resume_from.is_empty(), "it re-runs fresh with the context");
+    assert!(
+        h.state().resume_from.is_empty(),
+        "it re-runs fresh with the context"
+    );
 }
 
 #[test]
@@ -1579,7 +1600,12 @@ fn u2_queued_context_lets_a_corrected_run_resume() {
     let mut h = H::explored(&["p"], SessionOptions::default());
     let (spec, _) = h.start("spawn generate-spec");
     steer(&mut h, &spec, "Use sqlx.");
-    amend(&mut h, "name it orders_cancel", vec![], ContextDelivery::Queue);
+    amend(
+        &mut h,
+        "name it orders_cancel",
+        vec![],
+        ContextDelivery::Queue,
+    );
     assert_eq!(h.state().held_amendments().count(), 1);
     h.finish(&spec, ExecutionStatus::Interrupted, None);
     assert_eq!(h.summaries(), vec!["judge route-answer amendment:0"]);
@@ -1643,7 +1669,11 @@ fn p2_a_resume_continues_the_same_execution() {
     let st = h.state();
     let running: Vec<_> = st.running_executions().map(|r| r.id.clone()).collect();
     assert_eq!(running, vec![spec.clone()]);
-    assert_eq!(st.spec.runs, vec![spec.clone()], "a resume is not a new run");
+    assert_eq!(
+        st.spec.runs,
+        vec![spec.clone()],
+        "a resume is not a new run"
+    );
     assert!(st.resume_from.is_empty());
     assert!(h.summaries().is_empty(), "{:?}", h.summaries());
     h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 1)));
@@ -1893,7 +1923,10 @@ fn review_loop_splits_autofix_fix_and_caps_at_three() {
             text: None,
         },
     );
-    assert_eq!(h.summaries(), vec!["spawn implementer phase 1 fix (continues)"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn implementer phase 1 fix (continues)"]
+    );
 }
 
 #[test]
@@ -2627,7 +2660,11 @@ fn b7_docs_writers_fan_out_under_a_cap() {
     for p in ["b", "c", "d"] {
         h.start(&format!("spawn documentation docs {p}"));
     }
-    assert_eq!(h.summaries(), vec![] as Vec<String>, "the cap holds while four run");
+    assert_eq!(
+        h.summaries(),
+        vec![] as Vec<String>,
+        "the cap holds while four run"
+    );
     h.finish(&id, ExecutionStatus::Ok, Some(docs_submit("a")));
     assert_eq!(h.summaries(), vec!["spawn documentation docs e"]);
 }
@@ -2638,25 +2675,51 @@ fn b9_a_large_projects_areas_each_get_a_writer() {
     plan_docs(&mut h, "p", vec![area("core"), area("web")]);
     assert_eq!(
         h.summaries(),
-        vec!["spawn documentation docs p/core", "spawn documentation docs p/web"]
+        vec![
+            "spawn documentation docs p/core",
+            "spawn documentation docs p/web"
+        ]
     );
     let r = h.spawn_step("spawn documentation docs p/web");
-    assert_eq!(r.inputs.docs_area.as_ref().map(|a| a.id.as_str()), Some("web"));
-    assert_eq!(r.inputs.docs_areas.len(), 2, "each writer knows the other areas");
+    assert_eq!(
+        r.inputs.docs_area.as_ref().map(|a| a.id.as_str()),
+        Some("web")
+    );
+    assert_eq!(
+        r.inputs.docs_areas.len(),
+        2,
+        "each writer knows the other areas"
+    );
     h.run("spawn documentation docs p/core", docs_submit("p"));
-    assert_eq!(h.summaries(), vec!["spawn documentation docs p/web"], "the part waits for every area");
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs p/web"],
+        "the part waits for every area"
+    );
     h.run("spawn documentation docs p/web", docs_submit("p"));
     assert_eq!(h.summaries(), vec!["write-book p"]);
     let update = h.state().book_update();
-    let ids: Vec<&str> = update.parts[0].1.sections.iter().map(|s| s.id.as_str()).collect();
-    assert_eq!(ids, ["p-orders", "p-orders-web"], "a clashing section ID takes its area");
+    let ids: Vec<&str> = update.parts[0]
+        .1
+        .sections
+        .iter()
+        .map(|s| s.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        ["p-orders", "p-orders-web"],
+        "a clashing section ID takes its area"
+    );
     assert!(update.areas["p"].iter().all(|(_, sub)| sub.is_some()));
 }
 
 #[test]
 fn b9_area_writers_share_the_session_cap() {
     let mut h = docs_session_unplanned(&["p"]);
-    let areas: Vec<_> = ["a", "b", "c", "d", "e", "f"].iter().map(|i| area(i)).collect();
+    let areas: Vec<_> = ["a", "b", "c", "d", "e", "f"]
+        .iter()
+        .map(|i| area(i))
+        .collect();
     plan_docs(&mut h, "p", areas);
     let spawns = h
         .summaries()
@@ -2683,7 +2746,10 @@ fn b9_an_abandoned_area_keeps_the_rest_of_the_part() {
     );
     assert_eq!(h.summaries(), vec!["write-book p"]);
     let update = h.state().book_update();
-    assert!(update.areas["p"][1].1.is_none(), "the web area keeps what the book holds");
+    assert!(
+        update.areas["p"][1].1.is_none(),
+        "the web area keeps what the book holds"
+    );
 }
 
 #[test]
@@ -2716,7 +2782,13 @@ fn b9_after_a_build_only_the_touched_areas_are_rewritten() {
     );
     assert_eq!(h.summaries(), vec!["plan-docs p"]);
     let book_areas = Some(vec!["core".to_string(), "web".to_string()]);
-    plan_docs_with(&mut h, "p", vec![area("core"), area("web")], book_areas, vec!["web".into()]);
+    plan_docs_with(
+        &mut h,
+        "p",
+        vec![area("core"), area("web")],
+        book_areas,
+        vec!["web".into()],
+    );
     assert_eq!(h.summaries(), vec!["spawn documentation docs p/web"]);
     h.run("spawn documentation docs p/web", docs_submit("p"));
     assert_eq!(h.summaries(), vec!["write-book p"]);
@@ -2751,11 +2823,21 @@ fn b9_a_book_without_these_areas_gets_every_area() {
                 tests: false,
                 docs: true,
             }],
-        });
-    plan_docs_with(&mut h, "p", vec![area("core"), area("web")], Some(vec![]), vec!["web".into()]);
+        },
+    );
+    plan_docs_with(
+        &mut h,
+        "p",
+        vec![area("core"), area("web")],
+        Some(vec![]),
+        vec!["web".into()],
+    );
     assert_eq!(
         h.summaries(),
-        vec!["spawn documentation docs p/core", "spawn documentation docs p/web"]
+        vec![
+            "spawn documentation docs p/core",
+            "spawn documentation docs p/web"
+        ]
     );
 }
 
@@ -2767,9 +2849,16 @@ fn b4_architecture_runs_only_for_two_or_more_projects() {
         vec!["spawn documentation docs a", "spawn documentation docs b"]
     );
     h.run("spawn documentation docs a", docs_submit("a"));
-    assert_eq!(h.summaries(), vec!["spawn documentation docs b"], "the book waits for every part");
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs b"],
+        "the book waits for every part"
+    );
     h.run("spawn documentation docs b", docs_submit("b"));
-    assert_eq!(h.summaries(), vec!["spawn system-architecture architecture"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn system-architecture architecture"]
+    );
     let r = h.spawn_step("spawn system-architecture");
     assert_eq!(r.inputs.target, Some(root().join("ostra-docs-parts.json")));
     assert_eq!(
@@ -2795,7 +2884,8 @@ fn b4_an_abandoned_part_leaves_one_project_and_no_architecture() {
         GateAnswer::Choice {
             option: "abandon".into(),
             text: None,
-        });
+        },
+    );
     assert_eq!(h.summaries(), vec!["write-book a"]);
 }
 
@@ -2850,7 +2940,10 @@ fn b6_a_book_update_replaces_the_projects_part() {
     assert_eq!(book.projects, ["a", "b"]);
     assert_eq!(book.parts[0].overview, "a serves orders.");
     assert_eq!(book.parts[0].sections.len(), 1);
-    assert_eq!(book.parts[1].overview, "old", "another project's part is kept");
+    assert_eq!(
+        book.parts[1].overview, "old",
+        "another project's part is kept"
+    );
     let terms: Vec<(&str, &str)> = book
         .glossary
         .iter()
@@ -2925,7 +3018,9 @@ fn spend(h: &mut H, prefix: &str, submit: Value, cost: f64) {
 
 #[test]
 fn budget_pauses_spawns_until_raised() {
-    let mut h = H::new(&["p"], SessionOptions {
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
             yolo: true,
             track: Some(Track::Full),
             ..Default::default()
@@ -2954,7 +3049,9 @@ fn budget_pauses_spawns_until_raised() {
 
 #[test]
 fn budget_stop_ends_the_session() {
-    let mut h = H::new(&["p"], SessionOptions {
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
             track: Some(Track::Full),
             ..Default::default()
         },
@@ -3261,7 +3358,10 @@ fn f1_feedback_across_projects_is_judged_and_builds_one_revision_per_target() {
 fn f1_a_requirement_change_goes_into_the_spec_before_the_revision() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     h.pass_phase(1);
-    feedback(&mut h, "Cancelled orders must also refund the shipping fee.");
+    feedback(
+        &mut h,
+        "Cancelled orders must also refund the shipping fee.",
+    );
     assert_eq!(h.summaries(), vec!["judge feedback 0"]);
     h.decide(
         JudgeKind::Feedback,
@@ -3427,7 +3527,11 @@ fn j1_discarded_and_remembered_answers_do_not_reach_the_spec() {
         vec!["judge stakes"],
         "a bare approval is not routed"
     );
-    h.decide(JudgeKind::Stakes, None, json!({"stakes": "low", "reason": "r"}));
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "low", "reason": "r"}),
+    );
     let imp = h.spawn_step("spawn implementer phase 1 initial");
     assert_eq!(
         imp.inputs.user_notes,
@@ -3531,7 +3635,11 @@ fn j1_a_discarded_stuck_answer_leaves_the_phase_blocked() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (id, _) = h.start("spawn implementer");
     h.finish(&id, ExecutionStatus::Ok, Some(json!({"status": "stuck", "report_path": "/r", "summary": "s", "stuck": {"diagnostic": "d", "need": "n"}})));
-    h.decide(JudgeKind::Rescue, Some(id.as_str()), json!({"action": "gate", "reason": "r"}));
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "gate", "reason": "r"}),
+    );
     let g = h.open_gate("stuck");
     h.answer(
         &g,
@@ -3588,7 +3696,10 @@ fn j1_answers_recorded_before_the_rule_fold_as_they_did() {
         false,
     );
     // Rule D3 as it was: the answer went straight to generate-spec.
-    assert_eq!(h.summaries(), vec!["spawn generate-spec spec#2 (continues)"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn generate-spec spec#2 (continues)"]
+    );
 }
 
 #[test]
@@ -3633,7 +3744,11 @@ fn j1_a_typed_answer_reaches_the_spec_with_the_numbered_options() {
     );
     h.deliver(&g);
     let answers = h.spawn_step("spawn generate-spec").inputs.answers;
-    assert!(answers[0].answer.starts_with("1 and 2, plus an audit log\n"));
+    assert!(
+        answers[0]
+            .answer
+            .starts_with("1 and 2, plus an audit log\n")
+    );
     assert!(answers[0].answer.contains("1. A: a; 2. B: b"));
     assert_eq!(answers[1].answer, "B", "a picked option goes as is");
 }
@@ -3712,9 +3827,19 @@ fn j1_an_answer_split_into_parts_keeps_every_note() {
         ], "research": [], "forget": [], "reason": "r"}),
     );
     let st = h.state();
-    assert_eq!(st.notes_for(ostra_engine::judge::NoteStage::Tests), vec!["Use a temp file."]);
+    assert_eq!(
+        st.notes_for(ostra_engine::judge::NoteStage::Tests),
+        vec!["Use a temp file."]
+    );
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
-    assert!(rerun.inputs.instructions.unwrap().contains("OSTRA_ENV_FILE"), "delivered, because one part is");
+    assert!(
+        rerun
+            .inputs
+            .instructions
+            .unwrap()
+            .contains("OSTRA_ENV_FILE"),
+        "delivered, because one part is"
+    );
 }
 
 // ------------------------------------------------------------------------------------------
@@ -4149,8 +4274,14 @@ impl H {
     /// Wake a native run in place the way the runner does: the delivery, then the resume.
     fn wake(&mut self, prefix: &str) -> (ExecutionId, DeliveryKind, String) {
         let req = self.spawn_step(prefix);
-        let id = req.resumes.clone().expect("the spawn wakes a waiting run in place");
-        let d = self.state().next_delivery(&id).expect("a message waits for the run");
+        let id = req
+            .resumes
+            .clone()
+            .expect("the spawn wakes a waiting run in place");
+        let d = self
+            .state()
+            .next_delivery(&id)
+            .expect("a message waits for the run");
         self.ev(SessionEvent::MessageDelivered {
             ask: d.ask.clone(),
             to: id.clone(),
@@ -4198,29 +4329,65 @@ fn h5_fact_check_loop_wakes_the_author_and_continues_the_checker() {
         Some(fact("FAIL", "spec", &["R2 cites a missing file"])),
     );
     let revise = h.spawn_step("spawn generate-spec spec#2");
-    assert_eq!(revise.continues.as_ref(), Some(&author), "the author is woken with the findings");
-    assert!(revise.inputs.findings.unwrap().contains("R2 cites a missing file"));
+    assert_eq!(
+        revise.continues.as_ref(),
+        Some(&author),
+        "the author is woken with the findings"
+    );
+    assert!(
+        revise
+            .inputs
+            .findings
+            .unwrap()
+            .contains("R2 cites a missing file")
+    );
     let (rev, _) = h.start("spawn generate-spec spec#2 (continues)");
     h.finish(&rev, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
     let recheck = h.spawn_step("spawn fact-check fact-check-spec#2");
-    assert_eq!(recheck.continues.as_ref(), Some(&checker), "the same checker re-checks");
+    assert_eq!(
+        recheck.continues.as_ref(),
+        Some(&checker),
+        "the same checker re-checks"
+    );
     let (re, _) = h.start("spawn fact-check fact-check-spec#2 (continues)");
     let st = h.state();
-    assert_eq!(st.subagent_of(&rev), author, "H1: one subagent ID per conversation");
+    assert_eq!(
+        st.subagent_of(&rev),
+        author,
+        "H1: one subagent ID per conversation"
+    );
     assert_eq!(st.subagent_of(&re), checker);
     h.finish(&re, ExecutionStatus::Ok, Some(fact("PASS", "spec", &[])));
-    assert_eq!(h.summaries(), vec!["gate spec_approval"], "gates are unchanged");
+    assert_eq!(
+        h.summaries(),
+        vec!["gate spec_approval"],
+        "gates are unchanged"
+    );
 }
 
 #[test]
 fn h5_review_loop_continues_the_implementer_and_the_reviewer() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (imp, _) = h.start("spawn implementer phase 1 initial");
-    h.finish(&imp, ExecutionStatus::Ok, Some(impl_submit(1, &["src/a.rs"])));
+    h.finish(
+        &imp,
+        ExecutionStatus::Ok,
+        Some(impl_submit(1, &["src/a.rs"])),
+    );
     let (rev, _) = h.start("spawn code-reviewer review phase 1 #1");
-    h.finish(&rev, ExecutionStatus::Ok, Some(review(&[finding("HIGH", "C9")])));
-    assert_eq!(h.spawn_step("spawn implementer phase 1 fix").continues, Some(imp));
-    h.run("spawn implementer phase 1 fix (continues)", impl_submit(1, &["src/a.rs"]));
+    h.finish(
+        &rev,
+        ExecutionStatus::Ok,
+        Some(review(&[finding("HIGH", "C9")])),
+    );
+    assert_eq!(
+        h.spawn_step("spawn implementer phase 1 fix").continues,
+        Some(imp)
+    );
+    h.run(
+        "spawn implementer phase 1 fix (continues)",
+        impl_submit(1, &["src/a.rs"]),
+    );
     assert_eq!(
         h.summaries(),
         vec!["spawn code-reviewer review phase 1 #2 (continues)"]
@@ -4259,24 +4426,46 @@ fn h6_a_pair_loop_starts_fresh_when_the_conversation_cannot_continue() {
         "spawn generate-spec spec#1",
         ExecutorKind::Harness(ostra_core::HarnessKind::Codex),
     );
-    h.finish_with(&author, ExecutionStatus::Ok, Some(spec_submit(0, 0)), Some("sid"));
+    h.finish_with(
+        &author,
+        ExecutionStatus::Ok,
+        Some(spec_submit(0, 0)),
+        Some("sid"),
+    );
     h.run("spawn fact-check", fact("FAIL", "spec", &["x"]));
-    assert_eq!(h.spawn_step("spawn generate-spec spec#2").continues, Some(author));
+    assert_eq!(
+        h.spawn_step("spawn generate-spec spec#2").continues,
+        Some(author)
+    );
 }
 
 #[test]
 fn h6_a_conversation_stops_continuing_at_its_run_cap() {
     fn past_recurring_gate(h: &mut H) {
-        if h.summaries().contains(&"gate fact_check_recurring".to_string()) {
+        if h.summaries()
+            .contains(&"gate fact_check_recurring".to_string())
+        {
             let g = h.open_gate("fact_check_recurring");
-            h.answer(&g, GateAnswer::Choice { option: "another-round".into(), text: None });
+            h.answer(
+                &g,
+                GateAnswer::Choice {
+                    option: "another-round".into(),
+                    text: None,
+                },
+            );
         }
     }
     let (mut h, _) = spec_written();
     for n in 2..=ostra_core::coord::MAX_CONVERSATION_RUNS as u32 {
-        h.run("spawn fact-check", fact("FAIL", "spec", &[&format!("f{n}")]));
+        h.run(
+            "spawn fact-check",
+            fact("FAIL", "spec", &[&format!("f{n}")]),
+        );
         past_recurring_gate(&mut h);
-        assert!(h.spawn_step("spawn generate-spec").continues.is_some(), "round {n} continues");
+        assert!(
+            h.spawn_step("spawn generate-spec").continues.is_some(),
+            "round {n} continues"
+        );
         h.run("spawn generate-spec", spec_submit(0, 0));
     }
     h.run("spawn fact-check", fact("FAIL", "spec", &["last"]));
@@ -4295,14 +4484,21 @@ fn h2_k3_a_helper_answers_and_the_asker_wakes_in_place() {
     let (spec, _) = h.start("spawn generate-spec spec#1");
     let ask = h.ask(
         &spec,
-        AskTarget::Agent { agent: AgentName::Explore, project: "p".into() },
+        AskTarget::Agent {
+            agent: AgentName::Explore,
+            project: "p".into(),
+        },
         "How does the refund service round amounts?",
     );
     h.wait(&spec);
     let st = h.state();
     assert!(st.is_waiting(&spec));
     let s = h.summaries();
-    assert_eq!(s, vec!["spawn explore explore#1"], "the stage holds while the author waits");
+    assert_eq!(
+        s,
+        vec!["spawn explore explore#1"],
+        "the stage holds while the author waits"
+    );
     let helper = h.spawn_step("spawn explore explore#1");
     assert!(helper.inputs.task.unwrap().contains("round amounts"));
     let (e, _) = h.start("spawn explore explore#1");
@@ -4315,7 +4511,11 @@ fn h2_k3_a_helper_answers_and_the_asker_wakes_in_place() {
     assert!(st.asks[&ask].answer_delivered);
     assert!(!st.is_waiting(&spec));
     assert_eq!(st.spec.runs.len(), 1, "a woken run is the same run");
-    assert!(h.summaries().is_empty(), "the author runs again: {:?}", h.summaries());
+    assert!(
+        h.summaries().is_empty(),
+        "the author runs again: {:?}",
+        h.summaries()
+    );
     h.finish(&spec, ExecutionStatus::Ok, Some(spec_submit(0, 0)));
     assert_eq!(h.summaries(), vec!["spawn fact-check fact-check-spec#1"]);
 }
@@ -4326,25 +4526,39 @@ fn h3_a_helper_asks_its_asker_back_and_both_wake_in_turn() {
     let (spec, _) = h.start("spawn generate-spec spec#1");
     h.ask(
         &spec,
-        AskTarget::Agent { agent: AgentName::Explore, project: "p".into() },
+        AskTarget::Agent {
+            agent: AgentName::Explore,
+            project: "p".into(),
+        },
         "Research the refund API.",
     );
     h.wait(&spec);
     let (e, _) = h.start("spawn explore explore#1");
-    let q = h.ask(&e, AskTarget::Subagent { id: spec.clone() }, "Card refunds or all refunds?");
+    let q = h.ask(
+        &e,
+        AskTarget::Subagent { id: spec.clone() },
+        "Card refunds or all refunds?",
+    );
     h.wait(&e);
     let (id, kind, note) = h.wake("spawn generate-spec");
     assert_eq!((id.clone(), kind), (spec.clone(), DeliveryKind::Question));
     assert!(note.contains("Card refunds or all refunds?") && note.contains("SubagentReply"));
     let st = h.state();
     assert_eq!(st.owed_by(&spec).map(|a| a.id.clone()), Some(q.clone()));
-    assert!(st.ask_event(&spec, &json!({"message": "m", "agent": "explore"})).is_err(), "H4: reply first");
+    assert!(
+        st.ask_event(&spec, &json!({"message": "m", "agent": "explore"}))
+            .is_err(),
+        "H4: reply first"
+    );
     h.reply(&q, &spec, "Card refunds only.");
     h.wait(&spec);
     let (id, kind, note) = h.wake("spawn explore explore#1");
     assert_eq!((id, kind), (e.clone(), DeliveryKind::Answer));
     assert!(note.contains("Card refunds only."));
-    assert!(h.state().is_waiting(&spec), "the author still waits for the research");
+    assert!(
+        h.state().is_waiting(&spec),
+        "the author still waits for the research"
+    );
     h.finish(&e, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
     assert_eq!(h.wake("spawn generate-spec").1, DeliveryKind::Answer);
 }
@@ -4353,27 +4567,54 @@ fn h3_a_helper_asks_its_asker_back_and_both_wake_in_turn() {
 fn h3_a_subagent_that_ended_answers_in_a_consult_run() {
     let (mut h, author) = spec_written();
     let (checker, _) = h.start("spawn fact-check fact-check-spec#1");
-    let q = h.ask(&checker, AskTarget::Subagent { id: author.clone() }, "Where does R2 come from?");
+    let q = h.ask(
+        &checker,
+        AskTarget::Subagent { id: author.clone() },
+        "Where does R2 come from?",
+    );
     h.wait(&checker);
-    assert_eq!(h.summaries(), vec!["spawn generate-spec consult (continues)"]);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn generate-spec consult (continues)"]
+    );
     let consult = h.spawn_step("spawn generate-spec consult");
     assert_eq!(consult.continues, Some(author.clone()));
     assert_eq!(consult.stage, StageKind::Spec);
     let (c, _) = h.start("spawn generate-spec consult");
     let st = h.state();
     assert_eq!(st.subagent_of(&c), author);
-    assert!(st.ask_event(&c, &json!({"message": "m", "subagent_id": checker.as_str()})).is_err(), "H4: a consult run does not ask");
-    let (event, end) = st.reply_event(&c, &json!({"message": "From the research doc."})).unwrap();
+    assert!(
+        st.ask_event(
+            &c,
+            &json!({"message": "m", "subagent_id": checker.as_str()})
+        )
+        .is_err(),
+        "H4: a consult run does not ask"
+    );
+    let (event, end) = st
+        .reply_event(&c, &json!({"message": "From the research doc."}))
+        .unwrap();
     assert_eq!(end, ostra_core::coord::RunEnd::Finish);
     h.ev(event);
-    h.finish(&c, ExecutionStatus::Ok, Some(json!({"coordination": "SubagentReply"})));
+    h.finish(
+        &c,
+        ExecutionStatus::Ok,
+        Some(json!({"coordination": "SubagentReply"})),
+    );
     let (id, kind, note) = h.wake("spawn fact-check");
     assert_eq!((id, kind), (checker.clone(), DeliveryKind::Answer));
     assert!(note.contains("From the research doc."));
     assert!(h.state().asks[&q].answer_delivered);
     // The next round of the author continues from the consult run, its latest.
-    h.finish(&checker, ExecutionStatus::Ok, Some(fact("FAIL", "spec", &["x"])));
-    assert_eq!(h.spawn_step("spawn generate-spec spec#2").continues, Some(c));
+    h.finish(
+        &checker,
+        ExecutionStatus::Ok,
+        Some(fact("FAIL", "spec", &["x"])),
+    );
+    assert_eq!(
+        h.spawn_step("spawn generate-spec spec#2").continues,
+        Some(c)
+    );
 }
 
 #[test]
@@ -4385,7 +4626,11 @@ fn h3_a_failed_subagent_answers_with_its_failure() {
     let ask = h.ask(&spec2, AskTarget::Subagent { id: author.clone() }, "Why?");
     h.wait(&spec2);
     let st = h.state();
-    assert!(st.effective_answer(&st.asks[&ask]).unwrap().contains("cannot answer"));
+    assert!(
+        st.effective_answer(&st.asks[&ask])
+            .unwrap()
+            .contains("cannot answer")
+    );
     let (id, kind, _) = h.wake("spawn generate-spec");
     assert_eq!((id, kind), (spec2, DeliveryKind::Answer));
 }
@@ -4396,9 +4641,17 @@ fn h3_a_question_to_a_busy_subagent_waits() {
     h.classify("RESEARCH", &["p", "q"]);
     let (a, _) = h.start("spawn explore explore#0");
     let (b, _) = h.start("spawn explore explore#1");
-    h.ask(&a, AskTarget::Subagent { id: b.clone() }, "What did you find in q?");
+    h.ask(
+        &a,
+        AskTarget::Subagent { id: b.clone() },
+        "What did you find in q?",
+    );
     h.wait(&a);
-    assert!(h.summaries().is_empty(), "b is running: {:?}", h.summaries());
+    assert!(
+        h.summaries().is_empty(),
+        "b is running: {:?}",
+        h.summaries()
+    );
     h.finish(&b, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
     assert_eq!(h.summaries(), vec!["spawn explore consult (continues)"]);
 }
@@ -4412,7 +4665,10 @@ fn h2_a_harness_run_waits_alive_and_gets_a_delivery() {
     );
     h.ask(
         &spec,
-        AskTarget::Agent { agent: AgentName::Explore, project: "p".into() },
+        AskTarget::Agent {
+            agent: AgentName::Explore,
+            project: "p".into(),
+        },
         "Research X.",
     );
     assert!(h.state().is_waiting(&spec), "alive and waiting");
@@ -4420,7 +4676,11 @@ fn h2_a_harness_run_waits_alive_and_gets_a_delivery() {
     h.finish(&e, ExecutionStatus::Ok, Some(explore_submit(1, &[])));
     assert_eq!(h.summaries(), vec!["deliver answer"]);
     let d = h.state().next_delivery(&spec).unwrap();
-    h.ev(SessionEvent::MessageDelivered { ask: d.ask, to: spec.clone(), kind: d.kind });
+    h.ev(SessionEvent::MessageDelivered {
+        ask: d.ask,
+        to: spec.clone(),
+        kind: d.kind,
+    });
     assert!(h.summaries().is_empty());
     assert!(!h.state().is_waiting(&spec));
 }
@@ -4431,16 +4691,38 @@ fn h4_asks_are_bounded() {
     let (spec, _) = h.start("spawn generate-spec spec#1");
     let helper = |p: &str| json!({"message": "m", "agent": "explore", "project": p});
     let st = h.state();
-    assert!(st.ask_event(&spec, &json!({"message": "m", "agent": "implementer"})).is_err());
-    assert!(st.ask_event(&spec, &helper("nope")).is_err(), "unknown project");
-    assert!(st.ask_event(&spec, &json!({"message": "m", "subagent_id": spec.as_str()})).is_err(), "not yourself");
-    assert!(st.ask_event(&spec, &json!({"message": "m", "subagent_id": "x_none"})).is_err());
-    assert!(st.reply_event(&spec, &json!({"message": "m"})).is_err(), "nothing to reply to");
+    assert!(
+        st.ask_event(&spec, &json!({"message": "m", "agent": "implementer"}))
+            .is_err()
+    );
+    assert!(
+        st.ask_event(&spec, &helper("nope")).is_err(),
+        "unknown project"
+    );
+    assert!(
+        st.ask_event(
+            &spec,
+            &json!({"message": "m", "subagent_id": spec.as_str()})
+        )
+        .is_err(),
+        "not yourself"
+    );
+    assert!(
+        st.ask_event(&spec, &json!({"message": "m", "subagent_id": "x_none"}))
+            .is_err()
+    );
+    assert!(
+        st.reply_event(&spec, &json!({"message": "m"})).is_err(),
+        "nothing to reply to"
+    );
     for _ in 0..ostra_core::coord::MAX_HELPERS_PER_RUN {
         let (e, _) = h.state().ask_event(&spec, &helper("p")).unwrap();
         h.ev(e);
     }
-    assert!(h.state().ask_event(&spec, &helper("p")).is_err(), "helper cap");
+    assert!(
+        h.state().ask_event(&spec, &helper("p")).is_err(),
+        "helper cap"
+    );
     let (e, _) = h.start("spawn explore explore#1");
     let err = h.state().ask_event(&e, &helper("p")).unwrap_err();
     assert!(err.contains("helper may not start helpers"), "{err}");
@@ -4451,7 +4733,14 @@ fn h9_a_waiting_subagent_holds_completion() {
     let mut h = H::new(&["p"], SessionOptions::default());
     h.classify("RESEARCH", &["p"]);
     let (a, _) = h.start("spawn explore explore#0");
-    h.ask(&a, AskTarget::Agent { agent: AgentName::Explore, project: "p".into() }, "More on X.");
+    h.ask(
+        &a,
+        AskTarget::Agent {
+            agent: AgentName::Explore,
+            project: "p".into(),
+        },
+        "More on X.",
+    );
     h.wait(&a);
     assert!(h.state().coordination_open());
     let s = h.summaries();
@@ -4468,10 +4757,13 @@ fn skip(h: &mut H, id: &ExecutionId) {
 
 #[test]
 fn u1_skipped_research_stops_and_never_reruns() {
-    let mut h = H::new(&["a", "b"], SessionOptions {
+    let mut h = H::new(
+        &["a", "b"],
+        SessionOptions {
             track: Some(Track::Full),
             ..Default::default()
-        });
+        },
+    );
     h.classify("IMPLEMENT", &["a", "b"]);
     h.run("spawn explore explore#0", explore_submit(0, &[]));
     let (research, _) = h.start("spawn explore explore#1");
@@ -4546,7 +4838,12 @@ fn u1_context_can_skip_running_and_queued_research() {
     );
     h.run("spawn explore explore#0", explore_submit(0, &[]));
     let (backoff, _) = h.start("spawn explore explore#1");
-    amend(&mut h, "skip the backoff and deadpool research", vec![], ContextDelivery::Now);
+    amend(
+        &mut h,
+        "skip the backoff and deadpool research",
+        vec![],
+        ContextDelivery::Now,
+    );
     assert!(h.state().interrupting.contains_key(&backoff));
     h.finish(&backoff, ExecutionStatus::Interrupted, None);
     route_amendment(
@@ -4555,7 +4852,10 @@ fn u1_context_can_skip_running_and_queued_research() {
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "skip": [2, 3], "reason": "r"}),
     );
     let st = h.state();
-    assert!(st.explore[1].abandoned, "the interrupted task does not re-run");
+    assert!(
+        st.explore[1].abandoned,
+        "the interrupted task does not re-run"
+    );
     assert!(st.explore[2].abandoned, "the queued task never starts");
     assert_eq!(h.summaries(), vec!["judge track"]);
 }
@@ -4572,7 +4872,12 @@ fn u1_queued_context_skips_research_once_running_work_finishes() {
         ], "opts_in": {"tests": false, "docs": false}, "reason": "r"}),
     );
     let (order, _) = h.start("spawn explore explore#0");
-    amend(&mut h, "skip the deadpool research", vec![], ContextDelivery::Queue);
+    amend(
+        &mut h,
+        "skip the deadpool research",
+        vec![],
+        ContextDelivery::Queue,
+    );
     // Rule C2: the queued context holds back the next research until the running one finishes.
     assert!(h.summaries().is_empty(), "{:?}", h.summaries());
     h.finish(&order, ExecutionStatus::Ok, Some(explore_submit(0, &[])));
@@ -4581,7 +4886,10 @@ fn u1_queued_context_skips_research_once_running_work_finishes() {
         0,
         json!({"route": "implementation_detail", "items": [{"id": "answer", "disposition": "discard"}], "research": [], "skip": [2], "reason": "r"}),
     );
-    assert!(h.state().explore[1].abandoned, "the held-back task never starts");
+    assert!(
+        h.state().explore[1].abandoned,
+        "the held-back task never starts"
+    );
     assert_eq!(h.summaries(), vec!["judge track"]);
 }
 
@@ -4597,7 +4905,11 @@ fn d2_one_sufficiency_round_adds_at_most_three_tasks() {
         .iter()
         .map(|i| json!({"item": i, "needed": true, "reason": "r", "task": {"project": "p", "task": format!("research {i}")}}))
         .collect();
-    h.decide(JudgeKind::Sufficiency, Some("0"), json!({"items": items, "reason": "r"}));
+    h.decide(
+        JudgeKind::Sufficiency,
+        Some("0"),
+        json!({"items": items, "reason": "r"}),
+    );
     assert_eq!(
         h.summaries(),
         vec![

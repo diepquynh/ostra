@@ -158,7 +158,9 @@ pub async fn memory_recall(env: &ToolEnv, input: &Value) -> ToolOutput {
 pub async fn docs_search(env: &ToolEnv, input: &Value) -> ToolOutput {
     use ostra_core::book_search::{self, Filter, Index};
     let Some(query) = str_arg(input, "query").map(str::to_string) else {
-        return ToolOutput::err("Pass query: the question you want the documentation books to answer.");
+        return ToolOutput::err(
+            "Pass query: the question you want the documentation books to answer.",
+        );
     };
     let project = str_arg(input, "project").map(str::to_string);
     let limit = u64_arg(input, "limit")
@@ -167,7 +169,9 @@ pub async fn docs_search(env: &ToolEnv, input: &Value) -> ToolOutput {
         .clamp(1, book_search::MAX_LIMIT);
     let ws = env.config().workspace_root.clone();
     if ws.as_os_str().is_empty() {
-        return ToolOutput::ok("This run has no workspace, so there are no documentation books. Read the code instead.");
+        return ToolOutput::ok(
+            "This run has no workspace, so there are no documentation books. Read the code instead.",
+        );
     }
     let result = tokio::task::spawn_blocking(move || {
         let index = Index::build(&book_search::load_books(&ws));
@@ -212,12 +216,29 @@ mod tests {
                 "code_refs": [{"path": "src/runner.rs", "note": "The slot limiter."}]}]
         }))
         .unwrap();
-        let update = BookUpdate { session: "s_1".into(), parts: vec![("app".into(), submit)], ..Default::default() };
+        let update = BookUpdate {
+            session: "s_1".into(),
+            parts: vec![("app".into(), submit)],
+            ..Default::default()
+        };
         apply(d.path(), "app", &update, chrono::Utc::now()).unwrap();
-        let out = run(&env, "DocsSearch", json!({"query": "how many concurrent executions"})).await;
+        let out = run(
+            &env,
+            "DocsSearch",
+            json!({"query": "how many concurrent executions"}),
+        )
+        .await;
         assert!(!out.is_error, "{}", out.text);
-        assert!(out.text.contains("1. Execution slots (app, project `app`)"), "{}", out.text);
-        assert!(out.text.contains("Caps concurrent executions."), "{}", out.text);
+        assert!(
+            out.text.contains("1. Execution slots (app, project `app`)"),
+            "{}",
+            out.text
+        );
+        assert!(
+            out.text.contains("Caps concurrent executions."),
+            "{}",
+            out.text
+        );
         assert!(!out.text.contains("budget"), "{}", out.text);
         assert!(out.text.contains("app/slots.md"), "{}", out.text);
     }

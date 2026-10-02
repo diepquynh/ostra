@@ -868,7 +868,10 @@ impl ExecutionHost for WakeHost {
         let at = self.started.elapsed().as_secs_f64();
         eprintln!("probe: the run waits ({at:.0}s in)");
         tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-        self.waits.lock().unwrap().push((std::time::Instant::now(), at));
+        self.waits
+            .lock()
+            .unwrap()
+            .push((std::time::Instant::now(), at));
         let note = {
             let mut n = self.notes.lock().unwrap();
             (!n.is_empty()).then(|| n.remove(0))
@@ -987,7 +990,10 @@ async fn wake_probe(args: &[String]) {
                 "What is the release codename?",
                 "The release codename is BLUE-HERON-7.",
             ),
-            answer("What is the release date?", "The release date is 2026-10-14."),
+            answer(
+                "What is the release date?",
+                "The release date is 2026-10-14.",
+            ),
         ]),
         waits: Mutex::new(vec![]),
         started: std::time::Instant::now(),

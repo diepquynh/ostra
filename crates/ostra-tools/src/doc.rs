@@ -30,9 +30,9 @@ pub async fn document(env: &ToolEnv, input: &Value) -> ToolOutput {
     let session = &env.config().session_dir;
     // Compare through `fold` so a resolved path (no `\\?\`, real case) matches the stored session
     // dir on Windows, where the two can differ in prefix, case, and separators.
-    let same_dir = md.parent().is_some_and(|p| {
-        ostra_core::paths::fold(p) == ostra_core::paths::fold(session)
-    });
+    let same_dir = md
+        .parent()
+        .is_some_and(|p| ostra_core::paths::fold(p) == ostra_core::paths::fold(session));
     if !same_dir {
         return ToolOutput::err(format!(
             "Write the {} directly inside {}, the session dir your prompt names, because the next stage reads it there.",
@@ -240,10 +240,16 @@ mod tests {
             out.text
         );
         let stored = ostra_core::doc::load(&md).unwrap();
-        assert_eq!(stored["snapshot"]["root"], json!(repo.display().to_string()));
+        assert_eq!(
+            stored["snapshot"]["root"],
+            json!(repo.display().to_string())
+        );
         assert_eq!(stored["snapshot"]["files"]["src/b.rs"], "missing");
         assert_eq!(
-            stored["snapshot"]["files"]["src/a.rs"].as_str().unwrap().len(),
+            stored["snapshot"]["files"]["src/a.rs"]
+                .as_str()
+                .unwrap()
+                .len(),
             16
         );
     }

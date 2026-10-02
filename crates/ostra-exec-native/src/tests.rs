@@ -69,7 +69,8 @@ fn fixture() -> Fixture {
     // Outside OS temp, because the policy never asks for writes there.
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     // Strip the Windows `\\?\` verbatim prefix so derived paths match what the tools resolve to.
-    let root = ostra_core::paths::strip_verbatim(&ostra_core::paths::canonical(dir.path()).unwrap());
+    let root =
+        ostra_core::paths::strip_verbatim(&ostra_core::paths::canonical(dir.path()).unwrap());
     let repo = root.join("repo");
     let session = root.join("ws/.ostra/sessions/s_1/app");
     let outside = root.join("elsewhere");
@@ -528,11 +529,16 @@ async fn resuming_in_place_records_only_the_new_turn() {
     assert_eq!(r.status, ExecutionStatus::Ok);
     let req = &p.requests()[0];
     assert_eq!(req.messages.len(), 3, "the note joins the last user turn");
-    assert!(matches!(&req.messages[2].content[..], [Block::ToolResult { .. }, Block::Text { text }] if text == "Continue the workflow."));
+    assert!(
+        matches!(&req.messages[2].content[..], [Block::ToolResult { .. }, Block::Text { text }] if text == "Continue the workflow.")
+    );
     let recorded = host.messages.lock().clone();
     assert_eq!(
         recorded[0],
-        ("user".to_string(), json!([{"type": "text", "text": "Continue the workflow."}])),
+        (
+            "user".to_string(),
+            json!([{"type": "text", "text": "Continue the workflow."}])
+        ),
         "the stored prefix is not recorded again"
     );
 }
@@ -540,10 +546,22 @@ async fn resuming_in_place_records_only_the_new_turn() {
 #[test]
 fn rebuilding_merges_adjacent_turns_of_one_role() {
     let transcript = vec![
-        ("user".to_string(), json!([{"type": "text", "text": "Task."}])),
-        ("assistant".to_string(), json!([{"type": "text", "text": "Working."}])),
-        ("user".to_string(), json!([{"type": "text", "text": "Continue the workflow."}])),
-        ("user".to_string(), json!([{"type": "text", "text": "Continue the workflow."}])),
+        (
+            "user".to_string(),
+            json!([{"type": "text", "text": "Task."}]),
+        ),
+        (
+            "assistant".to_string(),
+            json!([{"type": "text", "text": "Working."}]),
+        ),
+        (
+            "user".to_string(),
+            json!([{"type": "text", "text": "Continue the workflow."}]),
+        ),
+        (
+            "user".to_string(),
+            json!([{"type": "text", "text": "Continue the workflow."}]),
+        ),
     ];
     let m = rebuild_transcript(&transcript, None);
     assert_eq!(m.len(), 3);
@@ -828,17 +846,32 @@ async fn an_ask_ends_the_run_waiting_and_a_consult_reply_ends_it_ok() {
     let caps = vec![Capability::Read, Capability::Coordinate];
     let p = ScriptedProvider::new();
     p.push_tool_use("SubagentList", json!({}));
-    p.push_tool_use("SubagentAsk", json!({"message": "why?", "agent": "explore"}));
+    p.push_tool_use(
+        "SubagentAsk",
+        json!({"message": "why?", "agent": "explore"}),
+    );
     let (exec, p) = executor(p);
     let exec = exec.with_coord(Arc::new(FakeCoordConnector));
-    let s = spec(&f, AgentName::GenerateSpec, PermissionMode::Default, caps.clone());
+    let s = spec(
+        &f,
+        AgentName::GenerateSpec,
+        PermissionMode::Default,
+        caps.clone(),
+    );
     let host = Arc::new(FakeHost::default());
     let r = exec.run(s, host.clone(), CancellationToken::new()).await;
     assert_eq!(r.status, ExecutionStatus::Waiting, "{:?}", r.error);
     assert_eq!(r.submit.unwrap()["coordination"], "SubagentAsk");
-    assert_eq!(p.requests().len(), 2, "the run stops at the ask, with no model call after it");
+    assert_eq!(
+        p.requests().len(),
+        2,
+        "the run stops at the ask, with no model call after it"
+    );
     let last = host.messages.lock().last().cloned().unwrap();
-    assert!(last.1.to_string().contains("SubagentAsk done"), "the ask's result is recorded");
+    assert!(
+        last.1.to_string().contains("SubagentAsk done"),
+        "the ask's result is recorded"
+    );
 
     let p = ScriptedProvider::new();
     p.push_tool_use("SubagentReply", json!({"message": "because"}));
@@ -856,7 +889,10 @@ async fn an_ask_ends_the_run_waiting_and_a_consult_reply_ends_it_ok() {
 async fn a_run_that_owes_an_answer_is_reminded_to_reply_and_cannot_submit() {
     let f = fixture();
     let p = ScriptedProvider::new();
-    p.push(response(vec![Block::text("I think the answer is 42.")], StopReason::EndTurn));
+    p.push(response(
+        vec![Block::text("I think the answer is 42.")],
+        StopReason::EndTurn,
+    ));
     p.push_tool_use("submit_generate_spec", json!({"spec_path": "/x", "open_questions": [], "external_evidence_rows": 0, "deliverables": 1, "requirements": 1, "summary": "s"}));
     p.push_tool_use("SubagentReply", json!({"message": "42"}));
     let (exec, p) = executor(p);
@@ -921,22 +957,30 @@ async fn compacts_near_the_context_window_and_continues_from_the_summary() {
     p.push_tool_use("submit_quick_answer", json!({"answer": "hello"}));
     let (exec, p) = executor(p);
     let host = Arc::new(FakeHost::default());
-    let r = exec.run(quick(&f), host.clone(), CancellationToken::new()).await;
+    let r = exec
+        .run(quick(&f), host.clone(), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
     assert_eq!(r.usage.context_tokens, 190_000);
 
     let reqs = p.requests();
     assert_eq!(reqs.len(), 3);
     assert!(is_compaction_ask(&reqs[1]));
-    assert_eq!(reqs[1].messages.len(), 3, "the whole conversation is summarized");
+    assert_eq!(
+        reqs[1].messages.len(),
+        3,
+        "the whole conversation is summarized"
+    );
     assert_eq!(
         reqs[1].messages[2].content.last(),
         Some(&Block::text(COMPACT_INSTRUCTIONS))
     );
     let after = &reqs[2].messages;
     assert_eq!(after.len(), 1, "the summary replaces the conversation");
-    assert!(matches!(&after[0].content[..], [Block::Compaction { summary, .. }, Block::Text { text }]
-        if summary.starts_with("Summary:") && text == AFTER_COMPACTION));
+    assert!(
+        matches!(&after[0].content[..], [Block::Compaction { summary, .. }, Block::Text { text }]
+        if summary.starts_with("Summary:") && text == AFTER_COMPACTION)
+    );
 
     let recorded = host.messages.lock().clone();
     let (role, window) = recorded
@@ -962,7 +1006,11 @@ async fn a_compaction_without_summary_is_not_retried_every_turn() {
     p.push_tool_use("submit_quick_answer", json!({"answer": "hello"}));
     let (exec, p) = executor(p);
     let r = exec
-        .run(quick(&f), Arc::new(FakeHost::default()), CancellationToken::new())
+        .run(
+            quick(&f),
+            Arc::new(FakeHost::default()),
+            CancellationToken::new(),
+        )
         .await;
     assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
     let asks = p.requests().iter().filter(|r| is_compaction_ask(r)).count();
@@ -976,10 +1024,19 @@ fn a_stored_compaction_replaces_the_messages_before_it() {
         {"type": "text", "text": "Continue."},
     ]}]);
     let transcript = vec![
-        ("user".to_string(), json!([{"type": "text", "text": "Task."}])),
-        ("assistant".to_string(), json!([{"type": "text", "text": "Working."}])),
+        (
+            "user".to_string(),
+            json!([{"type": "text", "text": "Task."}]),
+        ),
+        (
+            "assistant".to_string(),
+            json!([{"type": "text", "text": "Working."}]),
+        ),
         (COMPACTION_RECORD.to_string(), window),
-        ("assistant".to_string(), json!([{"type": "text", "text": "After."}])),
+        (
+            "assistant".to_string(),
+            json!([{"type": "text", "text": "After."}]),
+        ),
     ];
     let m = stored_messages(&transcript);
     assert_eq!(m.len(), 2);
@@ -1006,7 +1063,9 @@ async fn each_response_reports_its_own_cost_before_its_tool_calls() {
     p.push(second);
     let (exec, _) = executor(p);
     let host = Arc::new(FakeHost::default());
-    let r = exec.run(quick(&f), host.clone(), CancellationToken::new()).await;
+    let r = exec
+        .run(quick(&f), host.clone(), CancellationToken::new())
+        .await;
     assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
     assert_eq!(r.usage.cost_usd, 0.75);
 
@@ -1018,7 +1077,10 @@ async fn each_response_reports_its_own_cost_before_its_tool_calls() {
             _ => None,
         })
         .collect();
-    assert_eq!(turns, vec![(0.25, vec!["r10".into()]), (0.5, vec!["s1".into()])]);
+    assert_eq!(
+        turns,
+        vec![(0.25, vec!["r10".into()]), (0.5, vec!["s1".into()])]
+    );
     let at = |pred: &dyn Fn(&ExecutionDelta) -> bool| d.iter().position(pred).unwrap();
     assert!(
         at(&|d| matches!(d, ExecutionDelta::Turn { .. }))

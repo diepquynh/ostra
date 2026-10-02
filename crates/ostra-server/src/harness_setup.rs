@@ -53,12 +53,10 @@ pub fn command(
             let (program, args) = ("sh".to_string(), vec!["-c".to_string(), checked]);
             #[cfg(windows)]
             let (program, args) = (
-                ostra_core::shells::powershell().to_string_lossy().into_owned(),
-                vec![
-                    "-NoProfile".to_string(),
-                    "-Command".to_string(),
-                    checked,
-                ],
+                ostra_core::shells::powershell()
+                    .to_string_lossy()
+                    .into_owned(),
+                vec!["-NoProfile".to_string(), "-Command".to_string(), checked],
             );
             (program, args, script.into())
         }

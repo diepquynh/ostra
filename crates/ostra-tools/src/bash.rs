@@ -297,7 +297,9 @@ pub async fn run(
     tree.end();
     drop(_members);
     if let Ok(dir) = std::fs::read_to_string(&pwd_file) {
-        let dir = env.sandbox_to_host(&std::path::PathBuf::from(dir.trim_end_matches(['\n', '\r'])));
+        let dir = env.sandbox_to_host(&std::path::PathBuf::from(
+            dir.trim_end_matches(['\n', '\r']),
+        ));
         if dir.is_dir() {
             env.set_cwd(dir);
         }
@@ -375,7 +377,11 @@ mod tests {
         run_tool(&env, "Bash", json!({"command": "cd .. && exit 1"})).await;
         assert!(env.cwd().ends_with("sub"));
         let out = run_tool(&env, "Read", json!({"file_path": "missing"})).await;
-        assert!(out.text.replace('\\', "/").contains("/sub/missing"), "{}", out.text);
+        assert!(
+            out.text.replace('\\', "/").contains("/sub/missing"),
+            "{}",
+            out.text
+        );
     }
 
     #[tokio::test]

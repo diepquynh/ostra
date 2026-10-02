@@ -498,7 +498,11 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
                     k.id,
                     k.projects.join(", "),
                     k.sections,
-                    if k.has_architecture { ", with the system architecture" } else { "" }
+                    if k.has_architecture {
+                        ", with the system architecture"
+                    } else {
+                        ""
+                    }
                 )
             })
             .collect();

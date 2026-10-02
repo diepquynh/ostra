@@ -292,7 +292,10 @@ fn render_prompt_in(
         let guide = render_str("code-tools.md", &asset_text("code-tools.md")?, &ctx)?;
         body = format!("{guide}{body}");
     }
-    if agent_def(agent).capabilities.contains(&Capability::Coordinate) {
+    if agent_def(agent)
+        .capabilities
+        .contains(&Capability::Coordinate)
+    {
         let guide = render_str("coordination.md", &asset_text("coordination.md")?, &ctx)?;
         body = format!("{guide}{body}");
     }

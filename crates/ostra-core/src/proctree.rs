@@ -194,7 +194,10 @@ impl Job {
 
     fn assign(&self, process: HANDLE) -> std::io::Result<()> {
         // SAFETY: both handles are live for the call.
-        if unsafe { windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(self.0, process) } == 0 {
+        if unsafe {
+            windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(self.0, process)
+        } == 0
+        {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
@@ -310,7 +313,12 @@ mod tests {
                 let child = cmd.spawn().unwrap();
                 let tree = Tree::of_std(&child).unwrap();
                 let out = child.wait_with_output().unwrap();
-                assert_eq!(out.status.code(), Some(7), "{} spawn {i}", program.display());
+                assert_eq!(
+                    out.status.code(),
+                    Some(7),
+                    "{} spawn {i}",
+                    program.display()
+                );
                 drop(tree);
             }
         }

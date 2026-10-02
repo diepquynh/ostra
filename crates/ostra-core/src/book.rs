@@ -370,9 +370,18 @@ fn slug(s: &str) -> String {
         }
     }
     let out = out.trim_end_matches('-');
-    let cut = out.char_indices().map(|(i, _)| i).take_while(|i| *i <= 40).last().unwrap_or(0);
+    let cut = out
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|i| *i <= 40)
+        .last()
+        .unwrap_or(0);
     let out = if out.len() > 40 { &out[..cut] } else { out };
-    if out.is_empty() { "area".into() } else { out.trim_end_matches('-').to_string() }
+    if out.is_empty() {
+        "area".into()
+    } else {
+        out.trim_end_matches('-').to_string()
+    }
 }
 
 /// Rule B9: group a project's module-map areas into writer areas of about [`AREA_TARGET_BYTES`]
@@ -390,10 +399,20 @@ pub fn plan_areas(areas: &[(String, Vec<String>, u64)], rest: u64) -> Vec<DocsAr
     let mut members: Vec<Member> = areas
         .iter()
         .filter(|(_, _, b)| *b > 0)
-        .map(|(n, g, b)| Member { name: n, globs: g, bytes: *b, rest: false })
+        .map(|(n, g, b)| Member {
+            name: n,
+            globs: g,
+            bytes: *b,
+            rest: false,
+        })
         .collect();
     if rest > 0 {
-        members.push(Member { name: "other files", globs: &[], bytes: rest, rest: true });
+        members.push(Member {
+            name: "other files",
+            globs: &[],
+            bytes: rest,
+            rest: true,
+        });
     }
     let total: u64 = members.iter().map(|m| m.bytes).sum();
     if members.len() < 2 || total <= AREA_TARGET_BYTES {
@@ -427,10 +446,17 @@ pub fn plan_areas(areas: &[(String, Vec<String>, u64)], rest: u64) -> Vec<DocsAr
         .map(|g| {
             let names: Vec<&str> = g.iter().map(|m| m.name).collect();
             let base = slug(names[0]);
-            let mut id = if g.len() > 1 { format!("{base}-and-{}-more", g.len() - 1) } else { base };
+            let mut id = if g.len() > 1 {
+                format!("{base}-and-{}-more", g.len() - 1)
+            } else {
+                base
+            };
             let mut n = 2;
             while !seen.insert(id.clone()) {
-                id = format!("{}-{n}", id.trim_end_matches(char::is_numeric).trim_end_matches('-'));
+                id = format!(
+                    "{}-{n}",
+                    id.trim_end_matches(char::is_numeric).trim_end_matches('-')
+                );
                 n += 1;
             }
             DocsArea {
@@ -521,7 +547,12 @@ fn merge_areas(
             ids.push(s.id.clone());
             sections.push(s);
         }
-        records.push(BookArea { id: area.id.clone(), title: area.title.clone(), overview, sections: ids });
+        records.push(BookArea {
+            id: area.id.clone(),
+            title: area.title.clone(),
+            overview,
+            sections: ids,
+        });
     }
     let overview = records
         .iter()
@@ -529,7 +560,13 @@ fn merge_areas(
         .map(|r| format!("{}: {}", r.title, r.overview))
         .collect::<Vec<_>>()
         .join("\n\n");
-    BookPart { project: project.to_string(), overview, sections, updated_at: now, areas: records }
+    BookPart {
+        project: project.to_string(),
+        overview,
+        sections,
+        updated_at: now,
+        areas: records,
+    }
 }
 
 /// Where a workspace keeps its books.
@@ -610,7 +647,11 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         glossary: vec![],
     });
     for (project, submit) in &update.parts {
-        let old = book.parts.iter().position(|p| &p.project == project).map(|i| book.parts.remove(i));
+        let old = book
+            .parts
+            .iter()
+            .position(|p| &p.project == project)
+            .map(|i| book.parts.remove(i));
         let part = match update.areas.get(project) {
             Some(areas) => merge_areas(project, old.as_ref(), areas, now),
             None => BookPart {
@@ -655,7 +696,12 @@ static BOOK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Merge `update` into the book on disk and write it, holding the book lock across the read and
 /// the write.
-pub fn apply(workspace: &Path, id: &str, update: &BookUpdate, now: DateTime<Utc>) -> std::io::Result<Book> {
+pub fn apply(
+    workspace: &Path,
+    id: &str,
+    update: &BookUpdate,
+    now: DateTime<Utc>,
+) -> std::io::Result<Book> {
     let _guard = BOOK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let merged = merge(read(workspace, id), id, update, now);
     write(workspace, &merged)?;
@@ -1401,7 +1447,12 @@ mod tests {
         let kb = 1024;
         let a = |n: &str, b: u64| (n.to_string(), vec![format!("{n}/**")], b);
         let areas = plan_areas(
-            &[a("engine", 600 * kb), a("store", 100 * kb), a("notify", 50 * kb), a("server", 300 * kb)],
+            &[
+                a("engine", 600 * kb),
+                a("store", 100 * kb),
+                a("notify", 50 * kb),
+                a("server", 300 * kb),
+            ],
             20 * kb,
         );
         let ids: Vec<&str> = areas.iter().map(|a| a.id.as_str()).collect();
@@ -1414,19 +1465,39 @@ mod tests {
 
     #[test]
     fn b9_the_writer_count_is_capped() {
-        let many: Vec<(String, Vec<String>, u64)> =
-            (0..40).map(|i| (format!("m{i}"), vec![format!("m{i}/**")], 600 * 1024)).collect();
+        let many: Vec<(String, Vec<String>, u64)> = (0..40)
+            .map(|i| (format!("m{i}"), vec![format!("m{i}/**")], 600 * 1024))
+            .collect();
         let areas = plan_areas(&many, 0);
-        assert!(areas.len() <= MAX_DOCS_AREAS && areas.len() >= 2, "{}", areas.len());
+        assert!(
+            areas.len() <= MAX_DOCS_AREAS && areas.len() >= 2,
+            "{}",
+            areas.len()
+        );
         let ids: BTreeSet<&str> = areas.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids.len(), areas.len(), "area IDs are unique");
     }
 
     #[test]
     fn b9_combined_areas_keep_every_section_with_unique_ids() {
-        let a = DocsArea { id: "core".into(), title: "core".into(), globs: vec![], rest: false, bytes: 1 };
-        let b = DocsArea { id: "web".into(), title: "web".into(), globs: vec![], rest: false, bytes: 1 };
-        let (sa, sb) = (area_submit(&["setup", "orders"], "Core."), area_submit(&["setup"], "Web."));
+        let a = DocsArea {
+            id: "core".into(),
+            title: "core".into(),
+            globs: vec![],
+            rest: false,
+            bytes: 1,
+        };
+        let b = DocsArea {
+            id: "web".into(),
+            title: "web".into(),
+            globs: vec![],
+            rest: false,
+            bytes: 1,
+        };
+        let (sa, sb) = (
+            area_submit(&["setup", "orders"], "Core."),
+            area_submit(&["setup"], "Web."),
+        );
         let c = combine_areas(&[(&a, &sa), (&b, &sb)]);
         let ids: Vec<&str> = c.sections.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids, ["setup", "orders", "setup-web"]);
@@ -1436,7 +1507,13 @@ mod tests {
     #[test]
     fn b9_a_later_session_rewrites_only_its_areas() {
         let now = Utc::now();
-        let area = |id: &str| DocsArea { id: id.into(), title: id.into(), globs: vec![], rest: false, bytes: 1 };
+        let area = |id: &str| DocsArea {
+            id: id.into(),
+            title: id.into(),
+            globs: vec![],
+            rest: false,
+            bytes: 1,
+        };
         let first = BookUpdate {
             session: "s1".into(),
             parts: vec![("p".into(), area_submit(&[], ""))],
@@ -1456,14 +1533,24 @@ mod tests {
             parts: vec![("p".into(), area_submit(&[], ""))],
             areas: BTreeMap::from([(
                 "p".to_string(),
-                vec![(area("core"), None), (area("web"), Some(area_submit(&["pages", "forms"], "Web v2.")))],
+                vec![
+                    (area("core"), None),
+                    (
+                        area("web"),
+                        Some(area_submit(&["pages", "forms"], "Web v2.")),
+                    ),
+                ],
             )]),
             ..Default::default()
         };
         let book = merge(Some(book), "p", &second, now);
         let part = &book.parts[0];
         let ids: Vec<&str> = part.sections.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(ids, ["orders", "pages", "forms"], "core is kept, web is rewritten");
+        assert_eq!(
+            ids,
+            ["orders", "pages", "forms"],
+            "core is kept, web is rewritten"
+        );
         assert_eq!(part.overview, "core: Core v1.\n\nweb: Web v2.");
         assert_eq!(part.areas[1].sections, ["pages", "forms"]);
     }

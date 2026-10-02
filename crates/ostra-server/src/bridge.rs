@@ -456,10 +456,7 @@ impl BridgeServices for ServerBridge {
         if out.is_error {
             Err(text)
         } else {
-            Ok(ostra_exec_harness::McpOut {
-                text,
-                end: out.end,
-            })
+            Ok(ostra_exec_harness::McpOut { text, end: out.end })
         }
     }
 

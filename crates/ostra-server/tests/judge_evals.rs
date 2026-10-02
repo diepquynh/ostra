@@ -720,7 +720,11 @@ fn score_items(e: &Expect, out: &Value) -> (String, bool) {
     });
     let mut forget: Vec<String> = out["forget"]
         .as_array()
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     forget.sort();
     if let Some(want) = &e.forget {

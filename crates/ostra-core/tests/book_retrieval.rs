@@ -355,7 +355,11 @@ fn slug(h: &str) -> String {
 }
 
 fn inline_code(text: &str) -> String {
-    text.split('`').skip(1).step_by(2).collect::<Vec<_>>().join(" ")
+    text.split('`')
+        .skip(1)
+        .step_by(2)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Every page of `docs/` cut into sections at `##` and `###` headings, and each section into
@@ -378,7 +382,11 @@ fn docs_index() -> Index {
     let mut units: Vec<UnitSpec> = vec![];
     let mut passages: Vec<PassageSpec> = vec![];
     for page in pages {
-        let rel = page.strip_prefix(&docs).unwrap().to_string_lossy().replace('\\', "/");
+        let rel = page
+            .strip_prefix(&docs)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
         let text = std::fs::read_to_string(&page).unwrap();
         let title = text
             .lines()
@@ -390,7 +398,11 @@ fn docs_index() -> Index {
         let mut new_unit = |units: &mut Vec<UnitSpec>, anchor: &str, t: String| {
             let n = seen.entry(anchor.to_string()).or_default();
             *n += 1;
-            let id = if *n == 1 { format!("{rel}#{anchor}") } else { format!("{rel}#{anchor}-{n}") };
+            let id = if *n == 1 {
+                format!("{rel}#{anchor}")
+            } else {
+                format!("{rel}#{anchor}-{n}")
+            };
             units.push(UnitSpec {
                 book: "docs".into(),
                 id,
@@ -405,56 +417,123 @@ fn docs_index() -> Index {
         let mut label = String::new();
         let mut block: Vec<String> = vec![];
         let mut fence: Option<String> = None;
-        let flush = |block: &mut Vec<String>, unit: usize, label: &str, passages: &mut Vec<PassageSpec>| {
-            if block.is_empty() {
-                return;
-            }
-            let lines = std::mem::take(block);
-            let push = |passages: &mut Vec<PassageSpec>, kind, l: String, text: String| {
-                let code = inline_code(&text);
-                passages.push(PassageSpec { unit, kind, label: l, text, code });
-            };
-            let named = |d: &str| if label.is_empty() { d.to_string() } else { format!("{label}: {d}") };
-            if lines[0].starts_with('|') {
-                let cols: Vec<String> =
-                    lines[0].trim_matches('|').split('|').map(|c| c.trim().to_string()).collect();
-                let rows: Vec<String> = lines
-                    .iter()
-                    .skip(1)
-                    .filter(|l| !l.replace(['|', '-', ':', ' '], "").is_empty())
-                    .map(|l| format!("- {}", l.trim_matches('|').split('|').map(str::trim).collect::<Vec<_>>().join(" | ")))
-                    .collect();
-                for chunk in rows.chunks(5) {
-                    push(passages, PassageKind::Table, named(&format!("Table ({})", cols.join(" | "))), chunk.join("\n"));
+        let flush =
+            |block: &mut Vec<String>, unit: usize, label: &str, passages: &mut Vec<PassageSpec>| {
+                if block.is_empty() {
+                    return;
                 }
-            } else if lines[0].starts_with("- ") || lines[0].starts_with("* ") || lines[0].split_once(". ").is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit())) {
-                let mut items: Vec<String> = vec![];
-                for l in &lines {
-                    let t = l.trim_start();
-                    let starts = t.starts_with("- ") || t.starts_with("* ") || t.split_once(". ").is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
-                    if starts && l.len() - t.len() < 2 || items.is_empty() {
-                        items.push(t.to_string());
+                let lines = std::mem::take(block);
+                let push = |passages: &mut Vec<PassageSpec>, kind, l: String, text: String| {
+                    let code = inline_code(&text);
+                    passages.push(PassageSpec {
+                        unit,
+                        kind,
+                        label: l,
+                        text,
+                        code,
+                    });
+                };
+                let named = |d: &str| {
+                    if label.is_empty() {
+                        d.to_string()
                     } else {
-                        let last = items.last_mut().unwrap();
-                        last.push(' ');
-                        last.push_str(t);
+                        format!("{label}: {d}")
                     }
+                };
+                if lines[0].starts_with('|') {
+                    let cols: Vec<String> = lines[0]
+                        .trim_matches('|')
+                        .split('|')
+                        .map(|c| c.trim().to_string())
+                        .collect();
+                    let rows: Vec<String> = lines
+                        .iter()
+                        .skip(1)
+                        .filter(|l| !l.replace(['|', '-', ':', ' '], "").is_empty())
+                        .map(|l| {
+                            format!(
+                                "- {}",
+                                l.trim_matches('|')
+                                    .split('|')
+                                    .map(str::trim)
+                                    .collect::<Vec<_>>()
+                                    .join(" | ")
+                            )
+                        })
+                        .collect();
+                    for chunk in rows.chunks(5) {
+                        push(
+                            passages,
+                            PassageKind::Table,
+                            named(&format!("Table ({})", cols.join(" | "))),
+                            chunk.join("\n"),
+                        );
+                    }
+                } else if lines[0].starts_with("- ")
+                    || lines[0].starts_with("* ")
+                    || lines[0]
+                        .split_once(". ")
+                        .is_some_and(|(n, _)| n.chars().all(|c| c.is_ascii_digit()))
+                {
+                    let mut items: Vec<String> = vec![];
+                    for l in &lines {
+                        let t = l.trim_start();
+                        let starts = t.starts_with("- ")
+                            || t.starts_with("* ")
+                            || t.split_once(". ").is_some_and(|(n, _)| {
+                                !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())
+                            });
+                        if starts && l.len() - t.len() < 2 || items.is_empty() {
+                            items.push(t.to_string());
+                        } else {
+                            let last = items.last_mut().unwrap();
+                            last.push(' ');
+                            last.push_str(t);
+                        }
+                    }
+                    for chunk in items.chunks(5) {
+                        push(
+                            passages,
+                            PassageKind::Table,
+                            named("List"),
+                            chunk.join("\n"),
+                        );
+                    }
+                } else {
+                    push(
+                        passages,
+                        PassageKind::Purpose,
+                        named("Text"),
+                        lines.join(" "),
+                    );
                 }
-                for chunk in items.chunks(5) {
-                    push(passages, PassageKind::Table, named("List"), chunk.join("\n"));
-                }
-            } else {
-                push(passages, PassageKind::Purpose, named("Text"), lines.join(" "));
-            }
-        };
+            };
         for line in text.lines() {
             if let Some(lang) = &fence {
                 if line.trim_start().starts_with("```") {
-                    let kind = if lang == "mermaid" { PassageKind::Diagram } else { PassageKind::Overview };
+                    let kind = if lang == "mermaid" {
+                        PassageKind::Diagram
+                    } else {
+                        PassageKind::Overview
+                    };
                     let body = std::mem::take(&mut block).join("\n");
-                    let l = if label.is_empty() { "Code".to_string() } else { format!("{label}: code") };
-                    let code = if kind == PassageKind::Diagram { String::new() } else { body.clone() };
-                    passages.push(PassageSpec { unit, kind, label: l, text: body, code });
+                    let l = if label.is_empty() {
+                        "Code".to_string()
+                    } else {
+                        format!("{label}: code")
+                    };
+                    let code = if kind == PassageKind::Diagram {
+                        String::new()
+                    } else {
+                        body.clone()
+                    };
+                    passages.push(PassageSpec {
+                        unit,
+                        kind,
+                        label: l,
+                        text: body,
+                        code,
+                    });
                     fence = None;
                 } else {
                     block.push(line.to_string());
@@ -476,7 +555,11 @@ fn docs_index() -> Index {
             if let Some(h) = line.strip_prefix("### ") {
                 flush(&mut block, unit, &label, &mut passages);
                 label.clear();
-                let t = if h2.is_empty() { format!("{title} > {}", h.trim()) } else { format!("{title} > {h2} > {}", h.trim()) };
+                let t = if h2.is_empty() {
+                    format!("{title} > {}", h.trim())
+                } else {
+                    format!("{title} > {h2} > {}", h.trim())
+                };
                 unit = new_unit(&mut units, &slug(h), t);
                 continue;
             }
@@ -509,14 +592,21 @@ fn retrieval_over_docs() {
     let index = docs_index();
     let cases = cases();
     let labels = labels_in("docs_labels");
-    eprintln!("docs: {} units, {} passages", index.units.len(), index.passages.len());
+    eprintln!(
+        "docs: {} units, {} passages",
+        index.units.len(),
+        index.passages.len()
+    );
     if labels.is_empty() {
         return;
     }
     for c in &cases {
         for id in labels.get(&c.id).into_iter().flatten() {
             if !index.units.iter().any(|u| &u.id == id) {
-                eprintln!("{}: label {id} names no section; relabel after a docs change", c.id);
+                eprintln!(
+                    "{}: label {id} names no section; relabel after a docs change",
+                    c.id
+                );
             }
         }
     }
@@ -534,7 +624,8 @@ fn retrieval_over_docs() {
 /// or `docs` (the pages in `docs/`).
 fn corpus(name: &str) -> (Index, BTreeMap<String, Vec<String>>) {
     let book = |f: &str| -> Index {
-        let b: Book = serde_json::from_str(&std::fs::read_to_string(root().join(f)).unwrap()).unwrap();
+        let b: Book =
+            serde_json::from_str(&std::fs::read_to_string(root().join(f)).unwrap()).unwrap();
         Index::build(&[b])
     };
     match name {
@@ -553,7 +644,11 @@ fn retrieval_over_corpus() {
     let name = std::env::var("OSTRA_EVAL_CORPUS").unwrap_or("book".into());
     let (index, labels) = corpus(&name);
     let cases = cases();
-    eprintln!("{name}: {} units, {} passages", index.units.len(), index.passages.len());
+    eprintln!(
+        "{name}: {} units, {} passages",
+        index.units.len(),
+        index.passages.len()
+    );
     for c in &cases {
         for id in labels.get(&c.id).into_iter().flatten() {
             if !index.units.iter().any(|u| &u.id == id) {

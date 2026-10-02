@@ -931,8 +931,15 @@ mod tests {
             .await
             .unwrap();
         let sent = &p.requests()[0];
-        assert_eq!(sent.messages[..2], req.messages[..2], "the cached prefix is unchanged");
-        assert_eq!(sent.messages[2].content.last(), Some(&Block::text("Summarize.")));
+        assert_eq!(
+            sent.messages[..2],
+            req.messages[..2],
+            "the cached prefix is unchanged"
+        );
+        assert_eq!(
+            sent.messages[2].content.last(),
+            Some(&Block::text("Summarize."))
+        );
         assert_eq!(sent.tool_choice, ToolChoice::None);
         let messages = out.messages.expect("a summary");
         assert!(matches!(
@@ -943,7 +950,10 @@ mod tests {
         ));
 
         p.push(mock::response(vec![], StopReason::MaxTokens));
-        let out = p.compact(req, "Summarize.", CancellationToken::new()).await.unwrap();
+        let out = p
+            .compact(req, "Summarize.", CancellationToken::new())
+            .await
+            .unwrap();
         assert!(out.messages.is_none(), "a cut-off summary is not used");
     }
 

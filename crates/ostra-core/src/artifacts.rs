@@ -191,7 +191,10 @@ pub fn tagged_files(
         let Ok(rel) = normalize(path.trim_end_matches('/')) else {
             continue;
         };
-        let (Ok(root), Ok(full)) = (crate::paths::canonical(root), crate::paths::canonical(root.join(&rel))) else {
+        let (Ok(root), Ok(full)) = (
+            crate::paths::canonical(root),
+            crate::paths::canonical(root.join(&rel)),
+        ) else {
             continue;
         };
         if full.starts_with(&root) {

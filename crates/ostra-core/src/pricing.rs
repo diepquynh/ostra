@@ -305,7 +305,10 @@ mod tests {
             "anthropic's listing beats a reseller's"
         );
         assert_eq!(c.price("anthropic:claude-opus-5").unwrap().base.input, 5.0);
-        assert_eq!(c.price("claude-sonnet-5-5-20260901").unwrap().base.input, 2.0);
+        assert_eq!(
+            c.price("claude-sonnet-5-5-20260901").unwrap().base.input,
+            2.0
+        );
         assert_eq!(c.price("claude-fable-5-1").unwrap().base.cache_read, 0.25);
         assert!(c.price("claude-opus-50").is_none());
         assert!(c.price("unknown").is_none());
@@ -314,7 +317,10 @@ mod tests {
     #[test]
     fn looks_up_context_windows_and_output_limits_like_prices() {
         let c = sample();
-        assert_eq!(c.context_window("anthropic:claude-opus-5-5"), Some(1_000_000));
+        assert_eq!(
+            c.context_window("anthropic:claude-opus-5-5"),
+            Some(1_000_000)
+        );
         assert_eq!(c.context_window("claude-haiku-4-5-20251001"), Some(200_000));
         assert_eq!(c.context_window("openai:gpt-5.6-sol"), Some(1_050_000));
         assert_eq!(c.context_window("unknown"), None);

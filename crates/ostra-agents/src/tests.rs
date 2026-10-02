@@ -1,6 +1,7 @@
 use super::*;
 use crate::brief::{
-    ArtifactsBrief, BooksBrief, BriefInput, ProjectDoc, augment, build_brief, project_docs, stated_in,
+    ArtifactsBrief, BooksBrief, BriefInput, ProjectDoc, augment, build_brief, project_docs,
+    stated_in,
 };
 use crate::spawn::*;
 use ostra_core::HarnessKind;
@@ -149,10 +150,18 @@ fn coordination_guide_names_the_tools_per_executor() {
     let native = render_prompt(AgentName::GenerateSpec, ExecutorKind::Native).unwrap();
     assert!(native.contains("## Subagent coordination"));
     assert!(native.contains("`SubagentAsk`") && native.contains("`SubagentReply`"));
-    let claude = render_prompt(AgentName::FactCheck, ExecutorKind::Harness(HarnessKind::Claude)).unwrap();
+    let claude = render_prompt(
+        AgentName::FactCheck,
+        ExecutorKind::Harness(HarnessKind::Claude),
+    )
+    .unwrap();
     assert!(claude.contains("`mcp__ostra__subagent_ask`"));
     assert!(claude.contains("| coordinate | mcp__ostra__subagent_list, mcp__ostra__subagent_ask, mcp__ostra__subagent_reply |"));
-    let codex = render_prompt(AgentName::Implementer, ExecutorKind::Harness(HarnessKind::Codex)).unwrap();
+    let codex = render_prompt(
+        AgentName::Implementer,
+        ExecutorKind::Harness(HarnessKind::Codex),
+    )
+    .unwrap();
     assert!(codex.contains("`subagent_reply`"));
     // Agents outside the pipeline's pairs get no coordination tools.
     let advisor = render_prompt(AgentName::Advisor, ExecutorKind::Native).unwrap();
@@ -421,7 +430,10 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         "backend -> /ws/backend"
     );
     let block = plan.render();
-    assert!(block.contains("\nCode facts: /ws/s/ostra-code-facts.md\n"), "{block}");
+    assert!(
+        block.contains("\nCode facts: /ws/s/ostra-code-facts.md\n"),
+        "{block}"
+    );
     assert!(block.contains("\nPhases to revise: 1, 3\n"), "{block}");
 
     let imp = ImplementerParams {
@@ -488,13 +500,22 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
     };
     roundtrip(&area);
     let text = area.render();
-    assert!(text.contains("Area: server, other files (server-and-1-more)"), "{text}");
-    assert!(text.contains("Area paths: server/**, and every file no other area covers"), "{text}");
+    assert!(
+        text.contains("Area: server, other files (server-and-1-more)"),
+        "{text}"
+    );
+    assert!(
+        text.contains("Area paths: server/**, and every file no other area covers"),
+        "{text}"
+    );
     assert!(text.contains("Other areas: engine (engine/**)"), "{text}");
     let arch = ArchitectureParams {
         common: common(),
         book_parts: "/r/ostra-docs-parts.json".into(),
-        projects: vec![("api".into(), "/ws/api".into()), ("web".into(), "/ws/web".into())],
+        projects: vec![
+            ("api".into(), "/ws/api".into()),
+            ("web".into(), "/ws/web".into()),
+        ],
         existing_book: None,
         extra: Extras::default(),
     };
@@ -730,7 +751,9 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
     assert!(brief.contains("`./mvnw -q compile`"));
     // The brief renders paths with the OS separator, so compare with slashes normalized.
     assert!(
-        brief.replace('\\', "/").contains("/ws/backend/.agents/skills/entity/SKILL.md"),
+        brief
+            .replace('\\', "/")
+            .contains("/ws/backend/.agents/skills/entity/SKILL.md"),
         "{brief}"
     );
     assert!(brief.contains("use for JPA entity"));
@@ -790,7 +813,7 @@ fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
             instructions: &[],
             project_docs: &[],
             artifacts: None,
-        books: None,
+            books: None,
             new_projects: &[],
         };
         let brief = build_brief(&input).unwrap();
@@ -798,8 +821,14 @@ fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
             brief.contains("- **unit**: `pytest tests/unit`; one test: `pytest {PATH}`"),
             "{brief}"
         );
-        assert!(brief.contains("- **e2e**: `npx playwright test`\n"), "{brief}");
-        assert!(brief.contains("### Commands"), "{agent}: regression suites need exact commands");
+        assert!(
+            brief.contains("- **e2e**: `npx playwright test`\n"),
+            "{brief}"
+        );
+        assert!(
+            brief.contains("### Commands"),
+            "{agent}: regression suites need exact commands"
+        );
     }
 }
 

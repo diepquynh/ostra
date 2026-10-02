@@ -14,7 +14,11 @@ const MAX_GREP_OUTPUT: usize = 30_000;
 /// A path for tool output, with forward slashes on every OS so agents and tests read one form.
 fn disp(p: &Path) -> String {
     let s = p.display().to_string();
-    if cfg!(windows) { s.replace('\\', "/") } else { s }
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s
+    }
 }
 
 fn walker(
@@ -76,8 +80,7 @@ struct SecretFilter {
 
 impl SecretFilter {
     fn new() -> Self {
-        let home = ostra_core::paths::home()
-            .unwrap_or_default();
+        let home = ostra_core::paths::home().unwrap_or_default();
         let both = |p: PathBuf| {
             [ostra_core::paths::canonical(&p).ok(), Some(p)]
                 .into_iter()

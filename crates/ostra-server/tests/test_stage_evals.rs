@@ -34,13 +34,14 @@ use futures::StreamExt;
 use ostra_core::agent::{AgentName, Capability};
 use ostra_core::api::{CreateSession, FileIndex};
 use ostra_core::config::{
-    GlobalConfig, ProjectEntry, ProjectProfile, ResolvedRoute, WorkspaceSettings, load_toml, save_toml,
+    GlobalConfig, ProjectEntry, ProjectProfile, ResolvedRoute, WorkspaceSettings, load_toml,
+    save_toml,
 };
 use ostra_core::coord::{CoordReply, RunEnd, SUBAGENT_REPLY};
 use ostra_core::event::{ExecPurpose, SessionOptions};
 use ostra_core::exec::{
-    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec, ExecutionStatus,
-    Executor, Usage,
+    CancellationToken, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
+    ExecutionStatus, Executor, Usage,
 };
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
@@ -229,7 +230,11 @@ fn tail(s: &str, n: usize) -> String {
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git").args(args).current_dir(dir).output().unwrap();
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
     assert!(
         out.status.success(),
         "git {args:?}: {}",
@@ -417,7 +422,10 @@ fn sh(dir: &Path, cmd: &str, limit: Duration) -> (bool, String) {
     let _ = std::fs::remove_file(&out_path);
     match status {
         Some(s) => (s.success(), text),
-        None => (false, format!("{text}\n[timed out after {}s]", limit.as_secs())),
+        None => (
+            false,
+            format!("{text}\n[timed out after {}s]", limit.as_secs()),
+        ),
     }
 }
 
@@ -450,7 +458,11 @@ fn survives(dir: &Path, m: &Mutant, types: &[(String, String)]) -> Result<bool, 
 
 /// Whether this machine has the program a project's tests run with.
 fn has_runner(project: &str) -> bool {
-    let program = if project == "notes" { "node" } else { "python3" };
+    let program = if project == "notes" {
+        "node"
+    } else {
+        "python3"
+    };
     sh(
         Path::new("."),
         &format!("command -v {program}"),
@@ -479,7 +491,10 @@ fn vars(st: &SessionState, repo: &Path, ws: &Path, key: &str, report: Option<&Pa
     Vars(vec![
         ("{repo}", repo.display().to_string()),
         ("{root}", st.session_root.display().to_string()),
-        ("{session}", st.project_session_dir(key).display().to_string()),
+        (
+            "{session}",
+            st.project_session_dir(key).display().to_string(),
+        ),
         ("{ws}", ws.display().to_string()),
         (
             "{report}",
@@ -588,7 +603,13 @@ impl ExecutionHost for Tap {
                 is_error,
                 ..
             } => {
-                if let Some((_, s)) = self.steps.lock().iter_mut().rev().find(|(id, _)| id == call_id) {
+                if let Some((_, s)) = self
+                    .steps
+                    .lock()
+                    .iter_mut()
+                    .rev()
+                    .find(|(id, _)| id == call_id)
+                {
                     s.output = Some(output.clone());
                     s.is_error = *is_error;
                 }
@@ -607,7 +628,12 @@ impl ExecutionHost for Tap {
         self.inner.emit(delta);
     }
 
-    async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer {
+    async fn ask_permission(
+        &self,
+        call: &ToolCall,
+        reason: &str,
+        rule: &RuleRef,
+    ) -> PermissionAnswer {
         self.inner.ask_permission(call, reason, rule).await
     }
 
@@ -664,9 +690,7 @@ impl Router {
     }
 
     fn is_live(&self, agent: AgentName) -> bool {
-        !self.dry
-            && self.case.live.iter().any(|r| role_agent(r) == agent)
-            && self.live.is_some()
+        !self.dry && self.case.live.iter().any(|r| role_agent(r) == agent) && self.live.is_some()
     }
 
     /// The offline replay's check of the project's own tests, before the golden tests go in.
@@ -684,7 +708,9 @@ impl Router {
             .collect();
         *self.baseline.lock() = Some(Baseline {
             passes: failure.is_none(),
-            failure: failure.map(|(t, o)| format!("{t}: {}", tail(&o, 600))).unwrap_or_default(),
+            failure: failure
+                .map(|(t, o)| format!("{t}: {}", tail(&o, 600)))
+                .unwrap_or_default(),
             mutants,
         });
     }
@@ -725,7 +751,12 @@ impl Router {
             let text = "Nothing to add beyond my report.";
             host.record_message("assistant", &text_blocks(text));
             let (engine, session) = self.slot.get().unwrap();
-            return match engine.coordinate(session, &spec.id, SUBAGENT_REPLY, &json!({"message": text})) {
+            return match engine.coordinate(
+                session,
+                &spec.id,
+                SUBAGENT_REPLY,
+                &json!({"message": text}),
+            ) {
                 Ok(CoordReply { end, .. }) => ok(
                     if end == RunEnd::Wait {
                         ExecutionStatus::Waiting
@@ -742,7 +773,11 @@ impl Router {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, text).unwrap();
         };
-        let report_or = |fallback: &str| report.clone().unwrap_or_else(|| spec.ctx.session_dir.join(fallback));
+        let report_or = |fallback: &str| {
+            report
+                .clone()
+                .unwrap_or_else(|| spec.ctx.session_dir.join(fallback))
+        };
         let submit = match spec.agent {
             AgentName::Explore => {
                 let path = spec.ctx.session_dir.join("ostra-research-1.md");
@@ -760,7 +795,10 @@ impl Router {
             }
             AgentName::GenerateSpec => {
                 let path = st.session_root.join("ostra-spec-1.md");
-                write(&path, &v.fill(self.case.spec.as_deref().unwrap_or("# Spec\n")));
+                write(
+                    &path,
+                    &v.fill(self.case.spec.as_deref().unwrap_or("# Spec\n")),
+                );
                 json!({"spec_path": path, "open_questions": [], "external_evidence_rows": 0,
                     "deliverables": 1, "requirements": 1, "summary": "A spec for the request."})
             }
@@ -776,7 +814,10 @@ impl Router {
                 let master = st.session_root.join("ostra-plan-1.md");
                 let phase = st.session_root.join("ostra-plan-1-phase-1.md");
                 write(&master, "# Plan\n\nOne phase; see its phase file.\n");
-                write(&phase, &v.fill(self.case.phase_file.as_deref().unwrap_or("# Phase 1\n")));
+                write(
+                    &phase,
+                    &v.fill(self.case.phase_file.as_deref().unwrap_or("# Phase 1\n")),
+                );
                 json!({"spec_path": st.session_root.join("ostra-spec-1.md"), "master_plan_path": master,
                     "phases": [{"id": 1, "deliverable": "D1", "project": self.key, "title": "The change",
                         "complexity": "Medium", "test_policy": "Required", "depends_on": [], "file": phase}],
@@ -784,11 +825,21 @@ impl Router {
             }
             AgentName::Implementer => {
                 let Some(change) = &self.case.change else {
-                    return ExecutionResult::error("eval: an implementer ran in a case with no change");
+                    return ExecutionResult::error(
+                        "eval: an implementer ran in a case with no change",
+                    );
                 };
                 let files = copy_over(&overlay(&self.case.project, change), &self.repo);
                 let path = report_or("ostra-implementer-phase-1.md");
-                write(&path, &v.fill(self.case.implementer_report.as_deref().unwrap_or("# Report\n")));
+                write(
+                    &path,
+                    &v.fill(
+                        self.case
+                            .implementer_report
+                            .as_deref()
+                            .unwrap_or("# Report\n"),
+                    ),
+                );
                 json!({"status": "ok", "report_path": path, "changed_files": files, "summary": "Implemented the change."})
             }
             AgentName::CodeReviewer => json!({"findings": [], "security_block": false,
@@ -820,7 +871,9 @@ impl Router {
                 match std::fs::read_to_string(dir.join("write-test.json")) {
                     Ok(s) => match serde_json::from_str(&v.fill(&s)) {
                         Ok(v) => v,
-                        Err(e) => return ExecutionResult::error(format!("eval: write-test.json: {e}")),
+                        Err(e) => {
+                            return ExecutionResult::error(format!("eval: write-test.json: {e}"));
+                        }
                     },
                     Err(_) => json!({"status": "ok", "report_path": path, "changed_files": files,
                         "summary": "Wrote the tests the analysis asks for. All verifications passed."}),
@@ -864,7 +917,8 @@ impl Executor for Router {
                 | AgentName::Implementer
                 | AgentName::CodeReviewer
                 | AgentName::ExecutionPathAnalyzer
-        ) || (spec.agent == AgentName::WriteTest && self.case.live.iter().any(|l| l == WRITE_TEST));
+        ) || (spec.agent == AgentName::WriteTest
+            && self.case.live.iter().any(|l| l == WRITE_TEST));
         if !scripted {
             self.stop(format!("before {} ({kind})", spec.agent));
             let mut r = ExecutionResult::with_status(ExecutionStatus::Cancelled);
@@ -880,14 +934,21 @@ impl Executor for Router {
         let role = role_of(spec.agent, &kind);
         if let Some(r) = role {
             // Kept for whoever reads a run or writes a case: what the agent was told.
-            let _ = std::fs::write(self.dir.join(format!("first-message-{r}.md")), &spec.first_message);
+            let _ = std::fs::write(
+                self.dir.join(format!("first-message-{r}.md")),
+                &spec.first_message,
+            );
         }
         let before = role.map(|_| tree(&self.repo));
         let live = self.is_live(spec.agent);
         let started = Instant::now();
         let result = if live {
             spec.route.model = self.model.clone();
-            self.live.as_ref().unwrap().run(spec.clone(), tap.clone(), cancel).await
+            self.live
+                .as_ref()
+                .unwrap()
+                .run(spec.clone(), tap.clone(), cancel)
+                .await
         } else {
             self.canned(&spec, &tap, &st, &kind).await
         };
@@ -960,7 +1021,9 @@ impl ostra_tools::CodeNav for Nav {
         let (root, list, indexes) = (self.root.clone(), self.list.clone(), self.indexes.clone());
         let (tool, input) = (tool.to_string(), input.clone());
         tokio::task::spawn_blocking(move || {
-            indexes.with(&(), &root, &list, |ix| ostra_code::tools::run(ix, &tool, &input))
+            indexes.with(&(), &root, &list, |ix| {
+                ostra_code::tools::run(ix, &tool, &input)
+            })
         })
         .await
         .map_err(|e| format!("The code index failed: {e}"))?
@@ -1023,7 +1086,9 @@ impl Services for EvalServices {
             json!({"report_markdown": "# Done", "reason": "Scripted by the eval."})
         } else if let Some(answer) = props.get("answer") {
             match answer["properties"]["kind"]["const"].as_str() {
-                Some("approval") => json!({"answer": {"kind": "approval", "approved": true}, "reason": "Scripted."}),
+                Some("approval") => {
+                    json!({"answer": {"kind": "approval", "approved": true}, "reason": "Scripted."})
+                }
                 Some("choice") => {
                     let options: Vec<&str> = answer["properties"]["option"]["enum"]
                         .as_array()
@@ -1224,7 +1289,12 @@ async fn run_session(
     }
     // Let cancelled runs return, so their results are in the log.
     let settle = Instant::now();
-    while engine.state(&session).unwrap().running_executions().next().is_some()
+    while engine
+        .state(&session)
+        .unwrap()
+        .running_executions()
+        .next()
+        .is_some()
         && settle.elapsed() < Duration::from_secs(30)
     {
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1285,7 +1355,10 @@ fn calls_record(r: &RunLog, ws: &Path) -> String {
     let mut out = String::new();
     for st in r.steps.iter().take(120) {
         if st.tool == "Bash" {
-            out.push_str(&format!("- Bash: `{}`\n", short(&st.input, 400, 400).replace('`', "'")));
+            out.push_str(&format!(
+                "- Bash: `{}`\n",
+                short(&st.input, 400, 400).replace('`', "'")
+            ));
             match &st.output {
                 Some(o) => out.push_str(&format!(
                     "  - {}output ends: {}\n",
@@ -1311,7 +1384,10 @@ fn calls_record(r: &RunLog, ws: &Path) -> String {
 fn check_epa(case: &Case, s: &Session) -> (Vec<String>, String) {
     let e = case.epa.as_ref().expect("an epa expectation");
     let Some(r) = run_of(s, EPA) else {
-        return (vec![format!("the analyzer never ran ({})", s.stop)], String::new());
+        return (
+            vec![format!("the analyzer never ran ({})", s.stop)],
+            String::new(),
+        );
     };
     let mut fails = vec![];
     if r.status != ExecutionStatus::Ok {
@@ -1341,7 +1417,10 @@ fn check_epa(case: &Case, s: &Session) -> (Vec<String>, String) {
     if let Some((before, after)) = s.router.trees.lock().get(EPA) {
         let changed = diff(before, after);
         if !changed.is_empty() {
-            fails.push(format!("the analyzer changed project files: {}", changed.join(", ")));
+            fails.push(format!(
+                "the analyzer changed project files: {}",
+                changed.join(", ")
+            ));
         }
     }
     for m in missing(&text, &e.has) {
@@ -1376,7 +1455,10 @@ fn listed(sub: &ReportSubmit, repo: &Path) -> Vec<String> {
 fn check_wt(case: &Case, s: &Session) -> (Vec<String>, String) {
     let w = case.write_test.as_ref().expect("a write-test expectation");
     let Some(r) = run_of(s, WRITE_TEST) else {
-        return (vec![format!("write-test never ran ({})", s.stop)], String::new());
+        return (
+            vec![format!("write-test never ran ({})", s.stop)],
+            String::new(),
+        );
     };
     let mut fails = vec![];
     // A stuck submit ends the execution as stuck.
@@ -1404,7 +1486,10 @@ fn check_wt(case: &Case, s: &Session) -> (Vec<String>, String) {
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default();
     if status != w.status {
-        fails.push(format!("write-test submitted {status}, expected {}", w.status));
+        fails.push(format!(
+            "write-test submitted {status}, expected {}",
+            w.status
+        ));
     }
     let report = report_of(&r, &sub).unwrap_or_else(|err| {
         fails.push(err);
@@ -1419,13 +1504,25 @@ fn check_wt(case: &Case, s: &Session) -> (Vec<String>, String) {
         .cloned()
         .unwrap_or_default();
     let changed = diff(&before, &after);
-    let globs: Vec<&String> = profile.test_types.values().flat_map(|t| &t.matches).collect();
-    for f in changed.iter().filter(|f| !globs.iter().any(|g| glob_match(g, f))) {
+    let globs: Vec<&String> = profile
+        .test_types
+        .values()
+        .flat_map(|t| &t.matches)
+        .collect();
+    for f in changed
+        .iter()
+        .filter(|f| !globs.iter().any(|g| glob_match(g, f)))
+    {
         fails.push(format!("changed {f}, which is not a test file"));
     }
     let listed = listed(&sub, &s.repo);
-    for f in changed.iter().filter(|f| after.contains_key(*f) && !listed.contains(f)) {
-        fails.push(format!("left {f} out of changed_files, so Ostra would not stage it"));
+    for f in changed
+        .iter()
+        .filter(|f| after.contains_key(*f) && !listed.contains(f))
+    {
+        fails.push(format!(
+            "left {f} out of changed_files, so Ostra would not stage it"
+        ));
     }
     for f in &w.files {
         let text = after
@@ -1446,7 +1543,10 @@ fn check_wt(case: &Case, s: &Session) -> (Vec<String>, String) {
             })
         });
         if !hit {
-            fails.push(format!("no new or changed test at level {}", group.join(" or ")));
+            fails.push(format!(
+                "no new or changed test at level {}",
+                group.join(" or ")
+            ));
         }
     }
     for m in missing(&format!("{report}\n{}", sub.summary), &w.has) {
@@ -1471,11 +1571,17 @@ fn check_wt(case: &Case, s: &Session) -> (Vec<String>, String) {
             None => {
                 facts.push(format!(
                     "The grading ran the {} tests: they pass.",
-                    types.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                    types
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ));
                 for m in &case.mutant {
                     match survives(&s.repo, m, &types) {
-                        Ok(true) => fails.push(format!("no test catches mutant {}: {}", m.id, m.note)),
+                        Ok(true) => {
+                            fails.push(format!("no test catches mutant {}: {}", m.id, m.note))
+                        }
                         Ok(false) => facts.push(format!("Mutant {} ({}) is caught.", m.id, m.note)),
                         Err(e) => fails.push(e),
                     }
@@ -1486,8 +1592,15 @@ fn check_wt(case: &Case, s: &Session) -> (Vec<String>, String) {
     let mut files = String::new();
     for f in changed.iter().filter(|f| after.contains_key(*f)) {
         let text = String::from_utf8_lossy(&after[f]).into_owned();
-        let what = if before.contains_key(f) { "modified" } else { "created" };
-        files.push_str(&format!("## {f} ({what})\n\n```\n{}\n```\n\n", clip(&text, 6000)));
+        let what = if before.contains_key(f) {
+            "modified"
+        } else {
+            "created"
+        };
+        files.push_str(&format!(
+            "## {f} ({what})\n\n```\n{}\n```\n\n",
+            clip(&text, 6000)
+        ));
     }
     let record = format!(
         "# write-test's report\n\n{}\n\n# Its submit\n\n```json\n{}\n```\n\n# The test files it changed\n\n{}# What the grading found\n\n{}\n\n# Its tool calls, in order\n\n{}",
@@ -1551,9 +1664,15 @@ fn infra_error(runs: &[RunLog]) -> Option<String> {
         .filter_map(|r| r.error.clone())
         .find(|e| {
             let e = e.to_lowercase();
-            ["model call failed", "provider error", "overloaded", "rate limit", "stream failed"]
-                .iter()
-                .any(|m| e.contains(m))
+            [
+                "model call failed",
+                "provider error",
+                "overloaded",
+                "rate limit",
+                "stream failed",
+            ]
+            .iter()
+            .any(|m| e.contains(m))
         })
 }
 
@@ -1576,7 +1695,9 @@ struct Outcome {
 
 impl Outcome {
     fn pass(&self) -> bool {
-        self.infra.is_none() && self.fails.is_empty() && self.grade.as_ref().is_some_and(|(ok, _)| *ok)
+        self.infra.is_none()
+            && self.fails.is_empty()
+            && self.grade.as_ref().is_some_and(|(ok, _)| *ok)
     }
 }
 
@@ -1759,7 +1880,11 @@ async fn test_stage_evals() {
         for case in &cases {
             for model in &models {
                 let short = model.split(':').next_back().unwrap_or(model);
-                work.push((case.clone(), model.clone(), root.join(format!("{}-{short}-{run}", case.id))));
+                work.push((
+                    case.clone(),
+                    model.clone(),
+                    root.join(format!("{}-{short}-{run}", case.id)),
+                ));
             }
         }
     }
@@ -1809,7 +1934,10 @@ async fn test_stage_evals() {
             .push(o);
     }
     let mut report = vec![];
-    println!("\n{:<34} {:<10} {:<40} {:>6}  failures", "case", "role", "model", "pass");
+    println!(
+        "\n{:<34} {:<10} {:<40} {:>6}  failures",
+        "case", "role", "model", "pass"
+    );
     for case in &cases {
         for role in ["epa", "write-test", "stage"] {
             for model in &models {
@@ -1823,13 +1951,19 @@ async fn test_stage_evals() {
                     .filter(|o| !o.pass())
                     .map(|o| {
                         if let Some(e) = &o.infra {
-                            format!("provider error on every attempt: {}", e.chars().take(80).collect::<String>())
+                            format!(
+                                "provider error on every attempt: {}",
+                                e.chars().take(80).collect::<String>()
+                            )
                         } else if !o.fails.is_empty() {
                             o.fails.join("; ")
                         } else if let Some((_, r)) = &o.grade {
                             format!("grader: {r}")
                         } else {
-                            format!("grader error: {}", o.grade_error.clone().unwrap_or_default())
+                            format!(
+                                "grader error: {}",
+                                o.grade_error.clone().unwrap_or_default()
+                            )
                         }
                     })
                     .collect();
@@ -1856,7 +1990,17 @@ async fn test_stage_evals() {
     }
     println!(
         "\n{:<40} {:>7} {:>7} {:>7} {:>7} {:>11} {:>7} {:>7} {:>9} {:>9} {:>9}",
-        "model", "tier 1", "tier 2", "tier 3", "epa", "write-test", "stage", "all", "cost", "grading", "avg time"
+        "model",
+        "tier 1",
+        "tier 2",
+        "tier 3",
+        "epa",
+        "write-test",
+        "stage",
+        "all",
+        "cost",
+        "grading",
+        "avg time"
     );
     for model in &models {
         let os: Vec<&Outcome> = outcomes
@@ -1913,37 +2057,80 @@ async fn test_stage_cases_run_dry() {
         let id = &case.id;
         assert!(ids.insert(id.clone()), "duplicate case id {id}");
         assert!((1..=3).contains(&case.tier), "{id}: tier 1 to 3");
-        assert!(matches!(case.mode.as_str(), "phase" | "request"), "{id}: mode");
-        assert!(matches!(case.track.as_str(), "light" | "full"), "{id}: track");
+        assert!(
+            matches!(case.mode.as_str(), "phase" | "request"),
+            "{id}: mode"
+        );
+        assert!(
+            matches!(case.track.as_str(), "light" | "full"),
+            "{id}: track"
+        );
         assert!(
             !case.live.is_empty() && case.live.iter().all(|l| l == EPA || l == WRITE_TEST),
             "{id}: live lists epa, write-test, or both"
         );
-        assert_eq!(case.live.iter().any(|l| l == EPA), case.epa.is_some(), "{id}: [case.epa] when and only when epa is live");
+        assert_eq!(
+            case.live.iter().any(|l| l == EPA),
+            case.epa.is_some(),
+            "{id}: [case.epa] when and only when epa is live"
+        );
         assert_eq!(
             case.live.iter().any(|l| l == WRITE_TEST),
             case.write_test.is_some(),
             "{id}: [case.write_test] when and only when write-test is live"
         );
-        assert!(golden_dir(case).join("epa.md").is_file(), "{id}: the golden has an epa.md");
+        assert!(
+            golden_dir(case).join("epa.md").is_file(),
+            "{id}: the golden has an epa.md"
+        );
         if case.mode == "phase" {
-            assert!(case.change.is_some() && case.implementer_report.is_some(), "{id}: a phase case has a change and a report");
-            assert!(case.history.is_empty() && case.staged.is_none(), "{id}: a phase case's implementer makes the change");
+            assert!(
+                case.change.is_some() && case.implementer_report.is_some(),
+                "{id}: a phase case has a change and a report"
+            );
+            assert!(
+                case.history.is_empty() && case.staged.is_none(),
+                "{id}: a phase case's implementer makes the change"
+            );
         } else {
-            assert!(case.change.is_none() && case.implementer_report.is_none(), "{id}: no implementer runs in a request case");
+            assert!(
+                case.change.is_none() && case.implementer_report.is_none(),
+                "{id}: no implementer runs in a request case"
+            );
         }
-        assert_eq!(case.track == "full" && case.mode == "phase", case.phase_file.is_some(), "{id}: a phase file only on the full track");
+        assert_eq!(
+            case.track == "full" && case.mode == "phase",
+            case.phase_file.is_some(),
+            "{id}: a phase file only on the full track"
+        );
         if let Some(w) = &case.write_test {
             assert!(matches!(w.status.as_str(), "ok" | "stuck"), "{id}: status");
-            assert!(matches!(w.baseline.as_str(), "passes" | "fails"), "{id}: baseline");
-            assert_eq!(w.status == "ok", !case.mutant.is_empty(), "{id}: mutants when and only when write-test should pass");
-            assert!(!w.cause.trim().is_empty() && !w.rubric.trim().is_empty(), "{id}");
+            assert!(
+                matches!(w.baseline.as_str(), "passes" | "fails"),
+                "{id}: baseline"
+            );
+            assert_eq!(
+                w.status == "ok",
+                !case.mutant.is_empty(),
+                "{id}: mutants when and only when write-test should pass"
+            );
+            assert!(
+                !w.cause.trim().is_empty() && !w.rubric.trim().is_empty(),
+                "{id}"
+            );
         }
         if let Some(e) = &case.epa {
-            assert!(!e.cause.trim().is_empty() && !e.rubric.trim().is_empty(), "{id}");
+            assert!(
+                !e.cause.trim().is_empty() && !e.rubric.trim().is_empty(),
+                "{id}"
+            );
         }
         for m in &case.mutant {
-            assert!(!m.note.trim().is_empty(), "{id}: mutant {} needs a note", m.id);
+            assert!(
+                !m.note.trim().is_empty(),
+                "{id}: mutant {} needs a note",
+                m.id
+            );
         }
     }
 
@@ -1953,7 +2140,10 @@ async fn test_stage_cases_run_dry() {
         .filter(|c| {
             let ok = has_runner(&c.project);
             if !ok {
-                println!("{}: skipped, because this machine lacks the runner its tests need", c.id);
+                println!(
+                    "{}: skipped, because this machine lacks the runner its tests need",
+                    c.id
+                );
             }
             ok
         })
@@ -1979,14 +2169,27 @@ async fn test_stage_cases_run_dry() {
             .map(|r| format!("{}:{}", r.agent, r.kind))
             .collect();
         println!("{id}: {} | {} ({:.1}s)", seen.join(" > "), s.stop, s.secs);
-        let last = if case.live.iter().any(|l| l == WRITE_TEST) { WRITE_TEST } else { EPA };
+        let last = if case.live.iter().any(|l| l == WRITE_TEST) {
+            WRITE_TEST
+        } else {
+            EPA
+        };
         if s.stop != format!("after {last}") {
-            let errors: Vec<String> = s.router.runs.lock().iter().filter_map(|r| r.error.clone()).collect();
+            let errors: Vec<String> = s
+                .router
+                .runs
+                .lock()
+                .iter()
+                .filter_map(|r| r.error.clone())
+                .collect();
             problems.push(format!("{id}: the replay stopped with `{}`, not after {last}; runs: {seen:?}; errors: {errors:?}", s.stop));
             continue;
         }
         // What each agent is told comes from the engine, so the replay checks the parts the cases rest on.
-        let first = |role: &str| std::fs::read_to_string(s.router.dir.join(format!("first-message-{role}.md"))).unwrap_or_default();
+        let first = |role: &str| {
+            std::fs::read_to_string(s.router.dir.join(format!("first-message-{role}.md")))
+                .unwrap_or_default()
+        };
         let label = |text: &str, name: &str| {
             text.lines()
                 .find_map(|l| l.strip_prefix(&format!("{name}: ")))
@@ -2004,18 +2207,30 @@ async fn test_stage_cases_run_dry() {
             None => problems.push(format!("{id}: the analyzer got no `Implementer report:` line")),
             _ => {}
         }
-        if (label(&epa_first, "Phase file").is_some()) != (case.track == "full" && case.mode == "phase") {
-            problems.push(format!("{id}: the analyzer's `Phase file:` line does not match the track"));
+        if (label(&epa_first, "Phase file").is_some())
+            != (case.track == "full" && case.mode == "phase")
+        {
+            problems.push(format!(
+                "{id}: the analyzer's `Phase file:` line does not match the track"
+            ));
         }
         if case.write_test.is_some() {
-            let plan = if case.track == "full" && case.mode == "phase" { "Phase file" } else { "No plan" };
+            let plan = if case.track == "full" && case.mode == "phase" {
+                "Phase file"
+            } else {
+                "No plan"
+            };
             if label(&wt_first, plan).is_none() {
                 problems.push(format!("{id}: write-test got no `{plan}:` line"));
             }
         }
         if case.epa.is_some() {
             let (fails, _) = check_epa(case, s);
-            problems.extend(fails.into_iter().map(|f| format!("{id}: golden analysis: {f}")));
+            problems.extend(
+                fails
+                    .into_iter()
+                    .map(|f| format!("{id}: golden analysis: {f}")),
+            );
         }
         if let Some(w) = &case.write_test {
             let b = s.router.baseline.lock().clone().unwrap_or_default();
@@ -2034,7 +2249,11 @@ async fn test_stage_cases_run_dry() {
                 }
             }
             let (fails, _) = check_wt(case, s);
-            problems.extend(fails.into_iter().map(|f| format!("{id}: golden tests: {f}")));
+            problems.extend(
+                fails
+                    .into_iter()
+                    .map(|f| format!("{id}: golden tests: {f}")),
+            );
         }
     }
     assert!(problems.is_empty(), "{}", problems.join("\n"));
@@ -2044,7 +2263,10 @@ async fn test_stage_cases_run_dry() {
 fn glob_matches_folders_and_files() {
     assert!(glob_match("tests/unit/**/*.py", "tests/unit/test_a.py"));
     assert!(glob_match("tests/unit/**/*.py", "tests/unit/sub/test_a.py"));
-    assert!(!glob_match("tests/unit/**/*.py", "tests/integration/test_a.py"));
+    assert!(!glob_match(
+        "tests/unit/**/*.py",
+        "tests/integration/test_a.py"
+    ));
     assert!(!glob_match("tests/unit/**/*.py", "shop/unit.py"));
     assert!(glob_match("e2e/**/*.spec.js", "e2e/archive.spec.js"));
     assert!(!glob_match("e2e/**/*.spec.js", "e2e/archive.js"));

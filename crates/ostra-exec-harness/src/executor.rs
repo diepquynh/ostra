@@ -537,8 +537,7 @@ impl Executor for HarnessExecutor {
         if spec.resume.as_ref().is_some_and(|r| r.inspect) {
             live.set_inspect();
         }
-        let repos =
-            ostra_sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]);
+        let repos = ostra_sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]);
         let result = match self.launch(&spec, harness, &live, &host).await {
             Ok(pty) => {
                 self.ptys.insert(spec.id.clone(), pty.clone());

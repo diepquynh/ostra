@@ -328,9 +328,8 @@ impl Addr {
 
     /// Agent and kind only, for facts about an execution rather than one of its runs.
     fn matches_exec(&self, runs: &[&RunLog]) -> bool {
-        runs.iter().any(|r| {
-            self.agent == r.at.agent && self.kind.as_ref().is_none_or(|k| *k == r.at.kind)
-        })
+        runs.iter()
+            .any(|r| self.agent == r.at.agent && self.kind.as_ref().is_none_or(|k| *k == r.at.kind))
     }
 }
 
@@ -438,9 +437,15 @@ impl RunLog {
 
     fn wrote(&self) -> bool {
         self.calls.iter().any(|c| {
-            ["Write ", "Edit ", "Document ", "MultiEdit ", "NotebookEdit "]
-                .iter()
-                .any(|t| c.starts_with(t))
+            [
+                "Write ",
+                "Edit ",
+                "Document ",
+                "MultiEdit ",
+                "NotebookEdit ",
+            ]
+            .iter()
+            .any(|t| c.starts_with(t))
         }) || self.denials.iter().any(|d| d.contains("answer-only"))
     }
 }
@@ -474,7 +479,12 @@ impl ExecutionHost for Tap {
         self.inner.emit(delta);
     }
 
-    async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer {
+    async fn ask_permission(
+        &self,
+        call: &ToolCall,
+        reason: &str,
+        rule: &RuleRef,
+    ) -> PermissionAnswer {
         self.inner.ask_permission(call, reason, rule).await
     }
 
@@ -525,7 +535,10 @@ fn vars(st: &SessionState, repo: &Path, ws: &Path, key: &str) -> Vars {
     Vars(vec![
         ("{repo}", repo.display().to_string()),
         ("{root}", st.session_root.display().to_string()),
-        ("{session}", st.project_session_dir(key).display().to_string()),
+        (
+            "{session}",
+            st.project_session_dir(key).display().to_string(),
+        ),
         ("{ws}", ws.display().to_string()),
     ])
 }
@@ -539,13 +552,22 @@ impl Router {
     }
 
     fn actor(&self, r: &RunRef) -> Option<Actor> {
-        let dry = if self.dry { self.case.dry.iter() } else { [].iter() };
+        let dry = if self.dry {
+            self.case.dry.iter()
+        } else {
+            [].iter()
+        };
         dry.chain(self.case.actor.iter())
             .find(|a| addr(&a.run).is_ok_and(|x| x.matches(r)))
             .cloned()
     }
 
-    fn coordinate(&self, exec: &ExecutionId, tool: &str, input: Value) -> Result<CoordReply, String> {
+    fn coordinate(
+        &self,
+        exec: &ExecutionId,
+        tool: &str,
+        input: Value,
+    ) -> Result<CoordReply, String> {
         let (engine, session) = self.slot.get().ok_or("no engine")?;
         engine.coordinate(session, exec, tool, &input)
     }
@@ -658,7 +680,8 @@ impl Router {
             .clone()
             .or_else(|| owes.then(|| "Nothing to add beyond my earlier work.".to_string()));
         if let Some(text) = reply {
-            return match self.coordinate(&spec.id, SUBAGENT_REPLY, json!({"message": fill(&text)})) {
+            return match self.coordinate(&spec.id, SUBAGENT_REPLY, json!({"message": fill(&text)}))
+            {
                 Ok(CoordReply { end, .. }) => ok(
                     if end == RunEnd::Wait {
                         ExecutionStatus::Waiting
@@ -711,11 +734,9 @@ impl Router {
             AgentName::GenerateSpec => {
                 let path = st.session_root.join("ostra-spec-1.md");
                 if !path.exists() || (r.nth == 1 && self.case.spec.is_some()) {
-                    let text = self
-                        .case
-                        .spec
-                        .clone()
-                        .unwrap_or_else(|| "# Spec\n\n- R1: THE native loop SHALL keep its limits.\n".into());
+                    let text = self.case.spec.clone().unwrap_or_else(|| {
+                        "# Spec\n\n- R1: THE native loop SHALL keep its limits.\n".into()
+                    });
                     std::fs::write(&path, fill(&text)).unwrap();
                 }
                 json!({"spec_path": path, "open_questions": [], "external_evidence_rows": 0,
@@ -736,7 +757,10 @@ impl Router {
                 std::fs::create_dir_all(report.parent().unwrap()).unwrap();
                 std::fs::write(
                     &report,
-                    format!("# Report\n\n{}\n", say.map(|s| fill(&s)).unwrap_or_else(|| "Done.".into())),
+                    format!(
+                        "# Report\n\n{}\n",
+                        say.map(|s| fill(&s)).unwrap_or_else(|| "Done.".into())
+                    ),
                 )
                 .unwrap();
                 json!({"status": "ok", "report_path": report, "changed_files": actor.changed, "summary": "Done."})
@@ -881,7 +905,9 @@ impl ostra_tools::CodeNav for Nav {
         let (root, list, indexes) = (self.root.clone(), self.list.clone(), self.indexes.clone());
         let (tool, input) = (tool.to_string(), input.clone());
         tokio::task::spawn_blocking(move || {
-            indexes.with(&(), &root, &list, |ix| ostra_code::tools::run(ix, &tool, &input))
+            indexes.with(&(), &root, &list, |ix| {
+                ostra_code::tools::run(ix, &tool, &input)
+            })
         })
         .await
         .map_err(|e| format!("The code index failed: {e}"))?
@@ -940,7 +966,9 @@ impl Services for EvalServices {
             json!({"report_markdown": "# Done", "reason": "Scripted by the eval."})
         } else if let Some(answer) = props.get("answer") {
             match answer["properties"]["kind"]["const"].as_str() {
-                Some("approval") => json!({"answer": {"kind": "approval", "approved": true}, "reason": "Scripted."}),
+                Some("approval") => {
+                    json!({"answer": {"kind": "approval", "approved": true}, "reason": "Scripted."})
+                }
                 Some("choice") => {
                     let options: Vec<&str> = answer["properties"]["option"]["enum"]
                         .as_array()
@@ -1017,7 +1045,10 @@ async fn run_session(
 
     let slot: Slot = Arc::new(OnceLock::new());
     let live = providers.map(|p| {
-        let mut files: Vec<String> = git(&repo, &["ls-files"]).lines().map(String::from).collect();
+        let mut files: Vec<String> = git(&repo, &["ls-files"])
+            .lines()
+            .map(String::from)
+            .collect();
         files.sort();
         let nav = Nav {
             root: repo.clone(),
@@ -1120,7 +1151,12 @@ async fn run_session(
     }
     // Let cancelled runs return, so their results are in the log.
     let settle = Instant::now();
-    while engine.state(&session).unwrap().running_executions().next().is_some()
+    while engine
+        .state(&session)
+        .unwrap()
+        .running_executions()
+        .next()
+        .is_some()
         && settle.elapsed() < Duration::from_secs(30)
     {
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1210,7 +1246,11 @@ fn check(case: &Case, s: &Session, key: &str) -> Vec<String> {
             Some((_, _, m)) => {
                 let miss = missing(m, &exp.has);
                 if !miss.is_empty() {
-                    fails.push(format!("the question to {} lacks {}", exp.to, miss.join(", ")));
+                    fails.push(format!(
+                        "the question to {} lacks {}",
+                        exp.to,
+                        miss.join(", ")
+                    ));
                 }
             }
         }
@@ -1261,11 +1301,9 @@ fn check(case: &Case, s: &Session, key: &str) -> Vec<String> {
     }
     for exp in &case.expect.submits {
         let a = addr(&exp.run).unwrap();
-        let Some(r) = runs
-            .iter()
-            .rev()
-            .find(|r| a.matches(&r.at) && r.submit.is_some() && r.status != ExecutionStatus::Waiting)
-        else {
+        let Some(r) = runs.iter().rev().find(|r| {
+            a.matches(&r.at) && r.submit.is_some() && r.status != ExecutionStatus::Waiting
+        }) else {
             fails.push(format!("{} submitted nothing", exp.run));
             continue;
         };
@@ -1341,7 +1379,9 @@ fn check(case: &Case, s: &Session, key: &str) -> Vec<String> {
 /// The research document of the last live explore run that submitted one.
 fn research_of(runs: &[RunLog]) -> Option<(String, String)> {
     let r = runs.iter().rev().find(|r| {
-        r.live && r.at.agent == AgentName::Explore && r.submit.is_some()
+        r.live
+            && r.at.agent == AgentName::Explore
+            && r.submit.is_some()
             && r.status == ExecutionStatus::Ok
     })?;
     let path = r.submit.as_ref()?["research_path"].as_str()?.to_string();
@@ -1499,9 +1539,15 @@ fn infra_error(runs: &[RunLog]) -> Option<String> {
         .filter_map(|r| r.error.clone())
         .find(|e| {
             let e = e.to_lowercase();
-            ["model call failed", "provider error", "overloaded", "rate limit", "stream failed"]
-                .iter()
-                .any(|m| e.contains(m))
+            [
+                "model call failed",
+                "provider error",
+                "overloaded",
+                "rate limit",
+                "stream failed",
+            ]
+            .iter()
+            .any(|m| e.contains(m))
         })
 }
 
@@ -1529,7 +1575,9 @@ struct Outcome {
 
 impl Outcome {
     fn pass(&self) -> bool {
-        self.infra.is_none() && self.fails.is_empty() && self.grade.as_ref().is_some_and(|(ok, _)| *ok)
+        self.infra.is_none()
+            && self.fails.is_empty()
+            && self.grade.as_ref().is_some_and(|(ok, _)| *ok)
     }
 }
 
@@ -1566,7 +1614,12 @@ async fn run_one(
         let infra = infra_error(&s.router.runs.lock());
         match infra {
             Some(e) if retries < 2 => {
-                println!("  {:<52} {:<34} provider error, running again: {}", case.id, model, e.chars().take(120).collect::<String>());
+                println!(
+                    "  {:<52} {:<34} provider error, running again: {}",
+                    case.id,
+                    model,
+                    e.chars().take(120).collect::<String>()
+                );
                 let _ = std::fs::remove_dir_all(s.repo.join("target"));
                 retries += 1;
             }
@@ -1591,9 +1644,8 @@ async fn run_one(
         .iter()
         .map(|r| r.usage.input_tokens + r.usage.cache_read_tokens + r.usage.cache_write_tokens)
         .sum();
-    let cache_ratio = (input > 0).then(|| {
-        live.iter().map(|r| r.usage.cache_read_tokens).sum::<u64>() as f64 / input as f64
-    });
+    let cache_ratio = (input > 0)
+        .then(|| live.iter().map(|r| r.usage.cache_read_tokens).sum::<u64>() as f64 / input as f64);
     let run_values: Vec<Value> = runs.iter().map(run_json).collect();
     std::fs::write(
         dir.join("runs.json"),
@@ -1762,7 +1814,9 @@ async fn coordination_evals() {
 
     let mut by: BTreeMap<(String, String), Vec<&Outcome>> = BTreeMap::new();
     for o in &outcomes {
-        by.entry((o.case.clone(), o.model.clone())).or_default().push(o);
+        by.entry((o.case.clone(), o.model.clone()))
+            .or_default()
+            .push(o);
     }
     let mut report = vec![];
     println!("\n{:<52} {:<34} {:>6}  failures", "case", "model", "pass");
@@ -1778,13 +1832,19 @@ async fn coordination_evals() {
                 .filter(|o| !o.pass())
                 .map(|o| {
                     if let Some(e) = &o.infra {
-                        format!("provider error on every attempt: {}", e.chars().take(80).collect::<String>())
+                        format!(
+                            "provider error on every attempt: {}",
+                            e.chars().take(80).collect::<String>()
+                        )
                     } else if !o.fails.is_empty() {
                         o.fails.join("; ")
                     } else if let Some((_, r)) = &o.grade {
                         format!("grader: {r}")
                     } else {
-                        format!("grader error: {}", o.grade_error.clone().unwrap_or_default())
+                        format!(
+                            "grader error: {}",
+                            o.grade_error.clone().unwrap_or_default()
+                        )
                     }
                 })
                 .collect();
@@ -1843,7 +1903,10 @@ async fn coordination_evals() {
             if cached.is_empty() {
                 "-".into()
             } else {
-                format!("{:.0}%", 100.0 * cached.iter().sum::<f64>() / cached.len() as f64)
+                format!(
+                    "{:.0}%",
+                    100.0 * cached.iter().sum::<f64>() / cached.len() as f64
+                )
             },
             os.iter().map(|o| o.secs).sum::<f64>() / os.len().max(1) as f64
         );
@@ -1869,7 +1932,10 @@ async fn coordination_cases_run_dry() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let base = snapshot(&root);
-    let secret = git(&base, &["ls-files", "tests/evals", "crates/ostra-server/tests"]);
+    let secret = git(
+        &base,
+        &["ls-files", "tests/evals", "crates/ostra-server/tests"],
+    );
     assert!(
         !secret.contains("coordination"),
         "the snapshot must not hold the eval's expectations"
@@ -1907,7 +1973,11 @@ async fn coordination_cases_run_dry() {
         {
             addr(a).unwrap_or_else(|err| panic!("{}: {err}", case.id));
         }
-        assert!(!e.rubric.trim().is_empty() && !e.cause.trim().is_empty(), "{}", case.id);
+        assert!(
+            !e.rubric.trim().is_empty() && !e.cause.trim().is_empty(),
+            "{}",
+            case.id
+        );
         for t in case
             .spec_tools
             .iter()
@@ -1926,7 +1996,9 @@ async fn coordination_cases_run_dry() {
             "{}: the replay stopped with `{}`, not a stop condition; runs: {seen:?}; failures: {:?}",
             case.id,
             s.stop,
-            runs.iter().filter_map(|r| r.error.clone()).collect::<Vec<_>>()
+            runs.iter()
+                .filter_map(|r| r.error.clone())
+                .collect::<Vec<_>>()
         );
         for l in &case.live {
             let a = addr(l).unwrap();
@@ -1946,10 +2018,13 @@ async fn coordination_cases_run_dry() {
             assert!(r.continues(), "{}: `{c}` started fresh", case.id);
         }
         assert!(
-            runs.iter().all(|r| r.error.is_none() || r.error.as_deref() == Some("stopped by the eval")),
+            runs.iter()
+                .all(|r| r.error.is_none() || r.error.as_deref() == Some("stopped by the eval")),
             "{}: a scripted run failed: {:?}",
             case.id,
-            runs.iter().filter_map(|r| r.error.clone()).collect::<Vec<_>>()
+            runs.iter()
+                .filter_map(|r| r.error.clone())
+                .collect::<Vec<_>>()
         );
     }
 }

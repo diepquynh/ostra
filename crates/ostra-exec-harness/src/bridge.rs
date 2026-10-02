@@ -265,7 +265,10 @@ impl HarnessBridge {
                         live.set_waiting(true);
                     }
                     RunEnd::Finish => {
-                        let message = args.get("message").and_then(Value::as_str).unwrap_or_default();
+                        let message = args
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
                         live.record_submit(ostra_core::coord::end_payload(&call.tool, message));
                     }
                 }
@@ -576,7 +579,12 @@ mod tests {
                 vec![]
             }
         }
-        async fn mcp_call(&self, _: &ExecutionId, tool: &str, _: Value) -> Result<crate::McpOut, String> {
+        async fn mcp_call(
+            &self,
+            _: &ExecutionId,
+            tool: &str,
+            _: Value,
+        ) -> Result<crate::McpOut, String> {
             Ok(crate::McpOut::text(format!("ran {tool}")))
         }
         fn mcp_tools(&self, _: &ExecutionId) -> Vec<(String, String, Value)> {

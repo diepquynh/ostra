@@ -187,13 +187,8 @@ pub struct CommandProvider {
 impl CommandProvider {
     async fn run(&self, input: Vec<u8>) -> Result<Vec<u8>, String> {
         let (program, args) = self.command.split_first().ok_or("The command is empty.")?;
-        let hc = ostra_sandbox::host_command(
-            program,
-            args,
-            &self.root,
-            &[&self.root],
-            &self.sandbox,
-        )?;
+        let hc =
+            ostra_sandbox::host_command(program, args, &self.root, &[&self.root], &self.sandbox)?;
         let mut cmd = tokio::process::Command::new(&hc.program);
         for k in &hc.env_remove {
             cmd.env_remove(k);

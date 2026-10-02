@@ -5,12 +5,12 @@
 use crate::judge::NoteStage;
 use crate::state::*;
 use ostra_core::agent::AgentName;
+use ostra_core::coord::DeliveryKind;
 use ostra_core::event::{
     ClosingItem, CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, SessionKind,
     WorkKind,
 };
 use ostra_core::exec::ExecutionStatus;
-use ostra_core::coord::DeliveryKind;
 use ostra_core::ids::{ExecutionId, GateId, MessageId};
 use ostra_core::model::Complexity;
 use ostra_core::paths::report;
@@ -255,7 +255,11 @@ impl Step {
                 "spawn {} {}{}",
                 s.agent,
                 purpose_summary(&s.purpose),
-                if s.continues.is_some() { " (continues)" } else { "" }
+                if s.continues.is_some() {
+                    " (continues)"
+                } else {
+                    ""
+                }
             ),
             Step::Deliver { kind, .. } => format!("deliver {kind:?}").to_lowercase(),
             Step::OpenGate { payload, .. } => format!("gate {}", payload.kind_str()),
@@ -1322,13 +1326,14 @@ impl<'a> Planner<'a> {
                 } else {
                     phase.to_string()
                 };
-                let rationale = l.rationale.clone().unwrap_or_else(|| {
-                    match (&p.revision, &p.info.file) {
-                        (Some(r), _) => revision_task(r, &s.full_request()),
-                        (None, Some(_)) => format!("Phase {phase}: {}", p.info.title),
-                        (None, None) => s.full_request(),
-                    }
-                });
+                let rationale =
+                    l.rationale
+                        .clone()
+                        .unwrap_or_else(|| match (&p.revision, &p.info.file) {
+                            (Some(r), _) => revision_task(r, &s.full_request()),
+                            (None, Some(_)) => format!("Phase {phase}: {}", p.info.title),
+                            (None, None) => s.full_request(),
+                        });
                 let inputs = SpawnInputs {
                     phase: Some(p.info.clone()),
                     changed_files: l.changed.iter().cloned().collect(),
@@ -1830,7 +1835,9 @@ impl<'a> Planner<'a> {
         let queued = self
             .out
             .iter()
-            .filter(|st| matches!(st, Step::Spawn(r) if matches!(r.purpose, ExecPurpose::Docs { .. })))
+            .filter(
+                |st| matches!(st, Step::Spawn(r) if matches!(r.purpose, ExecPurpose::Docs { .. })),
+            )
             .count();
         running + queued
     }

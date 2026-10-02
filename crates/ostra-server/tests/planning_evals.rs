@@ -121,7 +121,7 @@ fn results_dir() -> PathBuf {
 
 /// `p` relative to the repo, so a committed report names no machine path.
 fn relative(p: &Path) -> String {
-    let root = paths::canonical(&repo_root()).unwrap_or_else(|_| repo_root());
+    let root = paths::canonical(repo_root()).unwrap_or_else(|_| repo_root());
     let p = paths::canonical(p).unwrap_or_else(|_| p.to_path_buf());
     p.strip_prefix(&root)
         .map(|r| r.display().to_string())
@@ -134,7 +134,13 @@ fn label(s: &str) -> String {
         .next()
         .unwrap_or(s)
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }
 
@@ -215,7 +221,7 @@ fn snapshot(pin: &str) -> PathBuf {
     let partial = base.with_extension("partial");
     let _ = std::fs::remove_dir_all(&partial);
     std::fs::create_dir_all(&partial).unwrap();
-    let archive = std::process::Command::new("git")
+    let mut archive = std::process::Command::new("git")
         .args(["archive", "--format=tar", pin])
         .current_dir(repo_root())
         .stdout(std::process::Stdio::piped())
@@ -224,9 +230,10 @@ fn snapshot(pin: &str) -> PathBuf {
     let status = std::process::Command::new("tar")
         .args(["-x", "-C"])
         .arg(&partial)
-        .stdin(archive.stdout.unwrap())
+        .stdin(archive.stdout.take().unwrap())
         .status()
         .unwrap();
+    assert!(archive.wait().unwrap().success(), "archiving {pin} failed");
     assert!(status.success(), "extracting {pin} failed");
     for gone in [
         "tests/evals/planning.toml",
@@ -262,7 +269,10 @@ impl Vars {
     fn of(st: &SessionState, repo: &Path, ws: &Path, key: &str) -> Vars {
         // Longest first, so `{session}` is not written as `{root}` plus a tail.
         Vars(vec![
-            ("{session}", st.project_session_dir(key).display().to_string()),
+            (
+                "{session}",
+                st.project_session_dir(key).display().to_string(),
+            ),
             ("{root}", st.session_root.display().to_string()),
             ("{repo}", repo.display().to_string()),
             ("{ws}", ws.display().to_string()),
@@ -359,7 +369,12 @@ impl ExecutionHost for Tap {
         self.inner.emit(delta);
     }
 
-    async fn ask_permission(&self, call: &ToolCall, reason: &str, rule: &RuleRef) -> PermissionAnswer {
+    async fn ask_permission(
+        &self,
+        call: &ToolCall,
+        reason: &str,
+        rule: &RuleRef,
+    ) -> PermissionAnswer {
         self.inner.ask_permission(call, reason, rule).await
     }
 
@@ -476,7 +491,11 @@ impl Router {
                     "summary": "A stand-in plan.", "step_count": 1, "requirement_coverage": "1 of 1"})
             }
             _ => {
-                let target = if stage == "plan-check" { "plan" } else { "spec" };
+                let target = if stage == "plan-check" {
+                    "plan"
+                } else {
+                    "spec"
+                };
                 json!({"verdict": "PASS", "target": target, "findings": []})
             }
         };
@@ -541,7 +560,10 @@ impl Executor for Router {
             turns: Mutex::new(0),
         });
         let started = Instant::now();
-        let planning = matches!(stage.as_str(), "spec" | "spec-check" | "plan" | "plan-check");
+        let planning = matches!(
+            stage.as_str(),
+            "spec" | "spec-check" | "plan" | "plan-check"
+        );
         let mut live = false;
         let result = match (stage.as_str(), self.mode) {
             ("explore", Mode::Run | Mode::Dry) => {
@@ -549,7 +571,10 @@ impl Executor for Router {
                 match self.doc_for(task.unwrap_or_default()) {
                     Some(doc) => self.replay(spec, tap.clone(), cancel, &doc, &vars).await,
                     None => {
-                        self.stop(format!("no recorded research for task {}", task.unwrap_or_default() + 1));
+                        self.stop(format!(
+                            "no recorded research for task {}",
+                            task.unwrap_or_default() + 1
+                        ));
                         ExecutionResult::error("eval: no recorded research")
                     }
                 }
@@ -617,7 +642,9 @@ impl ostra_tools::CodeNav for Nav {
         let (root, list, indexes) = (self.root.clone(), self.list.clone(), self.indexes.clone());
         let (tool, input) = (tool.to_string(), input.clone());
         tokio::task::spawn_blocking(move || {
-            indexes.with(&(), &root, &list, |ix| ostra_code::tools::run(ix, &tool, &input))
+            indexes.with(&(), &root, &list, |ix| {
+                ostra_code::tools::run(ix, &tool, &input)
+            })
         })
         .await
         .map_err(|e| format!("The code index failed: {e}"))?
@@ -712,8 +739,12 @@ impl Services for EvalServices {
             json!({"items": [], "reason": reason})
         } else if let Some(answer) = props.get("answer") {
             match answer["properties"]["kind"]["const"].as_str() {
-                Some("approval") => json!({"answer": {"kind": "approval", "approved": true}, "reason": reason}),
-                Some("questions") => json!({"answer": self.recommended_answers()?, "reason": reason}),
+                Some("approval") => {
+                    json!({"answer": {"kind": "approval", "approved": true}, "reason": reason})
+                }
+                Some("questions") => {
+                    json!({"answer": self.recommended_answers()?, "reason": reason})
+                }
                 Some("choice") => {
                     let options: Vec<&str> = answer["properties"]["option"]["enum"]
                         .as_array()
@@ -779,7 +810,10 @@ async fn run_session(
 
     let slot: Slot = Arc::new(OnceLock::new());
     let live = providers.map(|p| {
-        let mut files: Vec<String> = git(&repo, &["ls-files"]).lines().map(String::from).collect();
+        let mut files: Vec<String> = git(&repo, &["ls-files"])
+            .lines()
+            .map(String::from)
+            .collect();
         files.sort();
         let nav = Nav {
             root: repo.clone(),
@@ -882,7 +916,12 @@ async fn run_session(
         let _ = engine.stop_session(&session);
     }
     let settle = Instant::now();
-    while engine.state(&session).unwrap().running_executions().next().is_some()
+    while engine
+        .state(&session)
+        .unwrap()
+        .running_executions()
+        .next()
+        .is_some()
         && settle.elapsed() < Duration::from_secs(30)
     {
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -910,11 +949,17 @@ fn recorded(s: &Session, case: &Case, model: &str, pin: &str) -> Result<Fixture,
         let run = runs
             .iter()
             .rev()
-            .find(|r| r.stage == "explore" && r.task == Some(i as u32) && r.status == ExecutionStatus::Ok)
+            .find(|r| {
+                r.stage == "explore" && r.task == Some(i as u32) && r.status == ExecutionStatus::Ok
+            })
             .ok_or(format!("research task {} did not finish", i + 1))?;
-        let submit = run.submit.clone().ok_or("an explore run submitted nothing")?;
+        let submit = run
+            .submit
+            .clone()
+            .ok_or("an explore run submitted nothing")?;
         let md = PathBuf::from(submit["research_path"].as_str().unwrap_or_default());
-        let mut document = ostra_core::doc::load(&md).ok_or(format!("{} has no document", md.display()))?;
+        let mut document =
+            ostra_core::doc::load(&md).ok_or(format!("{} has no document", md.display()))?;
         if let Some(m) = document.as_object_mut() {
             m.remove("snapshot");
         }
@@ -967,7 +1012,9 @@ fn ref_path(repo: &Path, text: &str) -> Option<String> {
     repo_file(repo, path)
 }
 
-const VIEWERS: [&str; 9] = ["cat", "head", "tail", "sed", "nl", "less", "awk", "bat", "more"];
+const VIEWERS: [&str; 9] = [
+    "cat", "head", "tail", "sed", "nl", "less", "awk", "bat", "more",
+];
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 struct Reads {
@@ -1038,7 +1085,10 @@ fn cited(fixture: Option<&Fixture>, repo: &Path) -> BTreeSet<String> {
             for f in list(&p["files"]) {
                 out.extend(ref_path(repo, f.as_str().unwrap_or_default()));
             }
-            out.extend(ref_path(repo, p["snippet"]["source"].as_str().unwrap_or_default()));
+            out.extend(ref_path(
+                repo,
+                p["snippet"]["source"].as_str().unwrap_or_default(),
+            ));
         }
         for h in list(&doc["data_flow"]) {
             out.extend(ref_path(repo, h["location"].as_str().unwrap_or_default()));
@@ -1165,7 +1215,10 @@ fn newest_json(dir: &Path, prefix: &str, skip: &str) -> Option<Value> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            let n = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let n = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
             n.starts_with(prefix) && n.ends_with(".json") && (skip.is_empty() || !n.contains(skip))
         })
         .collect();
@@ -1181,7 +1234,11 @@ fn quality(st: &SessionState, repo: &Path) -> Option<Quality> {
     let ids = |v: &Value, key: &str| -> BTreeSet<String> {
         v[key]
             .as_array()
-            .map(|a| a.iter().filter_map(|x| x["id"].as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x["id"].as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let requirements = ids(&spec, "requirements");
@@ -1202,12 +1259,18 @@ fn quality(st: &SessionState, repo: &Path) -> Option<Quality> {
                     delivered.insert(r.to_string());
                 }
             }
-            let file = s["file"].as_str().unwrap_or_default().trim_start_matches("./").to_string();
+            let file = s["file"]
+                .as_str()
+                .unwrap_or_default()
+                .trim_start_matches("./")
+                .to_string();
             match s["change"].as_str() {
                 Some("Create") => {
                     created.insert(file);
                 }
-                Some("Modify" | "Delete") if !repo.join(&file).exists() && !created.contains(&file) => {
+                Some("Modify" | "Delete")
+                    if !repo.join(&file).exists() && !created.contains(&file) =>
+                {
                     broken += 1;
                 }
                 _ => {}
@@ -1231,9 +1294,15 @@ fn infra_error(runs: &[RunLog]) -> Option<String> {
         .filter_map(|r| r.error.clone())
         .find(|e| {
             let e = e.to_lowercase();
-            ["model call failed", "provider error", "overloaded", "rate limit", "stream failed"]
-                .iter()
-                .any(|m| e.contains(m))
+            [
+                "model call failed",
+                "provider error",
+                "overloaded",
+                "rate limit",
+                "stream failed",
+            ]
+            .iter()
+            .any(|m| e.contains(m))
         })
 }
 
@@ -1249,7 +1318,11 @@ fn report(s: &Session, case: &Case, arm: &str, model: &str, dir: &Path) -> CaseR
         stop: s.stop.clone(),
         approved: s.stop == "before implementer",
         infra: infra_error(&runs),
-        cost_usd: runs.iter().filter(|r| r.live).map(|r| r.usage.cost_usd).sum(),
+        cost_usd: runs
+            .iter()
+            .filter(|r| r.live)
+            .map(|r| r.usage.cost_usd)
+            .sum(),
         cited_files: cited.len(),
         stages,
         quality: quality(&s.state, &s.repo),
@@ -1293,7 +1366,10 @@ fn markdown(cases: &[CaseReport], title: &str) -> String {
         out,
         "| Case | Tier | Approved | Cost | Spec reads (cited) | Plan reads (cited) | Facts | Plan runs | FAILs spec/plan | Ref errors | Requirements | Deliverables | Broken files |"
     );
-    let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    let _ = writeln!(
+        out,
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    );
     for c in cases {
         let s = |n: &str| stage(c, n).cloned().unwrap_or_default();
         let (spec, plan) = (s("spec"), s("plan"));
@@ -1303,7 +1379,13 @@ fn markdown(cases: &[CaseReport], title: &str) -> String {
             "| {} | {} | {} | ${:.2} | {} ({}) | {} ({}) | {} | {} | {}/{} | {} | {}/{} | {}/{} | {} |",
             c.case,
             c.tier,
-            if c.infra.is_some() { "infra" } else if c.approved { "yes" } else { "no" },
+            if c.infra.is_some() {
+                "infra"
+            } else if c.approved {
+                "yes"
+            } else {
+                "no"
+            },
             c.cost_usd,
             spec.files_read,
             spec.reread_cited,
@@ -1326,7 +1408,10 @@ fn markdown(cases: &[CaseReport], title: &str) -> String {
         out,
         "| Tier | Cases | Approved | Cost | Spec cost | Spec-check cost | Plan cost | Plan-check cost | Spec reads (cited) | Plan reads (cited) | Plan runs |"
     );
-    let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    let _ = writeln!(
+        out,
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    );
     for tier in [Some(1u8), Some(2), Some(3), None] {
         let rows: Vec<&CaseReport> = cases
             .iter()
@@ -1379,25 +1464,94 @@ fn compare(base: &[CaseReport], cand: &[CaseReport]) -> String {
     let rows: Vec<Row> = vec![
         ("Approved", Box::new(|c| c.approved as u8 as f64)),
         ("Cost, all stages ($)", Box::new(|c| c.cost_usd)),
-        ("Spec cost ($)", Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.cost_usd))),
-        ("Spec-check cost ($)", Box::new(|c| stage(c, "spec-check").map_or(0.0, |s| s.cost_usd))),
-        ("Plan cost ($)", Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.cost_usd))),
-        ("Plan-check cost ($)", Box::new(|c| stage(c, "plan-check").map_or(0.0, |s| s.cost_usd))),
-        ("Spec code files read", Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.files_read as f64))),
-        ("Spec reads the research described", Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.reread_cited as f64))),
-        ("Plan code files read", Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.files_read as f64))),
-        ("Plan reads the research described", Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.reread_cited as f64))),
-        ("Plan-check code files read", Box::new(|c| stage(c, "plan-check").map_or(0.0, |s| s.files_read as f64))),
-        ("Tool calls, all stages", Box::new(|c| c.stages.values().map(|s| s.tool_calls as f64).sum())),
-        ("Output tokens, all stages", Box::new(|c| c.stages.values().map(|s| s.output_tokens as f64).sum())),
-        ("Spec runs", Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.runs as f64))),
-        ("Plan runs", Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.runs as f64))),
-        ("Fact-check FAILs", Box::new(|c| c.stages.values().map(|s| s.fails as f64).sum())),
-        ("Plan Document chars", Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.document_chars as f64))),
-        ("Reference errors caught at write", Box::new(|c| c.stages.values().map(|s| s.reference_errors as f64).sum())),
-        ("Requirements delivered (%)", Box::new(|c| c.quality.as_ref().map_or(0.0, |q| 100.0 * q.requirements_delivered as f64 / q.requirements.max(1) as f64))),
-        ("Deliverables planned (%)", Box::new(|c| c.quality.as_ref().map_or(0.0, |q| 100.0 * q.deliverables_planned as f64 / q.deliverables.max(1) as f64))),
-        ("Broken step files", Box::new(|c| c.quality.as_ref().map_or(0.0, |q| q.broken_step_files as f64))),
+        (
+            "Spec cost ($)",
+            Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.cost_usd)),
+        ),
+        (
+            "Spec-check cost ($)",
+            Box::new(|c| stage(c, "spec-check").map_or(0.0, |s| s.cost_usd)),
+        ),
+        (
+            "Plan cost ($)",
+            Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.cost_usd)),
+        ),
+        (
+            "Plan-check cost ($)",
+            Box::new(|c| stage(c, "plan-check").map_or(0.0, |s| s.cost_usd)),
+        ),
+        (
+            "Spec code files read",
+            Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.files_read as f64)),
+        ),
+        (
+            "Spec reads the research described",
+            Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.reread_cited as f64)),
+        ),
+        (
+            "Plan code files read",
+            Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.files_read as f64)),
+        ),
+        (
+            "Plan reads the research described",
+            Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.reread_cited as f64)),
+        ),
+        (
+            "Plan-check code files read",
+            Box::new(|c| stage(c, "plan-check").map_or(0.0, |s| s.files_read as f64)),
+        ),
+        (
+            "Tool calls, all stages",
+            Box::new(|c| c.stages.values().map(|s| s.tool_calls as f64).sum()),
+        ),
+        (
+            "Output tokens, all stages",
+            Box::new(|c| c.stages.values().map(|s| s.output_tokens as f64).sum()),
+        ),
+        (
+            "Spec runs",
+            Box::new(|c| stage(c, "spec").map_or(0.0, |s| s.runs as f64)),
+        ),
+        (
+            "Plan runs",
+            Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.runs as f64)),
+        ),
+        (
+            "Fact-check FAILs",
+            Box::new(|c| c.stages.values().map(|s| s.fails as f64).sum()),
+        ),
+        (
+            "Plan Document chars",
+            Box::new(|c| stage(c, "plan").map_or(0.0, |s| s.document_chars as f64)),
+        ),
+        (
+            "Reference errors caught at write",
+            Box::new(|c| c.stages.values().map(|s| s.reference_errors as f64).sum()),
+        ),
+        (
+            "Requirements delivered (%)",
+            Box::new(|c| {
+                c.quality.as_ref().map_or(0.0, |q| {
+                    100.0 * q.requirements_delivered as f64 / q.requirements.max(1) as f64
+                })
+            }),
+        ),
+        (
+            "Deliverables planned (%)",
+            Box::new(|c| {
+                c.quality.as_ref().map_or(0.0, |q| {
+                    100.0 * q.deliverables_planned as f64 / q.deliverables.max(1) as f64
+                })
+            }),
+        ),
+        (
+            "Broken step files",
+            Box::new(|c| {
+                c.quality
+                    .as_ref()
+                    .map_or(0.0, |q| q.broken_step_files as f64)
+            }),
+        ),
         ("Wall time (min)", Box::new(|c| c.secs / 60.0)),
     ];
     for tier in [Some(1u8), Some(2), Some(3), None] {
@@ -1408,9 +1562,14 @@ fn compare(base: &[CaseReport], cand: &[CaseReport]) -> String {
         if set.is_empty() {
             continue;
         }
-        let name = tier.map(|t| format!("Tier {t}")).unwrap_or_else(|| "All tiers".into());
+        let name = tier
+            .map(|t| format!("Tier {t}"))
+            .unwrap_or_else(|| "All tiers".into());
         let _ = writeln!(out, "## {name} ({} cases)\n", set.len());
-        let _ = writeln!(out, "| Metric | Sum | Mean per case | Median per case | Change |");
+        let _ = writeln!(
+            out,
+            "| Metric | Sum | Mean per case | Median per case | Change |"
+        );
         let _ = writeln!(out, "| --- | --- | --- | --- | --- |");
         for (label, f) in &rows {
             let xs: Vec<f64> = set.iter().map(|(x, _)| metric(x, f.as_ref())).collect();
@@ -1435,7 +1594,10 @@ fn compare(base: &[CaseReport], cand: &[CaseReport]) -> String {
         let _ = writeln!(out);
     }
     let _ = writeln!(out, "## Per case\n");
-    let _ = writeln!(out, "| Case | Approved | Cost | Plan reads (cited) | Spec reads (cited) | Plan runs | FAILs |");
+    let _ = writeln!(
+        out,
+        "| Case | Approved | Cost | Plan reads (cited) | Spec reads (cited) | Plan runs | FAILs |"
+    );
     let _ = writeln!(out, "| --- | --- | --- | --- | --- | --- | --- |");
     for (x, y) in &pairs {
         let g = |c: &CaseReport, n: &str| stage(c, n).cloned().unwrap_or_default();
@@ -1489,11 +1651,17 @@ fn engine_arm() -> String {
         return arm;
     }
     let root = repo_root();
-    let head = git(&root, &["rev-parse", "--short=12", "HEAD"]).trim().to_string();
+    let head = git(&root, &["rev-parse", "--short=12", "HEAD"])
+        .trim()
+        .to_string();
     let dirty = !git(&root, &["status", "--porcelain", "--untracked-files=no"])
         .trim()
         .is_empty();
-    if dirty { format!("{head}+changes") } else { head }
+    if dirty {
+        format!("{head}+changes")
+    } else {
+        head
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1547,8 +1715,8 @@ async fn planning_evals() {
         .into_iter()
         .filter(|c| mode != Mode::Record || again || load_fixture(&c.id).is_none())
         .collect();
-    let model = std::env::var("OSTRA_EVAL_MODEL")
-        .unwrap_or_else(|_| "anthropic:claude-sonnet-5-5".into());
+    let model =
+        std::env::var("OSTRA_EVAL_MODEL").unwrap_or_else(|_| "anthropic:claude-sonnet-5-5".into());
     let pin = std::env::var("OSTRA_EVAL_PIN").unwrap_or_else(|_| file.pin.clone());
     let jobs: usize = env_or("OSTRA_EVAL_JOBS", 3);
     let budget: f64 = env_or("OSTRA_EVAL_BUDGET", 50.0);
@@ -1652,10 +1820,20 @@ async fn planning_evals() {
     let out = results_dir();
     std::fs::create_dir_all(&out).unwrap();
     let name = format!("{stamp}-{}-{}", label(arm), label(model));
-    std::fs::write(out.join(format!("{name}.json")), serde_json::to_string_pretty(&reports).unwrap()).unwrap();
-    let md = markdown(&reports, &format!("Planning evals: engine {arm}, {model}, code at {pin}"));
+    std::fs::write(
+        out.join(format!("{name}.json")),
+        serde_json::to_string_pretty(&reports).unwrap(),
+    )
+    .unwrap();
+    let md = markdown(
+        &reports,
+        &format!("Planning evals: engine {arm}, {model}, code at {pin}"),
+    );
     std::fs::write(out.join(format!("{name}.md")), &md).unwrap();
-    println!("\n{md}\nReport: {}", out.join(format!("{name}.md")).display());
+    println!(
+        "\n{md}\nReport: {}",
+        out.join(format!("{name}.md")).display()
+    );
     assert!(
         reports.iter().any(|r| r.infra.is_none()),
         "no session finished without a provider failure"
@@ -1689,7 +1867,10 @@ fn planning_compare() {
 async fn planning_cases_run_dry() {
     let file = load_cases();
     if !has_commit(&file.pin) {
-        println!("planning evals: commit {} is not in this clone, so the offline replay is skipped", file.pin);
+        println!(
+            "planning evals: commit {} is not in this clone, so the offline replay is skipped",
+            file.pin
+        );
         return;
     }
     let ids: HashSet<&str> = file.case.iter().map(|c| c.id.as_str()).collect();
@@ -1698,33 +1879,38 @@ async fn planning_cases_run_dry() {
     let root = scratch_root().join(format!("dry-{}", Utc::now().format("%Y%m%dT%H%M%S%f")));
     let file = &file;
     let base = &base;
-    let reports: Vec<(String, Result<CaseReport, String>)> = futures::stream::iter(file.case.clone())
-        .map(|case| {
-            let dir = root.join(&case.id);
-            async move {
-                let s = run_session(None, file, &case, "mock:eval", Mode::Dry, base, &dir).await;
-                let runs = s.router.runs.lock().clone();
-                let replays = runs.iter().filter(|r| r.stage == "explore").count();
-                let failed: Vec<String> = runs
-                    .iter()
-                    .filter(|r| r.stage == "explore" && r.status != ExecutionStatus::Ok)
-                    .map(|r| r.error.clone().unwrap_or_default())
-                    .collect();
-                let result = if !failed.is_empty() {
-                    Err(format!("a research replay failed: {}", failed.join("; ")))
-                } else if replays != case.explore.len() {
-                    Err(format!("{replays} research replays for {} tasks", case.explore.len()))
-                } else if s.stop != "before implementer" {
-                    Err(format!("stopped {}", s.stop))
-                } else {
-                    Ok(report(&s, &case, "dry", "mock:eval", &dir))
-                };
-                (case.id.clone(), result)
-            }
-        })
-        .buffer_unordered(4)
-        .collect()
-        .await;
+    let reports: Vec<(String, Result<CaseReport, String>)> =
+        futures::stream::iter(file.case.clone())
+            .map(|case| {
+                let dir = root.join(&case.id);
+                async move {
+                    let s =
+                        run_session(None, file, &case, "mock:eval", Mode::Dry, base, &dir).await;
+                    let runs = s.router.runs.lock().clone();
+                    let replays = runs.iter().filter(|r| r.stage == "explore").count();
+                    let failed: Vec<String> = runs
+                        .iter()
+                        .filter(|r| r.stage == "explore" && r.status != ExecutionStatus::Ok)
+                        .map(|r| r.error.clone().unwrap_or_default())
+                        .collect();
+                    let result = if !failed.is_empty() {
+                        Err(format!("a research replay failed: {}", failed.join("; ")))
+                    } else if replays != case.explore.len() {
+                        Err(format!(
+                            "{replays} research replays for {} tasks",
+                            case.explore.len()
+                        ))
+                    } else if s.stop != "before implementer" {
+                        Err(format!("stopped {}", s.stop))
+                    } else {
+                        Ok(report(&s, &case, "dry", "mock:eval", &dir))
+                    };
+                    (case.id.clone(), result)
+                }
+            })
+            .buffer_unordered(4)
+            .collect()
+            .await;
     let fails: Vec<String> = reports
         .iter()
         .filter_map(|(id, r)| r.as_ref().err().map(|e| format!("{id}: {e}")))

@@ -203,15 +203,22 @@ async fn compacts_through_the_compact_endpoint() {
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].content[0], Block::text("Read a.rs"));
     let item = json!({"type": "compaction", "id": "cmp_1", "encrypted_content": "gAAAA-cmp"});
-    assert!(matches!(&messages[0].content[1], Block::Compaction { provider, value: Some(v), .. }
-        if provider == "openai" && *v == item));
-    assert_eq!((out.usage.input_tokens, out.usage.cache_read_tokens), (200, 800));
+    assert!(
+        matches!(&messages[0].content[1], Block::Compaction { provider, value: Some(v), .. }
+        if provider == "openai" && *v == item)
+    );
+    assert_eq!(
+        (out.usage.input_tokens, out.usage.cache_read_tokens),
+        (200, 800)
+    );
 
     // The item goes back verbatim on the next request.
     let mut next = request("gpt-5.6-terra");
     next.messages = messages;
     next.messages.push(Message::user_text("go on"));
-    p.chat(next, &|_| {}, CancellationToken::new()).await.unwrap();
+    p.chat(next, &|_| {}, CancellationToken::new())
+        .await
+        .unwrap();
     let cap = captured.lock().unwrap();
     assert!(cap[0].head.starts_with("POST /v1/responses/compact"));
     assert_eq!(cap[0].body["instructions"], "be brief");
@@ -227,12 +234,18 @@ async fn compacts_on_the_client_when_the_endpoint_is_missing() {
     ])
     .await;
     let out = provider(base)
-        .compact(request("gpt-5.6-terra"), "Summarize.", CancellationToken::new())
+        .compact(
+            request("gpt-5.6-terra"),
+            "Summarize.",
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
     let messages = out.messages.expect("a client summary");
-    assert!(matches!(&messages[0].content[0], Block::Compaction { value: None, summary, .. }
-        if !summary.is_empty()));
+    assert!(
+        matches!(&messages[0].content[0], Block::Compaction { value: None, summary, .. }
+        if !summary.is_empty())
+    );
     let cap = captured.lock().unwrap();
     assert!(cap[1].head.starts_with("POST /v1/responses "));
 }

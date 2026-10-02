@@ -245,7 +245,11 @@ impl Engine {
         if req.request.trim().is_empty() {
             return Err(EngineError::Invalid("Describe the task first.".into()));
         }
-        if let Some(b) = req.docs_book.as_deref().filter(|b| !ostra_core::book::is_book_id(b)) {
+        if let Some(b) = req
+            .docs_book
+            .as_deref()
+            .filter(|b| !ostra_core::book::is_book_id(b))
+        {
             return Err(EngineError::Invalid(format!(
                 "Pick a documentation book from the list instead of `{b}`: a book ID is lowercase letters, digits, dashes, and underscores."
             )));
@@ -323,9 +327,15 @@ impl Engine {
                     .append(session, event)
                     .map_err(|e| e.to_string())?;
                 let text = match (end, harness) {
-                    (RunEnd::Wait, true) => "Answer sent. End your turn now and reply with only `Waiting`: you wait for the answer to your own question again.",
-                    (RunEnd::Wait, false) => "Answer sent. This run waits for the answer to your own question again.",
-                    _ => "Answer sent. This run is complete: end your turn now, without further tool calls.",
+                    (RunEnd::Wait, true) => {
+                        "Answer sent. End your turn now and reply with only `Waiting`: you wait for the answer to your own question again."
+                    }
+                    (RunEnd::Wait, false) => {
+                        "Answer sent. This run waits for the answer to your own question again."
+                    }
+                    _ => {
+                        "Answer sent. This run is complete: end your turn now, without further tool calls."
+                    }
                 };
                 Ok(reply(text.into(), end))
             }
@@ -763,7 +773,9 @@ impl Engine {
             .get_execution(id)?
             .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?
             .session
-            .ok_or_else(|| EngineError::Invalid("A side-panel answer has no task to skip.".into()))?;
+            .ok_or_else(|| {
+                EngineError::Invalid("A side-panel answer has no task to skip.".into())
+            })?;
         if !self.state(&session)?.can_skip(id) {
             return Err(EngineError::Invalid(
                 "Only a running research, test analysis, docs, or architecture task can be skipped. Cancel the execution instead.".into(),
@@ -789,7 +801,9 @@ impl Engine {
             .get_execution(id)?
             .ok_or_else(|| EngineError::NotFound(format!("execution {id}")))?
             .session
-            .ok_or_else(|| EngineError::Invalid("A side-panel answer takes no correction.".into()))?;
+            .ok_or_else(|| {
+                EngineError::Invalid("A side-panel answer takes no correction.".into())
+            })?;
         if !self.state(&session)?.can_steer(id) {
             return Err(EngineError::Invalid(
                 "Only a running or paused execution takes a correction. Add context to the session instead.".into(),
@@ -1866,7 +1880,8 @@ impl Inner {
                 let path = st.project_path(&project).ok_or_else(|| {
                     EngineError::Invalid(format!("Project `{project}` is not in this workspace."))
                 })?;
-                let profile: ProjectProfile = load_toml(&paths::project_profile(&path)).unwrap_or_default();
+                let profile: ProjectProfile =
+                    load_toml(&paths::project_profile(&path)).unwrap_or_default();
                 let changed: Vec<String> = st
                     .phases
                     .values()
@@ -1901,7 +1916,12 @@ impl Inner {
                 let ws = &st.workspace_root;
                 let error = ostra_core::book::apply(ws, &book, &update, chrono::Utc::now())
                     .err()
-                    .map(|e| format!("The book could not be written to {}: {e}", ostra_core::book::book_dir(ws, &book).display()));
+                    .map(|e| {
+                        format!(
+                            "The book could not be written to {}: {e}",
+                            ostra_core::book::book_dir(ws, &book).display()
+                        )
+                    });
                 self.append(
                     session,
                     SessionEvent::BookWritten {
@@ -2180,65 +2200,62 @@ impl Inner {
             .snapshot(session)?
             .project_path(project)
             .unwrap_or_default();
-        let (cmd_text, exit, tail) =
-            match purpose {
-                CommandPurpose::Format => match command {
-                    None => (
-                        String::new(),
-                        None,
-                        "No format command in project.toml, so format was skipped.".to_string(),
-                    ),
-                    // Rule A1: a format command runs only once the user approved it.
-                    Some(cmd) if !self.services.command_approved(&root, &cmd) => {
-                        (cmd, None, FORMAT_NOT_APPROVED.to_string())
-                    }
-                    Some(cmd) => {
-                        self.append_command_started(session, purpose, project, &cmd)?;
-                        // The project's own program, so it runs under the agent sandbox.
-                        let (code, out) = match ostra_sandbox::host_command(
-                            "bash",
-                            &["-c".into(), cmd.clone()],
-                            &root,
-                            &[&root],
-                            &self.services.workspace().sandbox(),
-                        ) {
-                            Ok(hc) => run_host(&root, &hc, 600).await,
-                            Err(e) => (None, e),
-                        };
-                        (cmd, code, out)
-                    }
-                },
-                CommandPurpose::Stage => {
-                    if files.is_empty() {
-                        (String::new(), Some(0), "No files to stage.".to_string())
-                    } else {
-                        // Staging keeps each review focused on the unstaged diff (Step 2).
-                        for p in ostra_sandbox::repair_git_dirs(
-                            &ostra_sandbox::git_repos(&[&root]),
-                        ) {
-                            tracing::warn!("removed a planted {} before staging", p.display());
-                        }
-                        let mut args: Vec<String> = ostra_core::git::AUTOMATIC
-                            .iter()
-                            .map(|s| s.to_string())
-                            .collect();
-                        args.extend(ostra_core::git::filter_overrides(&root).await);
-                        args.extend([
-                            "-C".into(),
-                            root.display().to_string(),
-                            "add".into(),
-                            "-A".into(),
-                            "--".into(),
-                        ]);
-                        args.extend(files.iter().cloned());
-                        let text = format!("git {}", args.join(" "));
-                        self.append_command_started(session, purpose, project, &text)?;
-                        let (code, out) = run_shell(&root, "git", &args, 60).await;
-                        (text, code, out)
-                    }
+        let (cmd_text, exit, tail) = match purpose {
+            CommandPurpose::Format => match command {
+                None => (
+                    String::new(),
+                    None,
+                    "No format command in project.toml, so format was skipped.".to_string(),
+                ),
+                // Rule A1: a format command runs only once the user approved it.
+                Some(cmd) if !self.services.command_approved(&root, &cmd) => {
+                    (cmd, None, FORMAT_NOT_APPROVED.to_string())
                 }
-                CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
-            };
+                Some(cmd) => {
+                    self.append_command_started(session, purpose, project, &cmd)?;
+                    // The project's own program, so it runs under the agent sandbox.
+                    let (code, out) = match ostra_sandbox::host_command(
+                        "bash",
+                        &["-c".into(), cmd.clone()],
+                        &root,
+                        &[&root],
+                        &self.services.workspace().sandbox(),
+                    ) {
+                        Ok(hc) => run_host(&root, &hc, 600).await,
+                        Err(e) => (None, e),
+                    };
+                    (cmd, code, out)
+                }
+            },
+            CommandPurpose::Stage => {
+                if files.is_empty() {
+                    (String::new(), Some(0), "No files to stage.".to_string())
+                } else {
+                    // Staging keeps each review focused on the unstaged diff (Step 2).
+                    for p in ostra_sandbox::repair_git_dirs(&ostra_sandbox::git_repos(&[&root])) {
+                        tracing::warn!("removed a planted {} before staging", p.display());
+                    }
+                    let mut args: Vec<String> = ostra_core::git::AUTOMATIC
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect();
+                    args.extend(ostra_core::git::filter_overrides(&root).await);
+                    args.extend([
+                        "-C".into(),
+                        root.display().to_string(),
+                        "add".into(),
+                        "-A".into(),
+                        "--".into(),
+                    ]);
+                    args.extend(files.iter().cloned());
+                    let text = format!("git {}", args.join(" "));
+                    self.append_command_started(session, purpose, project, &text)?;
+                    let (code, out) = run_shell(&root, "git", &args, 60).await;
+                    (text, code, out)
+                }
+            }
+            CommandPurpose::Autofix => (String::new(), Some(0), String::new()),
+        };
         self.append(
             session,
             SessionEvent::CommandRan {
@@ -2342,9 +2359,8 @@ impl Inner {
     fn write_session_context(&self, session: &SessionId) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
         let path = st.session_context_path();
-        std::fs::write(&path, crate::context::render(&st)).map_err(|e| {
-            EngineError::Invalid(format!("Could not write {}: {e}", path.display()))
-        })
+        std::fs::write(&path, crate::context::render(&st))
+            .map_err(|e| EngineError::Invalid(format!("Could not write {}: {e}", path.display())))
     }
 
     async fn perform_spawn(
@@ -2363,7 +2379,11 @@ impl Inner {
         {
             return Ok(());
         }
-        if req.inputs.context_files.contains(&st.session_context_path()) {
+        if req
+            .inputs
+            .context_files
+            .contains(&st.session_context_path())
+        {
             self.write_session_context(session)?;
         }
         // Rule D4a: rendered for each spawn, so every mark reflects the files as they are now.
@@ -2490,7 +2510,12 @@ impl Inner {
             );
         }
         if st.category == Some(Category::Docs) {
-            for p in req.inputs.implementer_reports.iter().filter(|p| !p.exists()) {
+            for p in req
+                .inputs
+                .implementer_reports
+                .iter()
+                .filter(|p| !p.exists())
+            {
                 let _ = std::fs::write(
                     p,
                     format!(
@@ -2509,10 +2534,7 @@ impl Inner {
                 .into_iter()
                 .map(|(k, v)| (k, serde_json::to_value(v).unwrap_or_default()))
                 .collect();
-            let _ = std::fs::write(
-                p,
-                serde_json::to_string_pretty(&parts).unwrap_or_default(),
-            );
+            let _ = std::fs::write(p, serde_json::to_string_pretty(&parts).unwrap_or_default());
         }
         let built = match factory.build(
             &req,

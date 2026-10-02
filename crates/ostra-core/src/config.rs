@@ -1812,11 +1812,13 @@ pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<(), ConfigError
 mod tests {
     use super::*;
 
-
     #[test]
     fn a_key_with_no_route_is_found_for_the_fix() {
         let mut ws = WorkspaceSettings::seeded("x");
-        assert!(keys_without_route(&ws).is_empty(), "seeded settings route every agent");
+        assert!(
+            keys_without_route(&ws).is_empty(),
+            "seeded settings route every agent"
+        );
         ws.routing.model.by_agent.remove("advisor");
         assert_eq!(keys_without_route(&ws), ["advisor"]);
         ws.routing.model.by_phase_complexity.remove("implementer");
@@ -1829,7 +1831,11 @@ mod tests {
             .model
             .by_agent
             .insert("implementer".into(), "default".into());
-        assert_eq!(keys_without_route(&ws), ["advisor"], "byAgent covers every complexity");
+        assert_eq!(
+            keys_without_route(&ws),
+            ["advisor"],
+            "byAgent covers every complexity"
+        );
     }
     #[test]
     fn the_sandbox_is_required_unless_a_workspace_or_the_global_config_says_otherwise() {

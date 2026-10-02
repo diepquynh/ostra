@@ -5,6 +5,7 @@
 use futures::future::join_all;
 use ostra_core::agent::AgentName;
 use ostra_core::config::{ProjectProfile, load_toml};
+use ostra_core::coord::RunEnd;
 use ostra_core::exec::{
     CancellationToken, ExecContext, ExecutionDelta, ExecutionHost, ExecutionResult, ExecutionSpec,
     ExecutionStatus, Executor, Usage,
@@ -17,7 +18,6 @@ use ostra_providers::{
     ServerTools, StopReason, StreamEvent, SystemBlock, ToolChoice, ToolDef,
 };
 use ostra_store::MemoryStore;
-use ostra_core::coord::RunEnd;
 use ostra_tools::{
     CodeNav, CoordConnector, ManageConnector, McpConnector, SkillResolver, ToolEnv, ToolEnvConfig,
 };
@@ -109,10 +109,7 @@ impl Executor for NativeExecutor {
             host: host.clone(),
             usage: usage.clone(),
             cancel: inner.clone(),
-            git_repos: ostra_sandbox::git_repos(&[
-                &spec.ctx.repo_root,
-                &spec.ctx.workspace_root,
-            ]),
+            git_repos: ostra_sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]),
             spec,
         };
         let fut = run.execute();
@@ -185,7 +182,10 @@ fn policy_inputs(ctx: &ExecContext) -> PolicyInputs {
 }
 
 fn input_message(input: &Value) -> &str {
-    input.get("message").and_then(Value::as_str).unwrap_or_default()
+    input
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
 }
 
 fn truncate(s: &str, n: usize) -> String {
@@ -552,9 +552,8 @@ impl Run {
             req.tool_choice = ToolChoice::Auto;
 
             let next = measured + estimate_tokens(&messages[measured_len.min(messages.len())..]);
-            let retry_ok = failed_compaction_at.is_none_or(|at| {
-                next as f64 >= at as f64 + COMPACT_RETRY_GROWTH * window as f64
-            });
+            let retry_ok = failed_compaction_at
+                .is_none_or(|at| next as f64 >= at as f64 + COMPACT_RETRY_GROWTH * window as f64);
             // A user turn last means no tool call is open, as compaction requires.
             if next as f64 >= COMPACT_AT * window as f64
                 && retry_ok
@@ -580,7 +579,9 @@ impl Run {
                     }
                     Err(e) => {
                         self.host.emit(ExecutionDelta::Status {
-                            message: format!("Compaction failed, so the run continues without it: {e}"),
+                            message: format!(
+                                "Compaction failed, so the run continues without it: {e}"
+                            ),
                         });
                         failed_compaction_at = Some(next);
                     }
@@ -1066,16 +1067,17 @@ impl Run {
             is_error: out.is_error,
             duration_ms: out.duration_ms,
         });
-        let end = if out.is_error { RunEnd::Continue } else { out.end };
+        let end = if out.is_error {
+            RunEnd::Continue
+        } else {
+            out.end
+        };
         (Block::tool_result(id, text, out.is_error), end)
     }
 }
 
 enum Sandbox {
-    On(
-        ostra_sandbox::Backend,
-        Box<ostra_sandbox::Profile>,
-    ),
+    On(ostra_sandbox::Backend, Box<ostra_sandbox::Profile>),
     Off(Option<String>),
 }
 
@@ -1113,8 +1115,7 @@ fn sandbox_for(
     let global: ostra_core::config::GlobalConfig =
         ostra_core::config::load_toml(&ostra_core::paths::global_config_path()).unwrap_or_default();
     let sandbox = global.sandbox.for_workspace(&ctx.sandbox());
-    let home = ostra_core::paths::home()
-        .unwrap_or_else(|| "/".into());
+    let home = ostra_core::paths::home().unwrap_or_else(|| "/".into());
     Ok(match ostra_sandbox::decide(&sandbox)? {
         ostra_sandbox::Decision::Sandboxed(backend) => {
             let scratch = ostra_sandbox::new_scratch()

@@ -1563,7 +1563,10 @@ async fn book_delete(
     let book = book_param(&book)?;
     let dir = ostra_core::book::book_dir(&w.root, book);
     if !dir.join("book.json").is_file() {
-        return Err(ApiErr::new(StatusCode::NOT_FOUND, "No such book in this workspace."));
+        return Err(ApiErr::new(
+            StatusCode::NOT_FOUND,
+            "No such book in this workspace.",
+        ));
     }
     // Rule W4: no session starts between the check and the removal.
     let Ok(_work) = w.work.try_write() else {

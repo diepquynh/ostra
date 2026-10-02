@@ -3,8 +3,9 @@
 
 use crate::judge::{
     ANSWER_ITEM, AnswerItem, AnswerRoute, ClassifyOut, Disposition, ExploreTaskSpec, FeedbackOut,
-    FeedbackTarget, MAX_ANSWER_RESEARCH, MAX_SUFFICIENCY_RESEARCH, NoteStage, OptsIn, RescueAction, RescueOut, ResolveAction,
-    ResolveReviewOut, RouteAnswerOut, StakesOut, SufficiencyOut, TrackOut, clean_title, item_for, parts_for,
+    FeedbackTarget, MAX_ANSWER_RESEARCH, MAX_SUFFICIENCY_RESEARCH, NoteStage, OptsIn, RescueAction,
+    RescueOut, ResolveAction, ResolveReviewOut, RouteAnswerOut, StakesOut, SufficiencyOut,
+    TrackOut, clean_title, item_for, parts_for,
 };
 use chrono::{DateTime, Utc};
 use ostra_core::agent::AgentName;
@@ -73,7 +74,9 @@ impl ExploreOrigin {
     pub fn loop_bound(&self) -> bool {
         matches!(
             self,
-            ExploreOrigin::Rescue { .. } | ExploreOrigin::LoopAnswer { .. } | ExploreOrigin::Ask { .. }
+            ExploreOrigin::Rescue { .. }
+                | ExploreOrigin::LoopAnswer { .. }
+                | ExploreOrigin::Ask { .. }
         )
     }
 }
@@ -733,7 +736,10 @@ impl ProjectTrack {
     /// The writer state an execution for `area` folds into.
     pub fn docs_mut(&mut self, area: Option<&str>) -> &mut DocsState {
         match area {
-            Some(a) => self.area_docs.entry(a.to_string()).or_insert(DocsState::NotStarted),
+            Some(a) => self
+                .area_docs
+                .entry(a.to_string())
+                .or_insert(DocsState::NotStarted),
             None => &mut self.docs,
         }
     }
@@ -750,7 +756,10 @@ impl ProjectTrack {
         if let Some(r) = states.iter().find(|s| matches!(s, DocsState::Running(_))) {
             return (*r).clone();
         }
-        if let Some(f) = states.iter().find(|s| matches!(s, DocsState::Failed { .. })) {
+        if let Some(f) = states
+            .iter()
+            .find(|s| matches!(s, DocsState::Failed { .. }))
+        {
             return (*f).clone();
         }
         if states.iter().any(|s| matches!(s, DocsState::NotStarted)) {
@@ -928,7 +937,9 @@ impl Interrupt {
             Interrupt::ProjectCreated => {
                 "Stopped after creating the project, which Ostra initializes before this phase starts again in it."
             }
-            Interrupt::Skipped => "You skipped this task, so Ostra stopped it and moved on without it.",
+            Interrupt::Skipped => {
+                "You skipped this task, so Ostra stopped it and moved on without it."
+            }
             Interrupt::Steer => "Interrupted to deliver the correction the user sent.",
         }
     }
@@ -1572,8 +1583,7 @@ impl SessionState {
                 let now = *delivery == ContextDelivery::Now;
                 if now {
                     // Rule C2: a fresh re-run replaces a correction's resume, which would not see the context.
-                    self.interrupting
-                        .retain(|_, why| *why != Interrupt::Steer);
+                    self.interrupting.retain(|_, why| *why != Interrupt::Steer);
                     self.interrupt_running(Interrupt::Context);
                     self.steers.clear();
                 }
@@ -1740,7 +1750,9 @@ impl SessionState {
                 steer.text.push_str(text);
                 steer.queued &= !running;
                 if running {
-                    self.interrupting.entry(id.clone()).or_insert(Interrupt::Steer);
+                    self.interrupting
+                        .entry(id.clone())
+                        .or_insert(Interrupt::Steer);
                 }
             }
             SessionEvent::SteerWithdrawn { id } => {
@@ -1983,7 +1995,12 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn push_explore(&mut self, project: String, task: String, origin: ExploreOrigin) -> u32 {
+    pub(crate) fn push_explore(
+        &mut self,
+        project: String,
+        task: String,
+        origin: ExploreOrigin,
+    ) -> u32 {
         let idx = self.explore.len() as u32;
         self.explore.push(ExploreTask {
             idx,
@@ -2287,7 +2304,12 @@ impl SessionState {
         let Some(rec) = self.executions.get(exec) else {
             return false;
         };
-        if self.is_terminal() || self.interrupting.get(exec).is_some_and(|w| *w != Interrupt::Steer) {
+        if self.is_terminal()
+            || self
+                .interrupting
+                .get(exec)
+                .is_some_and(|w| *w != Interrupt::Steer)
+        {
             return false;
         }
         match &rec.result {
@@ -2804,17 +2826,16 @@ impl SessionState {
             });
         }
         // Rule D10: a requirement change goes into the spec before anything is built from it.
-        let spec_first =
-            route == AnswerRoute::RequirementChange && self.spec.current.is_some();
+        let spec_first = route == AnswerRoute::RequirementChange && self.spec.current.is_some();
         let r = &mut self.feedback.rounds[i];
         r.route = Some(route);
         r.reason = reason;
         r.targets = targets;
         if spec_first {
             r.awaiting_spec = true;
-            self.spec
-                .changes
-                .push(format!("The user reviewed the implementation and asked for: {text}"));
+            self.spec.changes.push(format!(
+                "The user reviewed the implementation and asked for: {text}"
+            ));
             self.spec.needs_run = true;
             self.spec.revoke_approval();
         } else {
@@ -2964,9 +2985,11 @@ impl SessionState {
                             _ => (self.primary(), item.item.clone()),
                         };
                         // Rule D2: the judge often maps several items to one task; research it once.
-                        if self.explore.iter().any(|t| {
-                            !t.finished() && t.project == project && t.task == task
-                        }) {
+                        if self
+                            .explore
+                            .iter()
+                            .any(|t| !t.finished() && t.project == project && t.task == task)
+                        {
                             continue;
                         }
                         self.push_explore(project, task, ExploreOrigin::Sufficiency);
@@ -3067,7 +3090,9 @@ impl SessionState {
                             advisor: None,
                         }
                     }
-                    RescueAction::Advise | RescueAction::Gate => LoopNext::RescueGate { exec, stuck },
+                    RescueAction::Advise | RescueAction::Gate => {
+                        LoopNext::RescueGate { exec, stuck }
+                    }
                 };
                 if let Some(l) = self.loop_mut(key) {
                     l.next = new_next;
@@ -3142,8 +3167,8 @@ impl SessionState {
                 if !self.held_answers.contains_key(&gate)
                     && !self.phases.values().any(|p| {
                         [&p.impl_loop, &p.test_loop].iter().any(
-                            |l| matches!(&l.next, LoopNext::AwaitRoute { gate: g, .. } if *g == gate),
-                        )
+                        |l| matches!(&l.next, LoopNext::AwaitRoute { gate: g, .. } if *g == gate),
+                    )
                     })
                 {
                     return;
@@ -3185,7 +3210,12 @@ impl SessionState {
                 let Ok(out) = serde_json::from_value::<FeedbackOut>(output.clone()) else {
                     return;
                 };
-                if self.feedback.rounds.get(i).is_none_or(|r| r.route.is_some()) {
+                if self
+                    .feedback
+                    .rounds
+                    .get(i)
+                    .is_none_or(|r| r.route.is_some())
+                {
                     return;
                 }
                 let Some(gate) = self.feedback_gate(i) else {
@@ -3335,11 +3365,12 @@ impl SessionState {
                 l.in_flight = Some(l.next.clone());
                 if !resumed
                     && matches!(
-                    purpose,
-                    ExecPurpose::Implement { .. }
-                        | ExecPurpose::WriteTest { .. }
-                        | ExecPurpose::Verify { .. }
-                ) || matches!(purpose, ExecPurpose::PromptGen { handoff_for: None })
+                        purpose,
+                        ExecPurpose::Implement { .. }
+                            | ExecPurpose::WriteTest { .. }
+                            | ExecPurpose::Verify { .. }
+                    )
+                    || matches!(purpose, ExecPurpose::PromptGen { handoff_for: None })
                 {
                     l.work_count += 1;
                 }

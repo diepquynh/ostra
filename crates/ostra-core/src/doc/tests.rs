@@ -361,7 +361,10 @@ fn shop(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
             backend.join("src/events/publisher.ts"),
             "export function publish() {}\n",
         ),
-        (web.join("src/orders/OrderPage.tsx"), "export const Page = 1;\n"),
+        (
+            web.join("src/orders/OrderPage.tsx"),
+            "export const Page = 1;\n",
+        ),
     ] {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
@@ -441,8 +444,11 @@ fn plan_steps_change_and_read_files_that_exist_or_an_earlier_step_creates() {
         "src/orders/service.ts:OrderService.cancel"
     ]);
     // Another repo's file counts, including one an earlier phase creates.
-    v["phases"][1]["steps"][0]["read_first"] =
-        json!(["src/orders/OrderPage.tsx", "src/orders/cancel.ts", "src/orders/nope.ts"]);
+    v["phases"][1]["steps"][0]["read_first"] = json!([
+        "src/orders/OrderPage.tsx",
+        "src/orders/cancel.ts",
+        "src/orders/nope.ts"
+    ]);
     let w = write(DocKind::Plan, &md, &v, None).unwrap();
     let lines = issue_lines(&w);
     assert_eq!(w.errors(), 1, "{lines:?}");
@@ -464,8 +470,9 @@ fn plan_steps_change_and_read_files_that_exist_or_an_earlier_step_creates() {
     v["phases"][0]["steps"][1]["file"] = json!("src/orders/gone.ts");
     let w = write(DocKind::Plan, &md, &v, None).unwrap();
     assert!(
-        issue_lines(&w).iter().any(|l| l.contains("(step 1.2)")
-            && l.contains("Use `Create`, or fix the path")),
+        issue_lines(&w)
+            .iter()
+            .any(|l| l.contains("(step 1.2)") && l.contains("Use `Create`, or fix the path")),
         "{:?}",
         issue_lines(&w)
     );
@@ -479,7 +486,10 @@ fn a_research_document_records_its_files_and_cites_only_real_ones() {
     let w = write(DocKind::Research, &md, &value(RESEARCH), Some(&backend)).unwrap();
     assert!(w.issues.is_empty(), "{:?}", issue_lines(&w));
     let stored = load(&md).unwrap();
-    assert_eq!(stored["snapshot"]["root"], json!(backend.display().to_string()));
+    assert_eq!(
+        stored["snapshot"]["root"],
+        json!(backend.display().to_string())
+    );
     let files = stored["snapshot"]["files"].as_object().unwrap();
     assert_eq!(
         files.keys().cloned().collect::<Vec<_>>(),
@@ -516,7 +526,11 @@ fn code_facts_mark_what_changed_since_research() {
     let docs = vec![md.clone()];
     assert!(changed_since_research(&docs).is_empty());
 
-    std::fs::write(backend.join("src/orders/service.ts"), "export class OrderService {}\n").unwrap();
+    std::fs::write(
+        backend.join("src/orders/service.ts"),
+        "export class OrderService {}\n",
+    )
+    .unwrap();
     std::fs::remove_file(backend.join("src/orders/repository.ts")).unwrap();
     assert_eq!(
         changed_since_research(&docs),

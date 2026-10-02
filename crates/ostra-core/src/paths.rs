@@ -59,7 +59,10 @@ pub fn from_msys(raw: &str) -> PathBuf {
         {
             let drive = bytes[1].to_ascii_uppercase() as char;
             let rest = &s[2..];
-            return PathBuf::from(format!("{drive}:{}", if rest.is_empty() { "\\" } else { rest }));
+            return PathBuf::from(format!(
+                "{drive}:{}",
+                if rest.is_empty() { "\\" } else { rest }
+            ));
         }
         // `/tmp` is Git Bash's `%TEMP%`.
         if s == "/tmp" || s.starts_with("/tmp/") {
@@ -555,8 +558,8 @@ pub fn windows_path_problem(raw: &str) -> Option<&'static str> {
 /// Windows device names, which open a device under any extension and in any folder.
 const RESERVED_NAMES: &[&str] = &[
     "con", "prn", "aux", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-    "com¹", "com²", "com³", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8",
-    "lpt9", "lpt¹", "lpt²", "lpt³", "conin$", "conout$",
+    "com¹", "com²", "com³", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+    "lpt¹", "lpt²", "lpt³", "conin$", "conout$",
 ];
 
 /// True when the last component of `p` is a Windows device name other than `NUL` (`CON`,
@@ -568,7 +571,11 @@ pub fn is_reserved_device(p: &Path) -> bool {
     let Some(name) = p.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
         return false;
     };
-    let stem = name.split('.').next().unwrap_or_default().trim_end_matches([' ', '.']);
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '.']);
     RESERVED_NAMES.contains(&stem)
 }
 
@@ -643,11 +650,7 @@ fn resolve_windows(cwd: &Path, target: &Path) -> PathBuf {
             }
         }
         // Joining an empty `rest` would append a trailing separator, so keep the path as is.
-        let join_rest = |base: PathBuf| {
-            tail.iter()
-                .rev()
-                .fold(base, |acc: PathBuf, n| acc.join(n))
-        };
+        let join_rest = |base: PathBuf| tail.iter().rev().fold(base, |acc: PathBuf, n| acc.join(n));
         match canonical(&existing) {
             Ok(real) => return join_rest(strip_verbatim(&real)),
             Err(_) => match std::fs::read_link(&existing) {
@@ -679,8 +682,8 @@ pub fn dot_dot_after_link(cwd: &Path, raw: &Path) -> bool {
     };
     let mut prev_link = false;
     for c in raw.components() {
-        let dotdot = matches!(c, Component::ParentDir)
-            || matches!(c, Component::Normal(n) if n == "..");
+        let dotdot =
+            matches!(c, Component::ParentDir) || matches!(c, Component::Normal(n) if n == "..");
         if dotdot && prev_link {
             return true;
         }
@@ -859,7 +862,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn strip_verbatim_removes_the_prefix() {
-        assert_eq!(strip_verbatim(Path::new(r"\\?\C:\x\y")), PathBuf::from(r"C:\x\y"));
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\x\y")),
+            PathBuf::from(r"C:\x\y")
+        );
         assert_eq!(
             strip_verbatim(Path::new(r"\\?\UNC\srv\share\f")),
             PathBuf::from(r"\\srv\share\f")
@@ -903,7 +909,13 @@ mod tests {
         assert_eq!(resolve(&repo, Path::new("a/../b/c")), repo.join("b\\c"));
         // A forward-slash drive path resolves to the same file as its backslash form.
         assert_eq!(
-            resolve(Path::new(r"C:\other"), &PathBuf::from(format!("{}/repo/x", root.display().to_string().replace('\\', "/")))),
+            resolve(
+                Path::new(r"C:\other"),
+                &PathBuf::from(format!(
+                    "{}/repo/x",
+                    root.display().to_string().replace('\\', "/")
+                ))
+            ),
             repo.join("x")
         );
     }

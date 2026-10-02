@@ -26,7 +26,7 @@ pub use protocol::{HookEvent, McpRequest, McpResponse, PolicyRequest, PolicyResp
 pub use pty::{PtyRegistry, PtySession};
 pub use services::{BridgeServices, McpOut};
 pub use setup::{
-    all_harness_status, ensure_agy_integration, harness_status, install_dirs, install_script, installer_tool,
-    login_command,
+    all_harness_status, ensure_agy_integration, harness_status, install_dirs, install_script,
+    installer_tool, login_command,
 };
 pub use term_log::{TRANSCRIPT_CAP, TermLog, read_transcript};

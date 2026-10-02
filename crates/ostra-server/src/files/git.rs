@@ -586,7 +586,10 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         git(&["add", "."]);
         git(&["commit", "-qm", "init"]);
         std::fs::write(repo.join(".gitattributes"), "*.txt filter=x\n").unwrap();
-        let driver = format!("touch {}; cat", marker.display().to_string().replace('\\', "/"));
+        let driver = format!(
+            "touch {}; cat",
+            marker.display().to_string().replace('\\', "/")
+        );
         git(&["config", "filter.x.clean", &driver]);
         git(&["config", "filter.x.smudge", &driver]);
         std::fs::write(repo.join("a.txt"), "two\n").unwrap();
@@ -623,7 +626,10 @@ u UU N... 100644 100644 100644 100644 e1 e2 e3 sub/conflict.rs\0\
         std::fs::write(nested.join("f.txt"), "one\n").unwrap();
         git(&nested, &["add", "-A"]);
         git(&nested, &["commit", "-qm", "x"]);
-        let driver = format!("touch {}; cat", marker.display().to_string().replace('\\', "/"));
+        let driver = format!(
+            "touch {}; cat",
+            marker.display().to_string().replace('\\', "/")
+        );
         git(&nested, &["config", "filter.x.clean", &driver]);
         git(&repo, &["add", "a/evil"]);
         // Same size, newer mtime: git hashes the file again, through the clean filter.

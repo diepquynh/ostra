@@ -43,7 +43,7 @@ fn looks_like_path(p: &str) -> bool {
 /// Parse `path`, `path:Symbol`, or `path:line`, ignoring prose after the first space. `None` for
 /// a URL, a `new:` grounding, a glob, a placeholder, or text that does not start with a path.
 pub(crate) fn parse_ref(text: &str) -> Option<CodeRef> {
-    let head = text.trim().split_whitespace().next()?.trim_matches('`');
+    let head = text.split_whitespace().next()?.trim_matches('`');
     if head.contains("://") || head.to_ascii_lowercase().starts_with("new:") {
         return None;
     }

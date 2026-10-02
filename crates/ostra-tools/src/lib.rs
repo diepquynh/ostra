@@ -27,10 +27,10 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 pub use code::CodeNav;
+pub use coord::{CoordConnector, Coordinate};
 pub use defs::{
     ToolDefinition, definitions, document_tool_definition, submit_tool_definition, wants_web_search,
 };
-pub use coord::{CoordConnector, Coordinate};
 pub use manage::{Manage, ManageConnector};
 pub use mcp::{McpConnector, McpOpened, McpTools};
 pub use web::webfetch_hosts;
@@ -251,7 +251,9 @@ impl ToolEnv {
     }
 
     pub fn has_read(&self, path: &Path) -> bool {
-        self.read_files.lock().contains(&ostra_core::paths::fold(path))
+        self.read_files
+            .lock()
+            .contains(&ostra_core::paths::fold(path))
     }
 
     pub fn mark_read(&self, path: &Path) {
@@ -292,11 +294,27 @@ pub async fn execute(
             "Bash" => bash::run(env, call_id, input, live.clone(), cancel.clone()).await,
             #[cfg(windows)]
             "PowerShell" => {
-                winshell::run(env, call_id, input, winshell::Shell::PowerShell, live.clone(), cancel.clone()).await
+                winshell::run(
+                    env,
+                    call_id,
+                    input,
+                    winshell::Shell::PowerShell,
+                    live.clone(),
+                    cancel.clone(),
+                )
+                .await
             }
             #[cfg(windows)]
             "Cmd" => {
-                winshell::run(env, call_id, input, winshell::Shell::Cmd, live.clone(), cancel.clone()).await
+                winshell::run(
+                    env,
+                    call_id,
+                    input,
+                    winshell::Shell::Cmd,
+                    live.clone(),
+                    cancel.clone(),
+                )
+                .await
             }
             "Grep" => search::grep(env, input).await,
             "Glob" => search::glob(env, input).await,
@@ -408,7 +426,9 @@ mod tests {
     fn canonical_call_uses_the_shell_cwd() {
         let d = tempfile::tempdir().unwrap();
         let env = env_in(d.path());
-        let outside = ostra_core::paths::canonical(d.path()).unwrap().join("session");
+        let outside = ostra_core::paths::canonical(d.path())
+            .unwrap()
+            .join("session");
         env.set_cwd(outside.clone());
         let write = env.canonical_call(&ToolCall::new(
             "Write",

@@ -4,12 +4,12 @@
 use crate::init::STACK_REFERENCE_NAME;
 use crate::plan::{SpawnInputs, SpawnRequest};
 use crate::services::{AgentMeta, BuiltSpawn, SpawnEnv, SpawnFactory};
+use crate::state::SessionState;
 use ostra_agents::brief::{ArtifactsBrief, BooksBrief, BriefInput, augment};
 use ostra_agents::spawn::*;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, FactTarget, WorkKind};
 use ostra_core::executor::ExecutorKind;
-use crate::state::SessionState;
 use ostra_core::pipeline::{Category, Track};
 use std::path::{Path, PathBuf};
 

@@ -217,8 +217,7 @@ fn hostname() -> Option<String> {
         let mut buf = [0u16; 256];
         let mut len = buf.len() as u32;
         // SAFETY: `len` holds the buffer's size in UTF-16 units and receives the name's length.
-        if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buf.as_mut_ptr(), &mut len) } == 0
-        {
+        if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buf.as_mut_ptr(), &mut len) } == 0 {
             return None;
         }
         String::from_utf16_lossy(&buf[..len as usize])

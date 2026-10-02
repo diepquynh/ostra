@@ -2107,9 +2107,23 @@ fn h3_a_consult_run_answers_and_writes_nothing() {
     let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
     let reason = denied(&p, &write(f.repo.join("src/a.rs")), "SubagentReply");
     assert!(reason.starts_with("Answer with SubagentReply"), "{reason}");
-    denied(&p, &bash(format!("echo x > {}", shp(f.repo.join("a.txt")))), "change no file");
-    denied(&p, &ToolCall::new("Report", json!({"content": "x"})), "change no file");
-    allowed(&p, &ToolCall::new("Read", json!({"file_path": f.repo.join("src/a.rs").to_string_lossy()})));
+    denied(
+        &p,
+        &bash(format!("echo x > {}", shp(f.repo.join("a.txt")))),
+        "change no file",
+    );
+    denied(
+        &p,
+        &ToolCall::new("Report", json!({"content": "x"})),
+        "change no file",
+    );
+    allowed(
+        &p,
+        &ToolCall::new(
+            "Read",
+            json!({"file_path": f.repo.join("src/a.rs").to_string_lossy()}),
+        ),
+    );
     allowed(&p, &ToolCall::new("SubagentReply", json!({"message": "m"})));
 }
 

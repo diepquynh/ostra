@@ -629,7 +629,11 @@ impl SpawnParams for DocumentationParams {
             let mut paths = a.paths.join(", ");
             if a.rest {
                 let every = "every file no other area covers";
-                paths = if paths.is_empty() { every.into() } else { format!("{paths}, and {every}") };
+                paths = if paths.is_empty() {
+                    every.into()
+                } else {
+                    format!("{paths}, and {every}")
+                };
             }
             b.line("Area paths", &paths);
             let others: Vec<String> = a

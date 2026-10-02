@@ -333,7 +333,9 @@ mod tests {
 
     fn root() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let root = ostra_core::paths::canonical(dir.path()).unwrap().join("proj");
+        let root = ostra_core::paths::canonical(dir.path())
+            .unwrap()
+            .join("proj");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn a() {}\n").unwrap();
         (dir, root)
@@ -361,7 +363,9 @@ mod tests {
     #[test]
     fn containment_refuses_symlink_escapes() {
         let (d, root) = root();
-        let outside = ostra_core::paths::canonical(d.path()).unwrap().join("secret");
+        let outside = ostra_core::paths::canonical(d.path())
+            .unwrap()
+            .join("secret");
         std::fs::create_dir_all(&outside).unwrap();
         std::fs::write(outside.join("key"), "k").unwrap();
         std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();

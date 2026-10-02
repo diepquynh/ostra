@@ -296,7 +296,11 @@ mod tests {
         );
         let started = Instant::now();
         let out = run_tool(&env, "PowerShell", json!({"command": cmd, "timeout": 6000})).await;
-        assert!(out.is_error && out.text.contains("timed out"), "{}", out.text);
+        assert!(
+            out.is_error && out.text.contains("timed out"),
+            "{}",
+            out.text
+        );
         assert!(started.elapsed() < Duration::from_secs(15));
         tokio::time::sleep(Duration::from_millis(4000)).await;
         assert!(!marker.exists(), "a child outlived the timeout");

@@ -23,7 +23,11 @@ fn windows_shell_tool(input: &Value) -> &'static str {
         _ => None,
     };
     let posix = first.is_some_and(|w| {
-        let name = w.rsplit(['/', '\\']).next().unwrap_or(&w).to_ascii_lowercase();
+        let name = w
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&w)
+            .to_ascii_lowercase();
         let name = name.strip_suffix(".exe").unwrap_or(&name);
         matches!(name, "bash" | "sh")
     });

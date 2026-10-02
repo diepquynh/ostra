@@ -690,7 +690,8 @@ impl ostra_tools::CodeNav for CodeTools {
             .get()
             .and_then(Weak::upgrade)
             .ok_or("The Ostra server is shutting down.")?;
-        let dir = ostra_core::paths::canonical(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+        let dir =
+            ostra_core::paths::canonical(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
         let (w, key, root) = project_holding(&app, &dir).ok_or_else(|| {
             format!(
                 "{} is not inside a project of an open workspace, so it has no code index.",

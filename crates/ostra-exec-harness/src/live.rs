@@ -294,7 +294,11 @@ mod tests {
     #[test]
     fn a_waiting_run_ends_its_turn_without_a_submit() {
         let reg = LiveRegistry::new();
-        let live = reg.register(ExecutionId::new(), AgentName::GenerateSpec, HarnessKind::Claude);
+        let live = reg.register(
+            ExecutionId::new(),
+            AgentName::GenerateSpec,
+            HarnessKind::Claude,
+        );
         live.set_waiting(true);
         assert_eq!(live.on_stop(None), StopVerdict::Allow);
         let s = live.snapshot();
@@ -306,7 +310,11 @@ mod tests {
     #[test]
     fn a_run_that_owes_an_answer_is_told_to_reply() {
         let reg = LiveRegistry::new();
-        let live = reg.register(ExecutionId::new(), AgentName::GenerateSpec, HarnessKind::Claude);
+        let live = reg.register(
+            ExecutionId::new(),
+            AgentName::GenerateSpec,
+            HarnessKind::Claude,
+        );
         live.set_owes_reply(true);
         assert!(
             matches!(live.on_stop(None), StopVerdict::Block(ref m) if m.contains("mcp__ostra__subagent_reply"))

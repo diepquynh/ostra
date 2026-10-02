@@ -266,7 +266,13 @@ async fn pause_interrupts_and_resume_continues_the_run() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].status, ExecutionStatus::Running);
     until("the resumed run reports its spend", || {
-        e.db().get_execution(&paused.id).unwrap().unwrap().usage.cost_usd == 2.0
+        e.db()
+            .get_execution(&paused.id)
+            .unwrap()
+            .unwrap()
+            .usage
+            .cost_usd
+            == 2.0
     })
     .await;
     e.stop_session(&s).unwrap();
@@ -652,10 +658,15 @@ async fn a_correction_resumes_the_run_in_place_with_it() {
     assert_eq!(resume.from, id);
     assert_eq!(
         resume.note,
-        Some(ostra_engine::runner::steer_note("Read src/refund.rs first."))
+        Some(ostra_engine::runner::steer_note(
+            "Read src/refund.rs first."
+        ))
     );
     assert_eq!(t.exec.ids.lock().unwrap()[1], id);
-    assert!(e.withdraw_steer(&id).is_err(), "a correction sent to a running run is final");
+    assert!(
+        e.withdraw_steer(&id).is_err(),
+        "a correction sent to a running run is final"
+    );
     e.stop_session(&s).unwrap();
     until("the run ends", || {
         e.state(&s).unwrap().running_executions().count() == 0

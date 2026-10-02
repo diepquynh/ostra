@@ -709,7 +709,11 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
         }
         let docs = t.docs_aggregate();
         if let Some(st) = run_status(&docs) {
-            let mut c = card(StageKind::Documentation, format!("Documentation for {key}"), st);
+            let mut c = card(
+                StageKind::Documentation,
+                format!("Documentation for {key}"),
+                st,
+            );
             c.project = Some(key.clone());
             c.executions = exec_ids(
                 s,

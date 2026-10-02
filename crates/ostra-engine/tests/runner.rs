@@ -62,8 +62,8 @@ impl Services for Fake {
         schema: Value,
         _e: Effort,
     ) -> Result<(Value, Usage), String> {
-        let classify = system.contains("\"category\"")
-            || user.contains("# Toggles from the New task form");
+        let classify =
+            system.contains("\"category\"") || user.contains("# Toggles from the New task form");
         let out = if classify && user.contains("Document the greeting") {
             json!({"category": "DOCS", "projects": ["app"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "The request asks for documentation.", "title": "Greeting docs"})
         } else if classify {
@@ -167,7 +167,10 @@ impl Executor for Scripted {
             AgentName::Documentation => {
                 let stub = sess.join("ostra-docs-request.md");
                 let text = std::fs::read_to_string(&stub).unwrap_or_default();
-                assert!(text.contains("Document the greeting"), "the stub holds the request: {text}");
+                assert!(
+                    text.contains("Document the greeting"),
+                    "the stub holds the request: {text}"
+                );
                 json!({"status": "ok", "summary": "Documented the greeting.", "overview": "app greets users.",
                     "sections": [{"id": "greeting", "title": "Greeting", "purpose": "Prints a greeting.",
                         "assumptions": ["stdout is open."],
@@ -470,7 +473,13 @@ async fn init_session_start_and_end_notify_project_changes() {
 struct Coordinating {
     inner: Scripted,
     engine: std::sync::OnceLock<Engine>,
-    log: Mutex<Vec<(AgentName, ostra_core::ids::ExecutionId, Option<ostra_core::exec::ResumeInfo>)>>,
+    log: Mutex<
+        Vec<(
+            AgentName,
+            ostra_core::ids::ExecutionId,
+            Option<ostra_core::exec::ResumeInfo>,
+        )>,
+    >,
 }
 
 #[async_trait]
@@ -506,7 +515,9 @@ impl Executor for Coordinating {
             }
             (AgentName::FactCheck, 0) => ExecutionResult {
                 status: ExecutionStatus::Ok,
-                submit: Some(json!({"verdict": "FAIL", "target": "spec", "findings": [{"severity": "HIGH", "location": "R1", "claim": "c", "issue": "R1 names a missing file"}]})),
+                submit: Some(
+                    json!({"verdict": "FAIL", "target": "spec", "findings": [{"severity": "HIGH", "location": "R1", "claim": "c", "issue": "R1 names a missing file"}]}),
+                ),
                 final_text: String::new(),
                 usage: Usage::default(),
                 native_session_id: None,
@@ -564,13 +575,22 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
         .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     while !engine.state(&summary.id).unwrap().is_terminal() {
-        assert!(tokio::time::Instant::now() < deadline, "timed out: {:#?}", exec.log.lock().unwrap());
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out: {:#?}",
+            exec.log.lock().unwrap()
+        );
         let _ = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
     }
     let st = engine.state(&summary.id).unwrap();
     assert!(st.failed.is_none(), "failed: {:?}", st.failed);
     let log = exec.log.lock().unwrap().clone();
-    let of = |agent: AgentName| -> Vec<_> { log.iter().filter(|(a, _, _)| *a == agent).cloned().collect() };
+    let of = |agent: AgentName| -> Vec<_> {
+        log.iter()
+            .filter(|(a, _, _)| *a == agent)
+            .cloned()
+            .collect()
+    };
     let specs = of(AgentName::GenerateSpec);
     assert_eq!(specs.len(), 3, "{specs:#?}");
     let (_, first, none) = &specs[0];
@@ -580,21 +600,47 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
     assert_eq!(woken, first);
     let resume = resume.as_ref().unwrap();
     assert_eq!(&resume.from, first);
-    assert!(resume.note.as_ref().unwrap().contains("ostra-research-1.md"), "{resume:?}");
+    assert!(
+        resume
+            .note
+            .as_ref()
+            .unwrap()
+            .contains("ostra-research-1.md"),
+        "{resume:?}"
+    );
     // H5: the fact-check failed, so the author continues its conversation in a new run.
     let (_, revised, resume) = &specs[2];
     assert_ne!(revised, first);
     let resume = resume.as_ref().unwrap();
     assert_eq!(&resume.from, first);
     let note = resume.note.as_ref().unwrap();
-    assert!(note.contains("continues your conversation") && note.contains("R1 names a missing file"), "{note}");
+    assert!(
+        note.contains("continues your conversation") && note.contains("R1 names a missing file"),
+        "{note}"
+    );
     let checks = of(AgentName::FactCheck);
-    assert_eq!(checks[1].2.as_ref().unwrap().from, checks[0].1, "the checker continues too");
+    assert_eq!(
+        checks[1].2.as_ref().unwrap().from,
+        checks[0].1,
+        "the checker continues too"
+    );
     assert_eq!(st.subagent_of(revised), *first);
     let events = engine.db().events(&summary.id).unwrap();
-    assert!(events.iter().any(|e| matches!(e.event, SessionEvent::AgentAsked { .. })));
-    assert!(events.iter().any(|e| matches!(e.event, SessionEvent::MessageDelivered { .. })));
-    assert_eq!(of(AgentName::Explore).len(), 2, "the classify explore and the helper");
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::AgentAsked { .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e.event, SessionEvent::MessageDelivered { .. }))
+    );
+    assert_eq!(
+        of(AgentName::Explore).len(),
+        2,
+        "the classify explore and the helper"
+    );
 }
 
 // Rule O6: a pinned session holds only its pinned projects.
@@ -699,12 +745,29 @@ async fn docs_session_writes_the_book_into_the_workspace() {
     assert_eq!(book.sessions, [summary.id.to_string()]);
     let root = ostra_core::book::book_dir(&ws_root, "app");
     let section = std::fs::read_to_string(root.join("app/greeting.md")).unwrap();
-    assert!(section.contains("## Assumptions\n\n- stdout is open."), "{section}");
+    assert!(
+        section.contains("## Assumptions\n\n- stdout is open."),
+        "{section}"
+    );
     assert!(section.contains("```mermaid\nsequenceDiagram"), "{section}");
-    assert!(section.find("## Code references") > section.find("```mermaid"), "code references come last");
+    assert!(
+        section.find("## Code references") > section.find("```mermaid"),
+        "code references come last"
+    );
     let index = std::fs::read_to_string(root.join("index.md")).unwrap();
-    assert!(index.contains("- [Greeting](app/greeting.md): Prints a greeting."), "{index}");
-    assert!(std::fs::read_to_string(root.join("glossary.md")).unwrap().contains("| Greeting |"));
+    assert!(
+        index.contains("- [Greeting](app/greeting.md): Prints a greeting."),
+        "{index}"
+    );
+    assert!(
+        std::fs::read_to_string(root.join("glossary.md"))
+            .unwrap()
+            .contains("| Greeting |")
+    );
     let agents: Vec<AgentName> = exec.runs.lock().unwrap().iter().map(|r| r.0).collect();
-    assert_eq!(agents, [AgentName::Documentation], "no implementer runs for a DOCS request");
+    assert_eq!(
+        agents,
+        [AgentName::Documentation],
+        "no implementer runs for a DOCS request"
+    );
 }

@@ -308,7 +308,11 @@ mod question_tests {
         };
         assert_eq!(labels(&q(0)), ["1A", "2B", "3C"]);
         assert_eq!(labels(&q(2)), ["1C", "2A", "3B"]);
-        assert_eq!(labels(&q(9)), ["1A", "2B", "3C"], "an out-of-range recommendation is ignored");
+        assert_eq!(
+            labels(&q(9)),
+            ["1A", "2B", "3C"],
+            "an out-of-range recommendation is ignored"
+        );
     }
 
     #[test]
