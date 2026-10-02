@@ -24,7 +24,6 @@ the answer schema for this gate kind.
 - **Closing gate:** answer no for tests and no for docs, the recommended defaults, unless the request already
   asked for that stage (Rule T3).
 - **Review cap:** choose another pass while the open-finding count is falling, else stop.
-- **Stuck:** state a fact if the context supplies one, else leave the phase blocked.
 - **Permission:** allow, unless the call matches one of the user's explicit deny rules.
 - **Harness failure:** re-route the execution to the native executor.
 - **Skill approval:** accept every default disposition the proposal set.

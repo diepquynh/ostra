@@ -20,7 +20,7 @@ agent definitions from disk and a user cannot swap one out by editing a file.
 | `generate-spec` | Spec | advanced | Reads every research document for the request and writes one spec: requirements in EARS notation with Given/When/Then criteria, grouped into ordered deliverables. It states what to build, never how. A new codebase gets a new project key in it, which Ostra creates only after the plan is approved. |
 | `fact-check` | Fact-check | advanced | Checks a spec or a plan for claims that would break the implementer and for external facts that no longer trace to a cited page. It runs after every spec and every plan, and Ostra refuses approval without a recorded `PASS`. |
 | `plan` | Plan | advanced | Turns an approved spec into a master plan plus one file per phase. Each step names an exact path, an action, the skills to load, and a verification command. It reads the spec and nothing else. It lists a new project the spec names in `new_projects`. |
-| `implementer` | Build | balanced | Writes the code for one plan phase, one review fix, or one inline change, and verifies each step with the project's build command. It never writes tests. |
+| `implementer` | Build | balanced | Writes the code for one plan phase, one review fix, one inline change, or the fix for a stuck run the user sent it to (rule O8), and verifies each step with the project's build command. It never writes tests. |
 | `code-reviewer` | Review | balanced | Reviews the unstaged changes of one review loop against the project's rule set and the phase's requirements, and runs a security scan whose BLOCKER findings no instruction can override. |
 | `execution-path-analyzer` | Test | balanced | Plans how a phase is verified. It traces every path through the functions the phase changed (branches, early returns, error paths, boundaries), the system flows that reach them (from a route, a CLI command, a screen, a job, or a consumer of a changed contract), and the existing tests that cover them, and gives each check a test level from the project's test types. `write-test` turns each path and flow into one test. |
 | `write-test` | Test | balanced | Verifies the phase: writes unit, integration, and end-to-end tests at the levels the analyzer assigned, following the project's test skills, then runs them and the existing suites the analyzer listed as regression. It writes only test code. |
@@ -200,7 +200,12 @@ prompt, and where the engine makes decisions the agent should not make for itsel
 - A rerun after an interruption gets a task note telling the agent to continue from its progress log rather
   than start over.
 - A rescue after a `stuck` result gets the verbatim diagnostic plus the fact the user supplied, so it is
-  never a plain retry.
+  never a plain retry. After an implementer the user sent to fix the cause (Rule O8), the fact is that
+  implementer's summary, report, and changed files.
+- An implementer sent to a stuck run gets `No plan:` and an `Unblock:` line with the stuck run's diagnostic,
+  need, and the user's instructions, plus the phase file under `Context files:`. Its report is
+  `ostra-implementer-unblock-phase-<N>-<round>.md`, so it never overwrites the stuck run's report or progress
+  log.
 
 The factory then assembles the full execution: the rendered system prompt for the chosen executor, the first
 message (spawn block plus repo brief), the parameters as JSON for the event log, the report path, and the

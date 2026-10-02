@@ -25,7 +25,11 @@ function textField(p: ChoicePayload): TextField | null {
         hint: "Optional. It is added after the findings the fix agent receives.",
       };
     case "stuck":
-      return { label: "The missing fact", hint: "State it plainly. It is quoted to the agent verbatim.", rows: 3 };
+      return {
+        label: "The missing fact, or what to fix",
+        hint: "A fact is quoted to the agent verbatim. To send an implementer, say what it should fix, or leave this empty to fix what the diagnostic and the need name.",
+        rows: 3,
+      };
     case "phase_blocked":
       return {
         label: "Instructions for the retry",

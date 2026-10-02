@@ -269,6 +269,15 @@ fn purpose_summary(p: &ExecPurpose) -> String {
     match p {
         ExecPurpose::Explore { task } => format!("explore#{task}"),
         ExecPurpose::Advise { project, round, .. } => format!("advise {project} #{round}"),
+        ExecPurpose::Unblock {
+            phase,
+            tests,
+            round,
+            ..
+        } => format!(
+            "unblock phase {phase}{} #{round}",
+            if *tests { " tests" } else { "" }
+        ),
         ExecPurpose::Consult { .. } => "consult".into(),
         ExecPurpose::Spec { round } => format!("spec#{round}"),
         ExecPurpose::FactCheck { target, pass } => format!("fact-check-{}#{pass}", target.as_str()),
@@ -1223,6 +1232,60 @@ impl<'a> Planner<'a> {
                     },
                 ))));
             }
+            LoopNext::RescueFix { fixer: Some(_), .. } => {}
+            LoopNext::RescueFix {
+                exec,
+                stuck,
+                instructions,
+                fixer: None,
+            } => {
+                // Rule O8: the user sent an implementer to fix what stopped the stuck run.
+                let round = s
+                    .executions
+                    .values()
+                    .filter(|e| matches!(&e.purpose, ExecPurpose::Unblock { execution, .. } if execution == exec))
+                    .count() as u32
+                    + 1;
+                let agent = s.executions.get(exec).map(|r| r.agent);
+                let unblock = format!(
+                    "The {} run of phase {phase} ({} loop) stopped with STUCK and waits for this fix. Its diagnostic, verbatim:\n{}\nIt needs: {}\n{}",
+                    agent.map(|a| a.as_str()).unwrap_or("implementer"),
+                    if tests { "test" } else { "build" },
+                    stuck.diagnostic,
+                    stuck.need,
+                    match instructions {
+                        Some(i) => format!("The user's instructions: {i}"),
+                        None =>
+                            "The user gave no instructions: fix the cause the diagnostic and the need name."
+                                .into(),
+                    }
+                );
+                let phase_str = if tests {
+                    format!("{phase}-tests")
+                } else {
+                    phase.to_string()
+                };
+                let inputs = SpawnInputs {
+                    phase: Some(p.info.clone()),
+                    instructions: Some(unblock),
+                    report_file: Some(dir.join(report::unblock(&phase_str, round))),
+                    context_files: p.info.file.iter().cloned().collect(),
+                    user_notes: s.notes_for(NoteStage::Implement),
+                    ..Default::default()
+                };
+                self.spawn(
+                    AgentName::Implementer,
+                    ExecPurpose::Unblock {
+                        phase,
+                        tests,
+                        execution: exec.clone(),
+                        round,
+                    },
+                    &project,
+                    dir,
+                    inputs,
+                );
+            }
             LoopNext::Work { kind, instructions } => {
                 self.loop_work(p, tests, *kind, instructions.clone())
             }
@@ -1291,7 +1354,7 @@ impl<'a> Planner<'a> {
                     .unwrap_or(AgentName::Implementer);
                 self.gate(
                     format!("Phase {phase} is stuck"),
-                    "The agent hit its retry ceiling on the same failure and needs a fact only you can give. State the missing fact, or leave the phase blocked.",
+                    "The agent hit its retry ceiling on the same failure. State the missing fact, send an implementer to fix the cause so the agent can continue, or leave the phase blocked.",
                     GatePayload::Stuck {
                         execution: exec.clone(),
                         agent,

@@ -132,6 +132,7 @@ export const CHOICES: Record<ChoiceGateKind, ChoiceOption[]> = {
       text: "required",
       missing: "Write the missing fact first. The agent re-runs with it quoted verbatim.",
     },
+    { option: "fix", label: "Send an implementer to fix it", variant: "default", text: "optional" },
     { option: "block", label: "Block this work", variant: "default", text: "none" },
   ],
   phase_blocked: [

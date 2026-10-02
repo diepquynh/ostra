@@ -170,10 +170,27 @@ impl SpawnFactory for AgentsFactory {
                 findings: i.findings.clone(),
                 master_plan: i.target.clone(),
             }),
+            // Rule O8: an implementer the user sent to a stuck run fixes only what stopped it.
+            AgentName::Implementer if matches!(req.purpose, ExecPurpose::Unblock { .. }) => {
+                Box::new(ImplementerParams {
+                    common,
+                    report_file: required(i.report_file.clone(), "report file")?,
+                    work: WorkSource::NoPlan(
+                        "A fix for another run of this phase that is stuck. The Unblock line says what to fix.".into(),
+                    ),
+                    unblock: Some(i.instructions.clone().ok_or("missing unblock")?),
+                    extra: Extras {
+                        context_files: i.context_files.clone(),
+                        user_notes: i.user_notes.clone(),
+                        ..Default::default()
+                    },
+                })
+            }
             AgentName::Implementer => Box::new(ImplementerParams {
                 common,
                 report_file: required(i.report_file.clone(), "report file")?,
                 work: work_source(i, s),
+                unblock: None,
                 extra: Extras {
                     // Rule O2: the phase's project does not exist yet.
                     new_project: s.project_to_create(&req.project).map(|folder| {

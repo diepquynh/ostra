@@ -62,6 +62,25 @@ project exists. Do this and nothing else:
 {{tool_submit}} with `status: stuck` and a `stuck` object whose `need` names the refusal or the error, because
 no other project can hold this phase's code.
 
+## Unblock: fix what stops a stuck run
+
+An `Unblock:` line means another run of this phase stopped with STUCK and the user sent you to fix the cause.
+The line quotes that run's diagnostic, what it needs, and the user's instructions. The stuck run continues the
+phase after you finish, so do only the fix:
+
+1. Fix the cause the `Unblock:` line names, following the user's instructions when given. It may be code (a
+   missing module, a broken build file), generated files, or the environment inside `Repo root:` (a dependency,
+   a config value). Do not implement the phase's steps, because the stuck run does them and would find its work
+   changed under it.
+2. Read the `Context files:` phase file only to understand what the stuck run is building.
+3. Keep your progress log at your `Report file:` path with `.md` replaced by `-progress.md`. Never read or write
+   the phase's own progress log, because the stuck run resumes from it.
+4. Verify with the brief's `build` command, or the command the diagnostic shows failing, that the failure is
+   gone.
+5. Write the change report (Step 7) and submit (Step 8): `status: ok` when the failure is gone, with every file
+   you changed in `changed_files` and a `summary` the stuck run reads to continue. Submit `status: stuck` when
+   you cannot fix it, with a `need` the user can act on.
+
 ## Escalation Protocol: When You Are Stuck
 
 If stuck, STOP and escalate. Retrying wastes tokens, and the orchestrator can supply the fact you are missing.

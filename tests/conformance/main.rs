@@ -2072,6 +2072,155 @@ fn o7_a_stuck_test_run_shows_its_advisor_on_the_test_card() {
     );
 }
 
+// ------------------------------------------------------------------------------------------
+// O8: the user can send an implementer to fix what stopped a stuck run, which then continues.
+// ------------------------------------------------------------------------------------------
+
+fn stuck_gate(h: &mut H, prefix: &str) -> (ExecutionId, GateId) {
+    let (id, _) = h.start(prefix);
+    h.finish(
+        &id,
+        ExecutionStatus::Ok,
+        Some(json!({"status": "stuck", "report_path": "/r", "changed_files": [], "summary": "s",
+                     "stuck": {"diagnostic": "error: cannot find module 'orders-client'", "need": "the generated client package"}})),
+    );
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "gate", "reason": "r"}),
+    );
+    let g = h.open_gate("stuck");
+    (id, g)
+}
+
+fn fix(text: Option<&str>) -> GateAnswer {
+    GateAnswer::Choice {
+        option: "fix".into(),
+        text: text.map(String::from),
+    }
+}
+
+#[test]
+fn o8_a_fix_sends_an_implementer_then_the_stuck_run_continues() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (stuck, g) = stuck_gate(&mut h, "spawn implementer");
+    h.answer(&g, fix(Some("Run the client generator first.")));
+    assert_eq!(h.summaries(), vec!["spawn implementer unblock phase 1 #1"]);
+    let (f, req) = h.start("spawn implementer unblock");
+    assert!(matches!(&req.purpose, ExecPurpose::Unblock { execution, .. } if *execution == stuck));
+    let task = req.inputs.instructions.unwrap();
+    assert!(task.contains("orders-client") && task.contains("Run the client generator first."));
+    assert!(
+        req.inputs
+            .report_file
+            .unwrap()
+            .ends_with("ostra-implementer-unblock-phase-1-1.md")
+    );
+    assert_eq!(
+        h.summaries(),
+        vec![] as Vec<String>,
+        "nothing starts while the fix runs"
+    );
+    let card = ostra_engine::view::stages(&h.state())
+        .into_iter()
+        .find(|c| c.stage == StageKind::Implement)
+        .unwrap();
+    assert!(card.executions.contains(&f));
+    h.finish(
+        &f,
+        ExecutionStatus::Ok,
+        Some(json!({"status": "ok", "report_path": "/u", "changed_files": ["gen/client.ts"], "summary": "Generated the client."})),
+    );
+    let rescue = h.spawn_step("spawn implementer phase 1 rescue");
+    assert_eq!(
+        rescue.continues,
+        Some(stuck),
+        "the rescue continues the stuck run, not the fix"
+    );
+    let ctx = rescue.inputs.instructions.unwrap();
+    assert!(
+        ctx.contains("orders-client")
+            && ctx.contains("Generated the client.")
+            && ctx.contains("gen/client.ts")
+    );
+    assert!(
+        h.state().phases[&1]
+            .impl_loop
+            .changed
+            .contains("gen/client.ts")
+    );
+}
+
+#[test]
+fn o8_a_fix_answer_skips_the_route_judge() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (_, g) = stuck_gate(&mut h, "spawn implementer");
+    let st = h.state();
+    let payload = &st.gates[&g].payload;
+    assert!(!ostra_engine::state::answer_needs_route(
+        payload,
+        &fix(Some("x"))
+    ));
+    h.answer(&g, fix(None));
+    let req = h.spawn_step("spawn implementer unblock");
+    assert!(
+        req.inputs
+            .instructions
+            .unwrap()
+            .contains("gave no instructions")
+    );
+}
+
+#[test]
+fn o8_a_fix_that_does_not_finish_reopens_the_stuck_gate() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (_, g) = stuck_gate(&mut h, "spawn implementer");
+    h.answer(&g, fix(Some("x")));
+    h.run(
+        "spawn implementer unblock",
+        json!({"status": "stuck", "report_path": "/u", "changed_files": [], "summary": "STUCK: the generator needs a token."}),
+    );
+    let steps = h.steps();
+    let Some(Step::OpenGate {
+        payload: GatePayload::Stuck { need, .. },
+        ..
+    }) = steps.first()
+    else {
+        panic!("{:?}", h.summaries())
+    };
+    assert!(need.contains("the generated client package") && need.contains("needs a token"));
+}
+
+#[test]
+fn o8_an_interrupted_fix_runs_again() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (_, g) = stuck_gate(&mut h, "spawn implementer");
+    h.answer(&g, fix(Some("x")));
+    let (f, _) = h.start("spawn implementer unblock");
+    h.finish(&f, ExecutionStatus::Interrupted, None);
+    assert_eq!(h.summaries(), vec!["spawn implementer unblock phase 1 #2"]);
+}
+
+#[test]
+fn o8_yolo_always_sends_a_fix() {
+    use ostra_engine::judge_input::{YoloPlan, yolo_plan};
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    let (_, mut g) = stuck_gate(&mut h, "spawn implementer");
+    for _ in 0..4 {
+        let st = h.state();
+        assert!(matches!(
+            yolo_plan(&st, &g),
+            Some(YoloPlan::Fixed { answer: GateAnswer::Choice { option, text: None }, .. }) if option == "fix"
+        ));
+        h.answer(&g, fix(None));
+        h.run(
+            "spawn implementer unblock",
+            json!({"status": "ok", "report_path": "/u", "changed_files": [], "summary": "fixed"}),
+        );
+        g = stuck_gate(&mut h, "spawn implementer phase 1 rescue").1;
+    }
+}
+
 #[test]
 fn stuck_rescue_by_explore() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
@@ -2540,8 +2689,7 @@ fn b9_a_book_without_these_areas_gets_every_area() {
                 tests: false,
                 docs: true,
             }],
-        },
-    );
+        });
     plan_docs_with(&mut h, "p", vec![area("core"), area("web")], Some(vec![]), vec!["web".into()]);
     assert_eq!(
         h.summaries(),
@@ -2585,8 +2733,7 @@ fn b4_an_abandoned_part_leaves_one_project_and_no_architecture() {
         GateAnswer::Choice {
             option: "abandon".into(),
             text: None,
-        },
-    );
+        });
     assert_eq!(h.summaries(), vec!["write-book a"]);
 }
 
@@ -2716,9 +2863,7 @@ fn spend(h: &mut H, prefix: &str, submit: Value, cost: f64) {
 
 #[test]
 fn budget_pauses_spawns_until_raised() {
-    let mut h = H::new(
-        &["p"],
-        SessionOptions {
+    let mut h = H::new(&["p"], SessionOptions {
             yolo: true,
             track: Some(Track::Full),
             ..Default::default()
@@ -2750,7 +2895,8 @@ fn budget_stop_ends_the_session() {
     let mut h = H::new(&["p"], SessionOptions {
             track: Some(Track::Full),
             ..Default::default()
-        });
+        },
+    );
     h.ctx.budget_usd = Some(1.0);
     h.classify("IMPLEMENT", &["p"]);
     spend(&mut h, "spawn explore", explore_submit(0, &[]), 2.0);
@@ -2768,10 +2914,13 @@ fn budget_stop_ends_the_session() {
 
 #[test]
 fn no_budget_means_no_limit() {
-    let mut h = H::new(&["p"], SessionOptions {
+    let mut h = H::new(
+        &["p"],
+        SessionOptions {
             track: Some(Track::Full),
             ..Default::default()
-        });
+        },
+    );
     h.classify("IMPLEMENT", &["p"]);
     spend(&mut h, "spawn explore", explore_submit(0, &[]), 500.0);
     assert_eq!(h.summaries(), vec!["spawn generate-spec spec#1"]);
@@ -3216,11 +3365,7 @@ fn j1_discarded_and_remembered_answers_do_not_reach_the_spec() {
         vec!["judge stakes"],
         "a bare approval is not routed"
     );
-    h.decide(
-        JudgeKind::Stakes,
-        None,
-        json!({"stakes": "low", "reason": "r"}),
-    );
+    h.decide(JudgeKind::Stakes, None, json!({"stakes": "low", "reason": "r"}));
     let imp = h.spawn_step("spawn implementer phase 1 initial");
     assert_eq!(
         imp.inputs.user_notes,
@@ -3324,11 +3469,7 @@ fn j1_a_discarded_stuck_answer_leaves_the_phase_blocked() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (id, _) = h.start("spawn implementer");
     h.finish(&id, ExecutionStatus::Ok, Some(json!({"status": "stuck", "report_path": "/r", "summary": "s", "stuck": {"diagnostic": "d", "need": "n"}})));
-    h.decide(
-        JudgeKind::Rescue,
-        Some(id.as_str()),
-        json!({"action": "gate", "reason": "r"}),
-    );
+    h.decide(JudgeKind::Rescue, Some(id.as_str()), json!({"action": "gate", "reason": "r"}));
     let g = h.open_gate("stuck");
     h.answer(
         &g,
@@ -3473,7 +3614,11 @@ fn j1_a_later_answer_forgets_a_kept_note() {
     let st = h.state();
     assert!(st.user_notes[0].forgotten, "the note stays in the log");
     assert_eq!(st.user_notes[1].id, "N2");
-    h.decide(JudgeKind::Stakes, None, json!({"stakes": "low", "reason": "r"}));
+    h.decide(
+        JudgeKind::Stakes,
+        None,
+        json!({"stakes": "low", "reason": "r"}),
+    );
     let imp = h.spawn_step("spawn implementer phase 1 initial");
     assert_eq!(imp.inputs.user_notes, vec!["Use sqlx.".to_string()]);
 }
@@ -3483,7 +3628,11 @@ fn j1_an_answer_split_into_parts_keeps_every_note() {
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (id, _) = h.start("spawn implementer");
     h.finish(&id, ExecutionStatus::Ok, Some(json!({"status": "stuck", "report_path": "/r", "summary": "s", "stuck": {"diagnostic": "d", "need": "the variable"}})));
-    h.decide(JudgeKind::Rescue, Some(id.as_str()), json!({"action": "gate", "reason": "r"}));
+    h.decide(
+        JudgeKind::Rescue,
+        Some(id.as_str()),
+        json!({"action": "gate", "reason": "r"}),
+    );
     let g = h.open_gate("stuck");
     h.answer(
         &g,

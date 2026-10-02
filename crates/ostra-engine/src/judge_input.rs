@@ -983,17 +983,11 @@ pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
                 "required": ["kind", "approved"]
             }),
         },
-        GatePayload::Stuck { .. } => YoloPlan::Judge {
-            schema: json!({
-                "type": "object",
-                "properties": {
-                    "kind": {"const": "choice"},
-                    "option": {"type": "string", "enum": ["fact", "block"]},
-                    "text": {"type": ["string", "null"], "description": "The missing fact, when option is fact. Never guess a fact only the user has."}
-                },
-                "required": ["kind", "option"]
-            }),
-        },
+        // Rule O8: under YOLO every stuck run gets an implementer sent to fix its cause.
+        GatePayload::Stuck { .. } => choice(
+            "fix",
+            "Under YOLO an implementer is sent to fix what stopped the agent, so the work continues instead of waiting for you.",
+        ),
         GatePayload::ImplementationReview { .. } => choice(
             "done",
             "Under YOLO the implementation is accepted as built, because only the user can say what they want changed.",
@@ -1108,24 +1102,6 @@ pub fn yolo_answer_from_judge(
                 return Err("a rejection needs feedback saying what to change".into());
             }
             Ok(GateAnswer::Approval { approved, feedback })
-        }
-        GatePayload::Stuck { .. } => {
-            let option = answer
-                .get("option")
-                .and_then(|v| v.as_str())
-                .unwrap_or("block")
-                .to_string();
-            let text = answer
-                .get("text")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .filter(|t| !t.trim().is_empty());
-            let option = if option == "fact" && text.is_none() {
-                "block".into()
-            } else {
-                option
-            };
-            Ok(GateAnswer::Choice { option, text })
         }
         _ => Err("this gate is answered without the judge".into()),
     }

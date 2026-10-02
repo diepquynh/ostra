@@ -145,7 +145,7 @@ describe("answer shapes per gate kind", () => {
     expect(options).toEqual({
       fact_check_recurring: ["another-round", "stop"],
       review_cap: ["another-pass", "stop"],
-      stuck: ["fact", "block"],
+      stuck: ["fact", "fix", "block"],
       phase_blocked: ["retry", "leave"],
       harness_failure: ["retry", "native"],
       execution_failed: ["retry", "abandon"],
@@ -190,6 +190,10 @@ describe("answer shapes per gate kind", () => {
       answer: { kind: "choice", option: "fact", text: "Use SDK v2.8" },
     });
     expect(choiceAnswer("stuck", "block", "")).toEqual({ answer: { kind: "choice", option: "block", text: null } });
+    expect(choiceAnswer("stuck", "fix", "")).toEqual({ answer: { kind: "choice", option: "fix", text: null } });
+    expect(choiceAnswer("stuck", "fix", " Generate the client ")).toEqual({
+      answer: { kind: "choice", option: "fix", text: "Generate the client" },
+    });
   });
 
   it("accepts an empty or positive dollar amount when raising the budget", () => {

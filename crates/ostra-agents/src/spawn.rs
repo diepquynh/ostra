@@ -278,6 +278,8 @@ pub struct ImplementerParams {
     pub common: Common,
     pub report_file: PathBuf,
     pub work: WorkSource,
+    /// Rule O8: what keeps a stuck run of the phase from finishing. This run fixes only that.
+    pub unblock: Option<String>,
     pub extra: Extras,
 }
 
@@ -494,6 +496,7 @@ impl SpawnParams for ImplementerParams {
         let mut b = Block::new();
         b.path("Report file", &self.report_file);
         b.work(&self.work);
+        b.opt("Unblock", self.unblock.as_deref());
         b.common(&self.common);
         b.extras(&self.extra);
         b.finish()

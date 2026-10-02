@@ -383,6 +383,14 @@ pub enum LoopNext {
         exec: ExecutionId,
         stuck: StuckInfo,
     },
+    /// Rule O8: an implementer the user sent fixes what keeps the stuck run `exec` from finishing.
+    RescueFix {
+        exec: ExecutionId,
+        stuck: StuckInfo,
+        /// The user's words, or none to work from the diagnostic alone.
+        instructions: Option<String>,
+        fixer: Option<ExecutionId>,
+    },
     /// A gate answer with free text waits for the Route answer judge (Rule J1).
     AwaitRoute {
         gate: GateId,
@@ -1102,7 +1110,7 @@ fn purpose_loop(purpose: &ExecPurpose) -> Option<(u32, bool)> {
 
 pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
     match purpose {
-        ExecPurpose::Advise { .. } => StageKind::Rescue,
+        ExecPurpose::Advise { .. } | ExecPurpose::Unblock { .. } => StageKind::Rescue,
         ExecPurpose::Consult { .. } => StageKind::Handoff,
         ExecPurpose::Explore { .. } => StageKind::Explore,
         ExecPurpose::Spec { .. } => StageKind::Spec,
@@ -3297,6 +3305,13 @@ impl SessionState {
                     i.advising = Some(id.clone());
                 }
             }
+            ExecPurpose::Unblock { execution, .. } => {
+                if let Some(l) = self.fixing_loop_mut(execution)
+                    && let LoopNext::RescueFix { fixer, .. } = &mut l.next
+                {
+                    *fixer = Some(id.clone());
+                }
+            }
             ExecPurpose::PromptGen { handoff_for: None } if !resumed => self.prompt_gens += 1,
             _ => {}
         }
@@ -3479,6 +3494,9 @@ impl SessionState {
             }
             ExecPurpose::Init { mode, item } => {
                 self.init_finished(&rec.id, *mode, item.clone(), status, result, error)
+            }
+            ExecPurpose::Unblock { execution, .. } => {
+                self.loop_fix_finished(execution, &rec.id, status, result, error)
             }
             ExecPurpose::Advise {
                 project, execution, ..
@@ -4091,8 +4109,18 @@ impl SessionState {
                     && let Some(l) = self.loop_mut(key)
                 {
                     l.gate = None;
-                    if let LoopNext::RescueGate { stuck, .. } = l.next.clone() {
+                    if let LoopNext::RescueGate { exec, stuck } = l.next.clone() {
                         match choice {
+                            // Rule O8: the user's words are the implementer's task, not a fact
+                            // for the stuck agent, so they skip the Route answer judge.
+                            Some(("fix", text)) => {
+                                l.next = LoopNext::RescueFix {
+                                    exec,
+                                    stuck,
+                                    instructions: text,
+                                    fixer: None,
+                                };
+                            }
                             Some(("fact", Some(text))) => {
                                 l.next = LoopNext::AwaitRoute {
                                     gate: id.clone(),
@@ -4563,6 +4591,84 @@ impl SessionState {
         let key = self.executions.get(exec).and_then(|r| r.loop_key)?;
         self.loop_mut(key)
             .filter(|l| matches!(&l.next, LoopNext::RescueAdvise { exec: e, .. } if e == exec))
+    }
+
+    /// The work loop whose stuck run `exec` an implementer the user sent is fixing (Rule O8).
+    fn fixing_loop_mut(&mut self, exec: &ExecutionId) -> Option<&mut WorkLoop> {
+        let key = self.executions.get(exec).and_then(|r| r.loop_key)?;
+        self.loop_mut(key)
+            .filter(|l| matches!(&l.next, LoopNext::RescueFix { exec: e, .. } if e == exec))
+    }
+
+    /// Rule O8: a fix that finished sends the stuck run back to work with what changed; one that
+    /// did not reopens the stuck gate with the reason.
+    fn loop_fix_finished(
+        &mut self,
+        stuck_exec: &ExecutionId,
+        fixer_exec: &ExecutionId,
+        status: ExecutionStatus,
+        result: &ExecutionResult,
+        error: String,
+    ) {
+        let parsed: Option<ImplementerSubmit> = parse(&result.submit);
+        let Some(l) = self.fixing_loop_mut(stuck_exec) else {
+            return;
+        };
+        let LoopNext::RescueFix {
+            exec,
+            stuck,
+            instructions,
+            fixer,
+        } = l.next.clone()
+        else {
+            return;
+        };
+        if fixer.as_ref() != Some(fixer_exec) {
+            return;
+        }
+        if status == ExecutionStatus::Interrupted {
+            l.next = LoopNext::RescueFix {
+                exec,
+                stuck,
+                instructions,
+                fixer: None,
+            };
+            return;
+        }
+        l.next = match parsed {
+            Some(f) if status == ExecutionStatus::Ok && f.status == SubmitStatus::Ok => {
+                l.changed.extend(f.changed_files.iter().cloned());
+                let asked = instructions
+                    .map(|i| format!("The user asked it to: {i}\n"))
+                    .unwrap_or_default();
+                let files = if f.changed_files.is_empty() {
+                    "none".to_string()
+                } else {
+                    f.changed_files.join(", ")
+                };
+                let fact = format!(
+                    "The user sent another implementer to fix what stopped you, and it finished.\n{asked}Its summary: {}\nFiles it changed: {files}\nIts report: {}\nContinue your work from where you stopped.",
+                    f.summary, f.report_path
+                );
+                LoopNext::Work {
+                    kind: WorkKind::Rescue,
+                    instructions: Some(rescue_context(&stuck, &fact)),
+                }
+            }
+            other => {
+                let why = match other {
+                    Some(f) => format!("The implementer you sent did not fix it: {}", f.summary),
+                    None => format!("The implementer you sent did not finish: {error}"),
+                };
+                LoopNext::RescueGate {
+                    exec,
+                    stuck: StuckInfo {
+                        diagnostic: stuck.diagnostic,
+                        need: format!("{}\n\n{why}", stuck.need),
+                    },
+                }
+            }
+        };
     }
 
     fn loop_advice_finished(

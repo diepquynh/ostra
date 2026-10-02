@@ -220,16 +220,22 @@ fn card(stage: StageKind, label: String, status: StageStatus) -> StageCard {
 /// The work loop whose stuck run the advisor execution `exec` looks at (Rule O7).
 fn advised_loop(s: &SessionState, exec: &ExecutionId) -> Option<(u32, bool)> {
     match s.executions.get(exec).map(|e| &e.purpose) {
-        Some(ostra_core::event::ExecPurpose::Advise { execution, .. }) => {
-            s.executions.get(execution).and_then(|r| r.loop_key)
-        }
+        Some(
+            ostra_core::event::ExecPurpose::Advise { execution, .. }
+            | ostra_core::event::ExecPurpose::Unblock { execution, .. },
+        ) => s.executions.get(execution).and_then(|r| r.loop_key),
         _ => None,
     }
 }
 
 fn advising_detail(l: &WorkLoop) -> Option<String> {
-    matches!(l.next, LoopNext::RescueAdvise { .. })
-        .then(|| "The advisor is looking at the stuck run.".into())
+    match l.next {
+        LoopNext::RescueAdvise { .. } => Some("The advisor is looking at the stuck run.".into()),
+        LoopNext::RescueFix { .. } => {
+            Some("An implementer is fixing what stopped the stuck run.".into())
+        }
+        _ => None,
+    }
 }
 
 fn loop_status(l: &WorkLoop) -> StageStatus {

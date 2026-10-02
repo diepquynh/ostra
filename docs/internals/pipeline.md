@@ -440,6 +440,14 @@ The build loop has three exits besides success.
   Or it submits `escalate`, and the stuck gate opens with the advisor's reason under the need, so the user
   gets a diagnosis instead of a raw error. A loop gets at most two advisor rounds (`MAX_ADVICE`); after that
   an `advise` decision opens the gate. The advisor shows on the phase's card, or the tests card, while it runs.
+- **The user can send an implementer to fix the cause (Rule O8).** At the stuck gate, besides stating a fact or
+  blocking the work, the user can answer `fix`, with or without instructions. Ostra starts a separate implementer
+  run whose only job is the cause the diagnostic names, such as a module to generate or a dependency to add; it
+  keeps its own report and progress log and leaves the phase's steps to the stuck agent. When it submits `ok`,
+  the stuck agent continues its conversation as a rescue, told what changed and which files, and those files
+  join the next review. When it fails, the stuck gate opens again with the reason. The implementer shows on the
+  phase's card, or the tests card, while it runs. Under YOLO every stuck gate is answered `fix`, with no
+  round cap; the session budget is what stops a fix that never works.
 - **HANDOFF.** An agent that needs a prompt or skill written asks for a handoff. The engine runs
   prompt-generation with that request, then resumes the original agent with its resume instructions.
 

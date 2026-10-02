@@ -47,7 +47,7 @@ the LOW findings, and takes an optional change request:
 | `plan_approval` | The plan passed its fact-check | Approve, or reject with what to change |
 | `fact_check_recurring` | The spec or plan fact-check failed three times in a row | `another-round` (optionally with guidance) or `stop` |
 | `review_cap` | A review loop used its passes with HIGH or MEDIUM findings open | `another-pass` (optionally with guidance) or leave it blocked |
-| `stuck` | The Rescue judge decided only the user has the missing fact, or the advisor escalated an environment failure (Rule O7) | `fact` with the fact as text, or `block` |
+| `stuck` | The Rescue judge decided only the user has the missing fact, or the advisor escalated an environment failure (Rule O7) | `fact` with the fact as text, `fix` with optional instructions for an implementer (Rule O8), or `block` |
 | `phase_blocked` | A phase ended blocked | `retry` (optionally with instructions) or `leave` |
 | `implementation_review` | Every phase of an `IMPLEMENT` session finished and nothing runs | `done`, or `feedback` with what to change as text |
 | `closing_gate` | A project's phases are done and, for `IMPLEMENT`, the implementation was accepted | Tests yes or no, docs yes or no, per project |
@@ -106,7 +106,14 @@ its Guidance text and has no dismiss button:
 
 A stuck agent's diagnostic and need are shown. A `fact` answer goes to the Route-answer judge first, because a
 stated fact might be a requirement change rather than a detail, and because "I don't know, look it up" is a
-request for research rather than a fact. Any other answer, or a fact the judge discards, blocks the phase.
+request for research rather than a fact. A `block` answer, or a fact the judge discards, blocks the phase.
+
+A `fix` answer sends an implementer to remove the cause (Rule O8). The answer's text, when given, is that
+implementer's task and reaches it as written, so it skips the Route-answer judge. The implementer runs with an
+`Unblock:` line quoting the stuck run's diagnostic, its need, and the user's words, and it fixes only that, so the
+stuck run finds its own work as it left it. When the implementer submits `ok`, the stuck agent continues its
+conversation as a rescue, told what the implementer changed, and the files it changed join the loop's next
+review. When it does not finish, the stuck gate opens again with its reason under the need.
 
 A stuck gate names the execution and asks for the missing fact. Above it is a phase blocked gate for another phase:
 
@@ -194,7 +201,7 @@ stated reason, a call to the YOLO-answer judge with a JSON schema for that gate'
 | --- | --- |
 | `open_questions` | YOLO judge. Takes each question's recommended option unless the research gives a specific reason for another. |
 | `spec_approval`, `plan_approval` | YOLO judge. Approves only with a fact-check PASS; rejects with feedback when the artifact plainly omits part of the request. |
-| `stuck` | YOLO judge. States a fact only if the context supplies one, else leaves the phase blocked. |
+| `stuck` | Fixed: `fix`, so an implementer is sent to remove the cause and the stuck agent continues (Rule O8). There is no round cap, because a YOLO user chose to have Ostra fix as much as it can; the session budget stops it, since YOLO never answers a budget gate. |
 | `closing_gate` | Fixed: no tests and no docs, unless the request already asked for them (Rules T2, T3). |
 | `fact_check_recurring` | Fixed: `another-round` while fewer than six FAILs in a row, then `stop`. |
 | `review_cap` | Fixed: `another-pass`. In practice the loop rarely gets here, because the YOLO review budget is ten passes and then the Resolve judge takes over. |

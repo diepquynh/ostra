@@ -223,6 +223,14 @@ pub enum ExecPurpose {
         execution: ExecutionId,
         round: u32,
     },
+    /// Rule O8: the `round`-th implementer the user sent to fix what keeps stuck run `execution` of
+    /// phase `phase`'s build or test loop from finishing.
+    Unblock {
+        phase: u32,
+        tests: bool,
+        execution: ExecutionId,
+        round: u32,
+    },
     /// Rule H3: subagent `subagent` answers question `ask` in a run that continues its conversation.
     Consult {
         subagent: ExecutionId,
@@ -279,6 +287,7 @@ impl ExecPurpose {
             ExecPurpose::QuickAnswer => "Answer".into(),
             ExecPurpose::Inspect { .. } => "Read-only session".into(),
             ExecPurpose::Advise { project, .. } => format!("Advice for {project}"),
+            ExecPurpose::Unblock { phase, .. } => format!("Phase {phase} · unblock"),
             ExecPurpose::Consult { .. } => "Answer".into(),
             ExecPurpose::Init { mode, item: i } => match mode {
                 InitializerMode::Detect => "Detect the stack".into(),

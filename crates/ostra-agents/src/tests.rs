@@ -414,6 +414,7 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         common: common(),
         report_file: "/ws/s/backend/ostra-implementer-phase-1.md".into(),
         work: WorkSource::PhaseFile("/ws/s/ostra-plan-1-phase-1-data.md".into()),
+        unblock: None,
         extra: Extras::default(),
     };
     assert_eq!(

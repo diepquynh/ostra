@@ -384,6 +384,10 @@ pub mod report {
     pub fn implementer(phase: &str) -> String {
         format!("ostra-implementer-phase-{phase}.md")
     }
+    /// Rule O8: the change report of the `round`-th implementer sent to a stuck run of the loop.
+    pub fn unblock(phase: &str, round: u32) -> String {
+        format!("ostra-implementer-unblock-phase-{phase}-{round}.md")
+    }
     pub fn implementer_progress(phase: &str) -> String {
         format!("ostra-implementer-progress-phase-{phase}.md")
     }
