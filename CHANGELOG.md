@@ -2,6 +2,17 @@
 
 Every release of Ostra, written from its commit titles by `./release.sh`.
 
+## 0.1.1 (2026-10-02)
+
+### Fixes
+
+- mcp: Stop a server's processes when it is turned off (73fc262)
+
+### Build and chores
+
+- Pass clippy and rustfmt on the pinned toolchain (12a0f17)
+- Upgrade to Rust 1.99 (2b51fde)
+
 ## 0.1.0 (2026-10-02)
 
 ### Features
