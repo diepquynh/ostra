@@ -19,9 +19,11 @@ functions in [HANDOVER section 10.10](../../HANDOVER.md#1010-plugins).
 ## Default workflows
 
 No workflow is defined in code (Rule WF9). Ostra ships one default workflow per base pipeline as a TOML file
-in [`assets/workflows/`](../../assets/workflows/), embedded in the binary through `DEFAULT_WORKFLOWS` in
-[`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs). Each lists its built-in stages
-in a chain, each waiting for the one before it:
+in [`assets/workflows/`](../../assets/workflows/). The standard plugin `ostra`
+([`crates/ostra-default-plugin/src/lib.rs`](../../crates/ostra-default-plugin/src/lib.rs),
+[Plugins](plugins.md#the-standard-plugin)) embeds them in the binary and offers them as its manifest's workflows,
+and `WorkflowSet::add_plugin` files them as the set's `defaults`. Each lists its built-in stages in a chain, each
+waiting for the one before it:
 
 | Workflow | Stages |
 | --- | --- |
@@ -46,9 +48,11 @@ id = "spec"
 uses = "ostra:spec"
 ```
 
-The order of built-in stages each base needs (Rule WF2) is read from its default too: `builtin_chain(base)`
-returns the `uses` stages of the default file in order, and validation checks every workflow of that base
-against it. `WorkflowDef::builtin(base)` resolves the default file.
+The order of built-in stages each base needs (Rule WF2) is read from its default too:
+`WorkflowSet::builtin_chain(base)` returns the `uses` stages of the default file in order, and `resolve` checks
+every workflow of that base against it. `ostra_default_plugin::workflow(base)` resolves the default file. A set
+built without the standard plugin has no defaults, so it resolves no default name and checks no chain; the
+server and the workspace add the plugin to every set they build.
 
 ### Workflow names
 

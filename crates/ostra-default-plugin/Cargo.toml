@@ -1,0 +1,16 @@
+[package]
+name = "ostra-default-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ostra's own plugin `ostra`: the built-in agents and the default workflows, written with ostra-sdk."
+
+[dependencies]
+ostra-core.workspace = true
+ostra-sdk.workspace = true
+async-trait.workspace = true
+rust-embed.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

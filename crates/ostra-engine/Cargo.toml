@@ -10,6 +10,7 @@ ostra-core.workspace = true
 ostra-sandbox.workspace = true
 ostra-store.workspace = true
 ostra-agents.workspace = true
+ostra-default-plugin.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true

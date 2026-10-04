@@ -1407,7 +1407,7 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
 
 /// Rule PL4: the side panel's agent, the standard agent for answers.
 fn quick_agent() -> AgentName {
-    ostra_agents::standard::Standard::default_for(ostra_core::Contract::Answer)
+    ostra_default_plugin::Standard::default_for(ostra_core::Contract::Answer)
         .expect("the standard plugin returns every built-in contract")
 }
 

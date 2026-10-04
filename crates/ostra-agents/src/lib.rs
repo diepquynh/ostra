@@ -5,7 +5,6 @@ pub mod brief;
 pub mod catalog;
 mod mapping;
 pub mod spawn;
-pub mod standard;
 
 use ostra_core::{AgentName, Capability, Effort, ExecutorKind, Tier, WriteScope};
 use rust_embed::RustEmbed;
@@ -114,7 +113,7 @@ fn leak(s: String) -> &'static str {
 
 /// Rule PL4: the built-in agents, as the standard plugin defines them.
 fn load_defs() -> Result<BTreeMap<AgentName, AgentDef>, AgentsError> {
-    standard::Standard::manifest_ref()
+    ostra_default_plugin::Standard::manifest_ref()
         .agents
         .iter()
         .map(|a| {

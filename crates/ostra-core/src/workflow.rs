@@ -323,94 +323,8 @@ pub enum WorkflowChoice {
     Named { name: String },
 }
 
-/// Rule WF9: Ostra's default workflows, one TOML file per base pipeline, shipped in
-/// `assets/workflows/`. A workspace runs its own copy in `.ostra/workflows/` when it has one.
-pub const DEFAULT_WORKFLOWS: [(Category, &str); 9] = [
-    (
-        Category::Research,
-        include_str!("../../../assets/workflows/research.toml"),
-    ),
-    (
-        Category::Spec,
-        include_str!("../../../assets/workflows/spec.toml"),
-    ),
-    (
-        Category::Plan,
-        include_str!("../../../assets/workflows/plan.toml"),
-    ),
-    (
-        Category::Implement,
-        include_str!("../../../assets/workflows/implement.toml"),
-    ),
-    (
-        Category::Verify,
-        include_str!("../../../assets/workflows/verify.toml"),
-    ),
-    (
-        Category::Test,
-        include_str!("../../../assets/workflows/test.toml"),
-    ),
-    (
-        Category::Docs,
-        include_str!("../../../assets/workflows/docs.toml"),
-    ),
-    (
-        Category::Prompt,
-        include_str!("../../../assets/workflows/prompt.toml"),
-    ),
-    (
-        Category::QuickChange,
-        include_str!("../../../assets/workflows/quick-change.toml"),
-    ),
-];
-
 /// The prefix that names Ostra's shipped default over a workspace copy: `extends = "ostra:implement"`.
 pub const DEFAULT_PREFIX: &str = "ostra:";
-
-fn defaults() -> &'static [(Category, WorkflowFile)] {
-    static PARSED: std::sync::OnceLock<Vec<(Category, WorkflowFile)>> = std::sync::OnceLock::new();
-    PARSED.get_or_init(|| {
-        DEFAULT_WORKFLOWS
-            .iter()
-            .map(|(c, text)| {
-                let file: WorkflowFile = toml::from_str(text)
-                    .unwrap_or_else(|e| panic!("assets/workflows/{}.toml: {e}", category_name(*c)));
-                (*c, file)
-            })
-            .collect()
-    })
-}
-
-/// The shipped default workflow file named `name`.
-pub fn default_file(name: &str) -> Option<&'static WorkflowFile> {
-    defaults()
-        .iter()
-        .find(|(c, _)| category_name(*c) == name)
-        .map(|(_, f)| f)
-}
-
-/// The shipped default workflow file's text, as a migration writes it into a workspace.
-pub fn default_text(name: &str) -> Option<&'static str> {
-    DEFAULT_WORKFLOWS
-        .iter()
-        .find(|(c, _)| category_name(*c) == name)
-        .map(|(_, t)| *t)
-}
-
-/// Rule WF2: the built-in stages each base pipeline runs, in order, as its default workflow lists
-/// them.
-pub fn builtin_chain(base: Category) -> Vec<BuiltinStage> {
-    defaults()
-        .iter()
-        .find(|(c, _)| *c == base)
-        .map(|(_, f)| {
-            f.stages
-                .iter()
-                .filter_map(|s| s.uses.as_deref().and_then(BuiltinStage::parse_uses))
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// Category names as a workflow file writes them: `implement`, `quick-change`, or the log's own
 /// `IMPLEMENT`.
@@ -424,13 +338,6 @@ pub fn category_name(c: Category) -> String {
 }
 
 impl WorkflowDef {
-    /// Rule WF9: Ostra's shipped default workflow for a base pipeline.
-    pub fn builtin(base: Category) -> WorkflowDef {
-        WorkflowSet::default()
-            .resolve(&format!("{DEFAULT_PREFIX}{}", category_name(base)))
-            .unwrap_or_else(|e| panic!("the default `{}` workflow: {e}", category_name(base)))
-    }
-
     pub fn stage(&self, id: &str) -> Option<&StageDef> {
         self.stages.iter().find(|s| s.id == id)
     }
@@ -477,9 +384,9 @@ impl WorkflowDef {
         out
     }
 
-    /// Rules WF2 and WF7: the structure every workflow must have. Agent and plugin names are
-    /// checked against the workspace by the caller.
-    pub fn validate(&self) -> Vec<String> {
+    /// Rules WF2 and WF7: the structure every workflow must have, with `chain` the built-in
+    /// stages its base runs. Agent and plugin names are checked against the workspace by the caller.
+    pub fn validate(&self, chain: &[BuiltinStage]) -> Vec<String> {
         let mut out = vec![];
         if self.base == Category::QuickAnswer {
             out.push("Pick another `base`: quick answers run outside workflows.".into());
@@ -556,7 +463,6 @@ impl WorkflowDef {
             ));
         }
         // Rule WF2: built-in stages keep their order, and only some may be left out.
-        let chain = builtin_chain(self.base);
         for s in &self.stages {
             if let Some(b) = s.builtin()
                 && !chain.contains(&b)
@@ -578,7 +484,7 @@ impl WorkflowDef {
                     .map(|s| (*b, s))
             })
             .collect();
-        for b in &chain {
+        for b in chain {
             if !present.iter().any(|(p, _)| p == b) {
                 let ok = b.removable() && !(*b == BuiltinStage::Track && self.track.is_none());
                 if !ok {
@@ -934,6 +840,8 @@ impl WorkflowFile {
 /// Every workflow a workspace can run: the built-in ones, then its own files.
 #[derive(Debug, Clone, Default)]
 pub struct WorkflowSet {
+    /// Rule WF9: Ostra's default workflows, by base name, from the standard plugin's manifest.
+    pub defaults: BTreeMap<String, WorkflowFile>,
     pub files: BTreeMap<String, WorkflowFile>,
     /// Rule WB7: the composite functions in `.ostra/transforms/`.
     pub functions: crate::transform::Functions,
@@ -1024,10 +932,15 @@ impl WorkflowSet {
 
     /// Rule PL6: add the workflows and transform functions of plugin `plugin`, each named
     /// `<plugin>:<name>`.
+    /// The standard plugin's workflows are the defaults of Rule WF9.
     pub fn add_plugin(&mut self, plugin: &str, manifest: &crate::plugin::PluginManifest) {
         for w in &manifest.workflows {
-            self.plugin_files
-                .insert(format!("{plugin}:{}", w.name), w.workflow.clone());
+            if plugin == crate::plugin::STANDARD_PLUGIN {
+                self.defaults.insert(w.name.clone(), w.workflow.clone());
+            } else {
+                self.plugin_files
+                    .insert(format!("{plugin}:{}", w.name), w.workflow.clone());
+            }
         }
         for t in &manifest.transforms {
             self.plugin_transforms.insert(
@@ -1052,6 +965,20 @@ impl WorkflowSet {
                 .collect::<Vec<_>>(),
         );
         v
+    }
+
+    /// Rule WF2: the built-in stages each base pipeline runs, in order, as its default workflow
+    /// lists them.
+    pub fn builtin_chain(&self, base: Category) -> Vec<BuiltinStage> {
+        self.defaults
+            .get(&category_name(base))
+            .map(|f| {
+                f.stages
+                    .iter()
+                    .filter_map(|s| s.uses.as_deref().and_then(BuiltinStage::parse_uses))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Rule WF9: the default workflows the workspace has no copy of.
@@ -1097,10 +1024,10 @@ impl WorkflowSet {
         // always names the default.
         let shipped = name.strip_prefix(DEFAULT_PREFIX);
         let file = match shipped {
-            Some(n) => default_file(n),
+            Some(n) => self.defaults.get(n),
             // Rule PL6: `<plugin>:<name>` is a workflow a plugin builds.
             None if name.contains(':') => self.plugin_files.get(name),
-            None => self.files.get(name).or_else(|| default_file(name)),
+            None => self.files.get(name).or_else(|| self.defaults.get(name)),
         }
         .ok_or_else(|| {
             format!(
@@ -1378,7 +1305,7 @@ impl WorkflowSet {
             ),
             stages,
         };
-        let issues = wf.validate();
+        let issues = wf.validate(&self.builtin_chain(wf.base));
         if !issues.is_empty() {
             return Err(format!("Workflow `{name}`: {}", issues.join(" ")));
         }
@@ -1427,8 +1354,23 @@ pub struct WorkflowInfo {
 mod tests {
     use super::*;
 
+    /// The default workflows as the standard plugin ships them, read from the repository.
+    fn defaults() -> BTreeMap<String, WorkflowFile> {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/workflows");
+        std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| {
+                let name = e.path().file_stem().unwrap().to_string_lossy().to_string();
+                let text = std::fs::read_to_string(e.path()).unwrap();
+                (name, toml::from_str(&text).unwrap())
+            })
+            .collect()
+    }
+
     fn set(files: &[(&str, &str)]) -> WorkflowSet {
         WorkflowSet {
+            defaults: defaults(),
             files: files
                 .iter()
                 .map(|(n, t)| (n.to_string(), toml::from_str(t).unwrap()))
@@ -1439,9 +1381,17 @@ mod tests {
 
     #[test]
     fn builtins_are_valid_chains() {
+        let s = set(&[]);
         for c in BUILTIN_BASES {
-            let w = WorkflowDef::builtin(c);
-            assert!(w.validate().is_empty(), "{c}: {:?}", w.validate());
+            let w = s
+                .resolve(&format!("{DEFAULT_PREFIX}{}", category_name(c)))
+                .unwrap();
+            let chain = s.builtin_chain(c);
+            assert!(
+                w.validate(&chain).is_empty(),
+                "{c}: {:?}",
+                w.validate(&chain)
+            );
             assert_eq!(w.ordered().len(), w.stages.len());
         }
         assert_eq!(parse_category("quick-change"), Some(Category::QuickChange));
@@ -1451,13 +1401,18 @@ mod tests {
     /// Rule WF9: the defaults are TOML files, the chains come from them, and a workspace copy wins.
     #[test]
     fn wf9_defaults_come_from_toml_and_a_workspace_copy_wins() {
+        let s = set(&[]);
         assert_eq!(
-            builtin_chain(Category::Implement),
+            s.builtin_chain(Category::Implement),
             BuiltinStage::ALL.to_vec(),
             "the implement default lists every built-in stage in order"
         );
-        assert_eq!(builtin_chain(Category::Test), vec![BuiltinStage::Closing]);
-        assert!(builtin_chain(Category::QuickAnswer).is_empty());
+        assert_eq!(s.builtin_chain(Category::Test), vec![BuiltinStage::Closing]);
+        assert!(s.builtin_chain(Category::QuickAnswer).is_empty());
+        assert!(
+            WorkflowSet::default().resolve("research").is_err(),
+            "without the standard plugin a set has no defaults"
+        );
         let empty = WorkflowSet::default();
         assert_eq!(empty.missing_defaults().len(), 9);
         let own = set(&[(

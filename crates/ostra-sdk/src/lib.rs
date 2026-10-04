@@ -20,8 +20,9 @@
 //! in the session. Save where the work is there, because a plugin program can stop at any time:
 //! Ostra starts it again and calls it once more, and the new process reads what the old one saved.
 //!
-//! Ostra's own agents are written the same way: `ostra_agents::standard::Standard` is the plugin
-//! `ostra`, which reads each agent's `agent.toml` and prompt with [`definition::parse_toml`].
+//! Ostra's own agents and default workflows are written the same way: the crate
+//! `ostra-default-plugin` is the plugin `ostra`, which reads each agent's `agent.toml` and prompt
+//! with [`definition::parse_toml`] and offers each default workflow as one of its workflows.
 
 pub mod definition;
 pub mod stdio;

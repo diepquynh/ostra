@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 ostra-core.workspace = true
 ostra-sdk.workspace = true
-async-trait.workspace = true
+ostra-default-plugin.workspace = true
 minijinja.workspace = true
 rust-embed.workspace = true
 serde.workspace = true

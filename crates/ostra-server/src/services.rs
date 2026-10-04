@@ -79,6 +79,7 @@ impl Services for ServerServices {
             } else {
                 ostra_core::workflow::WorkflowSet::default()
             };
+        ostra_default_plugin::add_workflows(&mut set);
         // Rule PL6: a plugin's workflows and transforms come with it; a plugin program starts only
         // while the workspace file is approved (Rule PL1).
         for (name, p) in self.shared.plugins.plugins(&self.root) {

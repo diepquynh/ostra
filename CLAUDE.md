@@ -27,7 +27,7 @@ ostra-sandbox     sandbox profiles, the bubblewrap and Seatbelt backends, the eg
 ostra-policy      guards and permissions over canonical ToolCalls; bash parsing
 ostra-tools       native tool implementations (Read, Write, Edit, Bash, Grep, Glob, Skill, WebFetch, ...)
 ostra-providers   Anthropic and OpenAI streaming clients; ScriptedProvider for tests
-ostra-agents      embedded assets/, the agent catalog (built-in and custom agents), prompt rendering per
+ostra-agents      embedded assets/, the agent catalog (built-in, custom, and plugin agents), prompt rendering per
                   executor, typed spawn structs, the repo brief
 ostra-engine      event-sourced session state, the pure planner, judges, the runner, the spawn factory
 ostra-exec-native the native agent loop (providers + tools + policy)
@@ -37,6 +37,8 @@ ostra-mcp         MCP client for workspace MCP servers: stdio and streamable HTT
 ostra-code        tokenizer, per-project code index (usages, imports, symbols), LSP client, code providers
 ostra-workspace   workspaces: settings checks, projects, command approvals (trust), create/delete, WorkspaceRt
 ostra-sdk         the plugin SDK: the Plugin trait's helpers, a plugin registry, and the stdio transport
+ostra-default-plugin  the standard plugin `ostra`, written with ostra-sdk: the built-in agents (from
+                  assets/agents/) and the default workflows (from assets/workflows/)
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
 ```
 

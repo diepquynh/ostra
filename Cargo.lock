@@ -2296,10 +2296,10 @@ dependencies = [
 name = "ostra-agents"
 version = "0.1.1"
 dependencies = [
- "async-trait",
  "chrono",
  "minijinja",
  "ostra-core",
+ "ostra-default-plugin",
  "ostra-sdk",
  "regex",
  "rust-embed",
@@ -2358,6 +2358,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ostra-default-plugin"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "ostra-core",
+ "ostra-sdk",
+ "rust-embed",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "ostra-engine"
 version = "0.1.1"
 dependencies = [
@@ -2367,6 +2379,7 @@ dependencies = [
  "globset",
  "ostra-agents",
  "ostra-core",
+ "ostra-default-plugin",
  "ostra-sandbox",
  "ostra-store",
  "pretty_assertions",
@@ -2536,6 +2549,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "ostra-core",
+ "ostra-default-plugin",
  "parking_lot",
  "serde",
  "serde_json",
@@ -2569,6 +2583,7 @@ dependencies = [
  "ostra-agents",
  "ostra-code",
  "ostra-core",
+ "ostra-default-plugin",
  "ostra-engine",
  "ostra-exec-harness",
  "ostra-exec-native",
@@ -2657,6 +2672,7 @@ dependencies = [
  "hex",
  "ostra-agents",
  "ostra-core",
+ "ostra-default-plugin",
  "ostra-engine",
  "ostra-policy",
  "ostra-sandbox",

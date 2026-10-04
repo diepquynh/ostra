@@ -134,14 +134,14 @@ impl SessionState {
             .as_ref()
             .and_then(|w| w.stages.iter().find(|d| d.builtin() == Some(stage)))
             .and_then(|d| d.agents.get(&contract).copied())
-            .or_else(|| ostra_agents::standard::Standard::default_for(contract))
+            .or_else(|| ostra_default_plugin::Standard::default_for(contract))
             .expect("the standard plugin returns every built-in contract")
     }
 
     /// Rule PL4: the standard plugin's agent for a contract no built-in stage binds, such as a
     /// quick answer or a project's setup.
     pub fn default_agent(&self, contract: Contract) -> AgentName {
-        ostra_agents::standard::Standard::default_for(contract)
+        ostra_default_plugin::Standard::default_for(contract)
             .expect("the standard plugin returns every built-in contract")
     }
 
@@ -212,7 +212,7 @@ impl SessionState {
             return Some(w.clone());
         }
         let c = self.category?;
-        (c != Category::QuickAnswer).then(|| WorkflowDef::builtin(c))
+        (c != Category::QuickAnswer).then(|| ostra_default_plugin::workflow(c))
     }
 
     /// Rule WF1: the session waits for its workflow to be resolved and recorded.
@@ -1406,7 +1406,7 @@ mod tests {
         let file: WorkflowFile = toml::from_str(text).unwrap();
         WorkflowSet {
             files: [("w".to_string(), file)].into_iter().collect(),
-            ..Default::default()
+            ..ostra_default_plugin::workflow_set()
         }
         .resolve("w")
         .unwrap()

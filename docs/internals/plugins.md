@@ -60,26 +60,32 @@ capability, including the document, ledger, and project-management grants, becau
 
 ## The standard plugin
 
-Ostra's own agents are a plugin too: the standard plugin `ostra` (`Standard` in
-[`crates/ostra-agents/src/standard.rs`](../../crates/ostra-agents/src/standard.rs), Rule PL4). It is written with
-`ostra-sdk` and serves as the reference for writing one. Its manifest lists the 14 built-in agents and no stages
-or contracts, because the built-in stages are the planner's own rules. It builds each agent from its embedded
-`assets/agents/<name>/agent.toml` and `prompt.md` with `parse_toml` and sets nothing else:
+Ostra's own agents and default workflows are a plugin too: the standard plugin `ostra` (`Standard` in its own
+crate, [`crates/ostra-default-plugin/src/lib.rs`](../../crates/ostra-default-plugin/src/lib.rs), Rule PL4). It is
+written with `ostra-sdk` and serves as the reference for writing one. Its manifest lists the 14 built-in agents,
+the nine default workflows, and no stages or contracts, because the built-in stages are the planner's own rules.
+It builds each agent from its embedded `assets/agents/<name>/agent.toml` and `prompt.md` with `parse_toml` and
+sets nothing else:
 
 ```rust
-pub fn agent(agent: AgentName) -> Result<PluginAgent, AgentsError> {
-    let dir = format!("agents/{}", agent.as_str());
-    let toml_path = format!("{dir}/agent.toml");
-    let prompt = asset_text(&format!("{dir}/prompt.md"))?;
-    ostra_sdk::definition::parse_toml(agent.as_str(), &asset_text(&toml_path)?, &prompt)
-        .map_err(|message| AgentsError::Parse { path: toml_path, message })
+pub fn agent(agent: AgentName) -> Result<PluginAgent, String> {
+    let toml_path = format!("{agent}/agent.toml");
+    let prompt = agent_file(&format!("{agent}/prompt.md"))?;
+    ostra_sdk::definition::parse_toml(agent.as_str(), &agent_file(&toml_path)?, &prompt)
+        .map_err(|e| format!("assets/agents/{toml_path}: {e}"))
 }
 ```
 
 So a built-in agent's contract, write scope, brief, and grants are fields any agent can declare. The engine
 reads results by contract, and `Standard::default_for(contract)` names the standard agent that returns a
 contract, which a built-in stage runs unless its workflow binds another agent (Rule WF8,
-[Workflows](workflows.md#which-agent-fills-a-built-in-stage)). A workspace `[[plugins]]` entry may not be
+[Workflows](workflows.md#which-agent-fills-a-built-in-stage)).
+
+Each default workflow is its embedded `assets/workflows/<base>.toml`, offered as one of the manifest's
+workflows under the base's name. `WorkflowSet::add_plugin` files the standard plugin's workflows as the set's
+defaults rather than as another plugin's workflows, so they resolve as `ostra:<base>` and as a bare `<base>` the
+workspace has no copy of ([Workflows](workflows.md#default-workflows)). A set built without the standard plugin
+has no defaults, so the server and the workspace add it to every set they build (`add_workflows`). A workspace `[[plugins]]` entry may not be
 named `ostra`, so a plugin program cannot take the standard plugin's name.
 
 ## Two ways to run
@@ -512,7 +518,7 @@ whether the session goes on without these tests. The example's tests run with
 | `WorkflowSet::add_plugin`, plugin workflow resolution | [`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs) |
 | `PluginTransforms`, `function_info_with` | [`crates/ostra-core/src/transform.rs`](../../crates/ostra-core/src/transform.rs) |
 | Agent files: `parse_markdown`, `parse_toml` | [`crates/ostra-sdk/src/definition.rs`](../../crates/ostra-sdk/src/definition.rs) |
-| The standard plugin, `Standard::default_for` | [`crates/ostra-agents/src/standard.rs`](../../crates/ostra-agents/src/standard.rs) |
+| The standard plugin, `Standard::default_for`, the default workflows | [`crates/ostra-default-plugin/src/lib.rs`](../../crates/ostra-default-plugin/src/lib.rs) |
 | The stdio transport, `serve`, `StdioPlugin` | [`crates/ostra-sdk/src/stdio.rs`](../../crates/ostra-sdk/src/stdio.rs) |
 | `PluginHost`, `ProgramExecutor`, the run's `Restart`, `contracts`, `infos` | [`crates/ostra-server/src/plugins.rs`](../../crates/ostra-server/src/plugins.rs) |
 | Restarting a plugin during a stage decision, result handler, or transform: `call_plugin` | [`crates/ostra-server/src/services.rs`](../../crates/ostra-server/src/services.rs) |

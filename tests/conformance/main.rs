@@ -5059,7 +5059,7 @@ fn workflow(toml_text: &str) -> WorkflowDef {
     let file: WorkflowFile = toml::from_str(toml_text).unwrap();
     WorkflowSet {
         files: [("w".to_string(), file)].into_iter().collect(),
-        ..Default::default()
+        ..ostra_default_plugin::workflow_set()
     }
     .resolve("w")
     .unwrap()
@@ -5169,7 +5169,7 @@ fn wf1_a_new_session_records_its_workflow_once_classified() {
         "nothing runs before the workflow is recorded"
     );
     h.ev(SessionEvent::WorkflowResolved {
-        workflow: WorkflowDef::builtin(Category::Implement),
+        workflow: ostra_default_plugin::workflow(Category::Implement),
     });
     assert_eq!(h.summaries(), vec!["spawn explore explore#0"]);
 }
@@ -5957,7 +5957,7 @@ fn wf9_a_session_runs_the_workspace_copy_of_its_category() {
     .unwrap();
     let set = WorkflowSet {
         files: [("research".to_string(), copy)].into_iter().collect(),
-        ..Default::default()
+        ..ostra_default_plugin::workflow_set()
     };
     let mut h = H::new(&["p"], SessionOptions::default());
     if let Some(SessionEvent::SessionCreated { workflow, .. }) =
@@ -6006,7 +6006,7 @@ fn wb7_a_composite_is_recorded_with_the_workflow_and_runs_its_steps() {
     let wf = WorkflowSet {
         files: [("w".to_string(), file)].into_iter().collect(),
         functions: [("files-of".to_string(), function)].into_iter().collect(),
-        ..Default::default()
+        ..ostra_default_plugin::workflow_set()
     }
     .resolve("w")
     .unwrap();
@@ -6065,7 +6065,7 @@ fn pl6_pl7_a_plugin_workflow_resolves_by_name_and_records_its_plugin_transforms(
         }],
         ..Default::default()
     };
-    let mut set = WorkflowSet::default();
+    let mut set = ostra_default_plugin::workflow_set();
     set.add_plugin("lib", &manifest);
     let wf = set.resolve("lib:flow").unwrap();
     assert_eq!(wf.name, "lib:flow");

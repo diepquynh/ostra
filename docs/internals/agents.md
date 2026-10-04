@@ -16,18 +16,17 @@ Every built-in agent lives in `assets/agents/<name>/` as two files: `agent.toml`
 never reads these definitions from disk and a user cannot swap one out by editing a file.
 
 The fourteen agents are not wired into the engine by name. They are the standard plugin `ostra`
-([`standard.rs`](../../crates/ostra-agents/src/standard.rs)), written with `ostra-sdk` like any other plugin
+([`ostra-default-plugin`](../../crates/ostra-default-plugin/src/lib.rs)), written with `ostra-sdk` like any other plugin
 (Rule PL4). It reads each agent's `agent.toml` and `prompt.md` with the SDK's definition parser
 (`ostra_sdk::definition::parse_toml`) and sets nothing else, so everything that makes the reviewer a reviewer is
 data in its files, in fields any agent can declare:
 
 ```rust
-pub fn agent(agent: AgentName) -> Result<PluginAgent, AgentsError> {
-    let dir = format!("agents/{}", agent.as_str());
-    let toml_path = format!("{dir}/agent.toml");
-    let prompt = asset_text(&format!("{dir}/prompt.md"))?;
-    ostra_sdk::definition::parse_toml(agent.as_str(), &asset_text(&toml_path)?, &prompt)
-        .map_err(|message| AgentsError::Parse { path: toml_path, message })
+pub fn agent(agent: AgentName) -> Result<PluginAgent, String> {
+    let toml_path = format!("{agent}/agent.toml");
+    let prompt = agent_file(&format!("{agent}/prompt.md"))?;
+    ostra_sdk::definition::parse_toml(agent.as_str(), &agent_file(&toml_path)?, &prompt)
+        .map_err(|e| format!("assets/agents/{toml_path}: {e}"))
 }
 ```
 
@@ -880,7 +879,7 @@ results.
 | Agent definitions and prompts | `assets/agents/<name>/` |
 | Tool names per executor | `assets/tool-mapping.toml` |
 | Loading definitions and rendering prompts | `crates/ostra-agents/src/lib.rs`, `mapping.rs` |
-| The standard plugin of Ostra's own agents | `crates/ostra-agents/src/standard.rs` |
+| The standard plugin of Ostra's own agents and default workflows | `crates/ostra-default-plugin/src/lib.rs` |
 | Definition files (markdown and `agent.toml`) | `crates/ostra-sdk/src/definition.rs` |
 | Custom agents and the catalog | `crates/ostra-agents/src/catalog.rs`, `assets/custom-agent.md` |
 | The agent screen's reads and saves | `crates/ostra-workspace/src/builder.rs` |

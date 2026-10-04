@@ -211,15 +211,13 @@ impl WorkspaceRt {
     /// Rule WF1: the workflows a session can run: the workspace's valid ones, and Ostra's defaults
     /// it has no copy of (Rule WF9).
     pub fn workflows(&self) -> Vec<ostra_core::workflow::WorkflowInfo> {
-        use ostra_core::workflow::{
-            BUILTIN_BASES, WorkflowDef, WorkflowInfo, category_name, parse_category,
-        };
+        use ostra_core::workflow::{BUILTIN_BASES, WorkflowInfo, category_name, parse_category};
         let (set, _) = self.workflow_set();
         let mut out: Vec<WorkflowInfo> = BUILTIN_BASES
             .iter()
             .filter(|c| !set.files.contains_key(&category_name(**c)))
             .map(|c| {
-                let wf = WorkflowDef::builtin(*c);
+                let wf = ostra_default_plugin::workflow(*c);
                 WorkflowInfo {
                     name: wf.name,
                     description: wf.description,
@@ -269,6 +267,7 @@ impl WorkspaceRt {
     /// of the plugins that run for it.
     pub fn workflow_set(&self) -> (ostra_core::workflow::WorkflowSet, Vec<(String, String)>) {
         let (mut set, issues) = ostra_core::workflow::WorkflowSet::load(&self.root);
+        ostra_default_plugin::add_workflows(&mut set);
         for (name, m) in self.host.plugin_manifests(&self.root) {
             set.add_plugin(&name, &m);
         }

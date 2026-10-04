@@ -538,7 +538,7 @@ pub fn default_workflow_files(root: &Path, names: &[String]) -> Vec<(PathBuf, Op
         .iter()
         .filter_map(|n| {
             let path = dir.join(format!("{n}.toml"));
-            let text = ostra_core::workflow::default_text(n)?;
+            let text = ostra_default_plugin::workflow_text(n)?;
             (!path.exists()).then(|| (path, Some(text.to_string())))
         })
         .collect()

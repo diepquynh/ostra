@@ -10,6 +10,7 @@ ostra-sandbox.workspace = true
 ostra-engine.workspace = true
 ostra-store.workspace = true
 ostra-agents.workspace = true
+ostra-default-plugin.workspace = true
 ostra-providers.workspace = true
 ostra-tools.workspace = true
 ostra-policy.workspace = true

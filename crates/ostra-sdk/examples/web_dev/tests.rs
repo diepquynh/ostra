@@ -259,7 +259,7 @@ fn the_contract_schema_is_in_the_supported_subset() {
         &mut issues,
     );
     assert!(issues.is_empty(), "{issues:?}");
-    let mut set = ostra_core::workflow::WorkflowSet::default();
+    let mut set = ostra_default_plugin::workflow_set();
     set.add_plugin(PLUGIN, &manifest);
     let flow = set.resolve("web-dev:web-app").unwrap();
     assert!(flow.stage("e2e").is_some());

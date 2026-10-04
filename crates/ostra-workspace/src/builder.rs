@@ -106,7 +106,7 @@ impl WorkspaceRt {
             return match builtin_base(name) {
                 // Rule WF9: the workspace has no copy, so it runs Ostra's default.
                 Some(c) => {
-                    let def = WorkflowDef::builtin(c);
+                    let def = ostra_default_plugin::workflow(c);
                     Ok(WorkflowDoc {
                         name: name.into(),
                         builtin: true,

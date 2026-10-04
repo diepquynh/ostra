@@ -27,6 +27,7 @@ ostra-mcp = { path = "crates/ostra-mcp" }
 ostra-workspace = { path = "crates/ostra-workspace" }
 ostra-sandbox = { path = "crates/ostra-sandbox" }
 ostra-sdk = { path = "crates/ostra-sdk" }
+ostra-default-plugin = { path = "crates/ostra-default-plugin" }
 
 tokio = { version = "1.53", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
