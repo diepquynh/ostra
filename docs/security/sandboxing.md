@@ -255,7 +255,8 @@ without a rule for each one.
   are `.git`, the repo dir that holds it, and each dir above that up to the root. A mount point cannot be
   renamed. Thus no process can move a protected path away from its rule (see [git](#git-stays-usable-and-closed)).
 - A private `/tmp` (see [temporary files](#temporary-files)).
-- The per-workspace tool caches (see [tool caches](#tool-caches)).
+- The tool caches of the session, or of the workspace for a run outside a session (see
+  [tool caches](#tool-caches)).
 - Each entry of `[sandbox] extra_writable`.
 
 ### Read-only

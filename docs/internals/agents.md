@@ -1,6 +1,6 @@
 # Agents
 
-Ostra divides the work of the pipeline among thirteen agents. Each agent does one job. For example, an agent
+Ostra divides the work of the pipeline among fourteen agents. Each agent does one job. For example, an agent
 researches a request, writes a spec, reviews a change, or writes tests. Code decides which agent runs, which
 inputs it gets, and what Ostra does with its result. The agent does the work in its stage. Then it returns a
 structured answer.
@@ -41,7 +41,7 @@ The tier column gives a default. The workspace routing settings select the model
 route an agent in a different way for each phase complexity. Thus, an implementer phase of low complexity can
 run on a cheaper model than a phase of high complexity.
 
-Eight smaller prompts in `assets/judges/` are not agents. They answer named judgment questions for the engine.
+Ten smaller prompts in `assets/judges/` are not agents. They answer named judgment questions for the engine.
 For example, a judge decides the risk of a request, or decides if Ostra must fix a review finding. Read
 [the engine](../../HANDOVER.md#8-the-engine) for the function of the judges.
 
@@ -303,7 +303,7 @@ native executor. It writes each prompt to `<data dir>/assets/agents/<agent>.md`,
 The prompt of the advisor tells it to read the part for the failed mode. In most init failures, a step did not
 obey one of its own rules. An example is the rule for a project that has no source. Some advice tells a step to
 break its rules, for example to scaffold code during initialization. Such advice fails again at a guard. The
-advisor evals below showed both facts.
+advisor evals (`tests/evals/advisor.toml`) showed both facts.
 
 ## The repo brief
 

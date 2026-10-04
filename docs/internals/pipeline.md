@@ -584,28 +584,29 @@ The build loop has three exits other than success.
   - ask the user.
 
   A plain retry is not an option, because it gives the same failure again.
-- **Environment failures go to the advisor first (Rule O7).** When the failure is in the agent's environment, the
-  judge picks `advise`. Examples are a cache in a read-only home folder, a tool that is not installed, or a
-  refused host. The advisor agent reads the spawn block of the stuck run, its result, and the diagnostic. It
-  checks the machine with read-only shell commands from inside the same sandbox, so it sees what the step saw.
 
-  The advisor can submit `retry` with guidance. Then the agent runs again as a rescue, with the guidance quoted
-  next to its diagnostic. Or the advisor can submit `escalate`. Then the stuck gate opens with the advisor's
-  reason under the need, so the user gets a diagnosis and not a raw error.
+  - **Environment failures go to the advisor first (Rule O7).** When the failure is in the agent's environment, the
+    judge picks `advise`. Examples are a cache in a read-only home folder, a tool that is not installed, or a
+    refused host. The advisor agent reads the spawn block of the stuck run, its result, and the diagnostic. It
+    checks the machine with read-only shell commands from inside the same sandbox, so it sees what the step saw.
 
-  A loop gets at most two advisor rounds (`MAX_ADVICE`). After that, an `advise` decision opens the gate. The
-  advisor shows on the card of the phase, or on the tests card, during its run.
-- **The user can send an implementer to fix the cause (Rule O8).** At the stuck gate, the user can state a fact
-  or block the work. The user can also answer `fix`, with or without instructions. Then Ostra starts a separate
-  implementer run. The only job of this run is the cause that the diagnostic names, such as a module to generate
-  or a dependency to add. The run keeps its own report and progress log, and it leaves the steps of the phase to
-  the stuck agent.
+    The advisor can submit `retry` with guidance. Then the agent runs again as a rescue, with the guidance quoted
+    next to its diagnostic. Or the advisor can submit `escalate`. Then the stuck gate opens with the advisor's
+    reason under the need, so the user gets a diagnosis and not a raw error.
 
-  When the fix run submits `ok`, the stuck agent continues its conversation as a rescue. Ostra tells it what
-  changed and which files changed, and those files join the next review. When the fix run fails, the stuck gate
-  opens again with the reason. The implementer shows on the card of the phase, or on the tests card, during its
-  run. Under YOLO, Ostra answers every stuck gate with `fix`, with no round cap. The session budget is what stops
-  a fix that never works.
+    A loop gets at most two advisor rounds (`MAX_ADVICE`). After that, an `advise` decision opens the gate. The
+    advisor shows on the card of the phase, or on the tests card, during its run.
+  - **The user can send an implementer to fix the cause (Rule O8).** At the stuck gate, the user can state a fact
+    or block the work. The user can also answer `fix`, with or without instructions. Then Ostra starts a separate
+    implementer run. The only job of this run is the cause that the diagnostic names, such as a module to generate
+    or a dependency to add. The run keeps its own report and progress log, and it leaves the steps of the phase to
+    the stuck agent.
+
+    When the fix run submits `ok`, the stuck agent continues its conversation as a rescue. Ostra tells it what
+    changed and which files changed, and those files join the next review. When the fix run fails, the stuck gate
+    opens again with the reason. The implementer shows on the card of the phase, or on the tests card, during its
+    run. Under YOLO, Ostra answers every stuck gate with `fix`, with no round cap. The session budget is what stops
+    a fix that never works.
 - **HANDOFF.** If an agent needs a prompt or skill written, it asks for a handoff. The engine runs
   prompt-generation with that request. Then it resumes the original agent with its resume instructions.
 

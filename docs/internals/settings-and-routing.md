@@ -542,10 +542,12 @@ fact-check = "advanced"
 code-reviewer = "balanced"
 execution-path-analyzer = "balanced"
 documentation = "default"    # the agent.toml default tier
+system-architecture = "default"
 prompt-generation = "advanced"
 initializer = "balanced"
 judge = "advanced"
 quick-answer = "balanced"
+advisor = "advanced"
 
 [routing.model.byPhaseComplexity.implementer]
 low = "fast"

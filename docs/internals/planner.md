@@ -313,7 +313,7 @@ planner continues from the new state. Your answer uses the same path as all othe
 
 ## Proving the rules: conformance fixtures
 
-Each rule that the planner implements has a fixture in `tests/conformance/main.rs`. The file holds 76 fixtures
+Each rule that the planner implements has a fixture in `tests/conformance/main.rs`. The file holds 160 fixtures
 today. A fixture builds an event history, folds it, and checks the summaries of the steps that the planner
 returns. The planner is pure. Thus, a fixture runs in microseconds and needs no model, executor, or database.
 

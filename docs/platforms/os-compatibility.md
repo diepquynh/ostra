@@ -38,7 +38,9 @@ gives the details.
 
 ## What has been run, and what has not
 
-Ostra has no CI yet. Each result below comes from a person who ran the tests or the server by hand.
+CI (`.github/workflows/ci.yml`) runs on Ubuntu 24.04 only: clippy, the Rust tests without the evals, the checks and tests of
+`design/`, `web/`, and `site/`, and the browser suite. Each result below for another system comes from a person who ran
+the tests or the server by hand.
 
 - **Linux** is the system where the developers work on Ostra. These tests run on Ubuntu with kernel 6.8 and
   bubblewrap 0.9:

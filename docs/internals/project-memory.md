@@ -40,8 +40,8 @@ more recent, and the store does not fill with duplicates. A full-text index (SQL
 `lesson` supports every search. Triggers keep the index equal to the table.
 
 The store has no maximum size, and it never deletes lessons because of their age. A lesson leaves the store only
-when someone removes it. Two removals exist: the user in the Memory screen, or an exact `forget` of a lesson
-that someone confirmed to be stale.
+when the user deletes it in the Memory screen. `MemoryStore::forget` can delete one exact lesson, but no agent
+tool or route calls it yet.
 
 Each call opens its own connection with a busy timeout of 5 seconds. Thus parallel executions in the same
 project wait on the file lock of SQLite, and do not share a handle.

@@ -12,7 +12,7 @@ tokens and cookies), see [Server and browser](server-and-browser.md).
 
 | What | Where | Mode |
 | --- | --- | --- |
-| Data directory | `$OSTRA_DATA_DIR`, or `~/.local/share/ostra` on Linux and `~/Library/Application Support/ostra` on macOS | `0700` |
+| Data directory | `$OSTRA_DATA_DIR`, or `~/.local/share/ostra` on Linux, `~/Library/Application Support/ostra` on macOS, and `%LOCALAPPDATA%\ostra` on Windows | `0700` |
 | Registry: workspaces, sign-ins, sealed credentials, approvals | `<data dir>/registry.db` and its `-wal`, `-shm`, `-journal` files | `0600` |
 | Master key file, when Ostra does not use the keychain | `<data dir>/master.key`, or the file that `OSTRA_MASTER_KEY_FILE` names | `0600` |
 | Server log | `<data dir>/server.log` | In the `0700` directory |

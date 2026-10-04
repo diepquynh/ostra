@@ -57,7 +57,6 @@ Ostra has fifteen crates in one Cargo workspace. Each crate has one job.
 
 ```
 layer 0   ostra-core                     depends on no Ostra crate
-          ostra-mcp                      depends on no Ostra crate
 
 layer 1   ostra-store      → core
           ostra-policy     → core
@@ -65,6 +64,7 @@ layer 1   ostra-store      → core
           ostra-providers  → core
           ostra-sandbox    → core
           ostra-notify     → core
+          ostra-mcp        → core
 
 layer 2   ostra-tools        → core, store, sandbox
           ostra-code         → core, sandbox
@@ -167,7 +167,7 @@ never becomes a dependency.
 
 The API types are in `ostra-core`, and they have the `#[ts(export)]` attribute from the `ts-rs` crate.
 `cargo test -p ostra-core` writes one TypeScript file for each type into `web/src/api/gen/`. The
-`TS_RS_EXPORT_DIR` setting in `.cargo/config.toml` sets this path. There are close to 300 files. They hold
+`TS_RS_EXPORT_DIR` setting in `.cargo/config.toml` sets this path. There are 335 files. They hold
 session views, gate payloads, execution deltas, WebSocket messages, settings, and validation issues.
 
 Thus the browser types always agree with the server types. If you rename a field in Rust, regenerate the

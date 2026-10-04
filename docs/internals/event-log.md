@@ -50,7 +50,7 @@ Ostra calculates the sequence number in an immediate SQLite transaction. The num
 the session plus one. Thus, two events in one session cannot have the same number
 (`crates/ostra-store/src/workspace/events.rs`, `Events::append`).
 
-There are about twenty event kinds. This table puts them in groups by the data that they record:
+There are 33 event kinds. This table puts them in groups by the data that they record:
 
 | Group | Events | What they record |
 | --- | --- | --- |
