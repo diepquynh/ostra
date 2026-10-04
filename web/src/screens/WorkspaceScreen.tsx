@@ -118,6 +118,7 @@ export function WorkspaceScreen({ ws }: WorkspaceScreenProps) {
       <NewTask
         ws={ws}
         projects={detail.projects}
+        workflows={detail.workflows}
         yoloDefault={detail.settings.yolo.default}
         onCreated={(s) => {
           sessions.reload();

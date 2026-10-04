@@ -1,6 +1,7 @@
 //! Ostra workspaces: settings and their validation, projects, the approvals that keep folder files
 //! from starting programs, creating and deleting a workspace, and the runtime of an open one.
 
+pub mod builder;
 pub mod create;
 pub mod host;
 pub mod projects;

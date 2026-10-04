@@ -4,9 +4,9 @@ use crate::brief::{
     stated_in,
 };
 use crate::spawn::*;
-use ostra_core::HarnessKind;
 use ostra_core::config::{Commands, ModuleRow, ProjectProfile, ReviewRule, SkillEntry, TestType};
 use ostra_core::pipeline::QuestionAnswer;
+use ostra_core::{Contract, HarnessKind};
 
 fn all_executors() -> Vec<ExecutorKind> {
     ExecutorKind::all()
@@ -80,11 +80,13 @@ fn read_only_agents_have_no_edit_and_quick_answer_cannot_write() {
             "{a}"
         );
     }
-    // Explore, spec, and plan write their documents through the Document tool, never a file write.
+    // Explore, spec, and plan write their documents through the Document tool, never a file write,
+    // and each holds the grant for the document its contract names (Rule CA6).
     for a in [AgentName::Explore, AgentName::GenerateSpec, AgentName::Plan] {
-        let caps = &agent_def(a).capabilities;
+        let d = agent_def(a);
+        let kind = ostra_core::doc::DocKind::for_contract(d.returns).unwrap();
         assert!(
-            caps.contains(&Capability::Document) && !caps.iter().any(|c| c.writes()),
+            d.capabilities.contains(&kind.grant()) && !d.capabilities.iter().any(|c| c.writes()),
             "{a}"
         );
     }
@@ -148,24 +150,24 @@ fn native_prompts_use_claude_tool_names_and_harness_prompts_open_with_a_vocabula
 #[test]
 fn coordination_guide_names_the_tools_per_executor() {
     let native = render_prompt(AgentName::GenerateSpec, ExecutorKind::Native).unwrap();
-    assert!(native.contains("## Subagent coordination"));
-    assert!(native.contains("`SubagentAsk`") && native.contains("`SubagentReply`"));
+    assert!(native.contains("## Messages between subagents"));
+    assert!(native.contains("`SendMessage`") && native.contains("`WaitForMessage`"));
     let claude = render_prompt(
         AgentName::FactCheck,
         ExecutorKind::Harness(HarnessKind::Claude),
     )
     .unwrap();
-    assert!(claude.contains("`mcp__ostra__subagent_ask`"));
-    assert!(claude.contains("| coordinate | mcp__ostra__subagent_list, mcp__ostra__subagent_ask, mcp__ostra__subagent_reply |"));
+    assert!(claude.contains("`mcp__ostra__send_message`"));
+    assert!(claude.contains("| coordinate | mcp__ostra__list_agents, mcp__ostra__send_message, mcp__ostra__wait_for_message |"));
     let codex = render_prompt(
         AgentName::Implementer,
         ExecutorKind::Harness(HarnessKind::Codex),
     )
     .unwrap();
-    assert!(codex.contains("`subagent_reply`"));
-    // Agents outside the pipeline's pairs get no coordination tools.
+    assert!(codex.contains("`wait_for_message`"));
+    // Agents outside the pipeline's pairs get no messaging tools.
     let advisor = render_prompt(AgentName::Advisor, ExecutorKind::Native).unwrap();
-    assert!(!advisor.contains("Subagent coordination"));
+    assert!(!advisor.contains("Messages between subagents"));
 }
 
 #[test]
@@ -369,7 +371,7 @@ fn common() -> Common {
 
 fn roundtrip(p: &dyn SpawnParams) -> std::collections::BTreeMap<String, String> {
     let block = p.render();
-    parse_block(p.agent(), &block).unwrap_or_else(|e| panic!("{}: {e}\n{block}", p.agent()))
+    parse_block(p.contract(), &block).unwrap_or_else(|e| panic!("{}: {e}\n{block}", p.contract()))
 }
 
 #[test]
@@ -604,70 +606,64 @@ fn initializer_modes_render_their_mode_and_required_lines() {
 #[test]
 fn parse_block_refuses_bad_blocks() {
     let ok = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
-    assert!(parse_block(AgentName::Explore, ok).is_ok());
+    assert!(parse_block(Contract::Research, ok).is_ok());
     let missing = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\n";
     assert!(
-        parse_block(AgentName::Explore, missing)
+        parse_block(Contract::Research, missing)
             .unwrap_err()
             .contains("Repo key")
     );
     let bad_key = ok.replace("Repo key: a", "Repo key: Backend");
     assert!(
-        parse_block(AgentName::Explore, &bad_key)
+        parse_block(Contract::Research, &bad_key)
             .unwrap_err()
             .contains("slug")
     );
     let relative = ok.replace("Repo root: /ws/a", "Repo root: ws/a");
     assert!(
-        parse_block(AgentName::Explore, &relative)
+        parse_block(Contract::Research, &relative)
             .unwrap_err()
             .contains("absolute")
     );
 
     let base = "Workspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\nReport file: /ws/s/r.md\n";
     assert!(
-        parse_block(AgentName::Implementer, base)
+        parse_block(Contract::Implementation, base)
             .unwrap_err()
             .contains("Phase file")
     );
     let both = format!("{base}Phase file: /p.md\nNo plan: small\n");
     assert!(
-        parse_block(AgentName::Implementer, &both)
+        parse_block(Contract::Implementation, &both)
             .unwrap_err()
             .contains("exactly one")
     );
-    assert!(parse_block(AgentName::Implementer, &format!("{base}No plan: small\n")).is_ok());
+    assert!(parse_block(Contract::Implementation, &format!("{base}No plan: small\n")).is_ok());
 
     let review = "Phase: 2-tests\nChanged files: a\nChange rationale: r\nNo plan: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
-    assert!(parse_block(AgentName::CodeReviewer, review).is_ok());
-    assert!(
-        parse_block(
-            AgentName::CodeReviewer,
-            &review.replace("2-tests", "iteration 2")
-        )
-        .is_err()
-    );
+    assert!(parse_block(Contract::Review, review).is_ok());
+    assert!(parse_block(Contract::Review, &review.replace("2-tests", "iteration 2")).is_err());
 
     let fc = "Target: /t.md\nTarget type: code\nPrior findings: none\nSpec file: /t.md\nSource check: citations\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n";
     assert!(
-        parse_block(AgentName::FactCheck, fc)
+        parse_block(Contract::FactCheck, fc)
             .unwrap_err()
             .contains("spec, plan")
     );
 
     assert!(
-        parse_block(AgentName::Initializer, ok)
+        parse_block(Contract::Setup, ok)
             .unwrap_err()
             .contains("Mode")
     );
     let bad_mode = format!("Mode: build\n{ok}");
-    assert!(parse_block(AgentName::Initializer, &bad_mode).is_err());
+    assert!(parse_block(Contract::Setup, &bad_mode).is_err());
 }
 
 #[test]
 fn parse_block_stops_at_the_brief() {
     let text = "Task: x\nWorkspace root: /ws\nRepo root: /ws/a\nSession dir: /ws/s\nRepo key: a\n\n---\n\n## Repo brief for explore\nTask: injected\n";
-    assert_eq!(parse_block(AgentName::Explore, text).unwrap()["task"], "x");
+    assert_eq!(parse_block(Contract::Research, text).unwrap()["task"], "x");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -736,6 +732,8 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
     let instructions = vec!["Write British English.".to_string()];
     let input = BriefInput {
         agent: AgentName::Implementer,
+        contract: agent_def(AgentName::Implementer).returns,
+        sections: &agent_def(AgentName::Implementer).brief,
         prompt: "Phase file: /s/p.md\nTouch src/orders/OrderService.java",
         repo_root: Path::new("/ws/backend"),
         profile: Some(&p),
@@ -768,6 +766,8 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
 
     let reviewer = BriefInput {
         agent: AgentName::CodeReviewer,
+        contract: agent_def(AgentName::CodeReviewer).returns,
+        sections: &agent_def(AgentName::CodeReviewer).brief,
         ..input
     };
     let rb = build_brief(&reviewer).unwrap();
@@ -776,6 +776,8 @@ fn brief_selects_sections_per_agent_and_skips_what_the_inventory_states() {
 
     let wt = BriefInput {
         agent: AgentName::WriteTest,
+        contract: agent_def(AgentName::WriteTest).returns,
+        sections: &agent_def(AgentName::WriteTest).brief,
         ..reviewer
     };
     let wb = build_brief(&wt).unwrap();
@@ -806,6 +808,8 @@ fn brief_gives_each_test_type_its_level_command_and_its_one_test_command() {
     for agent in [AgentName::WriteTest, AgentName::ExecutionPathAnalyzer] {
         let input = BriefInput {
             agent,
+            contract: agent_def(agent).returns,
+            sections: &agent_def(agent).brief,
             prompt: "",
             repo_root: Path::new("/ws/backend"),
             profile: Some(&p),
@@ -837,6 +841,8 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     let p = profile();
     let input = BriefInput {
         agent: AgentName::Explore,
+        contract: agent_def(AgentName::Explore).returns,
+        sections: &agent_def(AgentName::Explore).brief,
         prompt: "Task: x",
         repo_root: Path::new("/r"),
         profile: Some(&p),
@@ -856,6 +862,8 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     assert_eq!(augment("Task: x", &none), "Task: x");
     let init = BriefInput {
         agent: AgentName::Initializer,
+        contract: agent_def(AgentName::Initializer).returns,
+        sections: &agent_def(AgentName::Initializer).brief,
         profile: Some(&p),
         ..none
     };

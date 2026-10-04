@@ -1,0 +1,8 @@
+# Ostra's default `docs` workflow. A workspace runs its own copy in .ostra/workflows/docs.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Write or update the documentation book, in the closing stages."
+base = "docs"
+
+[[stage]]
+id = "closing"
+uses = "ostra:closing"

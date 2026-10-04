@@ -2296,15 +2296,18 @@ dependencies = [
 name = "ostra-agents"
 version = "0.1.1"
 dependencies = [
+ "async-trait",
  "chrono",
  "minijinja",
  "ostra-core",
+ "ostra-sdk",
  "regex",
  "rust-embed",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "toml",
 ]
 
@@ -2372,6 +2375,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "toml",
  "tracing",
  "uuid",
 ]
@@ -2413,6 +2417,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "futures",
+ "ostra-agents",
  "ostra-core",
  "ostra-policy",
  "ostra-providers",
@@ -2475,6 +2480,7 @@ name = "ostra-policy"
 version = "0.1.1"
 dependencies = [
  "globset",
+ "ostra-agents",
  "ostra-core",
  "pretty_assertions",
  "regex",
@@ -2525,6 +2531,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "ostra-sdk"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "ostra-core",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "ostra-server"
 version = "0.1.1"
 dependencies = [
@@ -2556,6 +2577,7 @@ dependencies = [
  "ostra-policy",
  "ostra-providers",
  "ostra-sandbox",
+ "ostra-sdk",
  "ostra-store",
  "ostra-tools",
  "ostra-workspace",

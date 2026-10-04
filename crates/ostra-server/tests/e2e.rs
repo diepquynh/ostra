@@ -261,6 +261,7 @@ async fn boot_with(root: &Path, change: impl FnOnce(&mut GlobalConfig)) -> Serve
         exe: PathBuf::from("/nonexistent/ostra"),
         bind: None,
         allow_hosts: vec![],
+        plugins: ostra_sdk::Registry::new(),
     };
     let app = ostra_server::app::build(&opts, port).await.unwrap();
     app.shared.providers.register(
@@ -3495,6 +3496,7 @@ async fn a_loopback_server_lives_at_its_private_name() {
             exe: PathBuf::from("/nonexistent/ostra"),
             bind: None,
             allow_hosts: vec![],
+            plugins: ostra_sdk::Registry::new(),
         };
         let app = ostra_server::app::build(&opts, port).await.unwrap();
         let router = ostra_server::api::router(app.clone())
@@ -4306,8 +4308,9 @@ async fn an_approved_project_is_created_initialized_and_built() {
     );
 }
 
-/// A workspace saved before an agent existed has no route for it; the detail offers the fix and
-/// `settings/fix` applies it without touching anything else.
+/// A workspace saved before an agent existed has no route for it; the agent runs on its default
+/// tier (Rule CA4), the detail offers to write that down, and `settings/fix` applies it without
+/// touching anything else.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_missing_route_is_fixed_in_one_call() {
     let _serial = SERIAL.lock().await;
@@ -4342,8 +4345,9 @@ async fn a_missing_route_is_fixed_in_one_call() {
         .json()
         .await
         .unwrap();
+    // Rule CA4: the advisor still runs, on its default tier; the fix writes that down.
     assert!(
-        detail
+        !detail
             .validation
             .iter()
             .any(|i| i.path == "routing.model.byAgent.advisor"),

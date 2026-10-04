@@ -55,7 +55,9 @@ See [Agent containment](agent-containment.md) for the policy and the sandbox,
 A repository can also carry settings. `.ostra/workspace.toml` and `.ostra/project.toml` can name commands (MCP
 servers, language servers, formatters) and can arrive with a clone, a `git pull`, or an agent's edit. Ostra
 starts those programs only after you approved that exact content, and the permission mode and YOLO are never
-read from a folder file. See [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs).
+read from a folder file. The same approval covers the workspace's custom agents (`.ostra/agents/`), its workflows
+(`.ostra/workflows/`), its composite transform functions (`.ostra/transforms/`), and its plugin programs
+(`[[plugins]]`), because each decides what runs in a session. See [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs).
 
 ### A malicious MCP server
 

@@ -3,7 +3,6 @@
 //! ends the run with structured data.
 
 use futures::future::join_all;
-use ostra_core::agent::AgentName;
 use ostra_core::config::{ProjectProfile, load_toml};
 use ostra_core::coord::RunEnd;
 use ostra_core::exec::{
@@ -25,6 +24,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
+
+mod program;
+pub use program::PluginRestart;
 
 /// Upper bound on model turns in one execution, a guard against a loop that never submits.
 pub const MAX_TURNS: usize = 400;
@@ -87,32 +89,47 @@ impl NativeExecutor {
     }
 }
 
-#[async_trait::async_trait]
-impl Executor for NativeExecutor {
-    async fn run(
+impl NativeExecutor {
+    fn run_for(
         &self,
         spec: ExecutionSpec,
         host: Arc<dyn ExecutionHost>,
+        usage: Arc<Mutex<Usage>>,
         cancel: CancellationToken,
-    ) -> ExecutionResult {
-        let usage = Arc::new(Mutex::new(Usage::default()));
-        let inner = cancel.child_token();
-        let budget = Duration::from_secs(spec.timeout_secs.max(1));
-        let timeout_secs = spec.timeout_secs.max(1);
-        let run = Run {
+    ) -> Run {
+        Run {
             providers: self.providers.clone(),
             skill_resolver: self.skill_resolver.clone(),
             code: self.code.clone(),
             mcp: self.mcp.clone(),
             manage: self.manage.clone(),
             coord: self.coord.clone(),
-            host: host.clone(),
-            usage: usage.clone(),
-            cancel: inner.clone(),
+            host,
+            usage,
+            cancel,
             git_repos: ostra_sandbox::git_repos(&[&spec.ctx.repo_root, &spec.ctx.workspace_root]),
             spec,
-        };
-        let fut = run.execute();
+        }
+    }
+
+    /// Run one execution under its timeout and the caller's cancel, with `go` doing the work.
+    async fn bounded<F, Fut>(
+        &self,
+        spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        cancel: CancellationToken,
+        go: F,
+    ) -> ExecutionResult
+    where
+        F: FnOnce(Run) -> Fut,
+        Fut: std::future::Future<Output = ExecutionResult>,
+    {
+        let usage = Arc::new(Mutex::new(Usage::default()));
+        let inner = cancel.child_token();
+        let budget = Duration::from_secs(spec.timeout_secs.max(1));
+        let timeout_secs = spec.timeout_secs.max(1);
+        let run = self.run_for(spec, host.clone(), usage.clone(), inner.clone());
+        let fut = go(run);
         tokio::pin!(fut);
         let outcome = tokio::select! {
             r = &mut fut => return r,
@@ -135,6 +152,35 @@ impl Executor for NativeExecutor {
         }
         result
     }
+
+    /// Rule PL2: run a programmatic agent. The plugin's code does the work; every tool it calls
+    /// passes this run's policy, sandbox, and permission asks, and its model calls run on the
+    /// agent's route.
+    pub async fn run_program(
+        &self,
+        spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        cancel: CancellationToken,
+        plugin: Arc<dyn ostra_core::plugin::Plugin>,
+        restart: Arc<dyn PluginRestart>,
+    ) -> ExecutionResult {
+        self.bounded(spec, host, cancel, |run| {
+            program::execute(run, plugin, restart)
+        })
+        .await
+    }
+}
+
+#[async_trait::async_trait]
+impl Executor for NativeExecutor {
+    async fn run(
+        &self,
+        spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        cancel: CancellationToken,
+    ) -> ExecutionResult {
+        self.bounded(spec, host, cancel, |run| run.execute()).await
+    }
 }
 
 struct Run {
@@ -150,6 +196,16 @@ struct Run {
     /// The repos the sandbox protects, found once at the start.
     git_repos: Vec<std::path::PathBuf>,
     spec: ExecutionSpec,
+}
+
+/// What a run needs to call tools and models.
+struct Setup {
+    provider: Arc<dyn Provider>,
+    model: String,
+    env: ToolEnv,
+    policy: ExecutionPolicy,
+    mcp: Option<Arc<dyn ostra_tools::McpTools>>,
+    _scratch: Option<Scratch>,
 }
 
 /// What processing one turn's tool calls produced.
@@ -387,14 +443,20 @@ impl Run {
         self.host.emit(ExecutionDelta::Usage { usage: snapshot });
     }
 
-    async fn execute(self) -> ExecutionResult {
+    /// The provider, tool environment, and policy of this run: one setup for the model loop and
+    /// for a programmatic agent, so both pass the same guards.
+    async fn setup(&self) -> Result<Setup, Box<ExecutionResult>> {
         let spec = &self.spec;
         let (provider, model) = match self.providers.for_model(&spec.route.model) {
             Ok(p) => p,
             Err(ProviderError::NoKey(p)) => {
-                return self.fail(format!("The `{p}` provider has no API key. Set its key in the environment or the OS keychain."));
+                return Err(Box::new(self.fail(format!("The `{p}` provider has no API key. Set its key in the environment or the OS keychain."))));
             }
-            Err(e) => return self.fail(format!("Cannot run model `{}`: {e}", spec.route.model)),
+            Err(e) => {
+                return Err(Box::new(
+                    self.fail(format!("Cannot run model `{}`: {e}", spec.route.model)),
+                ));
+            }
         };
         let ctx = &spec.ctx;
         let mcp = match &self.mcp {
@@ -411,6 +473,7 @@ impl Run {
         inputs.read_only_mcp_tools = mcp.iter().flat_map(|m| m.read_only()).collect();
         let env = ToolEnv::new(ToolEnvConfig {
             agent: spec.agent,
+            doc_kinds: ostra_core::doc::DocKind::granted(&spec.capabilities),
             repo_root: ctx.repo_root.clone(),
             workspace_root: ctx.workspace_root.clone(),
             session_dir: ctx.session_dir.clone(),
@@ -442,11 +505,33 @@ impl Run {
                 }
                 env
             }
-            Err(e) => return self.fail(e),
+            Err(e) => return Err(Box::new(self.fail(e))),
         };
         let policy =
             ExecutionPolicy::new(ctx.clone(), inputs).sandboxed(env.every_ignore_file().is_some());
+        Ok(Setup {
+            provider,
+            model,
+            env,
+            policy,
+            mcp,
+            _scratch,
+        })
+    }
 
+    async fn execute(self) -> ExecutionResult {
+        let Setup {
+            provider,
+            model,
+            env,
+            policy,
+            mcp,
+            _scratch,
+        } = match self.setup().await {
+            Ok(s) => s,
+            Err(r) => return *r,
+        };
+        let spec = &self.spec;
         let offered = provider.server_tools(&model);
         let caps = &spec.capabilities;
         let server_fetch = offered.web_fetch && caps.contains(&ostra_core::Capability::WebFetch);
@@ -465,8 +550,8 @@ impl Run {
                 cache: false,
             })
             .collect();
-        if caps.contains(&ostra_core::Capability::Document)
-            && let Some(d) = ostra_tools::document_tool_definition(spec.agent)
+        if let Some(d) =
+            ostra_tools::document_tool_definition(&ostra_core::doc::DocKind::granted(caps))
         {
             tools.push(ToolDef {
                 name: d.name,
@@ -481,15 +566,12 @@ impl Run {
             input_schema: d.input_schema,
             cache: false,
         }));
-        let submit_def = ostra_tools::submit_tool_definition(spec.agent);
+        let submit_def =
+            ostra_tools::submit_tool_definition(spec.agent, spec.submit_schema.clone());
         tools.push(ToolDef {
             name: submit_def.name,
             description: submit_def.description,
-            input_schema: if spec.submit_schema.is_null() {
-                submit_def.input_schema
-            } else {
-                spec.submit_schema.clone()
-            },
+            input_schema: submit_def.input_schema,
             cache: true,
         });
 
@@ -651,20 +733,32 @@ impl Run {
                     r.usage = *self.usage.lock();
                     return r;
                 }
+                // Rule SM2: a turn without tool calls is a boundary too, so queued messages come
+                // first and the reminder waits.
+                if let Some(w) = self.host.take_messages() {
+                    let m = Message::user_text(&w.note);
+                    self.record(&m);
+                    messages.push(m);
+                    continue;
+                }
                 reminded = true;
-                let m = Message::user_text(if spec.ctx.owes_reply {
-                    ostra_core::coord::reply_instruction(ostra_core::coord::SUBAGENT_REPLY)
-                } else {
-                    format!(
+                let m = Message::user_text(match self.host.submit_blocked() {
+                    Some(why) => why,
+                    None => format!(
                         "Call {submit_name} now with your result. The engine reads only that call, so a result given in text is lost."
-                    )
+                    ),
                 });
                 self.record(&m);
                 messages.push(m);
                 continue;
             }
             match self.run_tools(&resp, &policy, &env, &submit_name).await {
-                TurnEnd::Continue(results) => {
+                TurnEnd::Continue(mut results) => {
+                    // Rule SM2: messages queued during the turn follow its tool results, after
+                    // the cached prefix, so the next request reuses the prompt cache.
+                    if let Some(w) = self.host.take_messages() {
+                        results.push(Block::text(w.note));
+                    }
                     let m = Message::tool_results(results);
                     self.record(&m);
                     messages.push(m);
@@ -745,7 +839,7 @@ impl Run {
         env: &ToolEnv,
         submit_name: &str,
     ) -> TurnEnd {
-        let submit_schema = ostra_core::submit::submit_schema(self.spec.agent);
+        let submit_schema = self.spec.submit_schema.clone();
         let calls: Vec<(String, String, Value)> = resp
             .tool_uses()
             .into_iter()
@@ -806,7 +900,7 @@ impl Run {
                 let (block, end) = self.coord_tool(id, name, input, policy, env).await;
                 results[i] = Some(block);
                 i += 1;
-                // Rule H2: a run that asked waits, and a consult run that answered ends.
+                // Rule SM3: a run that paused itself ends waiting until a message wakes it.
                 let status = match end {
                     RunEnd::Continue => continue,
                     RunEnd::Wait => ExecutionStatus::Waiting,
@@ -816,7 +910,7 @@ impl Run {
                     if results[j].is_none() {
                         results[j] = Some(Block::tool_result(
                             oid.clone(),
-                            "Not run: the run stopped to wait for another subagent.",
+                            "Not run: the run stopped to wait for a message.",
                             true,
                         ));
                     }
@@ -872,12 +966,20 @@ impl Run {
                 rule.layer, rule.rule
             )));
         }
-        if let Err(e) = ostra_core::submit::validate_submit(self.spec.agent, input) {
+        // Rule SM6: a run that owes a waiting sender a reply sends it before it submits.
+        if let Some(why) = self.host.submit_blocked() {
+            return Err(err(why));
+        }
+        if let Err(e) = ostra_core::submit::validate_submit_with(
+            self.spec.ctx.contract,
+            &self.spec.submit_schema,
+            input,
+        ) {
             return Err(err(format!(
                 "The {name} input is invalid: {e}. Fix it and call {name} again."
             )));
         }
-        if let Err(e) = ostra_core::doc::check_submit(self.spec.agent, input) {
+        if let Err(e) = ostra_core::doc::check_submit(self.spec.ctx.contract, input) {
             return Err(err(format!("{e} Nothing was recorded.")));
         }
         let status = match input.get("status").and_then(|s| s.as_str()) {
@@ -888,7 +990,7 @@ impl Run {
         if status == ExecutionStatus::Ok
             && let Some(report) = &self.spec.ctx.report_file
             && !report.exists()
-            && self.spec.agent != AgentName::CodeReviewer
+            && self.spec.ctx.contract.report_required()
         {
             return Err(err(format!(
                 "Write your report to {} before you call {name}, because the engine reads the report at that path.",

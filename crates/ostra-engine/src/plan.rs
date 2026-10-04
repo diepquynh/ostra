@@ -4,20 +4,21 @@
 
 use crate::judge::NoteStage;
 use crate::state::*;
+use ostra_core::Contract;
 use ostra_core::agent::AgentName;
-use ostra_core::coord::DeliveryKind;
 use ostra_core::event::{
     ClosingItem, CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, SessionKind,
     WorkKind,
 };
 use ostra_core::exec::ExecutionStatus;
-use ostra_core::ids::{ExecutionId, GateId, MessageId};
+use ostra_core::ids::{ExecutionId, GateId};
 use ostra_core::model::Complexity;
 use ostra_core::paths::report;
 use ostra_core::pipeline::{
     Category, PhaseInfo, QuestionAnswer, StageKind, Stakes, TestPolicy, Track,
 };
 use ostra_core::submit::{ReviewFinding, Severity, Verdict};
+use ostra_core::workflow::{BuiltinStage, StageDef, StageRun, StageScope, WorkflowDef};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -95,6 +96,13 @@ pub struct SpawnInputs {
     pub docs_area: Option<ostra_core::book::DocsArea>,
     pub docs_areas: Vec<ostra_core::book::DocsArea>,
     pub init_item: Option<String>,
+    /// Rule WF4: the workflow node a custom agent's run serves.
+    pub stage_id: Option<String>,
+    pub stage_round: Option<u32>,
+    /// Rule WF4: one line per earlier workflow stage, with its verdict, summary, and report.
+    pub earlier_stages: Vec<String>,
+    /// Rule WB4: the node's inputs, one `name = <json>` line each.
+    pub stage_inputs: Vec<String>,
 }
 
 impl SpawnInputs {
@@ -178,12 +186,6 @@ pub enum Step {
         execution: ExecutionId,
         error: String,
     },
-    /// Rule H2: hand a message to a harness run that waits with its process alive.
-    Deliver {
-        execution: ExecutionId,
-        ask: MessageId,
-        kind: DeliveryKind,
-    },
     /// Rule B9: measure a project's source by module-map area and record how its part of the
     /// book is split among writers.
     PlanDocs {
@@ -192,6 +194,35 @@ pub enum Step {
     /// Rule B5: write the session's documentation into the workspace book `book`.
     WriteBook {
         book: String,
+    },
+    /// Rule PL5: ask the plugin that owns a run's contract to handle its result.
+    HandleResult {
+        execution: ExecutionId,
+    },
+    /// Rule PL3: ask a plugin's stage logic for its next decision about workflow node `node`.
+    DecideStage {
+        node: String,
+        scope: Option<String>,
+        /// How many decisions it made before, so each request is its own step.
+        seq: u32,
+    },
+    /// Rule WB5: record that node `node` is skipped because its conditions do not hold.
+    SkipStage {
+        node: String,
+        scope: Option<String>,
+    },
+    /// Rules WB2 and WB3: run transform or prompt node `node` in the engine.
+    RunNode {
+        node: String,
+        scope: Option<String>,
+        round: u32,
+        /// A prompt node calls a model, so the session budget applies to it.
+        model: bool,
+    },
+    /// Rule WF1: resolve the session's workflow from the workspace's files and record it.
+    ResolveWorkflow {
+        name: Option<String>,
+        category: Option<Category>,
     },
     Complete {
         report_markdown: Option<String>,
@@ -236,9 +267,24 @@ impl Step {
             Step::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
             Step::FinishInit { project } => format!("finish-init:{project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
-            Step::Deliver { ask, kind, .. } => format!("deliver:{ask}:{kind:?}"),
             Step::PlanDocs { project } => format!("plan-docs:{project}"),
             Step::WriteBook { book } => format!("book:{book}"),
+            Step::ResolveWorkflow { .. } => "resolve-workflow".into(),
+            Step::HandleResult { execution } => format!("handle:{execution}"),
+            Step::DecideStage { node, scope, seq } => format!(
+                "decide:{}:{seq}",
+                crate::workflow::stage_key(node, scope.as_deref())
+            ),
+            Step::SkipStage { node, scope } => format!(
+                "skip:{}",
+                crate::workflow::stage_key(node, scope.as_deref())
+            ),
+            Step::RunNode {
+                node, scope, round, ..
+            } => format!(
+                "node:{}:{round}",
+                crate::workflow::stage_key(node, scope.as_deref())
+            ),
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
         }
@@ -261,7 +307,6 @@ impl Step {
                     ""
                 }
             ),
-            Step::Deliver { kind, .. } => format!("deliver {kind:?}").to_lowercase(),
             Step::OpenGate { payload, .. } => format!("gate {}", payload.kind_str()),
             Step::YoloAnswer { .. } => "yolo-answer".into(),
             Step::Command {
@@ -276,6 +321,26 @@ impl Step {
             Step::RecordInitProblem { project, .. } => format!("init-problem {project}"),
             Step::PlanDocs { project } => format!("plan-docs {project}"),
             Step::WriteBook { book } => format!("write-book {book}"),
+            Step::HandleResult { .. } => "handle-result".into(),
+            Step::DecideStage { node, scope, .. } => match scope {
+                Some(s) => format!("decide-stage {node} {s}"),
+                None => format!("decide-stage {node}"),
+            },
+            Step::SkipStage { node, scope } => match scope {
+                Some(s) => format!("skip-stage {node} {s}"),
+                None => format!("skip-stage {node}"),
+            },
+            Step::RunNode {
+                node, scope, round, ..
+            } => match scope {
+                Some(s) => format!("run-node {node} {s} #{round}"),
+                None => format!("run-node {node} #{round}"),
+            },
+            Step::ResolveWorkflow { name, category } => match (name, category) {
+                (Some(n), _) => format!("resolve-workflow {n}"),
+                (None, Some(c)) => format!("resolve-workflow {}", c.as_str().to_lowercase()),
+                _ => "resolve-workflow".into(),
+            },
             Step::Complete { .. } => "complete".into(),
             Step::Fail { .. } => "fail".into(),
         }
@@ -296,6 +361,12 @@ fn purpose_summary(p: &ExecPurpose) -> String {
             if *tests { " tests" } else { "" }
         ),
         ExecPurpose::Consult { .. } => "consult".into(),
+        ExecPurpose::Message { .. } => "messages".into(),
+        ExecPurpose::Helper { .. } => "helper".into(),
+        ExecPurpose::Stage { node, scope, round } => format!(
+            "stage {node}{}#{round}",
+            scope.as_ref().map(|s| format!(" {s} ")).unwrap_or_default()
+        ),
         ExecPurpose::Spec { round } => format!("spec#{round}"),
         ExecPurpose::FactCheck { target, pass } => format!("fact-check-{}#{pass}", target.as_str()),
         ExecPurpose::Plan { round } => format!("plan#{round}"),
@@ -367,6 +438,9 @@ fn gate_owner(p: &GatePayload) -> String {
         | GatePayload::PlanApproval { .. }
         | GatePayload::BudgetReached { .. } => String::new(),
         GatePayload::ImplementationReview { round, .. } => round.to_string(),
+        GatePayload::StageReview { stage, scope, .. } => {
+            crate::workflow::stage_key(stage, scope.as_deref())
+        }
     }
 }
 
@@ -388,13 +462,23 @@ pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step> {
 }
 
 impl<'a> Planner<'a> {
+    pub(crate) fn push_step(&mut self, step: Step) {
+        self.push(step);
+    }
+
+    pub(crate) fn session(&self) -> &'a SessionState {
+        self.s
+    }
+
     fn push(&mut self, mut step: Step) {
         // Rule O4: nothing but its init and the advisor runs in a created project until the init
         // ends, because every other agent routes its work by the project's inventory and profile.
         let held = match &step {
             Step::Spawn(r) => {
-                !matches!(r.agent, AgentName::Initializer | AgentName::Advisor)
-                    && self.s.awaiting_init(&r.project)
+                !matches!(
+                    r.purpose,
+                    ExecPurpose::Init { .. } | ExecPurpose::Advise { .. }
+                ) && self.s.awaiting_init(&r.project)
             }
             Step::Command { project, .. } | Step::Autofix { project, .. } => {
                 self.s.awaiting_init(project)
@@ -430,7 +514,7 @@ impl<'a> Planner<'a> {
         }
         // Budget guard: once the session has spent its budget, no new execution starts until
         // the user raises it. Running executions finish.
-        if matches!(step, Step::Spawn(_))
+        if matches!(step, Step::Spawn(_) | Step::RunNode { model: true, .. })
             && let Some(budget) = self.ctx.budget_usd
         {
             let limit = budget + self.s.budget_raised;
@@ -500,60 +584,85 @@ impl<'a> Planner<'a> {
         self.coordination();
     }
 
-    /// Rules H2 and H3: consult runs for questions to subagents that ended their run, and
-    /// messages for harness runs that wait with their process alive. Native runs that wait are
-    /// woken through their stage's spawn (see `push`).
+    /// Rules SM3, SM4, and SM7: wake waiting native runs that have messages, continue ended
+    /// subagents that were sent messages, and start the custom helpers messages asked for. A
+    /// running run reads its messages at its own turn boundary, and a waiting harness run is woken
+    /// by its executor, so neither needs a step.
     fn coordination(&mut self) {
         let s = self.s;
         if !s.created || s.is_terminal() || s.paused {
             return;
         }
-        for ask in s.asks.values() {
-            if ask.answerer.is_some() || ask.answer.is_some() || !s.is_waiting(&ask.from) {
+        // Rule PL5: a plugin contract's result goes to its plugin before anything reads it.
+        for execution in s.results_due() {
+            self.push(Step::HandleResult { execution });
+        }
+        for exec in s.wakes_due() {
+            // A stage that spawns again wakes its waiting run through that spawn (see `push`).
+            let staged = self
+                .out
+                .iter()
+                .any(|st| matches!(st, Step::Spawn(r) if r.resumes.as_ref() == Some(&exec)));
+            let Some(rec) = s.executions.get(&exec).filter(|_| !staged) else {
                 continue;
-            }
-            let crate::coord::Route::Consult(head) = s.route(ask) else {
-                continue;
-            };
-            let root = s.subagent_of(&head);
-            let taken = self.out.iter().any(|st| {
-                matches!(st, Step::Spawn(r) if r.continues.as_ref().is_some_and(|c| s.subagent_of(c) == root))
-            });
-            let Some(rec) = s.executions.get(&head) else {
-                continue;
-            };
-            if taken {
-                continue;
-            }
-            let inputs = SpawnInputs {
-                question: Some(ask.message.clone()),
-                task: Some(s.subagent_of(&ask.from).to_string()),
-                ..Default::default()
             };
             self.push(Step::Spawn(Box::new(SpawnRequest {
                 agent: rec.agent,
-                purpose: ExecPurpose::Consult {
+                purpose: rec.purpose.clone(),
+                stage: rec.stage,
+                project: rec.project.clone(),
+                session_dir: s.session_dir_of(rec),
+                inputs: SpawnInputs::default(),
+                resumes: Some(exec.clone()),
+                continues: None,
+            })));
+        }
+        for (head, first) in s.continuations_due() {
+            let Some(rec) = s.executions.get(&head) else {
+                continue;
+            };
+            let root = s.subagent_of(&head);
+            self.push(Step::Spawn(Box::new(SpawnRequest {
+                agent: rec.agent,
+                purpose: ExecPurpose::Message {
                     subagent: root,
-                    ask: ask.id.clone(),
+                    first,
                 },
                 stage: rec.stage,
                 project: rec.project.clone(),
                 session_dir: s.session_dir_of(rec),
-                inputs,
+                inputs: SpawnInputs::default(),
                 resumes: None,
                 continues: Some(head.clone()),
             })));
         }
-        for rec in s.running_executions() {
-            if matches!(rec.executor, ostra_core::ExecutorKind::Harness(_))
-                && let Some(d) = s.next_delivery(&rec.id)
-            {
-                self.push(Step::Deliver {
-                    execution: rec.id.clone(),
-                    ask: d.ask,
-                    kind: d.kind,
-                });
-            }
+        let helpers: Vec<(AgentName, String, ostra_core::ids::MessageId, String)> = s
+            .helpers_due()
+            .filter_map(|m| match &m.target {
+                ostra_core::coord::MessageTarget::Agent { agent, project, .. } => {
+                    Some((*agent, project.clone(), m.id.clone(), m.text.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (agent, project, message, text) in helpers {
+            let from = s
+                .messages
+                .iter()
+                .find(|m| m.id == message)
+                .map(|m| s.subagent_of(&m.from))
+                .unwrap_or_default();
+            self.spawn(
+                agent,
+                ExecPurpose::Helper { message },
+                &project,
+                s.project_session_dir(&project),
+                SpawnInputs {
+                    task: Some(text),
+                    stage_id: Some(format!("helper for {from}")),
+                    ..Default::default()
+                },
+            );
         }
     }
 
@@ -583,6 +692,11 @@ impl<'a> Planner<'a> {
         if s.held_amendments().next().is_some() {
             return;
         }
+        // Rule WF1: a named workflow is resolved first, because its base is the category.
+        if let Some(step @ Step::ResolveWorkflow { name: Some(_), .. }) = s.workflow_due() {
+            self.push(step);
+            return;
+        }
         let Some(category) = s.category else {
             if s.classify.is_none() {
                 self.push(Step::Judge {
@@ -610,79 +724,214 @@ impl<'a> Planner<'a> {
             }
             return;
         }
+        // Rule WF1: a new session records its workflow before any stage runs.
+        if let Some(step) = s.workflow_due() {
+            self.push(step);
+            return;
+        }
         // Explore tasks spawn whatever the stage: rescue explores can arrive mid-build.
         self.explore_tasks();
         match category {
             Category::QuickAnswer => self.quick_answer(),
-            Category::Research => {
-                if self.explore_complete() {
-                    self.completion();
-                }
+            _ => self.workflow_flow(),
+        }
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Workflows (Rules WF1 to WF8)
+    // -------------------------------------------------------------------------------------
+
+    /// Rule WF4: every stage whose stages before it are done runs; the session completes when every
+    /// stage is done.
+    fn workflow_flow(&mut self) {
+        let s = self.s;
+        let Some(wf) = s.active_workflow() else {
+            return;
+        };
+        let mut done: BTreeSet<String> = BTreeSet::new();
+        let mut all = true;
+        for d in wf.ordered() {
+            if !d.after.iter().all(|a| done.contains(a)) {
+                all = false;
+                continue;
             }
-            Category::Spec => {
-                if self.explore_complete() && self.spec_flow(false) {
-                    self.completion();
-                }
+            let ok = match &d.run {
+                StageRun::Builtin { stage } => self.builtin_stage(*stage, &wf),
+                // A phase stage runs inside the build stage, which is done only after it.
+                _ if d.scope == StageScope::Phase => true,
+                StageRun::Agent { agent } => self.agent_stage(&wf, d, *agent),
+                StageRun::Plugin { .. } => self.plugin_stage(&wf, d),
+                StageRun::Transform { .. } | StageRun::Prompt { .. } => self.data_stage(d),
+            };
+            if ok {
+                done.insert(d.id.clone());
+            } else {
+                all = false;
             }
-            Category::Plan => {
-                if self.explore_complete() && self.spec_flow(true) && self.plan_flow() {
-                    self.completion();
-                }
-            }
-            Category::Implement => {
-                if !self.explore_complete() {
-                    return;
-                }
-                // Light by default: the Track judge escalates to the full track on evidence.
-                let Some(track) = s.track else {
+        }
+        if all {
+            self.completion();
+        }
+    }
+
+    /// Rule WF2: a built-in stage runs Ostra's own rules for it, exactly as the fixed pipeline did.
+    fn builtin_stage(&mut self, b: BuiltinStage, wf: &WorkflowDef) -> bool {
+        let s = self.s;
+        let implement = wf.base == Category::Implement;
+        let light = implement && s.track == Some(Track::Light);
+        match b {
+            BuiltinStage::Research => self.explore_complete(),
+            // Light by default: the Track judge escalates to the full track on evidence.
+            BuiltinStage::Track => {
+                if s.track.is_none() {
                     self.push(Step::Judge {
                         judge: JudgeKind::Track,
                         subject: None,
                     });
-                    return;
-                };
-                if track == Track::Full {
-                    if !self.spec_flow(true) {
-                        return;
-                    }
-                    let Some((_, stakes)) = s.stakes else {
-                        self.push(Step::Judge {
-                            judge: JudgeKind::Stakes,
-                            subject: None,
-                        });
-                        return;
-                    };
-                    if stakes != Stakes::Low && !self.plan_flow() {
-                        return;
-                    }
-                    if s.plan.invalidated || s.spec.needs_run {
-                        return;
-                    }
                 }
-                // Rule O4: a project a phase created is initialized before its phases go on.
-                crate::init::plan_created(self.s, &mut |step| self.out.push(step));
-                self.phases();
-                if !self.implementation_review() {
-                    return;
-                }
-                self.closing_stages();
-                if self.all_implement_done() {
-                    self.completion();
-                }
+                s.track.is_some()
             }
-            Category::Verify | Category::Prompt | Category::QuickChange => {
-                self.phases();
-                if s.phases.values().all(|p| p.impl_loop.is_terminal()) && self.nothing_running() {
-                    self.completion();
+            BuiltinStage::Spec => light || self.spec_flow(wf.base != Category::Spec),
+            BuiltinStage::Stakes => {
+                if light {
+                    return true;
                 }
+                if s.stakes.is_none() {
+                    self.push(Step::Judge {
+                        judge: JudgeKind::Stakes,
+                        subject: None,
+                    });
+                }
+                s.stakes.is_some()
             }
-            Category::Test | Category::Docs => {
+            BuiltinStage::Plan if implement => {
+                if light {
+                    return true;
+                }
+                let low = matches!(s.stakes, Some((_, Stakes::Low)));
+                (low || self.plan_flow()) && !s.plan.invalidated && !s.spec.needs_run
+            }
+            BuiltinStage::Plan => self.plan_flow(),
+            BuiltinStage::Build => {
+                if implement {
+                    // Rule O4: a project a phase created is initialized before its phases go on.
+                    crate::init::plan_created(self.s, &mut |step| self.out.push(step));
+                }
+                self.phases();
+                self.phase_stages(wf);
+                self.build_done(wf)
+            }
+            BuiltinStage::Feedback => self.implementation_review(),
+            BuiltinStage::Closing => {
                 self.closing_stages();
-                if self.all_implement_done() {
-                    self.completion();
+                self.all_implement_done()
+            }
+        }
+    }
+
+    /// Every phase ended and every phase stage of a passed phase is done (Rule WF4).
+    fn build_done(&self, wf: &WorkflowDef) -> bool {
+        let s = self.s;
+        let removed = removed_phases(s);
+        let phases_done = s
+            .phases
+            .values()
+            .all(|p| removed.contains(&p.info.id) || p.impl_loop.is_terminal());
+        let staged = wf
+            .stages
+            .iter()
+            .any(|d| d.scope == StageScope::Phase && d.builtin().is_none());
+        phases_done
+            && (!staged
+                || s.phases
+                    .values()
+                    .filter(|p| !removed.contains(&p.info.id) && p.impl_loop.is_done())
+                    .all(|p| s.phase_stages_done(p.info.id)))
+    }
+
+    /// Rule WF4: the phase stages of every phase that passed its review.
+    fn phase_stages(&mut self, wf: &WorkflowDef) {
+        for d in wf
+            .stages
+            .iter()
+            .filter(|d| d.scope == StageScope::Phase && d.builtin().is_none())
+        {
+            match &d.run {
+                StageRun::Agent { agent } => {
+                    self.agent_stage(wf, d, *agent);
+                }
+                StageRun::Plugin { .. } => {
+                    self.plugin_stage(wf, d);
+                }
+                StageRun::Transform { .. } | StageRun::Prompt { .. } => {
+                    self.data_stage(d);
+                }
+                StageRun::Builtin { .. } => {}
+            }
+        }
+    }
+
+    /// Rules WF4 and WF5: run, ask about, or finish each instance of a custom agent stage.
+    fn agent_stage(&mut self, wf: &WorkflowDef, d: &StageDef, agent: AgentName) -> bool {
+        let s = self.s;
+        let mut done = true;
+        for scope in crate::workflow::stage_scopes(s, d) {
+            match crate::workflow::agent_stage_action(s, wf, d, agent, scope.as_deref()) {
+                crate::workflow::Action::Done => {}
+                crate::workflow::Action::Wait => done = false,
+                crate::workflow::Action::Fail(error) => {
+                    self.push(Step::Fail { error });
+                    done = false;
+                }
+                crate::workflow::Action::Gate(step) | crate::workflow::Action::Skip(step) => {
+                    self.push(step);
+                    done = false;
+                }
+                crate::workflow::Action::ExecFailed {
+                    exec,
+                    agent,
+                    project,
+                    error,
+                } => {
+                    self.exec_failed_gate(&exec, agent, &project, &error);
+                    done = false;
+                }
+                crate::workflow::Action::Spawn(req) => {
+                    self.push(Step::Spawn(req));
+                    done = false;
                 }
             }
         }
+        done
+    }
+
+    /// Rules WB2 and WB3: run, ask about, or finish each instance of a transform or prompt node.
+    fn data_stage(&mut self, d: &StageDef) -> bool {
+        let s = self.s;
+        let mut done = true;
+        for scope in crate::workflow::stage_scopes(s, d) {
+            match crate::workflow::data_stage_action(s, d, scope.as_deref()) {
+                crate::workflow::Action::Done => {}
+                crate::workflow::Action::Wait => done = false,
+                crate::workflow::Action::Fail(error) => {
+                    self.push(Step::Fail { error });
+                    done = false;
+                }
+                crate::workflow::Action::Gate(step) | crate::workflow::Action::Skip(step) => {
+                    self.push(step);
+                    done = false;
+                }
+                crate::workflow::Action::ExecFailed { .. } | crate::workflow::Action::Spawn(_) => {
+                    done = false
+                }
+            }
+        }
+        done
+    }
+
+    /// Rule PL3: a plugin's stage logic decides each next step of its stage.
+    fn plugin_stage(&mut self, wf: &WorkflowDef, d: &StageDef) -> bool {
+        crate::plugin_stage::plan(self, wf, d)
     }
 
     fn nothing_running(&self) -> bool {
@@ -707,8 +956,11 @@ impl<'a> Planner<'a> {
                     task: Some(format!("{}{}", t.task, s.added_context())),
                     ..Default::default()
                 };
+                let agent = t
+                    .agent
+                    .unwrap_or_else(|| s.agent_for(BuiltinStage::Research, Contract::Research));
                 self.spawn(
-                    AgentName::Explore,
+                    agent,
                     ExploreRef(t.idx).purpose(),
                     &t.project,
                     s.project_session_dir(&t.project),
@@ -722,7 +974,12 @@ impl<'a> Planner<'a> {
                 // Rule H3: a helper's failure is its asker's answer, not a gate.
                 matches!(t.origin, ExploreOrigin::Ask { .. }),
             ) {
-                self.exec_failed_gate(exec, AgentName::Explore, &t.project, err);
+                let agent = s
+                    .executions
+                    .get(exec)
+                    .map(|r| r.agent)
+                    .unwrap_or_else(|| s.agent_for(BuiltinStage::Research, Contract::Research));
+                self.exec_failed_gate(exec, agent, &t.project, err);
             }
         }
     }
@@ -808,7 +1065,12 @@ impl<'a> Planner<'a> {
                     )
                 })
                 .unwrap_or(exec);
-                self.exec_failed_gate(&exec, AgentName::GenerateSpec, &primary, err);
+                self.exec_failed_gate(
+                    &exec,
+                    s.agent_for(BuiltinStage::Spec, Contract::Spec),
+                    &primary,
+                    err,
+                );
             }
             return false;
         }
@@ -856,7 +1118,7 @@ impl<'a> Planner<'a> {
             };
             let round = t.runs.len() as u32 + 1;
             self.spawn(
-                AgentName::GenerateSpec,
+                s.agent_for(BuiltinStage::Spec, Contract::Spec),
                 ExecPurpose::Spec { round },
                 &primary,
                 s.session_root.clone(),
@@ -900,7 +1162,7 @@ impl<'a> Planner<'a> {
                     ..Default::default()
                 };
                 self.spawn(
-                    AgentName::FactCheck,
+                    s.agent_for(BuiltinStage::Spec, Contract::FactCheck),
                     ExecPurpose::FactCheck {
                         target: FactTarget::Spec,
                         pass,
@@ -982,7 +1244,12 @@ impl<'a> Planner<'a> {
                     )
                 })
             {
-                self.exec_failed_gate(&exec, AgentName::Plan, &primary, err);
+                self.exec_failed_gate(
+                    &exec,
+                    s.agent_for(BuiltinStage::Plan, Contract::Plan),
+                    &primary,
+                    err,
+                );
             }
             return false;
         }
@@ -1029,7 +1296,7 @@ impl<'a> Planner<'a> {
             };
             let round = t.runs.len() as u32 + 1;
             self.spawn(
-                AgentName::Plan,
+                s.agent_for(BuiltinStage::Plan, Contract::Plan),
                 ExecPurpose::Plan { round },
                 &primary,
                 s.session_root.clone(),
@@ -1062,7 +1329,7 @@ impl<'a> Planner<'a> {
                     ..Default::default()
                 };
                 self.spawn(
-                    AgentName::FactCheck,
+                    s.agent_for(BuiltinStage::Plan, Contract::FactCheck),
                     ExecPurpose::FactCheck {
                         target: FactTarget::Plan,
                         pass,
@@ -1135,13 +1402,15 @@ impl<'a> Planner<'a> {
         let project = p.info.project.clone();
         let dir = s.project_session_dir(&project);
         let phase = p.info.id;
-        let agent = if matches!(kind, WorkKind::Initial)
+        let contract = if matches!(kind, WorkKind::Initial)
             || (matches!(kind, WorkKind::Rerun | WorkKind::Resume) && l.work_count <= 1)
         {
-            l.work_agent
+            l.work
         } else {
-            l.fix_agent
+            l.fix
         };
+        // Rule WF8: the loop's stage binds the agent that fills the contract.
+        let agent = s.agent_for(loop_stage(tests), contract);
         let phase_str = phase.to_string();
         let mut inputs = SpawnInputs {
             phase: Some(p.info.clone()),
@@ -1152,15 +1421,15 @@ impl<'a> Planner<'a> {
             } else {
                 None
             },
-            user_notes: match agent {
-                AgentName::Implementer => s.notes_for(NoteStage::Implement),
-                AgentName::WriteTest => s.notes_for(NoteStage::Tests),
+            user_notes: match contract {
+                Contract::Implementation => s.notes_for(NoteStage::Implement),
+                Contract::Tests => s.notes_for(NoteStage::Tests),
                 _ => vec![],
             },
             ..Default::default()
         };
-        let purpose = match agent {
-            AgentName::WriteTest => {
+        let purpose = match contract {
+            Contract::Tests => {
                 inputs.implementer_report = p.implementer_report.clone();
                 inputs.epa_report = match &p.epa {
                     EpaState::Done(path) => Some(path.clone()),
@@ -1169,7 +1438,7 @@ impl<'a> Planner<'a> {
                 inputs.report_file = Some(dir.join(report::write_test(&phase_str)));
                 ExecPurpose::WriteTest { phase, work: kind }
             }
-            AgentName::PromptGeneration => {
+            Contract::Prompt => {
                 inputs.task = Some(s.full_request());
                 inputs.target_files = Some("Determine them from the task.".into());
                 inputs.report_file = Some(dir.join(report::prompt_gen(s.prompt_gens + 1)));
@@ -1243,6 +1512,7 @@ impl<'a> Planner<'a> {
                 );
                 self.push(Step::Spawn(Box::new(crate::init::advisor_request(
                     crate::init::AdviceInputs {
+                        advisor: s.agent_for(loop_stage(tests), Contract::Advice),
                         project: project.clone(),
                         session_dir: dir,
                         execution: exec.clone(),
@@ -1304,7 +1574,7 @@ impl<'a> Planner<'a> {
                     ..Default::default()
                 };
                 self.spawn(
-                    AgentName::Implementer,
+                    s.agent_for(loop_stage(tests), Contract::Implementation),
                     ExecPurpose::Unblock {
                         phase,
                         tests,
@@ -1351,7 +1621,7 @@ impl<'a> Planner<'a> {
                     ..Default::default()
                 };
                 self.spawn(
-                    AgentName::CodeReviewer,
+                    s.agent_for(loop_stage(tests), Contract::Review),
                     ExecPurpose::Review {
                         phase,
                         tests,
@@ -1382,7 +1652,7 @@ impl<'a> Planner<'a> {
                     .executions
                     .get(exec)
                     .map(|r| r.agent)
-                    .unwrap_or(AgentName::Implementer);
+                    .unwrap_or_else(|| s.agent_for(loop_stage(tests), l.work));
                 self.gate(
                     format!("Phase {phase} is stuck"),
                     "The agent hit its retry ceiling on the same failure. State the missing fact, send an implementer to fix the cause so the agent can continue, or leave the phase blocked.",
@@ -1414,7 +1684,7 @@ impl<'a> Planner<'a> {
                     ..Default::default()
                 };
                 self.spawn(
-                    AgentName::PromptGeneration,
+                    s.agent_for(BuiltinStage::Build, Contract::Prompt),
                     ExecPurpose::PromptGen {
                         handoff_for: Some(exec.clone()),
                     },
@@ -1469,7 +1739,7 @@ impl<'a> Planner<'a> {
                     .executions
                     .get(exec)
                     .map(|r| r.agent)
-                    .unwrap_or(l.work_agent);
+                    .unwrap_or_else(|| s.agent_for(loop_stage(tests), l.work));
                 self.exec_failed_gate(exec, agent, &project, error);
             }
             LoopNext::Blocked { reason } => {
@@ -1705,7 +1975,7 @@ impl<'a> Planner<'a> {
                         ..Default::default()
                     };
                     self.spawn(
-                        AgentName::ExecutionPathAnalyzer,
+                        s.agent_for(BuiltinStage::Closing, Contract::PathAnalysis),
                         ExecPurpose::Epa { phase: p.info.id },
                         project,
                         dir.clone(),
@@ -1720,7 +1990,7 @@ impl<'a> Planner<'a> {
                     if gate.is_none() {
                         self.exec_failed_gate(
                             exec,
-                            AgentName::ExecutionPathAnalyzer,
+                            s.agent_for(BuiltinStage::Closing, Contract::PathAnalysis),
                             project,
                             error,
                         );
@@ -1800,7 +2070,7 @@ impl<'a> Planner<'a> {
                         ..Default::default()
                     };
                     self.spawn(
-                        AgentName::Documentation,
+                        s.agent_for(BuiltinStage::Closing, Contract::Documentation),
                         ExecPurpose::Docs {
                             project: project.to_string(),
                             area: area.map(|a| a.id.clone()),
@@ -1817,7 +2087,12 @@ impl<'a> Planner<'a> {
                     ..
                 } => {
                     let (exec, error) = (exec.clone(), error.clone());
-                    self.exec_failed_gate(&exec, AgentName::Documentation, project, &error);
+                    self.exec_failed_gate(
+                        &exec,
+                        s.agent_for(BuiltinStage::Closing, Contract::Documentation),
+                        project,
+                        &error,
+                    );
                 }
                 _ => {}
             }
@@ -1903,7 +2178,7 @@ impl<'a> Planner<'a> {
                         ..Default::default()
                     };
                     self.spawn(
-                        AgentName::SystemArchitecture,
+                        s.agent_for(BuiltinStage::Closing, Contract::Architecture),
                         ExecPurpose::Architecture,
                         &progress.parts[0],
                         s.session_root.clone(),
@@ -1920,7 +2195,7 @@ impl<'a> Planner<'a> {
                     let (exec, error) = (exec.clone(), error.clone());
                     self.exec_failed_gate(
                         &exec,
-                        AgentName::SystemArchitecture,
+                        s.agent_for(BuiltinStage::Closing, Contract::Architecture),
                         &progress.parts[0],
                         &error,
                     );
@@ -2055,7 +2330,12 @@ impl<'a> Planner<'a> {
                 if s.gates.values().any(|g| failure_gate(g, exec)) {
                     self.push(Step::Fail { error: err.clone() });
                 } else {
-                    self.exec_failed_gate(exec, AgentName::QuickAnswer, &s.primary(), err);
+                    self.exec_failed_gate(
+                        exec,
+                        s.default_agent(Contract::Answer),
+                        &s.primary(),
+                        err,
+                    );
                 }
             }
             return;
@@ -2067,7 +2347,7 @@ impl<'a> Planner<'a> {
                 ..Default::default()
             };
             self.spawn(
-                AgentName::QuickAnswer,
+                s.default_agent(Contract::Answer),
                 ExecPurpose::QuickAnswer,
                 &primary,
                 s.session_root.clone(),
@@ -2174,6 +2454,15 @@ pub fn plan_phase_infos(plan: &ostra_core::submit::PlanSubmit) -> Vec<PhaseInfo>
 
 /// Rule D6 and M3: a phase is ready when every phase it depends on completed and passed review.
 /// An unreadable dependency means it depends on every earlier phase (Rule M5).
+/// The built-in stage a work loop belongs to: the build, or the closing stage for tests.
+fn loop_stage(tests: bool) -> BuiltinStage {
+    if tests {
+        BuiltinStage::Closing
+    } else {
+        BuiltinStage::Build
+    }
+}
+
 pub fn deps_passed(s: &SessionState, p: &PhaseRun) -> bool {
     let deps: Vec<u32> = match &p.info.depends_on {
         Some(d) => d.clone(),
@@ -2184,8 +2473,10 @@ pub fn deps_passed(s: &SessionState, p: &PhaseRun) -> bool {
             .filter(|id| *id < p.info.id)
             .collect(),
     };
-    deps.iter()
-        .all(|d| s.phases.get(d).is_some_and(|dp| dp.impl_loop.is_done()))
+    // Rule WF4: the phase stages of a dependency are part of it passing.
+    deps.iter().all(|d| {
+        s.phases.get(d).is_some_and(|dp| dp.impl_loop.is_done()) && s.phase_stages_done(*d)
+    })
 }
 
 /// Rule D9: every phase that depends, directly or transitively, on a blocked phase is removed

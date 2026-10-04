@@ -251,6 +251,7 @@ async fn implement_session_runs_to_completion_under_yolo() {
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -468,7 +469,7 @@ async fn init_session_start_and_end_notify_project_changes() {
     assert_eq!(changes, 2);
 }
 
-/// Rules H2 and H5: the first spec run asks an explore helper and waits; the first fact-check
+/// Rules SM3 and H5: the first spec run starts an explore helper and waits; the first fact-check
 /// fails, so the author and then the checker continue their conversations.
 struct Coordinating {
     inner: Scripted,
@@ -504,13 +505,13 @@ impl Executor for Coordinating {
                     .coordinate(
                         &session,
                         &spec.id,
-                        ostra_core::coord::SUBAGENT_ASK,
-                        &json!({"message": "How are greetings localized?", "agent": "explore"}),
+                        ostra_core::coord::SEND_MESSAGE,
+                        &json!({"message": "How are greetings localized?", "agent": "explore", "wait": true}),
                     )
                     .unwrap();
                 assert_eq!(reply.end, ostra_core::coord::RunEnd::Wait);
                 let mut r = ExecutionResult::with_status(ExecutionStatus::Waiting);
-                r.submit = Some(ostra_core::coord::end_payload("SubagentAsk", "q"));
+                r.submit = Some(ostra_core::coord::end_payload("SendMessage", "q"));
                 r
             }
             (AgentName::FactCheck, 0) => ExecutionResult {
@@ -571,6 +572,7 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
@@ -595,7 +597,7 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
     assert_eq!(specs.len(), 3, "{specs:#?}");
     let (_, first, none) = &specs[0];
     assert!(none.is_none());
-    // H2: woken in place with the helper's answer, even with a single execution slot.
+    // SM3: woken in place with the helper's result, even with a single execution slot.
     let (_, woken, resume) = &specs[1];
     assert_eq!(woken, first);
     let resume = resume.as_ref().unwrap();
@@ -629,18 +631,192 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.event, SessionEvent::AgentAsked { .. }))
+            .any(|e| matches!(e.event, SessionEvent::MessageSent { wait: true, .. }))
     );
     assert!(
         events
             .iter()
-            .any(|e| matches!(e.event, SessionEvent::MessageDelivered { .. }))
+            .any(|e| matches!(e.event, SessionEvent::MessagesDelivered { .. }))
     );
     assert_eq!(
         of(AgentName::Explore).len(),
         2,
         "the classify explore and the helper"
     );
+}
+
+/// Rules SM3, SM4, and SM6: the reviewer asks the implementer, whose run ended, to fix a finding
+/// and pauses; the implementer continues its conversation with its tools, fixes the file, and
+/// messages back; the reviewer wakes in place with the reply and passes the phase.
+struct ReviewTalk {
+    inner: Scripted,
+    engine: std::sync::OnceLock<Engine>,
+    root: PathBuf,
+    log: Mutex<Vec<(AgentName, ExecPurpose, Option<String>)>>,
+}
+
+#[async_trait]
+impl Executor for ReviewTalk {
+    async fn run(
+        &self,
+        spec: ExecutionSpec,
+        host: Arc<dyn ExecutionHost>,
+        cancel: CancellationToken,
+    ) -> ExecutionResult {
+        let engine = self.engine.get().unwrap();
+        let session = spec.ctx.session_id.clone().unwrap();
+        let st = engine.state(&session).unwrap();
+        let purpose = st.executions[&spec.id].purpose.clone();
+        let note = spec.resume.as_ref().and_then(|r| r.note.clone());
+        self.log
+            .lock()
+            .unwrap()
+            .push((spec.agent, purpose.clone(), note.clone()));
+        let send = |to: &str, text: &str, wait: bool| {
+            engine
+                .coordinate(
+                    &session,
+                    &spec.id,
+                    ostra_core::coord::SEND_MESSAGE,
+                    &json!({"message": text, "to": to, "wait": wait}),
+                )
+                .unwrap()
+        };
+        match (spec.agent, &purpose) {
+            (AgentName::CodeReviewer, ExecPurpose::Review { .. }) if note.is_none() => {
+                let implementer = st
+                    .executions
+                    .values()
+                    .find(|r| r.agent == AgentName::Implementer)
+                    .map(|r| st.subagent_of(&r.id))
+                    .unwrap();
+                let reply = send(
+                    implementer.as_str(),
+                    "greet() returns an empty string. Fix it to return \"hello\", then tell me.",
+                    true,
+                );
+                assert_eq!(reply.end, ostra_core::coord::RunEnd::Wait);
+                let mut r = ExecutionResult::with_status(ExecutionStatus::Waiting);
+                r.submit = Some(ostra_core::coord::end_payload("SendMessage", "fix"));
+                r
+            }
+            (AgentName::Implementer, ExecPurpose::Message { .. }) => {
+                assert!(
+                    note.as_deref()
+                        .unwrap()
+                        .contains("greet() returns an empty string")
+                );
+                assert!(
+                    host.submit_blocked().is_some(),
+                    "the reviewer waits for a reply"
+                );
+                std::fs::write(self.root.join("greet.txt"), "hello").unwrap();
+                let reviewer = st
+                    .executions
+                    .values()
+                    .find(|r| r.agent == AgentName::CodeReviewer)
+                    .map(|r| st.subagent_of(&r.id))
+                    .unwrap();
+                let reply = send(
+                    reviewer.as_str(),
+                    "Fixed: greet() returns \"hello\".",
+                    false,
+                );
+                assert_eq!(reply.end, ostra_core::coord::RunEnd::Continue);
+                assert!(host.submit_blocked().is_none());
+                self.inner.run(spec, host, cancel).await
+            }
+            _ => self.inner.run(spec, host, cancel).await,
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reviewer_asks_the_implementer_for_a_fix_and_waits_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = project(dir.path());
+    let ws_root = dir.path().join("ws");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    let mut ws = WorkspaceSettings::seeded("t");
+    ws.limits.max_parallel_executions = 1;
+    ws.projects.push(ProjectEntry {
+        key: "app".into(),
+        path: app.clone(),
+        stack: None,
+        code_provider: None,
+        language_servers: vec![],
+    });
+    let exec = Arc::new(ReviewTalk {
+        inner: Scripted {
+            root: app.clone(),
+            runs: Mutex::new(vec![]),
+        },
+        engine: std::sync::OnceLock::new(),
+        root: app.clone(),
+        log: Mutex::new(vec![]),
+    });
+    let services = Arc::new(Fake {
+        ws,
+        executor: exec.clone(),
+        notices: Mutex::new(vec![]),
+    });
+    let db = WorkspaceDb::open_in_memory().unwrap();
+    let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
+    let _ = exec.engine.set(engine.clone());
+    let mut rx = engine.subscribe();
+    let summary = engine
+        .create_session(CreateSession {
+            request: "Add a greeting".into(),
+            options: SessionOptions {
+                yolo: true,
+                ..Default::default()
+            },
+            projects: vec![],
+            files: vec![],
+            uploads: vec![],
+            docs_book: None,
+            workflow: None,
+        })
+        .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !engine.state(&summary.id).unwrap().is_terminal() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out: {:#?}",
+            exec.log.lock().unwrap()
+        );
+        let _ = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await;
+    }
+    let st = engine.state(&summary.id).unwrap();
+    assert!(st.failed.is_none(), "failed: {:?}", st.failed);
+    assert_eq!(
+        std::fs::read_to_string(app.join("greet.txt")).unwrap(),
+        "hello"
+    );
+    let log = exec.log.lock().unwrap().clone();
+    let reviews: Vec<_> = log
+        .iter()
+        .filter(|(a, _, _)| *a == AgentName::CodeReviewer)
+        .collect();
+    let woken = reviews[1].2.as_deref().unwrap();
+    assert!(woken.contains("Fixed: greet()"), "{woken}");
+    let continued = st
+        .executions
+        .values()
+        .find(|r| matches!(r.purpose, ExecPurpose::Message { .. }))
+        .unwrap();
+    let first = st
+        .executions
+        .values()
+        .find(|r| matches!(r.purpose, ExecPurpose::Implement { .. }))
+        .unwrap();
+    assert_eq!(
+        st.subagent_of(&continued.id),
+        first.id,
+        "the same conversation"
+    );
+    assert_eq!(continued.report_path, first.report_path);
+    assert!(!st.coordination_open());
 }
 
 // Rule O6: a pinned session holds only its pinned projects.
@@ -685,6 +861,7 @@ async fn pinned_session_holds_only_its_pinned_projects() {
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     engine.stop_session(&summary.id).unwrap();
@@ -729,6 +906,7 @@ async fn docs_session_writes_the_book_into_the_workspace() {
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);

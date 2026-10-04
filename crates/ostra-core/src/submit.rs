@@ -2,6 +2,7 @@
 //! the engine reads structured data instead of scraping a final message (Hard rule 4).
 
 use crate::agent::AgentName;
+use crate::contract::Contract;
 use crate::pipeline::Question;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -329,23 +330,90 @@ pub struct AdvisorSubmit {
     pub reason: String,
 }
 
-/// JSON schema for an agent's submit tool input.
-pub fn submit_schema(agent: AgentName) -> serde_json::Value {
-    let schema = match agent {
-        AgentName::Explore => schemars::schema_for!(ExploreSubmit),
-        AgentName::GenerateSpec => schemars::schema_for!(GenerateSpecSubmit),
-        AgentName::FactCheck => schemars::schema_for!(FactCheckSubmit),
-        AgentName::Plan => schemars::schema_for!(PlanSubmit),
-        AgentName::Implementer => schemars::schema_for!(ImplementerSubmit),
-        AgentName::CodeReviewer => schemars::schema_for!(CodeReviewerSubmit),
-        AgentName::ExecutionPathAnalyzer | AgentName::WriteTest | AgentName::PromptGeneration => {
+/// Rule CA3: how a custom agent's stage went, which the workflow reads to move on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum StageVerdict {
+    /// The stage's work is done and the workflow goes on.
+    Pass,
+    /// The stage found a problem the workflow must handle, per the stage's `on_fail`.
+    Fail,
+    /// The stage needs a decision from the user: `question` and `options` say which.
+    NeedsUser,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct CustomFinding {
+    /// What is wrong, specific enough to act on.
+    pub description: String,
+    /// The file it concerns, relative to the repo root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// What should change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+/// Rule CA3: the submit of every custom agent. `data` follows the schema the agent declares.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct CustomSubmit {
+    pub verdict: StageVerdict,
+    /// What the run did and found, in a few sentences, for the user and the next stages.
+    pub summary: String,
+    #[serde(default)]
+    pub findings: Vec<CustomFinding>,
+    /// For `needs_user`: the question for the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// For `needs_user`: the answers to offer, recommended first.
+    #[serde(default)]
+    pub options: Vec<String>,
+    /// A report file the run wrote, when it wrote one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_path: Option<String>,
+    /// Structured output in the shape the agent declares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(type = "unknown")]
+    pub data: Option<serde_json::Value>,
+}
+
+/// Rule CA3: the submit schema of a custom agent, with `data` set to its declared schema and required.
+pub fn custom_submit_schema(data: Option<&serde_json::Value>) -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(CustomSubmit))
+        .unwrap_or(serde_json::Value::Null);
+    if let Some(data) = data {
+        schema["properties"]["data"] = data.clone();
+        if let Some(req) = schema["required"].as_array_mut() {
+            req.push(serde_json::Value::from("data"));
+        }
+    }
+    schema
+}
+
+/// JSON schema for an agent's submit tool input. A custom agent gets the base schema, without the
+/// `data` shape it declares; the executor carries the full schema in `ExecutionSpec`.
+pub fn submit_schema(contract: Contract) -> serde_json::Value {
+    let schema = match contract {
+        Contract::Research => schemars::schema_for!(ExploreSubmit),
+        Contract::Spec => schemars::schema_for!(GenerateSpecSubmit),
+        Contract::FactCheck => schemars::schema_for!(FactCheckSubmit),
+        Contract::Plan => schemars::schema_for!(PlanSubmit),
+        Contract::Implementation => schemars::schema_for!(ImplementerSubmit),
+        Contract::Review => schemars::schema_for!(CodeReviewerSubmit),
+        Contract::PathAnalysis | Contract::Tests | Contract::Prompt => {
             schemars::schema_for!(ReportSubmit)
         }
-        AgentName::Documentation => schemars::schema_for!(crate::book::DocumentationSubmit),
-        AgentName::SystemArchitecture => schemars::schema_for!(crate::book::ArchitectureSubmit),
-        AgentName::Initializer => schemars::schema_for!(InitializerSubmit),
-        AgentName::QuickAnswer => schemars::schema_for!(QuickAnswerSubmit),
-        AgentName::Advisor => schemars::schema_for!(AdvisorSubmit),
+        Contract::Documentation => schemars::schema_for!(crate::book::DocumentationSubmit),
+        Contract::Architecture => schemars::schema_for!(crate::book::ArchitectureSubmit),
+        Contract::Setup => schemars::schema_for!(InitializerSubmit),
+        Contract::Answer => schemars::schema_for!(QuickAnswerSubmit),
+        Contract::Advice => schemars::schema_for!(AdvisorSubmit),
+        Contract::Stage => return custom_submit_schema(None),
+        // A plugin contract's schema comes from its manifest, carried in the run's spec.
+        Contract::Plugin(_) => return serde_json::json!({"type": "object"}),
     };
     serde_json::to_value(schema).unwrap_or(serde_json::Value::Null)
 }
@@ -359,8 +427,42 @@ pub fn submit_description(agent: AgentName) -> String {
     )
 }
 
+/// Validate a submit payload against the schema the run was given. A custom agent's `data` is checked
+/// against its declared shape; built-in agents ignore `schema`, because their structs are the schema.
+pub fn validate_submit_with(
+    contract: Contract,
+    schema: &serde_json::Value,
+    input: &serde_json::Value,
+) -> Result<(), String> {
+    validate_submit(contract, input)?;
+    // Rule PL5: a plugin contract is checked against the schema its plugin declares.
+    if let Contract::Plugin(_) = contract {
+        let problems = crate::schema_check::check(schema, input, "result");
+        if !problems.is_empty() {
+            return Err(problems.join("\n"));
+        }
+        return Ok(());
+    }
+    if contract == Contract::Stage
+        && let Some(data_schema) = schema.pointer("/properties/data")
+        && schema["required"]
+            .as_array()
+            .is_some_and(|r| r.iter().any(|v| v == "data"))
+    {
+        let data = input
+            .get("data")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let problems = crate::schema_check::check(data_schema, &data, "data");
+        if !problems.is_empty() {
+            return Err(problems.join("\n"));
+        }
+    }
+    Ok(())
+}
+
 /// Validate a submit payload for an agent. Returns the parsed value or a message for the model.
-pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String> {
+pub fn validate_submit(contract: Contract, input: &serde_json::Value) -> Result<(), String> {
     fn issues(list: Vec<String>) -> Result<(), String> {
         if list.is_empty() {
             Ok(())
@@ -373,13 +475,13 @@ pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<()
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
-    match agent {
-        AgentName::Explore => check::<ExploreSubmit>(input),
-        AgentName::GenerateSpec => check::<GenerateSpecSubmit>(input),
-        AgentName::FactCheck => check::<FactCheckSubmit>(input),
-        AgentName::Plan => check::<PlanSubmit>(input),
-        AgentName::Implementer => check::<ImplementerSubmit>(input),
-        AgentName::CodeReviewer => {
+    match contract {
+        Contract::Research => check::<ExploreSubmit>(input),
+        Contract::Spec => check::<GenerateSpecSubmit>(input),
+        Contract::FactCheck => check::<FactCheckSubmit>(input),
+        Contract::Plan => check::<PlanSubmit>(input),
+        Contract::Implementation => check::<ImplementerSubmit>(input),
+        Contract::Review => {
             let r: CodeReviewerSubmit =
                 serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
             let has_blocker = r.findings.iter().any(|f| f.severity == Severity::Blocker);
@@ -390,27 +492,42 @@ pub fn validate_submit(agent: AgentName, input: &serde_json::Value) -> Result<()
             }
             Ok(())
         }
-        AgentName::ExecutionPathAnalyzer | AgentName::WriteTest | AgentName::PromptGeneration => {
-            check::<ReportSubmit>(input)
-        }
-        AgentName::Documentation => {
+        Contract::PathAnalysis | Contract::Tests | Contract::Prompt => check::<ReportSubmit>(input),
+        Contract::Documentation => {
             let d: crate::book::DocumentationSubmit =
                 serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
             issues(crate::book::check_documentation(&d))
         }
-        AgentName::SystemArchitecture => {
+        Contract::Architecture => {
             let a: crate::book::ArchitectureSubmit =
                 serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
             issues(crate::book::check_architecture(&a))
         }
-        AgentName::Initializer => check::<InitializerSubmit>(input),
-        AgentName::QuickAnswer => check::<QuickAnswerSubmit>(input),
-        AgentName::Advisor => {
+        Contract::Setup => check::<InitializerSubmit>(input),
+        Contract::Answer => check::<QuickAnswerSubmit>(input),
+        Contract::Advice => {
             let a: AdvisorSubmit =
                 serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
             if a.action == AdviceAction::Retry && a.guidance.trim().is_empty() {
                 return Err(
                     "give `guidance` for a retry: what the step's next run must do differently"
+                        .into(),
+                );
+            }
+            Ok(())
+        }
+        Contract::Plugin(_) => Ok(()),
+        Contract::Stage => {
+            let c: CustomSubmit =
+                serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+            if c.summary.trim().is_empty() {
+                return Err("give `summary`: what the run did and found".into());
+            }
+            if c.verdict == StageVerdict::NeedsUser
+                && c.question.as_deref().is_none_or(|q| q.trim().is_empty())
+            {
+                return Err(
+                    "give `question` with verdict `needs_user`: the decision you need from the user"
                         .into(),
                 );
             }
@@ -425,7 +542,7 @@ mod tests {
 
     #[test]
     fn schemas_exist() {
-        for a in AgentName::ALL {
+        for a in Contract::BUILTIN {
             let s = submit_schema(a);
             assert!(s.get("properties").is_some(), "{a}");
         }
@@ -433,8 +550,22 @@ mod tests {
 
     #[test]
     fn initializer_result_is_an_object() {
-        let s = submit_schema(AgentName::Initializer);
+        let s = submit_schema(Contract::Setup);
         assert_eq!(s["properties"]["result"]["type"], "object", "{s}");
+    }
+
+    #[test]
+    fn custom_submit_checks_declared_data() {
+        let agent = Contract::Stage;
+        let data = serde_json::json!({"type": "object", "required": ["score"], "properties": {"score": {"type": "integer"}}});
+        let schema = custom_submit_schema(Some(&data));
+        assert_eq!(schema["properties"]["data"], data);
+        let ok = serde_json::json!({"verdict": "pass", "summary": "s", "data": {"score": 3}});
+        assert!(validate_submit_with(agent, &schema, &ok).is_ok());
+        let bad = serde_json::json!({"verdict": "pass", "summary": "s", "data": {"score": "x"}});
+        assert!(validate_submit_with(agent, &schema, &bad).is_err());
+        let ask = serde_json::json!({"verdict": "needs_user", "summary": "s"});
+        assert!(validate_submit(agent, &ask).is_err());
     }
 
     #[test]
@@ -443,6 +574,6 @@ mod tests {
             "findings": [{"severity":"BLOCKER","file":"a.js","rule":"SEC-BLOCK-EXFIL","description":"x","fix":"remove"}],
             "security_block": false, "ledger_path": "/l", "summary": "s"
         });
-        assert!(validate_submit(AgentName::CodeReviewer, &v).is_err());
+        assert!(validate_submit(Contract::Review, &v).is_err());
     }
 }

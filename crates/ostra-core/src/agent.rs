@@ -3,10 +3,11 @@ use std::fmt;
 use std::str::FromStr;
 use ts_rs::TS;
 
-/// Every leaf agent Ostra runs. Kebab-case names match `assets/agents/<name>/`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
-#[serde(rename_all = "kebab-case")]
-#[ts(export)]
+/// Every leaf agent Ostra runs: the built-in agents, whose kebab-case names match
+/// `assets/agents/<name>/`, and the custom agents a workspace or a plugin defines. Serialized as the
+/// bare name either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, TS)]
+#[ts(export, type = "string")]
 pub enum AgentName {
     Explore,
     GenerateSpec,
@@ -18,7 +19,6 @@ pub enum AgentName {
     WriteTest,
     /// Rule B1: writes one project's part of the documentation book. Logs written before books
     /// say `module-documentation`.
-    #[serde(alias = "module-documentation")]
     Documentation,
     /// Rule B4: writes the architecture of a book that covers two or more projects.
     SystemArchitecture,
@@ -27,6 +27,81 @@ pub enum AgentName {
     QuickAnswer,
     /// Rule O5: diagnoses a failed or stuck step and tells the engine how to continue.
     Advisor,
+    /// Rule CA1: an agent a workspace markdown file or a plugin defines.
+    Custom(CustomAgent),
+}
+
+/// The name of a custom agent, interned so [`AgentName`] stays `Copy`. Only names that pass
+/// [`CustomAgent::new`] exist, so every value is a valid, non-built-in agent name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CustomAgent(&'static str);
+
+/// Longest custom agent name, so it fits tool names such as `submit_<name>` on every harness.
+pub const MAX_CUSTOM_AGENT_NAME: usize = 40;
+
+impl CustomAgent {
+    /// Rule CA1: a custom agent name is lowercase kebab-case, starts with a letter, and is not a
+    /// built-in agent, a retired one, or the `judge` route.
+    pub fn new(name: &str) -> Result<CustomAgent, String> {
+        let name = name.trim();
+        let valid = !name.is_empty()
+            && name.len() <= MAX_CUSTOM_AGENT_NAME
+            && name.starts_with(|c: char| c.is_ascii_lowercase())
+            && !name.ends_with('-')
+            && !name.contains("--")
+            && name
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if !valid {
+            return Err(format!(
+                "Name the agent in lowercase kebab-case of at most {MAX_CUSTOM_AGENT_NAME} characters, starting with a letter: `{name}` is not."
+            ));
+        }
+        if AgentName::builtin(name).is_some()
+            || RETIRED_AGENTS.contains(&name)
+            || name == JUDGE_ROUTE
+        {
+            return Err(format!(
+                "Give the agent another name: `{name}` is a built-in Ostra agent or route."
+            ));
+        }
+        Ok(CustomAgent(intern(name)))
+    }
+
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+/// Custom agent names live as long as the process. They come from workspace files and plugin
+/// manifests, so the set stays small.
+pub(crate) fn intern(name: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static NAMES: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut names = NAMES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(n) = names.get(name) {
+        return n;
+    }
+    let leaked: &'static str = Box::leak(name.to_string().into_boxed_str());
+    names.insert(leaked);
+    leaked
+}
+
+impl Serialize for AgentName {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentName {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = std::borrow::Cow::<'de, str>::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 impl AgentName {
@@ -63,6 +138,23 @@ impl AgentName {
             AgentName::Initializer => "initializer",
             AgentName::QuickAnswer => "quick-answer",
             AgentName::Advisor => "advisor",
+            AgentName::Custom(c) => c.as_str(),
+        }
+    }
+
+    /// The built-in agent of this name, without the retired aliases.
+    pub fn builtin(name: &str) -> Option<AgentName> {
+        AgentName::ALL.into_iter().find(|a| a.as_str() == name)
+    }
+
+    pub fn is_builtin(self) -> bool {
+        !matches!(self, AgentName::Custom(_))
+    }
+
+    pub fn custom(self) -> Option<CustomAgent> {
+        match self {
+            AgentName::Custom(c) => Some(c),
+            _ => None,
         }
     }
 
@@ -84,32 +176,6 @@ impl AgentName {
     pub fn submit_tool_name(self) -> String {
         format!("submit_{}", self.snake())
     }
-
-    /// Agents confined to their session dir and OS temp (write-scope guard).
-    pub fn is_session_only(self) -> bool {
-        matches!(
-            self,
-            AgentName::Explore
-                | AgentName::GenerateSpec
-                | AgentName::FactCheck
-                | AgentName::Plan
-                | AgentName::CodeReviewer
-                | AgentName::ExecutionPathAnalyzer
-                | AgentName::Advisor
-                | AgentName::Documentation
-                | AgentName::SystemArchitecture
-        )
-    }
-
-    /// Rule O2: the agent that creates a project, because only an approved plan's phase starts one.
-    pub fn manages_projects(self) -> bool {
-        matches!(self, AgentName::Implementer)
-    }
-
-    /// Agents whose model tier is routed by the phase's `**Complexity:**` line.
-    pub fn routes_by_complexity(self) -> bool {
-        matches!(self, AgentName::Implementer | AgentName::WriteTest)
-    }
 }
 
 impl fmt::Display for AgentName {
@@ -129,11 +195,29 @@ impl FromStr for AgentName {
         if bare == "module-documentation" {
             return Ok(AgentName::Documentation);
         }
-        AgentName::ALL
-            .into_iter()
-            .find(|a| a.as_str() == bare)
-            .ok_or_else(|| format!("unknown agent `{s}`"))
+        if let Some(a) = AgentName::builtin(bare) {
+            return Ok(a);
+        }
+        CustomAgent::new(bare)
+            .map(AgentName::Custom)
+            .map_err(|_| format!("unknown agent `{s}`"))
     }
+}
+
+/// Rule CA2: where an agent may write files, enforced by the write-scope guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Default)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum WriteScope {
+    /// No file anywhere.
+    ReadOnly,
+    /// Its session dir and the OS temp dir.
+    #[default]
+    Session,
+    /// The repo root and its session dir.
+    Project,
+    /// The project's `.ostra/` runtime and its skills dir, and its session dir (project setup).
+    Setup,
 }
 
 /// The routing key `judge` sits beside the agent names in `routing.model.byAgent`.
@@ -196,8 +280,12 @@ pub enum Capability {
     WebSearch,
     WebFetch,
     Report,
-    /// The typed-document tool: research, spec, and plan documents (HANDOVER 10.3).
-    Document,
+    /// Rule CA6: the typed-document tool for research documents, and their ownership.
+    DocumentResearch,
+    /// Rule CA6: the typed-document tool for the spec, and its ownership.
+    DocumentSpec,
+    /// Rule CA6: the typed-document tool for the plan and its phase files, and their ownership.
+    DocumentPlan,
     Memory,
     MemoryRecall,
     /// Search over the workspace's documentation books (Rule B8).
@@ -208,6 +296,14 @@ pub enum Capability {
     ManageProjects,
     /// The subagent coordination tools ([`crate::coord::COORD_TOOLS`]).
     Coordinate,
+    /// Rule CA6: writes a review loop's ledger, which the engine counts to cap the loop.
+    ReviewLedger,
+    /// Rule CA6: writes the security block file of BLOCKER findings.
+    SecurityBlock,
+    /// Rule CA6: writes the implementer progress log that re-runs read.
+    ProgressLog,
+    /// Rule CA6: writes test files and directories in the repo.
+    TestFiles,
 }
 
 /// The code navigation tools: the operation (`code_{op}` over MCP) and the native tool name.
@@ -240,13 +336,30 @@ impl Capability {
             Capability::WebSearch => "WebSearch",
             Capability::WebFetch => "WebFetch",
             Capability::Report => "Report",
-            Capability::Document => "Document",
+            Capability::DocumentResearch | Capability::DocumentSpec | Capability::DocumentPlan => {
+                "Document"
+            }
             Capability::Memory => "Memory",
             Capability::MemoryRecall => "MemoryRecall",
             Capability::DocsSearch => "DocsSearch",
             Capability::Code => CODE_TOOLS[0].1,
             Capability::ManageProjects => crate::manage::PROJECT_TOOLS[0].1,
             Capability::Coordinate => crate::coord::COORD_TOOLS[0].1,
+            // Grants of file ownership, which add no tool.
+            Capability::ReviewLedger
+            | Capability::SecurityBlock
+            | Capability::ProgressLog
+            | Capability::TestFiles => "",
+        }
+    }
+
+    /// Rule CA6: the typed document this capability grants.
+    pub fn document_kind(self) -> Option<crate::doc::DocKind> {
+        match self {
+            Capability::DocumentResearch => Some(crate::doc::DocKind::Research),
+            Capability::DocumentSpec => Some(crate::doc::DocKind::Spec),
+            Capability::DocumentPlan => Some(crate::doc::DocKind::Plan),
+            _ => None,
         }
     }
 

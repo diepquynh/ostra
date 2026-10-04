@@ -36,6 +36,8 @@ const PAGE_TITLE: Record<string, string> = {
   memory: "Memory",
   skills: "Skills",
   docs: "Documentation",
+  agents: "Agents",
+  workflows: "Workflows",
 };
 
 /** The session a resource belongs to, for the quick question's context. */

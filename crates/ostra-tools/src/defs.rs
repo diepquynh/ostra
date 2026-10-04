@@ -151,28 +151,30 @@ Usage:
 - git_init defaults to true, which runs `git init` in the new folder.
 - If the user denies the call, put the work in a project already in scope, and say so in your document.";
 
-const SUBAGENT_LIST: &str = "Lists the subagents of this session: your own subagent ID, then each subagent's ID, agent, label, status, what it waits on, and its report.
+const LIST_AGENTS: &str = "Lists the subagents of this session: your own subagent ID, then each subagent's ID, agent, label, status, what it waits on, and its report, and the helper agents SendMessage can start.
 
 Usage:
-- Call it before SubagentAsk to find the subagent that knows the answer: the author of the document you check, the checker of your document, the implementer or reviewer of your phase, or the researcher of an area. Subagents you work with are marked.
+- Call it before SendMessage to find the subagent that knows the answer or does the work: the author of the document you check, the checker of your document, the implementer or reviewer of your phase, the stage before yours, or the researcher of an area. Subagents you work with are marked.
 - A subagent ID stays the same across every run of that subagent's conversation.";
 
-const SUBAGENT_ASK: &str = "Asks another agent a question and waits for the answer, then continues this run from where it stopped with the answer as the next message.
+const SEND_MESSAGE: &str = "Sends a message to another subagent of this session, or starts a helper agent with it. The message is queued: Ostra hands it over at the receiver's next turn boundary, never in the middle of its work.
 
 Usage:
-- Give agent to start a new helper: `explore` researches the question and writes a research document, and its findings are the answer. Give subagent_id to ask an existing subagent from SubagentList, which answers from its own conversation.
-- Ask only for what you cannot find yourself with your own tools in a few calls, because every question starts or wakes a run and costs a model call.
-- Write message so it stands on its own: what you need, why, and the file paths it concerns. The receiver does not see your conversation.
+- Give to with a subagent ID from ListAgents to message an existing subagent. A running subagent reads it at its next turn, a waiting one wakes with it, and one whose run ended continues its own conversation, with its own tools, to act on it.
+- Give agent to start a new helper with the message as its task, for example `explore` to research a question and write a research document. Its result comes back to you as a message.
+- Set wait to true to pause this run after sending, until a message arrives for you. Use it when you need the reply before you can go on, for example after asking an implementer to fix a finding you must check again. Make every other call you need first, because nothing else runs in this run while it waits.
+- Without wait, continue your task; a reply reaches you at your next turn.
+- Write message so it stands on its own: what you need or want done, why, and the file paths it concerns. The receiver does not see your conversation.
+- When a message tells you its sender waits for your reply, reply with SendMessage to that sender before you submit.
 - project names the project a helper works in. It defaults to your own project.
-- Nothing else runs in this run until the answer arrives, so make every other call you need first.
-- A run may start at most 3 helpers, and a session has a limit on questions.";
+- A run may start at most 3 helpers, and a session has a limit on messages.";
 
-const SUBAGENT_REPLY: &str = "Answers the question another subagent asked you, which is the message that woke this run.
+const WAIT_FOR_MESSAGE: &str = "Pauses this run until a message arrives for you, then continues it from where it stopped with the message as the next turn.
 
 Usage:
-- Call it once with the complete answer: the facts, the file paths and line numbers, and what you are unsure of. The asker continues from your message alone.
-- After the call, end your turn. A consult run ends; a run that was waiting goes back to waiting.
-- In a consult run, change no file: answer from your conversation and what you read.";
+- Use it when another subagent will message you and your task cannot go on before that, for example after you messaged several subagents without wait.
+- Make every other call you need first, because nothing else runs in this run while it waits.
+- When no subagent is left that could message you, Ostra wakes you with a notice saying so, and you continue without a message.";
 
 const PATH_NOTE: &str =
     "Paths are relative to the project root; an absolute path inside the project works too.";
@@ -515,52 +517,68 @@ fn project_defs() -> Vec<ToolDefinition> {
 fn coord_defs() -> Vec<ToolDefinition> {
     vec![
         def(
-            "SubagentList",
-            SUBAGENT_LIST,
+            "ListAgents",
+            LIST_AGENTS,
             json!({"type": "object", "properties": {}, "additionalProperties": false}),
         ),
         def(
-            "SubagentAsk",
-            SUBAGENT_ASK,
+            "SendMessage",
+            SEND_MESSAGE,
             json!({"type": "object", "properties": {
-                "message": {"type": "string", "description": "The question, standing on its own, with the file paths it concerns"},
-                "agent": {"type": "string", "enum": ostra_core::coord::HELPER_AGENTS.iter().map(|a| a.as_str()).collect::<Vec<_>>(), "description": "Start a new helper of this agent"},
-                "subagent_id": {"type": "string", "description": "Ask this existing subagent, by the ID SubagentList shows"},
-                "project": {"type": "string", "description": "Project key a helper works in. Defaults to yours"}
+                "message": {"type": "string", "description": "The message, standing on its own, with the file paths it concerns"},
+                "to": {"type": "string", "description": "The subagent ID to message, as ListAgents shows it"},
+                "agent": {"type": "string", "description": "Start a new helper of this agent instead, from the helpers ListAgents names"},
+                "project": {"type": "string", "description": "Project key a helper works in. Defaults to yours"},
+                "wait": {"type": "boolean", "description": "Pause this run after sending, until a message arrives for you"}
             }, "required": ["message"], "additionalProperties": false}),
         ),
         def(
-            "SubagentReply",
-            SUBAGENT_REPLY,
-            json!({"type": "object", "properties": {
-                "message": {"type": "string", "description": "The complete answer"}
-            }, "required": ["message"], "additionalProperties": false}),
+            "WaitForMessage",
+            WAIT_FOR_MESSAGE,
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
         ),
     ]
 }
 
-/// The `Document` tool for an agent that writes a typed document, with that document's schema.
-pub fn document_tool_definition(agent: AgentName) -> Option<ToolDefinition> {
-    let kind = ostra_core::doc::DocKind::for_agent(agent)?;
-    let mut schema = kind.schema();
-    let defs = schema
-        .as_object_mut()
-        .and_then(|m| m.remove("$defs"))
-        .unwrap_or_else(|| json!({}));
-    if let Some(m) = schema.as_object_mut() {
-        m.remove("$schema");
+/// Rule CA6: the `Document` tool for the typed documents a run is granted, with their schemas. A
+/// run granted several takes any of them, told apart by the file name's prefix.
+pub fn document_tool_definition(kinds: &[ostra_core::doc::DocKind]) -> Option<ToolDefinition> {
+    if kinds.is_empty() {
+        return None;
     }
-    let mut defs = match defs {
-        serde_json::Value::Object(m) => m,
-        _ => Default::default(),
+    let mut defs = serde_json::Map::new();
+    let mut refs = vec![];
+    for k in kinds {
+        let mut schema = k.schema();
+        if let Some(serde_json::Value::Object(m)) =
+            schema.as_object_mut().and_then(|m| m.remove("$defs"))
+        {
+            defs.extend(m);
+        }
+        if let Some(m) = schema.as_object_mut() {
+            m.remove("$schema");
+        }
+        let name = if kinds.len() == 1 {
+            "Document".to_string()
+        } else {
+            format!("Document{}", refs.len())
+        };
+        defs.insert(name.clone(), schema);
+        refs.push(json!({"$ref": format!("#/$defs/{name}")}));
+    }
+    let document = if refs.len() == 1 {
+        let mut d = refs.remove(0);
+        d["description"] = json!("The whole document. Replaces what is stored");
+        d
+    } else {
+        json!({"anyOf": refs, "description": "The whole document, of the kind its path names. Replaces what is stored"})
     };
-    defs.insert("Document".into(), schema);
     Some(def(
         "Document",
         DOCUMENT,
         json!({"type": "object", "properties": {
             "path": {"type": "string", "description": "Absolute path of the document's markdown file in your session dir"},
-            "document": {"$ref": "#/$defs/Document", "description": "The whole document. Replaces what is stored"},
+            "document": document,
             "update": {"type": "object", "description": "Top-level fields to change. Lists of items with an `id` merge by id, and a merged item keeps the fields you leave out"},
             "remove": {"type": "array", "items": {"type": "string"}, "description": "Ids of list items to remove, such as `R4`, a phase number, a step id, or `{parent id}/{id}`"}
         }, "required": ["path"], "additionalProperties": false, "$defs": defs}),
@@ -587,8 +605,15 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
             Capability::Skill => vec![skill_def()],
             Capability::WebFetch => vec![web_fetch_def()],
             Capability::Report => vec![report_def()],
-            // Agent-specific: see [`document_tool_definition`].
-            Capability::Document => vec![],
+            // Built from the granted kinds: see [`document_tool_definition`].
+            Capability::DocumentResearch | Capability::DocumentSpec | Capability::DocumentPlan => {
+                vec![]
+            }
+            // Grants of file ownership, which add no tool.
+            Capability::ReviewLedger
+            | Capability::SecurityBlock
+            | Capability::ProgressLog
+            | Capability::TestFiles => vec![],
             Capability::Memory => vec![memory_def()],
             Capability::MemoryRecall => vec![memory_recall_def()],
             Capability::DocsSearch => vec![docs_search_def()],
@@ -600,7 +625,7 @@ pub fn definitions(capabilities: &[Capability]) -> Vec<ToolDefinition> {
         .collect()
 }
 
-const EVERY: [Capability; 17] = [
+const EVERY: [Capability; 16] = [
     Capability::Read,
     Capability::Write,
     Capability::Edit,
@@ -611,7 +636,6 @@ const EVERY: [Capability; 17] = [
     Capability::WebSearch,
     Capability::WebFetch,
     Capability::Report,
-    Capability::Document,
     Capability::Memory,
     Capability::MemoryRecall,
     Capability::DocsSearch,
@@ -620,10 +644,10 @@ const EVERY: [Capability; 17] = [
     Capability::Coordinate,
 ];
 
-/// The input schema of a local tool as `agent` sees it.
-pub(crate) fn input_schema(tool: &str, agent: AgentName) -> Option<Value> {
+/// The input schema of a local tool as a run with these document grants sees it.
+pub(crate) fn input_schema(tool: &str, kinds: &[ostra_core::doc::DocKind]) -> Option<Value> {
     if tool == "Document" {
-        return document_tool_definition(agent).map(|d| d.input_schema);
+        return document_tool_definition(kinds).map(|d| d.input_schema);
     }
     definitions(&EVERY)
         .into_iter()
@@ -636,11 +660,12 @@ pub fn wants_web_search(capabilities: &[Capability]) -> bool {
     capabilities.contains(&Capability::WebSearch)
 }
 
-pub fn submit_tool_definition(agent: AgentName) -> ToolDefinition {
+/// The submit tool with the schema of the run's contract (Rule CA5).
+pub fn submit_tool_definition(agent: AgentName, schema: serde_json::Value) -> ToolDefinition {
     ToolDefinition {
         name: agent.submit_tool_name(),
         description: ostra_core::submit::submit_description(agent),
-        input_schema: ostra_core::submit::submit_schema(agent),
+        input_schema: schema,
     }
 }
 
@@ -717,7 +742,10 @@ mod tests {
 
     #[test]
     fn submit_definition() {
-        let d = submit_tool_definition(AgentName::CodeReviewer);
+        let d = submit_tool_definition(
+            AgentName::CodeReviewer,
+            ostra_core::submit::submit_schema(ostra_core::Contract::Review),
+        );
         assert_eq!(d.name, "submit_code_reviewer");
         assert!(d.input_schema.get("properties").is_some());
     }
@@ -730,8 +758,16 @@ mod document_tests {
     /// Every `$ref` in the Document schema points at a definition it carries.
     #[test]
     fn document_schema_refs_resolve() {
-        for agent in [AgentName::Explore, AgentName::GenerateSpec, AgentName::Plan] {
-            let d = document_tool_definition(agent).unwrap();
+        use ostra_core::doc::DocKind;
+        let all = DocKind::ALL.to_vec();
+        for kinds in [
+            vec![DocKind::Research],
+            vec![DocKind::Spec],
+            vec![DocKind::Plan],
+            all,
+        ] {
+            let agent = format!("{kinds:?}");
+            let d = document_tool_definition(&kinds).unwrap();
             let text = d.input_schema.to_string();
             let defs = d.input_schema["$defs"].as_object().unwrap();
             for part in text.split("\"#/$defs/").skip(1) {
@@ -740,6 +776,6 @@ mod document_tests {
             }
             assert!(!d.description.contains('\u{2014}'));
         }
-        assert!(document_tool_definition(AgentName::Implementer).is_none());
+        assert!(document_tool_definition(&[]).is_none());
     }
 }

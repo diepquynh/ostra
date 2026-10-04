@@ -175,6 +175,7 @@ pub fn stage_label(k: StageKind) -> &'static str {
         SkillApproval => "Approve skills",
         GenerateSkill => "Generate skills",
         GenerateInventory => "Write the inventory",
+        Custom => "Workflow stage",
     }
 }
 
@@ -800,9 +801,9 @@ pub fn phases(s: &SessionState) -> Vec<PhaseView> {
                 l.next,
                 LoopNext::Review | LoopNext::Autofix { .. } | LoopNext::Stage
             ) || l.running.as_ref().is_some_and(|r| {
-                s.executions
-                    .get(r)
-                    .is_some_and(|e| e.agent == ostra_core::AgentName::CodeReviewer)
+                s.executions.get(r).is_some_and(|e| {
+                    matches!(e.purpose, ostra_core::event::ExecPurpose::Review { .. })
+                })
             }) {
                 PhaseStatus::Reviewing
             } else {
@@ -1290,6 +1291,7 @@ mod tests {
             uploads: vec![],
             pinned: vec![],
             docs_book: None,
+            workflow: None,
         }
     }
 
@@ -1310,6 +1312,7 @@ mod tests {
             spawn_block: String::new(),
             report_path: None,
             resumes: None,
+            contract: None,
         }
     }
 

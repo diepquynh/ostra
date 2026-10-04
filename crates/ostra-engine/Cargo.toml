@@ -23,6 +23,7 @@ uuid.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
+toml.workspace = true
 
 [[test]]
 name = "conformance"

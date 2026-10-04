@@ -294,6 +294,7 @@ impl Log {
             spawn_block: String::new(),
             report_path: None,
             resumes: None,
+            contract: None,
         });
         id
     }
@@ -322,6 +323,7 @@ fn session(case: &Case, dir: &Path) -> SessionState {
         uploads: vec![],
         pinned: vec![],
         docs_book: None,
+        workflow: None,
     });
     if case.judge == "classify" {
         return SessionState::fold(SessionId::from("eval"), &log.events);

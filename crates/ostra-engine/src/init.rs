@@ -5,6 +5,7 @@
 
 use crate::plan::{SpawnInputs, SpawnRequest, Step};
 use crate::state::{InitTrack, SessionState};
+use ostra_core::Contract;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, GatePayload, SkillProposal};
 use ostra_core::ids::ExecutionId;
@@ -41,7 +42,7 @@ fn spawn(
         item: item.clone(),
     };
     Step::Spawn(Box::new(SpawnRequest {
-        agent: AgentName::Initializer,
+        agent: s.default_agent(Contract::Setup),
         stage: crate::state::stage_of(&purpose),
         purpose,
         project: project.clone(),
@@ -214,6 +215,8 @@ pub const MAX_STEP_RESULT_CHARS: usize = 8_000;
 /// Everything the advisor's spawn carries about one failed step (Rule O5).
 #[derive(Debug, Clone)]
 pub struct AdviceInputs {
+    /// Rule WF8: the agent that gives the advice, the one bound to the `advice` contract.
+    pub advisor: AgentName,
     pub project: String,
     pub session_dir: std::path::PathBuf,
     /// The failed execution, which a `retry` runs again.
@@ -278,7 +281,7 @@ pub fn advisor_request(a: AdviceInputs) -> SpawnRequest {
         round: a.earlier.len() as u32 + 1,
     };
     SpawnRequest {
-        agent: AgentName::Advisor,
+        agent: a.advisor,
         stage: crate::state::stage_of(&purpose),
         purpose,
         project: a.project,
@@ -296,6 +299,7 @@ pub fn advisor_request(a: AdviceInputs) -> SpawnRequest {
 fn advise(s: &SessionState, i: &InitTrack, exec: &ExecutionId, err: &str, focus: &str) -> Step {
     let rec = s.executions.get(exec);
     let inputs = AdviceInputs {
+        advisor: s.default_agent(Contract::Advice),
         project: i.project.clone(),
         session_dir: s.project_session_dir(&i.project),
         execution: exec.clone(),
@@ -542,7 +546,11 @@ fn failed_gate(s: &SessionState, exec: &ExecutionId, project: &str, err: &str) -
         explanation: explanation.into(),
         payload: GatePayload::ExecutionFailed {
             execution: exec.clone(),
-            agent: AgentName::Initializer,
+            agent: s
+                .executions
+                .get(exec)
+                .map(|r| r.agent)
+                .unwrap_or_else(|| s.default_agent(Contract::Setup)),
             project: project.to_string(),
             error: err.to_string(),
         },

@@ -59,10 +59,10 @@ What holds a slot and what does not:
 
 - **Holds a slot:** every agent execution a session spawns, on any executor, native or harness. The limit is
   per workspace, so two sessions in the same workspace share it.
-- **Gives its slot back while it waits:** a harness run that asked another subagent a question and waits with its
-  process alive (Rule H2). It takes a slot again before the answer is typed in. A native run that asks ends
-  instead, so it holds nothing while it waits. Without this, a limit of one would leave the asker holding the only
-  slot and the helper it waits for unable to start.
+- **Gives its slot back while it waits:** a harness run or a programmatic agent that paused for a message and
+  waits with its process alive (Rule SM3). It takes a slot again before the message is handed over. A native run
+  that pauses ends instead, so it holds nothing while it waits. Without this, a limit of one would leave the
+  waiting run holding the only slot and the run it waits for unable to start.
 - **Does not hold a slot:** judge calls, which are single structured requests the engine makes between steps,
   and side-panel quick answers, which run outside any session. Both are short and run on the `fast` or
   `balanced` tier by default.
@@ -141,13 +141,16 @@ The workspace's spend over time is available from `GET /api/workspaces/{ws}/cost
 ### When the budget is checked
 
 The budget is enforced by the planner, not by the executors. Every time the planner is about to emit a spawn,
-it first compares what the session has spent with its limit, in `Planner::push` in
+or a workflow prompt node's model call (`Step::RunNode` with `model: true`), it first compares what the session
+has spent with its limit, in `Planner::push` in
 [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs):
 
 ```rust
 // Budget guard: once the session has spent its budget, no new execution starts until
 // the user raises it. Running executions finish.
-if matches!(step, Step::Spawn(_)) && let Some(budget) = self.ctx.budget_usd {
+if matches!(step, Step::Spawn(_) | Step::RunNode { model: true, .. })
+    && let Some(budget) = self.ctx.budget_usd
+{
     let limit = budget + self.s.budget_raised;
     let spent = self.s.spent_usd();
     if spent >= limit {
@@ -160,14 +163,16 @@ if matches!(step, Step::Spawn(_)) && let Some(budget) = self.ctx.budget_usd {
 
 Three details decide how this behaves in practice.
 
-- **Spent means finished.** `SessionState::spent_usd` adds up the cost of executions that have finished. A
-  running execution is counted when it ends. The budget is therefore a ceiling that Ostra checks between
+- **Spent means finished.** `SessionState::spent_usd` adds up the cost of executions that have finished, plus
+  what workflow prompt nodes spent (`node_cost`, from each `NodeRan` event, Rule WB3). A running execution is
+  counted when it ends. The budget is therefore a ceiling that Ostra checks between
   executions: executions that are already running when the limit is reached run to the end, and a spawn that
   was already waiting for a slot still starts. A session can finish somewhat above its budget, by at most what
   those executions spend.
-- **Judge calls are not counted against it.** The budget covers agent executions. Judge calls appear in the
-  session's displayed cost but do not trip the gate, because they are small and the session cannot make
-  progress without them.
+- **Judge calls are not counted against it.** The budget covers agent executions and prompt nodes. Judge calls
+  appear in the session's displayed cost but do not trip the gate, because they are small and the session
+  cannot make progress without them. A prompt node goes through the same judge path but counts, because a
+  workflow may hold any number of them. A transform node calls no model and is never held.
 - **The setting is read on every planning pass.** The runner puts `session_budget_usd` into the planner's
   context each time it plans (`plan_ctx`), so a budget you change on the Settings screen applies to running
   sessions at their next step. Setting it to 0 removes the limit.
@@ -230,13 +235,27 @@ slot limiter comes into play. The init flow has two:
 Each generated skill runs on the `advanced` tier, so the second cap bounds the most expensive part of init.
 Under YOLO the proposal's defaults are used as they are, so the cap holds there too.
 
-Questions between subagents can start runs too, so they have caps of their own (Rule H4). One run may start at
-most three explore helpers (`coord::MAX_HELPERS_PER_RUN`), and a session may ask at most 24 questions
-(`coord::MAX_SESSION_ASKS`). A helper cannot start helpers, which keeps the fan-out one level deep. Helpers and the
-consult runs that answer a question go through the slot limiter and the budget guard like every other spawn. A
-pair loop that continues a conversation is not a new fan-out, but a conversation that reaches six runs
-(`coord::MAX_CONVERSATION_RUNS`) starts fresh, because every turn of a long conversation re-sends its whole
-history.
+Messages between subagents can start or wake runs too, so they have caps of their own (Rule SM5). One run may
+start at most three helpers (`coord::MAX_HELPERS_PER_RUN`), and a session's agents may send at most 48 messages
+(`coord::MAX_SESSION_MESSAGES`); a helper's result, which Ostra sends, does not count. A helper cannot start
+helpers, which keeps the fan-out one level deep. Helpers, and the runs that continue an ended subagent for its
+messages, go through the slot limiter and the budget guard like every other spawn. A pair loop that continues a
+conversation is not a new fan-out, but a conversation that reaches six runs (`coord::MAX_CONVERSATION_RUNS`)
+starts fresh, because every turn of a long conversation re-sends its whole history. A subagent whose conversation
+already holds six runs takes no message, for the same reason.
+
+Workflows add their own bounds (Rule WF7). A workflow holds at most 24 custom stages
+(`workflow::MAX_CUSTOM_STAGES`), and each stage runs at most `max_rounds` times, which a workflow file may set
+between 1 and 10 (`workflow::MAX_STAGE_ROUNDS`, default 3). After the last round a failing stage asks you instead
+of running again, and YOLO does not answer that gate, because only you can decide to spend more on it. A plugin
+stage counts a decision to run beyond `max_rounds` as a failure. A `project` stage runs once per project in scope
+and a `phase` stage once per passed phase, and every stage run goes through the slot limiter and the budget guard
+like any other spawn, so stages with the same dependencies running side by side never exceed
+`max_parallel_executions`.
+
+A programmatic agent (a plugin agent that runs in code) has no turn count, so its tool and model calls together
+are capped at 2,000 per run (`MAX_PROGRAM_CALLS` in `crates/ostra-exec-native/src/program.rs`). Its model calls run
+on the agent's route and count toward the run's usage and the session's spend.
 
 The engine has other loop limits that bound spend: a cap on review passes per implement loop, one automatic retry after
 an error, three sufficiency rounds for research, and a guard that refuses build commands after five failing

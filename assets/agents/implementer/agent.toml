@@ -1,7 +1,11 @@
 description = "Writes the code for one plan phase or one inline change: loads the skills named for it, follows the project's convention skill, verifies each step with the project's build command, and reports what changed. Runs for every phase, for review fixes, and after a handoff or rescue. Does all coding itself and never writes tests."
 default_tier = "balanced"
 timeout_seconds = 2400
-capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill", "memory_recall", "memory", "report", "code", "manage_projects", "coordinate", "docs_search"]
+capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill", "memory_recall", "memory", "report", "code", "manage_projects", "coordinate", "docs_search", "review_ledger", "progress_log"]
+
+returns = "implementation"
+write_scope = "project"
+brief = ["commands", "skills", "conventions", "modules"]
 
 [effort]
 native = "high"

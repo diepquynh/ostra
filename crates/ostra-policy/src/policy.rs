@@ -414,18 +414,6 @@ impl ExecutionPolicy {
         drop(state);
 
         let tool = call.tool.as_str();
-        if self.ctx.answer_only {
-            let writes = !self.write_paths(call).is_empty()
-                || matches!(tool, "Report" | "Document" | "Memory")
-                || ostra_core::manage::is_manage_tool(tool)
-                || parsed.is_some_and(|p| {
-                    !guards::shell_targets(&self.roots, p, &self.start_cwd(call)).is_empty()
-                });
-            if writes {
-                return Some(guards::answer_only_denial());
-            }
-        }
-        let tool = call.tool.as_str();
         if tool == "Report" {
             let reason = call.str_field("reason").map(str::trim).unwrap_or_default();
             if let Some(rec) = &pending
@@ -442,10 +430,6 @@ impl ExecutionPolicy {
         }
         if ostra_core::manage::is_manage_tool(tool) {
             return guards::check_manage(&self.ctx, tool, &call.input);
-        }
-        // Rule H3: a run that owes an answer replies before anything ends it.
-        if self.ctx.owes_reply && tool.starts_with("submit_") {
-            return Some(guards::reply_first_denial());
         }
         if tool.starts_with("submit_") {
             let status = call.str_field("status").unwrap_or("ok");

@@ -1,0 +1,12 @@
+# Ostra's default `spec` workflow. A workspace runs its own copy in .ostra/workflows/spec.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Research, then a spec with its fact-check and your approval."
+base = "spec"
+
+[[stage]]
+id = "research"
+uses = "ostra:research"
+
+[[stage]]
+id = "spec"
+uses = "ostra:spec"

@@ -1,0 +1,48 @@
+/* The schema builder: one row per field, nested objects and array items indented under a rule. */
+.sb {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sb-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.sb-label {
+  flex: 1;
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+.sb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sb-field,
+.sb-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.sb-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.sb-name {
+  flex: 1 1 160px;
+}
+.sb-count {
+  width: 90px;
+}
+.sb-nested {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-left: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border-subtle);
+}

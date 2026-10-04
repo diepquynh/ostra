@@ -281,6 +281,21 @@ pub fn workspace_runtime(workspace: &Path) -> PathBuf {
     workspace.join(RUNTIME_DIR)
 }
 
+/// Rule CA1: the workspace's custom agents, one markdown file each.
+pub fn workspace_agents_dir(workspace: &Path) -> PathBuf {
+    workspace_runtime(workspace).join("agents")
+}
+
+/// Rule WF1: the workspace's workflows, one TOML file each.
+pub fn workspace_workflows_dir(workspace: &Path) -> PathBuf {
+    workspace_runtime(workspace).join("workflows")
+}
+
+/// Rule WB7: the workspace's composite transform functions.
+pub fn workspace_transforms_dir(workspace: &Path) -> PathBuf {
+    workspace_runtime(workspace).join("transforms")
+}
+
 pub fn workspace_toml(workspace: &Path) -> PathBuf {
     workspace_runtime(workspace).join("workspace.toml")
 }

@@ -54,7 +54,9 @@ fn fx() -> Fx {
 }
 
 impl Fx {
+    /// A context for a standard agent, with the scope, contract, and grants its definition holds.
     fn ctx(&self, agent: AgentName) -> ExecContext {
+        let def = ostra_agents::builtin_def(agent);
         ExecContext {
             execution_id: "x_test".into(),
             session_id: Some("s1".into()),
@@ -82,8 +84,12 @@ impl Fx {
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: def.map(|d| d.write_scope),
+            contract: def
+                .map(|d| d.returns)
+                .unwrap_or(ostra_core::Contract::Stage),
+            capabilities: def.map(|d| d.capabilities.clone()).unwrap_or_default(),
         }
     }
 
@@ -241,7 +247,8 @@ fn write_scope_per_agent() {
     let imp = f.policy(AgentName::Implementer);
     allowed(&imp, &write(f.repo.join("src/App.ts")));
     let r = denied(&imp, &write(f.repo.join("src/App.test.ts")), "Constraint 6");
-    assert!(r.starts_with("Leave test files to write-test"));
+    assert!(r.starts_with("Leave test files to the test stage"), "{r}");
+    assert!(r.contains("`test_files`"), "{r}");
     assert_eq!(
         guard_of(&imp, &write(f.repo.join("core/src/test/java/FooTest.java"))),
         "no-tests-from-implementer"
@@ -463,7 +470,7 @@ fn declared_report_path_and_lesson_gate() {
             "echo x > {}",
             shp(f.session_dir.join("ostra-security-block.json"))
         )),
-        "code-reviewer",
+        "security_block",
     );
 
     // Three failures then a pass: a verified recovery with no lesson blocks the report.
@@ -747,6 +754,12 @@ fn self_protection() {
         &write(f.ws.join(".ostra/workspace.db-wal")),
         "part of Ostra itself",
     );
+    // Rule WB7: a composite transform an agent wrote would run in later nodes.
+    denied(
+        &p,
+        &write(f.ws.join(".ostra/transforms/high-files.toml")),
+        "part of Ostra itself",
+    );
     allowed(&p, &write(f.repo.join("src/App.ts")));
     allowed(
         &p,
@@ -828,12 +841,12 @@ fn state_ownership() {
     denied(
         &f.policy(AgentName::Explore),
         &write(&ledger),
-        "code-reviewer, implementer, write-test",
+        "review_ledger",
     );
     denied(
         &f.policy(AgentName::Implementer),
         &write(f.session_dir.join("ostra-security-block.json")),
-        "code-reviewer",
+        "security_block",
     );
     allowed(
         &f.policy(AgentName::CodeReviewer),
@@ -861,7 +874,7 @@ fn artifact_ownership() {
     denied(
         &f.policy(AgentName::GenerateSpec),
         &write(f.session_root.join("ostra-plan-x.md")),
-        "plan agent",
+        "document_plan",
     );
     // Fact-check's snapshot copy is not the artifact.
     let fc = f.policy(AgentName::FactCheck);
@@ -876,7 +889,7 @@ fn artifact_ownership() {
     denied(
         &fc,
         &bash(format!("cp /tmp/x \"{}\"", shp(&spec))),
-        "generate-spec",
+        "document_spec",
     );
 }
 
@@ -2033,16 +2046,18 @@ fn project_create_always_asks_unless_yolo() {
 fn project_create_is_guarded() {
     let f = fx();
     let call = project_create();
+    // Rule CA6: whatever its name, an agent without `manage_projects` creates nothing.
     for agent in [AgentName::GenerateSpec, AgentName::Plan, AgentName::Explore] {
         let mut ctx = creator(&f);
         ctx.agent = agent;
+        ctx.capabilities = f.ctx(agent).capabilities;
         let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
         p.set_yolo(true);
         assert_eq!(guard_of(&p, &call), "manage-tools", "{agent}");
     }
     let p = f.policy(AgentName::Implementer);
     p.set_yolo(true);
-    denied(&p, &call, "only the implementer of a phase");
+    denied(&p, &call, "holds `manage_projects`");
     let mut ctx = creator(&f);
     ctx.session_id = None;
     let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
@@ -2099,63 +2114,14 @@ fn project_list_is_allowed_for_every_agent() {
 }
 
 #[test]
-fn h3_a_consult_run_answers_and_writes_nothing() {
-    let f = fx();
-    let mut ctx = f.ctx(AgentName::Implementer);
-    ctx.answer_only = true;
-    ctx.permission_mode = PermissionMode::Default;
-    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
-    let reason = denied(&p, &write(f.repo.join("src/a.rs")), "SubagentReply");
-    assert!(reason.starts_with("Answer with SubagentReply"), "{reason}");
-    denied(
-        &p,
-        &bash(format!("echo x > {}", shp(f.repo.join("a.txt")))),
-        "change no file",
-    );
-    denied(
-        &p,
-        &ToolCall::new("Report", json!({"content": "x"})),
-        "change no file",
-    );
-    allowed(
-        &p,
-        &ToolCall::new(
-            "Read",
-            json!({"file_path": f.repo.join("src/a.rs").to_string_lossy()}),
-        ),
-    );
-    allowed(&p, &ToolCall::new("SubagentReply", json!({"message": "m"})));
-}
-
-#[test]
-fn h2_coordination_tools_never_ask_the_user() {
+fn sm2_messaging_tools_never_ask_the_user() {
     let f = fx();
     let mut ctx = f.ctx(AgentName::GenerateSpec);
     ctx.permission_mode = PermissionMode::Plan;
     let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
-    for tool in ["SubagentList", "SubagentAsk", "SubagentReply"] {
+    for tool in ["ListAgents", "SendMessage", "WaitForMessage"] {
         allowed(&p, &ToolCall::new(tool, json!({"message": "m"})));
     }
-}
-
-#[test]
-fn h3_a_run_that_owes_an_answer_replies_before_it_submits() {
-    let f = fx();
-    let mut ctx = f.ctx(AgentName::GenerateSpec);
-    ctx.owes_reply = true;
-    let p = ExecutionPolicy::new(ctx, PolicyInputs::default());
-    let reason = denied(
-        &p,
-        &ToolCall::new("submit_generate_spec", json!({"spec_path": "/x"})),
-        "SubagentReply",
-    );
-    assert!(reason.starts_with("Call SubagentReply"), "{reason}");
-    allowed(&p, &ToolCall::new("SubagentReply", json!({"message": "m"})));
-    let free = f.policy(AgentName::GenerateSpec);
-    assert!(!matches!(
-        free.check(&ToolCall::new("submit_generate_spec", json!({}))),
-        PolicyDecision::Deny { rule, .. } if rule.rule == "reply-first"
-    ));
 }
 
 // ---------------------------------------------------------------------------------------------

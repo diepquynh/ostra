@@ -102,6 +102,13 @@ pub struct WorkspaceDetail {
     pub global_sandbox: GlobalSandbox,
     /// `tool_enforcement` from the global config, which the workspace's own value replaces.
     pub global_tool_enforcement: crate::config::ToolEnforcement,
+    /// Rule WF1: the workflows a session can run: the built-in pipelines and the workspace's own
+    /// valid files.
+    #[serde(default)]
+    pub workflows: Vec<crate::workflow::WorkflowInfo>,
+    /// Rule WF9: Ostra's default workflows the workspace has no copy of. Sessions run Ostra's own
+    /// for them, and Settings offers to add them.
+    pub missing_workflows: Vec<String>,
 }
 
 /// A settings change that fixes the validation issue at `path` by setting it to `value`.
@@ -147,6 +154,14 @@ pub enum PendingKind {
     AllowRule,
     /// A project folder outside the workspace folder, which agents may then write.
     ProjectOutside,
+    /// Rule PL1: a plugin program the workspace starts.
+    Plugin,
+    /// Rule CA1: a custom agent file in `.ostra/agents/`.
+    AgentFile,
+    /// Rule WF1: a workflow file in `.ostra/workflows/`.
+    WorkflowFile,
+    /// Rule WB7: a composite transform function in `.ostra/transforms/`.
+    TransformFile,
 }
 
 /// One program or rule a folder file asks for. Values of `env` and `headers` are never sent,
@@ -199,6 +214,174 @@ pub struct AgentInfo {
     pub resolved: Option<ResolvedRoute>,
     /// What `Agent default` resolves to on the executor the agent is routed to.
     pub default_route: Option<ResolvedRoute>,
+    /// Rule AG1: where the definition comes from.
+    pub source: AgentSource,
+    /// Rule CA5: the result contract it submits.
+    pub returns: crate::contract::Contract,
+    pub write_scope: crate::agent::WriteScope,
+    /// Rule SM6: `SendMessage` may start it as a helper.
+    pub helper: bool,
+    /// Rule PL2: its plugin does its work in code, with no prompt.
+    pub programmatic: bool,
+}
+
+/// Rule AG1: where an agent's definition comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum AgentSource {
+    /// Ostra's standard plugin (Rule PL4).
+    Ostra,
+    /// A markdown file in the workspace's `.ostra/agents/`, by path under the workspace.
+    Workspace { file: String },
+    /// A plugin's manifest.
+    Plugin { plugin: String },
+}
+
+/// Rule AG2: an agent definition as the agent editor reads and writes it. A workspace agent's
+/// file is this, as TOML frontmatter and the prompt.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentDoc {
+    pub name: String,
+    pub description: String,
+    /// Rule CA5: a contract name such as `stage`, `review`, or `<plugin>:<contract>`.
+    pub returns: String,
+    #[serde(default)]
+    pub default_tier: Option<Tier>,
+    #[serde(default)]
+    pub capabilities: Vec<Capability>,
+    #[serde(default)]
+    pub write_scope: Option<crate::agent::WriteScope>,
+    /// Repo brief sections.
+    #[serde(default)]
+    pub brief: Vec<String>,
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub effort: BTreeMap<String, Effort>,
+    /// Rule CA3: the shape of a `stage` agent's submit `data`.
+    #[serde(default)]
+    #[ts(type = "unknown")]
+    pub data_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub helper: bool,
+    /// The instructions, with `{{ tool_* }}` tokens. Empty for a programmatic agent.
+    #[serde(default)]
+    pub prompt: String,
+}
+
+/// Rule AG1: one agent, everything the agent screen shows about it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct AgentDetail {
+    pub info: AgentInfo,
+    pub doc: AgentDoc,
+    /// Only a workspace agent's file is edited in Ostra.
+    pub editable: bool,
+    /// Rule A1: its file waits for the workspace's approval, so no session runs it yet.
+    pub waiting_approval: bool,
+    /// The system prompt as the native executor renders it.
+    pub prompt_preview: Option<String>,
+    /// The schema of its submit call.
+    #[ts(type = "unknown")]
+    pub submit_schema: serde_json::Value,
+    /// The workflow nodes that run it or bind it, as `workflow/node`.
+    pub used_by: Vec<String>,
+}
+
+/// Rule AG3: what a plugin program is doing now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PluginState {
+    Running,
+    /// Its entry is disabled.
+    Disabled,
+    /// The workspace file waits for approval (Rule PL1).
+    WaitingApproval,
+    Starting,
+    Failed,
+}
+
+/// Rule AG3: one plugin of a workspace, built in or a program.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PluginInfo {
+    pub name: String,
+    /// Compiled into this Ostra binary.
+    pub builtin: bool,
+    /// The `[[plugins]]` entry, with env values hidden.
+    pub config: Option<crate::plugin::PluginConfig>,
+    pub state: PluginState,
+    pub error: Option<String>,
+    /// What it declares, once it runs.
+    pub manifest: Option<crate::plugin::PluginManifest>,
+}
+
+/// Rule WB1: a workflow as the Workflow builder edits it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct WorkflowDoc {
+    pub name: String,
+    /// Ostra's default, which the workspace has no copy of (Rule WF9). Saving it writes the copy.
+    pub builtin: bool,
+    /// Every node written out, without `extends` or `remove`.
+    pub file: crate::workflow::WorkflowFile,
+    /// The workflow it resolves to, when it does.
+    pub resolved: Option<crate::workflow::WorkflowDef>,
+    pub issues: Vec<String>,
+    /// The file on disk uses `extends` or `remove`, which a save from the builder writes out.
+    pub flattened: bool,
+    /// Rule PL6: the plugin that builds it in code. The builder shows it read only.
+    #[serde(default)]
+    pub plugin: Option<String>,
+}
+
+/// Rule WB7: a composite transform function as its editor reads it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FunctionDoc {
+    pub name: String,
+    pub file: crate::transform::FunctionFile,
+    /// What the builder shows for it: its inputs, arguments, and output kind.
+    pub info: Option<crate::transform::TransformInfo>,
+    pub issues: Vec<String>,
+    /// The workflows and functions that call it.
+    pub used_by: Vec<String>,
+}
+
+/// Rule WB1: a built-in stage as the builder's palette lists it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BuiltinStageInfo {
+    pub stage: crate::workflow::BuiltinStage,
+    pub uses: String,
+    pub description: String,
+    /// Rule WF8: the contracts it reads, each bindable to an agent.
+    pub contracts: Vec<crate::contract::Contract>,
+    pub removable: bool,
+}
+
+/// Rule WB1: a plugin stage as the builder's palette lists it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PluginStageInfo {
+    pub plugin: String,
+    pub stage: String,
+    pub description: String,
+}
+
+/// Rule WB1: every kind of node the Workflow builder can place. Agents come from
+/// `WorkspaceDetail.agents`.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BuilderPalette {
+    pub builtin_stages: Vec<BuiltinStageInfo>,
+    pub plugin_stages: Vec<PluginStageInfo>,
+    pub transforms: Vec<crate::transform::TransformInfo>,
+    pub cond_ops: Vec<crate::transform::CondOp>,
+    pub tiers: Vec<Tier>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -728,6 +911,11 @@ pub struct CreateSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub docs_book: Option<String>,
+    /// Rule WF1: a workflow by name. Absent runs the workspace's workflow for the category the
+    /// Classify judge picks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workflow: Option<String>,
 }
 
 /// A file uploaded to the workspace's staging area, waiting for a session or an addition to

@@ -944,6 +944,13 @@ pub fn yolo_leaves_open(s: &SessionState, payload: &GatePayload) -> bool {
     match payload {
         GatePayload::BudgetReached { .. } => true,
         GatePayload::ExecutionFailed { execution, .. } => s.stopped_by_user(execution),
+        // Rule WF5: a stage that failed every round it may run waits for the user.
+        GatePayload::StageReview {
+            verdict: ostra_core::submit::StageVerdict::Fail,
+            round,
+            max_rounds,
+            ..
+        } => round >= max_rounds,
         _ => false,
     }
 }
@@ -1045,6 +1052,26 @@ pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
         },
         // Spending more is the user's decision, so YOLO leaves a budget gate open.
         GatePayload::BudgetReached { .. } => return None,
+        GatePayload::StageReview { .. } if yolo_leaves_open(s, &g.payload) => return None,
+        // Rule WF5: options come recommended first, so YOLO takes the first.
+        GatePayload::StageReview {
+            verdict: ostra_core::submit::StageVerdict::NeedsUser,
+            options,
+            ..
+        } => match options.first() {
+            Some(o) => choice(o, "Under YOLO the stage's recommended answer is taken."),
+            None => YoloPlan::Fixed {
+                answer: GateAnswer::Choice {
+                    option: "other".into(),
+                    text: Some("Decide as you recommend and go on.".into()),
+                },
+                reason: "Under YOLO the stage decides for itself, because it offered no options.".into(),
+            },
+        },
+        GatePayload::StageReview { .. } => choice(
+            "retry",
+            "Under YOLO a failed stage runs again with its findings while it has rounds left.",
+        ),
     })
 }
 

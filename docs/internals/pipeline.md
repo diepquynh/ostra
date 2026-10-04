@@ -59,9 +59,21 @@ route:
 | `PROMPT` | Prompt-generation, reviewed only when a changed file is code rather than an instruction file. |
 | `QUICK_CHANGE` | One implementer pass per project with no research, spec, plan, or review, on the native executor. |
 
-The route table is the `match category` block at the top of `Planner::run`. When the judge is unsure between two
+Each category's route is its built-in workflow: the built-in stages it runs, in a chain (`builtin_chain` in
+[`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs)). When the judge is unsure between two
 categories it is told to pick the one that runs more of the pipeline, because a skipped stage that was needed
 costs a wrong result while an unneeded stage costs one round.
+
+### Your own stages: workflows
+
+A workspace can change the route with workflow files in `.ostra/workflows/`. A workflow extends a built-in one and
+adds stages that run a custom agent or a plugin's stage logic between Ostra's own, for example a security audit
+after the build and before the closing stages. It may also leave out the implementation review, the closing
+stages, or the Track judge (with a fixed track in its place). Built-in stages keep their order and their rules,
+so every gate on this page still holds. The session records the workflow it runs when it starts, so editing a
+file never changes a session in flight. A custom stage that fails or needs a decision opens a `stage_review`
+gate ([Gates and judges](gates-and-judges.md#stage-review)). [Workflows](workflows.md) covers the file format,
+the rules, and how the planner walks the stages.
 
 On the session board, the lanes follow the same path. This session has finished research through build and waits
 for the user in review:

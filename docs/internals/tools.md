@@ -22,8 +22,9 @@ capability to its own tool:
 
 ```toml
 # assets/agents/implementer/agent.toml
-capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill",
-                "memory_recall", "memory", "report", "code"]
+capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill", "memory_recall",
+                "memory", "report", "code", "manage_projects", "coordinate", "docs_search",
+                "review_ledger", "progress_log"]
 ```
 
 | Capability | Native tool | Claude Code | Codex | Grok Build | Antigravity |
@@ -38,12 +39,13 @@ capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill"
 | `web_search` | `WebSearch` | `WebSearch` | `web_search` | `web_search` | `search_web` |
 | `web_fetch` | `WebFetch` | `WebFetch` | `web_search` | `web_fetch` | `read_url_content` |
 | `report` | `Report` | `mcp__ostra__report` | `report` | `report` | `report` |
-| `document` | `Document` | `mcp__ostra__document` | `document` | `document` | `document` |
+| `document_research`, `document_spec`, `document_plan` | `Document` | `mcp__ostra__document` | `document` | `document` | `document` |
 | `memory` | `Memory` | `mcp__ostra__memory` | `memory` | `memory` | `memory` |
 | `memory_recall` | `MemoryRecall` | `mcp__ostra__memory_recall` | `memory_recall` | `memory_recall` | `memory_recall` |
 | `docs_search` | `DocsSearch` | `mcp__ostra__docs_search` | `docs_search` | `docs_search` | `docs_search` |
 | `code` | `CodeOutline`, `CodeFind`, ... | `mcp__ostra__code_*` | `code_*` | `code_*` | `code_*` |
 | `manage_projects` | `ProjectList`, `ProjectCreate` | `mcp__ostra__project_list`, `mcp__ostra__project_create` | `project_*` | `project_*` | `project_*` |
+| `coordinate` | `ListAgents`, `SendMessage`, `WaitForMessage` | `mcp__ostra__list_agents`, ... | `list_agents`, ... | `list_agents`, ... | `list_agents`, ... |
 
 The table is `assets/tool-mapping.toml`. The prompt renderer reads it and writes each agent's prompt with the
 tool names of the executor it runs on, so an implementer on Codex is told to edit with `apply_patch` and an
@@ -68,22 +70,27 @@ executor. The policy then narrows further what the tools an agent has may touch.
 
 | Agent | Capabilities |
 | --- | --- |
-| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document, code, coordinate, docs_search |
-| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document, code, coordinate, docs_search |
+| explore | read, shell, search_text, glob, web_search, web_fetch, memory_recall, memory, document_research, code, coordinate, docs_search |
+| generate-spec | read, shell, search_text, glob, web_search, web_fetch, document_spec, code, coordinate, docs_search |
 | fact-check | read, write, shell, search_text, glob, web_search, web_fetch, code, coordinate, docs_search |
-| plan | read, shell, search_text, glob, document, code, coordinate, docs_search |
-| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate, docs_search |
-| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate, docs_search |
-| code-reviewer | read, shell, search_text, glob, code, coordinate, docs_search |
+| plan | read, shell, search_text, glob, document_plan, code, coordinate, docs_search |
+| implementer | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, manage_projects, coordinate, docs_search, review_ledger, progress_log |
+| write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate, docs_search, review_ledger, test_files |
+| code-reviewer | read, shell, search_text, glob, code, coordinate, docs_search, review_ledger, security_block |
 | execution-path-analyzer | read, shell, write, search_text, glob, report, code, docs_search |
 | documentation, system-architecture | read, shell, search_text, glob, code, docs_search |
-| prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code |
-| initializer | read, write, edit, shell, search_text, glob, code |
+| prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code, test_files |
+| initializer | read, write, edit, shell, search_text, glob, code, test_files |
 | quick-answer | read, search_text, glob, web_search, web_fetch, memory_recall, code, docs_search |
 | advisor | read, shell, search_text, glob, web_search, web_fetch, memory_recall, docs_search |
 
-Every agent also gets its own `submit_<agent>` tool and the workspace's MCP tools. [Agents](agents.md) covers
-what each agent is for.
+A custom agent lists its own capabilities in its definition; without a list it gets read, search_text, glob,
+report, and coordinate. Any agent may request any capability, including the document grants, the ownership grants (`review_ledger`,
+`security_block`, `progress_log`, `test_files`), and `manage_projects`, because none is reserved (Rule CA6);
+approving the workspace file is what lets it hold them. The ownership grants add no tool: they only widen what
+the guards let the agent write. The implementer holds `manage_projects` by default, and any agent that holds it
+and runs a phase in a project the plan names as new may create that project. Every agent also gets its own
+`submit_<agent>` tool and the workspace's MCP tools. [Agents](agents.md) covers what each agent is for.
 
 ## How the policy sees each tool
 
@@ -331,9 +338,15 @@ lesson applies. That is a guard, so it lives on the containment page.
 
 ### Document
 
-Writes the typed document of explore (research), generate-spec (spec), or plan (plan). The schemas are the structs in
-`crates/ostra-core/src/doc`. This tool is agent-specific: each of those three agents sees only its own document
-schema.
+Writes a typed document: a research document, a spec, or a plan. The schemas are the structs in
+`crates/ostra-core/src/doc`. An agent gets the tool when it holds a document grant (Rule CA6):
+`document_research`, `document_spec`, or `document_plan`, whatever the agent's name. Its schema covers every kind
+the run is granted (`document_tool_definition` in `crates/ostra-tools/src/defs.rs`): one kind's schema directly,
+or a choice of them when the agent holds several. The tool takes the kind from the file name's prefix
+(`ostra-research-`, `ostra-spec-`, `ostra-plan-`) and refuses a name that matches no granted kind. Even an agent granted a
+single kind must start the name with that kind's prefix, because later stages find the file by it
+(`crates/ostra-tools/src/doc.rs`). The
+standard agents `explore`, `generate-spec`, and `plan` each hold one grant.
 
 | Input | Meaning |
 | --- | --- |
@@ -361,6 +374,10 @@ in place.
 
 These files can only be written through `Document`. A `Write`, `Edit`, or shell write to them is refused with the
 correction to call `Document`, because the next render would overwrite the change and the browser would not show it.
+An agent without the matching grant may not write them at all.
+
+The other grants, `review_ledger`, `security_block`, `progress_log`, and `test_files`, add no tool: they only
+widen what the write guards let the agent's file tools touch (see [agent containment](../security/agent-containment.md)).
 
 ### Memory and MemoryRecall
 
@@ -437,13 +454,26 @@ text search cannot tell apart from another definition with the same name. On a h
 `code_find`, and so on, served by the `ostra` MCP server. [The code index](code-index.md) describes how the index is
 built.
 
-### Subagent tools
+### Messaging tools
 
-`SubagentList`, `SubagentAsk`, and `SubagentReply` let an agent with the `coordinate` capability ask a helper or
-another subagent a question and wait for the answer, then continue from its own conversation. On a harness they are
-`subagent_list`, `subagent_ask`, and `subagent_reply`. The permission layer allows them in every mode, because they
-change no file. An ask ends the native run with status `waiting`, or makes a harness run wait with its process
-alive; [Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other) covers the whole flow.
+`ListAgents`, `SendMessage`, and `WaitForMessage` let an agent with the `coordinate` capability message the other
+subagents of its session (definitions in `crates/ostra-tools/src/defs.rs`, inputs and limits in
+`crates/ostra-core/src/coord.rs`). On a harness they are `list_agents`, `send_message`, and `wait_for_message`, which
+Claude Code shows as `mcp__ostra__send_message` and so on.
+
+| Tool | Input | What it does |
+| --- | --- | --- |
+| `ListAgents` | none | Your subagent ID, every subagent of the session with its agent, label, project, status, what it waits on, and its report, and the helper agents you can start. |
+| `SendMessage` | `message`, exactly one of `to` (a subagent ID) or `agent` (a helper), optional `project` for a helper, optional `wait` | Queues the message and returns at once. With `wait: true` the run pauses after it. |
+| `WaitForMessage` | none | Pauses the run until a message arrives for it. |
+
+A message is plain text of at most 8,000 characters (`MAX_MESSAGE_CHARS`); longer material belongs in a file whose
+path the message names. A message is never delivered in the middle of a request: the receiver reads it at its next
+turn boundary. Pausing ends a native run with status `waiting` and makes a harness or programmatic run wait with its
+process alive, and the next message for the run wakes it. `WaitForMessage` is refused while the run owes a waiting
+sender a reply, because that sender would then wait on a run that waits on it. The permission layer allows the three
+tools in every mode, because they change no file. [Subagents that talk to each
+other](agents.md#subagents-that-talk-to-each-other) covers the whole flow.
 
 ### The submit tool
 
@@ -455,9 +485,9 @@ it ends the run rather than doing work: [The submit call](executors.md#the-submi
 
 Management tools are calls an agent makes to Ostra itself rather than to the files it works on. The first
 toolset manages projects, for a request that needs a codebase no project holds, such as a new service that
-would otherwise have to live inside an existing repository. Only the implementer has the `manage_projects`
-capability, and the guard narrows that to one run: the implementer of a phase the approved plan puts in a
-project that does not exist yet. A project is therefore created only after the user approved the plan that
+would otherwise have to live inside an existing repository. The implementer holds the `manage_projects`
+capability by default, and any agent may request it (Rule CA6). The guard narrows it to one run: a run holding
+the capability in a phase the approved plan puts in a project that does not exist yet. A project is therefore created only after the user approved the plan that
 needs it, so a spec or plan the user rejects leaves nothing on disk.
 
 ### ProjectList
@@ -479,11 +509,11 @@ every mode allows it.
 | `folder` | Optional, relative to the workspace root with no `..`. Defaults to the key. |
 | `git_init` | Optional, default true: run `git init` in the new folder. |
 
-The implementer takes these from its phase file, where the plan copied them from the spec's `Constraint`
+The implementer (or whichever agent holds the grant) takes these from its phase file, where the plan copied them from the spec's `Constraint`
 criteria. A call passes three checks before anything changes on disk:
 
 1. **The guard (rule O2).** The `manage-tools` guard allows the call only from an execution whose context has
-   `creates_project` set, which the runner sets only for the implementer of a phase in a project the approved
+   `creates_project` set, which the runner sets only for a run holding `manage_projects` in a phase in a project the approved
    plan lists in `new_projects` and the session does not hold yet. The key must be that phase's project key.
    The guard also refuses a malformed input: a bad key or stack, an empty or oversized purpose, no requirements
    or too many, or a folder that is absolute or climbs with `..`. Checking here means the user is never asked

@@ -8,7 +8,7 @@ use crate::protocol::*;
 use crate::services::BridgeServices;
 use ostra_core::coord::RunEnd;
 use ostra_core::policy::{PolicyDecision, RuleRef, ToolCall};
-use ostra_core::submit::{submit_description, submit_schema, validate_submit};
+use ostra_core::submit::{submit_description, validate_submit_with};
 use ostra_core::{ExecutionId, HarnessKind};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -208,7 +208,7 @@ impl HarnessBridge {
         let mut tools = vec![json!({
             "name": live.agent.submit_tool_name(),
             "description": submit_description(live.agent),
-            "inputSchema": object_schema(submit_schema(live.agent)),
+            "inputSchema": object_schema(live.submit_schema()),
         })];
         for (name, description, schema) in self.services.mcp_tools(&live.id) {
             tools.push(json!({"name": name, "description": description, "inputSchema": object_schema(schema)}));
@@ -221,19 +221,25 @@ impl HarnessBridge {
         let mut args = params.get("arguments").cloned().unwrap_or(json!({}));
         if name == live.agent.submit_tool_name() {
             // Rule H3: a run woken with a question replies before it submits.
-            if live.owes_reply() {
-                return tool_error(&ostra_core::coord::reply_instruction(
-                    ostra_core::coord::reply_tool(ostra_core::ExecutorKind::Harness(live.harness)),
-                ));
+            // Rule SM6: a run that owes a waiting sender a reply sends it before it submits.
+            if let Some(why) = live.submit_blocked() {
+                return tool_error(&why);
             }
-            ostra_core::args::coerce_json_strings(&mut args, &submit_schema(live.agent));
-            if let Err(message) = validate_submit(live.agent, &args) {
+            let schema = live.submit_schema();
+            ostra_core::args::coerce_json_strings(&mut args, &schema);
+            if let Err(message) = validate_submit_with(live.contract(), &schema, &args) {
                 return tool_error(&format!(
                     "Fix the arguments and call `{name}` again: {message}. Nothing was recorded."
                 ));
             }
-            if let Err(message) = ostra_core::doc::check_submit(live.agent, &args) {
+            if let Err(message) = ostra_core::doc::check_submit(live.contract(), &args) {
                 return tool_error(&format!("{message} Nothing was recorded."));
+            }
+            if let Some(report) = live.missing_report(&args) {
+                return tool_error(&format!(
+                    "Write your report to {} before you call `{name}`, because the engine reads the report at that path. Nothing was recorded.",
+                    report.display()
+                ));
             }
             return if live.record_submit(args) {
                 tool_text(
@@ -259,11 +265,9 @@ impl HarnessBridge {
             Ok(out) => {
                 match out.end {
                     RunEnd::Continue => {}
-                    // Rule H2: the process stays up and the answer is typed in when it arrives.
-                    RunEnd::Wait => {
-                        live.set_owes_reply(false);
-                        live.set_waiting(true);
-                    }
+                    // Rule SM3: the process stays up and the next message is typed in when it
+                    // arrives.
+                    RunEnd::Wait => live.set_waiting(true),
                     RunEnd::Finish => {
                         let message = args
                             .get("message")
@@ -605,6 +609,7 @@ mod tests {
             AgentName::Implementer,
             HarnessKind::Claude,
         );
+        exec.set_contract(ostra_core::Contract::Implementation);
         (HarnessBridge::new(fake.clone(), live), fake, exec)
     }
 
@@ -803,6 +808,7 @@ mod tests {
         let fake = Arc::new(Fake::default());
         let live = LiveRegistry::new();
         let exec = live.register(ExecutionId::new(), AgentName::Explore, HarnessKind::Claude);
+        exec.set_contract(ostra_core::Contract::Research);
         let bridge = HarnessBridge::new(fake, live);
         let args = json!({"research_path": "/nowhere/ostra-research-1.md", "scope_covered": "s", "findings_summary": "f", "sources_retrieved": 0, "open_questions": 0});
         let r = bridge

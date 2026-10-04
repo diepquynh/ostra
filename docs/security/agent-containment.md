@@ -75,7 +75,7 @@ a tool call names, so with enforcement on Ostra refuses it outright and the mode
 | Write scope, including quick-answer's read-only rule and the `Document` tool's session-dir rule | off | on |
 | Report path | off | on |
 | Self-protection: writes to Ostra's binary, config, and `workspace.toml`, running `ostra`, and inline interpreter code that writes files or spawns processes | off | on |
-| No tests from implementer, state ownership, artifact ownership, workspace artifacts, workspace docs, `Document` tool, git metadata, secret reads, Windows paths | on | on |
+| No test files without `test_files`, state ownership, artifact ownership, workspace artifacts, workspace docs, `Document` tool, git metadata, secret reads, Windows paths | on | on |
 | Lesson gate, build streak, management tools, and the subagent coordination gates | on | on |
 
 The choice is a trade between protection and tool calls. `enabled` protects the pipeline from a weaker model
@@ -101,15 +101,21 @@ applies to the next execution, not to one already running.
 
 This guard applies only with tool enforcement enabled.
 
-Each agent has a region of the disk it may write, and a write outside that region is refused.
+Each agent has a region of the disk it may write, its `write_scope` (Rule CA2), and a write outside that region is
+refused. Every agent declares its scope in its definition, Ostra's own agents in their `agent.toml`:
 
-| Agent | May write |
-| --- | --- |
-| explore, generate-spec, fact-check, plan, code-reviewer, EPA | its session dir, and OS temp |
-| initializer | `.ostra/` and `.agents/skills/` in the project |
-| documentation, system-architecture | their session dir and OS temp; they return the book in their submit call |
-| quick-answer | nothing: it answers in its submit call |
-| implementer, write-test, and the rest | the repo root and the session dir |
+| `write_scope` | May write | Standard agents with it |
+| --- | --- | --- |
+| `read_only` | nothing: it answers in its submit call | quick-answer |
+| `session` | its session dir, and OS temp | explore, generate-spec, fact-check, plan, code-reviewer, EPA, advisor, documentation, system-architecture |
+| `project` | the repo root and the session dir | implementer, write-test, prompt-generation |
+| `setup` | `.ostra/` and `.agents/skills/` in the project, and the session dir | initializer |
+
+The guard reads the region from `ExecContext::scope`, the run's declared scope (`check_scope` in
+[`guards.rs`](../../crates/ostra-policy/src/guards.rs)), and never looks at the agent's name, so a custom agent
+passes the same check as a standard one. An agent that declares no `write_scope` gets `project` when its
+capabilities include `write` or `edit`, else `session`. The files the engine reads as records (the ledger, the
+security block, the progress log, the typed documents) need a grant on top of the scope, described below.
 
 Scope stops two classes of mistakes. A research or review agent that "helpfully" fixes the code it was asked to
 read would change the project behind the pipeline's back, so the spec or review would describe code that no longer
@@ -117,13 +123,14 @@ exists. An agent that writes outside the repo can damage the user's machine. The
 `../../etc/x`, `~/.bashrc`, and a symlinked path are judged by where they land, not by how they are spelled.
 The allowed regions are resolved the same way. A project that keeps its skills in `skills/` or `.claude/skills/`
 and links `.agents/skills` to it lets the initializer write through the link, because both names land in the same
-folder. That folder must be inside the repo: a link that leaves the repo lands outside every agent's region. A
-write to the older `.ostra/skills/` is refused only when it does not also land in `.agents/skills/`.
+folder. That folder must be inside the repo: a link that leaves the repo lands outside every agent's region. For a
+`setup` agent, a write to the older `.ostra/skills/` is refused only when it does not also land in `.agents/skills/`.
 
-A second scope rule applies only to the implementer: it may not write any path that looks like a test
-(`*.test.ts`, `tests/`, `*_test.go`, `FooTest.java`, and similar patterns). Tests belong to write-test, which runs
-after the user asks for tests at the closing gate. An implementer that edits a test to make it pass has marked its
-own work.
+A second scope rule applies to every agent without the `test_files` grant (Rule CA6): it may not write any path in
+the repo that looks like a test (`*.test.ts`, `tests/`, `*_test.go`, `FooTest.java`, and similar patterns). The
+implementer lacks the grant, and write-test, prompt-generation, and the initializer hold it, so tests belong to the
+test stage, which runs after the user asks for tests at the closing gate. An implementer that edits a test to make
+it pass has marked its own work. This rule applies with tool enforcement on or off.
 
 ### State ownership
 
@@ -134,15 +141,20 @@ engine expects may write each record.
 - Engine state (every session's `.state/` folder) has no writer but the engine.
 - The lesson store (`knowledge.sqlite3` and its `-wal`, `-shm`, and `-journal` files) is written only by the
   `Memory` tool, because later sessions recall its contents as fact.
-- The review ledger may be written by code-reviewer, implementer, and write-test. The security sentinel may be
-  written only by code-reviewer. The progress log may be written only by the implementer.
+- The review ledger may be written only by agents that hold `review_ledger`, the security sentinel only by agents
+  that hold `security_block`, and the progress log only by agents that hold `progress_log` (Rule CA6). Among the
+  standard agents, code-reviewer, implementer, and write-test hold `review_ledger`, code-reviewer holds
+  `security_block`, and the implementer holds `progress_log`.
 
 Without this guard, an agent under pressure could write `{"verdict": "PASS"}` into a state file, or reset the
 review ledger to escape the review cap. The denial text says that directly: a hand-written value "would forge a
 pipeline decision rather than record one."
 
-Artifact ownership comes next. Spec files belong to generate-spec, plan files to plan, and research files to
-explore, so a reviewer cannot rewrite the requirements it is reviewing against. Those three document kinds may also
+Artifact ownership comes next. Spec files may be written only by agents that hold `document_spec`, plan files only
+by agents that hold `document_plan`, and research files only by agents that hold `document_research`, so a reviewer
+cannot rewrite the requirements it is reviewing against. Among the standard agents those are generate-spec, plan,
+and explore. The guards (`AGENT_OWNED` and `ARTIFACTS` in [`guards.rs`](../../crates/ostra-policy/src/guards.rs))
+name a grant for each file, never an agent, and the denial says which grant is missing. Those three document kinds may also
 be changed only through the `Document` tool, never by a plain file write. Ostra renders the Markdown from a typed
 JSON document, so a direct edit would be overwritten on the next render and would never show up in the browser.
 
@@ -200,8 +212,20 @@ The parts of this guard listed under [tool enforcement](#tool-enforcement) apply
 refusal of inline code that names pipeline state applies in both modes.
 
 Agents may read Ostra's files but never change them, and may not run Ostra's binary. Protected paths are the
-`ostra` binary, its assets, the global config, `workspace.toml`, and the workspace and registry databases with their
-journal files. Running `ostra hook` or `ostra mcp-stdio` from a tool call is refused, because those are the
+`ostra` binary, its assets, the global config, `workspace.toml`, the workspace's `.ostra/agents/`,
+`.ostra/workflows/`, and `.ostra/transforms/` folders, and the workspace and registry databases with their journal
+files. The three folders are protected because they decide which agents run, what they are told, and what data
+later nodes receive, so an agent that wrote one could define an agent, a workflow stage, or a transform that runs
+after it. They are protected in the guards and in the sandbox's
+read-only paths alike.
+
+Custom agents, workflows, and plugins are also gated on your approval (Rule A1). The hash you approve for the
+workspace file covers each file in `.ostra/agents/`, `.ostra/workflows/`, and `.ostra/transforms/` by name and
+content hash, and every
+`[[plugins]]` entry. While it waits, Ostra loads none of those files, starts no plugin program and stops a running one at the next
+read of the workspace's agents, and lists each
+file and plugin under the workspace's pending commands, so a folder that arrives with its own agents runs none of
+them until you looked at them ([`trust.rs`](../../crates/ostra-workspace/src/trust.rs)). Running `ostra hook` or `ostra mcp-stdio` from a tool call is refused, because those are the
 subcommands that talk to the policy, and a caller that runs them could grant itself what the guards withhold.
 
 Self-protection also covers code that the other guards cannot see. The write guards read the paths a tool call
@@ -234,8 +258,9 @@ A few guards were added on top of the Ultracode ports during Ostra's security re
 - **Workspace docs.** Agents read the documentation books in `<workspace>/.ostra/docs/` and never write, move, or
   delete them (`guard: workspace-docs`), because the engine writes each book from the docs stage's submit calls
   (Rule B5). The sandbox mounts the folder read-only as well.
-- **Management tools** (`guard: manage-tools`, rule O2). Only the implementer of a phase the approved plan puts
-  in a new project may call `ProjectCreate` (`creates_project` in its execution context), only with that
+- **Management tools** (`guard: manage-tools`, rule O2). Only a run that holds `manage_projects` (the
+  implementer, among the standard agents) for a phase the approved plan puts in a new project may call
+  `ProjectCreate` (`creates_project` in its execution context), only with that
   phase's project key, and only with a well-formed call: a valid key and stack, a purpose and requirements
   within their limits, and a folder relative to the workspace root with no `..`. Every other call is refused,
   because a project changes the workspace for every later session and must follow an approved plan, and the

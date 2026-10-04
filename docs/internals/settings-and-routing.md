@@ -131,6 +131,18 @@ typo therefore never switches your machine back to defaults halfway through a se
 - `[[mcp_servers]]`: external MCP servers, local (`command`) or remote (`url`), with per-server
   `disabled_tools`, an `agents` list, and a per-call `timeout_secs` from 1 to 600. Header and environment
   values may name a variable as `${VAR}` so that secrets stay out of the file.
+- `[[plugins]]`: plugin programs Ostra starts in the workspace folder, each with a `name` (lowercase
+  kebab-case, unique), a `command` (program, then arguments), optional `env`, `enabled` (default true), and
+  `timeout_secs` that bounds the `initialize` handshake, each stage decision, and each `result/handle` and `transform/run` call, from
+  1 to 3600 (default 120). The name `ostra` is refused, because it is Ostra's standard plugin. `env` values are passed to the program
+  as written, so keep secrets in the server's environment for the program to read. See [Plugins](plugins.md).
+
+Three folders beside `workspace.toml` hold more of the workspace's own definitions: `.ostra/agents/` holds custom
+agents as markdown files ([Agents](agents.md)), `.ostra/workflows/` holds workflows as TOML files
+([Workflows](workflows.md)), and `.ostra/transforms/` holds composite transform functions as TOML files
+([Your own transform functions](workflows.md#your-own-transform-functions)). `[[plugins]]` and the three folders
+are part of the content you approve (Rule A1), so a folder that arrives with them runs none of them until you
+approve it, and an agent never writes them, because the folders are protected paths.
 
 The Settings screen has a tab for each part. Projects lists each project's key, path, and stack:
 
@@ -227,9 +239,10 @@ route.
 ### Executor
 
 `[routing.executor]` picks what runs the agent: `native` or `harness:<claude|codex|grok|agy>`. An agent with
-no entry runs natively. Two keys cannot be routed to a harness at all: `judge`, because a judge call is a
-single structured request from the engine and not an agent execution, and `quick-answer`, the side panel's
-agent.
+no entry runs natively. Two kinds of key cannot be routed to a harness at all: `judge`, because a judge call is a
+single structured request from the engine and not an agent execution, and every agent that returns the
+`answer` contract, such as `quick-answer`, because answers run in-process on the native loop
+(`AgentRoute.native_only` in `crates/ostra-core/src/config.rs`).
 
 ### Model
 
@@ -242,24 +255,32 @@ agent.
 | Concrete model | `plan = "anthropic:claude-opus-5-5"` | Use this model as written, on whatever executor runs the agent |
 | Per executor | `plan = { native = "advanced", codex = "gpt-5.6-sol" }` | Pick the entry for the executor that runs the agent; each entry is a tier or a model |
 
-Every route key needs a model route. A new workspace is seeded with one for each
+A new workspace is seeded with a model route for each built-in agent
 (`WorkspaceSettings::seeded`), taken from Ultracode's inventory profile: research, spec, plan, fact-check,
 documentation, system architecture, prompt generation, and the advisor on `advanced`; review, execution-path analysis, the initializer,
 and quick answers on `balanced`; judges on `advanced`, because a wrong route costs more than the call.
 
-A workspace saved before an agent existed has no route for it, so an Ostra update that adds an agent (the
-advisor, for example) leaves that workspace with a validation problem, and the Settings screen refuses to save
-until it is fixed. Ostra does not fill the gap on its own, because the route is the user's choice. It offers
-the fix instead: the workspace detail lists, under `fixes`, a `default` route for each route key that has none
-(`keys_without_route` in `crates/ostra-core/src/config.rs`), and `default` resolves to the agent's own default
-tier. The dashboard's settings banner has a button that applies them through
+No agent needs a route (Rule CA4). An agent with no model route, built-in or custom, runs on its own
+`default_tier` on the executor its executor route picks, natively when it has none (`resolve_route` in
+[`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs)). So an Ostra update that adds an
+agent (the advisor, for example) or a file added to `.ostra/agents/` never leaves the workspace with a missing
+route, and validation does not report one. An entry for any agent under `routing.executor`, `routing.model`, or
+`routing.effort` works the same way. A programmatic agent from a plugin always runs natively, in its plugin's
+code; its model route serves the model calls it makes.
+
+Ostra still offers to write the default down, so the settings say outright what runs: the workspace detail
+lists, under `fixes`, a `default` route for each agent that has none, on some complexity for a per-phase agent
+(`keys_without_route` in `config.rs`, `settings_fixes` in
+[`crates/ostra-workspace/src/settings.rs`](../../crates/ostra-workspace/src/settings.rs)), and `default` resolves
+to the tier the agent already runs on. The dashboard's settings banner has a button that applies them through
 `POST /api/workspaces/:ws/settings/fix`, which writes only those routes and leaves any other problem for the
 user. On the Settings screen the same fix is a button next to the problem, and it changes the form, so it is
 saved with the rest of the edits.
 
 A route for an agent Ostra replaced stays valid and is ignored (`RETIRED_AGENTS` in
 `crates/ostra-core/src/agent.rs`), so a workspace saved with `module-documentation` still loads. Its replacements,
-`documentation` and `system-architecture`, need their own routes, which the same fix supplies.
+`documentation` and `system-architecture`, run on their default tiers until you route them, and the same fix
+writes those down.
 
 ### Effort
 
@@ -288,9 +309,10 @@ the level becomes thinking in one of two ways
 
 ### Phase complexity
 
-Two agents run once per plan phase: the implementer and write-test. Each phase file carries a
-`**Complexity:**` line, and these two agents can be routed by it under `byPhaseComplexity`, for executor,
-model, and effort alike. `byPhaseComplexity` wins over `byAgent`. Work with no phase file, such as a quick
+Agents whose result contract runs once per plan phase, `implementation` or `tests` (`Contract::per_phase`,
+Rule CA4), can be routed by the phase's complexity: the implementer and write-test, and any custom agent that
+returns one of those contracts. Each phase file carries a `**Complexity:**` line, and these agents can be routed
+by it under `byPhaseComplexity`, for executor, model, and effort alike. `byPhaseComplexity` wins over `byAgent`. Work with no phase file, such as a quick
 change, counts as `low`. The seeded settings run both agents on `fast` for `low` and `medium` phases and on
 `balanced` for `high` ones, so the model grows with the phase instead of every phase paying for the largest
 model.
@@ -355,19 +377,34 @@ as you type. Either returns every problem at once, each with the dotted path of 
 
 What is checked:
 
-- **Every route key resolves, on every complexity it can run at.** The implementer and write-test are
-  resolved three times, once per complexity, because a gap in the `high` row would otherwise only show up
-  when a high phase arrived.
+- **Every agent's route resolves, on every complexity it can run at.** An agent with no entry resolves to
+  its default tier, which must exist in the executor's tier table. A per-phase agent is resolved three times,
+  once per complexity, because a gap in the `high` row would otherwise only show up when a high phase arrived.
 - **The executor exists on this machine.** A route to a harness whose CLI is not installed is an error.
 - **The provider has a key.** A native route to `openai:...` with no usable OpenAI key is an error.
-- **Keys name real agents.** A typo such as `implementor` under `byAgent` is reported, not ignored.
-  `byPhaseComplexity` effort entries are accepted only for the two agents that run per phase.
-- **Forbidden routes.** `judge` and `quick-answer` cannot be sent to a harness.
+- **Keys name real agents.** A typo such as `implementor` under `byAgent` is reported, not ignored. Every
+  agent of the workspace's catalog counts, built-in, custom, and from plugins: validation reads them into
+  `Environment.agents` (`AgentRoute`: name, default tier, and whether its contract runs per phase, built by
+  `agent_routes`), accepts their names under `byAgent` and in an MCP server's `agents` list, and resolves each
+  one's route the same way. `byPhaseComplexity` effort entries are accepted only for per-phase agents.
+- **Forbidden routes.** `judge` and every agent that returns `answer` cannot be sent to a harness.
 - **Projects.** Keys are well formed and unique, paths are absolute and are folders, a stack name is valid,
   code providers and language servers name a program, each language has at most one server, and timeouts are
   from 1 to 120 seconds.
 - **Permission rules parse** (`ostra_policy::validate_rule`).
 - **MCP servers** have unique, valid names, exactly one of `command` or `url`, and a timeout in range.
+- **Plugins** have unique, valid names, a program, and a timeout in range. A plugin program that should run and
+  did not start, or stopped, is reported under its `plugins[<i>]` entry with its error or its stderr.
+- **Custom agents** (path `agents`): every file in `.ostra/agents/` parses, is not named after a built-in agent,
+  has a unique name (two files, or a file and a plugin, may not define the same agent), returns a contract that
+  exists (a plugin contract must be one some plugin of the workspace defines), declares `data_schema` only with
+  the `stage` contract, and renders. While the folder file waits for approval, one issue says the agent
+  and workflow files do not run yet.
+- **Workflows** (path `workflows.<name>`): every file in `.ostra/workflows/` resolves, names only agents and
+  plugin stages the workspace has, reads only fields the nodes it names give (Rule WB6), and no category is the
+  `default_for` of two workflows.
+- **Transforms** (path `transforms.<name>`): every file in `.ostra/transforms/` parses and passes
+  `check_function` (Rule WB7).
 - **Limits.** `max_parallel_executions` is at least 1, and `session_budget_usd` is a finite amount of 0 or
   more. See [Spend and limits](spend-and-limits.md).
 
@@ -518,6 +555,7 @@ on the Settings screen and kept in the registry (Rule A2).
 | Executor names and parsing | [`crates/ostra-core/src/executor.rs`](../../crates/ostra-core/src/executor.rs) |
 | Registry overlay and approvals (Rules A1, A2) | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
 | Extra checks beyond `validate_workspace` | [`crates/ostra-workspace/src/settings.rs`](../../crates/ostra-workspace/src/settings.rs) |
+| Custom agent, workflow, and plugin checks | `agent_issues`, `workflow_issues` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs); `plugin::validate` in [`crates/ostra-core/src/plugin.rs`](../../crates/ostra-core/src/plugin.rs) |
 | Machine facts for validation | `WorkspaceHost::environment` in [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |
 | Saving settings | `save_settings` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs) |
 | Route resolution at spawn time | `perform_spawn` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |

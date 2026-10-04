@@ -8,8 +8,11 @@ export const ROOT = "/tmp/pw-browser";
 export const STATE_FILE = path.join(ROOT, "state.json");
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 export const OSTRA_BIN = process.env.OSTRA_BIN ?? path.join(REPO_ROOT, "target-browser/debug/ostra");
-export const CHROME =
-  process.env.PW_CHROME ?? path.join(process.env.HOME ?? "", ".cache/ms-playwright/chromium-1217/chrome-linux64/chrome");
+// Full Chromium in new headless mode, because the headless shell keeps no History file and leaves
+// download popups open on about:blank.
+export const BROWSER = process.env.PW_CHROME
+  ? { executablePath: process.env.PW_CHROME }
+  : { channel: "chromium" };
 /** A hostname only this browser resolves, mapped to 127.0.0.1 with `--host-resolver-rules`. */
 export const EVIL_HOST = "evil-ostra.test";
 

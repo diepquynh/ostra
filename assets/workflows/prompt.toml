@@ -1,0 +1,8 @@
+# Ostra's default `prompt` workflow. A workspace runs its own copy in .ostra/workflows/prompt.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Write or update instruction files, built and reviewed."
+base = "prompt"
+
+[[stage]]
+id = "build"
+uses = "ostra:build"

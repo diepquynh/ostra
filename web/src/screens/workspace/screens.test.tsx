@@ -292,9 +292,10 @@ describe("workspace screen", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Remove flow.png" })).toBeTruthy());
     expect(upload).toHaveBeenCalledTimes(1);
 
-    // Two initialized projects show the pin buttons; pinning one sends it with the request.
+    // Two initialized projects show the pin buttons; pinning one sends it with the request, and so does a picked workflow.
     const create = vi.spyOn(api, "createSession");
     fireEvent.click(screen.getByRole("button", { name: "web" }));
+    fireEvent.change(screen.getByLabelText("Workflow"), { target: { value: "implement-with-release-gate" } });
     fireEvent.keyDown(request, { key: "Enter", metaKey: true, ctrlKey: true });
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create.mock.calls[0][1]).toEqual({
@@ -303,6 +304,7 @@ describe("workspace screen", () => {
       projects: ["web"],
       files: [],
       uploads: ["a".repeat(32)],
+      workflow: "implement-with-release-gate",
     });
     await waitFor(() => expect(open).toHaveBeenCalledWith("session:s_new"));
     expect(request.textContent).toBe("");

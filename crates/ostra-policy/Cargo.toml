@@ -19,3 +19,4 @@ url.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 pretty_assertions.workspace = true
+ostra-agents.workspace = true

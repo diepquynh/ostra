@@ -4,7 +4,7 @@
 use super::refs;
 use super::store::{DocKind, load, phase_path};
 use super::{Document, PhaseDoc, PlanDoc, ResearchDoc, SpecDoc};
-use crate::agent::AgentName;
+use crate::contract::Contract;
 use crate::pipeline::Question;
 use crate::submit::{GenerateSpecSubmit, PlanSubmit};
 use serde::{Deserialize, Serialize};
@@ -664,11 +664,11 @@ fn blocking(doc: &Document) -> Result<(), String> {
 
 /// For agents that write a document: the submitted path has a document with no errors, and the
 /// submit's counts agree with it. Reads files, so it runs at the tool boundary, never in the fold.
-pub fn check_submit(agent: AgentName, input: &serde_json::Value) -> Result<(), String> {
-    if agent == AgentName::Initializer {
+pub fn check_submit(contract: Contract, input: &serde_json::Value) -> Result<(), String> {
+    if contract == Contract::Setup {
         return check_inventory_submit(input);
     }
-    let Some(kind) = DocKind::for_agent(agent) else {
+    let Some(kind) = DocKind::for_contract(contract) else {
         return Ok(());
     };
     let field = match kind {

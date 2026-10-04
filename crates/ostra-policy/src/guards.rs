@@ -2,11 +2,11 @@
 //! Ultracode hook library, named in its function's comment.
 
 use crate::bash::{self, Parsed, SimpleCommand, TargetSpec};
-use ostra_core::AgentName;
 use ostra_core::exec::ExecContext;
 use ostra_core::ignore_files::{IgnoreFiles, Under};
 use ostra_core::paths;
 use ostra_core::policy::RuleRef;
+use ostra_core::{Capability, WriteScope};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -90,6 +90,11 @@ impl Roots {
         let mut protected: Vec<PathBuf> = ctx.protected_paths.iter().map(|p| canon(p)).collect();
         if !ws.as_os_str().is_empty() {
             protected.push(canon(&paths::workspace_toml(ws)));
+            // Rules CA1, WF1, and WB7: an agent that wrote these would define the agents, stages,
+            // and transforms that run after it.
+            protected.push(canon(&paths::workspace_agents_dir(ws)));
+            protected.push(canon(&paths::workspace_workflows_dir(ws)));
+            protected.push(canon(&paths::workspace_transforms_dir(ws)));
         }
         let mut protected_db_files = vec![];
         if !ws.as_os_str().is_empty() {
@@ -268,7 +273,8 @@ fn disp(p: &Path) -> String {
 
 struct Owned {
     pattern: Regex,
-    owners: &'static [AgentName],
+    /// Rule CA6: the capability that grants writing it.
+    grant: Capability,
     stakes: &'static str,
 }
 
@@ -289,45 +295,49 @@ static AGENT_OWNED: LazyLock<Vec<Owned>> = LazyLock::new(|| {
     vec![
         Owned {
             pattern: Regex::new(r"^ostra-review-ledger(-[\w.-]+)?\.md$").unwrap(),
-            owners: &[
-                AgentName::CodeReviewer,
-                AgentName::Implementer,
-                AgentName::WriteTest,
-            ],
+            grant: Capability::ReviewLedger,
             stakes: "the engine counts its iterations to cap the review loop",
         },
         Owned {
             pattern: Regex::new(r"^ostra-security-block\.json$").unwrap(),
-            owners: &[AgentName::CodeReviewer],
+            grant: Capability::SecurityBlock,
             stakes: "it records unwaivable BLOCKER findings",
         },
         Owned {
             pattern: Regex::new(r"^ostra-implementer-progress(-[\w.-]+)?\.md$").unwrap(),
-            owners: &[AgentName::Implementer],
+            grant: Capability::ProgressLog,
             stakes: "re-runs read it to learn which steps already succeeded",
         },
     ]
 });
 
-static ARTIFACTS: LazyLock<Vec<(Regex, AgentName, &'static str)>> = LazyLock::new(|| {
+/// Rule CA6: each typed document, the capability that grants writing it, and why it is guarded.
+static ARTIFACTS: LazyLock<Vec<(Regex, Capability, &'static str)>> = LazyLock::new(|| {
     vec![
         (
             Regex::new(r"^ostra-spec-.*\.(md|json)$").unwrap(),
-            AgentName::GenerateSpec,
-            "the spec is the requirements contract and only generate-spec rewrites it (Rules D3 and D10)",
+            Capability::DocumentSpec,
+            "the spec is the requirements contract, written only by the agent that writes the spec (Rules D3 and D10)",
         ),
         (
             Regex::new(r"^ostra-plan-.*\.(md|json)$").unwrap(),
-            AgentName::Plan,
-            "the plan and its phase files are written only by the plan agent (Rule D10)",
+            Capability::DocumentPlan,
+            "the plan and its phase files are written only by the agent that writes the plan (Rule D10)",
         ),
         (
             Regex::new(r"^ostra-research-.*\.(md|json)$").unwrap(),
-            AgentName::Explore,
-            "research documents are written only by explore",
+            Capability::DocumentResearch,
+            "research documents are written only by the agents that research",
         ),
     ]
 });
+
+fn grant_name(c: Capability) -> String {
+    serde_json::to_value(c)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default()
+}
 
 /// One pattern matching every protected state name, for scanning inline interpreter code.
 pub static STATE_NAME: LazyLock<Regex> = LazyLock::new(|| {
@@ -336,14 +346,6 @@ pub static STATE_NAME: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
-
-fn owner_names(owners: &[AgentName]) -> String {
-    owners
-        .iter()
-        .map(|a| a.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
 
 // ---------------------------------------------------------------------------------------------
 // Test paths (scope-policy.js isTestPath)
@@ -571,13 +573,13 @@ pub fn check_write(
         }
     }
     for owned in AGENT_OWNED.iter() {
-        if owned.pattern.is_match(&base) && !owned.owners.contains(&agent) {
+        if owned.pattern.is_match(&base) && !ctx.has(owned.grant) {
             return Some(deny(
                 STATE_OWNERSHIP,
                 format!(
-                    "Leave \"{base}\" to {}: it is owned by them, not {agent}. {}, so only the role that did the work may \
-                     write it. Put what you need to say in your own report instead.",
-                    owner_names(owned.owners),
+                    "Leave \"{base}\" to the agents that hold `{}`, which {agent} does not. {}, so only the agent that did \
+                     the work may write it. Put what you need to say in your own report instead.",
+                    grant_name(owned.grant),
                     capitalize(owned.stakes)
                 ),
             ));
@@ -590,12 +592,13 @@ pub fn check_write(
             .is_some_and(|n| n.to_string_lossy().starts_with("factcheck-snapshot-"))
     });
     if !in_snapshot {
-        for (pattern, owner, why) in ARTIFACTS.iter() {
-            if pattern.is_match(&base) && agent != *owner {
+        for (pattern, grant, why) in ARTIFACTS.iter() {
+            if pattern.is_match(&base) && !ctx.has(*grant) {
                 return Some(deny(
                     ARTIFACT_OWNERSHIP,
                     format!(
-                        "Leave \"{base}\" to {owner}: {why}. Say what should change in your report instead."
+                        "Leave \"{base}\" to an agent that holds `{}`: {why}. Say what should change in your report instead.",
+                        grant_name(*grant)
                     ),
                 ));
             }
@@ -624,7 +627,7 @@ pub fn check_write(
         && base.starts_with("ostra-")
         && !AGENT_OWNED
             .iter()
-            .any(|o| o.pattern.is_match(&base) && o.owners.contains(&agent))
+            .any(|o| o.pattern.is_match(&base) && ctx.has(o.grant))
     {
         if target != declared.as_path() {
             // Rule G1: without tool enforcement any `ostra-*` name is allowed.
@@ -651,36 +654,17 @@ pub fn check_write(
 /// Rule O2: only the implementer of a phase the approved plan puts in a project that does not
 /// exist yet creates a project, only that one, and only with a well-formed call, so the user is
 /// never asked about one that cannot run. (Ostra; no Ultracode source.)
-pub const ANSWER_ONLY: &str = "answer-only";
-
-/// Rule H3: a consult run answers from its conversation and changes nothing.
-pub fn answer_only_denial() -> Denial {
-    deny(
-        ANSWER_ONLY,
-        "Answer with SubagentReply and change no file: this run only answers another subagent's question. Name the change in your answer instead.".into(),
-    )
-}
-
-pub const REPLY_FIRST: &str = "reply-first";
-
-/// Rule H3: a run that was given a question answers it before it submits.
-pub fn reply_first_denial() -> Denial {
-    deny(
-        REPLY_FIRST,
-        "Call SubagentReply with your answer instead: another subagent asked you a question and waits for it, so this run submits nothing until you reply.".into(),
-    )
-}
-
 pub fn check_manage(ctx: &ExecContext, tool: &str, input: &serde_json::Value) -> Option<Denial> {
     use ostra_core::manage::{PROJECT_CREATE, ProjectCreateInput};
     if tool != PROJECT_CREATE {
         return None;
     }
-    if !ctx.agent.manages_projects() || !ctx.creates_project || ctx.session_id.is_none() {
+    // Rule CA6: the capability grants the tools; the phase decides whether it may create.
+    if !ctx.has(Capability::ManageProjects) || !ctx.creates_project || ctx.session_id.is_none() {
         return Some(deny(
             MANAGE_TOOLS,
             format!(
-                "Work in the projects already in scope: {} does not create a project here, because only the implementer of a phase the approved plan puts in a new project creates it.",
+                "Work in the projects already in scope: {} does not create a project here, because only a run that holds `manage_projects` in a phase the approved plan puts in a new project creates it.",
                 ctx.agent
             ),
         ));
@@ -729,12 +713,13 @@ pub fn check_document(
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default();
-    for (pattern, owner, why) in ARTIFACTS.iter() {
-        if pattern.is_match(&base) && ctx.agent != *owner {
+    for (pattern, grant, why) in ARTIFACTS.iter() {
+        if pattern.is_match(&base) && !ctx.has(*grant) {
             return Some(deny(
                 ARTIFACT_OWNERSHIP,
                 format!(
-                    "Leave \"{base}\" to {owner}: {why}. Say what should change in your report instead."
+                    "Leave \"{base}\" to an agent that holds `{}`: {why}. Say what should change in your report instead.",
+                    grant_name(*grant)
                 ),
             ));
         }
@@ -763,7 +748,8 @@ fn capitalize(s: &str) -> String {
 fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Option<Denial> {
     let agent = ctx.agent;
     let in_session = roots.in_session(target);
-    if agent == AgentName::Implementer
+    // Rule CA6: test files need the `test_files` grant.
+    if !ctx.has(Capability::TestFiles)
         && !in_session
         && let Ok(rel) = target.strip_prefix(&roots.repo)
         && is_test_path(&rel.to_string_lossy())
@@ -771,9 +757,8 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
         return Some(deny(
             NO_TESTS,
             format!(
-                "Leave test files to write-test: \"{raw}\" is a test file or directory path, and the implementer never \
-                 writes or fixes tests (implementer Constraint 6). Tests run only after the user asks for them at the \
-                 closing gate."
+                "Leave test files to the test stage: \"{raw}\" is a test file or directory path, and {agent} does not hold \
+                 `test_files` (implementer Constraint 6). Tests run only after the user asks for them at the closing gate."
             ),
         ));
     }
@@ -781,11 +766,13 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
     if !roots.strict {
         return None;
     }
-    if agent == AgentName::QuickAnswer {
+    // Rule CA2: the scope comes from the agent's definition, built-in or custom.
+    let scope = ctx.scope();
+    if scope == WriteScope::ReadOnly {
         return Some(deny(
             WRITE_SCOPE,
             format!(
-                "Put your answer in your submit call instead of writing \"{raw}\": quick-answer is read-only."
+                "Put your answer in your submit call instead of writing \"{raw}\": {agent} is read-only."
             ),
         ));
     }
@@ -793,7 +780,7 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
         return None;
     }
     if !roots.in_repo(target) {
-        if agent.is_session_only() && roots.in_temp(target) {
+        if scope == WriteScope::Session && roots.in_temp(target) {
             return None;
         }
         return Some(deny(
@@ -810,8 +797,8 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
     let skills = canon(&paths::project_skills_dir(&roots.repo));
     let legacy_skills = canon(&roots.repo.join(paths::LEGACY_SKILLS_DIR));
     // HANDOVER rule I2: the initializer writes skills only to `.agents/skills/`.
-    if agent == AgentName::Initializer && inside(&legacy_skills, target) && !inside(&skills, target)
-    {
+    let setup = scope == WriteScope::Setup;
+    if setup && inside(&legacy_skills, target) && !inside(&skills, target) {
         return Some(deny(
             WRITE_SCOPE,
             format!(
@@ -821,10 +808,8 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
             ),
         ));
     }
-    let extra: Option<Vec<PathBuf>> = match agent {
-        AgentName::Initializer => Some(vec![canon(&paths::project_runtime(&roots.repo)), skills]),
-        _ => None,
-    };
+    let extra: Option<Vec<PathBuf>> =
+        setup.then(|| vec![canon(&paths::project_runtime(&roots.repo)), skills]);
     if let Some(roots_allowed) = extra {
         if roots_allowed.iter().any(|r| inside(r, target)) {
             return None;
@@ -842,7 +827,7 @@ fn check_scope(ctx: &ExecContext, roots: &Roots, target: &Path, raw: &str) -> Op
             ),
         ));
     }
-    if agent.is_session_only() {
+    if scope == WriteScope::Session {
         return Some(deny(
             WRITE_SCOPE,
             format!(

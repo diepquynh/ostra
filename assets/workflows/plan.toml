@@ -1,0 +1,16 @@
+# Ostra's default `plan` workflow. A workspace runs its own copy in .ostra/workflows/plan.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Research, a spec, then a plan with its fact-check and your approval."
+base = "plan"
+
+[[stage]]
+id = "research"
+uses = "ostra:research"
+
+[[stage]]
+id = "spec"
+uses = "ostra:spec"
+
+[[stage]]
+id = "plan"
+uses = "ostra:plan"

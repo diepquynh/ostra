@@ -237,6 +237,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
             uploads: vec![],
             pinned: vec![],
             docs_book: None,
+            workflow: None,
         },
         SessionEvent::ProjectCreated {
             project: project.clone(),
@@ -266,6 +267,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         inventory: inventory.as_deref(),
         repo_root: &repo,
         project_docs: &docs,
+        agents: &ostra_agents::AgentCatalog::builtin(),
     };
 
     // The failed step's own spawn block, as the engine rendered it for that run.
@@ -322,6 +324,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         )
     };
     let request = advisor_request(AdviceInputs {
+        advisor: AgentName::Advisor,
         project: spec.key.clone(),
         session_dir: session.clone(),
         execution: ExecutionId::from("x_failed"),
@@ -501,8 +504,10 @@ async fn run_one(
         sandbox_loopback: Default::default(),
         sandbox_blocked_ports: vec![],
         creates_project: false,
-        answer_only: false,
         owes_reply: false,
+        write_scope: Some(def.write_scope),
+        contract: def.returns,
+        capabilities: def.capabilities.clone(),
     };
     let spec = ExecutionSpec {
         id: ctx.execution_id.clone(),
@@ -516,7 +521,7 @@ async fn run_one(
         system_prompt: sc.advisor.system_prompt.clone(),
         first_message: sc.advisor.first_message.clone(),
         capabilities: def.capabilities.clone(),
-        submit_schema: ostra_core::submit::submit_schema(AgentName::Advisor),
+        submit_schema: def.submit_schema(),
         timeout_secs: def.timeout_secs,
         ctx,
         resume: None,

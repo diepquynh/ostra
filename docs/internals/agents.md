@@ -1,7 +1,8 @@
 # Agents
 
-Ostra splits the pipeline's work among thirteen agents. Each one does one job, such as researching a request,
-writing a spec, reviewing a change, or writing tests. Code decides which agent runs, what it is given, and what
+Ostra splits the pipeline's work among fourteen built-in agents, and a workspace or a plugin can add its own
+custom agents beside them. Each one does one job, such as researching a request, writing a spec, reviewing a
+change, or writing tests. Code decides which agent runs, what it is given, and what
 happens with its result. The agent does the work inside its stage and then hands back a structured answer.
 
 This page covers what the agents are, how Ostra describes them, how it briefs them before a run, and how it
@@ -10,9 +11,30 @@ tool call, never the text it writes at the end of its run.** The rest of this pa
 
 ## The roster
 
-Every agent lives in `assets/agents/<name>/` as two files: `agent.toml`, which describes it, and `prompt.md`,
-its system prompt. Both are embedded in the `ostra` binary at compile time, so a running server never reads
-agent definitions from disk and a user cannot swap one out by editing a file.
+Every built-in agent lives in `assets/agents/<name>/` as two files: `agent.toml`, which describes it, and
+`prompt.md`, its system prompt. Both are embedded in the `ostra` binary at compile time, so a running server
+never reads these definitions from disk and a user cannot swap one out by editing a file.
+
+The fourteen agents are not wired into the engine by name. They are the standard plugin `ostra`
+([`standard.rs`](../../crates/ostra-agents/src/standard.rs)), written with `ostra-sdk` like any other plugin
+(Rule PL4). It reads each agent's `agent.toml` and `prompt.md` with the SDK's definition parser
+(`ostra_sdk::definition::parse_toml`) and sets nothing else, so everything that makes the reviewer a reviewer is
+data in its files, in fields any agent can declare:
+
+```rust
+pub fn agent(agent: AgentName) -> Result<PluginAgent, AgentsError> {
+    let dir = format!("agents/{}", agent.as_str());
+    let toml_path = format!("{dir}/agent.toml");
+    let prompt = asset_text(&format!("{dir}/prompt.md"))?;
+    ostra_sdk::definition::parse_toml(agent.as_str(), &asset_text(&toml_path)?, &prompt)
+        .map_err(|message| AgentsError::Parse { path: toml_path, message })
+}
+```
+
+The only privilege the standard plugin has is its name: no other plugin may call itself `ostra`, and its agents
+keep the built-in names, which is how a run of one is named. They are also the default agent for each result
+contract a built-in stage reads (Rule WF8), which a workflow can replace with any agent that returns the same
+contract.
 
 | Agent | Stage | Default tier | What it does |
 | --- | --- | --- | --- |
@@ -35,7 +57,7 @@ The tier column is a default. Workspace routing settings pick the model behind e
 differently per phase complexity, so a low-complexity implementer phase can run on a cheaper model than a
 high-complexity one.
 
-Eight smaller prompts in `assets/judges/` are not agents. They answer named judgment questions for the engine,
+Ten smaller prompts in `assets/judges/` are not agents. They answer named judgment questions for the engine,
 such as how risky a request is or whether a review finding should be fixed. See [the engine](../../HANDOVER.md#8-the-engine)
 for how judges fit in.
 
@@ -51,7 +73,11 @@ Here is the reviewer's definition, in full:
 description = "Reviews the unstaged working-tree changes of one review loop against the project's Review Rule Set ..."
 default_tier = "balanced"
 timeout_seconds = 1200
-capabilities = ["read", "shell", "search_text", "glob", "code"]
+capabilities = ["read", "shell", "search_text", "glob", "code", "coordinate", "docs_search", "review_ledger", "security_block"]
+
+returns = "review"
+write_scope = "session"
+brief = ["commands", "review", "conventions", "skills"]
 
 [effort]
 native = "high"
@@ -71,14 +97,56 @@ Each field has one job:
   code get 40.
 - **`capabilities`** lists what the agent can do, in abstract terms. The reviewer has no `write` or `edit`, so
   no tool that changes files is offered to it on any executor. Capabilities are a first filter. The policy
-  layer still checks every tool call the agent makes, including calls from agents that do hold `write`.
+  layer still checks every tool call the agent makes, including calls from agents that do hold `write`. Some
+  capabilities are grants rather than tools (Rule CA6): `review_ledger` and `security_block` let the reviewer
+  write the review ledger and the security block file, which the guards refuse to every agent without them.
+- **`returns`** is the result contract the agent submits (Rule CA5), here `review`. The engine reads the result
+  by this contract, never by the agent's name. See [result contracts](#result-contracts-and-grants).
+- **`write_scope`** bounds where the agent writes: `read_only`, `session`, `project`, or `setup` (Rule CA2).
+- **`brief`** names the sections of the repo brief the agent gets (see [the repo brief](#the-repo-brief)).
+- **`helper`**, set only in `explore`'s file, lets `SendMessage` start the agent as a helper.
 - **`[effort]`** sets reasoning effort per executor. The keys are `native` (Ostra's own agent loop) and one
   per harness: `claude` (Claude Code), `codex` (Codex), `grok` (Grok Build), and `agy` (Antigravity). The
   initializer is the one agent that differs: it runs at `xhigh` on Codex and Grok and at `max` on
   Antigravity. A workspace can override effort per agent or per phase complexity in its routing settings.
 
-The definitions are parsed once and cached. A malformed `agent.toml` is caught by the crate's tests, so it is a
-build defect and never a runtime error a user could hit.
+The standard plugin's manifest is built once and cached. A malformed `agent.toml` is caught by the crate's
+tests, so it is a build defect and never a runtime error a user could hit.
+
+## Result contracts and grants
+
+Built-in and custom agents follow one model, and the engine never asks which agent it is dealing with. It asks
+two other questions.
+
+**What does the result look like?** Every agent declares a result contract (`returns`, Rule CA5): `research`,
+`spec`, `fact-check`, `plan`, `implementation`, `review`, `path-analysis`, `tests`, `documentation`,
+`architecture`, `prompt`, `setup`, `answer`, `advice`, `stage`, or a plugin's own `<plugin>:<contract>`
+([`contract.rs`](../../crates/ostra-core/src/contract.rs)). The submit schema and its checks, the spawn block,
+the skills the brief lists, and whether a report file must exist before the submit (`Contract::report_required`,
+false only for `review`, whose ledger exists only when it found something) all follow the contract. A built-in
+stage runs any agent whose contract it reads, so a team can write its own spec writer and bind it to the spec
+stage (see [workflows](workflows.md)). Each run records its contract when it starts.
+
+**What may it touch?** Every integration is a capability any agent may request (Rule CA6). None is reserved:
+
+| Capability | Grants |
+| --- | --- |
+| `document_research`, `document_spec`, `document_plan` | The Document tool for that typed document, and the right to write it. |
+| `review_ledger` | Writing a review loop's ledger, which the engine counts to cap the loop. |
+| `security_block` | Writing the security block file of BLOCKER findings. |
+| `progress_log` | Writing the implementer progress log that re-runs read. |
+| `test_files` | Writing test files and directories in the repo. |
+| `manage_projects` | The project tools (`ProjectList`, `ProjectCreate`). |
+
+The standard agents hold exactly the grants their jobs need: `explore`, `generate-spec`, and `plan` hold their
+document grant; the implementer holds `review_ledger`, `progress_log`, and `manage_projects` but not
+`test_files`; `write-test`, `prompt-generation`, and the initializer hold `test_files`. The guards check these
+grants, so a custom agent that requests one gets the same access. That is safe because every agent file and
+plugin waits for the user's approval of the workspace file (Rule A1).
+
+Every definition, whatever wrote it, becomes an `AgentDef` in one function, `catalog::from_plugin_agent`
+([`catalog.rs`](../../crates/ostra-agents/src/catalog.rs)). Origin changes only the name: the standard plugin's
+agents get the built-in names, and every other source names a custom agent.
 
 ## One prompt, five executors
 
@@ -103,7 +171,11 @@ Native names follow Claude Code's, because the prompts were tuned against those 
 token with no value is an error, not an empty string, so a typo in a prompt fails the tests instead of shipping
 a prompt with a hole in it.
 
-Up to three sections are prepended to the rendered body (`render_prompt` in `crates/ostra-agents/src/lib.rs`):
+Up to five sections are prepended to the rendered body (`render_def` in `crates/ostra-agents/src/lib.rs`),
+in this order from the top: the tool vocabulary on a harness, the output rule, the messaging guide
+(`assets/coordination.md`) for an agent with the `coordinate` capability, the stage guide
+(`assets/custom-agent.md`) for an agent that returns `stage`, and the code tools guide. The three below need the
+most explanation:
 
 - **The output rule**, for every agent on every executor (`assets/output-rules.md`). It tells the agent to write
   no text outside tool calls: reports go through `report` or `document`, memories through `memory`, and the
@@ -240,8 +312,8 @@ All of them live in the session directory for that project. There are three reas
 3. The next agent's spawn block can name the previous agent's output directly. Write-test is given the
    implementer's report and the analyzer's report by path.
 
-The native executor also refuses an `ok` submit while the declared report file does not exist, and tells the
-agent to write it first.
+Both executors also refuse an `ok` submit while the declared report file does not exist, and tell the agent to
+write it first. The `review` contract is exempt, because its ledger exists only when the review found something.
 
 The report at the path the engine named, opened as an artifact of the session:
 
@@ -257,7 +329,9 @@ project before the user has approved the plan that needs it:
   evidence settles. Its first deliverable in that project creates the project skeleton.
 - **plan** puts phases in that key, lists it in `new_projects`, and copies the stack, purpose, and base
   requirements into the context of the first phase in it.
-- **implementer** is the only agent with the `manage_projects` capability. The implementer of that first phase
+- **implementer** holds the `manage_projects` capability by default. Any agent that holds it and runs a phase
+  in a project the plan names as new gets the same treatment (`creates_project` in `runner.rs`, the guard in
+  `guards.rs`). The implementer of that first phase
   gets a `New project:` spawn line and its session dir as `Repo root:`, reads the phase file, and calls
   `ProjectCreate` with those facts and nothing else (rule O2). Ostra stops the run once the project exists,
   initializes it, and starts the phase again inside it. If the user denies the call, the implementer returns
@@ -290,7 +364,8 @@ Below the spawn block, separated by a `---` line, every execution gets a repo br
 tool calls gathering: the build and test commands, the project's skills with their paths, conventions, and
 the module-map rows that cover the paths in the task.
 
-Each agent gets only the sections it uses:
+Each agent gets the sections its definition names in `brief` (Rule CA6), so the choice is data, not code. The
+standard agents ask for these:
 
 | Agent | Brief sections |
 | --- | --- |
@@ -306,8 +381,9 @@ Each agent gets only the sections it uses:
 | documentation | stack, commands, module map |
 | system-architecture | stack, module map |
 
-The reviewer is the only agent that receives the complete rule catalog, because it is the only one that
-grades against it.
+The reviewer is the only standard agent that asks for the complete rule catalog (`review`), because it is the
+only one that grades against it. The skills section is filtered by the agent's result contract: a `tests` agent
+sees test skills and conventions, a `review` agent conventions only, and every other agent all skills.
 
 After the brief come the project's own instruction files (`CLAUDE.md`, `AGENTS.md`, `AGENT.md`), then, when the
 session created a project, a "Projects created in this session" section with each one's folder, stack, purpose,
@@ -337,8 +413,9 @@ The Instructions tab of Settings holds the custom instructions for all agents an
 ## Structured returns
 
 Every agent finishes by calling one tool: `submit_<agent>`, as in `submit_fact_check` or
-`submit_implementer`. The tool's input schema is a Rust struct in `crates/ostra-core/src/submit.rs`, converted
-to JSON Schema. Here is the fact-check return:
+`submit_implementer`. The tool's input schema comes from the agent's result contract (Rule CA5): a built-in
+contract's schema is a Rust struct in `crates/ostra-core/src/submit.rs`, converted to JSON Schema; the `stage`
+contract adds the agent's declared `data`; a plugin contract's schema comes from the plugin's manifest. Here is the fact-check return:
 
 ```rust
 pub struct FactCheckFinding {
@@ -389,18 +466,22 @@ specialist, currently always prompt-generation, and it must say what to author a
 
 ### Validation happens before anything is recorded
 
-When an agent calls its submit tool, both executors run the same checks before accepting it:
+When an agent calls its submit tool, the native and harness executors run the same checks before accepting it
+(`Run::submit` in `ostra-exec-native`, the submit branch of `HarnessBridge` in `ostra-exec-harness`). A
+programmatic agent's result is checked for shape and for its report file, but not for documents:
 
-1. **Shape.** `validate_submit` parses the input into the agent's struct. A missing field or a wrong enum value
+1. **Shape.** `validate_submit_with` parses the input into the struct of the run's contract
+   (`ExecContext.contract`), or checks it against a plugin contract's schema. A missing field or a wrong enum value
    comes back to the agent as a tool error with the parser's message and "Fix it and call submit again."
 2. **Consistency.** Some rules cross fields. The reviewer's `security_block` must be true exactly when a
    BLOCKER finding is present, so a reviewer cannot report a BLOCKER while claiming nothing is blocked, or the
    reverse.
-3. **Documents.** For explore, generate-spec, and plan, the referenced document is opened and checked. The
+3. **Documents.** For the `research`, `spec`, and `plan` contracts, the referenced document is opened and
+   checked (`doc::check_submit`). The
    counts the agent reported, such as the number of requirements or evidence rows, must match what the file
    contains. An agent cannot submit a spec summary that differs from the spec it wrote.
 4. **Report file.** An `ok` submit from an agent with a declared report path is refused until that file
-   exists.
+   exists, except for the `review` contract, whose ledger exists only when the review found something.
 
 Nothing reaches the event log until all four pass. A rejected submit costs the agent one more turn. It never
 produces a half-valid record the engine has to interpret.
@@ -441,13 +522,179 @@ There are two narrow exceptions, and both are fallbacks, never a decision:
 - If an agent reports `stuck` without a diagnostic, the final text becomes the diagnostic shown in the rescue
   prompt. The routing decision still comes from the submitted `status`.
 
+## Custom agents
+
+A workspace adds its own agents beside the built-in ones, for checks or steps Ostra does not ship: a security
+audit, a release-notes writer, a check of the team's own conventions. They run in workflow stages (see
+[workflows](workflows.md)) and as helpers other agents start with `SendMessage`. HANDOVER section 9.4 holds the
+rules (CA1 to CA6). A custom agent is defined with the same fields as a built-in one and gets the same treatment:
+it may return any result contract and request any grant described [above](#result-contracts-and-grants).
+
+### The file
+
+A custom agent is one markdown file, `<workspace>/.ostra/agents/<name>.md`: TOML frontmatter between `+++` lines,
+then the agent's instructions.
+
+```markdown
++++
+description = "Audits changed files for secrets and unsafe input handling."
+default_tier = "balanced"
+capabilities = ["read", "search_text", "glob", "shell", "coordinate"]
+write_scope = "session"
+timeout_seconds = 1200
+[data_schema]
+type = "object"
+required = ["risk"]
+[data_schema.properties.risk]
+type = "string"
+enum = ["low", "medium", "high"]
++++
+Read every file the change touched and report each secret with {{ tool_read }} ...
+```
+
+Only `description` is required. The rest have defaults:
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `name` | the file name without `.md` | Lowercase kebab-case, at most 40 characters, never a built-in agent's name, `module-documentation`, or `judge`. |
+| `returns` | `stage` | The result contract (Rule CA5). A built-in contract such as `spec` lets a workflow bind the agent to the built-in stage that reads it; a plugin contract needs a plugin that defines it. |
+| `default_tier` | `balanced` | |
+| `capabilities` | `read`, `search_text`, `glob`, `report`, `coordinate` | Any capability, grants included (Rule CA6). None is reserved. |
+| `write_scope` | `project` when the capabilities include `write` or `edit`, else `session` | `read_only`, `session`, `project`, or `setup`. `read_only` together with `write` or `edit` is refused. |
+| `brief` | `stack`, `commands`, `skills`, `conventions`, `modules` | Sections of the repo brief, from those and `testing` and `review`. |
+| `timeout_seconds` | 1200 | At most 7200. |
+| `[effort]` | high on every executor | Keys are `native`, `claude`, `codex`, `grok`, `agy`. |
+| `data_schema` | none | The shape of the submit's `data`, as a table. Only an agent that returns `stage` may declare one. |
+| `helper` | false | True lets `SendMessage` start the agent as a helper. |
+
+The file may be at most 128 KiB, because the whole body goes into every run's system prompt. The body is
+rendered like a built-in prompt, with the same `{{ tool_* }}` tokens, the same code-tools and messaging guides
+when the capabilities call for them, and the same harness vocabulary. An agent that returns
+`stage` also gets `assets/custom-agent.md` before the body, a short guide to the stage contract and the submit
+call; an agent that returns a built-in contract describes that contract's fields in its own instructions, as the
+built-in prompts do. The body is rendered as a check when
+the file loads, so a broken template token is a settings error, never a failure in the middle of a session, and
+rendered again for each run.
+
+### The catalog
+
+`AgentCatalog` (`crates/ostra-agents/src/catalog.rs`) is the set of agents one workspace can run: the standard
+plugin's agents, the valid files of `.ostra/agents/`, and the agents of the workspace's plugins. A markdown file
+goes through `ostra_sdk::definition::parse_markdown` and then `from_plugin_agent`, like every other source.
+`AgentCatalog::load` also takes the result contracts the workspace's plugins define, with their schemas: an
+agent that returns one gets that schema for its submit, and one that returns a contract no plugin defines is
+left out and reported (Rule PL5). Like the
+settings, it is read again for every execution, so an edited agent applies to its next run without a restart.
+A file that does not parse, or a second agent with a name already taken, is left out and reported as a settings
+issue under `agents`, with the file it came from.
+
+`AgentName` stays one type for both kinds: built-in agents are its variants, and a custom agent is
+`AgentName::Custom`, whose name is interned so the type keeps its copy semantics. On the wire it is the bare name
+either way, so events and databases did not change shape.
+
+### Where an agent writes
+
+`write_scope` is enforced by the write-scope guard (`check_scope` in `crates/ostra-policy/src/guards.rs`, through
+`ExecContext::scope`), for built-in and custom agents alike. `read_only` writes nothing, `session` writes its
+session dir and the OS temp dir, `project` writes the repo root and its session dir but not the temp dir, and
+`setup` writes the project's `.ostra/` runtime and its skills dir (the initializer's scope). A spec, a plan, a
+research document, the review ledger, the security block file, the progress log, and test files need their grant,
+whatever the agent's scope. No agent can write `.ostra/agents`, `.ostra/workflows`, or `.ostra/transforms`, because an
+agent that could would decide which agents, stages, and transforms run after it.
+
+### What the stage contract holds
+
+An agent that returns `stage`, the default, ends with `CustomSubmit` in `crates/ostra-core/src/submit.rs`:
+
+| Field | Meaning |
+| --- | --- |
+| `verdict` | `pass`, `fail`, or `needs_user`. A workflow stage moves on, follows its `on_fail`, or asks you. |
+| `summary` | What the run did and found. Later stages and you read it. Required and non-empty. |
+| `findings` | Each problem, with its file and the fix. |
+| `question`, `options` | For `needs_user`: the decision needed, and the answers to offer, recommended first. `question` is required then. |
+| `report_path` | A report the run wrote, when it wrote one. |
+| `data` | Output in the shape `data_schema` declares. Required when one is declared. |
+
+`data` is checked against the declared schema by a small JSON Schema subset in
+`crates/ostra-core/src/schema_check.rs`: `type`, `properties`, `required`, `items`, `enum`, `minItems`,
+`maxItems`, and `additionalProperties: false`. Other keywords load but check nothing. The run's submit tool shows
+the model the full schema, and both executors validate against the schema the run was given, so a mismatch is a
+tool error the model can fix before anything is recorded.
+
+### Routing
+
+No agent needs a settings entry (Rule CA4). Its route is `routing.*.byAgent.<name>` when the workspace sets one,
+else its `default_tier` on its executor (`resolve_route` in `crates/ostra-core/src/config.rs`). Settings
+validation accepts route, effort, and MCP `agents` entries that name any agent of the catalog.
+
+### Agents from plugins
+
+A plugin (see [plugins](plugins.md)) defines agents in its manifest. One with a `prompt` runs on a model exactly
+like a markdown agent. One without a prompt is programmatic: the plugin's own code does the work, calling tools
+and the model through Ostra (Rule PL2, described in [executors](executors.md)). Its description stands in for
+the prompt when one is rendered. A plugin's agent may return a contract the plugin defines, whose results the
+plugin handles (Rule PL5).
+
+### Approval
+
+Agent files arrive with a workspace folder the same way MCP servers in `workspace.toml` do, so they wait for
+your approval the same way (Rule A1). The hash you approve for the workspace file covers each file in
+`.ostra/agents/`, `.ostra/workflows/`, and `.ostra/transforms/` by name and content hash (`definition_files` in
+`crates/ostra-workspace/src/trust.rs`), together with `[[plugins]]`. Until you approve, the catalog loads the
+built-in agents and the plugins built into the binary only, Settings lists each file as waiting, and a session
+that names a workflow from those files is refused. An agent file you add or edit outside Ostra puts the
+workspace file back into waiting.
+
+### The agent screen
+
+The console lists every agent the workspace can run and edits the workspace's own files (HANDOVER section 9.5,
+Rules AG1 to AG3). Its server side is in
+[`crates/ostra-workspace/src/builder.rs`](../../crates/ostra-workspace/src/builder.rs).
+
+`WorkspaceDetail.agents` gives each agent's `AgentInfo`, which says where the definition comes from (`source`:
+`ostra`, `workspace` with its file under `.ostra/agents/`, or `plugin` with the plugin's name), the contract it
+`returns`, its `write_scope`, and whether it is a `helper` or `programmatic`, besides its routes.
+
+| Request | What it does |
+| --- | --- |
+| `GET /api/workspaces/:ws/agents/:name` | An `AgentDetail`: the `AgentInfo`, the definition as an `AgentDoc`, whether it is `editable`, the system prompt as the native executor renders it (`prompt_preview`), its submit schema, and the workflow nodes that run it or bind it (`used_by`, as `workflow/node`). |
+| `PUT /api/workspaces/:ws/agents/:name` | Save a workspace agent from an `AgentDoc`. |
+| `DELETE /api/workspaces/:ws/agents/:name` | Delete a workspace agent's file. |
+
+Only a workspace agent's file is `editable`. Ostra's and a plugin's agents are read only; their `AgentDoc` is
+filled from the definition, so the console can duplicate one into a new workspace agent.
+
+The editor builds `data_schema` as a list of fields, because most output shapes are a few named values and
+hand-written JSON Schema is easy to get wrong. Each field has a name, a type (`string`, `number`, `integer`,
+`boolean`, `object`, or `array`), a required flag, and a description; a string can list its allowed values
+(`enum`), an object holds its own fields and can refuse others (`additionalProperties: false`), and an array
+picks its item type, which nests the same way, and its `minItems` and `maxItems`. These are the keywords
+`schema_check` enforces, so everything the builder writes is checked. The editor refuses to save while a field
+has no name or two fields of one object share a name. A JSON tab edits the same schema as text. A schema that
+uses anything else, such as a list of types or a `title`, opens in the JSON tab and stays there, so the builder
+never drops a keyword it cannot show. An empty builder saves no schema.
+
+A save writes the file a user would write (`agent_markdown`): TOML frontmatter between `+++` lines, then the
+prompt. Defaults are left out (`returns = "stage"`, an empty capability list, `helper = false`), and the tables
+(`effort`, `data_schema`) come last. Before anything is written, the text goes through the same
+`parse_markdown` a load uses (Rule CA1), so a built-in agent's name or a broken template token is refused. A
+save is also refused when a plugin already holds the name (`AgentCatalog::with_workspace_def`), when `returns`
+names a plugin contract no running plugin defines, and when the changed agent would stop a workflow that runs
+now from running, for example by changing the contract a workflow binds it to. A delete is refused while a
+workflow uses the agent. Both write through `trust::save_definitions`, so an approved workspace stays approved
+(Rule A1).
+
+An agent whose file waits for approval is out of the catalog, so no session runs it, but its page still reads
+the file and shows it with `waiting_approval`.
+
 ## Subagents that talk to each other
 
 Reports carry results from one stage to the next, but a report read cold loses what its writer knew: why a
 requirement is worded the way it is, which files the implementer already ruled out, what a finding refers to.
 Re-reading everything costs tokens, and a judge cannot fill the gap either, because it never saw the inside of
-either conversation. So agents can also reach each other directly, and every agent keeps its conversation so
-that it can be woken again. HANDOVER section 10.8 holds the rules (H1 to H9).
+either conversation. So agents can also message each other directly, and every agent keeps its conversation so
+that it can be woken again. HANDOVER section 10.8 holds the rules (SM1 to SM9 for messages, H5 to H7 for pair
+loops).
 
 ### A subagent ID names a conversation
 
@@ -455,77 +702,109 @@ Each execution is one run of a model. A **subagent** is a conversation that may 
 subagent ID is the id of the conversation's first execution. A run keeps the ID of the conversation it continues,
 whether it continues in place (the same execution resumed) or as a new execution whose `resumes` field names the
 run before it. The fold keeps a map from each execution to its subagent (`SessionState::subagents`), and the
-subagent's **head** is its latest run. Asking a subagent means asking its head.
+subagent's **head** is its latest run. A message to a subagent goes to its head. A run cannot message its own
+subagent.
 
 ### The three tools
 
-Seven agents have the `coordinate` capability: explore, generate-spec, fact-check, plan, implementer,
-code-reviewer, and write-test. It gives them three tools, and a prompt section (`assets/coordination.md`) that
-says when to use them:
+Agents with the `coordinate` capability get three tools, and a prompt section (`assets/coordination.md`) that says
+when to use them. Among the built-in agents these are explore, generate-spec, fact-check, plan, implementer,
+code-reviewer, and write-test; every custom agent has the capability unless its definition leaves it out.
 
 | Tool | What it does |
 | --- | --- |
-| `SubagentList` | Your own subagent ID and every subagent of the session, with its agent, status, report, and what it waits on. The subagents you work with are marked, such as "the author of the document you check" for a fact-checker. |
-| `SubagentAsk` | Ask a question. With `agent: "explore"` Ostra starts a helper research task from it. With `subagent_id` it goes to an existing subagent. |
-| `SubagentReply` | Answer the question that woke this run. |
+| `ListAgents` | Your own subagent ID and every subagent of the session, with its agent, status, report, and what it waits on, then the helper agents you can start. The subagents you work with are marked, such as "the author of the document you check" or "waits for your reply". |
+| `SendMessage` | Queue a message. With `to` it goes to an existing subagent; with `agent` Ostra starts a new helper with the message as its task. With `wait: true` your run pauses after sending. |
+| `WaitForMessage` | Pause your run until a message arrives for you. |
 
 The tools never ask you for permission in any mode, because they change no file; a deny rule can still refuse
 them. The engine checks each call against the fold and records it as an event before the tool returns
-(`Engine::coordinate`, the checks in `crates/ostra-engine/src/coord.rs`).
+(`Engine::coordinate` in `crates/ostra-engine/src/runner.rs`, the checks in `crates/ostra-engine/src/coord.rs`).
 
-### Asking waits
+### Messages are queued
 
-A run that asks stops working until the answer arrives. How it waits depends on the executor:
+A message never lands in the middle of a model request, because text spliced into a request in flight would
+break the receiver's turn and its prompt cache. Ostra keeps it in the fold and hands it over at the receiver's
+next turn boundary (Rule SM2):
 
-- **Native.** The loop ends the run with status `waiting`, like a submit ends it. The fold treats the run's stage
-  as paused and the planner holds its next spawn. When the answer is ready, that held spawn resumes the same
-  execution in place, and the loop replays the stored messages with the answer as the new user turn. The prefix
-  is the same, so the provider's prompt cache still covers it.
-- **Harness.** The CLI process stays alive. The MCP call returns an instruction to end the turn and reply only
-  `Waiting`, and the executor then waits for the engine's message instead of supervising for a submit. While it
-  waits it gives back its execution slot, a Stop without a submit is let through, and the time does not count
-  against its timeout. When the answer arrives, Ostra types it into the terminal as if you had, and the model
-  continues from there. If the server restarts during the wait, recovery records the run as `waiting` rather than
-  interrupted, and the answer later resumes the harness session from its stored session id.
+- **A running native run** reads its messages after its current turn's tool results, in the same user turn and
+  after the cached prefix, or in place of the reminder after a turn without tool calls.
+- **A running harness run** reads them once its turn ends: the Stop is let through, the process stays up, and
+  Ostra types the messages into its terminal.
+- **A programmatic agent** reads them after its current tool call, appended to the call's output.
+- **A waiting run** is woken with them.
+- **A subagent whose run ended** `ok`, `stuck`, or `handoff` is continued for them (below).
 
-Freeing the slot matters: with `max_parallel_executions = 1`, an asker that kept its slot would wait forever for a
-helper that can never start.
+[Executors](executors.md) describes how each executor does this.
 
-### Where a question goes
+### Pausing for a message
 
-A question to `explore` becomes a research task like the ones classification starts, tagged with the question
-(`ExploreOrigin::Ask`). It does not hold the research stage, because only the asker waits for it. Its submit is
-the answer: the findings summary, the research document's path, and what it did not cover. The document also
-joins the session's research documents, so later stages read it too. If the helper fails, its failure is the
-answer, and no failure gate opens.
+A run pauses with `wait: true` on `SendMessage`, or with `WaitForMessage` (Rule SM3). How it waits depends on the
+executor:
 
-A question to a subagent goes wherever that subagent can answer:
+- **Native.** The loop ends the run with status `waiting`, as a submit ends it. The fold treats the run's stage as
+  paused, and the planner holds the stage's next spawn. When a message is ready, the planner resumes the same
+  execution in place, and the loop replays the stored messages with the new messages as the next user turn. The
+  prefix is the same, so the provider's prompt cache still covers it.
+- **Harness and programmatic.** The process stays alive. A harness is told to end its turn and reply only
+  `Waiting`; its Stop is let through. While it waits it gives back its execution slot, and the time does not count
+  against its timeout. When a message arrives, Ostra types it into the terminal, or returns it from the
+  programmatic agent's tool call. If the server restarts during a harness wait, recovery records the run as
+  `waiting` rather than interrupted, and the message later resumes the harness session from its session id.
 
-1. **It waits on the asker**, for example the spec author waiting on the helper that now asks it back: the
-   subagent is woken in place with the question and answers with `SubagentReply`. Then it goes back to waiting for
-   its own answer. This is how two agents talk back and forth.
-2. **Its last run ended `ok`** (or `stuck` or `handoff`): Ostra starts a **consult run**, a new execution that
-   continues the subagent's conversation with the question as its new turn. A consult run may not write files;
-   the policy refuses writes with "Answer with SubagentReply and change no file". It ends when it replies.
-3. **It is running, or waits on someone else**: the question waits until the subagent is free.
-4. **It failed** (error, denied, cancelled): the asker is woken with that failure, so no run waits forever. A
-   run that was given a question and ends without replying answers with the same kind of message.
+Freeing the slot matters: with `max_parallel_executions = 1`, a waiting run that kept its slot would wait forever
+for a run that can never start.
 
-A run that owes an answer, a consult run or a run woken with a question, replies before anything else ends it.
-The guard refuses its submit call with "Call SubagentReply with your answer instead", and each reminder names the
-reply tool rather than the submit tool: the native loop's reminder after a turn with no tool call, a harness's
-turned-back Stop, and the nudge Ostra types into a quiet terminal. A harness learns it owes an answer from the
-wake itself, because the question arrives after its process started. The coordination evals found the need for
-this: a consult run that ended its turn in text was reminded to call its agent's submit tool, so it never replied.
+No run waits forever. A run that waits on a subagent hears when that subagent ends its run without messaging it,
+unless a message already queued for that subagent will continue it. A run that waits for any message hears when
+no other subagent of the session is running or waiting and no message is queued for one. Either way the run is
+woken with a notice saying so, and continues without a message.
+
+### Where a message goes
+
+A message to a helper whose contract is `research`, such as `explore`, becomes a research task like the ones
+classification starts, run by that helper and tagged with the message (`ExploreOrigin::Ask`). The `explore` name
+matters only for a log written before contracts, whose helper targets carry none. It does not hold the research stage, because only the sender waits for it. Any
+other agent whose definition sets `helper = true` is started as a helper run (purpose `Helper`) with the message
+as its task. Either way, the helper's submit comes back to the sender as a result message: for explore the
+findings summary, the research document, and what it did not cover; for a custom agent its verdict, summary,
+findings, report, and data. An explore helper that errors is retried once before its failure becomes the result.
+A result for a sender whose run already ended is dropped, because nothing waits for it.
+
+A message with `to` goes to the subagent's head:
+
+1. **It is running**: the message waits for its next turn boundary.
+2. **It waits**: it is woken with the message.
+3. **Its last run ended `ok`, `stuck`, or `handoff`**: Ostra continues its conversation in a new run (purpose
+   `Message`) with the messages as its new turn (Rule SM4). The run keeps the subagent's agent, tools, executor,
+   model, report path, and stage, so an implementer continued this way can edit files to make the fix it was
+   asked for. It ends with its submit call, which the pipeline records but does not read again.
+4. **It failed, or its conversation already holds six runs**: it takes no message, and `SendMessage` refuses with
+   the reason, so nothing is sent that no one reads.
+
+The reviewer and implementer show how this fits together. A reviewer finds a problem, sends the implementer
+"Fix X, then tell me" with `wait: true`, and pauses. The implementer's run had ended, so Ostra continues it with
+the message. It fixes the file and sends the reviewer a reply, which wakes the reviewer in place, and the
+reviewer checks again and submits its review.
+
+### Replies are owed
+
+A sender that waits for a reply is owed one (Rule SM6). When a run reads a message whose sender still waits on
+its subagent, it may not submit until it sends that sender a message. Both executors ask the engine before they
+accept a submit (`submit_blocked`), and every reminder names `SendMessage` and the sender's ID: the native loop's
+reminder after a turn with no tool call, a harness's turned-back Stop, and the nudge Ostra types into a quiet
+terminal. The coordination evals found the need for this: a run that answered in text was reminded only to
+submit, so its sender never heard back.
 
 ### The pair loops continue conversations
 
-The pipeline's loops between two agents use the same mechanism, driven by the engine instead of a tool call,
+The pipeline's loops between two agents use the same conversations, driven by the engine instead of a tool call,
 because the engine holds the gates. When a fact-check fails, the next spec or plan round continues the author's
 conversation; the next fact-check pass continues the checker's. When a review has findings, the fix continues
-the phase's last worker, and the re-review continues the reviewer. A rescue after `stuck` and a resume after a
-handoff continue the worker too. The fold decides this (`SessionState::continuation`), and the planner marks the
-spawn: fixtures show it as `spawn generate-spec spec#2 (continues)`.
+the phase's last worker, and the re-review continues the reviewer. A rescue after `stuck`, a resume after a
+handoff, and the next round of a workflow stage continue their worker too. The fold decides this
+(`SessionState::continuation`), and the planner marks the spawn: fixtures show it as
+`spawn generate-spec spec#2 (continues)`.
 
 A continued run's new turn is a fixed header followed by the new spawn block, which carries what the round needs:
 the findings, the answers, the prior findings of a re-pass. Pass or fail, the review cap, and the recurring
@@ -536,36 +815,39 @@ A loop starts a fresh run instead when continuing would be wrong or impossible: 
 with a submit, the agent was moved to another executor after a harness failure, a harness run left no session id
 to resume, you amended the request after the previous run started, or the conversation already holds six runs
 (`MAX_CONVERSATION_RUNS`), because a long conversation costs more per turn than a fresh start. A conversation
-never has two live runs: a continuation or consult waits while another run of the same subagent is live.
+never has two live runs: a continuation waits while another run of the same subagent is live (Rule H7).
 
 ### Limits
 
-Every question can start a run, so asks are bounded. A run may start at most three helpers
-(`MAX_HELPERS_PER_RUN`) and a session at most 24 questions (`MAX_SESSION_ASKS`). A helper may not start helpers,
-a consult run may not ask, and a run that owes an answer must reply before it asks. Helpers and consult runs go
-through the slot limiter and the budget guard like every other spawn, and a session does not complete while a
-question is open.
+Every message can start or wake a run, so messages are bounded (Rule SM5). A session's agents may send at most 48
+messages (`MAX_SESSION_MESSAGES`), and a run may start at most three helpers (`MAX_HELPERS_PER_RUN`). A helper may
+not start helpers. Helpers and continued runs go through the slot limiter and the budget guard like every other
+spawn, and a session does not complete while a message waits for a receiver that can still take it, or a subagent
+waits (Rule SM9).
 
 ### What the log records
 
-Each step is an event: `AgentAsked` when a run asks, `AgentReplied` when a run answers, and `MessageDelivered`
-when Ostra hands a question or an answer to a run that waits. A helper or consult run gets its question as its
-spawn, so its `ExecutionStarted` is the delivery. The fold derives everything else from these, including the
-helper's answer and every failure answer, so a replay rebuilds exactly who waits for what.
+Each step is an event (Rule SM8): `MessageSent` when a run sends, `AgentWaiting` when it waits without sending,
+and `MessagesDelivered` when Ostra hands messages to a run, with the notice when no message will come. A helper's
+start is its message's delivery. The fold derives everything else, including each helper's result message, so a
+replay rebuilds exactly who waits for what. Logs written before messaging still fold: see
+[the event log](event-log.md).
 
-### Measuring coordination
+### Measuring messaging
 
-Conformance fixtures prove where the engine routes a question; they cannot say whether a model asks the right
-subagent, answers from its conversation, or holds back when asking is not needed. The coordination evals do that.
-[`tests/evals/coordination.toml`](../../tests/evals/coordination.toml) holds cases in three tiers, all set in
-Ostra's own source:
+Conformance fixtures prove where the engine routes a message; they cannot say whether a model messages the right
+subagent, answers from its conversation, or holds back when a message is not needed. The coordination evals do
+that. [`tests/evals/coordination.toml`](../../tests/evals/coordination.toml) holds cases in three tiers, all set in
+Ostra's own source. A scripted `ask` sends with `wait: true`, and a scripted `reply` sends to the subagent that
+waits:
 
-1. **Answering.** A consult run explains a number only its conversation holds, declines to edit the spec it is
-   asked to change, and reads code it never discussed to answer correctly. A spec author woken by its helper's
-   question replies from its conversation and goes back to waiting.
-2. **Deciding.** An implementer, which has no web tools, needs a model id published last week and should ask an
-   explore helper instead of guessing it. A fact-checker finds the spec author among three subagents and asks it.
-   Two controls, a fully traceable spec and a one-file rename, must ask no one.
+1. **Answering.** A message run (an ended subagent continued for a message) explains a number only its
+   conversation holds, declines to change the spec to a number it can justify even though it has the tools to
+   edit it, and reads code it never discussed to answer correctly. A spec author woken by its helper's question
+   replies from its conversation and goes back to waiting.
+2. **Deciding.** An implementer, which has no web tools, needs a model id published last week and should start an
+   explore helper instead of guessing it. A fact-checker finds the spec author among three subagents with
+   `ListAgents` and messages it. Two controls, a fully traceable spec and a one-file rename, must message no one.
 3. **Loops.** A live fact-checker fails a false claim and its second pass continues its conversation; a live
    reviewer finds a planted bug, the live implementer fixes it in its own continued conversation, and the reviewer
    re-reviews; a live helper confirms its scope with the live author before it researches.
@@ -574,11 +856,12 @@ Ostra's own source:
 each case as a real session of a real `Engine`, on a git clone of a snapshot of Ostra's working tree that leaves
 out the eval itself, so no agent can read the expected answers. Judges are scripted. A router executor sends each
 run the case lists as live to the native loop on the model under test, with the policy, the sandbox, a code index
-of the snapshot, and coordination tools wired to that engine, and plays every other run from the case: what an
-author said, the file it wrote, the question a checker asked. So every wake, consult run, continuation, and freed
-slot goes through the engine's own code, and only the runs under test cost tokens.
+of the snapshot, and messaging tools wired to that engine, and plays every other run from the case: what an
+author said, the file it wrote, the message a checker sent. So every wake, message run, continuation, and freed
+slot goes through the engine's own code, and only the runs under test cost tokens. In grading, a message that
+pauses its sender or starts a helper counts as a question, and any other message counts as an answer.
 
-A run passes when every code check holds (who asked whom and what, the replies, statuses, submits, files,
+A run passes when every code check holds (who messaged whom and what, the replies, statuses, submits, files,
 continuations, cache reads) and a grader model finds the rubric met, reading a record of every run's tool calls,
 every question and answer, the live submits, and the diff. The report gives pass rates per tier and model, cost,
 and the share of live input tokens read from the prompt cache. A session whose live run died on a provider error
@@ -586,8 +869,9 @@ runs again, up to twice, and is reported apart from the pass rates. An offline t
 stand-ins for its live runs and checks that each live run is reached, the session stops where the case says, and
 every expected continuation continues its conversation, so a broken case fails in the normal suite.
 
-The harness side of rule H2, a CLI waiting with its process alive and the answer typed into its terminal, is
-checked live by `harness_probe wake`: the agent asks twice, and must submit both answers.
+The harness side of rule SM3, a CLI waiting with its process alive and the message typed into its terminal, is
+checked live by `harness_probe wake`: the agent starts a helper twice with `wait: true`, and must submit both
+results.
 
 ## Where to look in the code
 
@@ -596,14 +880,20 @@ checked live by `harness_probe wake`: the agent asks twice, and must submit both
 | Agent definitions and prompts | `assets/agents/<name>/` |
 | Tool names per executor | `assets/tool-mapping.toml` |
 | Loading definitions and rendering prompts | `crates/ostra-agents/src/lib.rs`, `mapping.rs` |
-| Spawn structs and the block parser | `crates/ostra-agents/src/spawn.rs` |
+| The standard plugin of Ostra's own agents | `crates/ostra-agents/src/standard.rs` |
+| Definition files (markdown and `agent.toml`) | `crates/ostra-sdk/src/definition.rs` |
+| Custom agents and the catalog | `crates/ostra-agents/src/catalog.rs`, `assets/custom-agent.md` |
+| The agent screen's reads and saves | `crates/ostra-workspace/src/builder.rs` |
+| Result contracts | `crates/ostra-core/src/contract.rs` |
+| The custom submit and its `data` check | `crates/ostra-core/src/submit.rs` (`CustomSubmit`), `crates/ostra-core/src/schema_check.rs` |
+| Spawn structs and the block parser, by contract | `crates/ostra-agents/src/spawn.rs` |
 | The repo brief | `crates/ostra-agents/src/brief.rs` |
 | Planner inputs to spawn structs | `crates/ostra-engine/src/factory.rs` |
-| Submit schemas and `validate_submit` | `crates/ostra-core/src/submit.rs` |
+| Submit schemas and `validate_submit_with`, by contract | `crates/ostra-core/src/submit.rs` |
 | Submit document checks | `crates/ostra-core/src/doc/check.rs` |
-| Subagent coordination: tool inputs and limits | `crates/ostra-core/src/coord.rs` |
-| Coordination in the fold: routes, deliveries, continuations | `crates/ostra-engine/src/coord.rs` |
-| The coordination prompt section | `assets/coordination.md` |
+| Messages: tool inputs and limits | `crates/ostra-core/src/coord.rs` |
+| Messages in the fold: queues, waits, deliveries, continuations | `crates/ostra-engine/src/coord.rs` |
+| The messaging prompt section | `assets/coordination.md` |
 | Coordination evals | `tests/evals/coordination.toml`, `crates/ostra-server/tests/coordination_evals.rs` |
 | Test stage evals | `tests/evals/test_stage.toml`, `tests/evals/test_stage/`, `crates/ostra-server/tests/test_stage_evals.rs` |
 | Planning evals | `tests/evals/planning.toml`, `tests/evals/planning/research/`, `tests/evals/planning/results/`, `crates/ostra-server/tests/planning_evals.rs` |

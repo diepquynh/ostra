@@ -87,6 +87,7 @@ function SettingsEditor({ ws, detail, onSaved }: { ws: string; detail: Workspace
       }
     >
       <PendingCommandsBanner ws={ws} pending={detail.pending_commands} onApproved={onSaved} />
+      <MissingWorkflowsBanner ws={ws} missing={detail.missing_workflows} onAdded={onSaved} />
       {external && dirty && (
         <Banner
           tone="info"
@@ -226,3 +227,31 @@ const linkButton = {
   cursor: "pointer",
   textDecoration: "underline",
 } as const;
+
+/** Rule WF9: Ostra's default workflows the workspace has no copy of, and the action that adds them. */
+function MissingWorkflowsBanner({ ws, missing, onAdded }: { ws: string; missing: string[]; onAdded: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  if (missing.length === 0) return null;
+  const add = async () => {
+    setError(null);
+    try {
+      await api.restoreWorkflows(ws);
+      onAdded();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  return (
+    <Banner
+      tone={error ? "bad" : "warn"}
+      actions={
+        <Button size="sm" onClick={() => void add()}>
+          Add the default workflows
+        </Button>
+      }
+    >
+      {error ??
+        `This workspace has no copy of Ostra's default ${missing.join(", ")} workflow${missing.length === 1 ? "" : "s"}, so sessions run Ostra's own. Add them to the workspace to edit them in the Workflow builder.`}
+    </Banner>
+  );
+}

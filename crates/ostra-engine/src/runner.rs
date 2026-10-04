@@ -5,7 +5,7 @@ use crate::autofix;
 use crate::judge::{self, output_schema};
 use crate::judge_input::{self, ProjectFacts, YoloPlan};
 use crate::plan::{PlanCtx, SpawnRequest, Step, next_steps};
-use crate::services::{Notice, Services, SpawnEnv};
+use crate::services::{BuiltSpawn, Notice, Services, SpawnEnv};
 use crate::state::{AUTO_FIXABLE_PARAM, Interrupt, SessionState, purpose_key};
 use crate::uploads;
 use crate::view;
@@ -31,6 +31,7 @@ use ostra_core::paths;
 use ostra_core::pipeline::Category;
 use ostra_core::policy::{PermissionAnswer, RuleRef, ToolCall};
 use ostra_core::submit::CodeReviewerSubmit;
+use ostra_core::workflow::StageRun;
 use ostra_store::{NewExecution, NewSession, SessionUpdate, WorkspaceDb};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -79,6 +80,7 @@ struct Attached<'a> {
     files: &'a [ContextFile],
     uploads: &'a [String],
     docs_book: Option<String>,
+    workflow: Option<ostra_core::workflow::WorkflowChoice>,
 }
 
 struct Live {
@@ -103,13 +105,8 @@ struct Inner {
     slots: Mutex<usize>,
     slot_free: Notify,
     /// Rule H2: messages for harness runs that wait with their process alive.
-    mail: Mutex<HashMap<ExecutionId, Mail>>,
-}
-
-#[derive(Default)]
-struct Mail {
-    waiter: Option<oneshot::Sender<Wake>>,
-    pending: Option<Wake>,
+    /// Rings on every appended event, so a waiting harness run checks for its messages.
+    bell: Notify,
 }
 
 /// A held execution slot; dropping it frees the slot.
@@ -158,7 +155,7 @@ impl Engine {
                 resume_hints: Mutex::new(HashMap::new()),
                 slots: Mutex::new(0),
                 slot_free: Notify::new(),
-                mail: Mutex::new(HashMap::new()),
+                bell: Notify::new(),
             }),
         }
     }
@@ -189,7 +186,7 @@ impl Engine {
                 let st = lock(&live.state);
                 let running: Vec<(ExecutionId, bool)> = st
                     .running_executions()
-                    .map(|r| (r.id.clone(), st.open_ask_of(&r.id).is_some()))
+                    .map(|r| (r.id.clone(), st.is_waiting(&r.id)))
                     .collect();
                 let stale: Vec<GateId> = st
                     .open_gates()
@@ -199,8 +196,8 @@ impl Engine {
                 (running, stale, st.is_terminal())
             };
             for (id, waiting) in running {
-                // Rule H2: a harness run that waited with its process alive still waits, and its
-                // answer resumes the harness session.
+                // Rule SM3: a harness run that waited with its process alive still waits, and the
+                // message that wakes it resumes the harness session.
                 let mut result = if waiting {
                     ExecutionResult::with_status(ExecutionStatus::Waiting)
                 } else {
@@ -263,6 +260,25 @@ impl Engine {
                 files: &req.files,
                 uploads: &req.uploads,
                 docs_book: req.docs_book.clone(),
+                workflow: Some(match req.workflow.as_deref().map(str::trim) {
+                    Some(name) if !name.is_empty() => {
+                        // Rule WF1: a workflow that cannot resolve is refused before the session exists.
+                        let wf = self
+                            .inner
+                            .services
+                            .workflows()
+                            .resolve(name)
+                            .map_err(EngineError::Invalid)?;
+                        crate::workflow::check_runnable(
+                            &wf,
+                            &self.inner.services.agents(),
+                            &self.inner.services.plugin_stages(),
+                        )
+                        .map_err(EngineError::Invalid)?;
+                        ostra_core::workflow::WorkflowChoice::Named { name: name.into() }
+                    }
+                    _ => ostra_core::workflow::WorkflowChoice::ByCategory,
+                }),
             },
         )
     }
@@ -293,8 +309,8 @@ impl Engine {
         )
     }
 
-    /// Rules H2 to H4: one coordination tool call from a running execution. `Err` is a tool
-    /// error shown to the model.
+    /// Rules SM2 to SM5: one messaging tool call from a running execution. `Err` is a tool error
+    /// shown to the model.
     pub fn coordinate(
         &self,
         session: &SessionId,
@@ -302,45 +318,71 @@ impl Engine {
         tool: &str,
         input: &Value,
     ) -> Result<ostra_core::coord::CoordReply, String> {
-        use ostra_core::coord::{RunEnd, SUBAGENT_ASK, SUBAGENT_LIST, SUBAGENT_REPLY};
+        use ostra_core::coord::{
+            CoordReply, LIST_AGENTS, RunEnd, SEND_MESSAGE, WAIT_FOR_MESSAGE, waiting_text,
+        };
         let st = self.state(session).map_err(|e| e.to_string())?;
         let harness = st
             .executions
             .get(execution)
             .is_some_and(|r| matches!(r.executor, ExecutorKind::Harness(_)));
-        let reply = crate::coord::reply;
+        let helpers = self.inner.services.agents().helpers();
         match tool {
-            SUBAGENT_LIST => Ok(reply(st.subagent_list(execution), RunEnd::Continue)),
-            SUBAGENT_ASK => {
-                let (event, who) = st.ask_event(execution, input)?;
-                self.inner
-                    .append(session, event)
-                    .map_err(|e| e.to_string())?;
-                Ok(reply(
-                    ostra_core::coord::waiting_text(&who, harness),
-                    RunEnd::Wait,
-                ))
-            }
-            SUBAGENT_REPLY => {
-                let (event, end) = st.reply_event(execution, input)?;
-                self.inner
-                    .append(session, event)
-                    .map_err(|e| e.to_string())?;
-                let text = match (end, harness) {
-                    (RunEnd::Wait, true) => {
-                        "Answer sent. End your turn now and reply with only `Waiting`: you wait for the answer to your own question again."
-                    }
-                    (RunEnd::Wait, false) => {
-                        "Answer sent. This run waits for the answer to your own question again."
-                    }
-                    _ => {
-                        "Answer sent. This run is complete: end your turn now, without further tool calls."
-                    }
+            LIST_AGENTS => Ok(CoordReply {
+                text: st.list_agents(execution, &helpers),
+                end: RunEnd::Continue,
+            }),
+            SEND_MESSAGE => {
+                let (event, who) = st.send_event(execution, input, &helpers)?;
+                let wait = matches!(event, SessionEvent::MessageSent { wait: true, .. });
+                let id = match &event {
+                    SessionEvent::MessageSent { id, .. } => id.to_string(),
+                    _ => String::new(),
                 };
-                Ok(reply(text.into(), end))
+                self.inner
+                    .append(session, event)
+                    .map_err(|e| e.to_string())?;
+                let queued = format!(
+                    "Queued message {id} for {who}. Ostra hands it over at their next turn boundary, or starts or continues them for it."
+                );
+                Ok(if wait {
+                    CoordReply {
+                        text: format!("{queued} {}", waiting_text(harness)),
+                        end: RunEnd::Wait,
+                    }
+                } else {
+                    CoordReply {
+                        text: format!(
+                            "{queued} Continue your task: a reply reaches you at your next turn, or wakes you when you wait with {}.",
+                            ostra_core::coord::tool_on(
+                                WAIT_FOR_MESSAGE,
+                                st.executions
+                                    .get(execution)
+                                    .map(|r| r.executor)
+                                    .unwrap_or_default()
+                            )
+                        ),
+                        end: RunEnd::Continue,
+                    }
+                })
+            }
+            WAIT_FOR_MESSAGE => {
+                let event = st.wait_event(execution)?;
+                self.inner
+                    .append(session, event)
+                    .map_err(|e| e.to_string())?;
+                Ok(CoordReply {
+                    text: waiting_text(harness),
+                    end: RunEnd::Wait,
+                })
             }
             other => Err(format!("Unknown tool `{other}`.")),
         }
+    }
+
+    /// Rule SM6: why `execution` may not submit yet.
+    pub fn submit_blocked(&self, session: &SessionId, execution: &ExecutionId) -> Option<String> {
+        self.state(session).ok()?.submit_blocked(execution)
     }
 
     /// Rule O3: record a project an agent created once the workspace holds it, so it joins the
@@ -375,6 +417,7 @@ impl Engine {
             files,
             uploads,
             docs_book,
+            workflow,
         } = attached;
         let settings = self.inner.services.workspace();
         if settings.yolo.default {
@@ -451,6 +494,7 @@ impl Engine {
                 uploads,
                 pinned: pinned.to_vec(),
                 docs_book,
+                workflow,
             },
         )?;
         self.inner.ensure_driver(&id, live);
@@ -970,8 +1014,14 @@ impl Engine {
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: Some(ostra_core::WriteScope::ReadOnly),
+            contract: st
+                .executions
+                .get(&view.id)
+                .map(|r| r.contract)
+                .unwrap_or(ostra_core::Contract::Stage),
+            capabilities: vec![],
         };
         self.inner.db.insert_execution(&NewExecution {
             id: new.clone(),
@@ -1270,7 +1320,8 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
                 | GatePayload::HarnessFailure { .. }
                 | GatePayload::ExecutionFailed { .. }
                 | GatePayload::BudgetReached { .. }
-                | GatePayload::ImplementationReview { .. },
+                | GatePayload::ImplementationReview { .. }
+                | GatePayload::StageReview { .. },
             GateAnswer::Choice { .. }
         ) | (GatePayload::ClosingGate { .. }, GateAnswer::Closing { .. })
             | (
@@ -1324,7 +1375,40 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
             }
         }
     }
+    // Rule WF5: a failed stage takes retry, continue, or stop; a question takes an option, other
+    // with text, or stop.
+    if let (
+        GatePayload::StageReview {
+            verdict, options, ..
+        },
+        GateAnswer::Choice { option, text },
+    ) = (payload, answer)
+    {
+        let has_text = text.as_ref().is_some_and(|t| !t.trim().is_empty());
+        let ok = match verdict {
+            ostra_core::submit::StageVerdict::Fail => {
+                matches!(option.as_str(), "retry" | "continue" | "stop")
+            }
+            _ => {
+                option == "stop"
+                    || (option == "other" && has_text)
+                    || options.iter().any(|o| o == option)
+            }
+        };
+        if !ok {
+            return Err(EngineError::Invalid(match verdict {
+                ostra_core::submit::StageVerdict::Fail => "Answer retry, continue, or stop.".into(),
+                _ => "Pick one of the stage's options, or other with your answer, or stop.".into(),
+            }));
+        }
+    }
     Ok(())
+}
+
+/// Rule PL4: the side panel's agent, the standard agent for answers.
+fn quick_agent() -> AgentName {
+    ostra_agents::standard::Standard::default_for(ostra_core::Contract::Answer)
+        .expect("the standard plugin returns every built-in contract")
 }
 
 /// The rule "always in this workspace" adds for a call.
@@ -1452,6 +1536,7 @@ impl Inner {
             session: session.clone(),
             stored: stored.clone(),
         });
+        self.bell.notify_waiters();
         self.push_for(session, &event);
         live.wake.notify_one();
         Ok(stored)
@@ -1685,6 +1770,19 @@ impl Inner {
         Ok(())
     }
 
+    /// Rule PL8: plugin `plugin`'s checkpoints in `session`.
+    fn checkpoints(
+        self: &Arc<Self>,
+        session: &SessionId,
+        plugin: &str,
+    ) -> Arc<dyn ostra_core::plugin::Checkpoints> {
+        Arc::new(SessionCheckpoints {
+            inner: self.clone(),
+            session: session.clone(),
+            plugin: plugin.to_string(),
+        })
+    }
+
     async fn perform(self: &Arc<Self>, session: &SessionId, step: Step) -> Result<(), EngineError> {
         match step {
             Step::Judge { judge, subject } => self.perform_judge(session, judge, subject).await,
@@ -1709,35 +1807,6 @@ impl Inner {
                 Ok(())
             }
             Step::YoloAnswer { gate } => self.perform_yolo(session, gate).await,
-            Step::Deliver {
-                execution,
-                ask,
-                kind,
-            } => {
-                let st = self.snapshot(session)?;
-                let Some(d) = st
-                    .next_delivery(&execution)
-                    .filter(|d| d.ask == ask && d.kind == kind)
-                else {
-                    return Ok(());
-                };
-                self.append(
-                    session,
-                    SessionEvent::MessageDelivered {
-                        ask,
-                        to: execution.clone(),
-                        kind,
-                    },
-                )?;
-                self.deliver_mail(
-                    &execution,
-                    Wake {
-                        note: d.note,
-                        owes_reply: kind == ostra_core::coord::DeliveryKind::Question,
-                    },
-                );
-                Ok(())
-            }
             Step::Command {
                 purpose,
                 project,
@@ -1829,6 +1898,156 @@ impl Inner {
             }
             Step::Fail { error } => {
                 self.append(session, SessionEvent::SessionFailed { error })?;
+                Ok(())
+            }
+            Step::HandleResult { execution } => {
+                let st = self.snapshot(session)?;
+                let Some((plugin, view)) = st.result_view(&execution) else {
+                    return Ok(());
+                };
+                if st
+                    .executions
+                    .get(&execution)
+                    .is_some_and(|r| r.handled.is_some())
+                {
+                    return Ok(());
+                }
+                drop(st);
+                let checkpoints = self.checkpoints(session, &plugin);
+                let outcome = self
+                    .services
+                    .handle_result(&plugin, view, checkpoints)
+                    .await
+                    .unwrap_or_else(|e| ostra_core::submit::CustomSubmit {
+                        verdict: ostra_core::submit::StageVerdict::Fail,
+                        summary: format!("Plugin `{plugin}` could not handle the result: {e}"),
+                        findings: vec![],
+                        question: None,
+                        options: vec![],
+                        report_path: None,
+                        data: None,
+                    });
+                self.append(session, SessionEvent::ResultHandled { execution, outcome })?;
+                Ok(())
+            }
+            Step::DecideStage { node, scope, seq } => {
+                let st = self.snapshot(session)?;
+                let current = st
+                    .stage_track(&node, scope.as_deref())
+                    .map(|t| t.decisions.len() as u32)
+                    .unwrap_or(0);
+                if current != seq {
+                    return Ok(());
+                }
+                let Some((plugin, stage, view)) =
+                    crate::plugin_stage::stage_view(&st, &node, scope.as_deref())
+                else {
+                    return Ok(());
+                };
+                drop(st);
+                let checkpoints = self.checkpoints(session, &plugin);
+                let decision = self
+                    .services
+                    .decide_stage(&plugin, &stage, view, checkpoints)
+                    .await
+                    .unwrap_or_else(|e| ostra_core::plugin::StageDecision::Fail {
+                        summary: format!("Plugin `{plugin}` could not decide: {e}"),
+                    });
+                self.append(
+                    session,
+                    SessionEvent::StageDecided {
+                        node,
+                        scope,
+                        decision,
+                    },
+                )?;
+                Ok(())
+            }
+            Step::SkipStage { node, scope } => {
+                self.append(session, SessionEvent::StageSkipped { node, scope })?;
+                Ok(())
+            }
+            Step::RunNode {
+                node, scope, round, ..
+            } => {
+                let st = self.snapshot(session)?;
+                let Some(d) = st.workflow.as_ref().and_then(|w| w.stage(&node)).cloned() else {
+                    return Ok(());
+                };
+                let track = st.stage_track(&node, scope.as_deref()).cloned();
+                if track.as_ref().is_some_and(|t| t.round >= round) {
+                    return Ok(());
+                }
+                let inputs = st.node_inputs(&d, scope.as_deref());
+                let notes = track.map(|t| t.notes).unwrap_or_default();
+                let functions = st
+                    .workflow
+                    .as_ref()
+                    .map(|w| w.functions.clone())
+                    .unwrap_or_default();
+                drop(st);
+                let (output, error, cost_usd) = match &d.run {
+                    // Rule PL7: `<plugin>:<name>` runs in its plugin's code.
+                    StageRun::Transform { function } if function.contains(':') => {
+                        let (plugin, name) = function.split_once(':').unwrap_or_default();
+                        match self
+                            .services
+                            .plugin_transform(plugin, name, inputs, d.args.clone())
+                            .await
+                        {
+                            Ok(v) => (Some(v), None, 0.0),
+                            Err(e) => (None, Some(format!("Plugin `{plugin}`: {e}")), 0.0),
+                        }
+                    }
+                    StageRun::Transform { function } => {
+                        match ostra_core::transform::run_function(
+                            function, &inputs, &d.args, &functions,
+                        ) {
+                            Ok(v) => (Some(v), None, 0.0),
+                            Err(e) => (None, Some(e), 0.0),
+                        }
+                    }
+                    StageRun::Prompt { tier, effort } => {
+                        self.prompt_node(&d, *tier, *effort, &inputs, &notes).await
+                    }
+                    _ => return Ok(()),
+                };
+                self.append(
+                    session,
+                    SessionEvent::NodeRan {
+                        node,
+                        scope,
+                        round,
+                        output,
+                        error,
+                        cost_usd,
+                    },
+                )?;
+                Ok(())
+            }
+            Step::ResolveWorkflow { name, category } => {
+                self.services.prepare_plugins().await;
+                let set = self.services.workflows();
+                let resolved = match (&name, category) {
+                    (Some(n), _) => set.resolve(n),
+                    (None, Some(c)) => set.default_for(c),
+                    (None, None) => return Ok(()),
+                }
+                .and_then(|wf| {
+                    crate::workflow::check_runnable(
+                        &wf,
+                        &self.services.agents(),
+                        &self.services.plugin_stages(),
+                    )
+                    .map(|_| wf)
+                });
+                let event = match resolved {
+                    Ok(workflow) => SessionEvent::WorkflowResolved { workflow },
+                    Err(error) => SessionEvent::SessionFailed {
+                        error: format!("The session's workflow cannot run. {error}"),
+                    },
+                };
+                self.append(session, event)?;
                 Ok(())
             }
             Step::FinishInit { project } => {
@@ -1962,6 +2181,78 @@ impl Inner {
                 }
             })
             .collect()
+    }
+
+    /// Rule WB3: one model call for a prompt node, on its tier, checked against its output
+    /// schema. Returns the output or the error, and what the calls cost.
+    async fn prompt_node(
+        &self,
+        d: &ostra_core::workflow::StageDef,
+        tier: Option<Tier>,
+        effort: Option<ostra_core::model::Effort>,
+        inputs: &serde_json::Map<String, Value>,
+        notes: &[String],
+    ) -> (Option<Value>, Option<String>, f64) {
+        let Some(system) = self.services.factory().judge_prompt("prompt-node") else {
+            return (None, Some("Ostra has no prompt-node prompt.".into()), 0.0);
+        };
+        let schema = d.output_schema.clone().unwrap_or(Value::Null);
+        let tier = tier.unwrap_or(Tier::Balanced);
+        let route = match resolve_route(
+            &self.services.global(),
+            &self.services.workspace(),
+            RouteQuery {
+                tier_override: Some(tier),
+                ..RouteQuery::new(ostra_core::agent::JUDGE_ROUTE, tier)
+            },
+        ) {
+            Ok(r) => r,
+            Err(e) => return (None, Some(e.0), 0.0),
+        };
+        let mut user = format!(
+            "## Prompt\n\n{}\n\n## Inputs\n\n{}\n",
+            d.instructions.as_deref().unwrap_or_default(),
+            serde_json::to_string_pretty(inputs).unwrap_or_default()
+        );
+        if !notes.is_empty() {
+            user.push_str("\n## Your earlier answers were refused\n\n");
+            for n in notes {
+                user.push_str(&format!("- {n}\n"));
+            }
+        }
+        let mut cost = 0.0;
+        let mut last = String::new();
+        for _ in 0..2 {
+            match self
+                .services
+                .judge(
+                    &route,
+                    &system,
+                    &user,
+                    schema.clone(),
+                    effort.unwrap_or(ostra_core::model::Effort::Medium),
+                )
+                .await
+            {
+                Ok((value, usage)) => {
+                    cost += usage.cost_usd;
+                    let issues = ostra_core::schema_check::check(&schema, &value, "");
+                    if issues.is_empty() {
+                        return (Some(value), None, cost);
+                    }
+                    last = format!(
+                        "the answer did not match the output schema: {}",
+                        issues.join("; ")
+                    );
+                }
+                Err(e) => last = e,
+            }
+        }
+        (
+            None,
+            Some(format!("The prompt node's model call failed: {last}")),
+            cost,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2310,6 +2601,7 @@ impl Inner {
                 spawn_block: String::new(),
                 report_path: None,
                 resumes: None,
+                contract: None,
             },
         )?;
         let mut result = ExecutionResult::with_status(ExecutionStatus::Denied);
@@ -2320,18 +2612,22 @@ impl Inner {
 
     /// Wait for a slot under the workspace's parallelism limit, re-read each time so a settings
     /// change applies to waiting spawns.
-    /// Rule H2: hand a message to a harness run that waits for it, now or when it starts waiting.
-    fn deliver_mail(&self, execution: &ExecutionId, note: Wake) {
-        let mut mail = lock(&self.mail);
-        let m = mail.entry(execution.clone()).or_default();
-        match m.waiter.take() {
-            Some(tx) => {
-                if let Err(note) = tx.send(note) {
-                    m.pending = Some(note);
-                }
-            }
-            None => m.pending = Some(note),
-        }
+    /// Rule SM2: hand run `execution` the messages queued for it, and record the hand-over.
+    fn take_messages(&self, session: &SessionId, execution: &ExecutionId) -> Option<Wake> {
+        let d = self.snapshot(session).ok()?.next_delivery(execution)?;
+        self.append(
+            session,
+            SessionEvent::MessagesDelivered {
+                to: execution.clone(),
+                ids: d.ids.clone(),
+                notice: d.notice.clone(),
+            },
+        )
+        .ok()?;
+        Some(Wake {
+            note: d.note,
+            owes_reply: !d.owes.is_empty(),
+        })
     }
 
     async fn acquire_slot(self: &Arc<Self>) -> Slot {
@@ -2411,7 +2707,11 @@ impl Inner {
                         )
                     })
             });
-        // Rule H2: a waiting run wakes only with its message.
+        // Another step already resumed this run.
+        if req.resumes.is_some() && paused.is_none() && req.continues.is_none() {
+            return Ok(());
+        }
+        // Rule SM3: a waiting run wakes only with its messages.
         let wake = match paused {
             Some(rec)
                 if rec
@@ -2434,7 +2734,19 @@ impl Inner {
         let global = self.services.global();
         let settings = self.services.workspace();
         let factory = self.services.factory();
-        let meta = factory.agent_meta(req.agent);
+        let agents = self.services.agents();
+        let Some(meta) = factory.agent_meta(req.agent, &agents) else {
+            return self.record_denied(
+                session,
+                &req,
+                ExecutorKind::Native,
+                String::new(),
+                format!(
+                    "The workspace defines no agent `{}` any more. Restore its file in .ostra/agents, or change the workflow.",
+                    req.agent
+                ),
+            );
+        };
         let complexity = req.complexity();
         let tier_override = matches!(
             req.purpose,
@@ -2473,7 +2785,27 @@ impl Inner {
             route.executor = rec.executor;
             route.model = rec.model.clone();
         }
-        let Some(executor) = self.services.executor(route.executor) else {
+        // Rule PL2: a programmatic agent runs in its plugin's code, natively, whatever its route
+        // says; the route's model serves its model calls.
+        if meta.programmatic {
+            route.executor = ExecutorKind::Native;
+            if let Ok(native) = resolve_route(
+                &global,
+                &settings,
+                RouteQuery {
+                    executor_override: Some(ExecutorKind::Native),
+                    ..RouteQuery::new(req.agent.as_str(), meta.default_tier)
+                },
+            ) {
+                route.model = native.model;
+            }
+        }
+        let executor = if meta.programmatic {
+            self.services.program_executor(req.agent)
+        } else {
+            self.services.executor(route.executor)
+        };
+        let Some(executor) = executor else {
             return self.record_denied(
                 session,
                 &req,
@@ -2482,10 +2814,23 @@ impl Inner {
                 format!("The {} executor is not available.", route.executor),
             );
         };
+        // Rule SM4: a run that continues an ended subagent starts with the messages sent to it.
+        let delivery = match &req.purpose {
+            ExecPurpose::Message { subagent, .. } => {
+                match st.continuation_delivery(subagent, route.executor) {
+                    Some(d) => Some(d),
+                    None => return Ok(()),
+                }
+            }
+            _ => None,
+        };
         // Rule O2: a phase in a project that does not exist yet runs from its session dir, so its
         // sandbox can write nowhere else until it creates the project.
-        let creates_project =
-            req.agent == AgentName::Implementer && st.project_to_create(&req.project).is_some();
+        // Rule CA6: a run that holds the project tools creates its phase's new project.
+        let creates_project = meta
+            .capabilities
+            .contains(&ostra_core::Capability::ManageProjects)
+            && st.project_to_create(&req.project).is_some();
         let repo_root = if creates_project {
             let _ = std::fs::create_dir_all(&req.session_dir);
             req.session_dir.clone()
@@ -2525,7 +2870,7 @@ impl Inner {
                 );
             }
         }
-        if req.agent == AgentName::SystemArchitecture
+        if matches!(req.purpose, ExecPurpose::Architecture)
             && let Some(p) = &req.inputs.target
         {
             let parts: serde_json::Map<String, serde_json::Value> = st
@@ -2536,18 +2881,46 @@ impl Inner {
                 .collect();
             let _ = std::fs::write(p, serde_json::to_string_pretty(&parts).unwrap_or_default());
         }
-        let built = match factory.build(
-            &req,
-            &SpawnEnv {
-                state: &st,
-                executor: route.executor,
-                settings: &settings,
-                profile: profile.as_ref(),
-                inventory: inventory.as_deref(),
-                repo_root: &repo_root,
-                project_docs: &project_docs,
-            },
-        ) {
+        // A paused run, and a run that continues a subagent for its messages, carry on with their
+        // own transcript, so they need the prompt and the spawn they had, not a new spawn block:
+        // their steps carry no stage inputs (Rules SM3 and SM4).
+        let reuse = paused.or(match req.purpose {
+            ExecPurpose::Message { .. } => continued,
+            _ => None,
+        });
+        let rebuilt = reuse.map(|rec| -> Result<BuiltSpawn, String> {
+            Ok(BuiltSpawn {
+                system_prompt: agents
+                    .render_prompt(rec.agent, route.executor)
+                    .map_err(|e| e.to_string())?,
+                first_message: rec.spawn_block.clone(),
+                spawn_block: rec.spawn_block.clone(),
+                params: rec.params.clone(),
+                report_file: rec.report_path.clone(),
+                effort: ostra_core::config::resolve_effort(
+                    &settings,
+                    rec.agent.as_str(),
+                    complexity,
+                )
+                .or_else(|| agents.def(rec.agent).map(|d| d.effort_on(route.executor)))
+                .unwrap_or(ostra_core::Effort::High),
+            })
+        });
+        let built = match rebuilt.unwrap_or_else(|| {
+            factory.build(
+                &req,
+                &SpawnEnv {
+                    state: &st,
+                    executor: route.executor,
+                    settings: &settings,
+                    profile: profile.as_ref(),
+                    inventory: inventory.as_deref(),
+                    repo_root: &repo_root,
+                    project_docs: &project_docs,
+                    agents: &agents,
+                },
+            )
+        }) {
             Ok(b) => b,
             Err(e) => {
                 return self.record_denied(
@@ -2600,11 +2973,10 @@ impl Inner {
                             .result
                             .as_ref()
                             .and_then(|r| r.native_session_id.clone()),
-                        note: Some(match req.purpose {
-                            ExecPurpose::Consult { .. } => crate::coord::consult_note(
-                                &built.spawn_block,
-                                crate::coord::reply_tool(route.executor),
-                            ),
+                        note: Some(match (&req.purpose, &delivery) {
+                            (ExecPurpose::Message { .. }, Some(d)) => {
+                                crate::coord::message_continuation_note(&d.note)
+                            }
                             _ => crate::coord::continuation_note(&built.spawn_block),
                         }),
                         inspect: false,
@@ -2646,20 +3018,22 @@ impl Inner {
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
             creates_project,
-            answer_only: matches!(req.purpose, ExecPurpose::Consult { .. }),
-            owes_reply: matches!(req.purpose, ExecPurpose::Consult { .. })
-                || wake
-                    .as_ref()
-                    .is_some_and(|d| d.kind == ostra_core::coord::DeliveryKind::Question),
+            owes_reply: wake
+                .as_ref()
+                .or(delivery.as_ref())
+                .is_some_and(|d| !d.owes.is_empty()),
+            write_scope: Some(meta.write_scope),
+            contract: meta.returns,
+            capabilities: meta.capabilities.clone(),
         };
         let usage_base = if paused.is_some() {
             if let Some(d) = &wake {
                 self.append(
                     session,
-                    SessionEvent::MessageDelivered {
-                        ask: d.ask.clone(),
+                    SessionEvent::MessagesDelivered {
                         to: id.clone(),
-                        kind: d.kind,
+                        ids: d.ids.clone(),
+                        notice: d.notice.clone(),
                     },
                 )?;
             }
@@ -2680,8 +3054,19 @@ impl Inner {
                     spawn_block: built.spawn_block.clone(),
                     report_path: built.report_file.clone(),
                     resumes: resume.as_ref().map(|r| r.from.clone()),
+                    contract: Some(meta.returns),
                 },
             )?;
+            if let Some(d) = &delivery {
+                self.append(
+                    session,
+                    SessionEvent::MessagesDelivered {
+                        to: id.clone(),
+                        ids: d.ids.clone(),
+                        notice: None,
+                    },
+                )?;
+            }
             self.db.insert_execution(&NewExecution {
                 id: id.clone(),
                 session: Some(session.clone()),
@@ -2740,7 +3125,7 @@ impl Inner {
             system_prompt: built.system_prompt,
             first_message: built.first_message,
             capabilities: meta.capabilities.clone(),
-            submit_schema: ostra_core::submit::submit_schema(req.agent),
+            submit_schema: meta.submit_schema.clone(),
             timeout_secs: meta.timeout_secs,
             ctx,
             resume,
@@ -2748,7 +3133,6 @@ impl Inner {
         };
         let mut result = executor.run(spec, host.clone(), token).await;
         lock(&self.execs).remove(&id);
-        lock(&self.mail).remove(&id);
         let mut usage = usage_base;
         usage.add(&result.usage);
         result.usage = usage;
@@ -2807,24 +3191,28 @@ impl Inner {
         let global = self.services.global();
         let settings = self.services.workspace();
         let factory = self.services.factory();
-        let meta = factory.agent_meta(AgentName::QuickAnswer);
+        // Rule PL4: the side panel runs the standard agent for answers.
+        let agent = quick_agent();
+        let meta = factory
+            .agent_meta(agent, &self.services.agents())
+            .ok_or_else(|| EngineError::Invalid(format!("{agent} is missing")))?;
         let route = resolve_route(
             &global,
             &settings,
             RouteQuery {
                 executor_override: Some(ExecutorKind::Native),
-                ..RouteQuery::new("quick-answer", meta.default_tier)
+                ..RouteQuery::new(agent.as_str(), meta.default_tier)
             },
         )
         .map_err(|e| EngineError::Invalid(e.0))?;
         let system = factory
-            .judge_prompt("__agent:quick-answer")
-            .ok_or_else(|| EngineError::Invalid("The quick-answer prompt is missing.".into()))?;
+            .judge_prompt(&format!("__agent:{agent}"))
+            .ok_or_else(|| EngineError::Invalid(format!("The {agent} prompt is missing.")))?;
         let first = format!("{context}\n# Question\n\n{question}\n");
         let ctx = ExecContext {
             execution_id: id.clone(),
             session_id: None,
-            agent: AgentName::QuickAnswer,
+            agent,
             initializer_mode: None,
             executor: ExecutorKind::Native,
             workspace_root: self.workspace_root.clone(),
@@ -2851,13 +3239,15 @@ impl Inner {
             sandbox_loopback: settings.sandbox_loopback,
             sandbox_blocked_ports: settings.sandbox_blocked_ports.clone(),
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: Some(meta.write_scope),
+            contract: meta.returns,
+            capabilities: meta.capabilities.clone(),
         };
         self.db.insert_execution(&NewExecution {
             id: id.clone(),
             session: None,
-            agent: AgentName::QuickAnswer,
+            agent,
             purpose: Some(ExecPurpose::QuickAnswer),
             stage: None,
             project: project.into(),
@@ -2880,13 +3270,13 @@ impl Inner {
         });
         let spec = ExecutionSpec {
             id: id.clone(),
-            agent: AgentName::QuickAnswer,
+            agent,
             route,
             effort: ostra_core::model::Effort::Medium,
             system_prompt: system,
             first_message: first,
             capabilities: meta.capabilities,
-            submit_schema: ostra_core::submit::submit_schema(AgentName::QuickAnswer),
+            submit_schema: meta.submit_schema.clone(),
             timeout_secs: meta.timeout_secs,
             ctx,
             resume: None,
@@ -2954,6 +3344,55 @@ fn tail(s: &str, n: usize) -> String {
         start += 1;
     }
     format!("...{}", &s[start..])
+}
+
+/// Rule PL8: a plugin's checkpoints in one session, read from the fold and saved as events.
+struct SessionCheckpoints {
+    inner: Arc<Inner>,
+    session: SessionId,
+    plugin: String,
+}
+
+#[async_trait::async_trait]
+impl ostra_core::plugin::Checkpoints for SessionCheckpoints {
+    fn all(&self) -> std::collections::BTreeMap<String, Value> {
+        self.inner
+            .snapshot(&self.session)
+            .ok()
+            .and_then(|st| st.plugin_checkpoints.get(&self.plugin).cloned())
+            .unwrap_or_default()
+    }
+
+    async fn write(&self, key: &str, value: Option<Value>) -> Result<(), String> {
+        let st = self
+            .inner
+            .snapshot(&self.session)
+            .map_err(|e| e.to_string())?;
+        if st.is_terminal() {
+            return Err("The session ended, so it keeps no more checkpoints.".into());
+        }
+        let kept = st
+            .plugin_checkpoints
+            .get(&self.plugin)
+            .cloned()
+            .unwrap_or_default();
+        let saves = st.checkpoint_saves.get(&self.plugin).copied().unwrap_or(0);
+        drop(st);
+        if !ostra_core::plugin::check_checkpoint(&kept, saves, key, value.as_ref())? {
+            return Ok(());
+        }
+        self.inner
+            .append(
+                &self.session,
+                SessionEvent::PluginCheckpoint {
+                    plugin: self.plugin.clone(),
+                    key: key.to_string(),
+                    value,
+                },
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Callbacks for one running execution.
@@ -3080,7 +3519,7 @@ impl ExecutionHost for EngineHost {
             .executions
             .get(&self.execution)
             .map(|r| r.agent)
-            .unwrap_or(AgentName::Implementer);
+            .unwrap_or_else(quick_agent);
         let repo = st
             .executions
             .get(&self.execution)
@@ -3145,6 +3584,17 @@ impl ExecutionHost for EngineHost {
         let _ = self.inner.db.append_message(&self.execution, role, content);
     }
 
+    fn checkpoints(&self, plugin: &str) -> Arc<dyn ostra_core::plugin::Checkpoints> {
+        match &self.session {
+            Some(session) => Arc::new(SessionCheckpoints {
+                inner: self.inner.clone(),
+                session: session.clone(),
+                plugin: plugin.to_string(),
+            }),
+            None => Arc::new(ostra_core::plugin::NoCheckpoints),
+        }
+    }
+
     fn transcript(&self, execution: &ExecutionId) -> Vec<(String, Value)> {
         self.inner
             .db
@@ -3160,22 +3610,49 @@ impl ExecutionHost for EngineHost {
     }
 
     async fn wait_for_wake(&self) -> Option<Wake> {
-        let rx = {
-            let mut mail = lock(&self.inner.mail);
-            let m = mail.entry(self.execution.clone()).or_default();
-            if let Some(note) = m.pending.take() {
-                return Some(note);
+        let session = self.session.clone()?;
+        let mut released = false;
+        loop {
+            let rung = self.inner.bell.notified();
+            if let Some(wake) = self.inner.take_messages(&session, &self.execution) {
+                if released {
+                    let slot = self.inner.acquire_slot().await;
+                    *lock(&self.slot) = Some(slot);
+                }
+                return Some(wake);
             }
-            let (tx, rx) = oneshot::channel();
-            m.waiter = Some(tx);
-            rx
-        };
-        // Rule H2: a waiting run holds no slot, so the run it waits for can start.
-        drop(lock(&self.slot).take());
-        let note = rx.await.ok();
-        let slot = self.inner.acquire_slot().await;
-        *lock(&self.slot) = Some(slot);
-        note
+            let st = self.inner.snapshot(&session).ok()?;
+            if st.is_terminal() || !st.is_waiting(&self.execution) {
+                return None;
+            }
+            drop(st);
+            // Rule SM3: a waiting run holds no slot, so the run it waits for can start.
+            if !released {
+                drop(lock(&self.slot).take());
+                released = true;
+            }
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), rung).await;
+        }
+    }
+
+    fn take_messages(&self) -> Option<Wake> {
+        self.inner
+            .take_messages(self.session.as_ref()?, &self.execution)
+    }
+
+    fn has_messages(&self) -> bool {
+        self.session.as_ref().is_some_and(|s| {
+            self.inner
+                .snapshot(s)
+                .is_ok_and(|st| st.next_delivery(&self.execution).is_some())
+        })
+    }
+
+    fn submit_blocked(&self) -> Option<String> {
+        self.inner
+            .snapshot(self.session.as_ref()?)
+            .ok()?
+            .submit_blocked(&self.execution)
     }
 }
 

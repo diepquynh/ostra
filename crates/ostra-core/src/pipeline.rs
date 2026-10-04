@@ -162,6 +162,8 @@ pub enum StageKind {
     SkillApproval,
     GenerateSkill,
     GenerateInventory,
+    /// Rule WF4: a workflow node that runs a custom agent or a plugin stage.
+    Custom,
 }
 
 impl StageKind {
@@ -176,7 +178,7 @@ impl StageKind {
             Stakes | Plan | PlanApproval => Lane::Design,
             Implement | Autofix | Handoff | Rescue | Verify | PromptGen | GenerateSkill
             | GenerateInventory => Lane::Build,
-            Review | Staging | Format | ImplementationReview => Lane::Review,
+            Review | Staging | Format | ImplementationReview | Custom => Lane::Review,
             ClosingGate | Epa | WriteTest | TestReview => Lane::Test,
             Documentation | Architecture | BookWrite => Lane::Docs,
             Completion => Lane::Done,

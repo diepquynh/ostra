@@ -1,6 +1,6 @@
 //! Settings checks a workspace adds to `validate_workspace`, and the agents' routes under them.
 
-use ostra_core::agent::{AgentName, JUDGE_ROUTE};
+use ostra_core::agent::JUDGE_ROUTE;
 use ostra_core::api::AgentInfo;
 use ostra_core::config::{
     Environment, GlobalConfig, RouteQuery, ValidationIssue, WorkspaceSettings, resolve_executor,
@@ -13,19 +13,46 @@ pub fn default_tier(key: &str) -> Tier {
         return Tier::Advanced;
     }
     key.parse()
-        .map(|a| ostra_agents::agent_def(a).default_tier)
+        .ok()
+        .and_then(ostra_agents::builtin_def)
+        .map(|d| d.default_tier)
         .unwrap_or(Tier::Balanced)
 }
 
-/// The fixes Ostra can apply on its own: an agent with no model route gets `default`, which
-/// resolves to its default tier.
-pub fn settings_fixes(settings: &WorkspaceSettings) -> Vec<ostra_core::api::SettingsFix> {
-    ostra_core::config::keys_without_route(settings)
+/// Rule CA4: what routing knows of every agent of a catalog, built-in and custom alike.
+pub fn agent_routes(agents: &ostra_agents::AgentCatalog) -> Vec<ostra_core::config::AgentRoute> {
+    agents
+        .names()
         .into_iter()
-        .map(|key| ostra_core::api::SettingsFix {
-            path: format!("routing.model.byAgent.{key}"),
-            value: "default".into(),
-            label: format!("Route `{key}` to its default tier ({})", default_tier(key)),
+        .filter_map(|n| agents.def(n))
+        .map(|d| ostra_core::config::AgentRoute {
+            name: d.name.to_string(),
+            default_tier: d.default_tier,
+            per_phase: d.returns.per_phase(),
+            native_only: d.returns == ostra_core::Contract::Answer,
+        })
+        .collect()
+}
+
+/// The fixes Ostra can apply on its own: an agent with no model route gets `default`, which
+/// writes down the default tier it already runs on (Rule CA4).
+pub fn settings_fixes(
+    settings: &WorkspaceSettings,
+    agents: &[ostra_core::config::AgentRoute],
+) -> Vec<ostra_core::api::SettingsFix> {
+    ostra_core::config::keys_without_route(settings, agents)
+        .into_iter()
+        .map(|key| {
+            let tier = agents
+                .iter()
+                .find(|a| a.name == key)
+                .map(|a| a.default_tier)
+                .unwrap_or_else(|| default_tier(key));
+            ostra_core::api::SettingsFix {
+                path: format!("routing.model.byAgent.{key}"),
+                value: "default".into(),
+                label: format!("Route `{key}` to its default tier ({tier})"),
+            }
         })
         .collect()
 }
@@ -73,12 +100,17 @@ pub fn field_issue(path: &str, message: String) -> ValidationIssue {
     }
 }
 
-/// Every agent's definition with its routes under `settings`.
-pub fn agent_infos(global: &GlobalConfig, settings: &WorkspaceSettings) -> Vec<AgentInfo> {
-    AgentName::ALL
+/// Every agent's definition, built-in and custom, with its routes under `settings`.
+pub fn agent_infos(
+    global: &GlobalConfig,
+    settings: &WorkspaceSettings,
+    agents: &ostra_agents::AgentCatalog,
+) -> Vec<AgentInfo> {
+    agents
+        .names()
         .into_iter()
-        .map(|name| {
-            let def = ostra_agents::agent_def(name);
+        .filter_map(|name| agents.def(name).map(|d| (name, d)))
+        .map(|(name, def)| {
             let q = RouteQuery::new(name.as_str(), def.default_tier);
             let resolved = resolve_route(global, settings, q).ok();
             let default_route = resolve_route(
@@ -97,19 +129,43 @@ pub fn agent_infos(global: &GlobalConfig, settings: &WorkspaceSettings) -> Vec<A
                 description: def.description.clone(),
                 default_tier: def.default_tier,
                 effort: def.effort.clone(),
-                default_effort: ostra_agents::effort_for(name, executor),
+                default_effort: def.effort_on(executor),
                 capabilities: def.capabilities.clone(),
                 timeout_secs: def.timeout_secs,
                 resolved,
                 default_route,
+                source: agent_source(&def.origin),
+                returns: def.returns,
+                write_scope: def.write_scope,
+                helper: def.helper,
+                programmatic: def.programmatic,
             }
         })
         .collect()
 }
 
+/// Rule AG1: where a definition comes from, with a workspace file named under the workspace.
+pub fn agent_source(origin: &ostra_agents::AgentOrigin) -> ostra_core::api::AgentSource {
+    use ostra_agents::AgentOrigin;
+    use ostra_core::api::AgentSource;
+    match origin {
+        AgentOrigin::Standard => AgentSource::Ostra,
+        AgentOrigin::Workspace(p) => AgentSource::Workspace {
+            file: format!(
+                ".ostra/agents/{}",
+                p.file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            ),
+        },
+        AgentOrigin::Plugin(p) => AgentSource::Plugin { plugin: p.clone() },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ostra_core::AgentName;
     use ostra_core::executor::{ExecutorKind, HarnessKind};
 
     #[test]
@@ -126,7 +182,7 @@ mod tests {
             ExecutorKind::Harness(HarnessKind::Codex),
         );
         settings.routing.model.by_agent.remove("explore");
-        let infos = agent_infos(&global, &settings);
+        let infos = agent_infos(&global, &settings, &ostra_agents::AgentCatalog::builtin());
         assert_eq!(infos.len(), AgentName::ALL.len());
         let get = |n: AgentName| infos.iter().find(|i| i.name == n).unwrap();
 
@@ -159,11 +215,9 @@ mod tests {
             )
         );
 
+        // Rule CA4: an agent without a route runs on its default tier.
         let explore = get(AgentName::Explore);
-        assert_eq!(
-            explore.resolved, None,
-            "a route that does not resolve is null"
-        );
+        assert_eq!(explore.resolved, explore.default_route);
         assert!(explore.default_route.is_some());
     }
 }

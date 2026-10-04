@@ -3,6 +3,10 @@ default_tier = "advanced"
 timeout_seconds = 2400
 capabilities = ["read", "shell", "search_text", "glob", "code", "docs_search"]
 
+returns = "documentation"
+write_scope = "session"
+brief = ["stack", "commands", "modules"]
+
 [effort]
 native = "high"
 claude = "high"

@@ -222,7 +222,8 @@ fn registered(host: &dyn WorkspaceHost, root: &Path) -> bool {
 
 fn draft_for(host: &dyn WorkspaceHost, body: &CreateWorkspace) -> Draft {
     let global = host.global();
-    let env = host.environment();
+    let mut env = host.environment();
+    env.agents = crate::settings::agent_routes(&ostra_agents::AgentCatalog::builtin());
     draft(
         body,
         &DraftCtx {
@@ -275,6 +276,7 @@ mod tests {
         Environment {
             installed_harnesses: vec![HarnessKind::Codex],
             providers_with_keys: vec!["anthropic".into()],
+            agents: vec![],
         }
     }
 

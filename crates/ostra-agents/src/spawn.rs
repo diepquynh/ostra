@@ -5,7 +5,7 @@
 
 use ostra_core::pipeline::QuestionAnswer;
 use ostra_core::slug::is_project_key;
-use ostra_core::{AgentName, InitializerMode};
+use ostra_core::{AgentName, Contract, InitializerMode};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 
 /// Behavior every spawn struct shares.
 pub trait SpawnParams {
-    fn agent(&self) -> AgentName;
+    /// Rule CA5: the contract whose spawn this is, whichever agent fills it.
+    fn contract(&self) -> Contract;
     fn mode(&self) -> Option<InitializerMode> {
         None
     }
@@ -398,9 +399,76 @@ pub struct ConsultParams {
     pub question: String,
 }
 
+/// Rule WF4: the spawn of a custom agent's stage. Built from the workflow node and what the stages
+/// before it produced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CustomParams {
+    pub common: Common,
+    pub agent: AgentName,
+    /// The workflow node's id.
+    pub stage: String,
+    /// The complete request as it now stands.
+    pub task: String,
+    /// The node's own instructions from the workflow file.
+    pub instructions: Option<String>,
+    /// 1 on the first run of the stage, then one more per retry.
+    pub round: u32,
+    /// `N` for a phase-scoped stage.
+    pub phase: Option<String>,
+    pub phase_file: Option<PathBuf>,
+    /// The implementer report of a phase stage's phase.
+    pub implementer_report: Option<PathBuf>,
+    /// Rule WB4: the node's inputs from earlier nodes, one `name = <json>` line each.
+    pub inputs: Vec<String>,
+    pub spec_file: Option<PathBuf>,
+    pub master_plan: Option<PathBuf>,
+    pub research_docs: Vec<PathBuf>,
+    /// One line per earlier stage: its id, verdict, summary, and report.
+    pub earlier_stages: Vec<String>,
+    /// What the previous round of this stage found, on a retry.
+    pub prior_findings: Option<String>,
+    pub report_file: Option<PathBuf>,
+    pub user_notes: Vec<String>,
+}
+
+impl SpawnParams for CustomParams {
+    fn contract(&self) -> Contract {
+        Contract::Stage
+    }
+    fn common(&self) -> &Common {
+        &self.common
+    }
+    fn render(&self) -> String {
+        let mut b = Block::new();
+        b.line("Stage", &self.stage);
+        b.line("Task", &self.task);
+        b.line("Round", &self.round.to_string());
+        b.opt("Phase", self.phase.as_deref());
+        b.common(&self.common);
+        b.opt_path("Report file", self.report_file.as_deref());
+        b.opt_path("Phase file", self.phase_file.as_deref());
+        b.opt_path("Implementer report", self.implementer_report.as_deref());
+        b.opt_path("Spec file", self.spec_file.as_deref());
+        b.opt_path("Master plan", self.master_plan.as_deref());
+        b.paths("Research docs", &self.research_docs);
+        b.list("Earlier stages", &self.earlier_stages);
+        b.list("Inputs", &self.inputs);
+        b.opt("Prior findings", self.prior_findings.as_deref());
+        b.list("User notes", &self.user_notes);
+        b.opt("Instructions", self.instructions.as_deref());
+        b.finish()
+    }
+    fn to_json(&self) -> Value {
+        json(self)
+    }
+    fn report_file(&self) -> Option<&Path> {
+        self.report_file.as_deref()
+    }
+}
+
 impl SpawnParams for ConsultParams {
-    fn agent(&self) -> AgentName {
-        self.agent
+    fn contract(&self) -> Contract {
+        Contract::Stage
     }
     fn common(&self) -> &Common {
         &self.common
@@ -418,8 +486,8 @@ impl SpawnParams for ConsultParams {
 }
 
 impl SpawnParams for ExploreParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Explore
+    fn contract(&self) -> Contract {
+        Contract::Research
     }
     fn common(&self) -> &Common {
         &self.common
@@ -437,8 +505,8 @@ impl SpawnParams for ExploreParams {
 }
 
 impl SpawnParams for GenerateSpecParams {
-    fn agent(&self) -> AgentName {
-        AgentName::GenerateSpec
+    fn contract(&self) -> Contract {
+        Contract::Spec
     }
     fn common(&self) -> &Common {
         &self.common
@@ -460,8 +528,8 @@ impl SpawnParams for GenerateSpecParams {
 }
 
 impl SpawnParams for FactCheckParams {
-    fn agent(&self) -> AgentName {
-        AgentName::FactCheck
+    fn contract(&self) -> Contract {
+        Contract::FactCheck
     }
     fn common(&self) -> &Common {
         &self.common
@@ -485,8 +553,8 @@ impl SpawnParams for FactCheckParams {
 }
 
 impl SpawnParams for PlanParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Plan
+    fn contract(&self) -> Contract {
+        Contract::Plan
     }
     fn common(&self) -> &Common {
         &self.common
@@ -511,8 +579,8 @@ impl SpawnParams for PlanParams {
 }
 
 impl SpawnParams for ImplementerParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Implementer
+    fn contract(&self) -> Contract {
+        Contract::Implementation
     }
     fn common(&self) -> &Common {
         &self.common
@@ -535,8 +603,8 @@ impl SpawnParams for ImplementerParams {
 }
 
 impl SpawnParams for CodeReviewerParams {
-    fn agent(&self) -> AgentName {
-        AgentName::CodeReviewer
+    fn contract(&self) -> Contract {
+        Contract::Review
     }
     fn common(&self) -> &Common {
         &self.common
@@ -565,8 +633,8 @@ impl SpawnParams for CodeReviewerParams {
 }
 
 impl SpawnParams for EpaParams {
-    fn agent(&self) -> AgentName {
-        AgentName::ExecutionPathAnalyzer
+    fn contract(&self) -> Contract {
+        Contract::PathAnalysis
     }
     fn common(&self) -> &Common {
         &self.common
@@ -589,8 +657,8 @@ impl SpawnParams for EpaParams {
 }
 
 impl SpawnParams for WriteTestParams {
-    fn agent(&self) -> AgentName {
-        AgentName::WriteTest
+    fn contract(&self) -> Contract {
+        Contract::Tests
     }
     fn common(&self) -> &Common {
         &self.common
@@ -614,8 +682,8 @@ impl SpawnParams for WriteTestParams {
 }
 
 impl SpawnParams for DocumentationParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Documentation
+    fn contract(&self) -> Contract {
+        Contract::Documentation
     }
     fn common(&self) -> &Common {
         &self.common
@@ -659,8 +727,8 @@ impl SpawnParams for DocumentationParams {
 }
 
 impl SpawnParams for ArchitectureParams {
-    fn agent(&self) -> AgentName {
-        AgentName::SystemArchitecture
+    fn contract(&self) -> Contract {
+        Contract::Architecture
     }
     fn common(&self) -> &Common {
         &self.common
@@ -680,8 +748,8 @@ impl SpawnParams for ArchitectureParams {
 }
 
 impl SpawnParams for PromptGenParams {
-    fn agent(&self) -> AgentName {
-        AgentName::PromptGeneration
+    fn contract(&self) -> Contract {
+        Contract::Prompt
     }
     fn common(&self) -> &Common {
         &self.common
@@ -704,8 +772,8 @@ impl SpawnParams for PromptGenParams {
 }
 
 impl SpawnParams for QuickAnswerParams {
-    fn agent(&self) -> AgentName {
-        AgentName::QuickAnswer
+    fn contract(&self) -> Contract {
+        Contract::Answer
     }
     fn common(&self) -> &Common {
         &self.common
@@ -742,8 +810,8 @@ pub struct AdvisorParams {
 }
 
 impl SpawnParams for AdvisorParams {
-    fn agent(&self) -> AgentName {
-        AgentName::Advisor
+    fn contract(&self) -> Contract {
+        Contract::Advice
     }
     fn common(&self) -> &Common {
         &self.common
@@ -846,8 +914,8 @@ fn scout_findings(b: &mut Block, paths: &[PathBuf]) {
 macro_rules! init_impl {
     ($ty:ty, $mode:expr, |$s:ident, $b:ident| $body:block) => {
         impl SpawnParams for $ty {
-            fn agent(&self) -> AgentName {
-                AgentName::Initializer
+            fn contract(&self) -> Contract {
+                Contract::Setup
             }
             fn mode(&self) -> Option<InitializerMode> {
                 Some($mode)
@@ -938,6 +1006,7 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("repo_key", &["Repo key"], Kind::RepoKey),
     ("phase", &["Phase"], Kind::Phase),
     ("task", &["Task"], Kind::Text),
+    ("stage", &["Stage"], Kind::Text),
     ("question", &["Question"], Kind::Text),
     (
         "mode",
@@ -1006,14 +1075,14 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
 const COMMON: [&str; 4] = ["workspace_root", "repo_root", "session_dir", "repo_key"];
 
 /// `(required, one_of)` per agent, beyond the common four.
-fn contract(
-    agent: AgentName,
+fn contract_labels(
+    contract: Contract,
     mode: Option<&str>,
 ) -> Result<(Vec<&'static str>, Vec<&'static str>), String> {
     let one_of_work = vec!["phase_file", "no_plan"];
-    Ok(match agent {
-        AgentName::Explore | AgentName::GenerateSpec => (vec!["task"], vec![]),
-        AgentName::FactCheck => (
+    Ok(match contract {
+        Contract::Research | Contract::Spec => (vec!["task"], vec![]),
+        Contract::FactCheck => (
             vec![
                 "target",
                 "target_type",
@@ -1023,23 +1092,24 @@ fn contract(
             ],
             vec![],
         ),
-        AgentName::Plan => (vec!["spec_file"], vec![]),
-        AgentName::Implementer => (vec!["report_file"], one_of_work),
-        AgentName::ExecutionPathAnalyzer => (vec!["implementer_report", "report_file"], vec![]),
-        AgentName::WriteTest => (
+        Contract::Plan => (vec!["spec_file"], vec![]),
+        Contract::Implementation => (vec!["report_file"], one_of_work),
+        Contract::PathAnalysis => (vec!["implementer_report", "report_file"], vec![]),
+        Contract::Tests => (
             vec!["implementer_report", "epa_report", "report_file"],
             one_of_work,
         ),
-        AgentName::CodeReviewer => (
+        Contract::Review => (
             vec!["phase", "changed_files", "change_rationale"],
             one_of_work,
         ),
-        AgentName::PromptGeneration => (vec!["task", "target_files", "report_file"], vec![]),
-        AgentName::Documentation => (vec!["implementer_reports"], vec![]),
-        AgentName::SystemArchitecture => (vec!["book_parts", "projects_in_scope"], vec![]),
-        AgentName::QuickAnswer => (vec!["question"], vec![]),
-        AgentName::Advisor => (vec!["failed_step", "problem", "step_inputs"], vec![]),
-        AgentName::Initializer => {
+        Contract::Prompt => (vec!["task", "target_files", "report_file"], vec![]),
+        Contract::Documentation => (vec!["implementer_reports"], vec![]),
+        Contract::Architecture => (vec!["book_parts", "projects_in_scope"], vec![]),
+        Contract::Answer => (vec!["question"], vec![]),
+        Contract::Advice => (vec!["failed_step", "problem", "step_inputs"], vec![]),
+        Contract::Stage | Contract::Plugin(_) => (vec!["stage", "task"], vec![]),
+        Contract::Setup => {
             let extra: Vec<&'static str> = match mode {
                 Some("detect") => vec![],
                 Some("adopt") => vec!["source_harness", "source_runtime_dir", "source_skills_dir"],
@@ -1125,7 +1195,7 @@ fn check(id: &str, kind: Kind, value: &str) -> Result<(), String> {
 /// Parse and validate a `Label: value` block for `agent`. Continuation lines (indented) append to
 /// the label above them. Parsing stops at a `---` rule or a `## ` heading, where the brief starts.
 /// Returns the values by parameter id.
-pub fn parse_block(agent: AgentName, text: &str) -> Result<BTreeMap<String, String>, String> {
+pub fn parse_block(contract: Contract, text: &str) -> Result<BTreeMap<String, String>, String> {
     let index = label_index();
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     let mut current: Option<String> = None;
@@ -1153,7 +1223,7 @@ pub fn parse_block(agent: AgentName, text: &str) -> Result<BTreeMap<String, Stri
             current = Some(id.to_string());
         }
     }
-    let (required, one_of) = contract(agent, values.get("mode").map(String::as_str))?;
+    let (required, one_of) = contract_labels(contract, values.get("mode").map(String::as_str))?;
     let kinds: BTreeMap<&str, Kind> = PARAMS.iter().map(|(id, _, k)| (*id, *k)).collect();
     for id in COMMON.iter().chain(required.iter()) {
         let label = PARAMS

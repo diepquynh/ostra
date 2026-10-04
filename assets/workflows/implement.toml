@@ -1,0 +1,36 @@
+# Ostra's default `implement` workflow. A workspace runs its own copy in .ostra/workflows/implement.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "Research, the track, a spec and a plan on the full track, the build, your review, and the closing stages."
+base = "implement"
+
+[[stage]]
+id = "research"
+uses = "ostra:research"
+
+[[stage]]
+id = "track"
+uses = "ostra:track"
+
+[[stage]]
+id = "spec"
+uses = "ostra:spec"
+
+[[stage]]
+id = "stakes"
+uses = "ostra:stakes"
+
+[[stage]]
+id = "plan"
+uses = "ostra:plan"
+
+[[stage]]
+id = "build"
+uses = "ostra:build"
+
+[[stage]]
+id = "feedback"
+uses = "ostra:feedback"
+
+[[stage]]
+id = "closing"
+uses = "ostra:closing"

@@ -1,5 +1,5 @@
 import { parseResource } from "../lib/resource";
-import { BookScreen, DependencyFileScreen, DocsScreen } from "../screens";
+import { AgentsScreen, BookScreen, DependencyFileScreen, DocsScreen, WorkflowsScreen } from "../screens";
 import { MArtifact } from "./screens/MArtifact";
 import { MExecution } from "./screens/MExecution";
 import { MHome } from "./screens/MHome";
@@ -20,6 +20,9 @@ export function MobileScreenFor({ ws, id }: { ws: string; id: string }) {
       if (r.page === "overview") return <MHome key={id} ws={ws} />;
       if (r.page === "settings") return <MSettings key={id} ws={ws} />;
       if (r.page === "docs") return <DocsScreen key={id} ws={ws} />;
+      // The agent screen and the Workflow builder need a desktop-width layout.
+      if (r.page === "agents") return <AgentsScreen key={id} ws={ws} />;
+      if (r.page === "workflows") return <WorkflowsScreen key={id} ws={ws} />;
       return <MWorkspace key={id} ws={ws} page={r.page} />;
     case "session":
       return <MSession key={id} ws={ws} id={r.id} />;

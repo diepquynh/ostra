@@ -217,7 +217,13 @@ pub fn agy_tools(caps: &[Capability]) -> Vec<&'static str> {
             Capability::WebSearch => add(&["search_web"]),
             Capability::WebFetch => add(&["read_url_content"]),
             Capability::Report
-            | Capability::Document
+            | Capability::DocumentResearch
+            | Capability::DocumentSpec
+            | Capability::DocumentPlan
+            | Capability::ReviewLedger
+            | Capability::SecurityBlock
+            | Capability::ProgressLog
+            | Capability::TestFiles
             | Capability::Memory
             | Capability::MemoryRecall
             | Capability::DocsSearch

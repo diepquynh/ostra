@@ -1,6 +1,9 @@
+import type { AgentDetail } from "./gen/AgentDetail";
+import type { AgentDoc } from "./gen/AgentDoc";
 import type { ApproveCommands } from "./gen/ApproveCommands";
 import type { Book } from "./gen/Book";
 import type { BookSummary } from "./gen/BookSummary";
+import type { BuilderPalette } from "./gen/BuilderPalette";
 import type { CodeDeps } from "./gen/CodeDeps";
 import type { CodeExternalFile } from "./gen/CodeExternalFile";
 import type { CodeFile } from "./gen/CodeFile";
@@ -14,9 +17,12 @@ import type { EnvironmentStatus } from "./gen/EnvironmentStatus";
 import type { FileDiff } from "./gen/FileDiff";
 import type { FileIndex } from "./gen/FileIndex";
 import type { FsBrowse } from "./gen/FsBrowse";
+import type { FunctionDoc } from "./gen/FunctionDoc";
+import type { FunctionFile } from "./gen/FunctionFile";
 import type { HarnessSetupAction } from "./gen/HarnessSetupAction";
 import type { HarnessSetupTerminal } from "./gen/HarnessSetupTerminal";
 import type { OnboardingState } from "./gen/OnboardingState";
+import type { PluginInfo } from "./gen/PluginInfo";
 import type { ProjectChange } from "./gen/ProjectChange";
 import type { ProjectFile } from "./gen/ProjectFile";
 import type { ProjectTree } from "./gen/ProjectTree";
@@ -25,6 +31,8 @@ import type { ProviderStatus } from "./gen/ProviderStatus";
 import type { RevokedSignIns } from "./gen/RevokedSignIns";
 import type { SaveProjectFile } from "./gen/SaveProjectFile";
 import type { SignInSession } from "./gen/SignInSession";
+import type { WorkflowDoc } from "./gen/WorkflowDoc";
+import type { WorkflowFile } from "./gen/WorkflowFile";
 import type { WorkspaceArtifact } from "./gen/WorkspaceArtifact";
 import type { WorkspaceArtifacts } from "./gen/WorkspaceArtifacts";
 import type { WorkspaceUiState } from "./gen/WorkspaceUiState";
@@ -277,6 +285,29 @@ export const httpApi = {
     request<void>("DELETE", `/api/workspaces/${enc(ws)}/projects/${enc(key)}/memory${q({ id })}`),
 
   skills: (ws: string) => request<ProjectSkills[]>("GET", `/api/workspaces/${enc(ws)}/skills`),
+  builderPalette: (ws: string) => request<BuilderPalette>("GET", `/api/workspaces/${enc(ws)}/builder`),
+  workflow: (ws: string, name: string) =>
+    request<WorkflowDoc>("GET", `/api/workspaces/${enc(ws)}/workflows/${enc(name)}`),
+  saveWorkflow: (ws: string, name: string, file: WorkflowFile) =>
+    request<WorkflowDoc>("PUT", `/api/workspaces/${enc(ws)}/workflows/${enc(name)}`, file),
+  /** What a save would be refused for, without saving. */
+  checkWorkflow: (ws: string, name: string, file: WorkflowFile) =>
+    request<string[]>("POST", `/api/workspaces/${enc(ws)}/workflows/${enc(name)}/check`, file),
+  transformFunction: (ws: string, name: string) =>
+    request<FunctionDoc>("GET", `/api/workspaces/${enc(ws)}/transforms/${enc(name)}`),
+  saveTransformFunction: (ws: string, name: string, file: FunctionFile) =>
+    request<FunctionDoc>("PUT", `/api/workspaces/${enc(ws)}/transforms/${enc(name)}`, file),
+  deleteTransformFunction: (ws: string, name: string) =>
+    request<void>("DELETE", `/api/workspaces/${enc(ws)}/transforms/${enc(name)}`),
+  deleteWorkflow: (ws: string, name: string) =>
+    request<void>("DELETE", `/api/workspaces/${enc(ws)}/workflows/${enc(name)}`),
+  /** Add Ostra's default workflows the workspace has no copy of. */
+  restoreWorkflows: (ws: string) => request<WorkspaceDetail>("POST", `/api/workspaces/${enc(ws)}/workflows/defaults`),
+  agent: (ws: string, name: string) => request<AgentDetail>("GET", `/api/workspaces/${enc(ws)}/agents/${enc(name)}`),
+  saveAgent: (ws: string, name: string, doc: AgentDoc) =>
+    request<AgentDetail>("PUT", `/api/workspaces/${enc(ws)}/agents/${enc(name)}`, doc),
+  deleteAgent: (ws: string, name: string) => request<void>("DELETE", `/api/workspaces/${enc(ws)}/agents/${enc(name)}`),
+  plugins: (ws: string) => request<PluginInfo[]>("GET", `/api/workspaces/${enc(ws)}/plugins`),
   books: (ws: string) => request<BookSummary[]>("GET", `/api/workspaces/${enc(ws)}/docs`),
   book: (ws: string, id: string) => request<Book>("GET", `/api/workspaces/${enc(ws)}/docs/${enc(id)}`),
   deleteBook: (ws: string, id: string) =>

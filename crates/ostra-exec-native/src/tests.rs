@@ -1,6 +1,8 @@
 use super::*;
+use ostra_core::agent::AgentName;
 use ostra_core::agent::Capability;
 use ostra_core::config::{PermissionMode, PermissionRules, ResolvedRoute};
+use ostra_core::exec::Wake;
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::ExecutionId;
 use ostra_core::model::Effort;
@@ -19,6 +21,10 @@ struct FakeHost {
     answer: Mutex<Option<PermissionAnswer>>,
     transcripts: Mutex<HashMap<ExecutionId, Vec<(String, Value)>>>,
     yolo: bool,
+    /// Rule SM2: messages queued for the run, handed over one per turn boundary.
+    inbox: Mutex<Vec<String>>,
+    /// Rule SM6: the run owes a waiting sender a reply until it sends one.
+    owes: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait::async_trait]
@@ -47,6 +53,18 @@ impl ExecutionHost for FakeHost {
     }
     fn yolo(&self) -> bool {
         self.yolo
+    }
+    fn take_messages(&self) -> Option<Wake> {
+        let mut inbox = self.inbox.lock();
+        (!inbox.is_empty()).then(|| Wake {
+            note: inbox.remove(0),
+            owes_reply: false,
+        })
+    }
+    fn submit_blocked(&self) -> Option<String> {
+        self.owes
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .then(|| ostra_core::coord::reply_instruction("SendMessage", &["x_sender".into()]))
     }
 }
 
@@ -95,6 +113,10 @@ fn spec(
 ) -> ExecutionSpec {
     let id = ExecutionId::new();
     let report = f.session.join("ostra-implementer-phase-1.md");
+    let def = ostra_agents::builtin_def(agent);
+    let contract = def
+        .map(|d| d.returns)
+        .unwrap_or(ostra_core::Contract::Stage);
     ExecutionSpec {
         id: id.clone(),
         agent,
@@ -106,8 +128,8 @@ fn spec(
         effort: Effort::Medium,
         system_prompt: "You are a test agent.".into(),
         first_message: "Do the task.".into(),
-        capabilities: caps,
-        submit_schema: ostra_core::submit::submit_schema(agent),
+        capabilities: caps.clone(),
+        submit_schema: ostra_core::submit::submit_schema(contract),
         timeout_secs: 30,
         ctx: ExecContext {
             execution_id: id,
@@ -146,8 +168,10 @@ fn spec(
             sandbox_loopback: Default::default(),
             sandbox_blocked_ports: vec![],
             creates_project: false,
-            answer_only: false,
             owes_reply: false,
+            write_scope: def.map(|d| d.write_scope),
+            contract,
+            capabilities: caps.clone(),
         },
         resume: None,
         harness_session_id: None,
@@ -266,7 +290,7 @@ async fn explore_submits_only_after_its_document() {
         &f,
         AgentName::Explore,
         PermissionMode::Default,
-        vec![Capability::Read, Capability::Document],
+        vec![Capability::Read, Capability::DocumentResearch],
     );
     s.ctx.report_file = None;
     let md = f.session.join("ostra-research-1-greeting.md");
@@ -810,21 +834,27 @@ fn webfetch_hosts_takes_exact_domain_rules() {
     );
 }
 
-/// Answers coordination calls the way the engine does: an ask waits, a reply ends a consult.
-struct FakeCoord;
+/// Answers messaging calls the way the engine does: a send with `wait` and a wait pause the run,
+/// and a send clears the reply the run owes.
+struct FakeCoord {
+    owes: Arc<std::sync::atomic::AtomicBool>,
+}
 
 #[async_trait::async_trait]
 impl ostra_tools::Coordinate for FakeCoord {
     async fn call(
         &self,
         tool: &str,
-        _input: &Value,
+        input: &Value,
     ) -> Result<ostra_core::coord::CoordReply, String> {
         let end = match tool {
-            "SubagentAsk" => RunEnd::Wait,
-            "SubagentReply" => RunEnd::Finish,
+            "SendMessage" if input["wait"] == json!(true) => RunEnd::Wait,
+            "WaitForMessage" => RunEnd::Wait,
             _ => RunEnd::Continue,
         };
+        if tool == "SendMessage" {
+            self.owes.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
         Ok(ostra_core::coord::CoordReply {
             text: format!("{tool} done"),
             end,
@@ -832,26 +862,36 @@ impl ostra_tools::Coordinate for FakeCoord {
     }
 }
 
-struct FakeCoordConnector;
+struct FakeCoordConnector {
+    owes: Arc<std::sync::atomic::AtomicBool>,
+}
 
 impl CoordConnector for FakeCoordConnector {
     fn open(&self, _spec: &ExecutionSpec) -> Option<Arc<dyn ostra_tools::Coordinate>> {
-        Some(Arc::new(FakeCoord))
+        Some(Arc::new(FakeCoord {
+            owes: self.owes.clone(),
+        }))
     }
 }
 
+fn coord() -> Arc<FakeCoordConnector> {
+    Arc::new(FakeCoordConnector {
+        owes: Default::default(),
+    })
+}
+
 #[tokio::test]
-async fn an_ask_ends_the_run_waiting_and_a_consult_reply_ends_it_ok() {
+async fn sm3_a_send_with_wait_or_a_wait_ends_the_run_waiting() {
     let f = fixture();
     let caps = vec![Capability::Read, Capability::Coordinate];
     let p = ScriptedProvider::new();
-    p.push_tool_use("SubagentList", json!({}));
+    p.push_tool_use("ListAgents", json!({}));
     p.push_tool_use(
-        "SubagentAsk",
-        json!({"message": "why?", "agent": "explore"}),
+        "SendMessage",
+        json!({"message": "why?", "agent": "explore", "wait": true}),
     );
     let (exec, p) = executor(p);
-    let exec = exec.with_coord(Arc::new(FakeCoordConnector));
+    let exec = exec.with_coord(coord());
     let s = spec(
         &f,
         AgentName::GenerateSpec,
@@ -861,62 +901,106 @@ async fn an_ask_ends_the_run_waiting_and_a_consult_reply_ends_it_ok() {
     let host = Arc::new(FakeHost::default());
     let r = exec.run(s, host.clone(), CancellationToken::new()).await;
     assert_eq!(r.status, ExecutionStatus::Waiting, "{:?}", r.error);
-    assert_eq!(r.submit.unwrap()["coordination"], "SubagentAsk");
+    assert_eq!(r.submit.unwrap()["coordination"], "SendMessage");
     assert_eq!(
         p.requests().len(),
         2,
-        "the run stops at the ask, with no model call after it"
+        "the run stops at the send, with no model call after it"
     );
     let last = host.messages.lock().last().cloned().unwrap();
     assert!(
-        last.1.to_string().contains("SubagentAsk done"),
-        "the ask's result is recorded"
+        last.1.to_string().contains("SendMessage done"),
+        "the send's result is recorded"
     );
 
     let p = ScriptedProvider::new();
-    p.push_tool_use("SubagentReply", json!({"message": "because"}));
+    p.push_tool_use("WaitForMessage", json!({}));
     let (exec, _) = executor(p);
-    let exec = exec.with_coord(Arc::new(FakeCoordConnector));
+    let exec = exec.with_coord(coord());
     let s = spec(&f, AgentName::GenerateSpec, PermissionMode::Default, caps);
     let r = exec
         .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
         .await;
-    assert_eq!(r.status, ExecutionStatus::Ok);
-    assert_eq!(r.submit.unwrap()["message"], "because");
+    assert_eq!(r.status, ExecutionStatus::Waiting);
 }
 
 #[tokio::test]
-async fn a_run_that_owes_an_answer_is_reminded_to_reply_and_cannot_submit() {
+async fn sm2_queued_messages_follow_the_tool_results_of_a_turn() {
+    let f = fixture();
+    let p = ScriptedProvider::new();
+    p.push_tool_use(
+        "Read",
+        json!({"file_path": f.repo.join("main.txt").display().to_string()}),
+    );
+    p.push_tool_use("submit_quick_answer", json!({"answer": "s", "sources": []}));
+    let (exec, p) = executor(p);
+    let mut s = spec(
+        &f,
+        AgentName::QuickAnswer,
+        PermissionMode::Default,
+        vec![Capability::Read],
+    );
+    s.ctx.report_file = None;
+    let host = Arc::new(FakeHost::default());
+    host.inbox
+        .lock()
+        .push("Message from subagent x_1: check R2.".into());
+    let r = exec.run(s, host, CancellationToken::new()).await;
+    assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
+    let reqs = p.requests();
+    let turn = reqs[1].messages.last().unwrap();
+    assert!(
+        matches!(&turn.content[0], Block::ToolResult { .. }),
+        "{turn:?}"
+    );
+    assert!(
+        matches!(turn.content.last().unwrap(), Block::Text { text } if text.contains("check R2")),
+        "the message follows the tool result in the same user turn: {turn:?}"
+    );
+    assert_eq!(
+        &reqs[1].messages[..reqs[0].messages.len()],
+        &reqs[0].messages[..],
+        "the earlier request is a prefix of the next, so the prompt cache holds"
+    );
+}
+
+#[tokio::test]
+async fn sm6_a_run_that_owes_a_reply_is_reminded_and_cannot_submit() {
     let f = fixture();
     let p = ScriptedProvider::new();
     p.push(response(
         vec![Block::text("I think the answer is 42.")],
         StopReason::EndTurn,
     ));
-    p.push_tool_use("submit_generate_spec", json!({"spec_path": "/x", "open_questions": [], "external_evidence_rows": 0, "deliverables": 1, "requirements": 1, "summary": "s"}));
-    p.push_tool_use("SubagentReply", json!({"message": "42"}));
+    let submit = json!({"answer": "s", "sources": []});
+    p.push_tool_use("submit_quick_answer", submit.clone());
+    p.push_tool_use("SendMessage", json!({"message": "42", "to": "x_sender"}));
+    p.push_tool_use("submit_quick_answer", submit);
     let (exec, p) = executor(p);
-    let exec = exec.with_coord(Arc::new(FakeCoordConnector));
+    let owes = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let exec = exec.with_coord(Arc::new(FakeCoordConnector { owes: owes.clone() }));
     let mut s = spec(
         &f,
-        AgentName::GenerateSpec,
+        AgentName::QuickAnswer,
         PermissionMode::Default,
         vec![Capability::Read, Capability::Coordinate],
     );
-    s.ctx.owes_reply = true;
-    let r = exec
-        .run(s, Arc::new(FakeHost::default()), CancellationToken::new())
-        .await;
+    s.ctx.report_file = None;
+    let host = Arc::new(FakeHost {
+        owes,
+        ..Default::default()
+    });
+    let r = exec.run(s, host, CancellationToken::new()).await;
     assert_eq!(r.status, ExecutionStatus::Ok, "{:?}", r.error);
-    assert_eq!(r.submit.unwrap()["coordination"], "SubagentReply");
+    assert_eq!(r.submit.unwrap()["answer"], "s");
     let reqs = p.requests();
     let reminder = reqs[1].messages.last().unwrap();
     assert!(
-        matches!(&reminder.content[0], Block::Text { text } if text.contains("SubagentReply")),
-        "the reminder names the reply tool: {reminder:?}"
+        matches!(&reminder.content[0], Block::Text { text } if text.contains("SendMessage") && text.contains("x_sender")),
+        "the reminder names the send tool and the sender: {reminder:?}"
     );
     let (denied, is_err) = &tool_results(&reqs[2])[0];
-    assert!(*is_err && denied.contains("reply-first"), "{denied}");
+    assert!(*is_err && denied.contains("x_sender"), "{denied}");
 }
 
 fn read_near_full(f: &Fixture, context: u64) -> ChatResponse {

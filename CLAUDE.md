@@ -19,14 +19,16 @@ stage and answer a small set of named judgment questions.
 
 ```
 ostra-core        ids, settings and route resolution, pipeline enums, submit schemas, the event log,
-                  API DTOs (exported to TypeScript), the Executor and ExecutionHost traits
+                  API DTOs (exported to TypeScript), the Executor and ExecutionHost traits, workflows,
+                  and the plugin protocol and traits
 ostra-store       SQLite: workspace db (event log plus materialized tables), registry, project memory
 ostra-sandbox     sandbox profiles, the bubblewrap and Seatbelt backends, the egress proxy, decoys, and the
                   per-OS layer (`sys/`, one `Os` impl per OS, picked in `sys/mod.rs` only)
 ostra-policy      guards and permissions over canonical ToolCalls; bash parsing
 ostra-tools       native tool implementations (Read, Write, Edit, Bash, Grep, Glob, Skill, WebFetch, ...)
 ostra-providers   Anthropic and OpenAI streaming clients; ScriptedProvider for tests
-ostra-agents      embedded assets/, prompt rendering per executor, typed spawn structs, the repo brief
+ostra-agents      embedded assets/, the agent catalog (built-in and custom agents), prompt rendering per
+                  executor, typed spawn structs, the repo brief
 ostra-engine      event-sourced session state, the pure planner, judges, the runner, the spawn factory
 ostra-exec-native the native agent loop (providers + tools + policy)
 ostra-exec-harness harness executors: PTY, per-harness adapters, hook bridge, MCP stdio shim
@@ -34,6 +36,7 @@ ostra-notify      Web Push without OpenSSL
 ostra-mcp         MCP client for workspace MCP servers: stdio and streamable HTTP, OAuth
 ostra-code        tokenizer, per-project code index (usages, imports, symbols), LSP client, code providers
 ostra-workspace   workspaces: settings checks, projects, command approvals (trust), create/delete, WorkspaceRt
+ostra-sdk         the plugin SDK: the Plugin trait's helpers, a plugin registry, and the stdio transport
 ostra-server      the `ostra` binary: axum, auth, REST, WebSocket, embedded web build, CLI
 ```
 

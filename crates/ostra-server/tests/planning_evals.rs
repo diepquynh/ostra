@@ -869,6 +869,7 @@ async fn run_session(
             files: vec![],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap();
     let session = summary.id.clone();

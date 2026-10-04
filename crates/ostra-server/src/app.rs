@@ -33,6 +33,8 @@ pub struct ServeOptions {
     pub bind: Option<String>,
     /// Extra host names, added to the config's `server.allowed_hosts`.
     pub allow_hosts: Vec<String>,
+    /// Rule PL1: plugins built into this binary.
+    pub plugins: ostra_sdk::Registry,
 }
 
 /// The listen address: the flag, else the config, else 127.0.0.1.
@@ -81,6 +83,8 @@ pub struct Shared {
     pub notifier: Arc<Notifier>,
     /// Connections to each workspace's external MCP servers.
     pub mcp: Arc<crate::mcp::McpGateway>,
+    /// Rule PL1: plugins built in and each workspace's plugin programs.
+    pub plugins: Arc<crate::plugins::PluginHost>,
     pub env: RwLock<EnvStatus>,
     pub exe: PathBuf,
     pub port: u16,
@@ -122,7 +126,78 @@ impl Shared {
     }
 }
 
+impl Shared {
+    /// The settings a workspace's programs start from: its folder file, with the commands that
+    /// wait for approval left out.
+    pub fn workspace_settings(&self, root: &Path) -> ostra_core::config::WorkspaceSettings {
+        let file = ostra_core::config::load_toml_required(&paths::workspace_toml(root))
+            .unwrap_or_else(|_| ostra_core::config::WorkspaceSettings::seeded("workspace"));
+        ostra_workspace::trust::effective(&self.registry, root, file)
+    }
+}
+
 impl WorkspaceHost for Shared {
+    /// Rules CA1 and PL2: the built-in agents, the workspace's agent files while its folder file
+    /// is approved, and its plugins' agents.
+    fn agents(
+        &self,
+        root: &Path,
+    ) -> (
+        ostra_agents::AgentCatalog,
+        Vec<ostra_agents::catalog::CatalogIssue>,
+    ) {
+        let approved = ostra_workspace::trust::definitions_approved(&self.registry, root);
+        // Rule PL1: a plugin program that should run and does not starts now, so its agents and
+        // stages show up in the next read.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.plugins
+                .prepare_soon(root, self.workspace_settings(root));
+        }
+        let (cat, mut issues) = ostra_agents::AgentCatalog::load(
+            approved.then_some(root),
+            &self.plugins.agent_defs(root),
+            &self.plugins.contracts(root),
+        );
+        if !approved && !ostra_workspace::trust::definition_files(root).is_empty() {
+            issues.push(ostra_agents::catalog::CatalogIssue {
+                source: paths::workspace_toml(root).display().to_string(),
+                message: "The workspace's agent and workflow files wait for approval in Settings, so none of them runs yet.".into(),
+            });
+        }
+        (cat, issues)
+    }
+
+    fn plugin_stages(&self, root: &Path) -> Vec<(String, String)> {
+        self.plugins.stages(root)
+    }
+
+    fn plugin_manifests(&self, root: &Path) -> Vec<(String, ostra_core::plugin::PluginManifest)> {
+        self.plugins
+            .plugins(root)
+            .into_iter()
+            .map(|(n, p)| (n, p.manifest()))
+            .collect()
+    }
+
+    fn plugin_infos(
+        &self,
+        root: &Path,
+        _settings: &ostra_core::config::WorkspaceSettings,
+    ) -> Vec<ostra_core::api::PluginInfo> {
+        let file = ostra_core::config::load_toml_required(&paths::workspace_toml(root))
+            .unwrap_or_else(|_| ostra_core::config::WorkspaceSettings::seeded("workspace"));
+        let approved = ostra_workspace::trust::workspace_file_approved(&self.registry, root);
+        self.plugins.infos(root, &file, approved)
+    }
+
+    fn plugin_issues(
+        &self,
+        root: &Path,
+        settings: &ostra_core::config::WorkspaceSettings,
+    ) -> Vec<ostra_core::config::ValidationIssue> {
+        self.plugins.issues(root, settings)
+    }
+
     fn registry(&self) -> &RegistryDb {
         &self.registry
     }
@@ -141,6 +216,7 @@ impl WorkspaceHost for Shared {
                 .filter(|p| p.has_key)
                 .map(|p| p.name)
                 .collect(),
+            agents: vec![],
         }
     }
 
@@ -430,6 +506,7 @@ pub async fn build(opts: &ServeOptions, port: u16) -> anyhow::Result<Arc<App>> {
         harness,
         notifier,
         mcp,
+        plugins: Arc::new(crate::plugins::PluginHost::new(opts.plugins.clone())),
         env: RwLock::new(env),
         exe: opts.exe.clone(),
         port,

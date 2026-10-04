@@ -167,6 +167,8 @@ In the console, everything under `/w/<workspace-id>/` belongs to one workspace. 
 folder and project count, a banner when the settings have validation problems (an agent whose route does not
 resolve cannot start), a banner for each project that is not initialized, the New task form, and the
 sessions table. The workspace menu in the title bar switches workspaces and opens the workspace's pages:
+Overview, Cost, Settings, Memory, Skills, Documentation, Agents (every agent and the workspace's own, see
+[Agents](agents.md#the-agent-screen)), and Workflows (the Workflow builder, see [Workflows](workflows.md)).
 
 ![The workspace menu with the current workspace's pages, other workspaces, and New workspace](../images/console/workspace-switcher.png)
 

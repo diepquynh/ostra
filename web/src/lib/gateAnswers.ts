@@ -29,6 +29,7 @@ export const ANSWER_KIND: Record<GateKindName, AnswerKind> = {
   execution_failed: "choice",
   budget_reached: "choice",
   implementation_review: "choice",
+  stage_review: "choice",
 };
 
 export const OTHER = "__other__";
@@ -100,7 +101,8 @@ export type ChoiceGateKind =
   | "harness_failure"
   | "execution_failed"
   | "budget_reached"
-  | "implementation_review";
+  | "implementation_review"
+  | "stage_review";
 
 export type ChoiceOption = {
   /** The option string the engine's fold matches on. */
@@ -160,6 +162,11 @@ export const CHOICES: Record<ChoiceGateKind, ChoiceOption[]> = {
       text: "required",
       missing: "Describe what to change first. Ostra builds it as a reviewed revision.",
     },
+  ],
+  stage_review: [
+    { option: "retry", label: "Run the stage again", variant: "primary", text: "optional" },
+    { option: "continue", label: "Continue without it", variant: "default", text: "none" },
+    { option: "stop", label: "Stop the session", variant: "danger", text: "none" },
   ],
 };
 

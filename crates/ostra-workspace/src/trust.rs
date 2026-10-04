@@ -85,6 +85,49 @@ struct WorkspaceCanon<'a> {
     /// Left out when empty, so files without such projects keep the hash they had before.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     outside: Vec<OutsideCanon<'a>>,
+    /// Rule PL1: plugin programs. Left out when empty, like `outside`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    plugins: Vec<&'a ostra_core::plugin::PluginConfig>,
+    /// Rules CA1 and WF1: each custom agent and workflow file and the hash of its content,
+    /// because they decide which agents run and what they are told.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    definitions: Vec<(String, String)>,
+}
+
+/// The custom agent and workflow files of the workspace at `root`, by path under `.ostra/`, with
+/// the hash of each file's content.
+pub fn definition_files(root: &Path) -> Vec<(String, String)> {
+    let mut out = vec![];
+    for (dir, ext) in [
+        (paths::workspace_agents_dir(root), "md"),
+        (paths::workspace_workflows_dir(root), "toml"),
+        (paths::workspace_transforms_dir(root), "toml"),
+    ] {
+        let folder = dir
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == ext) && p.is_file())
+            .collect();
+        files.sort();
+        for f in files {
+            let name = f
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let content = std::fs::read(&f).unwrap_or_default();
+            out.push((
+                format!("{folder}/{name}"),
+                hex::encode(Sha256::digest(&content)),
+            ));
+        }
+    }
+    out
 }
 
 /// A project folder outside the workspace folder. Agents may write in their project, so a
@@ -136,11 +179,15 @@ fn hash_of(root: Option<&Path>, s: &WorkspaceSettings) -> Option<String> {
                 path: &p.path,
             })
             .collect(),
+        plugins: s.plugins.iter().collect(),
+        definitions: root.map(definition_files).unwrap_or_default(),
     };
     if canon.mcp_servers.is_empty()
         && canon.projects.is_empty()
         && canon.allow.is_empty()
         && canon.outside.is_empty()
+        && canon.plugins.is_empty()
+        && canon.definitions.is_empty()
     {
         return None;
     }
@@ -427,8 +474,74 @@ pub fn effective(
         }
         s.permissions.allow.clear();
         s.projects.retain(|p| !outside(root, &p.path));
+        for p in &mut s.plugins {
+            p.enabled = false;
+        }
     }
     s
+}
+
+/// Rules CA1, WF1, and PL1: the workspace's custom agents, workflows, and plugins run only while
+/// its folder file, which covers them, is approved.
+pub fn definitions_approved(registry: &RegistryDb, root: &Path) -> bool {
+    workspace_file_approved(registry, root)
+}
+
+/// Rule A1: write, or delete when `content` is `None`, one agent or workflow file for a save made
+/// in Ostra. Those files are part of the hash the user approves, so an approved workspace stays
+/// approved with the new content, and one that waits keeps waiting.
+pub fn save_definition(
+    registry: &RegistryDb,
+    root: &Path,
+    path: &Path,
+    content: Option<&str>,
+) -> std::io::Result<()> {
+    save_definitions(
+        registry,
+        root,
+        &[(path.to_path_buf(), content.map(String::from))],
+    )
+}
+
+/// [`save_definition`] for several files at once.
+pub fn save_definitions(
+    registry: &RegistryDb,
+    root: &Path,
+    files: &[(PathBuf, Option<String>)],
+) -> std::io::Result<()> {
+    let was_approved = raw(root).is_none_or(|s| workspace_approved(registry, root, &s));
+    for (path, content) in files {
+        match content {
+            Some(text) => {
+                if let Some(dir) = path.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                std::fs::write(path, text)?;
+            }
+            None => match std::fs::remove_file(path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+                _ => {}
+            },
+        }
+    }
+    if was_approved && let Some(s) = raw(root) {
+        record(registry, &workspace_key(root), workspace_hash(root, &s));
+    }
+    Ok(())
+}
+
+/// Rule WF9: the shipped default workflow files `names` that `root` has no copy of, as a save
+/// writes them.
+pub fn default_workflow_files(root: &Path, names: &[String]) -> Vec<(PathBuf, Option<String>)> {
+    let dir = paths::workspace_workflows_dir(root);
+    names
+        .iter()
+        .filter_map(|n| {
+            let path = dir.join(format!("{n}.toml"));
+            let text = ostra_core::workflow::default_text(n)?;
+            (!path.exists()).then(|| (path, Some(text.to_string())))
+        })
+        .collect()
 }
 
 /// Write the workspace file for a save made in Ostra. The mode and YOLO go to the registry and
@@ -496,6 +609,24 @@ pub fn create_workspace(
     let s = &s;
     write_file(root, s)?;
     set_access(registry, root, s);
+    // Rule WF9: a new workspace starts with copies of Ostra's default workflows. A folder that
+    // brings its own files gets none, and Settings offers the missing ones.
+    if !adopted {
+        let all: Vec<String> = ostra_core::workflow::BUILTIN_BASES
+            .iter()
+            .map(|c| ostra_core::workflow::category_name(*c))
+            .collect();
+        for (path, text) in default_workflow_files(root, &all) {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| ConfigError::Io {
+                    path: dir.to_path_buf(),
+                    source: e,
+                })?;
+            }
+            std::fs::write(&path, text.unwrap_or_default())
+                .map_err(|e| ConfigError::Io { path, source: e })?;
+        }
+    }
     if adopted {
         record(registry, &workspace_key(root), None);
     } else {
@@ -673,6 +804,27 @@ fn workspace_items(root: &Path, s: &WorkspaceSettings) -> Vec<PendingCommand> {
     }
     for rule in &s.permissions.allow {
         out.push(item(PendingKind::AllowRule, rule));
+    }
+    for p in &s.plugins {
+        out.push(PendingCommand {
+            enabled: p.enabled,
+            command: Some(quote(&p.command)),
+            env: p.env.keys().cloned().collect(),
+            ..item(PendingKind::Plugin, &p.name)
+        });
+    }
+    for (file, _) in definition_files(root) {
+        let kind = if file.starts_with("agents/") {
+            PendingKind::AgentFile
+        } else if file.starts_with("transforms/") {
+            PendingKind::TransformFile
+        } else {
+            PendingKind::WorkflowFile
+        };
+        out.push(PendingCommand {
+            path: Some(paths::workspace_runtime(root).join(&file)),
+            ..item(kind, &file)
+        });
     }
     out
 }

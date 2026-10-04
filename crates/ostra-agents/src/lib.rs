@@ -2,16 +2,18 @@
 //! contract and the repo brief appended to every execution.
 
 pub mod brief;
+pub mod catalog;
 mod mapping;
 pub mod spawn;
+pub mod standard;
 
-use ostra_core::{AgentName, Capability, Effort, ExecutorKind, Tier};
+use ostra_core::{AgentName, Capability, Effort, ExecutorKind, Tier, WriteScope};
 use rust_embed::RustEmbed;
-use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+pub use catalog::AgentCatalog;
 pub use spawn::{SpawnParams, parse_block};
 
 #[derive(RustEmbed)]
@@ -33,7 +35,8 @@ pub enum AgentsError {
     Io(#[from] std::io::Error),
 }
 
-/// The fields of Ultracode's `definition.json`, from `assets/agents/<name>/agent.toml`.
+/// One agent's definition, from a `PluginAgent` of the standard plugin (Ostra's own agents), a
+/// workspace's markdown file, or another plugin.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentDef {
     pub name: AgentName,
@@ -43,15 +46,58 @@ pub struct AgentDef {
     pub effort: BTreeMap<String, Effort>,
     pub capabilities: Vec<Capability>,
     pub timeout_secs: u64,
+    /// Rule CA2: where the agent may write.
+    pub write_scope: WriteScope,
+    pub origin: AgentOrigin,
+    /// The prompt template. `None` for a programmatic agent.
+    pub prompt: Option<String>,
+    /// Rule CA3: the declared shape of a custom agent's submit `data`.
+    pub submit_data: Option<serde_json::Value>,
+    /// Rule SM6: `SendMessage` with `agent` may start this agent as a helper.
+    pub helper: bool,
+    /// Rule PL2: the plugin runs the agent's work in code instead of a model loop.
+    pub programmatic: bool,
+    /// Rule CA5: the result contract it submits.
+    pub returns: ostra_core::Contract,
+    /// Rule PL5: the schema of a plugin contract, from the plugin's manifest.
+    pub contract_schema: Option<serde_json::Value>,
+    /// Rule CA6: the repo brief sections it gets.
+    pub brief: Vec<brief::Section>,
 }
 
-#[derive(Deserialize)]
-struct AgentToml {
-    description: String,
-    default_tier: Tier,
-    timeout_seconds: u64,
-    capabilities: Vec<Capability>,
-    effort: BTreeMap<String, Effort>,
+/// Where an agent definition comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentOrigin {
+    /// Ostra's standard plugin (Rule PL4).
+    Standard,
+    /// A markdown file in the workspace's `.ostra/agents/`.
+    Workspace(PathBuf),
+    /// A plugin's manifest.
+    Plugin(String),
+}
+
+impl AgentDef {
+    /// The submit tool's input schema, with a custom agent's declared `data`.
+    pub fn submit_schema(&self) -> serde_json::Value {
+        use ostra_core::Contract;
+        match self.returns {
+            Contract::Stage => ostra_core::submit::custom_submit_schema(self.submit_data.as_ref()),
+            Contract::Plugin(_) => self
+                .contract_schema
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({"type": "object"})),
+            c => ostra_core::submit::submit_schema(c),
+        }
+    }
+
+    /// Reasoning effort on an executor. Falls back to the native value.
+    pub fn effort_on(&self, executor: ExecutorKind) -> Effort {
+        self.effort
+            .get(executor.tier_table())
+            .or_else(|| self.effort.get("native"))
+            .copied()
+            .unwrap_or(Effort::High)
+    }
 }
 
 pub(crate) fn asset_text(path: &str) -> Result<String, AgentsError> {
@@ -66,28 +112,21 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
+/// Rule PL4: the built-in agents, as the standard plugin defines them.
 fn load_defs() -> Result<BTreeMap<AgentName, AgentDef>, AgentsError> {
-    let mut out = BTreeMap::new();
-    for agent in AgentName::ALL {
-        let path = format!("agents/{}/agent.toml", agent.as_str());
-        let raw: AgentToml =
-            toml::from_str(&asset_text(&path)?).map_err(|e| AgentsError::Parse {
-                path: path.clone(),
-                message: e.to_string(),
-            })?;
-        out.insert(
-            agent,
-            AgentDef {
-                name: agent,
-                description: raw.description,
-                default_tier: raw.default_tier,
-                effort: raw.effort,
-                capabilities: raw.capabilities,
-                timeout_secs: raw.timeout_seconds,
-            },
-        );
-    }
-    Ok(out)
+    standard::Standard::manifest_ref()
+        .agents
+        .iter()
+        .map(|a| {
+            let def = catalog::from_plugin_agent(a.clone(), AgentOrigin::Standard).map_err(
+                |message| AgentsError::Parse {
+                    path: format!("agents/{}/agent.toml", a.name),
+                    message,
+                },
+            )?;
+            Ok((def.name, def))
+        })
+        .collect()
 }
 
 fn defs() -> &'static BTreeMap<AgentName, AgentDef> {
@@ -97,20 +136,22 @@ fn defs() -> &'static BTreeMap<AgentName, AgentDef> {
     })
 }
 
-/// The definition of one agent. Embedded assets are validated by this crate's tests, so a missing
-/// or malformed `agent.toml` is a build defect, not a runtime condition.
-pub fn agent_def(agent: AgentName) -> &'static AgentDef {
-    &defs()[&agent]
+/// The definition of a built-in agent. Embedded assets are validated by this crate's tests, so a
+/// missing or malformed `agent.toml` is a build defect, not a runtime condition. A custom agent's
+/// definition comes from an [`AgentCatalog`].
+pub fn builtin_def(agent: AgentName) -> Option<&'static AgentDef> {
+    defs().get(&agent)
 }
 
-/// Reasoning effort for an agent on an executor. Falls back to the native value.
+/// The definition of a built-in agent. Panics on a custom agent, whose definition lives in the
+/// workspace's [`AgentCatalog`].
+pub fn agent_def(agent: AgentName) -> &'static AgentDef {
+    builtin_def(agent).unwrap_or_else(|| panic!("`{agent}` is not a built-in agent"))
+}
+
+/// Reasoning effort for a built-in agent on an executor. Falls back to the native value.
 pub fn effort_for(agent: AgentName, executor: ExecutorKind) -> Effort {
-    let def = agent_def(agent);
-    def.effort
-        .get(executor.tier_table())
-        .or_else(|| def.effort.get("native"))
-        .copied()
-        .unwrap_or(Effort::High)
+    agent_def(agent).effort_on(executor)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -284,18 +325,42 @@ fn render_prompt_in(
     executor: ExecutorKind,
     assets: &Path,
 ) -> Result<String, AgentsError> {
-    let path = format!("agents/{}/prompt.md", agent.as_str());
-    let source = asset_text(&path)?;
+    render_def_in(agent_def(agent), executor, assets)
+}
+
+/// An agent's prompt rendered for an executor, from its definition: the embedded prompt of a
+/// built-in agent or the markdown body of a custom one, with the same shared guides.
+pub fn render_def(def: &AgentDef, executor: ExecutorKind) -> Result<String, AgentsError> {
+    render_def_in(def, executor, &assets_dir())
+}
+
+fn render_def_in(
+    def: &AgentDef,
+    executor: ExecutorKind,
+    assets: &Path,
+) -> Result<String, AgentsError> {
+    let agent = def.name;
+    let path = match &def.origin {
+        AgentOrigin::Standard => format!("agents/{agent}/prompt.md"),
+        _ => format!("custom agent {agent}"),
+    };
+    // Rule PL2: a programmatic agent has no model loop; its description says what it does.
+    let source = def
+        .prompt
+        .clone()
+        .unwrap_or_else(|| def.description.clone());
     let ctx = mapping::get().context(agent, executor, assets);
     let mut body = render_str(&path, &source, &ctx)?;
-    if agent_def(agent).capabilities.contains(&Capability::Code) {
+    if def.capabilities.contains(&Capability::Code) {
         let guide = render_str("code-tools.md", &asset_text("code-tools.md")?, &ctx)?;
         body = format!("{guide}{body}");
     }
-    if agent_def(agent)
-        .capabilities
-        .contains(&Capability::Coordinate)
-    {
+    // Rule CA1: an agent that returns the stage contract learns how to end its stage.
+    if def.returns == ostra_core::Contract::Stage {
+        let guide = render_str("custom-agent.md", &asset_text("custom-agent.md")?, &ctx)?;
+        body = format!("{guide}{body}");
+    }
+    if def.capabilities.contains(&Capability::Coordinate) {
         let guide = render_str("coordination.md", &asset_text("coordination.md")?, &ctx)?;
         body = format!("{guide}{body}");
     }
@@ -304,7 +369,7 @@ fn render_prompt_in(
     match executor {
         ExecutorKind::Native => Ok(body),
         ExecutorKind::Harness(h) => {
-            let vocab = mapping::get().vocabulary(agent, h, &agent_def(agent).capabilities);
+            let vocab = mapping::get().vocabulary(agent, h, &def.capabilities);
             let vocab = render_str("tool vocabulary", &vocab, &ctx)?;
             Ok(format!("{vocab}\n{body}"))
         }

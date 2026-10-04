@@ -8,8 +8,8 @@
 //! another, and the brief must avoid stating a fact twice without withholding it. Routing settings
 //! are never included: they mean nothing to an agent and would leak tier names into its context.
 
-use ostra_core::AgentName;
 use ostra_core::config::{ModuleRow, ProjectProfile, SkillEntry};
+use ostra_core::{AgentName, Contract};
 use std::path::{Path, PathBuf};
 
 pub const MAX_BRIEF_CHARS: usize = 3600;
@@ -54,8 +54,9 @@ pub fn project_docs(repo_root: &Path) -> Vec<ProjectDoc> {
     out
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Section {
+/// Rule CA6: one section of the repo brief, which an agent's definition picks (`brief`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
     Stack,
     Commands,
     Testing,
@@ -65,23 +66,48 @@ enum Section {
     Modules,
 }
 
-fn sections(agent: AgentName) -> &'static [Section] {
-    use Section::*;
-    match agent {
-        AgentName::Implementer => &[Commands, Skills, Conventions, Modules],
-        AgentName::WriteTest => &[Commands, Testing, Skills, Conventions, Modules],
-        AgentName::CodeReviewer => &[Commands, Review, Conventions, Skills],
-        AgentName::ExecutionPathAnalyzer => &[Commands, Testing, Modules],
-        AgentName::Explore => &[Stack, Skills, Modules],
-        AgentName::Plan => &[Stack, Commands, Skills, Modules],
-        AgentName::GenerateSpec => &[Stack, Modules],
-        AgentName::Documentation => &[Stack, Commands, Modules],
-        AgentName::SystemArchitecture => &[Stack, Modules],
-        AgentName::FactCheck => &[Stack, Modules],
-        AgentName::PromptGeneration => &[Skills],
-        AgentName::QuickAnswer => &[Stack, Commands, Skills, Modules],
-        AgentName::Initializer => &[],
-        AgentName::Advisor => &[Stack, Commands, Skills, Modules],
+impl Section {
+    pub const ALL: [Section; 7] = [
+        Section::Stack,
+        Section::Commands,
+        Section::Testing,
+        Section::Skills,
+        Section::Conventions,
+        Section::Review,
+        Section::Modules,
+    ];
+
+    /// The sections an agent gets when its definition names none.
+    pub const DEFAULT: [Section; 5] = [
+        Section::Stack,
+        Section::Commands,
+        Section::Skills,
+        Section::Conventions,
+        Section::Modules,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Section::Stack => "stack",
+            Section::Commands => "commands",
+            Section::Testing => "testing",
+            Section::Skills => "skills",
+            Section::Conventions => "conventions",
+            Section::Review => "review",
+            Section::Modules => "modules",
+        }
+    }
+
+    pub fn parse(s: &str) -> Result<Section, String> {
+        Section::ALL
+            .into_iter()
+            .find(|x| x.as_str() == s.trim())
+            .ok_or_else(|| {
+                format!(
+                    "Name brief sections from {}: `{s}` is not one.",
+                    Section::ALL.map(|x| x.as_str()).join(", ")
+                )
+            })
     }
 }
 
@@ -136,6 +162,10 @@ impl BooksBrief {
 /// What the brief is built from.
 pub struct BriefInput<'a> {
     pub agent: AgentName,
+    /// Rule CA5: the contract the agent returns, which picks the skills it is shown.
+    pub contract: Contract,
+    /// Rule CA6: the sections its definition asks for.
+    pub sections: &'a [Section],
     /// The spawn block and task text, scanned for paths that narrow the module map.
     pub prompt: &'a str,
     pub repo_root: &'a Path,
@@ -212,7 +242,7 @@ fn relevant_modules<'p>(map: &'p [ModuleRow], hints: &[String]) -> Vec<&'p Modul
 }
 
 fn skill_rows(
-    agent: AgentName,
+    contract: Contract,
     skills: &[SkillEntry],
     inventory: &str,
     repo_root: &Path,
@@ -224,12 +254,12 @@ fn skill_rows(
             if s.kind == "convention" {
                 return true;
             }
-            match agent {
-                AgentName::WriteTest => {
+            match contract {
+                Contract::Tests => {
                     let hay = format!("{} {}", s.name, s.kind).to_lowercase();
                     hay.contains("test") || hay.contains("spec")
                 }
-                AgentName::CodeReviewer => s.kind == "convention",
+                Contract::Review => s.kind == "convention",
                 _ => true,
             }
         })
@@ -254,7 +284,7 @@ fn skill_rows(
 /// The brief as markdown, or `None` when there is nothing to say.
 pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
     let mut out: Vec<String> = vec![];
-    let wanted = sections(input.agent);
+    let wanted = input.sections;
     if let Some(profile) = input.profile.filter(|_| !wanted.is_empty()) {
         let inventory = squash(input.inventory.unwrap_or(""));
         let mut body: Vec<String> = vec![];
@@ -321,7 +351,7 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         }
 
         if wanted.contains(&Section::Skills) {
-            let rows = skill_rows(input.agent, &profile.skills, &inventory, input.repo_root);
+            let rows = skill_rows(input.contract, &profile.skills, &inventory, input.repo_root);
             if !rows.is_empty() {
                 body.push(format!(
                     "### Skills\nLoad a skill by its name with the skill tool, or read the file at its path. \

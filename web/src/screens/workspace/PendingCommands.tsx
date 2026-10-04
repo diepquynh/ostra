@@ -10,6 +10,10 @@ const KIND: Record<PendingKind, string> = {
   formatCommand: "Format command",
   allowRule: "Allow rule",
   projectOutside: "Project outside the workspace",
+  plugin: "Plugin",
+  agentFile: "Custom agent",
+  workflowFile: "Workflow",
+  transformFile: "Transform",
 };
 
 function describe(c: PendingCommand): string {

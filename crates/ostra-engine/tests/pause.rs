@@ -204,6 +204,7 @@ fn start(engine: &Engine, files: Vec<ContextFile>) -> SessionId {
             files,
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         })
         .unwrap()
         .id
@@ -467,6 +468,7 @@ async fn attached_files_and_folders_must_be_inside_a_project() {
             files: vec![bad.clone()],
             uploads: vec![],
             docs_book: None,
+            workflow: None,
         });
         assert!(r.is_err(), "{bad:?} was accepted");
     }
@@ -562,6 +564,7 @@ async fn uploads_are_kept_in_the_session_and_listed_as_artifacts() {
             files: vec![],
             uploads: vec![first.id.clone()],
             docs_book: None,
+            workflow: None,
         })
         .unwrap()
         .id;

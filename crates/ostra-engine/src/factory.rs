@@ -5,8 +5,10 @@ use crate::init::STACK_REFERENCE_NAME;
 use crate::plan::{SpawnInputs, SpawnRequest};
 use crate::services::{AgentMeta, BuiltSpawn, SpawnEnv, SpawnFactory};
 use crate::state::SessionState;
+use ostra_agents::AgentCatalog;
 use ostra_agents::brief::{ArtifactsBrief, BooksBrief, BriefInput, augment};
 use ostra_agents::spawn::*;
+use ostra_core::Contract;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, FactTarget, WorkKind};
 use ostra_core::executor::ExecutorKind;
@@ -109,13 +111,17 @@ fn init_str(inputs: &SpawnInputs, key: &str) -> Result<String, String> {
 }
 
 impl SpawnFactory for AgentsFactory {
-    fn agent_meta(&self, agent: AgentName) -> AgentMeta {
-        let d = ostra_agents::agent_def(agent);
-        AgentMeta {
+    fn agent_meta(&self, agent: AgentName, agents: &AgentCatalog) -> Option<AgentMeta> {
+        let d = agents.def(agent)?;
+        Some(AgentMeta {
             default_tier: d.default_tier,
             capabilities: d.capabilities.clone(),
             timeout_secs: d.timeout_secs,
-        }
+            write_scope: d.write_scope,
+            submit_schema: d.submit_schema(),
+            programmatic: d.programmatic,
+            returns: d.returns,
+        })
     }
 
     fn judge_prompt(&self, name: &str) -> Option<String> {
@@ -136,19 +142,33 @@ impl SpawnFactory for AgentsFactory {
             repo_key: req.project.clone(),
         };
         let (changed_since_research, facts_file) = code_facts(i, s);
-        let params: Box<dyn SpawnParams> = match req.agent {
-            agent if matches!(req.purpose, ExecPurpose::Consult { .. }) => Box::new(ConsultParams {
+        // Rule CA5: the spawn is the contract's, whichever agent fills it.
+        let def = env
+            .agents
+            .def(req.agent)
+            .ok_or_else(|| format!("the workspace defines no agent `{}`", req.agent))?;
+        let agent = req.agent;
+        let params: Box<dyn SpawnParams> = match def.returns {
+            // A workflow stage or a helper gets the stage spawn, whatever the agent returns.
+            _ if matches!(
+                req.purpose,
+                ExecPurpose::Stage { .. } | ExecPurpose::Helper { .. }
+            ) =>
+            {
+                Box::new(crate::workflow::custom_params(req, s, common)?)
+            }
+            _ if matches!(req.purpose, ExecPurpose::Consult { .. }) => Box::new(ConsultParams {
                 common,
                 agent,
                 asked_by: i.task.clone().ok_or("missing asker")?,
                 question: i.question.clone().ok_or("missing question")?,
             }),
-            AgentName::Explore => Box::new(ExploreParams {
+            Contract::Research => Box::new(ExploreParams {
                 common,
                 task: i.task.clone().ok_or("missing task")?,
                 extra: Extras::default(),
             }),
-            AgentName::GenerateSpec => Box::new(GenerateSpecParams {
+            Contract::Spec => Box::new(GenerateSpecParams {
                 common,
                 task: i.task.clone().ok_or("missing task")?,
                 spec_file: i.spec_file.clone(),
@@ -163,7 +183,7 @@ impl SpawnFactory for AgentsFactory {
                     ..Default::default()
                 },
             }),
-            AgentName::FactCheck => Box::new(FactCheckParams {
+            Contract::FactCheck => Box::new(FactCheckParams {
                 common,
                 target: required(i.target.clone(), "target")?,
                 target_type: match i.target_type {
@@ -181,7 +201,7 @@ impl SpawnFactory for AgentsFactory {
                 changed_since_research,
                 code_facts: facts_file,
             }),
-            AgentName::Plan => Box::new(PlanParams {
+            Contract::Plan => Box::new(PlanParams {
                 common,
                 spec_file: required(i.spec_file.clone(), "spec file")?,
                 projects_in_scope: i.projects_in_scope.clone(),
@@ -191,7 +211,7 @@ impl SpawnFactory for AgentsFactory {
                 master_plan: i.target.clone(),
             }),
             // Rule O8: an implementer the user sent to a stuck run fixes only what stopped it.
-            AgentName::Implementer if matches!(req.purpose, ExecPurpose::Unblock { .. }) => {
+            Contract::Implementation if matches!(req.purpose, ExecPurpose::Unblock { .. }) => {
                 Box::new(ImplementerParams {
                     common,
                     report_file: required(i.report_file.clone(), "report file")?,
@@ -206,7 +226,7 @@ impl SpawnFactory for AgentsFactory {
                     },
                 })
             }
-            AgentName::Implementer => Box::new(ImplementerParams {
+            Contract::Implementation => Box::new(ImplementerParams {
                 common,
                 report_file: required(i.report_file.clone(), "report file")?,
                 work: work_source(i, s),
@@ -223,7 +243,7 @@ impl SpawnFactory for AgentsFactory {
                     ..work_extras(i)
                 },
             }),
-            AgentName::CodeReviewer => {
+            Contract::Review => {
                 let tests = matches!(req.purpose, ExecPurpose::Review { tests: true, .. });
                 Box::new(CodeReviewerParams {
                     common,
@@ -241,7 +261,7 @@ impl SpawnFactory for AgentsFactory {
                     epa_report: i.epa_report.clone(),
                 })
             }
-            AgentName::ExecutionPathAnalyzer => Box::new(EpaParams {
+            Contract::PathAnalysis => Box::new(EpaParams {
                 common,
                 implementer_report: required(i.implementer_report.clone(), "implementer report")?,
                 report_file: required(i.report_file.clone(), "report file")?,
@@ -251,7 +271,7 @@ impl SpawnFactory for AgentsFactory {
                     ..Default::default()
                 },
             }),
-            AgentName::WriteTest => Box::new(WriteTestParams {
+            Contract::Tests => Box::new(WriteTestParams {
                 common,
                 implementer_report: required(i.implementer_report.clone(), "implementer report")?,
                 epa_report: required(i.epa_report.clone(), "EPA report")?,
@@ -259,7 +279,7 @@ impl SpawnFactory for AgentsFactory {
                 work: work_source(i, s),
                 extra: work_extras(i),
             }),
-            AgentName::Documentation => Box::new(DocumentationParams {
+            Contract::Documentation => Box::new(DocumentationParams {
                 common,
                 implementer_reports: i.implementer_reports.clone(),
                 existing_book: existing_book(s),
@@ -281,7 +301,7 @@ impl SpawnFactory for AgentsFactory {
                     ..Default::default()
                 },
             }),
-            AgentName::SystemArchitecture => Box::new(ArchitectureParams {
+            Contract::Architecture => Box::new(ArchitectureParams {
                 common,
                 book_parts: required(i.target.clone(), "book parts")?,
                 projects: i.projects_in_scope.clone(),
@@ -291,7 +311,7 @@ impl SpawnFactory for AgentsFactory {
                     ..Default::default()
                 },
             }),
-            AgentName::PromptGeneration => Box::new(PromptGenParams {
+            Contract::Prompt => Box::new(PromptGenParams {
                 common,
                 task: i.task.clone().ok_or("missing task")?,
                 target_files: i
@@ -305,7 +325,7 @@ impl SpawnFactory for AgentsFactory {
                 report_file: required(i.report_file.clone(), "report file")?,
                 extra: Extras::default(),
             }),
-            AgentName::Advisor => Box::new(AdvisorParams {
+            Contract::Advice => Box::new(AdvisorParams {
                 common,
                 failed_step: init_str(i, "Failed step")?,
                 problem: init_str(i, "Problem")?,
@@ -318,7 +338,7 @@ impl SpawnFactory for AgentsFactory {
                     .and_then(|g| serde_json::from_str(g).ok())
                     .unwrap_or_default(),
             }),
-            AgentName::QuickAnswer => Box::new(QuickAnswerParams {
+            Contract::Answer => Box::new(QuickAnswerParams {
                 common,
                 question: i.question.clone().ok_or("missing question")?,
                 projects_in_scope: s
@@ -328,7 +348,7 @@ impl SpawnFactory for AgentsFactory {
                     .collect(),
                 session_artifacts: vec![],
             }),
-            AgentName::Initializer => {
+            Contract::Setup => {
                 let ExecPurpose::Init { mode, .. } = &req.purpose else {
                     return Err("initializer without a mode".into());
                 };
@@ -384,6 +404,9 @@ impl SpawnFactory for AgentsFactory {
                     }),
                 }
             }
+            Contract::Stage | Contract::Plugin(_) => {
+                Box::new(crate::workflow::custom_params(req, s, common)?)
+            }
         };
         let block = params.render();
         let ws = &env.state.workspace_root;
@@ -401,9 +424,10 @@ impl SpawnFactory for AgentsFactory {
             .collect();
         let artifacts = ArtifactsBrief::read(ws);
         let books = BooksBrief::read(ws).map(|mut b| {
-            if ostra_agents::agent_def(req.agent)
-                .capabilities
-                .contains(&ostra_core::Capability::DocsSearch)
+            if env
+                .agents
+                .def(req.agent)
+                .is_some_and(|d| d.capabilities.contains(&ostra_core::Capability::DocsSearch))
             {
                 b.search_tool = ostra_agents::tool_name("docs_search", req.agent, env.executor);
             }
@@ -413,6 +437,8 @@ impl SpawnFactory for AgentsFactory {
             &block,
             &BriefInput {
                 agent: req.agent,
+                contract: def.returns,
+                sections: &def.brief,
                 prompt: &block,
                 repo_root: env.repo_root,
                 profile: env.profile,
@@ -424,8 +450,10 @@ impl SpawnFactory for AgentsFactory {
                 new_projects: &s.created_projects,
             },
         );
-        let system_prompt =
-            ostra_agents::render_prompt(req.agent, env.executor).map_err(|e| e.to_string())?;
+        let system_prompt = env
+            .agents
+            .render_prompt(req.agent, env.executor)
+            .map_err(|e| e.to_string())?;
         Ok(BuiltSpawn {
             system_prompt,
             first_message,
@@ -437,7 +465,12 @@ impl SpawnFactory for AgentsFactory {
                 req.agent.as_str(),
                 req.complexity(),
             )
-            .unwrap_or_else(|| ostra_agents::effort_for(req.agent, env.executor)),
+            .unwrap_or_else(|| {
+                env.agents
+                    .def(req.agent)
+                    .map(|d| d.effort_on(env.executor))
+                    .unwrap_or(ostra_core::Effort::High)
+            }),
         })
     }
 }

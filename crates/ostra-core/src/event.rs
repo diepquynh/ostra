@@ -2,7 +2,7 @@
 //! replays and continues.
 
 use crate::agent::{AgentName, InitializerMode};
-use crate::coord::{AskTarget, DeliveryKind};
+use crate::coord::{AskTarget, DeliveryKind, MessageTarget};
 use crate::exec::ExecutionResult;
 use crate::executor::{ExecutorKind, HarnessKind};
 use crate::ids::{DecisionId, ExecutionId, GateId, MessageId};
@@ -231,10 +231,29 @@ pub enum ExecPurpose {
         execution: ExecutionId,
         round: u32,
     },
-    /// Rule H3: subagent `subagent` answers question `ask` in a run that continues its conversation.
+    /// Logs written before messaging: subagent `subagent` answered question `ask` in a run that
+    /// continued its conversation.
     Consult {
         subagent: ExecutionId,
         ask: MessageId,
+    },
+    /// Rule SM4: subagent `subagent` continues its conversation, with its own tools, to act on the
+    /// messages sent to it after its run ended, the first of them `first`.
+    Message {
+        subagent: ExecutionId,
+        first: MessageId,
+    },
+    /// Rule SM7: a custom helper agent `SendMessage` started for message `message`.
+    Helper {
+        message: MessageId,
+    },
+    /// Rule WF4: run `round` of workflow node `node`, for `scope`: the session when absent, else
+    /// `phase:<n>` or `project:<key>`.
+    Stage {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        round: u32,
     },
 }
 
@@ -302,6 +321,12 @@ impl ExecPurpose {
             ExecPurpose::Advise { project, .. } => format!("Advice for {project}"),
             ExecPurpose::Unblock { phase, .. } => format!("Phase {phase} · unblock"),
             ExecPurpose::Consult { .. } => "Answer".into(),
+            ExecPurpose::Message { .. } => "Messages".into(),
+            ExecPurpose::Helper { .. } => "Helper".into(),
+            ExecPurpose::Stage { node, scope, .. } => match scope {
+                Some(s) => format!("Stage {node} · {}", s.replace(':', " ")),
+                None => format!("Stage {node}"),
+            },
             ExecPurpose::Init { mode, item: i } => match mode {
                 InitializerMode::Detect => "Detect the stack".into(),
                 InitializerMode::Adopt => "Adopt a bootstrap".into(),
@@ -424,6 +449,25 @@ pub enum GatePayload {
         /// Phases that ended blocked, with the reason.
         blocked: Vec<String>,
     },
+    /// Rule WF5: a workflow stage failed or needs the user. For a failure, answer `retry` (with
+    /// guidance as `text`), `continue`, or `stop`. For a question, answer with the chosen option, or
+    /// `other` with the answer as `text`, or `stop`.
+    StageReview {
+        /// The workflow node.
+        stage: String,
+        /// `phase:<n>` or `project:<key>` for a stage that runs per phase or project.
+        scope: Option<String>,
+        /// The agent whose run raised it; none when a plugin's stage logic asks.
+        agent: Option<AgentName>,
+        execution: Option<ExecutionId>,
+        verdict: crate::submit::StageVerdict,
+        summary: String,
+        findings: Vec<crate::submit::CustomFinding>,
+        question: Option<String>,
+        options: Vec<String>,
+        round: u32,
+        max_rounds: u32,
+    },
     /// The session reached its budget. Answer `raise` (with the extra dollars as `text`) or `stop`.
     /// YOLO never answers it, because spending more is the user's decision.
     BudgetReached {
@@ -457,6 +501,7 @@ impl GatePayload {
             GatePayload::ExecutionFailed { .. } => StageKind::Implement,
             GatePayload::BudgetReached { .. } => StageKind::Intake,
             GatePayload::ImplementationReview { .. } => StageKind::ImplementationReview,
+            GatePayload::StageReview { .. } => StageKind::Custom,
         }
     }
 
@@ -476,6 +521,7 @@ impl GatePayload {
             GatePayload::ExecutionFailed { .. } => "execution_failed",
             GatePayload::BudgetReached { .. } => "budget_reached",
             GatePayload::ImplementationReview { .. } => "implementation_review",
+            GatePayload::StageReview { .. } => "stage_review",
         }
     }
 
@@ -607,6 +653,47 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         docs_book: Option<String>,
+        /// Rule WF1: the workflow the session asked for. Logs written before workflows have none
+        /// and run the built-in pipeline of their category.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        workflow: Option<crate::workflow::WorkflowChoice>,
+    },
+    /// Rule WF1: the workflow the session runs, resolved from the workspace's files when the
+    /// session needed it, so later edits to those files never change a running session.
+    WorkflowResolved {
+        workflow: crate::workflow::WorkflowDef,
+    },
+    /// Rule PL3: a plugin's stage logic decided the next step of workflow node `node`.
+    StageDecided {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        decision: crate::plugin::StageDecision,
+    },
+    /// Rule WB5: node `node`'s conditions did not hold once the nodes it waits for were done, so
+    /// it was skipped. A skipped node counts as done.
+    StageSkipped {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+    },
+    /// Rules WB2 and WB3: a transform or prompt node ran in the engine and gave `output`, or
+    /// failed with `error`. The output is recorded because a later Ostra may compute it
+    /// differently, and the fold must stay a function of the log.
+    NodeRan {
+        node: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+        round: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(type = "unknown")]
+        output: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        /// A prompt node's model cost.
+        #[serde(default)]
+        cost_usd: f64,
     },
     /// The user extended or changed the request, or added context (Rules D2, D10, C2).
     RequestAmended {
@@ -683,6 +770,25 @@ pub enum SessionEvent {
         report_path: Option<PathBuf>,
         /// Execution this one resumes, if any.
         resumes: Option<ExecutionId>,
+        /// Rule CA5: the result contract the run submits. Logs written before contracts have none,
+        /// and their runs follow the standard agent's contract.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        contract: Option<crate::contract::Contract>,
+    },
+    /// Rule PL5: the plugin that owns a run's contract turned its result into this outcome.
+    ResultHandled {
+        execution: ExecutionId,
+        outcome: crate::submit::CustomSubmit,
+    },
+    /// Rule PL8: plugin `plugin` saved `value` under `key` in this session, or removed the key
+    /// (`value` absent). Its later calls read it, so a program that stopped knows where it was.
+    PluginCheckpoint {
+        plugin: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(type = "unknown")]
+        value: Option<serde_json::Value>,
     },
     /// Rule P2: an execution the pause interrupted runs again under its own id, continuing its
     /// conversation, Activity, and usage.
@@ -709,20 +815,41 @@ pub enum SessionEvent {
     SteerWithdrawn {
         id: ExecutionId,
     },
-    /// Rule H8: a run asked a helper or another subagent, and waits for the answer.
+    /// Rule SM8: run `from` sent a message. With `wait`, the run pauses until a message arrives.
+    MessageSent {
+        id: MessageId,
+        from: ExecutionId,
+        to: MessageTarget,
+        text: String,
+        #[serde(default)]
+        wait: bool,
+    },
+    /// Rule SM3: run `id` paused itself until a message arrives.
+    AgentWaiting {
+        id: ExecutionId,
+    },
+    /// Rule SM8: Ostra handed messages `ids` to run `to` at a turn boundary, with `notice` when
+    /// Ostra had to tell a waiting run that no message will come.
+    MessagesDelivered {
+        to: ExecutionId,
+        ids: Vec<MessageId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notice: Option<String>,
+    },
+    /// Logs written before messaging: a run asked a helper or another subagent, and waited.
     AgentAsked {
         id: MessageId,
         from: ExecutionId,
         target: AskTarget,
         message: String,
     },
-    /// Rule H8: a run answered question `ask`.
+    /// Logs written before messaging: a run answered question `ask`.
     AgentReplied {
         ask: MessageId,
         from: ExecutionId,
         message: String,
     },
-    /// Rule H8: Ostra handed the question or the answer of `ask` to run `to`.
+    /// Logs written before messaging: Ostra handed the question or the answer of `ask` to run `to`.
     MessageDelivered {
         ask: MessageId,
         to: ExecutionId,

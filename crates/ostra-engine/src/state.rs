@@ -8,6 +8,7 @@ use crate::judge::{
     TrackOut, clean_title, item_for, parts_for,
 };
 use chrono::{DateTime, Utc};
+use ostra_core::Contract;
 use ostra_core::agent::AgentName;
 use ostra_core::book::{ArchitectureSubmit, DocumentationSubmit};
 use ostra_core::containment::{ContainmentSignal, PAUSE_AFTER};
@@ -196,6 +197,8 @@ pub struct ExploreTask {
     pub retries: u32,
     pub judged: bool,
     pub gate: Option<GateId>,
+    /// Rule SM7: the research helper a message started; else the research stage's bound agent.
+    pub agent: Option<AgentName>,
 }
 
 impl ExploreTask {
@@ -436,8 +439,10 @@ pub enum LoopNext {
 #[derive(Debug, Clone)]
 pub struct WorkLoop {
     pub tests: bool,
-    pub work_agent: AgentName,
-    pub fix_agent: AgentName,
+    /// Rule CA5: the contract of its work runs and of its fix runs; the planner binds an agent to
+    /// each through the workflow (Rule WF8).
+    pub work: ostra_core::Contract,
+    pub fix: ostra_core::Contract,
     /// Whether a review follows each work pass. PROMPT reviews only when code changed.
     pub review: ReviewMode,
     /// Whether passing files are staged with `git add`.
@@ -476,11 +481,11 @@ pub enum ReviewMode {
 }
 
 impl WorkLoop {
-    pub fn new(tests: bool, work_agent: AgentName, fix_agent: AgentName) -> Self {
+    pub fn new(tests: bool, work: ostra_core::Contract, fix: ostra_core::Contract) -> Self {
         WorkLoop {
             tests,
-            work_agent,
-            fix_agent,
+            work,
+            fix,
             review: ReviewMode::Always,
             stage: true,
             next: LoopNext::Idle,
@@ -797,6 +802,10 @@ pub struct ExecRecord {
     pub executor: ostra_core::ExecutorKind,
     pub model: String,
     pub spawn_block: String,
+    /// Rule CA5: the result contract it submits.
+    pub contract: ostra_core::Contract,
+    /// Rule PL5: what its plugin's handler made of a plugin contract's result.
+    pub handled: Option<ostra_core::submit::CustomSubmit>,
 }
 
 #[derive(Debug, Clone)]
@@ -970,6 +979,9 @@ pub fn purpose_key(p: &ExecPurpose) -> String {
         ExecPurpose::Spec { .. } => "spec".into(),
         ExecPurpose::Plan { .. } => "plan".into(),
         ExecPurpose::FactCheck { target, .. } => format!("fact-check:{}", target.as_str()),
+        ExecPurpose::Stage { node, scope, .. } => {
+            format!("stage:{node}:{}", scope.as_deref().unwrap_or_default())
+        }
         other => serde_json::to_string(other).unwrap_or_default(),
     }
 }
@@ -1049,6 +1061,10 @@ pub struct SessionState {
     pub paused: bool,
     /// Rule P3: containment signals per execution.
     pub signals: BTreeMap<ExecutionId, Vec<ContainmentSignal>>,
+    /// Rule PL8: each plugin's checkpoints in this session, by key.
+    pub plugin_checkpoints: BTreeMap<String, BTreeMap<String, Value>>,
+    /// Rule PL8: how often each plugin saved a checkpoint in this session.
+    pub checkpoint_saves: BTreeMap<String, u32>,
     /// Rule P3: the execution whose signals paused the session, until it is continued.
     pub contained: Option<ExecutionId>,
     /// Executions the engine is interrupting, and why.
@@ -1059,13 +1075,23 @@ pub struct SessionState {
     pub steers: BTreeMap<ExecutionId, Steer>,
     /// Rule H2: native runs that ended waiting for a message, by [`purpose_key`].
     pub waiting_keys: BTreeMap<String, ExecutionId>,
-    /// Rule H8: questions between subagents, in the order they were asked.
-    pub asks: BTreeMap<ostra_core::ids::MessageId, crate::coord::Ask>,
+    /// Rule SM8: messages between subagents, in the order they were sent.
+    pub messages: Vec<crate::coord::Message>,
+    /// Rule SM3: runs that paused themselves and what each waits for.
+    pub waits: BTreeMap<ExecutionId, crate::coord::WaitOn>,
+    /// Rule WF1: the workflow the session asked for; `None` for logs written before workflows.
+    pub workflow_choice: Option<ostra_core::workflow::WorkflowChoice>,
+    /// Rule WF1: the workflow the session runs, once resolved.
+    pub workflow: Option<ostra_core::workflow::WorkflowDef>,
+    /// Rule WF4: custom stage instances by [`crate::workflow::stage_key`].
+    pub stages: BTreeMap<String, crate::workflow::StageTrack>,
     /// Rule H1: each execution's subagent ID, for runs that continue another's conversation.
     pub subagents: BTreeMap<ExecutionId, ExecutionId>,
     pub last_seq: i64,
     /// The session's short label: from the Classify decision, or fixed for an init session.
     pub title: Option<String>,
+    /// Rule WB3: what prompt nodes spent on their model calls.
+    pub node_cost: f64,
 }
 
 /// A docs-stage run ends done only with a submit the engine can read, because the book is built
@@ -1122,7 +1148,9 @@ fn purpose_loop(purpose: &ExecPurpose) -> Option<(u32, bool)> {
 pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
     match purpose {
         ExecPurpose::Advise { .. } | ExecPurpose::Unblock { .. } => StageKind::Rescue,
-        ExecPurpose::Consult { .. } => StageKind::Handoff,
+        ExecPurpose::Consult { .. } | ExecPurpose::Message { .. } => StageKind::Handoff,
+        ExecPurpose::Helper { .. } => StageKind::Explore,
+        ExecPurpose::Stage { .. } => StageKind::Custom,
         ExecPurpose::Explore { .. } => StageKind::Explore,
         ExecPurpose::Spec { .. } => StageKind::Spec,
         ExecPurpose::FactCheck {
@@ -1216,15 +1244,22 @@ impl SessionState {
             notes: vec![],
             paused: false,
             signals: BTreeMap::new(),
+            plugin_checkpoints: BTreeMap::new(),
+            checkpoint_saves: BTreeMap::new(),
             contained: None,
             interrupting: BTreeMap::new(),
             resume_from: BTreeMap::new(),
             steers: BTreeMap::new(),
             waiting_keys: BTreeMap::new(),
-            asks: BTreeMap::new(),
+            messages: vec![],
+            waits: BTreeMap::new(),
+            workflow_choice: None,
+            workflow: None,
+            stages: BTreeMap::new(),
             subagents: BTreeMap::new(),
             last_seq: 0,
             title: None,
+            node_cost: 0.0,
         }
     }
 
@@ -1350,13 +1385,15 @@ impl SessionState {
         self.executions.values().filter(|e| e.result.is_none())
     }
 
-    /// What finished executions spent. Running executions are counted when they finish.
+    /// What finished executions and prompt nodes spent. Running executions are counted when they
+    /// finish.
     pub fn spent_usd(&self) -> f64 {
         self.executions
             .values()
             .filter_map(|e| e.result.as_ref())
             .map(|r| r.usage.cost_usd)
-            .sum()
+            .sum::<f64>()
+            + self.node_cost
     }
 
     pub fn tests_requested(&self) -> bool {
@@ -1503,8 +1540,10 @@ impl SessionState {
                 uploads,
                 pinned,
                 docs_book,
+                workflow,
             } => {
                 self.created = true;
+                self.workflow_choice = workflow.clone();
                 self.pinned = pinned.clone();
                 self.docs_book = docs_book.clone();
                 self.files = files.clone();
@@ -1527,6 +1566,45 @@ impl SessionState {
                     });
                 }
             }
+            SessionEvent::WorkflowResolved { workflow } => self.on_workflow_resolved(workflow),
+            SessionEvent::ResultHandled { execution, outcome } => {
+                self.on_result_handled(execution, outcome)
+            }
+            SessionEvent::PluginCheckpoint { plugin, key, value } => {
+                *self.checkpoint_saves.entry(plugin.clone()).or_default() += 1;
+                let kept = self.plugin_checkpoints.entry(plugin.clone()).or_default();
+                match value {
+                    Some(v) => {
+                        kept.insert(key.clone(), v.clone());
+                    }
+                    None => {
+                        kept.remove(key);
+                    }
+                }
+            }
+            SessionEvent::StageDecided {
+                node,
+                scope,
+                decision,
+            } => self.on_stage_decided(node, scope.as_deref(), decision),
+            SessionEvent::StageSkipped { node, scope } => {
+                self.on_stage_skipped(node, scope.as_deref())
+            }
+            SessionEvent::NodeRan {
+                node,
+                scope,
+                round,
+                output,
+                error,
+                cost_usd,
+            } => self.on_node_ran(
+                node,
+                scope.as_deref(),
+                *round,
+                output.as_ref(),
+                error.as_deref(),
+                *cost_usd,
+            ),
             SessionEvent::ProjectCreated { project } => {
                 // Rule O3: the project joins the session's projects and scope uninitialized.
                 if !self.valid_project(&project.key) {
@@ -1675,7 +1753,10 @@ impl SessionState {
                 spawn_block,
                 report_path,
                 resumes,
+                contract,
             } => {
+                // Rule CA5: logs from before contracts ran the standard agents.
+                let contract = contract.unwrap_or_else(|| crate::workflow::legacy_contract(*agent));
                 let loop_key = match purpose {
                     ExecPurpose::PromptGen {
                         handoff_for: Some(x),
@@ -1701,6 +1782,8 @@ impl SessionState {
                         executor: *executor,
                         model: model.clone(),
                         spawn_block: spawn_block.clone(),
+                        contract,
+                        handled: None,
                     },
                 );
                 self.resume_from.remove(&purpose_key(purpose));
@@ -1714,8 +1797,12 @@ impl SessionState {
                 }
                 self.on_started(id, purpose, loop_key, false);
                 self.coord_started(id, purpose);
+                self.stage_started(id, purpose);
             }
-            SessionEvent::AgentAsked { .. }
+            SessionEvent::MessageSent { .. }
+            | SessionEvent::AgentWaiting { .. }
+            | SessionEvent::MessagesDelivered { .. }
+            | SessionEvent::AgentAsked { .. }
             | SessionEvent::AgentReplied { .. }
             | SessionEvent::MessageDelivered { .. } => self.on_coord_event(&stored.event, at),
             SessionEvent::ExecutionResumed { id } => {
@@ -1804,6 +1891,7 @@ impl SessionState {
                     self.skip_task(id);
                 }
                 self.coord_finished(&rec, result);
+                self.stage_finished(&rec, result);
                 if self.running_executions().next().is_none() {
                     let held: Vec<usize> = self.held_amendments().collect();
                     for i in held {
@@ -2015,6 +2103,7 @@ impl SessionState {
             retries: 0,
             judged: false,
             gate: None,
+            agent: None,
         });
         idx
     }
@@ -2639,7 +2728,8 @@ impl SessionState {
     }
 
     fn apply_classify(&mut self, out: &ClassifyOut) {
-        self.category = Some(out.category);
+        // Rule WF1: a named workflow's base is the category, whatever the judge picked.
+        self.category = Some(self.forced_category().unwrap_or(out.category));
         if let Some(t) = clean_title(&out.title) {
             self.title = Some(t);
         }
@@ -2699,7 +2789,7 @@ impl SessionState {
                 for (i, key) in scope.iter().enumerate() {
                     let id = i as u32 + 1;
                     let mut l =
-                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                        WorkLoop::new(false, Contract::Implementation, Contract::Implementation);
                     l.review = ReviewMode::Never;
                     l.stage = false;
                     self.insert_phase(inline_phase(id, key, "Verification", i), l);
@@ -2709,7 +2799,7 @@ impl SessionState {
                 for (i, key) in scope.iter().enumerate() {
                     let id = i as u32 + 1;
                     let mut l =
-                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                        WorkLoop::new(false, Contract::Implementation, Contract::Implementation);
                     l.next = LoopNext::Done;
                     let report = self
                         .project_session_dir(key)
@@ -2731,7 +2821,7 @@ impl SessionState {
                 for (i, key) in scope.iter().enumerate() {
                     let id = i as u32 + 1;
                     let mut l =
-                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                        WorkLoop::new(false, Contract::Implementation, Contract::Implementation);
                     l.next = LoopNext::Done;
                     let report = self
                         .project_session_dir(key)
@@ -2750,15 +2840,14 @@ impl SessionState {
             Category::QuickChange => {
                 for (i, key) in scope.iter().enumerate() {
                     let mut l =
-                        WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                        WorkLoop::new(false, Contract::Implementation, Contract::Implementation);
                     l.review = ReviewMode::Never;
                     self.insert_phase(inline_phase(i as u32 + 1, key, "Quick change", i), l);
                 }
             }
             Category::Prompt => {
                 if let Some(key) = scope.first() {
-                    let mut l =
-                        WorkLoop::new(false, AgentName::PromptGeneration, AgentName::Implementer);
+                    let mut l = WorkLoop::new(false, Contract::Prompt, Contract::Implementation);
                     l.review = ReviewMode::IfCodeChanged;
                     self.insert_phase(inline_phase(1, key, "Prompt change", 0), l);
                 }
@@ -2781,7 +2870,7 @@ impl SessionState {
         if track == Track::Light {
             let scope = self.scope.clone();
             for (i, key) in scope.iter().enumerate() {
-                let l = WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer);
+                let l = WorkLoop::new(false, Contract::Implementation, Contract::Implementation);
                 self.insert_phase(inline_phase(i as u32 + 1, key, "Implementation", i), l);
             }
         }
@@ -2868,7 +2957,7 @@ impl SessionState {
             };
             self.insert_phase(
                 info,
-                WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer),
+                WorkLoop::new(false, Contract::Implementation, Contract::Implementation),
             );
             if let Some(p) = self.phases.get_mut(&id) {
                 p.revision = Some(Revision {
@@ -2896,7 +2985,7 @@ impl SessionState {
             PhaseRun {
                 info,
                 impl_loop,
-                test_loop: WorkLoop::new(true, AgentName::WriteTest, AgentName::WriteTest),
+                test_loop: WorkLoop::new(true, Contract::Tests, Contract::Tests),
                 epa: EpaState::NotStarted,
                 implementer_report: None,
                 blocked_gate: None,
@@ -3013,8 +3102,8 @@ impl SessionState {
                         for (i, key) in scope.iter().enumerate() {
                             let l = WorkLoop::new(
                                 false,
-                                AgentName::Implementer,
-                                AgentName::Implementer,
+                                Contract::Implementation,
+                                Contract::Implementation,
                             );
                             self.insert_phase(
                                 inline_phase(i as u32 + 1, key, "Implementation", i),
@@ -3253,8 +3342,8 @@ impl SessionState {
     pub fn forced_executor(&self, agent: AgentName) -> Option<ostra_core::ExecutorKind> {
         (self.native_fallback.contains(&agent)
             || self.category == Some(Category::QuickChange)
-            || agent == AgentName::QuickAnswer)
-            .then_some(ostra_core::ExecutorKind::Native)
+            || self.category == Some(Category::QuickAnswer))
+        .then_some(ostra_core::ExecutorKind::Native)
     }
 
     fn can_override_classify_now(&self) -> bool {
@@ -3825,6 +3914,7 @@ impl SessionState {
             return;
         }
         match &rec.purpose {
+            ExecPurpose::Stage { .. } => self.stage_exec_gate(&rec, Some(gate), false),
             ExecPurpose::Explore { task } => {
                 if let Some(t) = self.explore.get_mut(*task as usize) {
                     t.gate = Some(gate.clone());
@@ -3873,6 +3963,7 @@ impl SessionState {
 
     fn on_gate_opened(&mut self, id: &GateId, payload: &GatePayload) {
         match payload {
+            GatePayload::StageReview { .. } => self.stage_gate_opened(id, payload),
             GatePayload::OpenQuestions { artifact, .. } => {
                 if artifact == "plan" {
                     self.plan.questions_gate = Some(id.clone());
@@ -3943,6 +4034,7 @@ impl SessionState {
             _ => None,
         };
         match payload {
+            GatePayload::StageReview { .. } => self.stage_gate_answered(id, payload, answer),
             GatePayload::OpenQuestions { artifact, .. } => {
                 let answers = match answer {
                     GateAnswer::Questions { answers } => answers.clone(),
@@ -4337,6 +4429,7 @@ impl SessionState {
             return;
         }
         match &rec.purpose {
+            ExecPurpose::Stage { .. } => self.stage_exec_gate(&rec, None, retry),
             ExecPurpose::Explore { task } => {
                 if let Some(t) = self.explore.get_mut(*task as usize) {
                     t.gate = None;
@@ -4477,7 +4570,7 @@ impl SessionState {
                 || self.project_to_create(&info.project).is_some();
             self.insert_phase(
                 info,
-                WorkLoop::new(false, AgentName::Implementer, AgentName::Implementer),
+                WorkLoop::new(false, Contract::Implementation, Contract::Implementation),
             );
             if !valid && let Some(ph) = self.phases.get_mut(&p.id) {
                 ph.impl_loop.next = LoopNext::Blocked {

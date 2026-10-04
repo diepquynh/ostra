@@ -1,0 +1,8 @@
+# Ostra's default `quick-change` workflow. A workspace runs its own copy in .ostra/workflows/quick-change.toml
+# when it has one, and this file otherwise. Each stage waits for the one before it.
+description = "A small change, built and reviewed, with no spec or plan."
+base = "quick-change"
+
+[[stage]]
+id = "build"
+uses = "ostra:build"

@@ -2,7 +2,7 @@ import { Banner, Button, Checkbox, Panel, Select } from "@ostra/design";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { BookSummary } from "../../api/gen/BookSummary";
-import type { ContextFile, ProjectView, SessionSummary, Track } from "../../api/types";
+import type { ContextFile, ProjectView, SessionSummary, Track, WorkflowInfo } from "../../api/types";
 import { FileTagInput } from "../../features/context/FileTagInput";
 import { useUploads } from "../../features/context/uploads";
 import { useAsync } from "../../lib/hooks";
@@ -12,12 +12,13 @@ import { useShell } from "../../lib/nav";
 export type NewTaskProps = {
   ws: string;
   projects: ProjectView[];
+  workflows: WorkflowInfo[];
   yoloDefault: boolean;
   onCreated: (s: SessionSummary) => void;
 };
 
-/** Request text with `@` file tags, the tests, docs and YOLO toggles, and optional pinned projects. */
-export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) {
+/** Request text with `@` file tags, the tests, docs and YOLO toggles, a workflow, and optional pinned projects. */
+export function NewTask({ ws, projects, workflows, yoloDefault, onCreated }: NewTaskProps) {
   const { taskDraft, setTaskDraft } = useShell();
   const [request, setRequest] = useState("");
   const [tests, setTests] = useState(false);
@@ -26,6 +27,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
   const books = useAsync<BookSummary[]>(() => (docs ? api.books(ws) : Promise.resolve([])), [ws, docs]);
   const [yolo, setYolo] = useState(yoloDefault);
   const [track, setTrack] = useState<Track | null>(null);
+  const [workflow, setWorkflow] = useState("");
   const [pins, setPins] = useState<string[]>([]);
   const [files, setFiles] = useState<ContextFile[]>([]);
   const uploads = useUploads(ws);
@@ -58,6 +60,7 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
         files,
         uploads: uploads.ids,
         ...(docs && book ? { docs_book: book } : {}),
+        ...(workflow ? { workflow } : {}),
       });
       setRequest("");
       uploads.clear();
@@ -154,6 +157,24 @@ export function NewTask({ ws, projects, yoloDefault, onCreated }: NewTaskProps) 
               {t === null ? "Auto" : t === "light" ? "Light" : "Full"}
             </Button>
           ))}
+          <span className="wp-divider" />
+          <Select
+            size="sm"
+            aria-label="Workflow"
+            title={
+              workflows.find((w) => w.name === workflow)?.description ??
+              "Ostra runs the workflow for the category it classifies the request into"
+            }
+            value={workflow}
+            onChange={(e) => setWorkflow(e.target.value)}
+            options={[
+              { value: "", label: "Workflow: by category" },
+              ...workflows.map((w) => ({
+                value: w.name,
+                label: `Workflow: ${w.name}${w.builtin ? "" : " (workspace)"}`,
+              })),
+            ]}
+          />
           {initialized.length > 1 && (
             <>
               <span className="wp-divider" />

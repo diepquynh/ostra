@@ -365,6 +365,32 @@ export function describeEvent(e: SessionEvent): string {
       return `${e.from} answered: ${truncate(e.message, 80)}`;
     case "message_delivered":
       return `${e.kind === "question" ? "Question" : "Answer"} delivered to ${e.to}`;
+    case "message_sent":
+      return e.to.kind === "agent"
+        ? `${e.from} started a ${e.to.agent} helper: ${truncate(e.text, 80)}`
+        : `${e.from} sent ${e.to.id} a message${e.wait ? " and waits" : ""}: ${truncate(e.text, 80)}`;
+    case "agent_waiting":
+      return `${e.id} waits for a message`;
+    case "messages_delivered":
+      return e.notice
+        ? `${e.to} woke with a notice: ${truncate(e.notice, 80)}`
+        : `${e.ids.length} message${e.ids.length === 1 ? "" : "s"} handed to ${e.to}`;
+    case "stage_decided":
+      return `Stage ${e.node}${e.scope ? ` (${e.scope})` : ""}: its plugin decided ${e.decision.kind}`;
+    case "result_handled":
+      return `${e.execution} result handled by its plugin: ${e.outcome.verdict}`;
+    case "plugin_checkpoint":
+      return e.value === undefined
+        ? `Plugin ${e.plugin} removed checkpoint ${e.key}`
+        : `Plugin ${e.plugin} saved checkpoint ${e.key}`;
+    case "workflow_resolved":
+      return `Workflow ${e.workflow.name}: ${e.workflow.stages.map((s) => s.id).join(", ")}`;
+    case "stage_skipped":
+      return `Node ${e.node}${e.scope ? ` (${e.scope})` : ""} skipped: its conditions did not hold`;
+    case "node_ran":
+      return e.error
+        ? `Node ${e.node}${e.scope ? ` (${e.scope})` : ""} failed in round ${e.round}: ${truncate(e.error, 80)}`
+        : `Node ${e.node}${e.scope ? ` (${e.scope})` : ""} gave its output`;
     case "session_paused":
       return "Session paused";
     case "session_resumed":

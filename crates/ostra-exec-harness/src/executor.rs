@@ -428,7 +428,7 @@ impl HarnessExecutor {
                 continue;
             }
             if !inspect && s.waiting {
-                // Rule H2: the process stays up; the wait does not count against the timeout.
+                // Rule SM3: the process stays up; the wait does not count against the timeout.
                 let waited = Instant::now();
                 let note = tokio::select! {
                     _ = cancel.cancelled() => return End::Cancelled,
@@ -533,7 +533,11 @@ impl Executor for HarnessExecutor {
             return ExecutionResult::error("the harness executor was given a native route");
         };
         let live = self.live.register(spec.id.clone(), spec.agent, harness);
+        live.set_submit_schema(spec.submit_schema.clone());
+        live.set_contract(spec.ctx.contract);
+        live.set_report_file(spec.ctx.report_file.clone());
         live.set_owes_reply(spec.ctx.owes_reply);
+        live.set_host(host.clone());
         if spec.resume.as_ref().is_some_and(|r| r.inspect) {
             live.set_inspect();
         }

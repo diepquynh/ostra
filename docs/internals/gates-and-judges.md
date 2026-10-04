@@ -56,6 +56,7 @@ the LOW findings, and takes an optional change request:
 | `execution_failed` | An execution failed after its automatic retry, or you stopped it | `retry` or `abandon` |
 | `skill_approval` | The init flow proposed skills, in an init session or in the build of a project the session created | Per skill: generate, regenerate, reuse, or drop |
 | `budget_reached` | The session spent its budget | `raise` (with the extra dollars as text) or `stop` |
+| `stage_review` | A workflow's custom stage failed and its `on_fail` asks, or it needs a decision from you (Rule WF5) | After a failure: `retry` (optionally with guidance), `continue`, or `stop`. For a question: one of its options, `other` with your answer as text, or `stop` |
 
 ### Open questions
 
@@ -187,13 +188,34 @@ not a positive number. `stop` fails the session with the amount spent.
 
 ![The budget gate with the amount spent, the budget, and Raise the budget and Stop the session buttons](../images/console/gate-budget.png)
 
+### Stage review
+
+A custom stage of a [workflow](workflows.md) opens this gate in two cases: its agent submitted `needs_user` with a
+question and options, or it submitted `fail` and the stage's `on_fail` is `gate`, or `retry` with its rounds used
+up. A [plugin's](plugins.md) stage logic opens it the same way when it decides `ask` or `fail`. The card shows the
+stage, the scope (`phase:<n>` or `project:<key>`), the round and its limit, the summary, the findings, and for a
+question its options, recommended first.
+
+`validate_answer` accepts `retry`, `continue`, or `stop` after a failure, and after a question one of the options,
+`other` with non-empty text, or `stop`. The fold (`stage_gate_answered` in
+[`workflow.rs`](../../crates/ostra-engine/src/workflow.rs)) applies it:
+
+- `stop` stops the session with the stage named in the error.
+- `continue` records the failure and lets the stages after it run.
+- `retry` runs the stage again with its last findings and your guidance as a user note. Any answer to a
+  question is kept as a user note, and the stage runs again with it. Each new round continues the agent's
+  conversation (Rule H5), and for a plugin stage the plugin decides again.
+
+These answers go to the stage directly, not through the Route answer judge, because only that stage reads them.
+
 ## YOLO: the engine answers
 
 YOLO means the orchestrator decides everything. It can be the workspace default (`yolo.default`) or toggled per
 session at any time, taking effect from the next gate or tool call.
 
 With YOLO on, the planner emits a `YoloAnswer` step for every open gate except permission asks, the budget
-gate, and the failure gate of an execution you stopped (`judge_input::yolo_leaves_open`). For each gate, `judge_input::yolo_plan` in
+gate, the failure gate of an execution you stopped, and a stage that failed every round it may run
+(`judge_input::yolo_leaves_open`). For each gate, `judge_input::yolo_plan` in
 [`judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) returns one of three things: a fixed answer with a
 stated reason, a call to the YOLO-answer judge with a JSON schema for that gate's answer, or nothing.
 
@@ -211,6 +233,7 @@ stated reason, a call to the YOLO-answer judge with a JSON schema for that gate'
 | `skill_approval` | Fixed: the proposal's default dispositions. |
 | `permission` | Answered inside the execution: the session behaves as `bypass`, so the ask never waits. This includes `ProjectCreate`, which asks in every mode without YOLO. |
 | `budget_reached` | None. The gate stays open for the user. |
+| `stage_review` | A question takes its first option, which the agent lists as recommended; with no options, `other` with "Decide as you recommend and go on." A failure is `retry` while the stage has rounds left; after its last round the gate stays open for you, because only you can accept a check that keeps failing. |
 
 The judge's answer is not trusted blindly. `yolo_answer_from_judge` turns it into a gate answer and enforces what
 must stay true: every question has an answer, and an approval stands only when the fact-check passed. The fold

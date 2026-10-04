@@ -155,7 +155,7 @@ What happens next depends on why the model stopped:
 | `pause_turn` | The provider paused a long server-side tool turn. The loop continues it. |
 | Refusal | Ends the run as `error` with the refusal category and text. |
 | Output limit, no tool call | Asks the model to continue from where it stopped, at most 3 times. |
-| Plain end of turn, no tool call | Reminds the model once to call the submit tool. A second turn with no tool call ends the run as `ok` with no submit, which the engine treats as a failed step. |
+| Plain end of turn, no tool call | Hands over messages queued for the run, when there are any, and goes on. Otherwise reminds the model once to call the submit tool, or, when a sender waits for this run's reply (Rule SM6), to send that reply first. A second turn with no tool call ends the run as `ok` with no submit, which the engine treats as a failed step. |
 
 The loop has a ceiling of 400 turns. A run that reaches it without submitting ends as an error, because an
 agent that has not submitted after 400 turns is looping.
@@ -194,9 +194,15 @@ The submit call is not a tool that does something. It is how the run ends. When 
 1. Coerces stringified JSON fields back into objects, because models sometimes send a nested object as a
    string.
 2. Runs the policy on it like any other call.
-3. Validates it against the agent's submit schema (`validate_submit`) and runs the document checks.
-4. Refuses an `ok` submit when the agent has a declared report file that does not exist yet, because the engine
-   reads that file next. The code reviewer is exempt.
+3. Asks the engine whether a sender waits for this run's reply (`ExecutionHost::submit_blocked`, Rule SM6). If one
+   does, the submit is refused with the instruction to send that sender a message first, naming its subagent ID.
+4. Validates it against the schema the run was given (`validate_submit_with`), keyed on the run's result contract
+   (`ExecContext.contract`, Rule CA5) and never on the agent's name: a built-in contract's struct, the `stage`
+   contract with the agent's declared `data` shape, or a plugin contract's schema. The document checks
+   (`doc::check_submit`) also follow the contract.
+5. Refuses an `ok` submit when the agent has a declared report file that does not exist yet, because the engine
+   reads that file next. A `review` run is exempt (`Contract::report_required`), because its ledger exists only
+   when it found something.
 
 A refused submit is an error result, and the model tries again. An accepted submit ends the run at once: any
 other tool calls in the same turn are answered "Not run" and never execute. The submit's `status` field decides
@@ -232,7 +238,7 @@ every message after the system prompt and tools changes, and that is the reason 
 nearly full. Summarizing costs one request over the whole conversation, which is added to the execution's usage.
 
 The new window is stored in the transcript as one `compaction` record. Reading a transcript back starts from the
-latest such record, so a resumed run, a plan revision round, or a consult continues from the summary instead of
+latest such record, so a resumed run, a plan revision round, or a message run continues from the summary instead of
 the full history. If no summary comes back (the summary was cut off, the model refused, or the request failed),
 the run continues without it and tries again only after the context grows by 2% of the window, because each try
 sends the whole conversation.
@@ -266,10 +272,46 @@ records only the new turn, and the request it sends starts with the same message
 the provider's prompt cache still covers that prefix while the cache lives. A run resumed from a different
 execution, such as a retry after a failure, copies the whole rebuilt transcript into its own.
 
-The same two paths serve subagent coordination. A `SubagentAsk` ends the run with status `waiting`, its tool
-result recorded like a submit's, and the answer later resumes it in place with the answer as the note. A pair-loop
-round or a consult run continues another execution's conversation, so it copies that transcript and adds the new
-spawn block as the note.
+The same two paths serve messages between subagents. A `SendMessage` with `wait: true`, or a `WaitForMessage`,
+ends the run with status `waiting`, its tool result recorded like a submit's, and the next message for the run
+later resumes it in place with the messages as the note. A pair-loop round or a message run (a subagent continued
+for messages sent after its run ended) continues another execution's conversation, so it copies that transcript
+and adds the new spawn block, or the messages, as the note.
+
+### Messages at the turn boundary
+
+A message to a running native run is never spliced into a request in flight (Rule SM2). After a turn's tool calls
+have run, the loop asks the host for the messages queued for this run (`ExecutionHost::take_messages`) and appends
+them as one text block after the tool results, in the same user turn. Everything before that turn is unchanged,
+so the next request still starts with the cached prefix. A turn with no tool calls is a boundary too: queued
+messages come first, and the submit reminder waits. `take_messages` records each hand-over as a
+`MessagesDelivered` event before it returns the text, so the fold knows which run read which message.
+
+### Programmatic agents
+
+A plugin agent without a prompt runs in its plugin's code instead of this loop (Rule PL2,
+`crates/ostra-exec-native/src/program.rs`). The engine routes it to `NativeExecutor::run_program`, whatever
+executor its settings name, and resolves its route again on the native executor, whose model serves its model
+calls. It goes through the same setup as the
+loop (`Run::setup`): the provider, the tool environment with its sandbox, the MCP tools, and the policy. The plugin
+then gets its task (the spawn block and brief as `first_message`, the repo root, the session dir, the model, the
+submit schema, and the names of its tools) and an `AgentCalls` handle:
+
+- `tool(name, input)` runs one tool through the same `tool_end` path a model's call takes: canonicalize, check,
+  ask, run, observe. Only the tools its capabilities give it are offered; any other name, and the submit tool,
+  is an error result. Messages queued for the run follow the tool's output. A `SendMessage` with `wait` or a
+  `WaitForMessage` keeps the call open until a message arrives (`ExecutionHost::wait_for_wake`), and the message
+  is the rest of its output, so the agent waits alive like a harness run.
+- `complete(request)` makes one model call on the agent's route, with the run's effort, streams it to the
+  Activity view, and adds its usage to the run's.
+- `status(text)` adds a line to the Activity view.
+
+Tool and model calls together are capped at 2,000 per run (`MAX_PROGRAM_CALLS`), the counterpart of the loop's
+400 turns. When the plugin returns, the result goes through the same checks as a model's submit: a sender still
+owed a reply fails the run, the submit is validated against the run's schema (`validate_submit_with`), and a declared report
+file must exist unless the contract is `review`. The document check of the model loop (`doc::check_submit`) does
+not run on a programmatic result. A plugin error, an invalid result, or a missing reply ends the run as `error`. The run is bounded by its
+timeout and cancel like any native run.
 
 Known weakness: a continued conversation loses the prompt cache when its effort changed. Effort is resolved fresh
 for each execution from the agent's default and the workspace's `routing.effort` settings, and it is sent as the
@@ -357,7 +399,7 @@ Config files that hold the bridge token are written owner-only.
 ### Keeping the repository's own config out
 
 A coding CLI started in a folder reads that folder's own settings, and those can carry hooks and MCP servers.
-Those would run outside Ostra's guards. Each planner shuts that door in its CLI's own way:
+Those would run outside Ostra's guards. Each planner turns them off in its CLI's own way:
 
 - **Claude Code** loads only your user settings and Ostra's (`--setting-sources user`), and only Ostra's MCP
   config (`--strict-mcp-config`). Ostra's hooks are passed as flag settings, which a user settings file cannot
@@ -441,9 +483,13 @@ with no tools, so a global registration stays inert.
 
 It serves:
 
-- `submit_<agent>`, the only submit tool this agent may call.
-- `report`, `document`, `memory`, `memory_recall`, and `docs_search`, as the agent's capabilities allow.
+- `submit_<agent>`, the only submit tool this agent may call, with the schema the run was given. The executor
+  hands the run's contract to the live execution (`LiveExecution::set_contract`), and the bridge validates the
+  submit and runs the document checks by that contract, as the native loop does.
+- `report`, `memory`, `memory_recall`, and `docs_search`, as the agent's capabilities allow, and `document` with
+  a schema for each typed document the run is granted (Rule CA6).
 - `code_outline`, `code_find`, and the rest of the code navigation tools.
+- `list_agents`, `send_message`, and `wait_for_message`, to an agent with the `coordinate` capability.
 - `project_list` and `project_create`, only to an execution whose agent has the `manage_projects` capability
   (the implementer), because the shim lists them only when the server gave the execution a management handle.
 - Each workspace MCP server's tools, as `<server>__<tool>`. The CLI sees them as `mcp__ostra__<server>__<tool>`.
@@ -473,11 +519,22 @@ half second. On each pass it checks the following:
   - "unknown model" or "failed to construct executor" ends the run as a launch failure.
 - **Quiet.** A session with no hook event and no terminal output for 4 minutes is nudged: Ostra types the
   submit instruction into the terminal, as if you had. After two nudges it ends the run as an error.
-- **Waiting.** After a `subagent_ask` or a `subagent_reply` that goes back to waiting, the loop stops supervising
-  and waits for the engine's message. A message that is a question marks the run as owing an answer, so its
-  turned-back Stops and typed nudges name `subagent_reply` and its submit is refused until it replies. It frees the run's execution slot while it waits, a Stop without a submit is
-  let through, and the wait is added to the deadline. The message is typed into the terminal, and supervising
-  resumes. A `subagent_reply` from a consult run is recorded like a submit and ends the run.
+- **Waiting.** After a `send_message` with `wait` or a `wait_for_message`, the bridge marks the run as waiting, and
+  the loop stops supervising and waits for the engine's message (`ExecutionHost::wait_for_wake`). It frees the run's
+  execution slot while it waits, a Stop without a submit is let through, and the wait is added to the deadline.
+  The message is typed into the terminal, and supervising resumes. On the engine's side
+  (`EngineHost::wait_for_wake` in `crates/ostra-engine/src/runner.rs`), the wait checks the fold for messages
+  every time an event is appended to the workspace's sessions, because `Inner::append` rings a bell the wait
+  listens to, and at least every 2 seconds. It gives back the slot on its first empty check and takes a slot
+  again before it returns. It returns nothing only when the session ended or the run no longer waits, and a run
+  that can get no message is woken with a notice instead (Rule SM3).
+- **Messages for a running run.** A message is never typed into a turn in progress (Rule SM2). When the CLI's turn
+  ends, the Stop hook asks the engine whether messages are queued for the run (`ExecutionHost::has_messages`). If
+  they are and the run has not submitted, the Stop is let through and the run is marked as waiting, so the next
+  pass of the loop takes the messages at once and types them in.
+- **Owed replies.** When a sender waits for this run's reply (Rule SM6), turned-back Stops and typed nudges name
+  `send_message` and that sender's ID, and the bridge refuses the submit until the reply is sent. The bridge asks
+  the engine each time (`submit_blocked`), so a duty that arrives with a message mid-run counts too.
 - **The budget.** Past `timeout_secs`, the run ends.
 
 The terminal itself is a `vt100` screen model kept in the server (`pty.rs`). A browser that attaches in the

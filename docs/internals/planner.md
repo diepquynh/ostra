@@ -70,7 +70,11 @@ A `Step` is one unit of work the runner knows how to perform:
 | `AnnounceBlocked` | Appends `PhaseBlocked`, which also sends a push notification. |
 | `FinishInit` | Ends the init of a project the session created (rule O4): checks that `INVENTORY.md` and a valid `project.toml` exist, then marks the project initialized and appends `ProjectInitFinished`. When a file is missing or invalid it appends `InitStepFailed` against the generate-inventory run instead, so the advisor looks at it (rule O5). |
 | `RecordInitProblem` | Appends `InitStepFailed` for an init step that finished but left nothing to build on, such as a detect with no slices, so the advisor looks at it (rule O5). |
-| `Deliver` | Hands a question or an answer to a harness run that waits for it with its process alive (Rule H2): appends `MessageDelivered` and passes the message to the waiting executor, which types it into the terminal. |
+| `ResolveWorkflow` | Reads the workspace's workflow files, resolves the named workflow or the default for the category, checks that every custom stage names an agent that returns `stage` or a plugin contract, that every plugin stage is one the workspace has, and that every agent bound to a built-in stage returns the contract it fills (`check_runnable`, Rule WF8), and appends `WorkflowResolved` (Rule WF1). A workflow that cannot run appends `SessionFailed` instead. See [Workflows](workflows.md). |
+| `HandleResult` | Asks the plugin that owns a run's result contract to handle the run's result, and appends `ResultHandled`, or a `fail` outcome when the plugin cannot handle it (Rule PL5). See [Plugins](plugins.md). |
+| `DecideStage` | Asks a plugin's stage logic for the next decision about its workflow stage and appends `StageDecided`, or a `fail` decision when the plugin cannot decide (Rule PL3). See [Plugins](plugins.md). |
+| `SkipStage` | Appends `StageSkipped` for a workflow node whose conditions do not hold once the nodes it waits for are done (Rule WB5). See [Workflows](workflows.md#conditions-and-skipping). |
+| `RunNode` | Runs a transform node's function, or a prompt node's model call through the judge path, on the node's resolved inputs, and appends `NodeRan` with the output or the error and the call's cost (Rules WB2 and WB3). A prompt node's step is held by the budget guard like a spawn. See [Workflows](workflows.md#transform-nodes). |
 | `Complete` | Writes the completion report to the session folder and appends `SessionCompleted`. |
 | `Fail` | Appends `SessionFailed`. |
 
@@ -130,16 +134,27 @@ branches of the planner that reach the same conclusion produce one step.
   asks again on its next pass, so a held step starts once the init ends.
 - **Resume after pause (Rule P2).** When the session has a paused run for the same purpose, the spawn is marked
   to resume it, so the runner continues that execution instead of starting a new one.
-- **A run that waits for an answer (Rule H2).** A native run that asked another subagent ended with status
-  `waiting`, which its stage sees as a paused run. Its stage's next spawn is dropped until the answer or a
-  question for it is ready, and then marked to resume it in place; the runner uses the message as the resume note.
+- **A run that waits for a message (Rule SM3).** A native run that paused itself ended with status `waiting`,
+  which its stage sees as a paused run. Its stage's next spawn is dropped until a message for it is ready, and
+  then marked to resume it in place; the runner hands over the messages as the resume note.
 - **Pair loops continue conversations (Rules H5 to H7).** A fact-check round, a re-pass, a fix, and a re-review
   are marked to continue the conversation of the run before them, from `SessionState::continuation`, unless a
   rule says to start fresh. A spawn that continues a conversation with a live run is dropped until that run ends,
   so a conversation never has two live runs.
 
-After the stage logic, a coordination pass adds a consult spawn for each question to a subagent that ended its run,
-and a `Deliver` step for each harness run whose message is ready.
+After the stage logic, a coordination pass handles messages between subagents (HANDOVER 10.8) and plugin results:
+
+- A run that returned a plugin contract and has no handled outcome yet gets a `HandleResult` step (Rule PL5),
+  because nothing reads such a result before its plugin handled it.
+- A native run that ended `waiting` and has a message ready is resumed in place, unless a stage spawn in the same
+  pass already resumes it (Rule SM3).
+- A subagent whose run ended `ok`, `stuck`, or `handoff` and that was sent a message gets a new run that
+  continues its conversation with its own tools (`Message` purpose, Rule SM4).
+- A message that starts a helper whose contract is not `research` spawns that helper (`Helper` purpose, Rule
+  SM7); a `research` helper runs as a research task with that agent.
+
+A running run needs no step: its executor takes its messages at its next turn boundary, and a waiting harness or
+programmatic run is woken by its executor (Rule SM2).
 
 And at the top of `run`, before any stage logic:
 
@@ -158,22 +173,38 @@ if !s.created || s.is_terminal() || s.paused {
    execution answers those), budget gates, and the failure gate of an execution you stopped (Rule P4).
 2. **Init sessions** take their own flow: detect, scouts, propose, skill approval, generate skills, generate the
    inventory.
-3. **No category yet** means a `Classify` judge. Answers waiting for the Route answer judge get their judge step
+3. **A named workflow** is resolved first, with a `ResolveWorkflow` step, because its base sets the category
+   (Rule WF1).
+4. **No category yet** means a `Classify` judge. Answers waiting for the Route answer judge get their judge step
    here, and context you added that waits for it holds everything else: the planner returns only those judge
    steps until the judge decides (Rule C2).
-4. **Explore tasks** spawn whatever the stage, because a rescue can add a research task in the middle of a
+5. **The workflow.** A new session that has no workflow recorded gets a `ResolveWorkflow` step and nothing else,
+   except a QUICK ANSWER session, which runs no workflow.
+   A session from a log written before workflows runs the built-in workflow of its category.
+6. **Explore tasks** spawn whatever the stage, because a rescue can add a research task in the middle of a
    build.
-5. **The category's path.** RESEARCH completes after explore. SPEC adds the spec flow. PLAN adds the plan flow.
-   IMPLEMENT asks the `Track` judge after research. The full track adds the spec flow, the Stakes judge, and
-   the plan flow unless stakes are low; the light track goes to the phases directly. Both then run the phases,
-   the implementation review gate with its feedback rounds (Rule F1), and, once you accept, the closing stages.
-   VERIFY, PROMPT, and QUICK CHANGE go straight to phases. TEST goes to the closing stages.
-6. **Completion** once nothing is running and no gate is open: first the `Completion` judge, then `Complete`
-   with the report it wrote.
+7. **The workflow walk.** QUICK ANSWER keeps its own flow. Every other category walks its workflow's stages in
+   dependency order (`workflow_flow`): a stage runs once every stage in its `after` list is done. A built-in
+   stage calls the same function the fixed pipeline called (`builtin_stage`): research runs `explore_complete`,
+   track and stakes ask their judges, spec and plan run `spec_flow` and `plan_flow`, build runs `phases` and
+   the phase stages, feedback runs `implementation_review` (Rule F1), and closing runs `closing_stages`. A
+   custom stage runs its agent or asks its plugin. See [Workflows](workflows.md).
 
-Each stage function returns whether its stage is finished, and later stages run only when earlier ones say yes.
-That is how a rule like D1 is enforced: `spec_flow` refuses to start with no research document, and there is no
-code path from explore to plan that skips it.
+   Every agent a built-in stage spawns comes from `SessionState::agent_for(stage, contract)`: the agent the
+   workflow binds to that contract in that stage, else the standard plugin's agent for the contract
+   (`Standard::default_for`, Rules WF8 and PL4). The planner never names an agent. A work loop records the
+   contracts of its work and fix runs (`WorkLoop::work` and `fix`, such as `implementation`, `prompt`, or
+   `tests`), not agents, because the fold creates loops at Classify time, before the workflow is resolved, and
+   the planner binds the agent when it spawns. Steps outside any built-in stage, such as a quick answer or a
+   created project's init, take the standard agent for their contract (`default_agent`).
+8. **Completion** once every stage is done, nothing is running, and no gate is open: first the `Completion`
+   judge, then `Complete` with the report it wrote.
+
+Each stage returns whether it is finished, and stages after it run only when it says yes. That is how a rule like
+D1 is enforced: `spec_flow` refuses to start with no research document, and a workflow must keep research before
+the spec (Rule WF2), so there is no path from explore to plan that skips it. The built-in workflow of each
+category chains its built-in stages in the order the fixed pipeline ran them, so a workspace without workflow
+files plans exactly as before, and the conformance fixtures prove it.
 
 Phases show the style. This is the whole scheduler for implement loops:
 
@@ -251,9 +282,9 @@ A few consequences of this shape:
 
 `limits.max_parallel_executions` in workspace settings caps how many executions run at once across the whole
 workspace. `perform_spawn` takes a slot before it does anything else and holds it for the life of the execution;
-dropping the slot frees it and wakes waiters. The one exception is a harness run that waits for another
-subagent's answer: it gives its slot back while it waits and takes one again before it continues (Rule H2),
-because otherwise a single slot would deadlock the asker and the helper it waits for. The planner can ask for six scouts at once, and the runner will start
+dropping the slot frees it and wakes waiters. The one exception is a harness or programmatic run that waits
+for a message: it gives its slot back while it waits and takes one again before it continues (Rule SM3), because
+otherwise a single slot would deadlock the sender and the subagent it waits for. The planner can ask for six scouts at once, and the runner will start
 them as slots free up. This is why fan-out stages keep their own caps too (`init::MAX_SCOUTS` is 6): the slot
 limiter bounds concurrency, and the caps bound the total.
 
@@ -345,8 +376,8 @@ can waive it (Hard rule 21).
 
 Fixtures are the contract for changing the engine. A new rule or a changed rule means a new or changed fixture
 in the same change, and the rule's ID appears both in the fixture's section comment and at the line in
-`plan.rs` or `state.rs` that implements it. If you want to see what Ostra does in a situation, the fastest way
-is often to write the history as a fixture and print `h.summaries()`.
+`plan.rs` or `state.rs` that implements it. If you want to see what Ostra does in a situation, write the history
+as a fixture and print `h.summaries()`, because that runs the planner without a server or a model.
 
 ### Beyond fixtures
 
@@ -378,4 +409,8 @@ happens next would be invisible to fixtures and lost on restart, so it does not 
 | Loop state the planner reads (`WorkLoop`, `LoopNext`) | `crates/ostra-engine/src/state.rs` |
 | Driver loop, `perform`, slots, `validate_answer` | `crates/ostra-engine/src/runner.rs` |
 | Spawn parameters from planner inputs | `crates/ostra-engine/src/factory.rs` |
+| The workflow walk (`workflow_flow`, `builtin_stage`, `build_done`, `phase_stages`) | `crates/ostra-engine/src/plan.rs` |
+| Custom stage fold and actions | `crates/ostra-engine/src/workflow.rs` |
+| Plugin stage planning and the stage view | `crates/ostra-engine/src/plugin_stage.rs` |
+| Messages in the fold, `wakes_due`, `continuations_due`, `helpers_due` | `crates/ostra-engine/src/coord.rs` |
 | Conformance fixtures and the `H` helper | `tests/conformance/main.rs` |

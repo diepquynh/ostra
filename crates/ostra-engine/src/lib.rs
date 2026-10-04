@@ -10,11 +10,13 @@ pub mod init;
 pub mod judge;
 pub mod judge_input;
 pub mod plan;
+mod plugin_stage;
 pub mod runner;
 pub mod services;
 pub mod state;
 pub mod uploads;
 pub mod view;
+pub mod workflow;
 
 pub use plan::{PlanCtx, SpawnInputs, SpawnRequest, Step, next_steps};
 pub use runner::{Engine, EngineError, EngineNotice, suggest_rule};

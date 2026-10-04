@@ -239,6 +239,11 @@ export const STAGES: Record<StageKind, StageInfo> = {
     produces: "INVENTORY.md and project.toml, the tables every agent routes by.",
     protects: "Routing work by skill descriptions instead of by name.",
   },
+  custom: {
+    label: "Workflow stage",
+    produces: "The result of a stage your workflow adds: a verdict, a summary, and findings.",
+    protects: "Skipping a check your team requires between Ostra's own stages.",
+  },
 };
 
 /** The collapsible note shown the first time a spec or plan is viewed. */

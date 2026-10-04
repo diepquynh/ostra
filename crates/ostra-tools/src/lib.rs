@@ -44,6 +44,8 @@ pub type LiveOutput = Arc<dyn Fn(&str, &str) + Send + Sync>;
 #[derive(Clone)]
 pub struct ToolEnvConfig {
     pub agent: AgentName,
+    /// Rule CA6: the typed documents the run is granted, which the Document tool writes.
+    pub doc_kinds: Vec<ostra_core::doc::DocKind>,
     pub repo_root: PathBuf,
     /// Empty outside a workspace. Custom skills among its artifacts load by name.
     pub workspace_root: PathBuf,
@@ -282,7 +284,7 @@ pub async fn execute(
 ) -> ToolOutput {
     let started = Instant::now();
     let mut input = call.input.clone();
-    if let Some(schema) = defs::input_schema(&call.tool, env.config().agent) {
+    if let Some(schema) = defs::input_schema(&call.tool, &env.config().doc_kinds) {
         ostra_core::args::coerce_json_strings(&mut input, &schema);
     }
     let input = &input;
@@ -384,6 +386,7 @@ pub(crate) mod testutil {
         let session = ostra_core::paths::canonical(&session).unwrap();
         ToolEnv::new(ToolEnvConfig {
             agent: AgentName::Implementer,
+            doc_kinds: vec![],
             report_file: Some(session.join("ostra-implementer-phase-1.md")),
             memory_db: session.join("memory/knowledge.sqlite3"),
             memory_source: "implementer x_test".into(),
