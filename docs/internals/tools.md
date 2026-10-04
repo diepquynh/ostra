@@ -1,24 +1,24 @@
 # Tools
 
-A tool is the only way an agent touches anything: a file, the shell, the web, the project's memory, or the
-engine. This page describes every tool Ostra gives an agent, what each one does, and how an agent ends up with
-the tools it has.
+An agent can touch a file, the shell, the web, the memory of the project, or the engine only through a tool.
+This page describes each tool that Ostra gives to an agent and what the tool does. It also tells how an agent
+gets its tools.
 
-Two ideas shape all of it:
+Two ideas control the design:
 
-- **The names are Claude Code's.** Ostra's native tools are called `Read`, `Write`, `Edit`, `Bash`, `Grep`,
-  `Glob`, `Skill`, `WebSearch`, and `WebFetch`, with the same input fields as Claude Code's tools of those
-  names. The agent prompts were written and tuned against those tools, so reusing their shape keeps the prompts
-  working on both executors. The policy also judges every call in that shape, whichever executor made it.
-- **Tools do the work and the policy decides.** Nothing in `ostra-tools` checks permissions or guards. The
-  executor runs `ExecutionPolicy::check` before a tool runs (see [Executors](executors.md)), and a tool is only
-  ever called with a call the policy already allowed. That keeps each tool small and puts every rule in one
-  place, [Agent containment](../security/agent-containment.md).
+- **The names are the names of Claude Code.** The native tools of Ostra are `Read`, `Write`, `Edit`, `Bash`,
+  `Grep`, `Glob`, `Skill`, `WebSearch`, and `WebFetch`. They have the same input fields as the Claude Code tools
+  with those names. The agent prompts were written and tuned for those tools. Ostra uses the same shape, so the
+  prompts work on both executors. The policy also judges each call in that shape, from each executor.
+- **Tools do the work, and the policy decides.** No code in `ostra-tools` checks permissions or guards. The
+  executor runs `ExecutionPolicy::check` before a tool runs (see [Executors](executors.md)). A tool gets only a
+  call that the policy allowed. Thus each tool stays small, and all rules are in one place:
+  [Agent containment](../security/agent-containment.md).
 
 ## How an agent gets its tools
 
-Agents do not ask for tools by name. Each agent's `agent.toml` lists **capabilities**, and each executor maps a
-capability to its own tool:
+Agents do not ask for tools by name. The `agent.toml` of each agent lists **capabilities**. Each executor maps
+a capability to its own tool:
 
 ```toml
 # assets/agents/implementer/agent.toml
@@ -45,24 +45,25 @@ capabilities = ["read", "edit", "write", "shell", "search_text", "glob", "skill"
 | `code` | `CodeOutline`, `CodeFind`, ... | `mcp__ostra__code_*` | `code_*` | `code_*` | `code_*` |
 | `manage_projects` | `ProjectList`, `ProjectCreate` | `mcp__ostra__project_list`, `mcp__ostra__project_create` | `project_*` | `project_*` | `project_*` |
 
-The table is `assets/tool-mapping.toml`. The prompt renderer reads it and writes each agent's prompt with the
-tool names of the executor it runs on, so an implementer on Codex is told to edit with `apply_patch` and an
-implementer on the native loop is told to use `Edit`. For the capabilities a CLI serves differently, the
-renderer adds a short instruction, for example how to load a skill in a CLI that has no skill tool.
+The table is `assets/tool-mapping.toml`. The prompt renderer reads it. The renderer writes the prompt of each
+agent with the tool names of the executor that the agent runs on. Thus the prompt tells an implementer on Codex
+to edit with `apply_patch`, and it tells an implementer on the native loop to use `Edit`. Some capabilities work
+differently in a CLI. For these capabilities, the renderer adds a short instruction. An example is how to load
+a skill in a CLI that has no skill tool.
 
-Two consequences follow from the table:
+The table has two results:
 
-- **On a harness, the file and shell tools are the CLI's own.** Ostra does not replace Claude Code's `Read` or
-  Codex's `apply_patch`. It checks each call through the hook bridge and lets the CLI run it. The adapters turn
-  each CLI's call back into the canonical shape before the policy sees it, so `apply_patch` is judged as writes
-  to the files the patch touches.
-- **Ostra's own tools come from Ostra everywhere.** `Report`, `Document`, `Memory`, `MemoryRecall`, `DocsSearch`, the
-  code navigation tools, the project management tools, the submit tool, and the workspace MCP tools are Ostra's code
-  on every executor. The native
-  loop calls them directly. A harness reaches them through the `ostra` MCP server.
+- **On a harness, the file and shell tools are the tools of the CLI.** Ostra does not replace the `Read` tool
+  of Claude Code or the `apply_patch` tool of Codex. Ostra checks each call through the hook bridge and lets
+  the CLI run it. Before the policy sees a call, the adapters change it back into the canonical shape. Thus the
+  policy judges `apply_patch` as writes to the files that the patch touches.
+- **The tools of Ostra come from Ostra on all executors.** These tools are Ostra code on each executor:
+  `Report`, `Document`, `Memory`, `MemoryRecall`, `DocsSearch`, the code navigation tools, the project
+  management tools, the submit tool, and the workspace MCP tools. The native loop calls them directly. A
+  harness gets them through the `ostra` MCP server.
 
-Capabilities are the upper bound. A reviewer has no `write` capability, so it has no `Write` tool at all, on any
-executor. The policy then narrows further what the tools an agent has may touch.
+Capabilities set the upper limit. A reviewer has no `write` capability, so it has no `Write` tool on any
+executor. Then the policy sets more limits on what the tools of an agent can touch.
 
 ### Who gets what
 
@@ -82,50 +83,54 @@ executor. The policy then narrows further what the tools an agent has may touch.
 | quick-answer | read, search_text, glob, web_search, web_fetch, memory_recall, code, docs_search |
 | advisor | read, shell, search_text, glob, web_search, web_fetch, memory_recall, docs_search |
 
-Every agent also gets its own `submit_<agent>` tool and the workspace's MCP tools. [Agents](agents.md) covers
-what each agent is for.
+Each agent also gets its own `submit_<agent>` tool and the MCP tools of the workspace. [Agents](agents.md)
+tells what each agent is for.
 
 ## How the policy sees each tool
 
-The permission layer sorts tools into families, and the family decides which rules apply to a call:
+The permission layer puts tools into families. The family sets which rules apply to a call:
 
 | Family | Tools | How a call is judged |
 | --- | --- | --- |
-| Read | `Read`, `Grep`, `Glob` | Allowed unless a `deny` or `ask` rule names the path. `Read(~/.ssh/**)` style rules apply. |
-| Edit | `Write`, `Edit`, and harness equivalents (`MultiEdit`, `NotebookEdit`, `ApplyPatch`) | Each target path is judged. The session dir and the OS temp dir are allowed. Other paths follow the rules, then the permission mode: `acceptEdits` allows edits inside the project. A path that runs code later is judged by the mode even inside the project. |
-| Bash | `Bash` | The command is parsed with tree-sitter-bash and each simple command is matched separately, so `npm test && curl evil` does not pass on `Bash(npm test *)`. A command Ostra cannot parse, or one that uses shell syntax it does not model, asks, and plan mode refuses it. |
-| Other (opaque shells) | `PowerShell`, `Cmd` (Windows only) | Not parsed. Refused when the text names Ostra's own files, engine state, or a credential store; otherwise matched against `PowerShell(...)` and `Cmd(...)` rules, then the mode, which never allows one unasked. |
-| WebFetch | `WebFetch` | Matched against `WebFetch(domain:...)` rules. With no rule, it asks, except in bypass mode. |
-| Other (changes Ostra) | `ProjectCreate` | Always asks, in every mode including bypass, and no allow rule stands in for the answer (rule O1). A `deny` rule refuses it, plan mode refuses it, and only YOLO answers the ask. |
-| Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, `DocsSearch`, `ProjectList`, the code tools, `submit_*`, workspace MCP tools | Ostra's own tools are allowed. `Skill` with a `path` is judged as a Read of that file. Workspace MCP tools are allowed unless a rule says otherwise, and plan mode allows only those their server marks read-only (rule M1). |
+| Read | `Read`, `Grep`, `Glob` | Allowed, unless a `deny` or `ask` rule names the path. Rules in the style of `Read(~/.ssh/**)` apply. |
+| Edit | `Write`, `Edit`, and harness equivalents (`MultiEdit`, `NotebookEdit`, `ApplyPatch`) | The policy judges each target path. The session dir and the OS temp dir are allowed. Other paths follow the rules, then the permission mode. `acceptEdits` allows edits inside the project. The mode judges a path that runs code later, also inside the project. |
+| Bash | `Bash` | Tree-sitter-bash parses the command. The policy matches each simple command separately, so `npm test && curl evil` does not pass on `Bash(npm test *)`. If Ostra cannot parse a command, or the command uses shell syntax that Ostra does not model, the policy asks. Plan mode refuses it. |
+| Other (opaque shells) | `PowerShell`, `Cmd` (Windows only) | Not parsed. Refused when the text names the files of Ostra, the engine state, or a credential store. Else the policy matches it against `PowerShell(...)` and `Cmd(...)` rules, then the mode. The mode never allows one without an ask. |
+| WebFetch | `WebFetch` | Matched against `WebFetch(domain:...)` rules. If no rule matches, the policy asks, but not in bypass mode. |
+| Other (changes Ostra) | `ProjectCreate` | Always asks, in each mode, also in bypass mode. No allow rule can replace the answer (rule O1). A `deny` rule refuses it, and plan mode refuses it. Only YOLO answers the ask. |
+| Other | `Skill`, `WebSearch`, `Report`, `Document`, `Memory`, `MemoryRecall`, `DocsSearch`, `ProjectList`, the code tools, `submit_*`, workspace MCP tools | The tools of Ostra are allowed. The policy judges `Skill` with a `path` as a Read of that file. Workspace MCP tools are allowed if no rule says differently. Plan mode allows only the MCP tools that their server marks read-only (rule M1). |
 
-The guards (write scope, state ownership, the report path, the lesson gate, the build streak, self-protection,
-and the management tools guard) run before this, on every family. Write scope, the report path, and most of
-self-protection run only with tool enforcement enabled. They are on [Agent containment](../security/agent-containment.md).
+The guards run before the family rules, on each family. The guards are write scope, state ownership, the
+report path, the lesson gate, the build streak, self-protection, and the management tools guard. Write scope,
+the report path, and most of self-protection run only when tool enforcement is on.
+[Agent containment](../security/agent-containment.md) describes them.
 
-The Permissions tab of Settings sets the mode, the sandbox (its mode, network choice, allowed hosts, and decoy
-files), and the allow, ask, and deny rules, and shows the global rules read-only:
+The Permissions tab of Settings sets the mode and the allow, ask, and deny rules. It also sets the sandbox: its
+mode, the network choice, the allowed hosts, and the decoy files. It shows the global rules as read-only:
 
 ![The Permissions settings tab with mode, sandbox, network, decoy files, rules, and global rules](../images/console/settings-permissions.png)
 
 ## One call, start to finish
 
-Before the policy sees a call, `ToolEnv::canonical_call` rewrites it into the form the tool will run:
+Before the policy sees a call, `ToolEnv::canonical_call` changes it into the form that the tool will run:
 
-- A relative `file_path` or `path` becomes absolute against the shell's current directory.
-- `Bash` gets a `cwd` field set to that directory, replacing any `cwd` the model sent.
-- A `WebFetch` URL is replaced with its parsed form.
+- A relative `file_path` or `path` becomes absolute, relative to the current directory of the shell.
+- `Bash` gets a `cwd` field set to that directory. This field replaces a `cwd` that the model sent.
+- Ostra replaces a `WebFetch` URL with its parsed form.
 
-The policy checks that rewritten call, and the tool runs that same call. Without this step a relative path could
-be checked against one directory and written in another after a `cd`, or a URL such as
-`https://evil.example\@docs.rs/x` could look like `docs.rs` to a rule and reach `evil.example`.
+The policy checks that changed call, and the tool runs the same call. This step stops two problems:
 
-`execute` then coerces any field the model sent as a JSON string back into the type its schema says, runs the
-tool, and times it. Every tool except `Bash` stops at once on cancel. `Bash` handles cancel itself, because it has
-a process group to kill.
+- Without it, the policy can check a relative path against one directory, and the tool can write it in a
+  different directory after a `cd`.
+- Without it, a URL such as `https://evil.example\@docs.rs/x` can look like `docs.rs` to a rule and go to
+  `evil.example`.
 
-Expanding a call in the Activity tab shows the policy decision and the change. This Edit was allowed by the
-`acceptEdits` permission mode:
+Then `execute` changes each field that the model sent as a JSON string back into the type that its schema
+gives. It runs the tool and measures the time. Each tool except `Bash` stops immediately on cancel. `Bash`
+handles cancel itself, because it has a process group to kill.
+
+Expand a call in the Activity tab to see the policy decision and the change. The `acceptEdits` permission mode
+allowed this Edit:
 
 ![An expanded Edit call showing the permission rule that allowed it and its diff](../images/console/tool-edit.png)
 
@@ -133,28 +138,29 @@ Expanding a call in the Activity tab shows the policy decision and the change. T
 
 ### Read
 
-Reads a file and returns it numbered like `cat -n`.
+Reads a file and returns it with line numbers, in the same format as `cat -n`.
 
 | Input | Meaning |
 | --- | --- |
-| `file_path` | The file. Relative paths resolve against the shell's directory. |
+| `file_path` | The file. A relative path resolves against the directory of the shell. |
 | `offset`, `limit` | The 1-based first line and the number of lines. The default is the first 2000 lines. |
 
-Lines over 2000 characters are cut. Files over 50 MB are refused with a pointer to `head`, `tail`, or `sed -n`.
-A binary file returns its size instead of its bytes. A directory is an error that points to `Glob`.
+Read cuts lines that are longer than 2000 characters. Read refuses files that are larger than 50 MB, and tells
+the model to use `head`, `tail`, or `sed -n`. For a binary file, Read returns its size and not its bytes. A
+directory gives an error that tells the model to use `Glob`.
 
-Each successful Read marks the file as read in this execution. That mark is what `Write` and `Edit` check.
+Each successful Read marks the file as read in this execution. `Write` and `Edit` check that mark.
 
 ### Write
 
-Writes a whole file. Inputs: `file_path`, `content`.
+Writes a full file. Inputs: `file_path`, `content`.
 
-If the file already exists, it must have been read in this execution, or the call fails with "Read it first,
-then write it, so you do not overwrite content you have not seen." Parent directories are created. The result
-carries a unified diff for the Activity view (capped at 50,000 bytes), so you see what changed without opening
-the file.
+If the file exists, the agent must read it in this execution first. Else the call fails with "Read it first,
+then write it, so you do not overwrite content you have not seen." Write creates the parent directories. The
+result has a unified diff for the Activity view, with a limit of 50,000 bytes. Thus you see what changed and
+you do not have to open the file.
 
-A Write the policy refused shows the guard rule and what to do instead:
+When the policy refuses a Write, the Activity view shows the guard rule and what to do in its place:
 
 ![An implementer run with a denied Write that names its guard rule](../images/console/execution.png)
 
@@ -162,256 +168,311 @@ A Write the policy refused shows the guard rule and what to do instead:
 
 Replaces an exact string. Inputs: `file_path`, `old_string`, `new_string`, and `replace_all`.
 
-- The file must have been read in this execution.
-- `old_string` must match exactly once. Zero matches fail with advice to re-read the file. Several matches fail
-  with the count and advice to add surrounding lines, or to set `replace_all`.
-- An empty `old_string` on a file that does not exist creates it.
-- `old_string` equal to `new_string` fails, because nothing would change.
+- The agent must read the file in this execution first.
+- `old_string` must match exactly one time. If it matches zero times, the call fails and tells the model to
+  read the file again. If it matches more than one time, the call fails with the count. Then it tells the model
+  to add the lines around the string, or to set `replace_all`.
+- An empty `old_string` on a file that does not exist creates the file.
+- If `old_string` is equal to `new_string`, the call fails, because the edit changes nothing.
 
-The result shows the lines around the change. Requiring an exact, unique match is what makes an edit safe to
-apply without a human reading it: the model cannot change a place it did not name.
+The result shows the lines around the change. Edit requires an exact and unique match. Thus Edit can apply a
+change safely without a person who reads it: the model cannot change a location that it did not name.
 
 ## Bash
 
-Runs a command in `bash` and returns stdout and stderr together. On Windows that is Git for Windows'
-`bin\bash.exe`, found by absolute path (`shells::bash` in [`shells.rs`](../../crates/ostra-core/src/shells.rs)),
-never the first `bash` on `PATH`, which is often `C:\Windows\System32\bash.exe`, the WSL launcher, running the
-command in a Linux VM with another view of the files. Without Git for Windows the tool fails with a message that
-says to install it, and the setup screen shows the same check ("Shell for the Bash tool").
+Runs a command in `bash` and returns stdout and stderr together. On Windows, the shell is the
+`bin\bash.exe` of Git for Windows. Ostra finds it by its absolute path (`shells::bash` in
+[`shells.rs`](../../crates/ostra-core/src/shells.rs)). Ostra never uses the first `bash` on `PATH`. That is
+frequently `C:\Windows\System32\bash.exe`, the WSL launcher, which runs the command in a Linux VM with a
+different view of the files. If Git for Windows is not installed, the tool fails with a message that tells you
+to install it. The setup screen shows the same check ("Shell for the Bash tool").
 
 | Input | Meaning |
 | --- | --- |
 | `command` | The command line. |
-| `timeout` | Milliseconds. The default is 120,000 (2 minutes), the maximum 600,000 (10 minutes). |
+| `timeout` | Milliseconds. The default is 120,000 (2 minutes). The maximum is 600,000 (10 minutes). |
 | `description` | A short label for the Activity view. |
 
 **The working directory persists.** The shell starts at the project root. The command runs through `eval` in a
-wrapper script whose exit trap writes the final directory to a file, so a `cd` carries into the next call. Each
-call is still a new process: shell variables do not carry over. Under Git Bash the trap writes `pwd -W`, the
-Windows form of the directory (`C:/Users/me/repo` rather than `/c/Users/me/repo`), because the other tools resolve
-paths against it.
+wrapper script. The exit trap of the script writes the last directory to a file, so a `cd` stays in effect for
+the next call. But each call is a new process: shell variables do not go to the next call. Under Git Bash, the
+trap writes `pwd -W`, the Windows form of the directory (`C:/Users/me/repo`, not `/c/Users/me/repo`). The
+reason: the other tools resolve paths against it.
 
-**Output streams and is bounded.** Output reaches the Activity view as the command prints it. In memory, Ostra
-keeps the head and tail of very long output, and the model gets at most 30,000 characters, keeping the start and
-the end, because a build error is usually at one end or the other.
+**Output streams and has a limit.** The output goes to the Activity view when the command prints it. For very
+long output, Ostra keeps only the start and the end in memory. The model gets at most 30,000 characters, from
+the start and the end of the output. The reason: a build error is usually at one end or the other.
 
-**Nothing survives the call.** The command runs in its own process group. When it returns, times out, or is
-cancelled, the whole group is killed. A server or a watcher started with `&` is stopped when the command
-returns, which is why the prompt tells agents not to start one. On Windows the shell starts suspended, joins a
-Job Object that kills its processes when its handle closes, and only then runs, so its first child is already in
-the job ([`proctree.rs`](../../crates/ostra-core/src/proctree.rs)). The job is closed when the call ends.
+**Nothing stays after the call.** The command runs in its own process group. When the command returns, times
+out, or is cancelled, Ostra kills the full group. Thus a server or a watcher started with `&` stops when the
+command returns. For this reason, the prompt tells agents not to start one. On Windows, the shell starts
+suspended and joins a Job Object. The Job Object kills its processes when its handle closes. Only after this
+does the shell run, so its first child is already in the job
+([`proctree.rs`](../../crates/ostra-core/src/proctree.rs)). Ostra closes the job when the call ends.
 
-**The environment is scrubbed.** Every credential variable that Ostra's config names, every workspace MCP secret,
-and every `OSTRA_*` variable is removed before the command starts. `GIT_PAGER` and `PAGER` are set to `cat`,
-because a pager would wait for input that never comes. `GIT_EXTERNAL_DIFF` is removed. Stdin is closed.
-[Secrets and data](../security/secrets-and-data.md) explains which variables count as credentials.
+**Ostra removes secrets from the environment.** Before the command starts, Ostra removes these variables:
 
-**It may run in a sandbox.** With the sandbox on, the command runs under bubblewrap on Linux or Seatbelt on
-macOS, with the execution's own scratch dir as `/tmp`. The other file tools map `/tmp` the same way, so a path the
-shell printed means the same file to `Read`. [OS compatibility](../platforms/os-compatibility.md) covers which
-backend each platform uses.
+- Each credential variable that the config of Ostra names.
+- Each workspace MCP secret.
+- Each `OSTRA_*` variable.
 
-Commands that match the project's configured build and test commands also add their wall time to the
-execution's `build_ms`, and their failures count toward the build-streak guard.
+Ostra sets `GIT_PAGER` and `PAGER` to `cat`, because a pager waits for input that never comes. Ostra removes
+`GIT_EXTERNAL_DIFF` and closes stdin. [Secrets and data](../security/secrets-and-data.md) tells which
+variables are credentials.
 
-A Bash command that no rule allows waits for the user. The same run shows a Write refused by the `write-scope`
-guard:
+**It can run in a sandbox.** When the sandbox is on, the command runs under bubblewrap on Linux or Seatbelt on
+macOS. The scratch dir of the execution is its `/tmp`. The other file tools map `/tmp` in the same way. Thus a
+path that the shell printed is the same file for `Read`. [OS compatibility](../platforms/os-compatibility.md)
+tells which backend each platform uses.
+
+Some commands match the configured build and test commands of the project. These commands also add their wall
+time to the `build_ms` of the execution, and their failures count toward the build-streak guard.
+
+If no rule allows a Bash command, the command waits for the user. The same run shows a Write that the
+`write-scope` guard refused:
 
 ![A code reviewer run with a Bash call asking for permission and a denied Write](../images/console/reviewer-ask.png)
 
 ## PowerShell and Cmd
 
-On Windows, the `shell` capability also gives an agent a `PowerShell` tool (Windows PowerShell 5.1,
-`powershell.exe` under the system dir) and a `Cmd` tool (`cmd.exe` under the system dir). Linux and macOS builds
-do not have them. They take the same inputs as Bash (`command`, `timeout`, `description`) and share its limits: the
-same timeouts, the same 30,000-character output bound, and the same scrubbed environment
-([`winshell.rs`](../../crates/ostra-tools/src/winshell.rs)).
+On Windows, the `shell` capability also gives an agent two more tools:
 
-- **The working directory persists.** PowerShell runs `Set-Location` first and writes `(Get-Location).Path` in a
-  `finally` block; cmd runs `cd /d` first and `cd > <file>` last, which leaves the command's `ERRORLEVEL` as the
-  exit code.
-- **cmd's line is passed raw.** Rust quotes an inner `"` as `\"`, which cmd does not read, so the whole
-  `/d /s /c "..."` line reaches cmd unescaped. The command is not wrapped in parentheses, because a `)` in it would
-  end the group.
-- **Nothing survives the call.** Both start suspended in a Job Object, as Bash does on Windows.
+- A `PowerShell` tool: Windows PowerShell 5.1, `powershell.exe` under the system dir.
+- A `Cmd` tool: `cmd.exe` under the system dir.
+
+Linux and macOS builds do not have them. They take the same inputs as Bash (`command`, `timeout`,
+`description`). They have the same limits: the same timeouts, the same 30,000-character output limit, and the
+same environment without secrets ([`winshell.rs`](../../crates/ostra-tools/src/winshell.rs)).
+
+- **The working directory persists.** PowerShell runs `Set-Location` first and writes `(Get-Location).Path` in
+  a `finally` block. Cmd runs `cd /d` first and `cd > <file>` last. Thus the `ERRORLEVEL` of the command stays
+  the exit code.
+- **The cmd line goes to cmd unchanged.** Rust quotes an inner `"` as `\"`, and cmd does not read that form.
+  Thus Ostra sends the full `/d /s /c "..."` line to cmd without escapes. Ostra does not put the command in
+  parentheses, because a `)` in it ends the group.
+- **Nothing stays after the call.** Both tools start suspended in a Job Object, the same as Bash on Windows.
 - **Your execution policy applies.** PowerShell runs with `-NoProfile -NonInteractive` and no
-  `-ExecutionPolicy` override, so running a `.ps1` script follows the policy set on the machine or by your
-  organization. An override was also what made Kaspersky's behavior monitor flag the build as a trojan.
+  `-ExecutionPolicy` override. Thus a `.ps1` script follows the policy that the machine or your organization
+  sets. An override also caused the behavior monitor of Kaspersky to identify the build as a trojan.
 
-Ostra cannot parse either shell, so the policy never allows one unasked and refuses a command whose text names its
-own files or a credential store ([PowerShell and Cmd](../security/agent-containment.md#powershell-and-cmd)). Their
-descriptions tell agents to prefer Bash for that reason.
+Ostra cannot parse either shell. Thus the policy never allows one without an ask. The policy refuses a command
+whose text names the files of Ostra or a credential store
+([PowerShell and Cmd](../security/agent-containment.md#powershell-and-cmd)). For this reason, their
+descriptions tell agents to use Bash first.
 
 ## Search tools
 
-Both use the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`, `globset`), so they behave like `rg` without
-needing it installed.
+Both tools use the ripgrep crates (`grep-searcher`, `grep-regex`, `ignore`, `globset`). Thus they work like
+`rg`, but `rg` does not have to be installed.
 
 ### Grep
 
 | Input | Meaning |
 | --- | --- |
 | `pattern` | A Rust regex. |
-| `path` | A file or directory. The default is the shell's directory. |
+| `path` | A file or directory. The default is the directory of the shell. |
 | `glob`, `type` | File filters: `*.ts`, `**/*.{ts,tsx}`, or a type such as `rust` or `py`. |
 | `output_mode` | `files_with_matches` (default, newest first), `content`, or `count`. |
 | `-i`, `-n`, `-A`, `-B`, `-C` | Case, line numbers, context. |
-| `multiline` | Lets `.` match newlines and a pattern span lines. |
-| `head_limit` | Caps the lines or files returned. |
+| `multiline` | Lets `.` match newlines and lets a pattern match across lines. |
+| `head_limit` | Sets a limit on the lines or files returned. |
 
-Output is capped at 30,000 characters.
+The output limit is 30,000 characters.
 
 ### Glob
 
-Finds files by name pattern, such as `src/**/*.ts`. Inputs: `pattern`, `path`. Returns at most 100 paths, newest
-first.
+Finds files by a name pattern, such as `src/**/*.ts`. Inputs: `pattern`, `path`. Returns at most 100 paths,
+newest first.
 
-Both tools search hidden files, so `.ostra/` and `.agents/` are visible. Which ignore files they honor depends on
-the sandbox. In a sandboxed execution they honor every `.*ignore` file (`.gitignore`, `.dockerignore`,
-`.npmignore`, and any other name of that shape), skipping each hidden folder without walking into it, because a
-sandboxed agent never searches what an ignore file hides (Rule G2,
-[Ignored paths](../security/agent-containment.md#ignored-paths)). Without a sandbox they honor the set ripgrep
-reads: `.gitignore`, `.ignore`, `.git/info/exclude`, and the global excludes file. Both skip credential stores and
-Ostra's own data dir (except its agent assets) even when a search starts from a parent folder, so a `Grep` from
-your home folder does not read `~/.ssh`.
+Both tools search hidden files, so `.ostra/` and `.agents/` are visible. The sandbox controls which ignore files
+they obey:
+
+- In a sandboxed execution, they obey each `.*ignore` file: `.gitignore`, `.dockerignore`, `.npmignore`, and
+  each other name of that shape. They skip each hidden folder and do not go into it. The reason: a sandboxed
+  agent never searches what an ignore file hides (Rule G2,
+  [Ignored paths](../security/agent-containment.md#ignored-paths)).
+- Without a sandbox, they obey the set that ripgrep reads: `.gitignore`, `.ignore`, `.git/info/exclude`, and
+  the global excludes file.
+
+Both tools skip credential stores and the data dir of Ostra, but not its agent assets. They skip them also when
+a search starts from a parent folder. Thus a `Grep` from your home folder does not read `~/.ssh`.
 
 ## Web tools
 
 ### WebSearch
 
-`WebSearch` has no local implementation. When an agent has the `web_search` capability and the provider offers a
-server-side search tool (Anthropic and OpenAI both do), the native loop enables it on the request and the provider
-runs the search. Each search shows as a status line in the Activity view. On a harness, the CLI's own search tool
-is used.
+`WebSearch` has no local implementation. Anthropic and OpenAI both offer a server-side search tool. If an agent
+has the `web_search` capability and the provider offers such a tool, the native loop enables it on the request.
+Then the provider runs the search. The Activity view shows each search as a status line. On a harness, the CLI
+uses its own search tool.
 
 ### WebFetch
 
-Fetches a URL and returns it as markdown. Inputs: `url`, and an optional `prompt` saying what to look for.
+Gets a URL and returns it as markdown. Inputs: `url`, and an optional `prompt` that tells what to look for.
 
-On Anthropic the provider's own fetch tool is used, and the local tool is not offered. On other providers Ostra
-fetches the page itself:
+On Anthropic, Ostra uses the fetch tool of the provider and does not offer the local tool. On other providers,
+Ostra gets the page itself:
 
 - Only `http` and `https`.
 - **Public addresses only.** The resolver refuses names that resolve to loopback, private, link-local, CGNAT,
-  unique-local, multicast, or reserved ranges, and it checks the address it connects to, so a name cannot point
-  the fetch at your machine or your network by changing its DNS answer between the check and the connect. A
-  private IP literal is refused before any lookup. A host named exactly by a `WebFetch(domain:<host>)` allow
-  rule is exempt, which is how you let an agent read an internal docs server.
-- **Redirects stay on one host.** A redirect to another host is not followed. The model gets the new URL and has
-  to fetch it with a new call, which the policy checks. The policy judged only the first URL, so following the
-  redirect would skip that check.
-- HTML becomes markdown, text types come back as they are, and binary content is refused. The body is capped at
-  5 MB and the text at 100,000 characters.
+  unique-local, multicast, or reserved ranges. It also checks the address that it connects to. Thus a name
+  cannot send the fetch to your machine or your network with a DNS answer that changes between the check and
+  the connect. Ostra refuses a private IP literal before a lookup. A host that a `WebFetch(domain:<host>)` allow
+  rule names exactly is exempt. With such a rule, you can let an agent read an internal docs server.
+- **Redirects stay on one host.** Ostra does not follow a redirect to a different host. The model gets the new
+  URL and must get it with a new call, which the policy checks. The policy judged only the first URL. Thus a
+  followed redirect skips that check.
+- Ostra changes HTML to markdown, returns text types unchanged, and refuses binary content. The body limit is
+  5 MB, and the text limit is 100,000 characters.
 
 ![A running fact-check with Read, Grep, and WebFetch calls](../images/console/factcheck-run.png)
 
 ## Skill
 
-Loads a `SKILL.md` and returns its text with the instruction to follow it. Pass `name` or `path`.
+Loads a `SKILL.md` and returns its text with the instruction to follow it. Give `name` or `path`.
 
-With `name`, it looks in the project's `.agents/skills/<name>/SKILL.md`, then the older
-`.ostra/skills/<name>/SKILL.md`, then the skills Ostra ships (such as `meta-author`). A name with `/` or `..` is
-refused, because a name is not a path. With `path`, it reads that file, and the policy judges it as a `Read` of that
-path. The skill file is marked read, so a later `Edit` of it passes the read-first check.
+With `name`, the tool looks in three locations, in this order:
+
+1. The `.agents/skills/<name>/SKILL.md` of the project.
+2. The older `.ostra/skills/<name>/SKILL.md`.
+3. The skills that Ostra ships, such as `meta-author`.
+
+The tool refuses a name with `/` or `..`, because a name is not a path. With `path`, the tool reads that file,
+and the policy judges it as a `Read` of that path. The tool marks the skill file as read. Thus a later `Edit` of
+it passes the read-first check.
 
 ## Ostra's own tools
 
-These have no counterpart in Claude Code. They are how an agent hands work to the engine and to later runs.
+Claude Code has no tools that agree with these tools. An agent uses them to give work to the engine and to
+later runs.
 
 ### Report
 
-Writes the agent's report to its declared `Report file:` path. Input: `content`, plus an optional `reason`.
+Writes the report of the agent to its declared `Report file:` path. Input: `content`, and an optional `reason`.
 
-The agent never chooses the path. The engine names every report path when it builds the spawn, and later stages
-read the report from there. An agent with no declared report file gets an error that says so.
+The agent never chooses the path. The engine names each report path when it builds the spawn. Later stages read
+the report from that path. If an agent has no declared report file, it gets an error that says so.
 
-The call is also where the lesson gate applies. If the agent went from a verified failure to a recovery and
-recorded no lesson, the report is refused until it records one with `Memory`, or passes a `reason` that says why no
-lesson applies. That is a guard, so it lives on the containment page.
+The lesson gate also applies to this call. Sometimes the agent goes from a verified failure to a recovery and
+records no lesson. Then Report refuses the report until the agent records a lesson with `Memory`. The agent can
+also give a `reason` that tells why no lesson applies. The lesson gate is a guard, so the containment page
+describes it.
 
 ### Document
 
-Writes the typed document of explore (research), generate-spec (spec), or plan (plan). The schemas are the structs in
-`crates/ostra-core/src/doc`. This tool is agent-specific: each of those three agents sees only its own document
-schema.
+Writes the typed document of explore (research), generate-spec (spec), or plan (plan). The schemas are the
+structs in `crates/ostra-core/src/doc`. This tool is specific to the agent: each of those three agents sees only
+its own document schema.
 
 | Input | Meaning |
 | --- | --- |
-| `path` | The document's `.md` path in the session dir: `ostra-research-*`, `ostra-spec-*`, or the master `ostra-plan-*`. |
-| `document` | The whole document. It replaces what is stored. |
-| `update` | A partial revision. Each top-level field it names replaces the stored one, except lists whose items carry an `id`, which merge by id. An item the update names takes the fields it sends and keeps the rest, and the keyed lists inside it merge the same way, so one step's `action` can be sent alone. |
-| `remove` | Ids to drop at any depth: a requirement, a phase by number, a step. An id that sits in more than one item is named with its parent, such as `2.3/E1`. |
+| `path` | The `.md` path of the document in the session dir: `ostra-research-*`, `ostra-spec-*`, or the master `ostra-plan-*`. |
+| `document` | The full document. It replaces the stored document. |
+| `update` | A partial revision. Each top-level field that it names replaces the stored field. The exception is a list whose items have an `id`: such a list merges by id. An item that the update names takes the fields that it sends and keeps the other fields. The keyed lists inside it merge in the same way. Thus the agent can send the `action` of one step alone. |
+| `remove` | Ids to remove at any depth: a requirement, a phase by number, a step. If an id is in more than one item, the agent names it with its parent, such as `2.3/E1`. |
 
-The JSON is stored beside the path, and the markdown is rendered from it with the section names the downstream
-prompts and the fact-check read. A plan also gets one `-phase-{N}.md` file per phase. Ostra computes the parts code
-can compute (the spec's delivery order, traceability tables, and counts; the plan's indexes and step counts), and the
-model never writes them.
+Ostra stores the JSON next to the path. Ostra renders the markdown from the JSON with the section names that
+the downstream prompts and the fact-check read. A plan also gets one `-phase-{N}.md` file for each phase. Ostra
+computes the parts that code can compute, and the model never writes them:
 
-Every write runs the document checks and returns their results. Errors are things code can decide: a dangling
-requirement or criterion id, an uncovered criterion, a cycle between phases, broken `AC{n}.{m}` numbering. Warnings
-are judgment calls, such as more than one `SHALL` in a statement. The submit call is refused while an error remains,
-so an agent cannot hand the next stage a broken spec.
+- For the spec: the delivery order, the traceability tables, and the counts.
+- For the plan: the indexes and the step counts.
 
-Writes and submits also check the code the document names (Hard rule 4): a research document's paths, a spec's
-criterion groundings and consumed contract sources, and a plan's step files and `read_first` paths must exist, and a
-`path:Symbol` must name a word the file contains. A plan step may name a file an earlier step creates. A research
-document's write also records a hash of each file it names, which later stages compare against (Rule D2a). The
-result names the nested items an `update` kept without sending them, so the agent sees what a partial update left
-in place.
+Each write runs the document checks and returns their results. Errors are problems that code can decide: a
+dangling requirement or criterion id, an uncovered criterion, a cycle between phases, or broken `AC{n}.{m}`
+numbering. Warnings are judgment calls, such as more than one `SHALL` in a statement. The submit call is refused
+when an error remains. Thus an agent cannot give a broken spec to the next stage.
 
-These files can only be written through `Document`. A `Write`, `Edit`, or shell write to them is refused with the
-correction to call `Document`, because the next render would overwrite the change and the browser would not show it.
+Writes and submits also check the code that the document names (Hard rule 4). These items must exist:
+
+- The paths of a research document.
+- The criterion groundings and the consumed contract sources of a spec.
+- The step files and the `read_first` paths of a plan.
+
+A `path:Symbol` must name a word that the file contains. A plan step can name a file that an earlier step
+creates. A write of a research document also records a hash of each file that it names. Later stages compare
+the files against these hashes (Rule D2a). The result names the nested items that an `update` kept but did not
+send. Thus the agent sees what a partial update left unchanged.
+
+Only `Document` can write these files. The policy refuses a `Write`, `Edit`, or shell write to them, and tells
+the agent to call `Document`. The reason: the next render overwrites the change, and the browser does not show
+it.
 
 ### Memory and MemoryRecall
 
-`Memory` records one durable lesson in the project's memory database: `area` (a module scope such as
-`orders::Service`), `lesson` (one line), and an optional `source`, which defaults to the agent and execution id.
-Recording the same area and lesson again updates it.
+`Memory` records one durable lesson in the memory database of the project. Inputs:
 
-`MemoryRecall` returns recorded lessons, most relevant first. Inputs: `query`, an optional `area` that narrows to a
-module and its sub-scopes, and `limit` (default 8, at most 50).
+- `area`: a module scope, such as `orders::Service`.
+- `lesson`: one line.
+- `source`: optional. The default is the agent and the execution id.
 
-The database is engine-owned: agents reach it only through these two tools, and no file tool may write it. The build
-streak also uses it: after the second failed build in a row, recalled lessons for that failure are appended to the
-tool result without the agent asking. [Project memory](project-memory.md) covers how lessons are stored and ranked.
+If an agent records the same area and lesson again, the tool updates the lesson.
+
+`MemoryRecall` returns recorded lessons, the most relevant first. Inputs: `query`, an optional `area` that
+limits the results to a module and its sub-scopes, and `limit` (default 8, at most 50).
+
+The engine owns the database. Agents can use it only through these two tools, and no file tool can write it.
+The build streak also uses it. After the second failed build in a row, Ostra adds the recalled lessons for that
+failure to the tool result. The agent does not have to ask for them. [Project memory](project-memory.md) tells
+how Ostra stores and ranks lessons.
 
 ### DocsSearch
 
-`DocsSearch` searches the documentation books the docs stage wrote into the workspace (Rule B8) and returns the
-sections that best match a question, each with only the passages that matched. Inputs: `query`, an optional
-`project` that narrows the search to one project's part, and `limit` (default 5, at most 15 sections).
+`DocsSearch` searches the documentation books that the docs stage wrote into the workspace (Rule B8). It returns
+the sections that best match a question. Each section has only the passages that matched. Inputs: `query`, an
+optional `project` that limits the search to the part of one project, and `limit` (default 5, at most 15
+sections).
 
-A section of a book can be long, and most of it does not bear on any one question, so the search does not rank
-whole sections. It cuts each section and sub-section into passages: the purpose, the boundaries, the assumptions,
-the business flow, each diagram, each table, the separation of concerns, and the code references, with lists and
-tables over five rows split into windows of five. A diagram is indexed by its title and the words in its labels
-and messages, never by its Mermaid keywords or node IDs, so a question about "participants" does not match every
-sequence diagram. The glossary gives one passage per term, and the system architecture one per component, failure
-case, and group of links or scaling rows.
+A section of a book can be long, and most of it is not related to one question. Thus the search does not rank
+full sections. It cuts each section and sub-section into these passages:
 
-BM25 ranks each passage over three fields: its label (weight 2), the paths and symbols of its code references
-(weight 1.5), and its text (weight 1). Words are lowercased and lightly stemmed, and an identifier also yields
-its parts, so `SessionState` matches "session state", and plurals, `-ed`, and `-ing` are stripped, so "started"
-meets "starts". A section ranks by its title (weight 3, counted once), plus its best passage, 35% of its second
-best, and a BM25 score of the section's whole text, which catches a question whose words are spread over several
-passages. The title counts once for the section and never decides which passages are
-shown: a section whose title matches the question shows the passages whose own text matches, or its purpose when
-none does. A hit shows at most two passages, each at least half as strong as the section's best, then the path of
-the section's Markdown file, which the agent reads when it needs the whole section. Within a list or table passage,
-only the lines that name a word of the question are shown, with a count of the lines left out, so a window of five
-assumptions shows the one that matched. Prose and diagrams are shown whole, because a sentence or a flow cut in
-half misleads.
+- The purpose, the boundaries, the assumptions, and the business flow.
+- Each diagram and each table.
+- The separation of concerns and the code references.
 
-The index is built from `book.json` on every call, so it never falls behind a book the docs stage just rewrote.
-When the workspace has a book and the agent has the capability, the repo brief names the tool and tells the agent
-to search before it reads code to learn an area.
+The search splits lists and tables of more than five rows into windows of five. The index uses the title of a
+diagram and the words in its labels and messages. It never uses the Mermaid keywords or the node IDs. Thus a
+question about "participants" does not match each sequence diagram. The glossary gives one passage for each
+term. The system architecture gives one passage for each component, each failure case, and each group of links
+or scaling rows.
+
+BM25 ranks each passage over three fields:
+
+- The label of the passage, with weight 2.
+- The paths and symbols of its code references, with weight 1.5.
+- Its text, with weight 1.
+
+The search changes words to lowercase and applies a light stemmer. An identifier also gives its parts. Thus
+`SessionState` matches "session state". The stemmer removes plurals, `-ed`, and `-ing`. Thus "started" matches
+"starts". A section gets a rank from the sum of four parts:
+
+- Its title, with weight 3, counted one time.
+- Its best passage.
+- 35% of its second-best passage.
+- A BM25 score of the full text of the section. This part finds a question whose words are in several passages.
+
+The title counts one time for the section, and it never decides which passages the search shows. If the title of
+a section matches the question, the hit shows the passages whose own text matches. If no passage matches, the
+hit shows the purpose. A hit shows at most two passages. Each of them has at least half the score of the best
+passage of the section. Then the hit shows the path of the Markdown file of the section. The agent reads that
+file when it needs the full section.
+
+In a list or table passage, the hit shows only the lines that contain a word of the question. It also shows a
+count of the lines that it does not show. Thus a window of five assumptions shows the one assumption that
+matched. The hit shows prose and diagrams in full, because a sentence or a flow cut in half gives a wrong
+meaning.
+
+The search builds the index from `book.json` on each call. Thus the index always agrees with a book that the
+docs stage just wrote again. If the workspace has a book and the agent has the capability, the repo brief names
+the tool. The brief tells the agent to search before it reads code to learn an area.
 
 The retrieval eval (`tests/evals/book_retrieval/`, run by `crates/ostra-core/tests/book_retrieval.rs`) measures
-the ranking with 221 questions about Ostra's own source against a book an Opus docs run wrote about the repository.
-Each question was labeled with the sections that state its answer; 127 have one. On those, the right section is
-first for 63% of questions and in the top five for 90%, and a top-five result is about 3,200 characters. The weak
-spot is a question in plain words that share none with the book ("the code formatter" for a section about the
-format command): 82% of those reach the top five. The eval fails when a ranking change drops below its floors.
+the ranking. It uses 221 questions about the source of Ostra against a book that an Opus docs run wrote about
+the repository. Each question has labels for the sections that state its answer. 127 questions have one such
+section. For those questions, the correct section is first for 63%, and in the top five for 90%. A top-five
+result is about 3,200 characters. The search is weak on a question in plain words that share no word with the
+book, for example "the code formatter" for a section about the format command. 82% of those questions reach the
+top five. The eval fails if a ranking change goes below its floors.
 
 A Memory call expanded in the Activity tab, after a failed check and its fix:
 
@@ -419,117 +480,136 @@ A Memory call expanded in the Activity tab, after a failed check and its fix:
 
 ### Code navigation
 
-Eight tools answer questions from the project's code index instead of from file reads:
+Eight tools answer questions from the code index of the project, not from file reads:
 
 | Tool | Answers |
 | --- | --- |
-| `CodeOutline` | A file's imports (with the project file each resolves to) and definitions with line ranges. |
+| `CodeOutline` | The imports of a file, each with the project file that it resolves to, and the definitions with line ranges. |
 | `CodeFind` | Definitions by name: exact, then prefix, then substring, then initials (`pn` finds `parse_name`). |
-| `CodeCallers` | Every use of a symbol, grouped by the enclosing function or type. |
-| `CodeCallees` | What one function or type body uses. |
+| `CodeCallers` | Each use of a symbol, grouped by the function or type that contains it. |
+| `CodeCallees` | What the body of one function or type uses. |
 | `CodeImplementations` | What a type implements or extends, and what implements it. |
-| `CodeNeighbors` | The files one file uses and the files that use it, with the linking names. |
+| `CodeNeighbors` | The files that one file uses and the files that use it, with the names that link them. |
 | `CodeImpact` | What a change can break, hop by hop, for a symbol or a set of files. |
-| `CodeMap` | Packages, their dependencies, the most depended-on files, and import cycles. |
+| `CodeMap` | Packages, their dependencies, the files with the most dependents, and import cycles. |
 
-They exist because an outline costs a fraction of a file read, and a caller list from the index drops the mentions a
-text search cannot tell apart from another definition with the same name. On a harness they are `code_outline`,
-`code_find`, and so on, served by the `ostra` MCP server. [The code index](code-index.md) describes how the index is
-built.
+These tools exist for two reasons. An outline costs a fraction of a file read. And a caller list from the index
+does not include the mentions that a text search cannot tell apart from a different definition with the same
+name. On a harness, the tools are `code_outline`, `code_find`, and the other `code_*` names. The `ostra` MCP
+server serves them. [The code index](code-index.md) describes how Ostra builds the index.
 
 ### Subagent tools
 
 `SubagentList`, `SubagentAsk`, and `SubagentReply` let an agent with the `coordinate` capability ask a helper or
-another subagent a question and wait for the answer, then continue from its own conversation. On a harness they are
-`subagent_list`, `subagent_ask`, and `subagent_reply`. The permission layer allows them in every mode, because they
-change no file. An ask ends the native run with status `waiting`, or makes a harness run wait with its process
-alive; [Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other) covers the whole flow.
+a different subagent a question. The agent waits for the answer, then continues from its own conversation. On a
+harness, the tools are `subagent_list`, `subagent_ask`, and `subagent_reply`. The permission layer allows them in
+each mode, because they change no file. An ask ends the native run with the status `waiting`. On a harness, an
+ask makes the run wait with its process alive.
+[Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other) covers the full flow.
 
 ### The submit tool
 
-Each agent has exactly one: `submit_<agent>`, whose schema is that agent's struct in `crates/ostra-core/src/submit.rs`.
-It is the last call of every run, and the engine reads only its payload. It is described with the executors, because
-it ends the run rather than doing work: [The submit call](executors.md#the-submit-call).
+Each agent has exactly one submit tool: `submit_<agent>`. Its schema is the struct of that agent in
+`crates/ostra-core/src/submit.rs`. It is the last call of each run, and the engine reads only its payload. The
+executors page describes it, because it ends the run and does no work:
+[The submit call](executors.md#the-submit-call).
 
 ## Project management tools
 
-Management tools are calls an agent makes to Ostra itself rather than to the files it works on. The first
-toolset manages projects, for a request that needs a codebase no project holds, such as a new service that
-would otherwise have to live inside an existing repository. Only the implementer has the `manage_projects`
-capability, and the guard narrows that to one run: the implementer of a phase the approved plan puts in a
-project that does not exist yet. A project is therefore created only after the user approved the plan that
-needs it, so a spec or plan the user rejects leaves nothing on disk.
+An agent calls management tools to change Ostra itself, not the files that it works on. The first toolset
+manages projects. It is for a request that needs a codebase that no project holds. An example is a new service
+that otherwise has to be inside an existing repository.
+
+Only the implementer has the `manage_projects` capability, and the guard limits that capability to one run. That
+run is the implementer of a phase that the approved plan puts in a project that does not exist yet. Thus Ostra
+creates a project only after the user approved the plan that needs it. If the user rejects a spec or plan,
+nothing stays on disk.
 
 ### ProjectList
 
-`ProjectList` takes no input. It returns the workspace root, which a new project's folder is relative to, and
-each project's key, folder, stack, init status, and whether it is in this session's scope. It is read-only, so
-every mode allows it.
+`ProjectList` takes no input. It returns the workspace root, which is the base of the relative folder of a new
+project. For each project, it also returns the key, the folder, the stack, the init status, and whether the
+project is in the scope of this session. It is read-only, so each mode allows it.
 
 ### ProjectCreate
 
-`ProjectCreate` takes:
+`ProjectCreate` takes these inputs:
 
 | Input | Meaning |
 | --- | --- |
-| `key` | The project key, with the Add project dialog's rule: lowercase letters, digits, and dashes, starting with a letter or digit. |
-| `stack` | The language and main framework in a few words, such as `rust`. One line, at most 64 characters. |
+| `key` | The project key, with the rule of the Add project dialog: lowercase letters, digits, and dashes, starting with a letter or digit. |
+| `stack` | The language and the main framework in a few words, such as `rust`. One line, at most 64 characters. |
 | `purpose` | What the codebase is for, at most 800 characters. The user approves the project from it. |
-| `requirements` | 1 to 20 base requirements, one fact each and at most 400 characters: toolchain version, libraries with versions, build tool, transport, the systems it connects to. |
-| `folder` | Optional, relative to the workspace root with no `..`. Defaults to the key. |
+| `requirements` | 1 to 20 base requirements, one fact each, at most 400 characters each: toolchain version, libraries with versions, build tool, transport, and the systems that it connects to. |
+| `folder` | Optional, relative to the workspace root, with no `..`. The default is the key. |
 | `git_init` | Optional, default true: run `git init` in the new folder. |
 
-The implementer takes these from its phase file, where the plan copied them from the spec's `Constraint`
-criteria. A call passes three checks before anything changes on disk:
+The implementer gets these inputs from its phase file. The plan copied them from the `Constraint` criteria of
+the spec. A call must pass three checks before Ostra changes anything on disk:
 
 1. **The guard (rule O2).** The `manage-tools` guard allows the call only from an execution whose context has
-   `creates_project` set, which the runner sets only for the implementer of a phase in a project the approved
-   plan lists in `new_projects` and the session does not hold yet. The key must be that phase's project key.
-   The guard also refuses a malformed input: a bad key or stack, an empty or oversized purpose, no requirements
-   or too many, or a folder that is absolute or climbs with `..`. Checking here means the user is never asked
-   about a call that cannot run. Until the project exists, the same run may write nothing outside its session
-   dir and temp, because its `Repo root:` is its session dir and there is no project yet to write in.
-2. **The permission (rule O1).** The call asks the user, in every permission mode including bypass, because
-   creating a project changes Ostra, not only files. The card reads like
-   ``Create project `notes-mcp` (rust) in `notes-mcp/` of the workspace: ...``, cut at 250 characters because
-   Grok clips ask reasons. It offers no "always" rule, and answering "always in this workspace" adds none,
-   because no allow rule may stand in for the answer. Only YOLO answers the ask; a `deny` rule on
-   `ProjectCreate` still refuses it, and plan mode refuses it.
-3. **The server's checks.** After the answer, the server (`crates/ostra-server/src/manage.rs`) refuses a key
-   the workspace already has, and a folder that exists and is not empty, lies outside the workspace root (a
-   symlinked parent is resolved first), lies in `.ostra`, or is inside or around another project. It also
-   refuses when the session has ended, when it is not a pipeline session, when the run that asked has ended,
-   or when the key is already in the session.
+   `creates_project` set. The runner sets it only for the implementer of a phase in a project that meets two
+   conditions:
+   - The approved plan lists the project in `new_projects`.
+   - The session does not hold the project yet.
 
-Then the server creates the folder, runs `git init` when asked (with the same no-exec git settings as a clone),
-registers the project in `workspace.toml` with its stack, and appends a `ProjectCreated` event to the session.
-A failed `git init` or registration removes what it created. The event stops the implementer that asked, and
-the phase starts over inside the new project once its init has run. What happens next is in
-[The pipeline](pipeline.md#a-new-codebase).
+   The key must be the project key of that phase. The guard also refuses a malformed input: a bad key or stack,
+   an empty or too long purpose, no requirements or too many, or a folder that is absolute or goes up with
+   `..`. Because the guard checks here, Ostra never asks the user about a call that cannot run. Until the
+   project exists, the same run can write only in its session dir and temp. The reason: its `Repo root:` is its
+   session dir, and no project exists yet to write in.
+2. **The permission (rule O1).** The call asks the user, in each permission mode, also in bypass mode, because
+   a new project changes Ostra and not only files. The card text is similar to
+   ``Create project `notes-mcp` (rust) in `notes-mcp/` of the workspace: ...``. Ostra cuts it at 250
+   characters, because Grok clips ask reasons. The card offers no "always" rule. The answer "always in this
+   workspace" adds no rule, because no allow rule can replace the answer. Only YOLO answers the ask. A `deny`
+   rule on `ProjectCreate` still refuses it, and plan mode refuses it.
+3. **The checks of the server.** After the answer, the server (`crates/ostra-server/src/manage.rs`) refuses
+   these keys and folders:
+   - A key that the workspace already has.
+   - A folder that exists and is not empty.
+   - A folder outside the workspace root. The server resolves a symlinked parent first.
+   - A folder in `.ostra`, or a folder inside or around a different project.
+
+   The server also refuses the call in these conditions: the session has ended, the session is not a pipeline
+   session, the run that asked has ended, or the key is already in the session.
+
+Then the server creates the folder and runs `git init` if the call asks for it. The `git init` uses the same
+no-exec git settings as a clone. The server registers the project and its stack in `workspace.toml`. Then it
+appends a `ProjectCreated` event to the session. If `git init` or the registration fails, the server removes
+what it created. The event stops the implementer that asked. After the init of the new project runs, the phase
+starts again inside the new project. [The pipeline](pipeline.md#a-new-codebase) tells what occurs next.
 
 ### How both executors reach them
 
-The tools crate knows no workspace or engine, so it defines a `Manage` trait and the server implements it. When
-an execution opens, the server hands it a handle bound to its workspace, session, and execution, and only when
-its agent has the `manage_projects` capability and runs in a session. The native loop runs the call through that
-handle in process. A harness sees `project_list` and `project_create` on Ostra's MCP server, which lists them only
-for an execution that holds the handle, and checks, asks, and runs each call once, like `report`.
+The tools crate knows no workspace or engine. Thus it defines a `Manage` trait, and the server implements it.
+When an execution opens, the server gives it a handle bound to its workspace, session, and execution. The
+server gives the handle only when the agent has the `manage_projects` capability and runs in a session. The
+native loop runs the call through that handle in the same process. A harness sees `project_list` and
+`project_create` on the MCP server of Ostra. The server lists them only for an execution that holds the handle.
+It checks, asks, and runs each call one time, the same as `report`.
 
 ## Workspace MCP tools
 
-The MCP servers listed in a workspace's `mcp_servers` reach every agent on every executor, because Ostra is the only MCP
-client. A tool keeps the canonical name `mcp__<server>__<tool>` in the native loop, in the Activity view, and in
-permission rules. A harness sees it as `mcp__ostra__<server>__<tool>`, through Ostra's own MCP server.
+The MCP servers in the `mcp_servers` list of a workspace are available to each agent on each executor, because
+Ostra is the only MCP client. A tool keeps the canonical name `mcp__<server>__<tool>` in the native loop, in
+the Activity view, and in permission rules. A harness sees it as `mcp__ostra__<server>__<tool>`, through the MCP
+server of Ostra.
 
-The tool list is fixed when an execution opens. A server that cannot be reached adds one Activity line, and the run
-continues without it. Results are text: images and binary resources become a one-line note, structured content
-becomes JSON, and results are cut at 100 KiB. [MCP servers](mcp.md) covers transports, sign-in, and naming.
+The tool list is fixed when an execution opens. If Ostra cannot connect to a server, Ostra adds one Activity
+line, and the run continues without that server. Results are text:
+
+- Images and binary resources become a one-line note.
+- Structured content becomes JSON.
+- Ostra cuts results at 100 KiB.
+
+[MCP servers](mcp.md) covers transports, sign-in, and names.
 
 ## Where to look in the code
 
 | Concern | File |
 | --- | --- |
-| Dispatch, canonical calls, per-execution state | `crates/ostra-tools/src/lib.rs` |
+| Dispatch, canonical calls, state for each execution | `crates/ostra-tools/src/lib.rs` |
 | Tool descriptions and input schemas | `crates/ostra-tools/src/defs.rs` |
 | Read, Write, Edit | `crates/ostra-tools/src/fs.rs` |
 | Bash | `crates/ostra-tools/src/bash.rs` |
@@ -539,7 +619,7 @@ becomes JSON, and results are cut at 100 KiB. [MCP servers](mcp.md) covers trans
 | Book passages and ranking for DocsSearch | `crates/ostra-core/src/book_search.rs` |
 | Document | `crates/ostra-tools/src/doc.rs` |
 | ProjectList, ProjectCreate: input rules, the handle, the server side | `crates/ostra-core/src/manage.rs`, `crates/ostra-tools/src/manage.rs`, `crates/ostra-server/src/manage.rs` |
-| Capability to tool name per executor | `assets/tool-mapping.toml` |
+| Capability to tool name for each executor | `assets/tool-mapping.toml` |
 | Tool families for permissions | `crates/ostra-policy/src/perms.rs` |
 
-Next: [The code index](code-index.md) explains what the code navigation tools read from.
+Next: [The code index](code-index.md) tells what the code navigation tools read.

@@ -8,37 +8,46 @@ Ostra has no native Gemini provider. The native registry builds only `anthropic`
 
 ## Harness executor: Antigravity
 
-**Do not route agents to `harness:agy` while the CLI is signed in with a Google consumer account** (a Google
-AI plan or a free Google account) until Google confirms in writing that another tool may drive the
-Antigravity CLI.
+**Do not route agents to `harness:agy` when the CLI uses a sign-in with a Google consumer account.** A Google
+consumer account is a Google AI plan or a free Google account. This rule applies until Google confirms in
+writing that another tool can control the Antigravity CLI.
 
-The [Antigravity additional terms](https://antigravity.google/terms), section 6, list these as prohibited:
+Section 6 of the [Antigravity additional terms](https://antigravity.google/terms) lists these actions as
+prohibited:
 
 - "using the Service in connection with products not provided by us."
 - "Using third party software, tools, or services to access the Service (e.g. using OpenClaw with Antigravity
   OAuth)."
 
-And: "Such actions may be grounds for suspension or termination of your Antigravity and/or Gemini CLI
-accounts."
+Section 6 also says: "Such actions may be grounds for suspension or termination of your Antigravity and/or
+Gemini CLI accounts."
 
-Ostra runs Google's own `agy` binary, which signs in through Google's flow, and never reads Antigravity's
-OAuth token. That is a narrower use than the OpenClaw example, which reused the OAuth token directly. The first
-clause is broad, though, and can cover a tool that drives `agy`. Google has acted on these terms: since
-February 2026 it has suspended accounts, including paid AI Ultra accounts, that used Antigravity or Gemini CLI
-sign-ins in third-party tools. Suspensions also cut off Gemini CLI and Gemini Code Assist on the same account.
-Reports from early September 2026 say enforcement is still going on.
+Ostra runs the `agy` binary of Google, which signs in through the Google flow. Ostra never reads the OAuth
+token of Antigravity. This use is narrower than the OpenClaw example, which reused the OAuth token directly. But
+the first clause is broad, and it can cover a tool that controls `agy`.
 
-Ostra keeps the `agy` harness for three cases: a Google account whose terms allow it, Google's written
-confirmation, or an API-key sign-in if the CLI supports one. The terms page does not say whether `agy` accepts
-a Gemini API key or Vertex AI credentials; check Google's current Antigravity CLI docs.
+Google acts on these terms. From February 2026, Google suspended accounts that used Antigravity or Gemini CLI
+sign-ins in third-party tools. These accounts included paid AI Ultra accounts. A suspension also stops Gemini
+CLI and Gemini Code Assist on the same account. Reports from early September 2026 say that the enforcement
+continues.
+
+Ostra keeps the `agy` harness for three cases:
+
+- A Google account whose terms allow this use.
+- A written confirmation from Google.
+- An API-key sign-in, if the CLI supports one.
+
+The terms page does not say whether `agy` accepts a Gemini API key or Vertex AI credentials. Check the current
+Antigravity CLI docs of Google.
 
 ### What Ostra installs
 
-The Antigravity harness needs one global integration: a plugin in `~/.gemini/config/plugins/ostra/` with one
-agent file per Ostra agent and a hooks file. Every hook is inert unless `OSTRA_EXECUTION` is set, so the
-plugin does nothing outside an Ostra execution (`crates/ostra-exec-harness/src/setup.rs`). Ostra checks that
-`~/.gemini/antigravity-cli/antigravity-oauth-token` or `~/.gemini/oauth_creds.json` exists to show the login
-status, and never opens either file. The launch keeps none of Ostra's provider variables.
+The Antigravity harness needs one global integration. This integration is a plugin in
+`~/.gemini/config/plugins/ostra/`, with one agent file for each Ostra agent and a hooks file. Each hook does
+nothing unless `OSTRA_EXECUTION` is set. So the plugin does nothing outside an Ostra execution
+(`crates/ostra-exec-harness/src/setup.rs`). To show the login status, Ostra checks that
+`~/.gemini/antigravity-cli/antigravity-oauth-token` or `~/.gemini/oauth_creds.json` exists. Ostra never opens
+either file. The launch keeps none of the provider variables of Ostra.
 
 ## Sources
 

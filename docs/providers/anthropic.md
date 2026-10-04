@@ -13,29 +13,31 @@ api_key_env = "ANTHROPIC_API_KEY"
 # keychain_service = "ostra"   # optional: read the key from the OS keychain, account "anthropic"
 ```
 
-You can also save the key from the browser, where it is stored in the registry database. The environment
-variable wins over a saved key.
+You can also save the key from the browser. Ostra stores a saved key in the registry database. If both are
+set, Ostra uses the environment variable, not the saved key.
 
-API keys fall under the [Commercial Terms of Service](https://www.anthropic.com/legal/commercial-terms)
-(effective June 17, 2025) and the [Usage Policy](https://www.anthropic.com/legal/aup). The clauses that
-matter for Ostra:
+The [Commercial Terms of Service](https://www.anthropic.com/legal/commercial-terms) (effective June 17, 2025)
+and the [Usage Policy](https://www.anthropic.com/legal/aup) apply to API keys. These clauses apply to Ostra:
 
-- **A.1** allows using the Services "to power products and services Customer makes available to its own
-  customers and end users." Ostra is such a product, and each person who runs it with their own key is the
+- **A.1** allows use of the Services "to power products and services Customer makes available to its own
+  customers and end users." Ostra is such a product. Each person who runs it with their own key is the
   customer.
-- **D.4** forbids accessing the Services "to build a competing product or service, including to train
-  competing AI models," reselling the Services "except as expressly approved by Anthropic," and reverse
-  engineering them. Ostra sends requests to Claude, trains no model, and resells nothing.
-- **D.5**: "Customer is responsible for all activity under its account." The key owner answers for every
-  execution Ostra runs with that key, so set a session budget.
+- **D.4** forbids these actions:
+  - Access to the Services "to build a competing product or service, including to train competing AI models."
+  - Resale of the Services "except as expressly approved by Anthropic."
+  - Reverse engineering of the Services.
+
+  Ostra sends requests to Claude, trains no model, and resells nothing.
+- **D.5**: "Customer is responsible for all activity under its account." Set a session budget, because the key
+  owner is responsible for each execution that Ostra runs with that key.
 
 Do not put a Claude subscription token in `ANTHROPIC_AUTH_TOKEN`, and do not point `ANTHROPIC_BASE_URL` at a
 proxy that holds one. The Claude Code
 [legal and compliance page](https://code.claude.com/docs/en/legal-and-compliance) says: "Anthropic does not
 permit third-party developers to offer Claude.ai login into their own applications, or to route requests
 through Free, Pro, or Max plan credentials on behalf of their users. Moreover, developers may not collect,
-store, or intermediate Claude.ai credentials or session tokens." `ANTHROPIC_AUTH_TOKEN` exists for gateways
-that hold API keys; see [gateways.md](gateways.md).
+store, or intermediate Claude.ai credentials or session tokens." `ANTHROPIC_AUTH_TOKEN` is for gateways
+that hold API keys. Refer to [gateways.md](gateways.md).
 
 ## Harness executor: Claude Code
 
@@ -45,35 +47,35 @@ your own Claude plan.
 The same Anthropic page allows a Claude plan in the unmodified Claude Code binary. The rule on third-party
 credentials "does not ... prevent an end user from signing in to the unmodified Claude Code binary with their
 own Claude subscription, including where a platform hosts Claude Code." Products that run Claude Code must
-meet these conditions. Each row says how Ostra meets it:
+satisfy the conditions in the table. Each row tells how Ostra satisfies one condition:
 
 | Condition from Anthropic | How Ostra meets it |
 | --- | --- |
-| "The Claude Code binary must not be modified." | Ostra runs the `claude` on `PATH` (or `[harness.claude] command`), installed by Anthropic's installer. It passes flags only: `--settings`, `--setting-sources user`, `--mcp-config`, `--strict-mcp-config`, `--append-system-prompt-file`, `--tools`, `--model`, `--effort`, and so on. |
+| "The Claude Code binary must not be modified." | Ostra runs the `claude` on `PATH` (or `[harness.claude] command`). Anthropic's installer installs it. Ostra passes only flags: `--settings`, `--setting-sources user`, `--mcp-config`, `--strict-mcp-config`, `--append-system-prompt-file`, `--tools`, `--model`, `--effort`, and so on. |
 | Customers "may not remove, disable, or restrict any authentication method built into it." | Ostra passes no flag or setting that changes sign-in. The person signs in with `claude auth login`. |
-| Customers "may not pay for, resell, or intermediate Claude usage on their end users' behalf." | Each person signs in with their own account on their own machine. Ostra holds no key and relays nothing. |
-| Names and logos: you can say, in plain text, that your product "runs Claude Code," but not use Anthropic's names or logos in your product name or logo, or suggest endorsement. | Ostra's name and logo contain neither. Docs and UI name Claude Code in plain text only. |
+| Customers "may not pay for, resell, or intermediate Claude usage on their end users' behalf." | Each person signs in with their own account on their own computer. Ostra holds no key and relays nothing. |
+| Names and logos: you can say, in plain text, that your product "runs Claude Code." You cannot use Anthropic's names or logos in your product name or logo. You cannot suggest endorsement. | Ostra's name and logo contain no Anthropic name or logo. The docs and the UI name Claude Code in plain text only. |
 
 Anthropic also says: "Advertised usage limits for Pro and Max plans assume ordinary, individual usage of
-Claude Code and the Agent SDK." On a plan, keep `limits.max_parallel_executions` at 3 or lower, and do not run
-Ostra for other people on your login. The [Consumer Terms](https://www.anthropic.com/legal/consumer-terms)
-(effective October 8, 2025) forbid it: "You may not share your Account login information, Anthropic API key,
+Claude Code and the Agent SDK." On a plan, keep `limits.max_parallel_executions` at 3 or lower. Do not run Ostra
+for other people on your login. The [Consumer Terms](https://www.anthropic.com/legal/consumer-terms)
+(effective October 8, 2025) forbid this use: "You may not share your Account login information, Anthropic API key,
 or Account credentials with anyone else."
 
 Claude Code inherits `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_BASE_URL` from Ostra's
-environment. When they are set, harness traffic follows them as well, so set them only to an API key or to a
-gateway that holds API keys. To run Claude Code on your plan while native agents use an API key, save the key
-from the browser (or in the keychain) instead of exporting it.
+environment. If they are set, harness traffic also uses them. Thus, set them only to an API key or to a gateway
+that holds API keys. You can run Claude Code on your plan and native agents on an API key. To do this, save the
+key from the browser or in the keychain. Do not export it.
 
 ## Enforcement so far
 
-- 2026-01-09: server-side checks started rejecting subscription OAuth tokens outside Claude Code.
-- 2026-02-19: the rule was written into the Claude Code legal and compliance page.
+- 2026-01-09: server-side checks started to reject subscription OAuth tokens outside Claude Code.
+- 2026-02-19: Anthropic wrote the rule into the Claude Code legal and compliance page.
 - 2026-04-04: Claude plans stopped covering usage through third-party harnesses such as OpenClaw and
   OpenCode. Those tools now need an API key or pay-as-you-go extra usage.
 
-Anthropic "may do so without prior notice." Ostra is unaffected because its native path uses API keys and
-its harness path runs Claude Code itself.
+Anthropic "may do so without prior notice." These changes have no effect on Ostra, because its native path
+uses API keys and its harness path runs Claude Code itself.
 
 ## Sources
 

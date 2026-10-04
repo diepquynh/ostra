@@ -1,25 +1,30 @@
 # Executors
 
 An executor is the part of Ostra that runs one agent from its first message to its `submit_<agent>` call. The
-engine decides what to run and when, and it never runs a model itself. It hands an executor a finished
-execution spec and gets one result back. Everything between those two points, including the model calls,
-the tool calls, the permission asks, the streaming output, and the timeout, belongs to the executor.
+engine decides what to run and when. The engine never runs a model itself. It gives an executor a finished
+execution spec and gets one result back. The executor controls all the work between these two points:
+
+- The model calls.
+- The tool calls.
+- The permission asks.
+- The streaming output.
+- The timeout.
 
 Ostra has two kinds of executor:
 
 - **Native.** Ostra runs the agent loop itself. It calls the provider's API with your API key and runs its own
   tools.
 - **Harness.** Ostra starts an installed coding CLI (Claude Code, Codex, Grok Build, or Antigravity) in a
-  terminal and lets that CLI run the loop. Ostra still checks every tool call, serves the tools only Ostra has,
-  and reads the result.
+  terminal and lets that CLI run the loop. Ostra still checks each tool call, serves the tools that only Ostra
+  has, and reads the result.
 
-Both kinds sit behind the same two traits, so the engine never needs to know which one it is talking to. The
-route in your settings picks one per agent ([Settings and routing](settings-and-routing.md)), and
-[Provider usage](../providers/README.md) lists which credentials each path takes.
+Both kinds use the same two traits. Thus, the engine does not know which kind it uses. The route in your
+settings selects one kind for each agent ([Settings and routing](settings-and-routing.md)).
+[Provider usage](../providers/README.md) lists the credentials that each path takes.
 
 ## The contract
 
-The whole interface lives in `crates/ostra-core/src/exec.rs`. It has two traits:
+The full interface is in `crates/ostra-core/src/exec.rs`. It has two traits:
 
 ```rust
 pub trait Executor: Send + Sync {
@@ -36,75 +41,84 @@ pub trait ExecutionHost: Send + Sync {
 }
 ```
 
-`Executor` is what an executor provides. `ExecutionHost` is what the engine gives the executor back while it
-runs. `run` never returns an error type: every way an execution can end becomes an `ExecutionResult` with a
-status. That keeps the runner simple, because the runner only ever handles one shape of answer.
+An executor supplies `Executor`. The engine gives `ExecutionHost` to the executor for the duration of the run.
+`run` never returns an error type. Each possible end of an execution becomes an `ExecutionResult` with a status.
+This keeps the runner simple, because the runner handles only one shape of answer.
 
 ### What goes in
 
-An `ExecutionSpec` carries everything the run needs, already resolved:
+An `ExecutionSpec` holds all the data that the run needs. The engine resolves this data before the run:
 
 | Field | What it holds |
 | --- | --- |
-| `route` | The executor and model, resolved from settings when the spec was built. |
+| `route` | The executor and model. The engine resolves them from settings when it builds the spec. |
 | `system_prompt` | The agent's prompt, rendered with this executor's tool names. |
 | `first_message` | The spawn block, the repo brief, and any custom instructions. |
-| `capabilities` | Which tools the agent may have, from its `agent.toml`. |
+| `capabilities` | The tools that the agent can have, from its `agent.toml`. |
 | `submit_schema` | The JSON schema of `submit_<agent>`. |
 | `timeout_secs` | The hard time budget for this execution. |
-| `ctx` | What the policy needs: repo root, session dir, report path, permission mode and rules, protected paths, the memory database, the sandbox mode. |
-| `resume` | Set when this run continues an earlier one. After a pause, `resume.from` is the run's own id. |
-| `harness_session_id` | A session id chosen up front, for the CLIs that accept one. |
+| `ctx` | The data that the policy needs: the repo root, the session dir, the report path, the permission mode and rules, the protected paths, the memory database, and the sandbox mode. |
+| `resume` | Set when this run continues an earlier run. After a pause, `resume.from` is the run's own id. |
+| `harness_session_id` | A session id that Ostra selects before the start, for the CLIs that accept one. |
 
-The executor does not read settings to decide what model to use or which tools to offer. That decision was
-made once, when the engine built the spec. Settings the executor does read fresh, such as the sandbox table,
-are read at the start of each execution, so a change applies to the next one.
+The executor does not read settings to select the model or the tools. The engine made this decision one time,
+when it built the spec. The executor reads some settings fresh, for example the sandbox table. It reads them at
+the start of each execution, so a change applies to the next execution.
 
 ### What comes out
 
-An `ExecutionResult` has a status, the submit payload when there is one, the last assistant text, usage, the
-harness session id, and an error message. The statuses are:
+An `ExecutionResult` has these parts:
+
+- A status.
+- The submit payload, if there is one.
+- The last assistant text.
+- The usage.
+- The harness session id.
+- An error message.
+
+The statuses are:
 
 | Status | Meaning |
 | --- | --- |
 | `ok` | The agent called its submit tool. |
-| `stuck` | The agent submitted with `status: "stuck"`, which asks the engine for a rescue. |
+| `stuck` | The agent submitted with `status: "stuck"`. This status asks the engine for a rescue. |
 | `handoff` | The agent submitted with `status: "handoff"`. |
-| `error` | The run ended without a usable submit: a timeout, a crash, a refusal, a launch failure. |
-| `denied` | The engine could not start it: the route did not resolve, no executor serves it, or the spawn block could not be built. No executor ran. |
-| `cancelled` | You or the engine stopped it. |
-| `interrupted` | It was stopped so it could be resumed, or the server restarted while it ran. |
+| `error` | The run ended without a usable submit. The cause is a timeout, a crash, a refusal, or a launch failure. |
+| `denied` | The engine could not start the run. The route did not resolve, no executor serves it, or the engine could not build the spawn block. No executor ran. |
+| `cancelled` | You or the engine stopped the run. |
+| `interrupted` | Ostra stopped the run to resume it later, or the server restarted during the run. |
 
-The engine reads only the submit payload. The final text is kept for display and for the transcript, and
-nothing downstream parses it. This is why every prompt ends with the instruction to call the submit tool, and
-why both executors chase an agent that stops without calling it.
+The engine reads only the submit payload. Ostra keeps the final text for display and for the transcript, but
+no later step parses it. For this reason, each prompt ends with the instruction to call the submit tool. For
+the same reason, both executors remind an agent that stops without the submit call.
 
 ### What streams while it runs
 
-`ExecutionHost::emit` takes an `ExecutionDelta`, and the engine stores and broadcasts each one to the Activity
-view. The deltas are the same for both executors, except `turn`:
+`ExecutionHost::emit` takes an `ExecutionDelta`. The engine stores each delta and broadcasts it to the Activity
+view. Both executors send the same deltas, except `turn`:
 
-- `text` and `thinking`: model output, buffered into readable chunks.
-- `tool_call`, `policy`, `tool_result`: one tool call, the decision the policy made on it, and what came back.
-- `tool_output`: live output of a running shell command, so you can watch a long build scroll.
+- `text` and `thinking`: model output, in buffered chunks that a person can read.
+- `tool_call`, `policy`, `tool_result`: one tool call, the decision of the policy on it, and the result.
+- `tool_output`: live output of a shell command that runs now. You can see the output of a long build as it
+  comes.
 - `usage`: a running total of tokens and cost.
-- `turn`: the tokens and cost of one model response, not a total, and the IDs of the tool calls it made. Only
-  the native executor sends it.
+- `turn`: the tokens and cost of one model response, not a total, and the IDs of the tool calls in it. Only the
+  native executor sends it.
 - `status`: a one-line note, such as "Bash runs without a sandbox" or "The session went quiet; Ostra reminded
   it to submit."
-- `native_session_id`: the harness CLI's own session id, once it is known.
+- `native_session_id`: the harness CLI's own session id, after Ostra knows it.
 
-Because both executors emit the same deltas, the Activity view does not have a native mode and a harness mode;
-a harness run simply shows no per-response costs.
-A harness run also has a Terminal tab with its raw screen, which the native executor has no equivalent for.
+Both executors emit the same deltas. Thus, the Activity view has no separate native mode and harness mode. A
+harness run only shows no costs for each response.
+A harness run also has a Terminal tab with its raw screen. The native executor has no equivalent tab.
 
 ## The native executor
 
-The native executor lives in `crates/ostra-exec-native/src/lib.rs`. It is a streaming agent loop over the
-`Provider` trait, with Anthropic (Messages API) and OpenAI (Responses API) implementations in
-`ostra-providers`.
+The native executor is in `crates/ostra-exec-native/src/lib.rs`. It is a streaming agent loop over the
+`Provider` trait. `ostra-providers` has the implementations for Anthropic (Messages API) and OpenAI (Responses
+API).
 
-A native run's Activity tab streams each tool call as the loop dispatches it, with its timing:
+The Activity tab of a native run shows each tool call with its timing when the loop dispatches the call:
 
 ![The Activity tab of a native implementer run](../images/console/execution.png)
 
@@ -112,188 +126,224 @@ A native run's Activity tab streams each tool call as the loop dispatches it, wi
 
 Before the first model call, a run does the following, in order:
 
-1. Resolves the model to a provider. A missing API key fails here with a message that says which variable to
-   set.
-2. Opens the workspace's MCP servers for this execution ([MCP servers](mcp.md)). A server that cannot be
-   reached adds one status line, and the run continues without it.
-3. Builds the policy for this execution from the spec's context and the project profile's build and test
-   commands. The build-streak guard uses those commands.
-4. Builds the tool environment: the persistent shell directory, the set of files read so far, an HTTP client,
-   and the list of environment variables every child process must not inherit.
-5. Decides the sandbox. The `[sandbox]` table is read fresh. If it asks for a sandbox, Bash runs under
-   bubblewrap on Linux or Seatbelt on macOS with a per-execution scratch `/tmp`, and under `allowlist` or
-   `public` with one egress proxy that every Bash call of the execution shares (a socket on bubblewrap, a
-   loopback port on Seatbelt); its decisions are recorded with the execution's activity ([sandboxing](../security/sandboxing.md#network)). If it allows running without
-   one and none is available, the run says so in the Activity view. [OS compatibility](../platforms/os-compatibility.md)
-   lists which backend each platform has.
-6. Assembles the tool list from the agent's capabilities (see [Tools](tools.md)), adds the typed `Document`
-   tool for the agents that write one, adds the workspace MCP tools, and appends `submit_<agent>` last.
-7. Builds the message list. A fresh run starts with the first message. A resumed run rebuilds the stored
+1. Resolves the model to a provider. If the API key is missing, the run fails here. The message tells which
+   variable to set.
+2. Opens the workspace's MCP servers for this execution ([MCP servers](mcp.md)). If the run cannot reach a
+   server, it adds one status line and continues without that server.
+3. Builds the policy for this execution from the spec's context and the build and test commands of the project
+   profile. The build-streak guard uses those commands.
+4. Builds the tool environment: the persistent shell directory, the set of files that the agent read, an HTTP
+   client, and the list of environment variables that no child process can inherit.
+5. Decides the sandbox. The run reads the `[sandbox]` table fresh. If the table asks for a sandbox, these
+   conditions apply:
+   - Bash runs under bubblewrap on Linux or Seatbelt on macOS, with a scratch `/tmp` for each execution.
+   - Under `allowlist` or `public`, all Bash calls of the execution share one egress proxy. The proxy is a
+     socket on bubblewrap and a loopback port on Seatbelt.
+   - Ostra records the decisions of the proxy with the execution's activity ([sandboxing](../security/sandboxing.md#network)).
+
+   If the table allows a run without a sandbox and no sandbox is available, the run shows this in the Activity
+   view. [OS compatibility](../platforms/os-compatibility.md) lists the backend of each platform.
+6. Makes the tool list from the agent's capabilities (refer to [Tools](tools.md)). Then it adds the typed
+   `Document` tool for the agents that write a document, and the workspace MCP tools. It adds `submit_<agent>`
+   last.
+7. Builds the message list. A new run starts with the first message. A resumed run rebuilds the stored
    transcript and adds a resume turn (below).
 
-The system prompt is marked for caching, and so is the last tool definition, the submit tool. That places one
-cache breakpoint after the system prompt and one after the tool list, so every turn after the first reads both
-from cache. Every breakpoint uses the 1-hour TTL, because the turns of one execution can sit more than five
-minutes apart: a long build or a permission card you have not answered yet would otherwise expire the cache.
+Ostra marks the system prompt for caching. It also marks the last tool definition, the submit tool. Thus,
+there is one cache breakpoint after the system prompt and one after the tool list. Each turn after the first
+reads both from the cache. Each breakpoint uses the 1-hour TTL, because the time between two turns of one
+execution can be more than five minutes. For example, a long build or an unanswered permission card can take
+that time. With a shorter TTL, the cache expires.
 
 ### The loop
 
-Each turn sends the whole conversation and streams the answer back. Text and thinking deltas are buffered and
-flushed every 160 characters or at a newline, so the Activity view shows sentences instead of one row per token.
-When the provider runs a server-side tool (web search, or the provider's fetch), that shows up as a status line.
-While the provider offers its own fetch tool, Ostra's `WebFetch` is left out so the model sees one fetch tool.
-On Anthropic, Ostra sends the `web_search_20250305` and `web_fetch_20250910` tools, which call the search and
-fetch backends directly. The 2026 versions run inside Anthropic's code-execution sandbox, and when code
-execution is rate limited (`too_many_requests`), every search fails, each failure costs a model turn, and the
-model concludes it has no internet access.
+Each turn sends the full conversation and streams the answer back. The loop buffers text and thinking deltas.
+It flushes them every 160 characters or at a newline, so the Activity view shows sentences, not one row for
+each token. When the provider runs a server-side tool (web search, or the provider's fetch), the Activity view
+shows a status line. If the provider offers its own fetch tool, Ostra removes its `WebFetch`. Thus, the model
+sees one fetch tool.
 
-What happens next depends on why the model stopped:
+On Anthropic, Ostra sends the `web_search_20250305` and `web_fetch_20250910` tools. These tools call the search
+and fetch backends directly. The 2026 versions run inside Anthropic's code-execution sandbox. When code
+execution is rate limited (`too_many_requests`), these events occur:
+
+- Each search fails.
+- Each failure costs a model turn.
+- The model concludes that it has no internet access.
+
+The next action of the loop depends on the reason that the model stopped:
 
 | Stop reason | What the loop does |
 | --- | --- |
 | Tool calls present | Runs them (below), appends the results, and starts the next turn. |
-| `pause_turn` | The provider paused a long server-side tool turn. The loop continues it. |
+| `pause_turn` | The provider paused a long server-side tool turn. The loop continues the turn. |
 | Refusal | Ends the run as `error` with the refusal category and text. |
-| Output limit, no tool call | Asks the model to continue from where it stopped, at most 3 times. |
-| Plain end of turn, no tool call | Reminds the model once to call the submit tool. A second turn with no tool call ends the run as `ok` with no submit, which the engine treats as a failed step. |
+| Output limit, no tool call | Asks the model to continue from the point where it stopped, at most 3 times. |
+| Plain end of turn, no tool call | Reminds the model one time to call the submit tool. If a second turn has no tool call, the run ends as `ok` with no submit. The engine sees this result as a failed step. |
 
-The loop has a ceiling of 400 turns. A run that reaches it without submitting ends as an error, because an
-agent that has not submitted after 400 turns is looping.
+The loop has a limit of 400 turns. If a run gets to this limit without a submit, it ends as an error. An agent
+without a submit after 400 turns is in a loop.
 
 ### Tool dispatch
 
-The model often asks for several tools in one turn. The loop runs them in order, with one exception: a run of
-consecutive read-only calls (`Read`, `Grep`, `Glob`, `WebFetch`, `MemoryRecall`, `DocsSearch`, `Skill`, and the code
-navigation tools) runs concurrently. Writes and shell commands always run one at a time and in the order the
-model gave, because the second call may depend on the first.
+The model often asks for many tools in one turn. The loop runs them in sequence, with one exception. A
+sequence of read-only calls runs concurrently. The read-only tools are `Read`, `Grep`, `Glob`, `WebFetch`,
+`MemoryRecall`, `DocsSearch`, `Skill`, and the code navigation tools. Writes and shell commands always run one
+at a time, in the sequence that the model gave. The reason is that the second call can depend on the first.
 
-Every single call follows the same path:
+Each call follows the same path:
 
-1. **Canonicalize.** Relative paths become absolute against the shell's current directory, `Bash` gets its
-   `cwd`, and a `WebFetch` URL is replaced with its parsed form. The policy then checks this call and the tool
-   runs this call, so the check and the run cannot disagree about the target. A URL such as
-   `https://evil.example\@docs.rs/x` is judged by the host it actually reaches.
+1. **Canonicalize.** The loop makes these changes:
+   - It makes relative paths absolute against the shell's current directory.
+   - It gives `Bash` its `cwd`.
+   - It replaces a `WebFetch` URL with its parsed form.
+
+   The policy then checks this call, and the tool runs this same call. Thus, the check and the run always have
+   the same target. For a URL such as `https://evil.example\@docs.rs/x`, the policy judges the host that the
+   URL really reaches.
 2. **Check.** `ExecutionPolicy::check` runs the guards and then the permission rules. The decision goes to the
    Activity view.
-3. **Deny or ask.** A denial becomes an error result that leads with the correction. An ask goes to
+3. **Deny or ask.** A denial becomes an error result that starts with the correction. An ask goes to
    `ExecutionHost::ask_permission`, which shows a card in the browser and waits. "Always in this workspace"
-   also adds a session allow rule, so the same call does not ask again in this execution.
-4. **Run.** The tool runs with a live-output callback, so Bash output streams while the command runs.
-5. **Observe.** The policy sees the outcome. That is how the build-streak guard counts failures: after two
-   failed builds it appends the project's recorded lessons to the tool result, and after five it refuses build
-   commands and tells the agent to return `STUCK:`.
+   also adds a session allow rule. Thus, the same call does not ask again in this execution.
+4. **Run.** The tool runs with a live-output callback, so Bash output streams during the command.
+5. **Observe.** The policy sees the result. The build-streak guard counts failures with this step:
+   - After two failed builds, it appends the project's recorded lessons to the tool result.
+   - After five failed builds, it refuses build commands and tells the agent to return `STUCK:`.
 
-Guards and permissions are covered on their own page, [Agent containment](../security/agent-containment.md).
-The point here is that the native loop has no path to a tool that skips step 2.
+A separate page, [Agent containment](../security/agent-containment.md), describes guards and permissions. On
+this page, the important fact is that the native loop has no path to a tool that skips step 2.
 
 ### The submit call
 
-The submit call is not a tool that does something. It is how the run ends. When the model calls
-`submit_<agent>`, the loop:
+The submit call is not a tool that does an action. It ends the run. When the model calls `submit_<agent>`,
+the loop does these steps:
 
-1. Coerces stringified JSON fields back into objects, because models sometimes send a nested object as a
+1. Changes stringified JSON fields back into objects, because models sometimes send a nested object as a
    string.
-2. Runs the policy on it like any other call.
-3. Validates it against the agent's submit schema (`validate_submit`) and runs the document checks.
-4. Refuses an `ok` submit when the agent has a declared report file that does not exist yet, because the engine
-   reads that file next. The code reviewer is exempt.
+2. Runs the policy on the call, the same as on all other calls.
+3. Validates the call against the agent's submit schema (`validate_submit`) and runs the document checks.
+4. Refuses an `ok` submit if the agent has a declared report file that does not exist, because the engine
+   reads that file next. This step does not apply to the code reviewer.
 
-A refused submit is an error result, and the model tries again. An accepted submit ends the run at once: any
-other tool calls in the same turn are answered "Not run" and never execute. The submit's `status` field decides
-between `ok`, `stuck`, and `handoff`.
+A refused submit is an error result, and the model tries again. An accepted submit ends the run immediately.
+The loop answers "Not run" to all other tool calls in the same turn, and these calls never run. The submit's
+`status` field selects `ok`, `stuck`, or `handoff`.
 
 ### Long runs
 
-An implementer can run for hundreds of turns, so a conversation can outgrow the model's context window. The
-loop compacts it before that happens: once the next request would fill 95% of the window, it asks the provider
-to summarize the conversation, replaces every message with the result, and continues. The context window comes
-from the models.dev catalog (1,000,000 tokens for current Opus and Sonnet models, 200,000 for Haiku 4.5), and a
-model the catalog does not list is assumed to have 200,000.
+An implementer can run for hundreds of turns, so a conversation can become larger than the model's context
+window. The loop compacts the conversation before this occurs. When the next request will fill 95% of the window,
+the loop does these steps:
 
-The loop knows the size of the next request without counting tokens itself. Each response reports its prompt
-tokens (input, cache reads, and cache writes), and the next request resends that prompt plus the response, so
-their sum is where the next request starts. Tool results added since then are estimated at four characters a
-token. The latest size is kept as `context_tokens` in the execution's usage.
+1. It asks the provider to summarize the conversation.
+2. It replaces each message with the result.
+3. It continues.
 
-Compaction runs only when the last message is a user turn, because a provider refuses to summarize while a tool
-call still waits for its result. How the summary is made depends on the provider:
+The context window comes from the models.dev catalog: 1,000,000 tokens for current Opus and Sonnet models, and
+200,000 for Haiku 4.5. For a model that is not in the catalog, the loop uses 200,000.
+
+The loop knows the size of the next request, but it does not count tokens itself. Each response reports its
+prompt tokens (input, cache reads, and cache writes). The next request sends that prompt and the response
+again. Thus, their sum is the start size of the next request. For tool results that the loop added after the
+response, it estimates four characters for each token. The loop keeps the latest size as `context_tokens` in
+the execution's usage.
+
+Compaction runs only when the last message is a user turn. The reason is that a provider refuses to summarize
+when a tool call waits for its result. The method of the summary depends on the provider:
 
 | Provider | How it compacts | What replaces the conversation |
 | --- | --- | --- |
 | Anthropic, on models with on-demand compaction (Opus 4.6 and later, Sonnet 4.6 and later, Fable, Mythos) | The same request with `compaction: {type: "summarize"}` and Ostra's summarization instructions, beta `compact-2026-09-04` | The signed `compaction` block, sent back verbatim first in every later request |
 | OpenAI | `POST /v1/responses/compact` with the conversation and the system prompt | The returned window: the messages it kept and an encrypted `compaction` item |
-| Anthropic Haiku 4.5 and older models, or any endpoint that rejects the server-side form | The same request with the instructions as a last user turn and tools turned off, so the cached prefix still applies | The summary text, as a user message |
+| Anthropic Haiku 4.5 and older models, or any endpoint that rejects the server-side form | The same request with the instructions as a last user turn and with the tools off. Thus, the cached prefix stays valid. | The summary text, as a user message |
 
-The instructions ask for the task and its requirements, the facts still needed from files read, every file
-changed, decisions and their reasons, failed commands, what is left, and the exact next step, with paths and
-errors kept verbatim. After the summary the loop adds one user turn: the context was compacted, continue from
-the next step, and read a file again when its content is needed. A compaction starts a new prompt cache, because
-every message after the system prompt and tools changes, and that is the reason it waits until the window is
-nearly full. Summarizing costs one request over the whole conversation, which is added to the execution's usage.
+The instructions ask for these items, with paths and errors kept verbatim:
 
-The new window is stored in the transcript as one `compaction` record. Reading a transcript back starts from the
-latest such record, so a resumed run, a plan revision round, or a consult continues from the summary instead of
-the full history. If no summary comes back (the summary was cut off, the model refused, or the request failed),
-the run continues without it and tries again only after the context grows by 2% of the window, because each try
-sends the whole conversation.
+- The task and its requirements.
+- The facts from the files read that the agent still needs.
+- Each changed file.
+- The decisions and their reasons.
+- The failed commands.
+- The work that remains.
+- The exact next step.
 
-Earlier versions cleared old tool results instead, through Anthropic's `clear_tool_uses` context edit. That edit
-changes the conversation near its start on every turn, so each request missed the prompt cache after the first
-cleared result and wrote the rest of the conversation to the cache again. One plan revision spent about $6 of $7
-on those writes. Compaction changes the conversation once, then the cache holds again.
+After the summary, the loop adds one user turn. The turn says that Ostra compacted the context. It tells the
+model to continue from the next step and to read a file again when it needs the content. A compaction starts a
+new prompt cache, because each message after the system prompt and the tools changes. For this reason, the
+loop waits until the window is almost full. A summary costs one request over the full conversation. Ostra adds
+this cost to the execution's usage.
+
+Ostra stores the new window in the transcript as one `compaction` record. When Ostra reads a transcript back,
+it starts from the latest `compaction` record. Thus, a resumed run, a plan revision round, or a consult continues
+from the summary, not from the full history. No summary can come back because the summary was cut off, the model
+refused, or the request failed. In this case, the run continues without a summary. It tries again only after
+the context increases by 2% of the window, because each try sends the full conversation.
+
+Earlier versions cleared old tool results with Anthropic's `clear_tool_uses` context edit. That edit changes
+the conversation near its start on each turn. Thus, after the first cleared result, each request missed the
+prompt cache and wrote the remaining conversation to the cache again. One plan revision spent about $6 of $7 on
+those writes. Compaction changes the conversation one time. After that, the cache is valid again.
 
 ### Provider errors
 
-The provider clients retry rate limits and server errors with exponential backoff and jitter, up to 4 retries
-with the delay capped at 60 seconds, and they honor a `Retry-After` header. They never retry once output has
-started streaming, because a retried turn would repeat text the Activity view already showed. A call that still
-fails ends the run with the provider's error.
+The provider clients retry rate limits and server errors with exponential backoff and jitter. They do at most
+4 retries, and the maximum delay is 60 seconds. They obey a `Retry-After` header. They never retry after the
+output starts to stream, because a retried turn repeats text that the Activity view showed. If a call fails
+after the retries, the run ends with the provider's error.
 
 ### Transcript and resume
 
-Every message the loop sends or receives goes to `ExecutionHost::record_message`, which stores it. A resumed
-execution reads that transcript back and adds one user turn:
+Each message that the loop sends or receives goes to `ExecutionHost::record_message`, which stores it. A
+resumed execution reads that transcript back and adds one user turn:
 
-- If the last stored message is the assistant's, its open tool calls are answered "Interrupted: this call did
-  not finish.", because the provider refuses a conversation with tool calls that have no results.
-- The resume note is then added: either the note the engine supplied ("Continue the workflow." after a pause)
-  or "The previous run was interrupted. Continue from where it stopped."
-- If the last stored message is already a user turn (the run stopped while waiting on the model), the note
-  joins it, because two user turns in a row are merged when the transcript is read.
+- If the last stored message is from the assistant, the loop answers its open tool calls with "Interrupted:
+  this call did not finish.". The reason is that the provider refuses a conversation with tool calls that have
+  no results.
+- Then the loop adds the resume note. The note is the note from the engine ("Continue the workflow." after a
+  pause) or "The previous run was interrupted. Continue from where it stopped."
+- If the last stored message is a user turn, the note becomes part of it. This occurs when the run stopped
+  during a wait for the model. The reason is that Ostra merges two sequential user turns when it reads the
+  transcript.
 
-A run resumed after a pause is the same execution, so its transcript is already stored under its id. The loop
-records only the new turn, and the request it sends starts with the same messages the interrupted run sent, so
-the provider's prompt cache still covers that prefix while the cache lives. A run resumed from a different
-execution, such as a retry after a failure, copies the whole rebuilt transcript into its own.
+A run resumed after a pause is the same execution. Thus, Ostra already stores its transcript under its id. The
+loop records only the new turn. Its request starts with the same messages that the interrupted run sent. Thus,
+the provider's prompt cache covers that prefix until the cache expires. A run resumed from a different
+execution, such as a retry after a failure, copies the full rebuilt transcript into its own transcript.
 
-The same two paths serve subagent coordination. A `SubagentAsk` ends the run with status `waiting`, its tool
-result recorded like a submit's, and the answer later resumes it in place with the answer as the note. A pair-loop
-round or a consult run continues another execution's conversation, so it copies that transcript and adds the new
-spawn block as the note.
+Subagent coordination uses the same two paths. A `SubagentAsk` ends the run with status `waiting`. Ostra
+records its tool result the same as a submit. Later, the answer resumes the run in place, with the answer as the
+note. A pair-loop round or a consult run continues the conversation of a different execution. Thus, it copies
+that transcript and adds the new spawn block as the note.
 
-Known weakness: a continued conversation loses the prompt cache when its effort changed. Effort is resolved fresh
-for each execution from the agent's default and the workspace's `routing.effort` settings, and it is sent as the
-top-level `output_config.effort`. The provider invalidates the cached messages when that value differs from the
-earlier requests, so the whole replayed transcript is written to the cache again at full write price. This happens
-when you edit the effort settings between two runs of one conversation, for example between spec rounds. In one
-session a spec round that made a single tool call cost $1.73, because it rewrote about 200,000 tokens of the
-previous round's transcript. The executor does not record the effort a run used, so a continuation cannot keep it.
+Known weakness: if the effort of a continued conversation changes, the conversation loses the prompt cache.
+Ostra resolves the effort fresh for each execution from the agent's default and the workspace's
+`routing.effort` settings. It sends the effort as the top-level `output_config.effort`. If that value is
+different from the earlier requests, the provider invalidates the cached messages. Then the provider writes the
+full replayed transcript to the cache again at the full write price.
+
+This occurs when you edit the effort settings between two runs of one conversation, for example between spec
+rounds. In one session, a spec round with only one tool call cost $1.73. The cause was that it wrote about
+200,000 tokens of the previous round's transcript to the cache again. The executor does not record the effort
+of a run, so a continuation cannot keep it.
 
 ### Cost
 
-Each response's usage is added to a running total and emitted at once, so the cost in the header moves while
-the agent works. Prices come from the models.dev catalog, cached in the data dir and refreshed daily. Anthropic
-1-hour cache writes are priced at twice the input rate, because models.dev lists only the 5-minute write price.
-[Spend and limits](spend-and-limits.md) explains how these numbers turn into the session budget.
-Wall time spent in build and test commands is tracked separately as `build_ms`, which feeds the build-loop
-metric. `context_tokens` is the size of the latest request's context, not a sum, so it shows how close a run is to
-compaction.
+The loop adds the usage of each response to a running total and emits it immediately. Thus, the cost in the
+header changes during the work of the agent. Prices come from the models.dev catalog. Ostra caches the catalog
+in the data dir and refreshes it daily. The price of an Anthropic 1-hour cache write is twice the input rate,
+because models.dev lists only the 5-minute write price. [Spend and limits](spend-and-limits.md) tells how these
+numbers become part of the session budget.
+
+Ostra records the wall time of build and test commands separately as `build_ms`. The build-loop metric uses this
+value. `context_tokens` is the size of the latest request's context, not a sum. Thus, it shows how near a run is
+to compaction.
 
 ## Harness executors
 
-The harness executor lives in `crates/ostra-exec-harness`. It runs one agent inside an installed CLI, under a
+The harness executor is in `crates/ostra-exec-harness`. It runs one agent inside an installed CLI, under a
 real pseudo-terminal, in the project directory. The PTY bytes go to the browser, where xterm.js shows the CLI's
-own interface. You can watch it work and type into it.
+own interface. You can see the work of the CLI and type into it.
 
 The four supported CLIs:
 
@@ -304,83 +354,94 @@ The four supported CLIs:
 | Grok Build | `grok` | Chosen by Ostra (`--session-id`) | `sessions/<cwd>/<id>/updates.jsonl` |
 | Antigravity | `agy` | Captured from the screen or transcript | None: its transcript records no usage |
 
-The binary name can be changed per harness with `[harness.<name>].command`, and extra arguments go in
-`[harness.<name>].args`. The launch flags were checked against claude 2.1.280, codex 0.153.4, grok 1.0.30, and
+You can change the binary name for each harness with `[harness.<name>].command`. Put more arguments in
+`[harness.<name>].args`. We checked the launch flags against claude 2.1.280, codex 0.153.4, grok 1.0.30, and
 agy 1.2.6.
 
 ### Why run a harness at all
 
-A harness route bills the run to the account that CLI is signed into, through the provider's own sign-in and
-the provider's own client. That is the only way Ostra uses a subscription: it never copies a token or signs in
-for you. The harness also brings its own tool implementations and its own model-specific tuning.
+A harness route bills the run to the account of the CLI's sign-in. It uses the provider's own sign-in and the
+provider's own client. Ostra uses a subscription only in this way. It never copies a token, and it never signs
+in for you. The harness also has its own tool implementations and its own tuning for each model.
 
-The cost of that is control. Ostra did not write the loop and cannot change it. So the design goal of the
-harness executor is to put three things around a loop Ostra does not own:
+But Ostra has less control. Ostra did not write the loop and cannot change it. Thus, the harness executor adds
+three controls around a loop that Ostra does not own:
 
-1. Every tool call the CLI makes passes Ostra's policy, the same one the native loop uses.
+1. Each tool call of the CLI passes Ostra's policy. The native loop uses the same policy.
 2. The CLI gets Ostra's own tools (submit, report, document, memory, code navigation, and the workspace MCP
-   servers) and nothing that would let it route around them.
-3. The run ends when the agent submits, and Ostra finds out.
+   servers). It gets no tool that lets it go around them.
+3. The run ends when the agent submits, and Ostra gets this information.
 
-The next sections describe the parts that do each of these.
+The next sections describe the parts that do each of these controls.
 
 ### The launch plan
 
-`launch.rs` turns an execution spec into a `LaunchPlan`: a program, arguments, environment, working directory,
-and the files to write before start. Each CLI takes its configuration differently, so each has its own planner.
-They share these steps:
+`launch.rs` changes an execution spec into a `LaunchPlan`: a program, arguments, environment, working
+directory, and the files to write before the start. Each CLI takes its configuration in a different way. Thus,
+each CLI has its own planner. The planners share these steps:
 
-- **The prompt.** The agent prompt, rendered with that harness's tool names, becomes the CLI's system prompt
-  addition (`--append-system-prompt-file` for Claude Code, `developer_instructions` for Codex, `--rules` for
-  Grok, an agent file for Antigravity). The first message becomes the CLI's first user message. A first message
-  over 96 KiB is written to a file and the CLI is pointed at it, because command lines have a length limit.
-- **Hooks.** Every PreToolUse, PostToolUse, Stop, and SessionStart event is pointed at
+- **The prompt.** Ostra renders the agent prompt with the tool names of that harness. The result becomes the
+  addition to the CLI's system prompt:
+  - `--append-system-prompt-file` for Claude Code.
+  - `developer_instructions` for Codex.
+  - `--rules` for Grok.
+  - An agent file for Antigravity.
+
+  The first message becomes the CLI's first user message. If the first message is more than 96 KiB, Ostra
+  writes it to a file and gives the file to the CLI. The reason is that command lines have a length limit.
+- **Hooks.** Each PreToolUse, PostToolUse, Stop, and SessionStart event goes to
   `ostra hook --execution <id> --harness <name> --event <event>`, a subcommand of the same `ostra` binary. The
-  hook timeout is 24 hours, because a permission ask waits for you and must not time out first.
-- **The MCP server.** One stdio MCP server named `ostra` is registered: `ostra mcp-stdio --execution <id>`.
-- **No subagents.** The CLI's own subagent tool is turned off (`--disallowed-tools Agent,Task` for Claude Code,
-  `--disable multi_agent` for Codex, `--no-subagents` for Grok). Every Ostra agent is a leaf, because a delegated
-  task would run outside Ostra's view and its result would never reach the engine.
-- **No questions in the terminal.** Claude Code's `AskUserQuestion` and plan-mode tools are disabled, because
-  nobody watches the terminal for questions. An agent that needs you puts the question in its submit call, and
-  the engine turns it into a gate.
-- **The model and effort.** The routed model is passed explicitly, and the effort from `agent.toml` is mapped to
-  the CLI's word for it, clamped to what that CLI accepts.
-- **Environment.** The CLI gets your environment, so it comes up signed in. Ostra removes the credential
-  variables its own config names, except the ones that CLI reads to sign in (for example Claude Code keeps
-  `ANTHROPIC_API_KEY`). Variables that would make the CLI a nested child of the Claude Code session Ostra itself
-  was started from are removed too, because Claude Code does not save a nested session and it could never be
-  resumed. [Secrets and data](../security/secrets-and-data.md) covers which variables count as credentials.
+  hook timeout is 24 hours. The reason is that a permission ask waits for you, and the hook must not time out
+  before you answer.
+- **The MCP server.** Ostra registers one stdio MCP server with the name `ostra`: `ostra mcp-stdio --execution <id>`.
+- **No subagents.** Ostra turns off the CLI's own subagent tool (`--disallowed-tools Agent,Task` for Claude
+  Code, `--disable multi_agent` for Codex, `--no-subagents` for Grok). Each Ostra agent is a leaf. The reason is
+  that a delegated task runs where Ostra cannot see it, and its result never gets to the engine.
+- **No questions in the terminal.** Ostra disables Claude Code's `AskUserQuestion` and plan-mode tools,
+  because no person monitors the terminal for questions. If an agent needs you, it puts the question in its
+  submit call. The engine changes the question into a gate.
+- **The model and effort.** Ostra passes the routed model explicitly. It maps the effort from `agent.toml` to
+  the CLI's word for it, clamped to the values that the CLI accepts.
+- **Environment.** The CLI gets your environment, so it starts with a sign-in. Ostra removes the credential
+  variables that its own config names. It keeps the variables that the CLI reads to sign in (for example, Claude
+  Code keeps `ANTHROPIC_API_KEY`). Ostra itself can start from a Claude Code session. Ostra also removes the
+  variables that make the CLI a nested child of that session. The reason is that Claude Code does not save a
+  nested session, and the session cannot be resumed. [Secrets and data](../security/secrets-and-data.md) tells
+  which variables are credentials.
 
-Config files that hold the bridge token are written owner-only.
+Ostra writes the config files that hold the bridge token with owner-only permissions.
 
 ### Keeping the repository's own config out
 
-A coding CLI started in a folder reads that folder's own settings, and those can carry hooks and MCP servers.
-Those would run outside Ostra's guards. Each planner shuts that door in its CLI's own way:
+A coding CLI reads the settings of the folder in which it starts. These settings can contain hooks and MCP
+servers. These hooks and servers run outside Ostra's guards. Each planner blocks them in a different way for
+its CLI:
 
-- **Claude Code** loads only your user settings and Ostra's (`--setting-sources user`), and only Ostra's MCP
-  config (`--strict-mcp-config`). Ostra's hooks are passed as flag settings, which a user settings file cannot
-  turn off. Its folder-trust prompt is answered yes, because trust adds nothing from the repository in this mode.
-- **Codex** gets a per-execution profile that marks the repository, and every folder up to its git root,
-  `untrusted`. It opens restricted: the repository's `.codex/` config, hooks, and exec policies stay off, and
-  your saved trust is untouched. If its prompt ever offers only "Trust and continue", the run stops and tells you
-  to remove `-p`/`--profile` from your extra args, because trusting would load the repository's config. The
-  profile file is deleted when the execution ends. Codex also runs with `check_for_update_on_startup = false`,
-  because a self-update exits the CLI and ends the run before it starts.
-- **Grok Build** gets a per-execution `GROK_HOME` that links to your real one except for its config, its trust
-  list, and its leader socket, which are private copies. Ostra trusts only the session dir. If Grok asks to
-  trust the repository, the run stops and asks you to trust it in Grok yourself, because Grok runs a trusted
-  folder's hooks and MCP servers and Ostra does not make that decision for you.
-- **Antigravity** reads hooks and MCP servers only from global config. Ostra installs one global integration
-  whose hook and MCP commands do nothing unless `$OSTRA_EXECUTION` is set, so it is inert in your own
-  Antigravity sessions.
+- **Claude Code** loads only your user settings and Ostra's settings (`--setting-sources user`). It loads only
+  Ostra's MCP config (`--strict-mcp-config`). Ostra passes its hooks as flag settings, and a user settings file
+  cannot turn them off. Ostra answers yes to the folder-trust prompt, because in this mode, trust adds nothing
+  from the repository.
+- **Codex** gets a profile for each execution. The profile marks the repository and each folder up to its git
+  root as `untrusted`. Thus, Codex opens with restrictions. The repository's `.codex/` config, hooks, and exec
+  policies stay off, and Ostra does not change your saved trust. If the prompt of Codex offers only "Trust and
+  continue", the run stops. It tells you to remove `-p`/`--profile` from your extra args, because trust loads
+  the repository's config. Ostra deletes the profile file when the execution ends. Codex also runs with
+  `check_for_update_on_startup = false`. The reason is that a self-update stops the CLI and ends the run before
+  it starts.
+- **Grok Build** gets a `GROK_HOME` for each execution. This `GROK_HOME` links to your real one. Its config,
+  its trust list, and its leader socket are exceptions: they are private copies. Ostra trusts only the session
+  dir. If Grok asks to trust the repository, the run stops and asks you to trust it in Grok yourself. The reason
+  is that Grok runs the hooks and MCP servers of a trusted folder, and Ostra does not make that decision for you.
+- **Antigravity** reads hooks and MCP servers only from global config. Ostra installs one global integration.
+  Its hook and MCP commands do nothing if `$OSTRA_EXECUTION` is not set. Thus, the integration has no effect in
+  your own Antigravity sessions.
 
 ### The hook bridge
 
-The CLI runs `ostra hook` for every hook event and pipes the event payload to it on stdin. That process is thin:
-it forwards the payload to the running server at `POST /internal/policy` with the execution's bearer token,
-prints what the server answers, and exits. The server's `HarnessBridge` (`bridge.rs`) does the work:
+The CLI runs `ostra hook` for each hook event and pipes the event payload to it on stdin. That process does
+little work. It forwards the payload to the running server at `POST /internal/policy` with the execution's
+bearer token. Then it prints the answer of the server and exits. The server's `HarnessBridge` (`bridge.rs`)
+does the work:
 
 ```
 harness CLI ── stdin ──> ostra hook ── POST /internal/policy ──> HarnessBridge
@@ -390,152 +451,193 @@ harness CLI ── stdin ──> ostra hook ── POST /internal/policy ──>
 harness CLI <── stdout ── ostra hook <──── adapter.pre_response ───┘
 ```
 
-The bridge fails closed. If `ostra hook` cannot reach the server, cannot read the answer, or is missing its URL
-or token, a PreToolUse answers with a denial that tells the agent to stop. An unknown execution, a stale token,
-or a hook whose harness does not match the execution also denies. Tokens are compared in constant time.
-`/internal/*` accepts local peers only.
+The bridge fails closed. A PreToolUse answers with a denial that tells the agent to stop if one of these
+conditions occurs:
 
-A sandboxed harness cannot reach the server's TCP port under any network choice but `host`. At startup the
-server also serves the two `/internal/*` routes, and nothing else, on a Unix socket in the data dir
-(`serve_bridge_socket`). In a bubblewrap sandbox, Ostra's helper listens on the bridge's port on the sandbox's
-own loopback and forwards each connection to that socket. In a Seatbelt sandbox, which shares the host's
-loopback, a fresh port of `127.0.0.1` splices to the socket, and the policy lets the CLI connect to that port.
-Either way the console's API is not reachable from the sandbox at all. The launch sets `OSTRA_URL` to
-`http://127.0.0.1:<port>` for that port and writes the same URL into any config file it made that names the
-bridge, because Grok's config passes `OSTRA_URL` to the MCP server it starts.
+- `ostra hook` cannot reach the server.
+- `ostra hook` cannot read the answer.
+- `ostra hook` does not have its URL or token.
 
-A Stop event goes through the bridge too, and that is how Ostra keeps an agent from stopping without a result.
-If the agent stops before it has submitted, the bridge blocks the stop and tells it to call its submit tool. It
-does that twice. On the third stop the run ends as an error ("The agent ended its turn three times without
-calling submit").
+An unknown execution, an old token, or a hook with a harness that is different from the execution also causes a
+denial. Ostra compares tokens in constant time. `/internal/*` accepts only local peers.
 
-A harness run's Tool calls tab lists every call the hook bridge saw, with the policy decision and the rule behind
-it:
+A sandboxed harness can reach the server's TCP port only under the network choice `host`. Thus, at startup,
+the server also serves the two `/internal/*` routes, and nothing else, on a Unix socket in the data dir
+(`serve_bridge_socket`):
+
+- In a bubblewrap sandbox, Ostra's helper listens on the bridge's port on the sandbox's own loopback. It
+  forwards each connection to that socket.
+- A Seatbelt sandbox shares the host's loopback. A new port of `127.0.0.1` splices to the socket, and the policy
+  lets the CLI connect to that port.
+
+In both cases, the sandbox cannot reach the console's API. The launch sets `OSTRA_URL` to
+`http://127.0.0.1:<port>` for that port. It also writes the same URL into each config file that it made that
+names the bridge. The reason is that Grok's config passes `OSTRA_URL` to the MCP server that Grok starts.
+
+A Stop event also goes through the bridge. With this event, Ostra prevents an agent stop without a result. If
+the agent stops before its submit, the bridge blocks the stop and tells the agent to call its submit tool. The
+bridge does this two times. On the third stop, the run ends as an error ("The agent ended its turn three times
+without calling submit").
+
+The Tool calls tab of a harness run lists each call that the hook bridge saw. It shows the policy decision and
+the rule of the decision:
 
 ![The Tool calls tab of a Claude Code run with allowed, denied, and asking calls](../images/console/harness-toolcalls.png)
 
 ### Adapters
 
-Each CLI names its tools differently and expects a different answer shape. `adapters/` has one adapter per CLI.
-Each one turns its CLI's payload into a canonical `ToolCall` (Claude Code's tool names and input shapes), and
-turns Ostra's decision back into the exact response that CLI accepts. The policy engine sees only canonical
-calls, so a guard is written once and holds for all four CLIs.
+Each CLI has different tool names and expects a different answer shape. `adapters/` has one adapter for each
+CLI. Each adapter changes its CLI's payload into a canonical `ToolCall` (Claude Code's tool names and input
+shapes). It also changes Ostra's decision back into the exact response that the CLI accepts. The policy engine
+sees only canonical calls. Thus, a guard has one implementation, and it applies to all four CLIs.
 
 | CLI | Tool names it uses | Answer shape and its quirks |
 | --- | --- | --- |
-| Claude Code | Already canonical. `MultiEdit` and `NotebookEdit` map to `Edit`, `LS` to a read. | Decisions and rewrites go only in `hookSpecificOutput`, because a top-level field fails its schema. |
-| Codex | `exec_command`/`shell` to `Bash`, `apply_patch` to the files the patch touches. | Rejects an `allow` without `updatedInput`, and rejects `ask`, so an allowed call answers `{}`. Its hooks get no exit status, so the policy judges the output text. |
-| Grok Build | `read_file`, `write_file`, `search_replace`, `run_terminal_command`, `grep`, `list_dir`, `web_fetch`, and others. | Reasons are clipped to 256 characters, so Ostra refits them keeping the correction and the final instruction. Payloads over 128 KiB lose their tool input, and such a call is refused, because it cannot be judged. |
-| Antigravity | `view_file`, `write_to_file`, `replace_file_content`, `run_command`, `grep_search`, `find_by_name`, `read_url_content`, `search_web`. | Output is proto-validated and an unknown field discards the whole response, so it answers only `decision` and `reason`. PostToolUse carries no tool result. |
+| Claude Code | Already canonical. `MultiEdit` and `NotebookEdit` map to `Edit`, `LS` to a read. | Decisions and rewrites go only in `hookSpecificOutput`, because a top-level field does not agree with its schema. |
+| Codex | `exec_command`/`shell` to `Bash`, `apply_patch` to the files the patch touches. | Rejects an `allow` without `updatedInput`, and rejects `ask`. Thus, an allowed call answers `{}`. Its hooks get no exit status. Thus, the policy judges the output text. |
+| Grok Build | `read_file`, `write_file`, `search_replace`, `run_terminal_command`, `grep`, `list_dir`, `web_fetch`, and others. | Grok clips reasons to 256 characters. Thus, Ostra shortens them and keeps the correction and the final instruction. A payload over 128 KiB loses its tool input. Ostra refuses such a call, because the policy cannot judge it. |
+| Antigravity | `view_file`, `write_to_file`, `replace_file_content`, `run_command`, `grep_search`, `find_by_name`, `read_url_content`, `search_web`. | Antigravity validates the output with proto, and an unknown field discards the full response. Thus, Ostra answers only `decision` and `reason`. PostToolUse has no tool result. |
 
-Some calls are refused before the policy sees them. A subagent spawn is refused with the leaf rule. A question to
-the user in the terminal is refused with the instruction to put it in the submit call. An input the adapter
-cannot read is refused rather than let through.
+The adapter refuses some calls before the policy sees them:
+
+- It refuses a subagent spawn with the leaf rule.
+- It refuses a question to the user in the terminal. The refusal tells the agent to put the question in the
+  submit call.
+- It refuses an input that it cannot read. It does not let this input through.
 
 ### The MCP stdio shim
 
-`ostra mcp-stdio` is a stdio MCP server that forwards each JSON-RPC message to `POST /internal/mcp` and prints
-the answer. Stdio, because it is the one MCP registration shape that works on all four CLIs. It speaks MCP
-protocol versions 2024-11-05 through 2025-11-25. Started outside an Ostra execution, it answers the handshake
-with no tools, so a global registration stays inert.
+`ostra mcp-stdio` is a stdio MCP server. It forwards each JSON-RPC message to `POST /internal/mcp` and prints
+the answer. Ostra uses stdio because it is the only MCP registration shape that works on all four CLIs. The
+shim uses MCP protocol versions 2024-11-05 through 2025-11-25. If it starts outside an Ostra execution, it
+answers the handshake with no tools. Thus, a global registration has no effect.
 
 It serves:
 
-- `submit_<agent>`, the only submit tool this agent may call.
-- `report`, `document`, `memory`, `memory_recall`, and `docs_search`, as the agent's capabilities allow.
+- `submit_<agent>`, the only submit tool that this agent can call.
+- `report`, `document`, `memory`, `memory_recall`, and `docs_search`, if the agent's capabilities allow them.
 - `code_outline`, `code_find`, and the rest of the code navigation tools.
-- `project_list` and `project_create`, only to an execution whose agent has the `manage_projects` capability
-  (the implementer), because the shim lists them only when the server gave the execution a management handle.
-- Each workspace MCP server's tools, as `<server>__<tool>`. The CLI sees them as `mcp__ostra__<server>__<tool>`.
+- `project_list` and `project_create`, only to an execution with an agent that has the `manage_projects`
+  capability (the implementer). The reason is that the shim lists them only when the server gave the execution a
+  management handle.
+- The tools of each workspace MCP server, as `<server>__<tool>`. The CLI sees them as
+  `mcp__ostra__<server>__<tool>`.
 
-A `tools/call` goes through the same policy check as a hook, because the hook bridge lets calls to Ostra's own
-MCP server pass unchecked (rule M2). Checking in both places would ask you twice.
+A `tools/call` goes through the same policy check as a hook. The reason is that the hook bridge does not check
+calls to Ostra's own MCP server (rule M2). A check in both places asks you two times.
 
-The submit call is where the result arrives. The bridge validates it against the schema and the document
-checks, records it, and answers "Recorded. Your run is complete: end your turn now, without further tool calls."
-A second submit is refused. The prompt's tool vocabulary tells the agent to reply only `Done!` afterwards,
-because any other text costs output tokens and nothing reads it.
+The result comes in the submit call. The bridge validates the call against the schema and the document
+checks, and records it. Then it answers "Recorded. Your run is complete: end your turn now, without further tool
+calls." The bridge refuses a second submit. The prompt's tool vocabulary tells the agent to reply only `Done!`
+after the submit. The reason is that all other text costs output tokens, and no part of Ostra reads it.
 
 ### Supervising the terminal
 
-While the CLI runs, the executor's `supervise` loop wakes on every hook event or MCP call, and at least every
-half second. On each pass it checks the following:
+During the CLI run, the executor's `supervise` loop wakes on each hook event or MCP call, and at least each
+half second. On each pass, it checks these conditions:
 
-- **Submitted.** Once a submit is recorded, the run ends at the CLI's next Stop event, or 20 seconds later if no
-  Stop arrives. Antigravity has no Stop hook, so for it 4 seconds of terminal quiet after the submit ends the
-  turn.
-- **Startup screens.** In the first two minutes, and only until the first tool call, it reads the screen:
-  - It answers folder trust as described above.
-  - It declines a new-model offer (Codex's "Meet GPT-6 Luna") by choosing "Use existing model", because
-    accepting would switch the run's model and your default model.
-  - Sign-in text such as "please log in", "select login method", or "finish signing in" ends the run at once as
-    a sign-in failure, because otherwise the CLI would sit on its sign-in screen for the whole budget.
+- **Submitted.** After Ostra records a submit, the run ends at the CLI's next Stop event. If no Stop comes, the
+  run ends 20 seconds later. Antigravity has no Stop hook. Thus, for Antigravity, 4 seconds with no terminal
+  output after the submit end the turn.
+- **Startup screens.** In the first two minutes, and only until the first tool call, the loop reads the screen:
+  - It answers folder trust as the section above describes.
+  - It declines a new-model offer (Codex's "Meet GPT-6 Luna") with the choice "Use existing model". The
+    reason is that a yes changes the run's model and your default model.
+  - Sign-in text such as "please log in", "select login method", or "finish signing in" ends the run
+    immediately as a sign-in failure. Without this check, the CLI stays on its sign-in screen for the full
+    budget.
   - "unknown model" or "failed to construct executor" ends the run as a launch failure.
-- **Quiet.** A session with no hook event and no terminal output for 4 minutes is nudged: Ostra types the
-  submit instruction into the terminal, as if you had. After two nudges it ends the run as an error.
-- **Waiting.** After a `subagent_ask` or a `subagent_reply` that goes back to waiting, the loop stops supervising
-  and waits for the engine's message. A message that is a question marks the run as owing an answer, so its
-  turned-back Stops and typed nudges name `subagent_reply` and its submit is refused until it replies. It frees the run's execution slot while it waits, a Stop without a submit is
-  let through, and the wait is added to the deadline. The message is typed into the terminal, and supervising
-  resumes. A `subagent_reply` from a consult run is recorded like a submit and ends the run.
-- **The budget.** Past `timeout_secs`, the run ends.
+- **Quiet.** If a session has no hook event and no terminal output for 4 minutes, Ostra sends a reminder. Ostra
+  types the submit instruction into the terminal, the same as a person. After two reminders, Ostra ends the run
+  as an error.
+- **Waiting.** A `subagent_ask` or a `subagent_reply` can put the run into a wait. Then the loop stops its checks
+  and waits for the engine's message. These conditions apply during the wait:
+  - If the message is a question, Ostra marks the run as one that must answer. Thus, the blocked Stops and the
+    typed reminders name `subagent_reply`. Ostra refuses the run's submit until the run replies.
+  - Ostra releases the run's execution slot.
+  - Ostra lets a Stop without a submit through.
+  - Ostra adds the wait time to the deadline.
 
-The terminal itself is a `vt100` screen model kept in the server (`pty.rs`). A browser that attaches in the
-middle of a run is sent the current screen and its scrollback. Ostra alone answers the terminal queries TUIs send
-(cursor position, device attributes, colors) and the browsers mute theirs, so the CLI gets exactly one answer
-whether zero or five tabs are watching. The raw bytes are also written to an owner-only file capped in size, so
-the Terminal tab can replay an ended run.
+  Ostra types the message into the terminal, and the checks start again. Ostra records a `subagent_reply` from a
+  consult run the same as a submit, and the reply ends the run.
+- **The budget.** After `timeout_secs`, the run ends.
 
-A harness run's Terminal tab shows the CLI on its PTY. This Claude Code run is paused on a permission ask that the
-hook bridge holds:
+The terminal itself is a `vt100` screen model in the server (`pty.rs`). If a browser attaches in the middle of
+a run, Ostra sends it the current screen and its scrollback. Only Ostra answers the terminal queries that TUIs
+send (cursor position, device attributes, colors). The browsers do not send their answers. Thus, the CLI gets
+exactly one answer, with zero tabs open or with five. Ostra also writes the raw bytes to an owner-only file with
+a size limit. Thus, the Terminal tab can replay an ended run.
+
+The Terminal tab of a harness run shows the CLI on its PTY. This Claude Code run is paused on a permission ask
+that the hook bridge holds:
 
 ![The Terminal tab of a Claude Code harness run with a paused permission ask](../images/console/terminal.png)
 
 ### Failures that are not the agent's fault
 
-A CLI that is not installed, is not signed in, or exits within 20 seconds without a single tool call has not
-failed at the task. It never started. Those errors carry a `harness-auth:` or `harness-launch:` prefix, and the
-planner opens a `HarnessFailure` gate for them instead of the generic "execution failed" gate. The gate offers
-to log in and retry, or to run this one execution on the native executor. Under YOLO the engine re-routes to
-native and records that it did ([Gates and judges](gates-and-judges.md)). Settings validation already refuses a route to a harness that is not installed,
-so this gate mostly catches expired sign-ins.
+Some CLI errors are not task failures, because the task never started:
 
-A harness that fails to start opens a harness failure gate with its exit message, and an error in the run itself
-opens an execution failed gate:
+- The CLI is not installed.
+- The CLI has no sign-in.
+- The CLI stops within 20 seconds without one tool call.
+
+These errors have a `harness-auth:` or `harness-launch:` prefix. For them, the planner opens a `HarnessFailure`
+gate, not the generic "execution failed" gate. The gate offers two choices: log in and retry, or run this one
+execution on the native executor. Under YOLO, the engine routes to native and records this change
+([Gates and judges](gates-and-judges.md)). Settings validation already refuses a route to a harness that is
+not installed. Thus, this gate catches mostly expired sign-ins.
+
+If a harness fails to start, Ostra opens a harness failure gate with its exit message. An error in the run
+itself opens an execution failed gate:
 
 ![A harness failure gate for Claude Code and an execution failed gate](../images/console/gate-harness-failure.png)
 
 ### Usage and cost
 
-Harnesses do not report cost through hooks, and Ostra does not use hooks for it, because hooks exist to enforce
-policy. Instead `usage_watch.rs` follows the CLI's own session file with a file watcher and reads each appended
-line once, so cost shows live. When the run ends, the whole file is read again for the final number. Each CLI's
-file is read differently: Claude Code repeats a message's usage on every line of it, so usage counts once per
-message id. Codex writes running totals whose input includes cached input. Grok states each turn's cost in
-units of 10^-10 dollars. Antigravity records no usage at all, so its runs show no cost.
+Harnesses do not report cost through hooks. Ostra does not use hooks for cost, because hooks are for policy
+enforcement. `usage_watch.rs` monitors the CLI's own session file with a file watcher. It reads each appended
+line one time, so the cost shows live. When the run ends, Ostra reads the full file again for the final number.
+Ostra reads the file of each CLI in a different way:
+
+- Claude Code repeats the usage of a message on each line of the message. Thus, Ostra counts usage one time
+  for each message id.
+- Codex writes running totals, and their input includes cached input.
+- Grok gives the cost of each turn in units of 10^-10 dollars.
+- Antigravity records no usage, so its runs show no cost.
 
 ### Sandbox
 
-When the sandbox is on, the CLI itself runs inside it, so its shell tool and everything it starts inherit it.
-Ostra tells the CLI not to start its own sandbox, because macOS cannot nest Seatbelt profiles. The CLI gets one
-egress proxy for the whole launch. Whatever the network choice, it lets the CLI reach its own model
-and sign-in hosts (`egress::model_hosts`) and the hosts of the model endpoints configured for it: `*_BASE_URL`
-variables, `env.*_BASE_URL` in Claude Code's `settings.json`, and Codex's `model_providers.*.base_url`. Under bubblewrap
-your home folder is overlaid so the CLI can write its state dirs without leaving files your later shells or CLI
-sessions would run. Under Seatbelt there is no overlay, so the rest of the home stays read-only. Harness
-executors use POSIX PTYs and process groups, so they run on Linux and macOS.
+When the sandbox is on, the CLI itself runs inside it. Thus, its shell tool and all the processes that it
+starts inherit the sandbox. Ostra tells the CLI not to start its own sandbox, because macOS cannot nest Seatbelt
+profiles. The CLI gets one egress proxy for the full launch. With all network choices, the proxy lets the CLI
+reach these hosts:
+
+- Its own model and sign-in hosts (`egress::model_hosts`).
+- The hosts of the model endpoints in its configuration: `*_BASE_URL` variables, `env.*_BASE_URL` in Claude
+  Code's `settings.json`, and Codex's `model_providers.*.base_url`.
+
+Under bubblewrap, Ostra puts an overlay on your home folder. Thus, the CLI can write its state dirs, but it
+leaves no files that your later shells or CLI sessions run. Under Seatbelt, there is no overlay, so the
+remaining part of the home folder stays read-only. Harness executors use POSIX PTYs and process groups, so they
+run on Linux and macOS.
 
 ### Resume and read-only sessions
 
-Resuming a harness run starts the CLI with its own resume flag (`--resume`, `codex resume`, `--conversation`)
-and the saved session id, so the agent continues in the conversation it had.
+To resume a harness run, Ostra starts the CLI with its own resume flag (`--resume`, `codex resume`,
+`--conversation`) and the saved session id. Thus, the agent continues in its earlier conversation.
 
-On an ended run, "Open the session" starts a read-only copy: the CLI reopens that session in a new terminal so
-you can scroll through the work and ask about it. It has no first prompt, so nothing is spent until you type.
-Every tool call is refused (guard `read-only-session`), no Ostra MCP tool is served, the Stop hook never asks it
-to submit, and there are no idle nudges. It ends when you leave the CLI, cancel it, or after 4 hours.
+On an ended run, "Open the session" starts a read-only copy. The CLI opens that session again in a new
+terminal. You can scroll through the work and ask about it. The copy has no first prompt, so it spends nothing
+until you type. These rules apply to the copy:
 
-An ended harness run replays its stored transcript with input off. Resume reopens the CLI's own session:
+- Ostra refuses each tool call (guard `read-only-session`).
+- Ostra serves no Ostra MCP tool.
+- The Stop hook never asks the copy to submit.
+- Ostra sends no reminders when the copy is idle.
+
+The copy ends when you leave the CLI or cancel it, or after 4 hours.
+
+An ended harness run replays its stored transcript with input off. Resume opens the CLI's own session again:
 
 ![An ended Codex run replaying its transcript with a Resume button](../images/console/codex-transcript.png)
 
@@ -551,28 +653,28 @@ Each agent's `agent.toml` sets `timeout_seconds`, which becomes `timeout_secs` i
 | explore, generate-spec, fact-check, plan, system-architecture, prompt-generation | 30 minutes |
 | implementer, write-test, initializer, documentation | 40 minutes |
 
-The budget is a hard limit on wall time, including time spent waiting on a permission card. The native executor
-enforces it with a `tokio::select!` around the whole run. The harness executor checks it in the supervise loop,
-with a floor of 30 seconds.
+The budget is a hard limit on wall time. It includes the time of a wait for a permission card. The native
+executor enforces it with a `tokio::select!` around the full run. The harness executor checks it in the
+supervise loop, with a minimum of 30 seconds.
 
-Cancellation is immediate. The runner holds a `CancellationToken` per execution, and Stop on the board or
-`POST /api/sessions/<id>/stop` cancels it.
+A cancellation occurs immediately. The runner holds a `CancellationToken` for each execution. Stop on the
+board or `POST /api/sessions/<id>/stop` cancels it.
 
-- **Native.** The loop sees the cancel at once, including in the middle of a streaming response, and returns
-  `cancelled`. Running tools get 3 seconds to shut down. A Bash command is killed with its whole process group,
-  so a build that spawned a dozen compilers leaves none behind.
-- **Harness.** Ostra first sends Esc, which ends the CLI's turn so its session is saved whole and can be
-  resumed. Then it signals the process group, waits 3 seconds, and kills what is left, including anything the
-  CLI started inside its sandbox.
+- **Native.** The loop sees the cancel immediately, also in the middle of a streaming response, and returns
+  `cancelled`. Tools that run get 3 seconds to stop. Ostra kills a Bash command with its full process group.
+  Thus, if a build started 12 compilers, no compiler stays.
+- **Harness.** Ostra first sends Esc. Esc ends the CLI's turn, so the CLI saves its full session, and Ostra can
+  resume it. Then Ostra signals the process group, waits 3 seconds, and kills the remaining processes. These
+  include all processes that the CLI started inside its sandbox.
 
-In both cases the usage spent so far is kept in the result. A harness resumed after a pause adds to its
-terminal log instead of replacing it, so the Terminal tab replays both parts.
+In both cases, Ostra keeps the usage until the cancel in the result. A harness resumed after a pause adds to its
+terminal log and does not replace it. Thus, the Terminal tab replays both parts.
 
-The engine sometimes cancels a run on purpose, for example to deliver context you added mid-run. The runner
-records the reason, and the `cancelled` result becomes `interrupted` with that reason, which the planner reads as
-"resume this" rather than "this failed". A server that restarts while executions run marks each one
-`interrupted` with "The server restarted while this execution ran." and keeps what they already spent, so
-recovery can resume them (see [The event log](event-log.md)).
+The engine sometimes cancels a run intentionally, for example to deliver context that you added during the run.
+The runner records the reason. Then the `cancelled` result becomes `interrupted` with that reason. The planner
+reads this result as "resume this", not as "this failed". If the server restarts during executions, it marks
+each execution `interrupted` with "The server restarted while this execution ran.". It keeps the cost that the
+executions spent. Thus, recovery can resume them (refer to [The event log](event-log.md)).
 
 ## Where to look in the code
 
@@ -591,4 +693,4 @@ recovery can resume them (see [The event log](event-log.md)).
 | Live harness cost | `crates/ostra-exec-harness/src/usage_watch.rs`, `transcript.rs` |
 | Running an execution | `crates/ostra-engine/src/runner.rs` |
 
-Next: [Tools](tools.md) describes every tool an agent can call.
+Next: [Tools](tools.md) describes each tool that an agent can call.

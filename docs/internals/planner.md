@@ -1,13 +1,18 @@
 # The planner
 
-Ostra's engine splits "deciding what to do" from "doing it". The planner looks at a session's state and returns
-a list of steps. The runner performs those steps and appends events for what happened. The new events change
-the state, and the planner runs again. This loop drives every session from the first Classify judge to the
-completion report.
+Ostra's engine keeps two jobs apart: the decision about what to do, and the work itself. The planner reads the
+state of a session and returns a list of steps. The runner does those steps and appends events for the results.
+The new events change the state, and then the planner runs again. This loop moves each session from the first
+Classify judge to the completion report.
 
-This page explains what the planner is, why it has no side effects, how the runner turns steps into work, and
-how the conformance fixtures prove that each pipeline rule holds. It builds on [The event log](event-log.md),
-which explains where the state comes from.
+This page explains these topics:
+
+- What the planner is.
+- Why the planner has no side effects.
+- How the runner changes steps into work.
+- How the conformance fixtures prove that each pipeline rule holds.
+
+Read [The event log](event-log.md) first, because it explains the source of the state.
 
 ## A pure function
 
@@ -17,27 +22,28 @@ The whole planner is one function in `crates/ostra-engine/src/plan.rs`:
 pub fn next_steps(s: &SessionState, ctx: &PlanCtx) -> Vec<Step>
 ```
 
-It takes the folded session state and a small context, and returns steps. It reads no files, calls no model,
-starts no process, writes no event, and checks no clock. Call it twice with the same inputs and you get the same
-list.
+The function takes the folded session state and a small context, and returns steps. It reads no files and
+calls no model. It starts no process, writes no event, and reads no clock. If you call it two times with the
+same inputs, you get the same list.
 
-This matters for three reasons:
+This design is important for three reasons:
 
-- **The rules are in one place.** Every orchestration rule from HANDOVER section 8.2 and the Ultracode
-  orchestrator (Rule D1 "full-track IMPLEMENT always passes through Spec", Rule M2 "one implement pipeline per project",
-  Rule D9 "a failed phase removes its dependents", and the rest) is a branch in this file, with its rule ID in
-  a comment next to it. When you want to know why Ostra did something, this is where you read.
-- **Models do not orchestrate.** A model never decides that the spec is good enough to plan from, or that three
-  review passes is enough. The planner decides from the structured data agents submitted. Models only answer
-  the named judgment questions (Classify, Sufficiency, Stakes, and the other judges), and even those answers
-  arrive as events the planner reads.
-- **It can be tested without anything running.** A test builds an event list by hand, folds it, calls
-  `next_steps`, and compares the result. No provider, no server, no database.
+- **The rules are in one place.** Each orchestration rule from HANDOVER section 8.2 and the Ultracode
+  orchestrator is a branch in this file. A comment next to the branch gives its rule ID. Examples are Rule D1
+  "full-track IMPLEMENT always passes through Spec", Rule M2 "one implement pipeline per project", and Rule D9
+  "a failed phase removes its dependents". To find why Ostra did something, read this file.
+- **Models do not control the pipeline.** A model never decides that the spec is good enough for a plan. A
+  model never decides that three review passes are enough. The planner decides from the structured data that
+  agents submitted. Models only answer the named judgment questions (Classify, Sufficiency, Stakes, and the
+  other judges). These answers also come to the planner as events.
+- **A test needs no running parts.** A test builds an event list by hand, folds it, calls `next_steps`, and
+  compares the result. The test needs no provider, no server, and no database.
 
 ### What the planner may know
 
-The session state is almost everything the planner needs, because the fold keeps every fact the log has. A few
-facts live outside the log and matter to planning. They reach the planner through `PlanCtx` and nowhere else:
+The session state holds almost all the facts that the planner needs, because the fold keeps each fact in the
+log. Some facts that are important to the plan are not in the log. These facts go to the planner only through
+`PlanCtx`:
 
 ```rust
 /// Facts from outside the event log the planner needs: each project's format command.
@@ -48,50 +54,50 @@ pub struct PlanCtx {
 }
 ```
 
-The runner builds a fresh `PlanCtx` every time it plans, from the current workspace settings and each project's
-`project.toml`. So if you change the session budget or a project's format command while a session runs, the
-next planning round sees the change. Keeping this struct small is deliberate: every field is a way for the
-planner's answer to depend on something a fixture does not control, so a new field needs a reason.
+Each time the runner plans, it builds a new `PlanCtx` from the current workspace settings and the
+`project.toml` of each project. Thus, if you change the session budget or a format command during a session,
+the next planning round sees the change. The struct is small on purpose. With each field, the result of the
+planner can depend on a fact that a fixture does not control. Thus, a new field needs a reason.
 
 ## Steps
 
-A `Step` is one unit of work the runner knows how to perform:
+A `Step` is one unit of work that the runner can do:
 
 | Step | What the runner does |
 | --- | --- |
-| `Judge` | Builds the judge's input from the state, calls the judge route, validates the JSON against the judge's schema, and appends `DecisionMade`. |
-| `Spawn` | Resolves the agent's route (executor, model, effort), builds the typed spawn block, waits for an execution slot, runs the executor, and appends `ExecutionStarted` and later `ExecutionFinished`. |
-| `OpenGate` | Appends `GateOpened`. The session then waits for you, or for YOLO. |
-| `YoloAnswer` | Under YOLO, answers an open gate with a fixed answer or the YOLO judge, and appends `GateAnswered` with source `yolo` and the judge's reason. |
-| `PlanDocs` | Measures a project's tracked source by module-map area, groups the areas into writer areas, and appends `DocsPlanned` with the areas, the areas the book's current part records, and the areas this session's changes touched (rule B9). |
-| `WriteBook` | Merges the session's documentation parts and architecture into the workspace book and writes its files under `.ostra/docs/<book>/`, then appends `BookWritten` (rule B5). |
-| `Command` | Runs the project's format command or `git add` on a phase's changed files, and appends `CommandRan`. |
-| `Autofix` | Applies review findings whose fix text is exact (`Change \`x\` to \`y\` on line N`), and appends `AutofixApplied`. |
-| `AnnounceBlocked` | Appends `PhaseBlocked`, which also sends a push notification. |
-| `FinishInit` | Ends the init of a project the session created (rule O4): checks that `INVENTORY.md` and a valid `project.toml` exist, then marks the project initialized and appends `ProjectInitFinished`. When a file is missing or invalid it appends `InitStepFailed` against the generate-inventory run instead, so the advisor looks at it (rule O5). |
-| `RecordInitProblem` | Appends `InitStepFailed` for an init step that finished but left nothing to build on, such as a detect with no slices, so the advisor looks at it (rule O5). |
-| `Deliver` | Hands a question or an answer to a harness run that waits for it with its process alive (Rule H2): appends `MessageDelivered` and passes the message to the waiting executor, which types it into the terminal. |
+| `Judge` | Builds the input of the judge from the state and calls the judge route. Validates the JSON against the schema of the judge, and appends `DecisionMade`. |
+| `Spawn` | Resolves the route of the agent (executor, model, effort) and builds the typed spawn block. Waits for an execution slot, runs the executor, and appends `ExecutionStarted` and then `ExecutionFinished`. |
+| `OpenGate` | Appends `GateOpened`. Then the session waits for you, or for YOLO. |
+| `YoloAnswer` | In YOLO mode, answers an open gate with a fixed answer or with the YOLO judge. Appends `GateAnswered` with source `yolo` and the reason of the judge. |
+| `PlanDocs` | Measures the tracked source of a project for each module-map area, and puts the areas into groups for the writers. Appends `DocsPlanned` with these areas, the areas that the current part of the book records, and the areas that the changes of this session touched (rule B9). |
+| `WriteBook` | Merges the documentation parts and the architecture of the session into the workspace book. Writes the book files under `.ostra/docs/<book>/`, then appends `BookWritten` (rule B5). |
+| `Command` | Runs the format command of the project or `git add` on the changed files of a phase. Appends `CommandRan`. |
+| `Autofix` | Applies the review findings that have an exact fix text (`Change \`x\` to \`y\` on line N`). Appends `AutofixApplied`. |
+| `AnnounceBlocked` | Appends `PhaseBlocked`. This event also sends a push notification. |
+| `FinishInit` | Ends the init of a project that the session created (rule O4). Makes sure that `INVENTORY.md` and a valid `project.toml` exist. Then it marks the project as initialized and appends `ProjectInitFinished`. If a file is missing or not valid, it appends `InitStepFailed` against the generate-inventory run. Then the advisor examines the problem (rule O5). |
+| `RecordInitProblem` | Appends `InitStepFailed` for an init step that finished but gave no usable result. An example is a detect step with no slices. Then the advisor examines the problem (rule O5). |
+| `Deliver` | Gives a question or an answer to a harness run that waits for it with a live process (Rule H2). Appends `MessageDelivered` and sends the message to the executor. The executor types the message into the terminal. |
 | `Complete` | Writes the completion report to the session folder and appends `SessionCompleted`. |
 | `Fail` | Appends `SessionFailed`. |
 
-Notice that every step ends in an append. A step's only lasting effect on the session is the events it adds.
-Files agents write in the repository and the session folder are the other lasting effect, and those are the
-work product, not pipeline state.
+Each step ends with an append. The only permanent effect of a step on the session is the events that it adds.
+The files that agents write in the repository and the session folder are the other permanent effect. These files
+are the work product, not pipeline state.
 
 ### Why the planner returns several steps
 
-`next_steps` returns every step that can start now, not only the next one. When the Classify judge produces two
-research tasks, the planner returns two explore spawns at once (Rule M1, parallel fan-out). When a plan has
-ready phases in two different projects, both implement loops start (Rules D6 and M3). The runner starts them all,
-and the slot limiter decides how many actually run at the same time.
+`next_steps` returns each step that can start now, not only the next step. If the Classify judge gives two
+research tasks, the planner returns two explore spawns together (Rule M1, parallel fan-out). If a plan has ready
+phases in two different projects, the two implement loops start (Rules D6 and M3). The runner starts all the
+steps. The slot limiter decides how many of them run at the same time.
 
 ### Keys: never start a step twice
 
-The planner runs every time any event is appended, which is often. Between "the planner asked for the review of
-phase 2" and "the review's `ExecutionStarted` is in the log", the planner may run several more times and ask for
-the same review each time. The runner must not start it twice.
+The planner runs each time the runner appends an event, and this occurs frequently. The planner can ask for the
+review of phase 2. Before the `ExecutionStarted` event of that review is in the log, the planner can run more
+times. Each time, it asks for the same review. The runner must not start the review two times.
 
-Each step has a key that names it:
+Each step has a key that identifies it:
 
 ```rust
 /// Identity used by the runner so a step already in flight is not started twice.
@@ -106,42 +112,49 @@ pub fn key(&self) -> String {
 }
 ```
 
-A spawn's key is its purpose, for example `{"kind":"review","phase":2,"tests":false,"iteration":1}`. Two
-requests for the same review pass of the same phase have the same key, while the second review pass has a
-different one. An initializer spawn's key also names its project, because a session that created two projects
-runs two inits whose detect steps have the same purpose. The runner keeps a set of in-flight keys per session and skips any step whose key is already
-there. The key leaves the set only when the step's work has finished and been appended, at which point the
-state has changed and the planner no longer asks for it.
+The key of a spawn is its purpose, for example `{"kind":"review","phase":2,"tests":false,"iteration":1}`. Two
+requests for the same review pass of the same phase have the same key. The second review pass has a different
+key. The key of an initializer spawn also names its project. This is necessary because a session that created
+two projects runs two inits, and their detect steps have the same purpose.
 
-The planner also uses keys on itself: `push` drops a step whose key is already in its output list, so two
-branches of the planner that reach the same conclusion produce one step.
+The runner keeps a set of in-flight keys for each session. It skips each step whose key is in the set. The key
+leaves the set only after the step finishes and the runner appends its result. At that time, the state is
+different, and the planner does not ask for the step again.
+
+The planner also uses keys in its own output. `push` drops a step whose key is already in the output list.
+Thus, two branches of the planner that reach the same result give one step.
 
 ### Guards applied to every spawn
 
-`Planner::push` is the single entry point for steps, so rules that apply to every spawn live there:
+`Planner::push` is the only entry point for steps. Thus, the rules that apply to each spawn are in it:
 
-- **Budget (CLAUDE.md pattern 8).** When `PlanCtx.budget_usd` is set and the session's spend from finished
-  executions reaches the budget plus whatever you raised it by, a spawn becomes a `BudgetReached` gate instead.
-  Running executions finish; nothing new starts. YOLO never answers this gate, because spending more is your
-  decision.
-- **A created project waits for its init (rule O4).** Every spawn in a project the session created, except
-  the init's own initializer and advisor runs, is dropped while that project's init has not ended, and so are
-  its format, staging, and autofix steps. Research in it waits too. Work in other projects does not. The planner
-  asks again on its next pass, so a held step starts once the init ends.
-- **Resume after pause (Rule P2).** When the session has a paused run for the same purpose, the spawn is marked
-  to resume it, so the runner continues that execution instead of starting a new one.
+- **Budget (CLAUDE.md pattern 8).** This rule applies when `PlanCtx.budget_usd` is set. The spend of the session
+  comes from its finished executions. If this spend reaches the budget plus your increases, the planner changes
+  a spawn into a `BudgetReached` gate. The running executions finish, and nothing new starts. YOLO never answers
+  this gate, because the decision to spend more is yours.
+- **A created project waits for its init (rule O4).** The planner drops each spawn in a project that the session
+  created until the init of that project ends. The initializer and advisor runs of the init are the exceptions.
+  The planner also drops the format, staging, and autofix steps of the project. Research in the project also
+  waits, but work in other projects does not wait. The planner asks again on its next pass. Thus, a held step
+  starts after the init ends.
+- **Resume after pause (Rule P2).** If the session has a paused run for the same purpose, the planner marks the
+  spawn to resume that run. Then the runner continues that execution and does not start a new one.
 - **A run that waits for an answer (Rule H2).** A native run that asked another subagent ended with status
-  `waiting`, which its stage sees as a paused run. Its stage's next spawn is dropped until the answer or a
-  question for it is ready, and then marked to resume it in place; the runner uses the message as the resume note.
-- **Pair loops continue conversations (Rules H5 to H7).** A fact-check round, a re-pass, a fix, and a re-review
-  are marked to continue the conversation of the run before them, from `SessionState::continuation`, unless a
-  rule says to start fresh. A spawn that continues a conversation with a live run is dropped until that run ends,
-  so a conversation never has two live runs.
+  `waiting`. Its stage sees this run as a paused run. The planner drops the next spawn of the stage until the
+  answer or a question for the run is ready. Then the planner marks the spawn to resume the run in place. The
+  runner uses the message as the resume note.
+- **Pair loops continue conversations (Rules H5 to H7).** The planner marks a fact-check round, a re-pass, a fix,
+  and a re-review to continue the conversation of the run before them. The source is
+  `SessionState::continuation`. A rule can tell the planner to start a new conversation. The planner drops a
+  spawn that continues a conversation with a live run until that run ends. Thus, a conversation never has two
+  live runs.
 
-After the stage logic, a coordination pass adds a consult spawn for each question to a subagent that ended its run,
-and a `Deliver` step for each harness run whose message is ready.
+After the stage logic, a coordination pass adds these steps:
 
-And at the top of `run`, before any stage logic:
+- A consult spawn for each question to a subagent that ended its run.
+- A `Deliver` step for each harness run whose message is ready.
+
+At the top of `run`, before all stage logic, this check occurs:
 
 ```rust
 // Rule P1: a paused session starts nothing, not even a YOLO answer.
@@ -152,30 +165,35 @@ if !s.created || s.is_terminal() || s.paused {
 
 ## How the planner walks a session
 
-`Planner::run` follows the same order the pipeline diagram in HANDOVER section 8.1 does. In outline:
+`Planner::run` uses the same order as the pipeline diagram in HANDOVER section 8.1. The order is:
 
-1. **YOLO first.** Under YOLO, every open gate gets a `YoloAnswer` step, except permission asks (the live
-   execution answers those), budget gates, and the failure gate of an execution you stopped (Rule P4).
-2. **Init sessions** take their own flow: detect, scouts, propose, skill approval, generate skills, generate the
-   inventory.
-3. **No category yet** means a `Classify` judge. Answers waiting for the Route answer judge get their judge step
-   here, and context you added that waits for it holds everything else: the planner returns only those judge
-   steps until the judge decides (Rule C2).
-4. **Explore tasks** spawn whatever the stage, because a rescue can add a research task in the middle of a
-   build.
-5. **The category's path.** RESEARCH completes after explore. SPEC adds the spec flow. PLAN adds the plan flow.
-   IMPLEMENT asks the `Track` judge after research. The full track adds the spec flow, the Stakes judge, and
-   the plan flow unless stakes are low; the light track goes to the phases directly. Both then run the phases,
-   the implementation review gate with its feedback rounds (Rule F1), and, once you accept, the closing stages.
-   VERIFY, PROMPT, and QUICK CHANGE go straight to phases. TEST goes to the closing stages.
-6. **Completion** once nothing is running and no gate is open: first the `Completion` judge, then `Complete`
-   with the report it wrote.
+1. **YOLO first.** In YOLO mode, each open gate gets a `YoloAnswer` step. The exceptions are permission asks,
+   budget gates, and the failure gate of an execution that you stopped (Rule P4). The live execution answers the
+   permission asks.
+2. **Init sessions** use their own flow: detect, scouts, propose, skill approval, generate skills, and generate
+   the inventory.
+3. **No category yet** means a `Classify` judge. Answers that wait for the Route answer judge get their judge step
+   here. If context that you added waits for this judge, all other work stops. The planner returns only those
+   judge steps until the judge decides (Rule C2).
+4. **Explore tasks** spawn in each stage, because a rescue can add a research task in the middle of a build.
+5. **The category's path.** The path for each category is:
+   - RESEARCH completes after explore.
+   - SPEC adds the spec flow.
+   - PLAN adds the plan flow.
+   - IMPLEMENT asks the `Track` judge after research. The full track adds the spec flow, the Stakes judge, and
+     the plan flow. If the stakes are low, the full track does not add the plan flow. The light track goes
+     directly to the phases. Then the two tracks run the phases and the implementation review gate with its
+     feedback rounds (Rule F1). After you accept, they run the closing stages.
+   - VERIFY, PROMPT, and QUICK CHANGE go directly to the phases.
+   - TEST goes to the closing stages.
+6. **Completion** occurs when nothing runs and no gate is open. First the `Completion` judge runs. Then
+   `Complete` runs with the report that the judge wrote.
 
-Each stage function returns whether its stage is finished, and later stages run only when earlier ones say yes.
-That is how a rule like D1 is enforced: `spec_flow` refuses to start with no research document, and there is no
-code path from explore to plan that skips it.
+Each stage function returns whether its stage is finished. Later stages run only when the earlier stages are
+finished. This is how the planner enforces a rule such as D1. `spec_flow` does not start without a research
+document, and no code path goes from explore to plan without it.
 
-Phases show the style. This is the whole scheduler for implement loops:
+The phases function shows the style. This is the full scheduler for implement loops:
 
 ```rust
 fn phases(&mut self) {
@@ -196,16 +214,16 @@ fn phases(&mut self) {
 }
 ```
 
-A phase whose dependency failed is in `removed` (Rule D9). A ready phase starts only if its project has no other
-loop running (Rule M2). Phases in different projects start together (Rule M3). A phase already in its loop gets
-whatever its loop needs next: a review, an autofix, a fix pass, a `git add`, or a gate. The fold has already
-worked out what that is, from the last review's findings, so `loop_steps` mostly reads the loop's `next` field
-and turns it into a step.
+A phase with a failed dependency is in `removed` (Rule D9). A ready phase starts only if no other loop runs in
+its project (Rule M2). Phases in different projects start together (Rule M3). A phase that is already in its
+loop gets the next item that its loop needs: a review, an autofix, a fix pass, a `git add`, or a gate. The fold
+finds this item from the findings of the last review. Thus, `loop_steps` usually reads the `next` field of the
+loop and changes it into a step.
 
 ## The runner and the driver loop
 
-The runner (`crates/ostra-engine/src/runner.rs`) performs steps. Each live session has one driver, a Tokio task
-that runs this loop:
+The runner (`crates/ostra-engine/src/runner.rs`) does the steps. Each live session has one driver. The driver is
+a Tokio task that runs this loop:
 
 ```rust
 async fn drive(self: Arc<Self>, id: SessionId, live: Arc<Live>) {
@@ -232,72 +250,91 @@ async fn drive(self: Arc<Self>, id: SessionId, live: Arc<Live>) {
 }
 ```
 
-Read it as: plan, start every new step in its own task, then sleep until something changes. "Something changes"
-means an append, because `Inner::append` ends with `wake.notify_one()`, or a step finishing. When the session
-ends, the loop exits.
+The loop does these actions:
 
-A few consequences of this shape:
+1. It plans.
+2. It starts each new step in its own task.
+3. It sleeps until a change occurs.
 
-- **The driver never blocks on work.** A spawn can run for an hour; the driver is asleep, and wakes for every
-  event that execution's siblings append.
-- **A failed step does not crash the session.** Its error becomes a `Note` event you can read on the board, and
-  the planner runs again. If the failure left the state unchanged, the next planning round asks for the same step
-  again.
-- **There is no hidden state machine in the runner.** The runner holds in-flight keys, cancellation tokens, and
-  permission waiters, all of which describe work in progress in this process. None of it survives a restart,
-  and none of it needs to, because recovery re-derives everything from the log.
+A change is an append or the end of a step. An append wakes the loop because `Inner::append` ends with
+`wake.notify_one()`. When the session ends, the loop stops.
+
+This design has these results:
+
+- **The driver never blocks on work.** A spawn can run for an hour. During that time the driver sleeps. It wakes
+  for each event that the other executions of the session append.
+- **A failed step does not stop the session.** Its error becomes a `Note` event that you can read on the board,
+  and then the planner runs again. If the failure did not change the state, the next planning round asks for
+  the same step again.
+- **The runner has no hidden state machine.** The runner holds in-flight keys, cancellation tokens, and
+  permission waiters. All of them describe work in progress in this process. They are lost at a restart. This
+  is not a problem, because recovery derives all the state again from the log.
 
 ### Execution slots
 
-`limits.max_parallel_executions` in workspace settings caps how many executions run at once across the whole
-workspace. `perform_spawn` takes a slot before it does anything else and holds it for the life of the execution;
-dropping the slot frees it and wakes waiters. The one exception is a harness run that waits for another
-subagent's answer: it gives its slot back while it waits and takes one again before it continues (Rule H2),
-because otherwise a single slot would deadlock the asker and the helper it waits for. The planner can ask for six scouts at once, and the runner will start
-them as slots free up. This is why fan-out stages keep their own caps too (`init::MAX_SCOUTS` is 6): the slot
-limiter bounds concurrency, and the caps bound the total.
+`limits.max_parallel_executions` in the workspace settings sets the maximum number of executions that run at
+the same time in the workspace. `perform_spawn` takes a slot before all other work. It holds the slot until the
+execution ends. When the slot is dropped, the slot becomes free and the waiters wake.
+
+A harness run that waits for the answer of another subagent is the only exception (Rule H2). It gives back its
+slot during the wait. It takes a slot again before it continues. Without this exception, one slot can cause a
+deadlock between the asker and the helper that it waits for.
+
+The planner can ask for six scouts together. The runner starts them when slots become free. For this reason,
+fan-out stages also keep their own caps (`init::MAX_SCOUTS` is 6). The slot limiter sets the maximum number at the
+same time, and the caps set the maximum total.
 
 ### What a spawn does
 
-`perform_spawn` is the longest step. In order, it:
+`perform_spawn` is the longest step. It does these actions in this order:
 
-1. Waits for a slot, then checks the session has not ended or paused in the meantime.
-2. Resolves the route: which executor (native, or a harness such as Claude Code or Codex) and which model, from
-   the agent's tier, the phase's complexity, and your settings. A route that does not resolve becomes a
-   `denied` execution with the reason, never a silent fallback.
-3. Builds the typed spawn parameters through the spawn factory, and records extra facts the fold will need
-   later in `params` (the auto-fixable rule IDs for a review).
-4. Appends `ExecutionStarted` with the parameters and the rendered spawn block. A spawn that resumes a paused
-   run of the same agent appends `ExecutionResumed` with that run's id instead (Rule P2): the run keeps its
-   row, executor, model, report path, and parameters, and the fold reopens it without counting a new run, a new
-   fact-check round, or new work in its loop. What the run already spent is the base its new usage adds to.
-5. Runs the executor with a cancellation token. If a pause or "send now" context cancelled it, the result is
-   recorded as `interrupted` rather than `cancelled`, so the fold knows to resume or re-run it.
-6. Appends `ExecutionFinished` with the result and its submit payload.
+1. It waits for a slot. Then it makes sure that the session did not end or pause during the wait.
+2. It resolves the route. The route gives the executor and the model. The executor is native or a harness, such
+   as Claude Code or Codex. The route comes from the tier of the agent, the complexity of the phase, and your
+   settings. If a route does not resolve, the execution becomes `denied` with the reason. It is never a silent
+   fallback.
+3. It builds the typed spawn parameters through the spawn factory. It records in `params` other facts that the
+   fold will need later, for example the auto-fixable rule IDs for a review.
+4. It appends `ExecutionStarted` with the parameters and the rendered spawn block. A spawn that resumes a paused
+   run of the same agent appends `ExecutionResumed` with the id of that run (Rule P2). The run keeps its row,
+   executor, model, report path, and parameters. The fold opens the run again, and does not count a new run, a
+   new fact-check round, or new work in its loop. The new usage of the run adds to its earlier spend.
+5. It runs the executor with a cancellation token. If a pause or "send now" context cancelled the execution, the
+   runner records the result as `interrupted`, not `cancelled`. Then the fold knows that it must resume or run
+   the execution again.
+6. It appends `ExecutionFinished` with the result and its submit payload.
 
 ### Gate answers from you
 
-When you answer a gate in the browser, the API calls into the engine, which checks that the answer's shape
-matches the gate (`validate_answer`: an approval for an approval gate, a choice for a review-cap gate, and so on)
-and appends `GateAnswered`. The append wakes the driver, and the planner picks up from the new state. Your
-answer takes the same path as every other fact.
+When you answer a gate in the browser, the API calls the engine. The engine makes sure that the shape of the
+answer agrees with the gate (`validate_answer`). For example, an approval gate needs an approval, and a
+review-cap gate needs a choice. Then the engine appends `GateAnswered`. The append wakes the driver, and the
+planner continues from the new state. Your answer uses the same path as all other facts.
 
 ## Proving the rules: conformance fixtures
 
-Every rule the planner implements has a fixture in `tests/conformance/main.rs`, which holds 76 of them today.
-A fixture builds an event history, folds it, and checks the summaries of the steps the planner returns. Because
-the planner is pure, a fixture runs in microseconds and needs no model, executor, or database.
+Each rule that the planner implements has a fixture in `tests/conformance/main.rs`. The file holds 76 fixtures
+today. A fixture builds an event history, folds it, and checks the summaries of the steps that the planner
+returns. The planner is pure. Thus, a fixture runs in microseconds and needs no model, executor, or database.
 
-The `H` helper makes histories short to write. `H::new` appends a `SessionCreated` for the projects you name.
-`h.classify("IMPLEMENT", &["p"])` appends the Classify decision. `h.run(prefix, submit)` finds the spawn step
-whose summary starts with `prefix`, appends its `ExecutionStarted`, and appends an `ExecutionFinished` with the
-submit payload you give. `h.open_gate(kind)` and `h.answer(gate, answer)` do the same for gates. `h.summaries()`
-folds the history and returns the planner's steps in compact form, such as `spawn generate-spec spec#1` or
-`gate review_cap`. Canned starting points (`H::explored`, `H::spec_approved`, `H::plan_approved`) build the
-common prefixes, each out of the same calls.
+With the `H` helper, a history is short to write:
 
-Here is the fixture for the review loop, which covers the Step 4 rules: findings split three ways, auto-fixable
-ones are applied by the engine, only HIGH and MEDIUM reach the fix agent, and the fourth pass is a gate.
+- `H::new` appends a `SessionCreated` for the projects that you name.
+- `h.classify("IMPLEMENT", &["p"])` appends the Classify decision.
+- `h.run(prefix, submit)` finds the spawn step whose summary starts with `prefix`. It appends the
+  `ExecutionStarted` of that step, and an `ExecutionFinished` with the submit payload that you give.
+- `h.open_gate(kind)` and `h.answer(gate, answer)` do the same for gates.
+- `h.summaries()` folds the history and returns the steps of the planner in a short form. Examples are
+  `spawn generate-spec spec#1` and `gate review_cap`.
+- Ready-made starting points (`H::explored`, `H::spec_approved`, `H::plan_approved`) build the common prefixes
+  from the same calls.
+
+The fixture below is for the review loop. It covers these Step 4 rules:
+
+- The findings go into three groups.
+- The engine applies the auto-fixable findings.
+- Only HIGH and MEDIUM findings go to the fix agent.
+- The fourth pass is a gate.
 
 ```rust
 #[test]
@@ -333,42 +370,43 @@ fn review_loop_splits_autofix_fix_and_caps_at_three() {
 }
 ```
 
-Read it as a story: a plan with one phase is approved, the implementer finishes, the reviewer reports three
-findings. The planner's only step is the autofix, because the `C1` finding's rule is in the project's
-auto-fixable list (the helper records `auto_fixable_ids: ["C1"]` in every review's params, the same place the
-real runner puts it). After the autofix, the fix pass gets `PHASE-REQ-1` and not the LOW `C9`. Two more rounds
-later the loop has used its three passes, and the planner opens a gate rather than a fourth review.
+The fixture shows this sequence of events. The user approves a plan with one phase. The implementer finishes,
+and the reviewer reports three findings. The only step of the planner is the autofix, because the rule of the
+`C1` finding is in the auto-fixable list of the project. The helper records `auto_fixable_ids: ["C1"]` in the
+params of each review, at the same location as the real runner. After the autofix, the fix pass gets
+`PHASE-REQ-1` but not the LOW `C9`. After two more rounds, the loop used its three passes. Then the planner
+opens a gate and does not start a fourth review.
 
-The same fixture file has a neighbor, `hard21_blocker_has_no_cap`, which runs five review passes with a BLOCKER
-finding and asserts that no review-cap gate ever opens, because a security block has no cap and no gate answer
-can waive it (Hard rule 21).
+The next fixture in the same file is `hard21_blocker_has_no_cap`. It runs five review passes with a BLOCKER
+finding. It asserts that no review-cap gate opens. A security block has no cap, and no gate answer can cancel it
+(Hard rule 21).
 
-Fixtures are the contract for changing the engine. A new rule or a changed rule means a new or changed fixture
-in the same change, and the rule's ID appears both in the fixture's section comment and at the line in
-`plan.rs` or `state.rs` that implements it. If you want to see what Ostra does in a situation, the fastest way
-is often to write the history as a fixture and print `h.summaries()`.
+Fixtures are the contract for changes to the engine. A new rule or a changed rule needs a new or changed fixture
+in the same change. The rule ID must be in the section comment of the fixture. It must also be at the line in
+`plan.rs` or `state.rs` that implements the rule. To see what Ostra does in a situation, write the history as a
+fixture and print `h.summaries()`. This is frequently the quickest method.
 
 ### Beyond fixtures
 
-Fixtures test the planner and the fold. Other tests cover the runner around them:
+Fixtures test the planner and the fold. Other tests examine the runner around them:
 
-- `crates/ostra-engine/tests/runner.rs` runs a real `Engine` with fake services and executors, so the driver
-  loop, slots, and appends run for real.
-- `crates/ostra-engine/tests/recover.rs` and `pause.rs` cover restart recovery and pause and continue.
-- `crates/ostra-server/tests/e2e.rs` runs the whole server with a scripted provider playing every agent.
+- `crates/ostra-engine/tests/runner.rs` runs a real `Engine` with fake services and executors. Thus, the driver
+  loop, the slots, and the appends are real.
+- `crates/ostra-engine/tests/recover.rs` and `pause.rs` test restart recovery, and pause and continue.
+- `crates/ostra-server/tests/e2e.rs` runs the full server. A scripted provider acts as each agent.
 
 ## Adding behavior
 
-The planner and fold are where new pipeline behavior goes. The pattern from the contributor notes:
+Put new pipeline behavior in the planner and the fold. The contributor notes give this procedure:
 
-1. If the behavior depends on something that happened, make sure an event records it. If it depends on a fact
-   from outside the log, record that fact in an event when it is used.
-2. Teach the fold to derive the state you need from those events.
-3. Add a branch to the planner that turns that state into a step.
+1. If the behavior depends on a past occurrence, make sure that an event records it. If the behavior depends on
+   a fact from outside the log, record that fact in an event when it is used.
+2. Change the fold to derive the necessary state from those events.
+3. Add a branch to the planner that changes that state into a step.
 4. Add a fixture that builds the history and asserts the steps.
 
-The runner changes only when there is a new kind of step to perform. Logic inside the runner that decides what
-happens next would be invisible to fixtures and lost on restart, so it does not go there.
+Change the runner only for a new kind of step. Do not put logic in the runner that decides the next action.
+Fixtures cannot see such logic, and a restart loses it.
 
 ## Where to look in the code
 

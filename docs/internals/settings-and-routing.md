@@ -1,10 +1,14 @@
 # Settings and routing
 
-Every execution Ostra starts has to answer three questions before it can run: which executor runs it (Ostra's
-own agent loop or one of the vendor CLIs), which model it talks to, and how hard that model should think. Ostra
-answers them from settings, and it answers them again for every execution. This page explains where those
-settings live, how a route turns into a concrete model, what Ostra checks when you save, and why some settings
-are kept out of the files in your repository.
+Ostra must answer three questions before each execution can run:
+
+- Which executor runs it: the agent loop of Ostra or one of the vendor CLIs.
+- Which model it uses.
+- Which reasoning effort the model uses.
+
+Ostra gets the answers from settings, and it gets them again for each execution. This page explains where the
+settings are and how a route becomes a concrete model. It also explains what Ostra checks when you save, and why
+Ostra keeps some settings out of the files in your repository.
 
 ## Where settings live
 
@@ -17,20 +21,31 @@ Settings come from three files and one database. Each has a different owner and 
 | Project profile | `<project>/.ostra/project.toml` | The init flow, then you | The project's stack, its build, test, and format commands, the module map, skills, and review rules |
 | Registry | `registry.db` in the data folder (`$OSTRA_DATA_DIR`, else `~/.local/share/ostra/` on Linux) | Ostra | Per workspace: the permission mode, the YOLO default, the spend limits, the sandbox mode, network choice, and extra allowed hosts, and the approvals of folder-file commands. Machine-wide: provider keys and base URLs saved from the browser |
 
-The global config belongs to the machine. It never travels with a repository, and it is the one place where
-the model names behind each tier are written down. The workspace and project files sit inside folders that a
-`git pull` or an agent's edit can change, which is why the registry exists.
+The global config belongs to the machine. It never goes with a repository. It is the only place that contains
+the model names for each tier. The workspace and project files are in folders that a `git pull` or an edit by an
+agent can change. This is the reason for the registry.
 
 ## Why some settings stay out of the folder
 
-A workspace file can arrive from someone else. If Ostra obeyed everything in it, cloning a repository could
-raise your budget, turn off your sandbox, switch you to YOLO, or start a program of the author's choosing.
-Two rules close that gap.
+A workspace file can come from a different person. If Ostra obeyed all of the file, a clone of a repository
+could do these changes:
 
-**Rule A2: control settings live in the registry.** The permission mode, the YOLO default, the spend limits,
-the workspace's tool enforcement, and the workspace's sandbox mode, network choice, extra allowed hosts, decoy files, readable credentials, and macOS loopback settings are read from the registry
-and never from `workspace.toml`. The overlay that
-enforces it is short enough to quote
+- Increase your budget.
+- Turn off your sandbox.
+- Change you to YOLO.
+- Start a program that the author selects.
+
+Two rules prevent this.
+
+**Rule A2: control settings live in the registry.** Ostra reads these settings from the registry and never from
+`workspace.toml`:
+
+- The permission mode, the YOLO default, and the spend limits.
+- The tool enforcement of the workspace.
+- The sandbox mode, network choice, extra allowed hosts, decoy files, readable credentials, and macOS loopback
+  settings of the workspace.
+
+The overlay that enforces the rule is short, so this page quotes it
 ([`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs)):
 
 ```rust
@@ -54,85 +69,103 @@ pub fn overlay(registry: &RegistryDb, root: &Path, s: &mut WorkspaceSettings) {
 }
 ```
 
-A `[limits]` table, a `yolo` table, a `tool_enforcement`, `sandbox_mode`, `sandbox_network`, `sandbox_allowed_hosts`, `sandbox_decoys`, `sandbox_readable`, `sandbox_loopback`, or `sandbox_blocked_ports` key, or a `permissions.mode` key written into
-`workspace.toml` by hand is ignored, and Ostra removes them the next time it saves the file. Change them on
-the Settings screen.
+Ostra ignores these entries when you write them into `workspace.toml` by hand:
 
-**Rule A1: commands start only after you approved them.** The parts of a folder file that name a program are
-held back until the registry records your approval of that exact content, by hash. In `workspace.toml` these
-are the MCP servers, each project's `code_provider` and `language_servers`, and `permissions.allow`. In
-`project.toml` it is `commands.format`, the only project command Ostra runs itself rather than through an
-agent. While a file waits for approval:
+- A `[limits]` table or a `yolo` table.
+- A `tool_enforcement`, `sandbox_mode`, `sandbox_network`, `sandbox_allowed_hosts`, `sandbox_decoys`,
+  `sandbox_readable`, `sandbox_loopback`, or `sandbox_blocked_ports` key.
+- A `permissions.mode` key.
 
-- no MCP server, language server, or code provider starts,
-- its allow rules do not apply (its deny and ask rules still do, because they only restrict),
-- projects that point outside the workspace folder are dropped from the effective settings,
-- a format step is recorded as skipped, with no exit code.
+Ostra removes them the next time that it saves the file. Change them on the Settings screen.
 
-The Settings screen shows the exact commands, the names of the environment variables and headers they use
-(never the values), and an Approve button. The approval carries the hash the browser showed, so if the file
-changed between showing and clicking, the approval is refused. Saves made through Ostra keep an approved file
-approved with its new content, so your own edits never ask again. A save of a file that is still waiting
-keeps it waiting, so saving cannot approve commands you were not shown. See
-[the threat model](../security/threat-model.md) for the wider picture.
+**Rule A1: commands start only after you approved them.** Ostra holds back the parts of a folder file that
+name a program. It holds them until the registry records your approval of that exact content, by hash. In
+`workspace.toml`, these parts are the MCP servers, the `code_provider` and `language_servers` of each project,
+and `permissions.allow`. In `project.toml`, the part is `commands.format`. This is the only project command that
+Ostra runs itself and not through an agent. When a file waits for approval, these effects apply:
 
-The General tab edits two of the controls Rule A2 keeps in the registry, YOLO and the limits. The Permissions tab
-holds the rest: the permission mode, and the sandbox's mode, network choice, allowed hosts, and decoy files. It also
-sets the workspace's tool enforcement: enabled, disabled, or the global `tool_enforcement` key, whose value the
-option names (`global_tool_enforcement` in the workspace response). See
-[tool enforcement](../security/agent-containment.md#tool-enforcement) for what it turns on. The General tab:
+- No MCP server, language server, or code provider starts.
+- Its allow rules do not apply. Its deny and ask rules still apply, because they only restrict.
+- Ostra removes projects that point outside the workspace folder from the effective settings.
+- Ostra records a format step as skipped, with no exit code.
+
+The Settings screen shows the exact commands and an Approve button. It also shows the names of the environment
+variables and headers that the commands use, but never the values. The approval contains the hash that the
+browser showed. If the file changed between the display and the click, Ostra refuses the approval. When you save
+through Ostra, an approved file stays approved with its new content, so your own edits never ask again. When you
+save a file that still waits, it continues to wait. Thus a save cannot approve commands that you did not see.
+See [the threat model](../security/threat-model.md) for the full security model.
+
+The General tab edits two of the controls that Rule A2 keeps in the registry: YOLO and the limits. The
+Permissions tab holds the other controls: the permission mode, and the mode, network choice, allowed hosts, and
+decoy files of the sandbox. It also sets the tool enforcement of the workspace to one of three values:
+
+- Enabled.
+- Disabled.
+- The global `tool_enforcement` key. The option shows the value of this key (`global_tool_enforcement` in the
+  workspace response).
+
+See [tool enforcement](../security/agent-containment.md#tool-enforcement) for the guards that it turns on. The
+General tab:
 
 ![The General settings tab with the workspace name, YOLO, limits, and Delete workspace](../images/console/settings-general.png)
 
 ## The global config
 
-A fresh machine runs with built-in defaults, so the file is optional. The defaults, from
-`GlobalConfig::default()` in [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs), are:
+A new machine runs with built-in defaults, so the file is optional. The defaults come from
+`GlobalConfig::default()` in [`crates/ostra-core/src/config.rs`](../../crates/ostra-core/src/config.rs):
 
 - **Providers.** `anthropic` reads `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_BASE_URL`.
   `openai` reads `OPENAI_API_KEY` and `OPENAI_BASE_URL`. A key can also come from the OS keychain
-  (`keychain_service`) or from the browser, where it is kept in the registry and never shown again. The key
-  is looked up in the environment first, then the saved key, then the keychain. The base URL comes from
-  `base_url` in this file, then `base_url_env`, then the saved URL.
-- **Tier tables.** One table per executor, described below.
-- **Harness commands.** `claude`, `codex`, `grok`, and `agy`, found on `PATH`. `command` points at another
-  binary and `args` adds arguments to every launch.
-- **Permissions.** One deny rule, `Bash(rm -rf /*)`. Rules here merge with the workspace's rules.
-- **Server.** `127.0.0.1` on a free port. `bind`, `port`, `allowed_hosts`, and `use_ip_host` change that.
-- **Sandbox.** `mode = "required"`: an execution that cannot be sandboxed does not start. See
-  [OS compatibility](../platforms/os-compatibility.md) for what each platform supports, and
-  [Agent containment](../security/agent-containment.md) for what the sandbox does.
+  (`keychain_service`) or from the browser. Ostra keeps a key from the browser in the registry and never shows it
+  again. Ostra looks for the key in this order: the environment, the saved key, the keychain. The base URL comes
+  from `base_url` in this file, then `base_url_env`, then the saved URL.
+- **Tier tables.** One table for each executor. The section below describes them.
+- **Harness commands.** `claude`, `codex`, `grok`, and `agy`, found on `PATH`. `command` points to a different
+  binary, and `args` adds arguments to each launch.
+- **Permissions.** One deny rule, `Bash(rm -rf /*)`. Ostra merges the rules in this file with the rules of the
+  workspace.
+- **Server.** `127.0.0.1` on a free port. `bind`, `port`, `allowed_hosts`, and `use_ip_host` change this.
+- **Sandbox.** `mode = "required"`. If Ostra cannot sandbox an execution, the execution does not start. See
+  [OS compatibility](../platforms/os-compatibility.md) for the support on each platform. See
+  [Agent containment](../security/agent-containment.md) for the functions of the sandbox.
 
-Write whole tables. A top-level table you write, such as `[tiers.*]` or `[providers.*]`, replaces that
-default table as a whole, and Ostra does not merge it entry by entry. A file with only `[tiers.native]`
-leaves the harness executors with no tier table, so a workspace that routes an agent to Codex fails
-validation. A `[providers.anthropic]` table that sets only `api_key_env` no longer reads
-`ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL`, and the default `openai` entry is gone. Harness commands are
-the exception in practice: a harness missing from `[harness.*]` still launches by its own name.
+Write full tables. A top-level table that you write, such as `[tiers.*]` or `[providers.*]`, replaces all of
+that default table. Ostra does not merge it entry by entry. These examples show the result:
 
-Ostra reads the global config again every time it needs it. If the file fails to parse, or a sandbox path
-in it is relative, Ostra keeps using the last version that worked and logs a warning to the server log. A
-typo therefore never switches your machine back to defaults halfway through a session.
+- A file with only `[tiers.native]` gives the harness executors no tier table. Thus validation fails for a
+  workspace that routes an agent to Codex.
+- A `[providers.anthropic]` table that sets only `api_key_env` does not read `ANTHROPIC_AUTH_TOKEN` or
+  `ANTHROPIC_BASE_URL`. Also, the default `openai` entry is not there.
+
+Harness commands are different in practice: a harness that is not in `[harness.*]` still launches by its own
+name.
+
+Ostra reads the global config again each time that it needs it. If the file does not parse, or if a sandbox path
+in it is relative, Ostra continues to use the last version that worked. Ostra then writes a warning to the server
+log. Thus a typo never changes your machine back to the defaults in the middle of a session.
 
 ## Workspace settings
 
-`workspace.toml` is the file the Settings screen edits. Its tables:
+`workspace.toml` is the file that the Settings screen edits. Its tables:
 
 - `name` and `[[projects]]`: each project has a `key` (lowercase letters, digits, and dashes) and an absolute
-  `path`. Optional `code_provider` and `[[projects.language_servers]]` feed code navigation in the Files view.
-- `[routing.*]`: executor, model, and effort per agent, covered in the next section.
-- `[instructions]`: `all` is given to every agent, and `agents.<name>` to one agent. Both are added to the
-  agent's spawn block, after the rules the prompt already carries. Type `@` in either field to tag a project
-  file or a workspace artifact; each agent gets its absolute path under the instruction. A tag that names a
-  hidden or missing artifact fails at save time.
-- `[permissions]`: `allow`, `ask`, and `deny` lists in Claude Code's rule syntax, such as `Bash(npm run test *)`.
-  They merge with the global rules, global first. Each rule is parsed at save time.
+  `path`. The optional `code_provider` and `[[projects.language_servers]]` supply code navigation in the Files
+  view.
+- `[routing.*]`: executor, model, and effort for each agent. The next section describes them.
+- `[instructions]`: Ostra gives `all` to each agent, and `agents.<name>` to one agent. Ostra adds both to the
+  spawn block of the agent, after the rules that the prompt already contains. Type `@` in either field to tag a
+  project file or a workspace artifact. Each agent then gets the absolute path of the tagged item under the
+  instruction. A tag that names a hidden or missing artifact fails at save time.
+- `[permissions]`: `allow`, `ask`, and `deny` lists in the rule syntax of Claude Code, such as
+  `Bash(npm run test *)`. Ostra merges them with the global rules, global first. Ostra parses each rule at save
+  time.
 - `[notifications]`: `push = true` sends Web Push for open gates and finished sessions.
-- `[[mcp_servers]]`: external MCP servers, local (`command`) or remote (`url`), with per-server
-  `disabled_tools`, an `agents` list, and a per-call `timeout_secs` from 1 to 600. Header and environment
-  values may name a variable as `${VAR}` so that secrets stay out of the file.
+- `[[mcp_servers]]`: external MCP servers, local (`command`) or remote (`url`). Each server has its own
+  `disabled_tools`, an `agents` list, and a `timeout_secs` for each call from 1 to 600. A header or environment
+  value can name a variable as `${VAR}`, so that secrets stay out of the file.
 
-The Settings screen has a tab for each part. Projects lists each project's key, path, and stack:
+The Settings screen has a tab for each part. Projects shows the key, path, and stack of each project:
 
 ![The Projects settings tab with two projects](../images/console/settings-projects.png)
 
@@ -140,49 +173,63 @@ Instructions holds the text for all agents and for each agent:
 
 ![The Instructions settings tab with a workspace artifact tagged in the text for all agents](../images/console/settings-instructions.png)
 
-Permissions holds the mode, the sandbox, and the rules, with the global rules shown read-only:
+Permissions holds the mode, the sandbox, and the rules. It shows the global rules as read-only:
 
 ![The Permissions settings tab with mode, sandbox, rules, and global rules](../images/console/settings-permissions.png)
 
-Notifications turns Web Push on and subscribes this browser:
+Notifications turns on Web Push and subscribes this browser:
 
 ![The Notifications settings tab](../images/console/settings-notifications.png)
 
-MCP servers edits `[[mcp_servers]]`, with each server's live state and a switch per tool ([MCP servers](mcp.md)):
+MCP servers edits `[[mcp_servers]]`. It shows the live state of each server and a switch for each tool
+([MCP servers](mcp.md)):
 
 ![The MCP servers settings tab with three servers](../images/console/settings-mcp.png)
 
-Two tabs hold state for the whole machine rather than `workspace.toml`. Git saves credentials for clones and pulls:
+Two tabs hold state for the full machine and not for `workspace.toml`. Git saves credentials for clones and
+pulls:
 
 ![The Git settings tab with the saved credentials table and the Add a git credential form](../images/console/settings-git.png)
 
-Sign-in lists every browser signed in to this server:
+Sign-in lists each browser that is signed in to this server:
 
 ![The Sign-in settings tab with two browser sessions](../images/console/settings-signin.png)
 
 ## The project profile
 
-`project.toml` is written by the init flow's inventory step and describes one repository: its stack, its
-commands (`build`, `test`, `test_one`, `format`, `lint`, `typecheck`, `run`), its test types, a module map,
-its skills, its conventions, and its review rules. You can edit it by hand afterwards.
+The inventory step of the init flow writes `project.toml`. The file describes one repository:
 
-Each `[test_types.<name>]` table describes one kind of test the repository runs, such as `unit`,
-`integration`, or `e2e`: the command for all of them, the command for one, the file globs its tests live under,
-and a note on what it needs to run. The init flow's detect step finds them from scripts, runner configs, and
-test directories. They are the levels the test stage can verify at: the execution path analyzer gives every
-check one of them, and write-test runs each test with its type's command. The repo brief gives both agents both
-commands of each type, the one for the whole level, which a regression run uses, and the one for a single test. A project with only a `unit` type
-gets unit tests and a regression run, and flows that need a running system are reported as unverified, so add
-a type here when the repository has integration or end-to-end tests the detect step missed.
+- Its stack.
+- Its commands (`build`, `test`, `test_one`, `format`, `lint`, `typecheck`, `run`).
+- Its test types, a module map, its skills, its conventions, and its review rules.
 
-Two details matter for behavior. First, only `commands.format` is run by Ostra itself, after an implement
-step, so only that command needs approval. The other commands are run by agents, through the policy and the
-sandbox. Second, a review rule marked `auto_fixable` lets the engine apply a reviewer's fix for that rule
-without another implement pass, unless its ID starts with `SEC-BLOCK` or `PHASE-REQ`. Those never qualify,
-whatever the file says (`ProjectProfile::auto_fixable_ids`).
+You can edit it by hand after the init flow.
 
-Because models write this file, its parser is built to explain itself. When the initializer submits a
-`project.toml` that does not parse, `check_profile` answers with the fix first, then the parser's text:
+Each `[test_types.<name>]` table describes one type of test that the repository runs, such as `unit`,
+`integration`, or `e2e`. The table gives these items:
+
+- The command for all tests of the type.
+- The command for one test.
+- The file globs that contain its tests.
+- A note about what the tests need to run.
+
+The detect step of the init flow finds the types from scripts, runner configs, and test directories. The test
+stage can verify only at these levels. The execution path analyzer gives each check one of them, and write-test
+runs each test with the command of its type. The repo brief gives both agents both commands of each type. The
+first command runs the full level, and a regression run uses it. The second command runs a single test.
+
+A project with only a `unit` type gets unit tests and a regression run. Ostra reports the flows that need a
+running system as unverified. Thus, if the repository has integration or end-to-end tests that the detect step
+did not find, add a type here.
+
+Two details are important for behavior. First, Ostra itself runs only `commands.format`, after an implement step.
+Thus only that command needs approval. Agents run the other commands, through the policy and the sandbox. Second,
+a review rule with `auto_fixable` lets the engine apply the fix of a reviewer for that rule without another
+implement pass. But this does not apply if the rule ID starts with `SEC-BLOCK` or `PHASE-REQ`. Those rules never
+qualify, independent of the file (`ProjectProfile::auto_fixable_ids`).
+
+Models write this file, so its parser gives clear explanations. If the initializer submits a `project.toml` that
+does not parse, `check_profile` answers with the fix first, then the text of the parser:
 
 ```text
 Fix /repo/.ostra/project.toml with the edit tool, then submit again, because Ostra cannot parse it.
@@ -190,8 +237,8 @@ Line 4: TOML has no null. Omit `test_framework` instead of writing `null`.
 Line 9: `conventions` is one table. Write `[conventions]`, not `[[conventions]]`.
 ```
 
-The fixes come first because some harnesses clip a long tool error, and the parser's own message is the
-least useful part.
+The fixes come first because some harnesses clip a long tool error. The message of the parser is the least
+useful part.
 
 The project screen shows the profile: its commands, skills, modules, and review rules:
 
@@ -199,17 +246,19 @@ The project screen shows the profile: its commands, skills, modules, and review 
 
 ## Routing: from agent to model
 
-A route is looked up by **route key**: the agent's name (`explore`, `plan`, `implementer`, and so on) or
-`judge` for the small structured calls the engine makes itself. Ostra resolves three things per key.
+Ostra finds a route by its **route key**. The route key is the name of the agent (`explore`, `plan`,
+`implementer`, and the other agents). For the small structured calls that the engine makes itself, the route
+key is `judge`. Ostra resolves three items for each key.
 
-The Routing tab of Settings has one row per agent, the phase complexity table, and the native provider keys:
+The Routing tab of Settings has one row for each agent, the phase complexity table, and the native provider keys:
 
 ![The Routing settings tab with the per-agent table, the phase complexity table, and native providers](../images/console/settings-routing.png)
 
 ### Tiers are the indirection
 
-Workspace settings rarely name a model. They name a **tier**: `fast`, `balanced`, `advanced`, or `frontier`.
-The global config maps each tier to a model once per executor, because each executor names models differently:
+Workspace settings almost never name a model. They name a **tier**: `fast`, `balanced`, `advanced`, or
+`frontier`. The global config maps each tier to a model one time for each executor, because each executor uses
+different model names:
 
 | Executor | Tier table | Default `fast` / `balanced` / `advanced` / `frontier` |
 | --- | --- | --- |
@@ -219,17 +268,18 @@ The global config maps each tier to a model once per executor, because each exec
 | `harness:grok` | `[tiers.grok]` | `grok-4.5` for every tier |
 | `harness:agy` | `[tiers.agy]` | `flash` for every tier |
 
-Native entries are `provider:model`, and the native providers are `anthropic` and `openai`. Harness entries
-are the CLI's own model slug. So `plan = "advanced"` means Opus when the planner runs natively and
-`gpt-5.6-sol` when it runs in Codex, and you can move an agent between executors without touching its model
-route.
+Native entries are `provider:model`, and the native providers are `anthropic` and `openai`. Harness entries are
+the model slug of the CLI. Thus `plan = "advanced"` means Opus when the planner runs natively. It means
+`gpt-5.6-sol` when the planner runs in Codex. You can move an agent to a different executor and not change its
+model route.
 
 ### Executor
 
-`[routing.executor]` picks what runs the agent: `native` or `harness:<claude|codex|grok|agy>`. An agent with
-no entry runs natively. Two keys cannot be routed to a harness at all: `judge`, because a judge call is a
-single structured request from the engine and not an agent execution, and `quick-answer`, the side panel's
-agent.
+`[routing.executor]` selects what runs the agent: `native` or `harness:<claude|codex|grok|agy>`. An agent with
+no entry runs natively. You cannot route two keys to a harness:
+
+- `judge`, because a judge call is a single structured request from the engine and not an agent execution.
+- `quick-answer`, the agent of the side panel.
 
 ### Model
 
@@ -237,79 +287,91 @@ agent.
 
 | Form | Example | Meaning |
 | --- | --- | --- |
-| Tier | `plan = "advanced"` | Look the tier up in the executor's tier table |
-| `default` | `plan = "default"` | Use the `default_tier` from the agent's `agent.toml` |
-| Concrete model | `plan = "anthropic:claude-opus-5-5"` | Use this model as written, on whatever executor runs the agent |
-| Per executor | `plan = { native = "advanced", codex = "gpt-5.6-sol" }` | Pick the entry for the executor that runs the agent; each entry is a tier or a model |
+| Tier | `plan = "advanced"` | Find the tier in the tier table of the executor |
+| `default` | `plan = "default"` | Use the `default_tier` from the `agent.toml` of the agent |
+| Concrete model | `plan = "anthropic:claude-opus-5-5"` | Use this model as written, on the executor that runs the agent |
+| Per executor | `plan = { native = "advanced", codex = "gpt-5.6-sol" }` | Use the entry for the executor that runs the agent. Each entry is a tier or a model |
 
-Every route key needs a model route. A new workspace is seeded with one for each
-(`WorkspaceSettings::seeded`), taken from Ultracode's inventory profile: research, spec, plan, fact-check,
-documentation, system architecture, prompt generation, and the advisor on `advanced`; review, execution-path analysis, the initializer,
-and quick answers on `balanced`; judges on `advanced`, because a wrong route costs more than the call.
+Each route key must have a model route. Ostra gives a new workspace one route for each key
+(`WorkspaceSettings::seeded`). These routes come from the inventory profile of Ultracode:
 
-A workspace saved before an agent existed has no route for it, so an Ostra update that adds an agent (the
-advisor, for example) leaves that workspace with a validation problem, and the Settings screen refuses to save
-until it is fixed. Ostra does not fill the gap on its own, because the route is the user's choice. It offers
-the fix instead: the workspace detail lists, under `fixes`, a `default` route for each route key that has none
-(`keys_without_route` in `crates/ostra-core/src/config.rs`), and `default` resolves to the agent's own default
-tier. The dashboard's settings banner has a button that applies them through
-`POST /api/workspaces/:ws/settings/fix`, which writes only those routes and leaves any other problem for the
-user. On the Settings screen the same fix is a button next to the problem, and it changes the form, so it is
-saved with the rest of the edits.
+- Research, spec, plan, fact-check, documentation, system architecture, prompt generation, and the advisor use
+  `advanced`.
+- Review, execution-path analysis, the initializer, and quick answers use `balanced`.
+- Judges use `advanced`, because a wrong route costs more than the call.
 
-A route for an agent Ostra replaced stays valid and is ignored (`RETIRED_AGENTS` in
-`crates/ostra-core/src/agent.rs`), so a workspace saved with `module-documentation` still loads. Its replacements,
-`documentation` and `system-architecture`, need their own routes, which the same fix supplies.
+A workspace that you saved before an agent existed has no route for that agent. Thus an Ostra update that adds
+an agent (for example, the advisor) gives that workspace a validation problem. The Settings screen then refuses
+to save until you fix the problem. Ostra does not add the route itself, because the user selects the route. But
+Ostra offers the fix:
+
+- The workspace detail lists, under `fixes`, a `default` route for each route key that has no route
+  (`keys_without_route` in `crates/ostra-core/src/config.rs`). `default` resolves to the default tier of the
+  agent.
+- The settings banner of the dashboard has a button that applies these routes through
+  `POST /api/workspaces/:ws/settings/fix`. This request writes only those routes. The user must fix all other
+  problems.
+- On the Settings screen, the same fix is a button next to the problem. It changes the form, so Ostra saves it
+  with the other edits.
+
+A route for an agent that Ostra replaced stays valid, and Ostra ignores it (`RETIRED_AGENTS` in
+`crates/ostra-core/src/agent.rs`). Thus a workspace saved with `module-documentation` still loads. Its
+replacements, `documentation` and `system-architecture`, must have their own routes. The same fix supplies them.
 
 ### Effort
 
-`[routing.effort]` sets reasoning effort: `low`, `medium`, `high`, `xhigh`, or `max`. An agent with no entry
-keeps the effort its `agent.toml` gives for that executor. The implementer's `agent.toml`, for example, asks
-for `high` on every executor. Each executor translates the level into whatever its model or CLI accepts.
+`[routing.effort]` sets the reasoning effort: `low`, `medium`, `high`, `xhigh`, or `max`. An agent with no entry
+keeps the effort that its `agent.toml` gives for that executor. For example, the `agent.toml` of the implementer
+asks for `high` on each executor. Each executor changes the level into the value that its model or CLI accepts.
 
-The native executor spends what the chosen level allows, because the user picked it knowing the cost. Every
-request asks for the model's whole output limit, from the models.dev catalog (32,000 tokens for a model the
-catalog does not list), so thinking at a high level is never cut short by the request, and the Anthropic provider
-holds any request to that limit. On Anthropic models
-the level becomes thinking in one of two ways
-([`crates/ostra-providers/src/anthropic.rs`](../../crates/ostra-providers/src/anthropic.rs)):
+The native executor spends all that the selected level allows, because the user selected it and knew the cost.
+Each request asks for the full output limit of the model, from the models.dev catalog. If the catalog does not
+list the model, the limit is 32,000 tokens. Thus the request never stops thinking early at a high level. The
+Anthropic provider keeps each request at that limit. On Anthropic models, the level becomes thinking in one of
+two ways ([`crates/ostra-providers/src/anthropic.rs`](../../crates/ostra-providers/src/anthropic.rs)):
 
-- **Adaptive thinking** with `output_config.effort` on Claude 4.6 and every later model. From Claude 4.7 on it
-  is the only thinking mode, because a fixed budget returns a 400. Opus 4.6 and Sonnet 4.6 accept both modes and
-  stay adaptive, because only adaptive thinking reasons between tool calls on Opus 4.6. The 4.6 models have no
-  `xhigh`, so it becomes `high` there.
-- **A fixed thinking budget** on the models that take nothing else (Claude Haiku 4.5, Sonnet 4.5, Opus 4.5, and
-  earlier). The budget is a share of the model's output limit, as models.dev lists it: an eighth at `medium`, a
-  quarter at `high`, half at `xhigh`, and all but 16,000 tokens at `max`, which stay for the answer; `low` thinks
-  not at all. Haiku 4.5 at `high` thinks against 16,000 of its 64,000 tokens. Only Opus 4.5 also takes the effort
-  itself. With tools, Sonnet 4.5, Opus 4.5, and the Claude 4.0 and 4.1 models think between tool calls through the
-  interleaved thinking beta, and their budget then spans the whole turn. Haiku 4.5 cannot, so it thinks only at the
-  start of a turn, before its first tool call.
+- **Adaptive thinking** with `output_config.effort` on Claude 4.6 and each later model.
+  - From Claude 4.7, it is the only thinking mode, because a fixed budget returns a 400.
+  - Opus 4.6 and Sonnet 4.6 accept both modes and stay adaptive. The reason is that on Opus 4.6, only adaptive
+    thinking reasons between tool calls.
+  - The 4.6 models have no `xhigh`, so on these models `xhigh` becomes `high`.
+- **A fixed thinking budget** on the models that accept nothing else (Claude Haiku 4.5, Sonnet 4.5, Opus 4.5,
+  and earlier).
+  - The budget is a part of the output limit of the model, from the models.dev list. It is one eighth at
+    `medium`, one quarter at `high`, and half at `xhigh`.
+  - At `max`, the budget is all but 16,000 tokens, which stay for the answer. At `low`, the model does not
+    think.
+  - For example, Haiku 4.5 at `high` thinks against 16,000 of its 64,000 tokens.
+  - Only Opus 4.5 also accepts the effort itself.
+  - With tools, Sonnet 4.5, Opus 4.5, and the Claude 4.0 and 4.1 models think between tool calls through the
+    interleaved thinking beta. Their budget then covers the full turn.
+  - Haiku 4.5 cannot do this, so it thinks only at the start of a turn, before its first tool call.
 
 ### Phase complexity
 
-Two agents run once per plan phase: the implementer and write-test. Each phase file carries a
-`**Complexity:**` line, and these two agents can be routed by it under `byPhaseComplexity`, for executor,
-model, and effort alike. `byPhaseComplexity` wins over `byAgent`. Work with no phase file, such as a quick
+Two agents run one time for each plan phase: the implementer and write-test. Each phase file has a
+`**Complexity:**` line. You can route these two agents by this line under `byPhaseComplexity`, for executor,
+model, and effort. `byPhaseComplexity` has priority over `byAgent`. Work with no phase file, such as a quick
 change, counts as `low`. The seeded settings run both agents on `fast` for `low` and `medium` phases and on
-`balanced` for `high` ones, so the model grows with the phase instead of every phase paying for the largest
+`balanced` for `high` phases. Thus the model increases with the phase, and not every phase pays for the largest
 model.
 
 ### Overrides the engine applies
 
-Settings are not the only input. The engine forces a few choices, and each one is recorded so the session
-can show why:
+Settings are not the only input. The engine forces some choices. It records each one, so that the session can
+show the reason:
 
-- **Generate-skill runs on `advanced`.** The initializer's generate-skill mode forces the tier, whatever the
-  initializer's own route says. The route sets the initializer's other modes.
+- **Generate-skill runs on `advanced`.** The generate-skill mode of the initializer forces the tier,
+  independent of the route of the initializer. The route sets the other modes of the initializer.
 - **Harness failures can fall back to native.** When a harness execution fails, its gate offers a `native`
-  answer. Choosing it records the agent in the session's `native_fallback` set, and every later execution of
-  that agent in the session runs natively.
-- **Quick changes and quick answers run natively**, because a harness start-up costs more than the change.
+  answer. If you select it, Ostra records the agent in the `native_fallback` set of the session. Each later
+  execution of that agent in the session then runs natively.
+- **Quick changes and quick answers run natively**, because a harness start costs more than the change.
 
 ### A worked resolution
 
-Take this workspace excerpt and an implementer spawn for a phase marked `**Complexity:** high`:
+This example uses the workspace excerpt below and an implementer spawn for a phase with
+`**Complexity:** high`:
 
 ```toml
 [routing.executor.byAgent]
@@ -324,24 +386,25 @@ medium = "fast"
 high = "balanced"
 ```
 
-1. **Executor.** `byPhaseComplexity.implementer.high` exists and says `native`, so it wins over the
-   `byAgent` entry. Low and medium phases would have gone to Codex.
-2. **Model.** `byPhaseComplexity.implementer.high` says `balanced`, a tier.
+1. **Executor.** `byPhaseComplexity.implementer.high` exists and gives `native`, so it has priority over the
+   `byAgent` entry. Low and medium phases go to Codex.
+2. **Model.** `byPhaseComplexity.implementer.high` gives `balanced`, a tier.
 3. **Tier table.** The executor is native, so Ostra reads `[tiers.native].balanced`:
    `anthropic:claude-sonnet-5-5`.
 4. **Check.** A native model must be `anthropic:<model>` or `openai:<model>`. It is.
-5. **Effort.** No effort route, so the implementer's `agent.toml` value for `native` applies: `high`.
+5. **Effort.** There is no effort route, so the `agent.toml` value of the implementer for `native` applies:
+   `high`.
 
 The result is a `ResolvedRoute { executor: native, model: "anthropic:claude-sonnet-5-5", tier: balanced }`.
-This is `resolve_route` in [`config.rs`](../../crates/ostra-core/src/config.rs), and the same function runs at
-save time and at spawn time.
+This is `resolve_route` in [`config.rs`](../../crates/ostra-core/src/config.rs). The same function runs at save
+time and at spawn time.
 
 ## Validation at save time
 
-A route that does not resolve is a validation error when you save, never a silent fallback when an agent
-starts. `validate_workspace` is where that is enforced. A
-save goes through `PATCH /api/workspaces/{ws}`; the Settings screen also calls `POST /api/workspaces/{ws}/validate`
-as you type. Either returns every problem at once, each with the dotted path of the field it belongs to:
+A route that does not resolve is a validation error when you save. It is never a silent fallback when an agent
+starts. `validate_workspace` enforces this. A save goes through `PATCH /api/workspaces/{ws}`. The Settings screen
+also calls `POST /api/workspaces/{ws}/validate` when you type. Both return all problems at the same time. Each
+problem has the dotted path of its field:
 
 ```json
 {
@@ -353,67 +416,73 @@ as you type. Either returns every problem at once, each with the dotted path of 
 }
 ```
 
-What is checked:
+Validation checks these items:
 
-- **Every route key resolves, on every complexity it can run at.** The implementer and write-test are
-  resolved three times, once per complexity, because a gap in the `high` row would otherwise only show up
-  when a high phase arrived.
-- **The executor exists on this machine.** A route to a harness whose CLI is not installed is an error.
+- **Every route key resolves, on every complexity it can run at.** Ostra resolves the implementer and write-test
+  three times, one time for each complexity. Without this check, a gap in the `high` row shows only when a high
+  phase arrives.
+- **The executor exists on this machine.** A route to a harness that does not have its CLI installed is an
+  error.
 - **The provider has a key.** A native route to `openai:...` with no usable OpenAI key is an error.
-- **Keys name real agents.** A typo such as `implementor` under `byAgent` is reported, not ignored.
-  `byPhaseComplexity` effort entries are accepted only for the two agents that run per phase.
-- **Forbidden routes.** `judge` and `quick-answer` cannot be sent to a harness.
-- **Projects.** Keys are well formed and unique, paths are absolute and are folders, a stack name is valid,
-  code providers and language servers name a program, each language has at most one server, and timeouts are
-  from 1 to 120 seconds.
+- **Keys name real agents.** Ostra reports a typo such as `implementor` under `byAgent`, and does not ignore it.
+  Ostra accepts `byPhaseComplexity` effort entries only for the two agents that run for each phase.
+- **Forbidden routes.** You cannot send `judge` and `quick-answer` to a harness.
+- **Projects.** The checks are:
+  - Keys are correct in form and unique.
+  - Paths are absolute and are folders.
+  - A stack name is valid.
+  - Code providers and language servers name a program.
+  - Each language has a maximum of one server.
+  - Timeouts are from 1 to 120 seconds.
 - **Permission rules parse** (`ostra_policy::validate_rule`).
 - **MCP servers** have unique, valid names, exactly one of `command` or `url`, and a timeout in range.
-- **Limits.** `max_parallel_executions` is at least 1, and `session_budget_usd` is a finite amount of 0 or
-  more. See [Spend and limits](spend-and-limits.md).
+- **Limits.** `max_parallel_executions` is 1 or more, and `session_budget_usd` is a finite amount of 0 or more.
+  See [Spend and limits](spend-and-limits.md).
 
-If any issue remains, nothing is written. The file is saved atomically, through a temporary file and a
-rename, so a crash during a save never leaves half a file.
+If an issue remains, Ostra writes nothing. Ostra saves the file atomically, through a temporary file and a
+rename. Thus a crash during a save never leaves half a file.
 
-The Settings screen runs the same checks as you edit. Here the implementer routes to a harness that is not
-installed, so the row shows the issue and the header counts the problems left before saving:
+The Settings screen runs the same checks when you edit. In this example, the implementer routes to a harness
+that is not installed. Thus the row shows the issue, and the header shows the count of problems to fix before
+the save:
 
 ![The Routing tab with an issue on the implementer row and 1 problem to fix before saving](../images/console/settings-validation.png)
 
 ### What save-time validation cannot see
 
-Validation checks the settings against the machine as it is at the moment you save. The machine can change
-afterwards: you edit the global config by hand, uninstall a CLI, or unset an API key. Ostra does not then
-guess a substitute. The spawn resolves its route, fails, and is recorded as a denied execution with the
+Validation checks the settings against the machine at the time of the save. The machine can change after the
+save. For example, you edit the global config by hand, remove a CLI, or unset an API key. Ostra then does not
+select a substitute. The spawn resolves its route and fails. Ostra records it as a denied execution with the
 reason, for example ``route: `plan` has no model route`` or `The harness:codex executor is not available.`
-The session shows that failure where you can act on it, instead of quietly running on a model you did not
-choose.
+The session shows that failure in a place where you can act on it. Thus Ostra does not silently run a model that
+you did not select.
 
-One case falls back rather than failing: if `workspace.toml` itself stops parsing, the engine runs with the
-seeded defaults for that workspace until the file parses again. Fix the file, or save from the Settings
-screen, which rewrites it.
+One case falls back and does not fail. If `workspace.toml` itself does not parse, the engine runs with the
+seeded defaults for that workspace until the file parses again. Fix the file, or save from the Settings screen,
+which writes the file again.
 
 ## Read fresh, every execution
 
-Ostra has no settings cache that needs a restart. The engine reaches settings only through its `Services`
-trait, and the server's implementation reads the files each time it is asked:
+Ostra has no settings cache that needs a restart. The engine gets settings only through its `Services` trait.
+The implementation of the server reads the files each time that the engine asks:
 
 - `Services::workspace()` loads `workspace.toml` and applies the registry overlay and the approval filter.
-- `Services::global()` loads the global config, with the last-good fallback described above.
-- Each spawn reads `project.toml` and the project inventory from disk while it builds the agent's input.
-- The planner reads the session budget on every planning pass, and the slot limiter reads the parallel
-  limit every time a spawn waits.
+- `Services::global()` loads the global config, with the last-good fallback that the section above describes.
+- Each spawn reads `project.toml` and the project inventory from disk when it builds the input of the agent.
+- The planner reads the session budget on each planning pass. The slot limiter reads the parallel limit each
+  time that a spawn waits.
 
-An edit therefore applies to the next execution, not to the one already running. A running execution keeps
-the route it started with, and its record shows the executor and model it actually used. The one thing that
-does not follow a settings change is anything already recorded in the session's event log: a gate answer, a
-fallback to native, or a raised budget stays as it was recorded, because the session's state is a fold over
-its log. See [The event log](event-log.md).
+Thus an edit applies to the next execution, not to the execution that already runs. A running execution keeps
+the route that it started with. Its record shows the executor and model that it used. A settings change does not
+change the data that the event log of the session already contains. A gate answer, a fallback to native, or a
+raised budget stays as Ostra recorded it. The reason is that the state of the session is a fold over its log.
+See [The event log](event-log.md).
 
 ## An annotated example
 
-The two files below parse with Ostra's own types and pass `validate_workspace` on a machine with Codex
-installed and an Anthropic key set. The global file writes only the tier tables this workspace uses, so a
-route to Claude Code, Grok Build, or Antigravity would need their tables too. It also replaces the
+The two files below parse with the types of Ostra. They pass `validate_workspace` on a machine that has Codex
+installed and an Anthropic key set. The global file writes only the tier tables that this workspace uses. Thus a
+route to Claude Code, Grok Build, or Antigravity needs their tables too. The global file also replaces the
 `providers` table, so OpenAI models are not available with it.
 
 ```toml
@@ -505,9 +574,8 @@ allow = ["Bash(npm run test *)"]    # waits for approval if this file changed ou
 deny = ["Bash(git push *)"]
 ```
 
-Things this example leaves out on purpose: the permission mode, YOLO, limits, and the workspace's sandbox mode
-and hosts. They are set
-on the Settings screen and kept in the registry (Rule A2).
+This example does not include some settings on purpose: the permission mode, YOLO, limits, and the sandbox mode
+and hosts of the workspace. You set them on the Settings screen, and Ostra keeps them in the registry (Rule A2).
 
 ## Where to look in the code
 
