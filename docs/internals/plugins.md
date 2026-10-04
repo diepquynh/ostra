@@ -113,6 +113,21 @@ timeout_secs = 120                      # for `initialize`, each stage decision,
 The program is any executable that calls `ostra_sdk::stdio::serve(Arc::new(MyPlugin)).await` from its `main`. It
 writes logs to stderr, because stdout carries the protocol.
 
+`ostra plugin add` writes the same entry from the command line, and works whether or not the server runs:
+
+```bash
+ostra plugin add release-gate --env RELEASE_CHANNEL=stable --timeout 120 -- /opt/plugins/release_gate
+```
+
+It finds the registered workspace that holds the current folder (or the folder `--workspace` names), refuses a
+name the file already has, and checks the entries with the same `[[plugins]]` validation a save in Settings runs,
+so a bad name, an empty command, or a timeout outside 1 to 3600 fails before anything is written. `--disabled`
+writes `enabled = false`. The program path is kept as written, and a relative one resolves against the workspace
+folder, because that is where the program starts. The command saves through the same path as Settings
+(`trust::save_workspace`): a folder file that was approved stays approved, because the registration is your own
+edit, and one that waits for approval keeps waiting, and the command says so. A running server starts the
+program the next time it reads the workspace's agents.
+
 `PluginHost` in [`crates/ostra-server/src/plugins.rs`](../../crates/ostra-server/src/plugins.rs) runs the programs:
 
 - It starts a wanted program in the workspace folder, reads its manifest, and keeps it running. A program whose
@@ -425,8 +440,10 @@ apply. On the second round it finds the implementer with `ListAgents` and messag
 implementer continues its own conversation, with its tools, to fix the changelog, and the check resumes once the
 implementer replies. Then it asks the model on its route whether the changelog describes the change, and returns
 `pass` or `fail`. Before it messages the implementer it saves a checkpoint, so a run that resumes after its
-program stopped does not message twice. To use it, build it with `cargo build -p ostra-sdk --example release_gate`, add it under
-`[[plugins]]`, add a stage `plugin = "release-gate:release"` to a workflow, and approve the workspace file.
+program stopped does not message twice. To use it, build it with
+`cargo build -p ostra-sdk --example release_gate`, add it under `[[plugins]]` (or run
+`ostra plugin add release-gate -- <path to the example binary>`), add a stage `plugin = "release-gate:release"` to
+a workflow, and approve the workspace file.
 
 The example also declares a transform function, `bump`, which returns the next semantic version from its
 `current` and `part` arguments, and a workflow built in code, `release-gate:implement-and-release`, which extends

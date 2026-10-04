@@ -6,7 +6,7 @@ updates reach the browser, and covers how the server starts, stops, and finds it
 
 ## One binary, several roles
 
-The `ostra` command does different jobs depending on its first argument (`crates/ostra-server/src/main.rs`):
+The `ostra` command does different jobs depending on its first argument (`crates/ostra-server/src/cli.rs`):
 
 | Command | What it does |
 | --- | --- |
@@ -17,6 +17,7 @@ The `ostra` command does different jobs depending on its first argument (`crates
 | `ostra signout` | The same as `ostra sessions revoke --all` |
 | `ostra stop <session-id>` | Stops a session while the server is down, so the next start does not re-run it |
 | `ostra config` | Prints the config path, writing a default config if none exists |
+| `ostra plugin add <name> -- <command>...` | Registers a plugin program in the `[[plugins]]` of the workspace that holds the current folder (or `--workspace`) |
 | `ostra hook ...` | The hook bridge that harness CLIs call. You never run it yourself |
 | `ostra mcp-stdio ...` | The MCP stdio shim that harness CLIs start. You never run it yourself |
 

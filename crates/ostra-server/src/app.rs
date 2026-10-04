@@ -312,6 +312,59 @@ pub fn stop_offline(session: &str) -> anyhow::Result<usize> {
     anyhow::bail!("No registered workspace has a session {session}.")
 }
 
+/// `ostra plugin add`: what the new `[[plugins]]` entry changed.
+pub struct AddedPlugin {
+    pub workspace: PathBuf,
+    /// Whether the folder file stays approved, so the program may start (Rule PL1).
+    pub approved: bool,
+}
+
+/// `ostra plugin add`: append a `[[plugins]]` entry to the registered workspace that holds
+/// `dir`. A running server starts the program on its next read of the workspace's agents.
+pub fn add_plugin(
+    dir: &std::path::Path,
+    entry: ostra_core::plugin::PluginConfig,
+) -> anyhow::Result<AddedPlugin> {
+    let registry = open_registry()?;
+    let dir = paths::resolve(&std::env::current_dir()?, dir);
+    let root = registry
+        .list_workspaces()?
+        .into_iter()
+        .map(|w| w.root)
+        .filter(|r| paths::is_inside(r, &dir))
+        .max_by_key(|r| r.components().count())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Run this inside a workspace folder or pass --workspace, because no registered workspace holds {}.",
+                dir.display()
+            )
+        })?;
+    let file = paths::workspace_toml(&root);
+    let mut settings: ostra_core::config::WorkspaceSettings =
+        ostra_core::config::load_toml_required(&file)?;
+    if settings.plugins.iter().any(|p| p.name == entry.name) {
+        anyhow::bail!(
+            "Pick another name or remove the entry first, because {} already has a plugin `{}`.",
+            file.display(),
+            entry.name
+        );
+    }
+    settings.plugins.push(entry);
+    let mut issues = vec![];
+    ostra_core::plugin::validate(&settings.plugins, &mut issues);
+    if !issues.is_empty() {
+        let lines: Vec<String> = issues.iter().map(|i| i.message.clone()).collect();
+        anyhow::bail!("{}", lines.join("\n"));
+    }
+    // Rule A2: the save also writes the registry's access settings, so start from them.
+    ostra_workspace::trust::overlay(&registry, &root, &mut settings);
+    ostra_workspace::trust::save_workspace(&registry, &root, &settings)?;
+    Ok(AddedPlugin {
+        approved: ostra_workspace::trust::workspace_file_approved(&registry, &root),
+        workspace: root,
+    })
+}
+
 pub fn ensure_global_config() -> anyhow::Result<PathBuf> {
     let path = paths::global_config_path();
     if !path.exists() {

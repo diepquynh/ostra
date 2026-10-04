@@ -145,6 +145,7 @@ Other commands:
 | `ostra sessions` | List signed-in browsers; `ostra sessions revoke <id>` signs one out. |
 | `ostra signout` | Sign out every browser. |
 | `ostra stop <session-id>` | Stop a session while the server is not running. |
+| `ostra plugin add <name> -- <command>...` | Register a plugin program in the workspace that holds the current folder. |
 
 ### Run as a service
 

@@ -49,6 +49,39 @@ enum SessionsAction {
 }
 
 #[derive(Subcommand)]
+enum PluginAction {
+    /// Register a plugin program in a workspace's `[[plugins]]`. Ostra starts it in the workspace
+    /// folder and speaks JSON-RPC with it on stdio, once the folder file is approved.
+    Add {
+        /// The plugin's name, the same as the name in its manifest, for example `release-gate`.
+        name: String,
+        /// The program and its arguments, after `--`. A relative program path is relative to the
+        /// workspace folder.
+        #[arg(last = true, required = true)]
+        command: Vec<String>,
+        /// A folder inside the workspace. Defaults to the current folder.
+        #[arg(long, default_value = ".")]
+        workspace: PathBuf,
+        /// An environment variable for the program, as KEY=VALUE. Repeatable.
+        #[arg(long = "env", value_parser = parse_env)]
+        env: Vec<(String, String)>,
+        /// Seconds one stage decision may take.
+        #[arg(long, default_value_t = 120)]
+        timeout: u64,
+        /// Register it without starting it.
+        #[arg(long)]
+        disabled: bool,
+    },
+}
+
+fn parse_env(s: &str) -> Result<(String, String), String> {
+    match s.split_once('=') {
+        Some((k, v)) if !k.is_empty() => Ok((k.to_string(), v.to_string())),
+        _ => Err(format!("write it as KEY=VALUE, not `{s}`")),
+    }
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Start the server (the default).
     Serve(ServeArgs),
@@ -75,6 +108,11 @@ enum Command {
     },
     /// Sign out every browser, the same as `ostra sessions revoke --all`.
     Signout,
+    /// Manage a workspace's plugin programs.
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
     /// Stop a session while the server is not running, so the next start does not recover and
     /// re-run its executions. With the server running, stop it from its session board instead.
     Stop {
@@ -114,6 +152,38 @@ pub fn main_with(plugins: ostra_sdk::Registry) -> anyhow::Result<()> {
         Some(Command::Config) => {
             let path = crate::app::ensure_global_config()?;
             println!("{}", path.display());
+            Ok(())
+        }
+        Some(Command::Plugin {
+            action:
+                PluginAction::Add {
+                    name,
+                    command,
+                    workspace,
+                    env,
+                    timeout,
+                    disabled,
+                },
+        }) => {
+            let entry = ostra_core::plugin::PluginConfig {
+                name: name.clone(),
+                command,
+                env: env.into_iter().collect(),
+                enabled: !disabled,
+                timeout_secs: timeout,
+            };
+            let added = crate::app::add_plugin(&workspace, entry)?;
+            println!(
+                "Registered plugin {name} in {}.",
+                ostra_core::paths::workspace_toml(&added.workspace).display()
+            );
+            if !added.approved {
+                println!(
+                    "It starts once you approve the workspace's folder file in the console, because the file waits for approval."
+                );
+            } else if disabled {
+                println!("It is disabled; set `enabled = true` in its entry to start it.");
+            }
             Ok(())
         }
         Some(Command::Stop { session }) => {
