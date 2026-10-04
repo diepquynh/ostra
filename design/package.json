@@ -2,7 +2,7 @@
   "name": "@ostra/design",
   "private": true,
   "license": "MIT",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "Ostra's design system: tokens and React components shared by the console (web/) and the site (site/).",
   "exports": {
