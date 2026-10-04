@@ -2,6 +2,24 @@
 
 Every release of Ostra, written from its commit titles by `./release.sh`.
 
+## 0.1.3 (2026-10-04)
+
+### Documentation
+
+- Rewrite the docs pages in Simplified Technical English (97d809b)
+- Fix statements that disagree with the code (6df0e2c)
+
+## 0.1.2 (2026-10-04)
+
+### Features
+
+- Write docs in Simplified Technical English (c58d153)
+
+### Build and chores
+
+- Add Dependabot config (ddd91bb)
+- Add CI for pull requests (e7f78cb)
+
 ## 0.1.1 (2026-10-02)
 
 ### Fixes

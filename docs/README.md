@@ -13,5 +13,5 @@
 - Security: [threat model](security/threat-model.md), [agent containment](security/agent-containment.md),
   [sandboxing](security/sandboxing.md), [server and browser](security/server-and-browser.md), and
   [secrets and data](security/secrets-and-data.md).
-- [Provider usage](providers/README.md): how Ostra reaches Anthropic, OpenAI, xAI, and Google models, which
-  credentials each path accepts, and the provider terms each path follows.
+- [Provider usage](providers/README.md): how Ostra connects to Anthropic, OpenAI, xAI, and Google models, the
+  credentials that each path accepts, and the provider terms that each path follows.

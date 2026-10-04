@@ -1,28 +1,28 @@
 # The pipeline
 
-A request typed into Ostra goes through the same stages a careful team would use: find out how the code works
-today, build the change in reviewed steps, let the person who asked try it and ask for changes, and then
-optionally write tests and update the docs. A change that needs its requirements settled first also gets a
-written spec, a check of that spec against the code, and a sequenced plan, each approved before anything is
-built. This page follows one request through
-every stage and explains what each stage produces, who does the work, how many things run at once, and what
-happens when a stage goes wrong.
+Ostra sends a request through the stages that a careful team uses. First, it finds out how the code works now.
+Then it builds the change in reviewed steps. Then the person who asked tries the change and can ask for
+changes. Last, it can write tests and update the docs.
 
-Two facts shape everything below.
+A change that needs its requirements settled first also gets a written spec, a check of the spec against the code, and a sequenced plan. The user approves each of these before Ostra builds anything. This page
+follows one request through every stage. For each stage, it tells what the stage produces and which part does the work. It also tells how many items run at the same time, and what happens when the stage fails.
 
-- **Code runs the pipeline, not a model.** Which stage comes next, when a loop stops, and how many agents run
-  at once are decided by the planner in
-  [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs), a pure function from the session's
-  state to a list of next steps. Models do the work inside a stage and answer a few named questions (the
-  judges, covered in [Gates and judges](gates-and-judges.md)). No agent can decide to skip the review.
-- **Every stage hands off through files and structured data.** An agent ends by calling its `submit_<agent>`
-  tool with a typed payload, and writes its long-form output (research document, spec, plan, report) to a
-  path the engine chose. The next stage gets those paths. Nothing depends on what an agent said in its final
-  message.
+Two facts apply to every section below.
+
+- **Code runs the pipeline, not a model.** The planner in
+  [`crates/ostra-engine/src/plan.rs`](../../crates/ostra-engine/src/plan.rs) decides which stage comes next,
+  when a loop stops, and how many agents run at the same time. The planner is a pure function from the
+  session's state to a list of next steps. Models do the work inside a stage and answer a small set of named
+  questions. These questions are the judges, which [Gates and judges](gates-and-judges.md) describes. No agent
+  can decide to skip the review.
+- **Every stage hands off through files and structured data.** An agent ends when it calls its
+  `submit_<agent>` tool with a typed payload. It writes its long output (research document, spec, plan,
+  report) to a path that the engine chose. The next stage gets those paths. No step depends on the text of an
+  agent's final message.
 
 Rule IDs such as D2 or T4 come from Ultracode's orchestrator and from HANDOVER section 8.2. The code that
-implements a rule cites it in a comment, and every rule has a conformance fixture in
-[`tests/conformance/main.rs`](../../tests/conformance/main.rs), so you can search for the ID to see both.
+implements a rule cites the ID in a comment. Every rule has a conformance fixture in
+[`tests/conformance/main.rs`](../../tests/conformance/main.rs). Search for the ID to find both.
 
 ## The whole path at a glance
 
@@ -43,215 +43,244 @@ Intake → Classify* → Explore ×N (parallel) → Sufficiency* → Track*
 * judge call     ⟲ a FAIL goes back to the author with the findings
 ```
 
-Not every request takes the whole path. The Classify judge picks a category first, and the category picks the
-route:
+Not every request goes through the whole path. The Classify judge first picks a category, and the category sets
+the route:
 
 | Category | Route |
 | --- | --- |
-| `QUICK_ANSWER` | One quick-answer agent, answer shown in the side panel. No files change. |
+| `QUICK_ANSWER` | One quick-answer agent. The side panel shows the answer. No files change. |
 | `RESEARCH` | Explore and sufficiency, then the completion report. |
-| `SPEC` | Research, then the spec and its fact-check. No approval gate, because nothing is built from it. |
-| `PLAN` | Research, spec with approval, plan with approval. Nothing is built. |
+| `SPEC` | Research, then the spec and its fact-check. No approval gate, because Ostra builds nothing from the spec. |
+| `PLAN` | Research, the spec with approval, and the plan with approval. Ostra builds nothing. |
 | `IMPLEMENT` | Research, then the light or the full track, the phases, the implementation review, and the closing stages. |
-| `VERIFY` | One implementer pass per project that runs the project's test command and reports. |
-| `TEST` | Straight to the test stage: EPA, write-test, review. No closing gate, because the request asked for tests. The stage verifies at every level the project has test types for (unit, integration, end to end) and re-runs the existing tests that cover the code. |
-| `DOCS` | Straight to the docs stage: one documentation writer per project, the system architecture when two or more projects are documented, then the book write. No closing gate, because the request asked for documentation, and no project file changes. |
-| `PROMPT` | Prompt-generation, reviewed only when a changed file is code rather than an instruction file. |
-| `QUICK_CHANGE` | One implementer pass per project with no research, spec, plan, or review, on the native executor. |
+| `VERIFY` | One implementer pass per project. The pass runs the project's test command and reports the result. |
+| `TEST` | Directly to the test stage: EPA, write-test, review. No closing gate, because the request asked for tests. The stage verifies at each level that has a test type in the project (unit, integration, end to end). It also runs again the existing tests that cover the code. |
+| `DOCS` | Directly to the docs stage: one documentation writer per project, then the system architecture when the stage documents two or more projects, then the book write. No closing gate, because the request asked for documentation. No project file changes. |
+| `PROMPT` | Prompt-generation. A review runs only when a changed file is code and not an instruction file. |
+| `QUICK_CHANGE` | One implementer pass per project on the native executor, with no research, spec, plan, or review. |
 
-Each category's route is its built-in workflow: the built-in stages it runs, in a chain (`builtin_chain` in
-[`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs)). When the judge is unsure between two
-categories it is told to pick the one that runs more of the pipeline, because a skipped stage that was needed
-costs a wrong result while an unneeded stage costs one round.
+Each category's route is its built-in workflow: the built-in stages that it runs, in a chain (`builtin_chain` in
+[`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs)). When the judge is not sure which
+of two categories applies, its prompt tells it to pick the one that runs more of the pipeline. It picks that one
+because a skipped stage that the request needed gives a wrong result, but an unneeded stage costs one round.
 
 ### Your own stages: workflows
 
-A workspace can change the route with workflow files in `.ostra/workflows/`. A workflow extends a built-in one and
-adds stages that run a custom agent or a plugin's stage logic between Ostra's own, for example a security audit
-after the build and before the closing stages. It may also leave out the implementation review, the closing
-stages, or the Track judge (with a fixed track in its place). Built-in stages keep their order and their rules,
-so every gate on this page still holds. The session records the workflow it runs when it starts, so editing a
-file never changes a session in flight. A custom stage that fails or needs a decision opens a `stage_review`
-gate ([Gates and judges](gates-and-judges.md#stage-review)). [Workflows](workflows.md) covers the file format,
-the rules, and how the planner walks the stages.
+A workspace can change the route with workflow files in `.ostra/workflows/`. A workflow extends a built-in
+workflow. It adds stages that run a custom agent or the stage logic of a plugin between the stages of Ostra. For
+example, a workflow can add a security audit after the build and before the closing stages. A workflow can also
+leave out these parts:
 
-On the session board, the lanes follow the same path. This session has finished research through build and waits
-for the user in review:
+- The implementation review.
+- The closing stages.
+- The Track judge. A fixed track replaces it.
+
+Built-in stages keep their order and their rules. Thus, each gate on this page still applies. The session records
+its workflow when it starts, so a change to a file never changes a session that runs. A custom stage that fails or
+needs a decision opens a `stage_review` gate ([Gates and judges](gates-and-judges.md#stage-review)).
+[Workflows](workflows.md) describes the file format, the rules, and how the planner goes through the stages.
+
+On the session board, the lanes follow the same path. In this session, the stages from research through build
+are done, and the session waits for the user in review:
 
 ![A session board with lanes from Research to Done and two gates waiting for the user](../images/console/session-board.png)
 
 ## Classify: choosing the route
 
 The first step of every session is a judge call. The Classify judge reads the request, the New task toggles
-(tests, docs), any pinned projects, and each project's stack and module map. It returns:
+(tests, docs), the pinned projects, and the stack and module map of each project. It returns:
 
 - the category,
 - the projects in scope,
 - the first research tasks, one per project or per area, each written as a self-contained instruction,
-- whether the request already opts into tests or docs (Rule T3),
-- a two to five word title for the session.
+- whether the request already asks for tests or docs (Rule T3),
+- a title of two to five words for the session.
 
-The research tasks carry the paths of any files the user attached or uploaded (Rules C1, C3), because a
-researcher reads only its own task and never sees the original request's attachment list.
+The research tasks carry the paths of all files that the user attached or uploaded (Rules C1, C3). They carry
+the paths because a researcher reads only its own task and never sees the attachment list of the original
+request.
 
-Pinning projects on the New task form limits the session to them (Rule O6). The session starts with only the
-pinned projects, and the fold sets the scope to exactly those, whatever the judge returns, so research tasks,
-feedback, and plan phases cannot land in another project. A plan phase that names an unpinned project is
-blocked. A project the approved plan creates still joins the session (Rule O3). Without a pin, every
-initialized project is in the session and the judge chooses the scope.
+If you pin projects on the New task form, the session uses only those projects (Rule O6). The session starts
+with only the pinned projects. The fold sets the scope to exactly those projects, whatever the judge returns. So
+research tasks, feedback, and plan phases cannot go to another project. A plan phase that names an unpinned
+project is blocked.
 
-The fold guards the judge's output. Projects that are not in the session are dropped, an empty scope
-falls back to the first project, and a research-bearing category with no tasks gets one task per project in
-scope with the full request as its text (Rule D1: the spec always has research to stand on). You can override
-the classification from the session board until the first research task or phase starts.
+A project that the approved plan creates still joins the session (Rule O3). Without a pin, every initialized
+project is in the session, and the judge chooses the scope.
 
-The Decisions tab of the session board shows the Classify decision with its reason and what it was based on:
+The fold guards the output of the judge. It drops the projects that are not in the session. If the scope is
+empty, the fold uses the first project. If a category that needs research has no tasks, the fold gives it one task per project in scope. The task text is the full request (Rule D1: the spec always has research to start from). You can override the classification from the session board until the first research task or phase
+starts.
+
+The Decisions tab of the session board shows the Classify decision with its reason and the inputs that it used:
 
 ![The Decisions tab with a Classify decision and a Stakes decision](../images/console/decisions.png)
 
 ## Explore: research in parallel
 
-Each research task spawns one `explore` agent. Explore is read-only, so every ready task spawns at once (Rule
-M1). The only limit on fan-out here is the workspace's `limits.max_parallel_executions` slot limiter in the
-runner, which every execution in Ostra goes through.
+Each research task spawns one `explore` agent. Explore is read-only, so all ready tasks spawn at the same time
+(Rule M1). The only limit on this fan-out is the slot limiter for the workspace's `limits.max_parallel_executions`
+in the runner. Every execution in Ostra goes through this limiter.
 
-An explore agent writes a research document and submits its scope and a `Not covered` list: things it touched
-but could not investigate.
+An explore agent writes a research document. It submits its scope and a `Not covered` list: the items that it
+touched but could not investigate.
 
-When explore writes the document, the Document tool records a content hash of every repo file it names: its
-files, the files its patterns use and copy from, its data-flow hops, and its approaches' precedents (Rule D2a).
-The hashes sit in the document's JSON, in a `snapshot` field that Ostra writes and the model's schema leaves
-out. The stages after research compare them with the files as they are now, so they take what the research
-says about an unchanged file as current instead of reading the file again. The same write checks that each of
-those paths exists in the repo, and the submit is refused while one does not (Hard rule 4). Explore tasks can also appear later. When a user adds context to a running session,
-the Route answer judge decides what research it needs and in which project (Rule C2), and the Rescue judge can
-start a targeted explore in the middle of a build. Every explore spawn gets the context the user added beside
-its task, so a task written before the addition, or re-run after Send now interrupted it, still sees it.
+When explore writes the document, the Document tool records a content hash of every repo file that the document
+names (Rule D2a). These files are the document's files, the files that its patterns use and copy from, its
+data-flow hops, and the precedents of its approaches. The hashes are in the document's JSON, in a `snapshot`
+field. Ostra writes this field, and the model's schema does not include it. The stages after research compare
+the hashes with the current files. For an unchanged file, they take what the research says as current and do
+not read the file again.
 
-The Add context box on the session board. Queue for the next step waits for the running agents to finish, holds
-back new work until then, and can be withdrawn while it waits; Send now restarts running work and cannot be
-withdrawn (Rule C2):
+The same write checks that each of those paths exists in the repo. Ostra refuses the submit if one of the paths
+does not exist (Hard rule 4).
+
+Explore tasks can also start later in a session. When a user adds context to a running session, the Route answer
+judge decides which research the context needs and in which project (Rule C2). The Rescue judge can also start
+a targeted explore in the middle of a build. Every explore spawn gets the context that the user added, next to
+its task. So a task that was written before the addition sees the context. A task that runs again after Send now
+interrupted it also sees the context.
+
+The image shows the Add context box on the session board (Rule C2). Queue for the next step waits until the
+running agents finish, and holds back new work until then. You can withdraw it during this wait. Send now
+restarts the running work, and you cannot withdraw it:
 
 ![The Add context box with Send now and Queue for the next step](../images/console/add-context.png)
 
-When a task fails, the engine retries it once automatically (`ERROR_RETRIES = 1` in
-[`state.rs`](../../crates/ostra-engine/src/state.rs)), then opens an execution-failed gate. If every task fails or
-is abandoned, the session fails with "there is no research document to write a spec from", because Rule D1
-forbids a spec without research.
+When a task fails, the engine retries it automatically one time (`ERROR_RETRIES = 1` in
+[`state.rs`](../../crates/ostra-engine/src/state.rs)). Then it opens an execution-failed gate. If every task
+fails or is abandoned, the session fails with the message "there is no research document to write a spec from".
+The reason is Rule D1, which forbids a spec without research.
 
-A research document renders as chapters. Its overview counts the files, patterns, sources, open questions, and the
-Not covered items the Sufficiency judge reads next:
+A research document shows as chapters. Its overview counts the files, patterns, sources, and open questions. It
+also counts the Not covered items, which the Sufficiency judge reads next:
 
 ![A research document with its Outlines menu and overview counts](../images/console/research.png)
 
 ## Sufficiency: is the research enough?
 
-The spec may start only when no research is running and no `Not covered` item the request depends on is left
-open (Rule D2). The planner collects every finished task with unjudged `Not covered` items and asks the
-Sufficiency judge about them in one call. For each item the judge answers needed or not needed, and a needed
-item comes with one more research task. The judge often gives several related items the same task (six gaps
-about one country's law become one "research these statutes" task), so the engine keeps one task per project
-and task text and skips a copy of a task that is still queued or running. One round adds at most three tasks
-(`MAX_SUFFICIENCY_RESEARCH` in [`judge.rs`](../../crates/ostra-engine/src/judge.rs)), the first three the judge
-names. Those tasks spawn, and the cycle repeats.
+The spec can start only when no research runs and no open `Not covered` item remains that the request depends on
+(Rule D2). The planner collects every finished task that has `Not covered` items with no judgment yet. It asks
+the Sufficiency judge about all of them in one call. For each item, the judge answers needed or not needed. For a
+needed item, it also gives one more research task.
 
-The engine allows three sufficiency rounds (`SUFFICIENCY_ROUNDS`). After that it proceeds to the spec with what
-it has, so a request that keeps opening new questions still moves forward.
+The judge often gives the same task to several related items. For example, six gaps about the law of one country
+become one "research these statutes" task. So the engine keeps one task for each project and task text. It skips
+a copy of a task that is still queued or in progress. One round adds at most three tasks
+(`MAX_SUFFICIENCY_RESEARCH` in [`judge.rs`](../../crates/ostra-engine/src/judge.rs)), the first three that the
+judge names. Those tasks spawn, and the cycle repeats.
 
-Each research pass is a full agent run, so the judge asks for one only when the answer changes what gets
-specified or built and no later agent finds it while doing its own work. It sees the request's category,
-the track when decided, whether tests and docs were requested, and how many rounds were already judged. Items
-it marks not needed:
+The engine allows three sufficiency rounds (`SUFFICIENCY_ROUNDS`). After the third round, it continues to the
+spec with the research that it has. So a request that continues to open new questions still moves forward.
 
-- a detail a later agent meets while it works, such as the API of a library the project already uses or
-  whether a type can be built in a test, because the implementer and the test writer read and run the code;
-- a check the researcher did not run, such as a lint or a build, because the build stage runs the project's
-  own checks;
-- a second look at a fact about the projects' own code that the researcher says it did not re-read;
-- a comparison with code or a deployment outside the request's scope;
-- for a request that only adds tests or docs, behavior the request does not change.
+Each research pass is a full agent run. So the judge asks for a pass only when both of these conditions are true:
 
-This came from a session that asked for tests and docs for one crate: the judge queued a pass to check whether
-a library's error type "taken from memory" could be built in a test, which the test writer finds out by
-writing the test. When the judge is unsure, it marks an item needed only if the item names behavior the
-request changes or an outside technology it brings in, because a missed dependency there shows up as a wrong
-spec after the user approved it.
+- The answer changes what Ostra specifies or builds.
+- No later agent finds the answer during its own work.
+
+The judge sees the category of the request and the track, when the track is decided. It also sees whether the request asked for tests and docs, and how many rounds it already judged. It marks these items not needed:
+
+- A detail that a later agent finds during its work, such as the API of a library that the project already
+  uses, or whether a type can be built in a test. The implementer and the test writer read and run the code.
+- A check that the researcher did not run, such as a lint or a build. The build stage runs the project's own
+  checks.
+- A second look at a fact about the projects' own code that the researcher says it did not read again.
+- A comparison with code or a deployment outside the scope of the request.
+- For a request that only adds tests or docs: behavior that the request does not change.
+
+This rule came from a session that asked for tests and docs for one crate. The judge queued a pass to check
+whether a library's error type "taken from memory" could be built in a test. The test writer finds this out when
+it writes the test. When the judge is not sure, it marks an item needed only in two cases. The item names behavior that the request changes, or an outside technology that the request brings in. It does this because a missed dependency
+in these areas shows as a wrong spec after the user approved the spec.
 
 ### Skipping research
 
-Exploration is the user's stage (Ultracode Rule D2), so you can drop a research task the session can do without
-(Rule U1):
+Exploration is the user's stage (Ultracode Rule D2). So you can drop a research task that the session does not
+need (Rule U1):
 
-- **Skip** on a running research execution stops it. The runner records `ExecutionSkipped`, the fold marks the
-  task abandoned, and the stop opens no failure gate, so the spec no longer waits for it.
-- **Add context** that says so ("skip the deadpool research") goes to the Route answer judge, which sees each
-  unfinished task numbered as "Research task N" and lists the ones you name in `skip`. A running one stops; a
-  queued one never starts, even when its spawn was already waiting for an execution slot. Queued context reaches
-  the judge only after the running executions finish, so only Send now stops a running research task this way. Context that only
-  asks for the skip is discarded, so no later agent reads it and looks for research that is not there.
+- **Skip** on a running research execution stops it. The runner records `ExecutionSkipped`, and the fold marks
+  the task abandoned. The stop opens no failure gate, so the spec does not wait for the task.
+- **Add context** that asks for the skip ("skip the deadpool research") goes to the Route answer judge. The judge
+  sees each unfinished task numbered as "Research task N", and it lists the tasks that you name in `skip`. A
+  running task stops. A queued task never starts, even when its spawn already waits for an execution slot.
+
+  Queued context reaches the judge only after the running executions finish. So only Send now stops a running
+  research task in this way. Ostra discards context that only asks for the skip. So no later agent reads it and
+  looks for research that does not exist.
 
 A skipped task leaves no research document. If every task ends without one, Rule D1 still fails the session.
 
 ## Track: light or full
 
-After research, an `IMPLEMENT` request asks the Track judge how much of the pipeline it needs. The light track
-is the default. It skips the spec, the fact-check, the plan, and both approvals: the engine creates one inline
-phase per project in scope, queued in order, and each implementer gets `No plan:` with the request and every
-research document. The full track runs the spec flow below, then Stakes, then the plan when stakes are not low.
+After research, an `IMPLEMENT` request asks the Track judge how much of the pipeline the request needs. The light
+track is the default. It skips the spec, the fact-check, the plan, and both approvals. In their place, the engine
+creates one inline phase per project in scope, queued in order. Each implementer gets `No plan:` with the request
+and every research document. The full track runs the spec flow below, then Stakes, then the plan when stakes are
+not low.
 
-The judge ([`assets/judges/track.md`](../../assets/judges/track.md)) reads every research document and picks
-`full` only on a finding it can name: a behavior the request leaves open, a contract other code consumes, a
-schema or data change, a change across several modules that must land in order, a security-sensitive area, or
-a need for a new codebase that no project in scope holds. The last one sends the request to the full track
-because only an approved plan can put phases in a project that does not exist yet (rule O2), and the light
-track builds only in projects that already exist. When the evidence is thin it picks `light`, because the user reviews the built result and can ask for changes
-(next sections), while a spec round costs the user several approvals.
+The judge ([`assets/judges/track.md`](../../assets/judges/track.md)) reads every research document. It picks
+`full` only for a finding that it can name:
 
-The New task form has a Track selector: Auto asks the judge, Light and Full skip it. The Track decision can be
-overridden from the Decisions tab until the spec or a phase starts; switching to full drops the inline phases,
-and switching to light creates them. The rest of the page follows the full track through the spec and the plan,
-then both tracks through the phases.
+- a behavior that the request leaves open,
+- a contract that other code consumes,
+- a schema or data change,
+- a change across several modules that must come in a fixed order,
+- a security-sensitive area,
+- a need for a new codebase that no project in scope holds.
+
+The last finding sends the request to the full track. Only an approved plan can put phases in a project that does not exist yet (rule O2). The light track builds only in projects that exist. When the evidence is weak,
+the judge picks `light`, because the user reviews the built result and can ask for changes (next sections). A
+spec round costs the user several approvals.
+
+The New task form has a Track selector. Auto asks the judge. Light and Full skip the judge. You can override the
+Track decision from the Decisions tab until the spec or a phase starts. A switch to full drops the inline phases,
+and a switch to light creates them.
+
+The rest of the page follows the full track through the spec and the plan. Then it follows both tracks through
+the phases.
 
 ## Spec: what should change
 
 One `generate-spec` agent runs for the whole session, in the primary project. It receives the full request,
-every research document (oldest first, including superseded ones), and the projects in scope. It also gets
-`Changed since research:`: the cited files whose content changed, or that are gone, since the newest document
-naming them, or `none` (Rule D2a). For every file the line does not list, the prompt has the agent take current
-behavior from the research documents instead of reading the code again. It writes the spec file and submits its
-summary, counts, external evidence rows, and any open questions.
+every research document (oldest first, with superseded documents included), and the projects in scope. It also
+gets the `Changed since research:` line (Rule D2a). This line lists the cited files whose content changed, or that
+are gone, after the newest document that names them, or `none`. For every file that the line does not list, the prompt tells the agent to take current behavior from the research documents. The agent does not read the code again.
 
-The spec is a typed document. The Document tool checks its structure and the code it cites: every criterion
+The agent writes the spec file and submits its summary, counts, external evidence rows, and open questions.
+
+The spec is a typed document. The Document tool checks its structure and the code that it cites. Every criterion
 grounding that names a `path:Symbol`, and every consumed contract source, must name a file in its repo that
-contains the symbol. The submit call is refused while the file has a check error or its counts disagree with the
-submit (Hard rule 4), so a wrong reference is fixed by the agent that wrote it, in the same run, rather than sent
-back by a fact-check round. The checks live in
-[`refs.rs`](../../crates/ostra-core/src/doc/refs.rs). The browser view does not run them, because a build later
-creates and deletes the files they name. The engine never edits the spec
-itself; every change goes back through the agent.
+contains the symbol. Ostra refuses the submit call if the file has a check error, or if its counts do not agree
+with the submit (Hard rule 4). So the agent that wrote a wrong reference fixes it in the same run, and a
+fact-check round does not need to send it back. The checks are in
+[`refs.rs`](../../crates/ostra-core/src/doc/refs.rs).
 
-The spec renders from its typed document. Each requirement shows its EARS type, the deliverable and criterion it
-covers, and its Given/When/Then acceptance criteria:
+The browser view does not run the checks, because a build later creates and deletes the files that they name.
+The engine never edits the spec itself. Every change goes back through the agent.
+
+The console renders the spec from its typed document. Each requirement shows its EARS type, the deliverable and
+the criterion that it covers, and its Given/When/Then acceptance criteria:
 
 ![The Requirements chapter of a spec with EARS requirements and acceptance criteria](../images/console/spec-requirements.png)
 
 ### A new codebase
 
-A request sometimes needs a codebase of its own: a new MCP server, CLI, or service that sits beside the
-existing projects. The spec does not create it. Before it groups deliverables, generate-spec gives the new
-codebase a new project key, tags its criteria and deliverables with that key, and records the project's stack
-and every base requirement the research or the user's answers settle as `Constraint` criteria. Nothing exists on
-disk yet, so a spec the user rejects leaves nothing behind. The plan and the build take it from there, as the
-next sections describe.
+Sometimes a request needs a codebase of its own: a new MCP server, CLI, or service next to the existing
+projects. The spec does not create it. Before generate-spec groups deliverables, it gives the new codebase a new
+project key. It tags the criteria and deliverables of the codebase with that key. It records the project's stack
+and each base requirement that the research or the user's answers settle as `Constraint` criteria.
+
+Nothing exists on disk yet, so if the user rejects the spec, nothing remains. The plan and the build continue
+from there. The next sections describe them.
 
 ### Open questions before any fact-check
 
-If the spec has open questions, they are asked before the fact-check runs (Rule D3), because checking a spec
-that is about to change is wasted work. Each answer re-runs generate-spec. On a revision the agent receives
-only the answers, change requests, and research documents its spec does not reflect yet, together with the
-path of the current spec, so it edits the file in place instead of rewriting it.
+If the spec has open questions, Ostra asks them before the fact-check runs (Rule D3). It asks them first because
+a check of a spec that will change is wasted work. Each answer runs generate-spec again. On a revision, the agent
+receives only the answers, change requests, and research documents that its spec does not include yet. It also
+gets the path of the current spec, so it edits the file in place and does not write it again.
 
-The open questions gate shows each question with its options, the recommended option first:
+The open questions gate shows each question with its options. The recommended option is first:
 
 ![The open questions gate with a single-choice and a multiple-choice question](../images/console/gate-open-questions.png)
 
@@ -260,106 +289,116 @@ The open questions gate shows each question with its options, the recommended op
 A `fact-check` agent checks every claim in the spec against the code and the research. Two parameters set its
 behavior:
 
-- **`Source check:`** is `refetch` only on a spec's first pass when the spec has External Evidence rows, so
-  outside claims are fetched again once. Every other pass uses `citations` (Rule D3b).
-- **`Prior findings:`** is `none` on the first pass. On a re-pass it is the previous pass's findings verbatim,
-  or `no findings on the previous pass` when that pass was clean, so a revision after a clean pass is still
-  treated as a re-pass (Rule D3a).
+- **`Source check:`** is `refetch` only on the first pass of a spec that has External Evidence rows. On that pass,
+  the agent fetches the outside claims again one time. Every other pass uses `citations` (Rule D3b).
+- **`Prior findings:`** is `none` on the first pass. On a later pass, it is the findings of the previous pass,
+  exactly as written. If that pass was clean, it is `no findings on the previous pass`. So a revision after a
+  clean pass is still a re-pass (Rule D3a).
 
-The checker does not re-verify the references Ostra already checked when the document was written. On a spec
-target it gets the research documents and `Changed since research:`, and on a plan target the code facts file
-(below), so it checks a claim about an unchanged file against what research recorded before it opens the file.
+The checker does not verify again the references that Ostra checked when the agent wrote the document. On a spec
+target, it gets the research documents and `Changed since research:`. On a plan target, it gets the code facts
+file (below). So it checks a claim about an unchanged file against the research record before it opens the file.
 
-A fact-check on a spec's first pass runs with `Source check: refetch`, so it fetches the External Evidence source
-again:
+A fact-check on the first pass of a spec runs with `Source check: refetch`, so it fetches the External Evidence
+source again:
 
 ![A running fact-check with Read, Grep, and WebFetch calls](../images/console/factcheck-run.png)
 
 A FAIL sends the findings back to generate-spec, and the loop repeats. The round after a FAIL continues the
-author's own conversation, with the findings as its new turn, and the next pass continues the same checker's
-conversation, so neither re-reads what it already knows (Rule H5, see
-[Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other)). While either works, it can ask
-the other a question directly. After three FAILs in a row
-(`FACTCHECK_RECURRING_LIMIT`) the engine stops and opens a fact-check-recurring gate instead of spending more.
+author's own conversation, with the findings as its new turn. The next pass continues the conversation of the
+same checker. So neither agent reads again what it already knows (Rule H5, see
+[Subagents that talk to each other](agents.md#subagents-that-talk-to-each-other)). Each of the two agents can
+ask the other a direct question during its run. After three FAILs in a row (`FACTCHECK_RECURRING_LIMIT`), the
+engine stops, opens a fact-check-recurring gate, and does not spend more.
 
-The gate shows the findings that keep coming back:
+The gate shows the findings that recur:
 
 ![The fact-check-recurring gate with a HIGH and a MEDIUM finding](../images/console/gate-factcheck-recurring.png)
 
 ### Spec approval
 
-A spec that passed its fact-check goes to the user for approval, with any LOW findings from the passing check
-shown on the card. Approving records the version that was approved. A change request becomes a spec change and
-the whole spec loop runs again. For the `SPEC` category the flow ends at the PASS and skips approval.
+After a spec passes its fact-check, it goes to the user for approval. The card shows the LOW findings of the
+passing check. An approval records the version that the user approved. A change request becomes a spec change,
+and the whole spec loop runs again. For the `SPEC` category, the flow ends at the PASS and skips approval.
 
 The approval card shows the passing check and its LOW findings:
 
 ![The spec approval gate with a Fact-check PASS badge, two LOW findings, and a change request field](../images/console/gate-spec-approval.png)
 
-In the spec itself, the Fact-check chapter shows each finding on the element it names:
+In the spec, the Fact-check chapter shows each finding on the element that the finding names:
 
 ![The Fact-check chapter of a spec with a LOW finding on R3](../images/console/spec-factcheck.png)
 
 ## Stakes: is a plan worth it?
 
-For `IMPLEMENT` on the full track, the Stakes judge reads the approved spec and returns `low`, `medium`, or `high`.
+For `IMPLEMENT` on the full track, the Stakes judge reads the approved spec. It returns `low`, `medium`, or
+`high`.
 
-- `low` skips the plan. The engine creates one inline phase per project in scope, queued in order because
-  there is no dependency graph to read (Rule M5), and the implementer works from the spec.
+- `low` skips the plan. The engine creates one inline phase per project in scope, queued in order because there
+  is no dependency graph to read (Rule M5). The implementer works from the spec.
 - `medium` and `high` run the plan stage.
 
-`PLAN` and full-track `IMPLEMENT` always go through the spec first (Rule D1, Hard rule 15). There is no path from
-research straight to a plan.
+`PLAN` and full-track `IMPLEMENT` always go through the spec first (Rule D1, Hard rule 15). No path goes from
+research directly to a plan.
 
 ## Plan: sequencing the work
 
-One `plan` agent reads the approved spec and the projects in scope, and never a research document (Rule D4, Hard
-rule 16): a request can have several, written while the user changed what they wanted, and only the spec
-reconciles them. Its parameter struct has no field for a research document, so the engine cannot leak one into
-it by accident.
+One `plan` agent reads the approved spec and the projects in scope. It never reads a research document (Rule D4,
+Hard rule 16). A request can have several research documents, and the user can change the request between them.
+Only the spec reconciles them. The plan's parameter struct has no field for a research document, so the engine
+cannot give one to the plan agent by accident.
 
-What research found about the code reaches the plan as `Code facts:` instead (Rule D4a). The runner writes
-`ostra-code-facts.md` in the session root just before the spawn, from every research document: per repo, each
-cited file with its purpose and symbols, the patterns with their code, the traced flows, and the dependencies.
-Each file carries a mark from comparing it with the hash its document recorded: `unchanged`, `changed`, `gone`,
-or `not checked` for a document older than the hashes. Where documents overlap, the newest stands. The plan
-prompt has the agent plan from unchanged entries and read only the files that changed or that the facts do not
-cover. The file holds no request text, asks, approaches, recommendation, or external fact, so requirements still
-reach the plan only through the spec ([`facts.rs`](../../crates/ostra-core/src/doc/facts.rs)).
+In place of the research, the facts that research found about the code reach the plan as `Code facts:` (Rule
+D4a). The runner writes `ostra-code-facts.md` in the session root just before the spawn. It builds the file from
+every research document. For each repo, the file has each cited file with its purpose and symbols, the patterns
+with their code, the traced flows, and the dependencies. Each file has a mark from a comparison with the hash
+that its document recorded: `unchanged`, `changed`, `gone`, or `not checked` for a document older than the
+hashes. Where documents overlap, the newest document applies.
 
-The Document tool checks the steps against the code (Hard rule 4): a `Modify` or `Delete` step must name a file
-that exists or that an earlier step creates, and each `read_first` path must exist in a repo of the plan or be
-created by an earlier step or by the step itself. A phase in a project that does not exist yet is not checked.
+The plan prompt tells the agent to plan from unchanged entries. The agent reads only the files that changed or
+that the facts do not cover. The file holds no request text, asks, approaches, recommendation, or external fact.
+So requirements still reach the plan only through the spec
+([`facts.rs`](../../crates/ostra-core/src/doc/facts.rs)).
 
-On a re-run after a fact-check FAIL, the plan also receives its earlier master plan, the findings, and `Phases to
-revise:` (Rule D4b): the plan's phases that the findings' elements and locations name, such as `step 2.3` or
-`...-phase-2.md`. The agent reads and changes only those phases. Its `update` sends only the steps and fields
-that change, because an item an update names takes the fields it sends and keeps the rest, at every level, so a
-revision never re-sends a whole phase to change one step.
+The Document tool checks the steps against the code (Hard rule 4):
 
-The plan is a master plan plus one file per phase. Each phase has an ID, a project, a deliverable, a
-complexity, a test policy (`Required` or `Skip` with a rationale), and the phases it depends on. Each step names
-the skills it needs from the repository's inventory, and Ostra fills a phase's Required Skills from the union
-of its steps (Rules P6, P7). The Document tool refuses a plan that names a skill not installed in its repo,
-because the implementer loads only the skills its phase file lists.
+- A `Modify` or `Delete` step must name a file that exists or that an earlier step creates.
+- Each `read_first` path must exist in a repo of the plan, or an earlier step or the step itself must create it.
 
-A spec deliverable whose repo key is not in scope names a new project. The plan puts its phases in that key,
-with `{workspace root}/{key}` as the phase's repo root, lists the key in its submit call's `new_projects`, and
-copies the project's stack, a one-sentence purpose, and the base requirements from the spec's `Constraint`
-criteria into the context of the first phase in it. When the plan is approved, a phase in a project the session
-does not hold is accepted only when `new_projects` names that key (`SessionState::project_to_create`); any
-other stays blocked, as a phase in an unknown project always was.
+The tool does not check a phase in a project that does not exist yet.
 
-The plan then goes through the same loop as the spec: clarifying questions, a fact-check that always uses
-`citations` and receives the approved spec and the code facts file (Rules D5, D4a), the recurring-FAIL limit,
-and approval.
+When the plan runs again after a fact-check FAIL, it also receives its earlier master plan, the findings, and
+`Phases to revise:` (Rule D4b). This line lists the phases of the plan that the findings' elements and locations
+name, such as `step 2.3` or `...-phase-2.md`. The agent reads and changes only those phases. Its `update` sends
+only the steps and fields that change. At every level, an item that an update names takes the fields that the
+update sends and keeps its other fields. So a revision never sends a whole phase again to change one step.
+
+The plan is a master plan plus one file per phase. Each phase has an ID, a project, a deliverable, a complexity,
+a test policy (`Required`, or `Skip` with a rationale), and the phases that it depends on. Each step names the
+skills that it needs from the repository's inventory. Ostra fills the Required Skills of a phase from the union
+of its steps (Rules P6, P7). The Document tool refuses a plan that names a skill not installed in its repo, because the implementer loads only the skills in its phase file.
+
+If a spec deliverable has a repo key that is not in scope, the deliverable names a new project. The plan puts the
+phases of that deliverable in that key, with `{workspace root}/{key}` as the repo root of the phase. It lists the
+key in the `new_projects` field of its submit call. It copies the project's stack, a one-sentence purpose, and the base requirements from the spec's `Constraint` criteria into the context of the project's first phase. When
+the plan is approved, Ostra accepts a phase in a project that the session does not hold only if `new_projects`
+names that key (`SessionState::project_to_create`). Every other phase of that kind stays blocked, the same as a
+phase in an unknown project.
+
+Then the plan goes through the same loop as the spec:
+
+- clarifying questions,
+- a fact-check that always uses `citations` and receives the approved spec and the code facts file (Rules D5,
+  D4a),
+- the limit on recurring FAILs,
+- approval.
 
 The master plan opens on its overview, with the phase count, the stakes, and the success criteria:
 
 ![A master plan overview with its counts, summary, and success criteria](../images/console/plan.png)
 
-Each phase is its own chapter, with its deliverable, complexity, test policy, dependencies, and the requirements it
-delivers:
+Each phase is its own chapter, with its deliverable, complexity, test policy, dependencies, and the requirements
+that it delivers:
 
 ![The Phase 1 chapter of a plan with its deliverable, complexity, test policy, and requirements](../images/console/plan-phase.png)
 
@@ -369,43 +408,61 @@ The plan approval gate lists the phases with their project, complexity, test pol
 
 ### Changes after the plan exists
 
-A requirement-level answer at any point after the spec exists goes into the spec first (Rule D10). The
-engine revokes both approvals, marks the plan invalidated, re-runs generate-spec with the change, asks for spec
-approval again, and then revises the plan in place against the spec's diff. This includes answers to the
-plan's own clarifying questions: they are requirement changes, because the plan agent takes requirements only
-from the spec, so an answer that lives anywhere else never reaches it.
+After the spec exists, a requirement-level answer at any point goes into the spec first (Rule D10). The engine
+then does these steps:
+
+1. It revokes both approvals.
+2. It marks the plan invalidated.
+3. It runs generate-spec again with the change.
+4. It asks for spec approval again.
+5. It revises the plan in place against the diff of the spec.
+
+This includes the answers to the plan's own clarifying questions. These answers are requirement changes, because
+the plan agent takes requirements only from the spec. An answer in any other place never reaches the plan agent.
 
 ### Measuring the planning stages
 
-Conformance fixtures prove which inputs each planning stage gets; they cannot say how much of the code a model reads
-again with them, or whether the plan still holds. The planning evals do that.
-[`tests/evals/planning.toml`](../../tests/evals/planning.toml) holds 30 change requests against Ostra's own source, in
-three tiers: a change in one place, a change across a few files or crates, and a feature across several crates with more
-than one deliverable. The file pins one upstream commit, and every run plans against that commit's tracked files,
-extracted with `git archive` into a fresh repository, so a result does not move when the code under development does.
+Conformance fixtures prove which inputs each planning stage gets. But they cannot show how much of the code a
+model reads again with these inputs, or whether the plan is still correct. The planning evals measure this.
+[`tests/evals/planning.toml`](../../tests/evals/planning.toml) holds 30 change requests against Ostra's own
+source, in three tiers:
 
-Each case's research is recorded once: explore runs live on the model under test, and its typed documents are saved
-under `tests/evals/planning/research/`, with the scenario's paths turned into placeholders. Every later run replays them
-through the native loop and the real Document tool, from a scripted provider, so the engine under test records and
-checks a replayed document the way it treats any research document, and two engines compared on one case read the same
-research.
+- a change in one place,
+- a change across a small number of files or crates,
+- a feature across several crates with more than one deliverable.
 
-[`crates/ostra-server/tests/planning_evals.rs`](../../crates/ostra-server/tests/planning_evals.rs) runs each case as a
-real session of a real `Engine` on YOLO, with scripted judges: the case's research tasks, the full track, high stakes,
-every approval, and the recommended option for every open question. Generate-spec, both fact-checks, and the plan run
-live on the native loop with the policy, the sandbox, and a code index, until the plan is approved and the first
-implementer would start. The report gives, per stage, the cost, the tool calls, the code files read, and how many of
-those files the research had already described, plus the plan rounds, the fact-check FAILs, the reference errors the
-Document tool caught, and the size of the plan's Document calls. It then checks the approved plan against the approved
-spec: every requirement delivered by a step, every deliverable planned, and every `Modify` or `Delete` step naming a
-file that exists or that an earlier step creates.
+The file pins one upstream commit. Every run plans against the tracked files of that commit, which `git archive`
+extracts into a new repository. So a result does not change when the code under development changes.
+
+The eval records the research of each case one time. Explore runs live on the model under test, and Ostra saves
+its typed documents under `tests/evals/planning/research/`. The scenario's paths become placeholders in the saved
+documents. Every later run replays the documents through the native loop and the real Document tool, from a
+scripted provider. So the engine under test records and checks a replayed document in the same way as any
+research document. Two engines that are compared on one case read the same research.
+
+[`crates/ostra-server/tests/planning_evals.rs`](../../crates/ostra-server/tests/planning_evals.rs) runs each case
+as a real session of a real `Engine` on YOLO, with scripted judges. The scripted judges give the case's research
+tasks, the full track, high stakes, every approval, and the recommended option for every open question.
+Generate-spec, both fact-checks, and the plan run live on the native loop with the policy, the sandbox, and a code
+index. They run until the plan is approved, just before the first implementer starts.
+
+For each stage, the report gives the cost, the tool calls, the code files read, and how many of those files the research already described. It also gives the plan rounds, the fact-check FAILs, the
+reference errors that the Document tool caught, and the size of the plan's Document calls. Then it checks the
+approved plan against the approved spec:
+
+- A step delivers every requirement.
+- The plan covers every deliverable.
+- Every `Modify` or `Delete` step names a file that exists or that an earlier step creates.
 
 Each run writes its report, in Markdown and JSON, to
-[`tests/evals/planning/results/`](../../tests/evals/planning/results/), named by its time, engine commit, and model, so
-results are committed beside the cases and the research they measured. The harness uses only engine APIs that exist
-at the pinned commit, so the same file runs on an unchanged engine in a git worktree at that commit, and a second test
-compares two reports case by case into the same folder. An offline test replays every case
-with stand-ins for the live stages in the normal suite. Record, run, and compare with:
+[`tests/evals/planning/results/`](../../tests/evals/planning/results/). The report name has the run's time, the
+engine commit, and the model. So the results are committed next to the cases and the research that they
+measured. The harness uses only engine APIs that exist at the pinned commit. So the same file runs on an
+unchanged engine in a git worktree at that commit. A second test compares two reports case by case and writes the
+result into the same folder.
+
+An offline test in the normal suite replays every case with stand-ins for the live stages. Use these commands to
+record, run, and compare:
 
 ```bash
 OSTRA_EVAL_MODE=record cargo test -p ostra-server --test planning_evals planning_evals -- --ignored --nocapture
@@ -417,56 +474,69 @@ OSTRA_EVAL_BASELINE=<report.json> OSTRA_EVAL_CANDIDATE=<report.json> \
 
 ## Phases: building in reviewed steps
 
-Once the plan is approved, its Phase Index becomes the build queue. The scheduler follows four rules:
+After the user approves the plan, its Phase Index becomes the build queue. The scheduler follows four rules:
 
-- A phase is ready when every phase it depends on has finished and passed review (Rules D6, M3).
-- A phase with an unreadable dependency list depends on every earlier phase (Rule M5).
-- Each project runs one implement pipeline at a time (Rule M2), because two implementers editing the same
-  working tree would overwrite each other.
+- A phase is ready when every phase that it depends on is finished and passed review (Rules D6, M3).
+- If Ostra cannot read the dependency list of a phase, the phase depends on every earlier phase (Rule M5).
+- Each project runs one implement pipeline at a time (Rule M2), because two implementers in the same working tree
+  overwrite the changes of each other.
 - Ready phases in different projects run in parallel.
 
-When a phase ends blocked, every phase that depends on it, directly or through other phases, is removed from
-the queue, and independent phases keep going (Rule D9). The removal is computed fresh on every planner pass by
-`removed_phases`.
+When a phase ends blocked, Ostra removes from the queue every phase that depends on it, directly or through other
+phases. Independent phases continue (Rule D9). `removed_phases` calculates the removal again on every planner
+pass.
 
-A phase in a new project creates the project first (rule O2). Its implementer runs with `creates_project`
-set in its execution context, its session dir as `Repo root:`, and a `New project:` spawn line naming the key
-and folder. It reads the phase file and calls `ProjectCreate` with the stack, purpose, and requirements written
-there, and it may write nothing outside its session dir and temp until the project exists. The call asks the
-user ([Tools](tools.md#project-management-tools)), so the permission card is where the user approves the new
-project. If the user denies it, the implementer returns stuck, and the phase follows the usual stuck path.
+A phase in a new project creates the project first (rule O2). Its implementer runs with `creates_project` set in
+its execution context and its session dir as `Repo root:`. A `New project:` spawn line names the key and the
+folder. The implementer reads the phase file and calls `ProjectCreate` with the stack, purpose, and requirements
+from that file. Until the project exists, it can write nothing outside its session dir and temp.
 
-Once the server creates the project, a `ProjectCreated` event adds it to the session's projects and scope
-(rule O3) and stops that implementer (interrupt `ProjectCreated`). The project is the one uninitialized
-project a pipeline session may target, and only in the session that created it. It stays in scope if the
-request is classified again. Every later spawn's repo brief lists it under "Projects created in this session"
-with the stack, purpose, and requirements from the call.
+The call asks the user ([Tools](tools.md#project-management-tools)), so the user approves the new project on the
+permission card. If the user denies it, the implementer returns stuck, and the phase follows the usual stuck path.
 
-The project is then initialized inside the session, as part of the build (rule O4). The init flow at the end of
-this page runs for it with a `User focus:` built from the `ProjectCreate` call: the key, stack, purpose, and base
-requirements, and a note that the folder is empty. The initializer seeds skills from the stack reference,
-because there is no code to learn from yet. Propose plans the module map from the base requirements (one area per
-part of the project they name), each with the path glob a project of that stack puts it under. The phases
-then put each new
-file in its area, and the implementer knows where one belongs before any directory exists. Until the init ends, nothing but the init and its advisor runs in
-that project: its phases, reviews, tests, research, docs, format, staging, and autofix wait, because every other
-agent routes its work by the project's inventory and profile. Work in other projects does not wait. The board
-shows the init as one "Initialize `<key>`" card in the Build lane, ahead of the phases.
+After the server creates the project, a `ProjectCreated` event adds it to the projects and the scope of the
+session (rule O3). The event also stops that implementer (interrupt `ProjectCreated`). The project is the one
+uninitialized project that a pipeline session can target, and only in the session that created it. It stays in
+scope if Ostra classifies the request again. The repo brief of every later spawn lists it under "Projects created
+in this session", with the stack, purpose, and requirements from the call.
 
-The init ends with a `ProjectInitFinished` event. The runner appends it after it checks that the initializer
-wrote `.ostra/INVENTORY.md` and a valid `.ostra/project.toml`, and marks the project initialized. The stopped
-phase then starts over with initial work inside the new project, with the project's own repo brief.
+Then Ostra initializes the project inside the session, as part of the build (rule O4). The init flow at the end
+of this page runs for it with a `User focus:` built from the `ProjectCreate` call. The focus holds the key, stack,
+purpose, and base requirements, and a note that the folder is empty. The initializer creates its first skills
+from the stack reference, because there is no code to learn from yet. Propose plans the module map from the base
+requirements, with one area for each part of the project that they name. Each area gets the path glob under which
+a project of that stack puts it.
 
-A step of that init that fails goes to the advisor before the user (rule O5). That covers an initializer run
-that fails or returns `stuck`, a result the init cannot use (detect found no slices, propose found no skills),
-and an inventory or profile that is missing or invalid at the end. The last two the engine finds itself and
-records as an `InitStepFailed` event. The advisor, a read-only agent on the advanced tier with high effort,
-reads the failed step's spawn block, the problem, the project, and any earlier guidance, and submits either
-`retry` with guidance or `escalate` with a reason. A retry runs the step again with an `Advisor guidance:`
-line. After two retries of one step (`MAX_ADVICE`), or on an escalation, the step's failure gate opens for the
-user, carrying the advisor's reason. Retrying there starts the step again. Abandoning it ends the init with a
-note, and the project's phases then run without it; the session does not fail, because the rest of the work
-still needs them.
+The phases then put each new file in its area. So the implementer knows the location of a file before any
+directory exists.
+
+Until the init ends, only the init and its advisor run in that project. Its phases, reviews, tests, research,
+docs, format, staging, and autofix wait, because every other agent routes its work by the inventory and profile of
+the project. Work in other projects does not wait. The board shows the init as one "Initialize `<key>`" card in
+the Build lane, before the phases.
+
+The init ends with a `ProjectInitFinished` event. The runner appends this event after it checks that the
+initializer wrote `.ostra/INVENTORY.md` and a valid `.ostra/project.toml`. The runner then marks the project
+initialized. Then the stopped phase starts again with initial work inside the new project, with the project's own
+repo brief.
+
+If a step of that init fails, the step goes to the advisor before the user (rule O5). These failures go to the
+advisor:
+
+- an initializer run that fails or returns `stuck`,
+- a result that the init cannot use (detect found no slices, propose found no skills),
+- an inventory or profile that is missing or not valid at the end.
+
+The engine finds the last two failures itself and records each one as an `InitStepFailed` event.
+
+The advisor is a read-only agent on the advanced tier with high effort. It reads the spawn block of the failed
+step, the problem, the project, and the earlier guidance. Then it submits `retry` with guidance or `escalate`
+with a reason. A retry runs the step again with an `Advisor guidance:` line. After two retries of one step
+(`MAX_ADVICE`), or after an escalation, the failure gate of the step opens for the user with the advisor's reason.
+
+If you retry at this gate, the step starts again. If you abandon the step, the init ends with a note, and the
+project's phases then run without the init. The session does not fail, because the rest of the work still needs
+the phases.
 
 The Phase graph on the session board shows each phase by step, with its project, complexity, test policy, and
 state:
@@ -477,149 +547,175 @@ state:
 
 Each phase is a loop, `WorkLoop` in [`state.rs`](../../crates/ostra-engine/src/state.rs):
 
-1. The `implementer` runs with `Phase file:` pointing at its phase (or `No plan:` with a reason, Hard rule 13).
-   It edits the code and submits its changed files and report path.
-2. The `code-reviewer` reviews the unstaged changes (`Review scope: unstaged`) and submits findings, each
-   with a severity and a rule ID.
+1. The `implementer` runs with `Phase file:`, which points at its phase, or with `No plan:` and a reason (Hard
+   rule 13). It edits the code and submits its changed files and report path.
+2. The `code-reviewer` reviews the unstaged changes (`Review scope: unstaged`). It submits findings, each with a
+   severity and a rule ID.
 3. The engine sorts the findings:
-   - **BLOCKER** (or a `security_block` flag): only the BLOCKER findings go back to the implementer with an
-     instruction to remove the problem. This loop has no cap and no gate can waive it (Hard rule 21). An open
-     BLOCKER also prevents the project's documentation from running.
-   - **Auto-fixable**: findings whose rule ID the project marks auto-fixable and whose fix text reads exactly
-     ``Change `x` to `y` on line N`` or ``Add `text` above line N: `anchor` `` are applied by the engine
-     itself ([`autofix.rs`](../../crates/ostra-engine/src/autofix.rs)), without spending an agent run.
-   - **HIGH and MEDIUM** go to the fix agent verbatim, with the path of the review ledger. The fix agent writes
-     a FIXED or WONTFIX line with its rationale for each finding, and the reviewer reads the ledger on the next
-     pass.
-   - **LOW** findings are kept for the completion report and do not hold up the phase.
-4. The loop repeats until no HIGH or MEDIUM finding is open. A fix continues the conversation of the phase's
-   last worker when the fix agent is the same agent, and each re-review continues the reviewer's conversation,
-   so both keep what they learned on the earlier pass (Rule H5).
+   - **BLOCKER** (or a `security_block` flag): only the BLOCKER findings go back to the implementer, with an
+     instruction to remove the problem. This loop has no cap, and no gate can waive it (Hard rule 21). Also, the
+     project's documentation does not run when a BLOCKER is open.
+   - **Auto-fixable**: the engine applies these findings itself
+     ([`autofix.rs`](../../crates/ostra-engine/src/autofix.rs)), with no agent run. A finding is auto-fixable
+     when the project marks its rule ID auto-fixable and its fix text is exactly
+     ``Change `x` to `y` on line N`` or ``Add `text` above line N: `anchor` ``.
+   - **HIGH and MEDIUM** go to the fix agent exactly as written, with the path of the review ledger. For each
+     finding, the fix agent writes a FIXED or WONTFIX line with its rationale. The reviewer reads the ledger on
+     the next pass.
+   - **LOW** findings stay for the completion report and do not stop the phase.
+4. The loop repeats until no HIGH or MEDIUM finding is open. If the fix agent is the same agent as the last
+   worker of the phase, a fix continues that worker's conversation. Each re-review continues the conversation of
+   the reviewer. So both agents keep what they learned on the earlier pass (Rule H5).
 
-The engine counts the passes. The cap is three review passes per loop (`REVIEW_CAP`). If findings are still
-open after the third, the next step is a review-cap gate asking the user for another pass or to leave the phase
-blocked. Under YOLO the budget is ten passes (`YOLO_REVIEW_BUDGET`), after which the Resolve judge takes over;
-see [Gates and judges](gates-and-judges.md#review-cap).
+The engine counts the passes. The cap is three review passes per loop (`REVIEW_CAP`). If findings are still open
+after the third pass, the next step is a review-cap gate. The gate asks the user for another pass or to leave the
+phase blocked. Under YOLO, the budget is ten passes (`YOLO_REVIEW_BUDGET`). After the tenth pass, the Resolve
+judge decides (see [Gates and judges](gates-and-judges.md#review-cap)).
 
-The implementer's report lists its changes, the verification it ran, and the tests to write later:
+The implementer's report lists its changes, the verification that it ran, and the tests to write later:
 
 ![An implementer report with Changes, Verification, and Tests to write](../images/console/report.png)
 
-The review ledger lists each finding with its pass and severity, and marks the lines it points at on the diff:
+The review ledger lists each finding with its pass and severity. It marks the lines that the finding points at on
+the diff:
 
 ![A review ledger with three findings and the diff they point at](../images/console/ledger.png)
 
 ### Staging
 
-When a phase's review passes, the engine runs `git -C <project> add` on the files the implementer reported
-changing. That keeps the next phase's review focused on the next phase's changes, because reviews look only at
-unstaged work.
+When the review of a phase passes, the engine runs `git -C <project> add` on the files that the implementer
+reported as changed. So the review of the next phase sees only the changes of the next phase, because reviews
+look only at unstaged work.
 
 ### When an agent is stuck or needs help
 
-The build loop has three exits besides success.
+The build loop has three exits other than success.
 
-- **Errors.** An execution that ends in an error is re-run once from its spawn block. A second error opens an
-  execution-failed gate. A harness that fails to start is not retried; it opens a harness-failure gate instead.
+- **Errors.** If an execution ends in an error, Ostra runs it again one time from its spawn block. A second error
+  opens an execution-failed gate. If a harness fails to start, Ostra does not retry it. It opens a
+  harness-failure gate.
 - **STUCK.** An agent returns `stuck` with a diagnostic and a specific need. The Rescue judge picks one action:
-  re-run the agent with the missing fact quoted, run a targeted explore and then re-run, send the run to the
-  advisor, or ask the user. A plain retry is not an option, because it would reproduce the same failure.
-- **Environment failures go to the advisor first (Rule O7).** When the failure is in the agent's environment,
-  such as a cache in a read-only home folder, a tool that is not installed, or a refused host, the judge picks
-  `advise`. The advisor agent reads the stuck run's spawn block, its result, and the diagnostic, and checks the
-  machine with read-only shell commands from inside the same sandbox, so it sees what the step saw. It submits
-  `retry` with guidance, and the agent runs again as a rescue with the guidance quoted beside its diagnostic.
-  Or it submits `escalate`, and the stuck gate opens with the advisor's reason under the need, so the user
-  gets a diagnosis instead of a raw error. A loop gets at most two advisor rounds (`MAX_ADVICE`); after that
-  an `advise` decision opens the gate. The advisor shows on the phase's card, or the tests card, while it runs.
-- **The user can send an implementer to fix the cause (Rule O8).** At the stuck gate, besides stating a fact or
-  blocking the work, the user can answer `fix`, with or without instructions. Ostra starts a separate implementer
-  run whose only job is the cause the diagnostic names, such as a module to generate or a dependency to add; it
-  keeps its own report and progress log and leaves the phase's steps to the stuck agent. When it submits `ok`,
-  the stuck agent continues its conversation as a rescue, told what changed and which files, and those files
-  join the next review. When it fails, the stuck gate opens again with the reason. The implementer shows on the
-  phase's card, or the tests card, while it runs. Under YOLO every stuck gate is answered `fix`, with no
-  round cap; the session budget is what stops a fix that never works.
-- **HANDOFF.** An agent that needs a prompt or skill written asks for a handoff. The engine runs
-  prompt-generation with that request, then resumes the original agent with its resume instructions.
+  - run the agent again with the missing fact quoted,
+  - run a targeted explore, then run the agent again,
+  - send the run to the advisor,
+  - ask the user.
+
+  A plain retry is not an option, because it gives the same failure again.
+
+  - **Environment failures go to the advisor first (Rule O7).** When the failure is in the agent's environment, the
+    judge picks `advise`. Examples are a cache in a read-only home folder, a tool that is not installed, or a
+    refused host. The advisor agent reads the spawn block of the stuck run, its result, and the diagnostic. It
+    checks the machine with read-only shell commands from inside the same sandbox, so it sees what the step saw.
+
+    The advisor can submit `retry` with guidance. Then the agent runs again as a rescue, with the guidance quoted
+    next to its diagnostic. Or the advisor can submit `escalate`. Then the stuck gate opens with the advisor's
+    reason under the need, so the user gets a diagnosis and not a raw error.
+
+    A loop gets at most two advisor rounds (`MAX_ADVICE`). After that, an `advise` decision opens the gate. The
+    advisor shows on the card of the phase, or on the tests card, during its run.
+  - **The user can send an implementer to fix the cause (Rule O8).** At the stuck gate, the user can state a fact
+    or block the work. The user can also answer `fix`, with or without instructions. Then Ostra starts a separate
+    implementer run. The only job of this run is the cause that the diagnostic names, such as a module to generate
+    or a dependency to add. The run keeps its own report and progress log, and it leaves the steps of the phase to
+    the stuck agent.
+
+    When the fix run submits `ok`, the stuck agent continues its conversation as a rescue. Ostra tells it what
+    changed and which files changed, and those files join the next review. When the fix run fails, the stuck gate
+    opens again with the reason. The implementer shows on the card of the phase, or on the tests card, during its
+    run. Under YOLO, Ostra answers every stuck gate with `fix`, with no round cap. The session budget is what stops
+    a fix that never works.
+- **HANDOFF.** If an agent needs a prompt or skill written, it asks for a handoff. The engine runs
+  prompt-generation with that request. Then it resumes the original agent with its resume instructions.
 
 Agents reach STUCK through the build-streak guard in
-[`crates/ostra-policy/src/build.rs`](../../crates/ostra-policy/src/build.rs). It watches every build and test
-command an execution runs. After two consecutive failures it recalls lessons for the diagnostic. From three it
-tells the agent to state its root-cause theory before trying again and warns that more failures will be
-refused. At five, further build and test commands are denied and the agent is told to submit `stuck`. When a
-build passes after a streak of three or more, the lesson gate refuses the agent's submit until it records what
-fixed the problem in project memory, so the next session does not have to work it out again.
+[`crates/ostra-policy/src/build.rs`](../../crates/ostra-policy/src/build.rs). The guard watches every build and
+test command that an execution runs. After two consecutive failures, it recalls lessons for the diagnostic. From
+the third failure, it tells the agent to state its root-cause theory before it tries again. It also warns that it
+will refuse more failures. At five failures, the guard denies all more build and test commands and tells the
+agent to submit `stuck`.
 
-This Codex run hit the build streak limit. After five failed builds the guard refused the next one, and the agent
-returned STUCK with its diagnostic:
+A build can pass after a streak of three or more failures. Then the lesson gate refuses the agent's submit until the agent records the fix in project memory. So the next session does not need to find the fix
+again.
+
+This Codex run reached the build streak limit. After five failed builds, the guard refused the next build, and
+the agent returned STUCK with its diagnostic:
 
 ![An ended Codex run with the build-streak denial and a STUCK diagnostic](../images/console/stuck-run.png)
 
-The stuck gate on the board asks for the missing fact. Above it, a phase blocked gate for another phase offers a
-retry:
+The stuck gate on the board asks for the missing fact. Above it, a phase blocked gate for a different phase
+offers a retry:
 
 ![A phase blocked gate with Retry the phase and a stuck gate for phase 2](../images/console/gate-stuck.png)
 
 ## Implementation review: feedback until you accept
 
-When every phase of an `IMPLEMENT` session has finished, passed or blocked, and nothing is running, the engine
-opens the implementation review gate (Rule F1). Nothing after it runs yet: no format, no closing gate, no tests,
-no docs. You try the change and either accept it or describe what to change.
+When every phase of an `IMPLEMENT` session is finished, passed or blocked, and nothing runs, the engine opens the
+implementation review gate (Rule F1). Nothing after this gate runs yet: no format, no closing gate, no tests, no
+docs. You try the change, and then you accept it or describe what to change.
 
-The gate card links the session context file and each implementer report, and lists any blocked phase with its
-reason:
+The gate card links the session context file and each implementer report. It also lists each blocked phase with
+its reason:
 
-- **Accept the implementation** answers `done`. The session moves on to format, the closing gate, tests, docs,
+- **Accept the implementation** answers `done`. The session continues to format, the closing gate, tests, docs,
   and the completion report.
 - **Send feedback** answers `feedback` with your text and starts a round. The Feedback judge
-  ([`assets/judges/feedback.md`](../../assets/judges/feedback.md)) routes every round, one project or several,
-  and writes one instruction per project it changes, so feedback on a backend and frontend pair can build a
-  revision in each. It also decides what happens to the text (Rule J1): feedback that asks for a change is built;
-  feedback that accepts the build and only instructs a later stage ("the docs should explain X") accepts the
-  implementation and keeps the note for that stage; feedback you tell Ostra to ignore builds nothing and the gate
-  opens again. When the feedback asks for research first, the research runs before the revision, and the
-  revision reads it in the session context file.
+  ([`assets/judges/feedback.md`](../../assets/judges/feedback.md)) routes every round, for one project or
+  several. It writes one instruction for each project that it changes. So feedback on a backend and frontend pair
+  can build a revision in each project. The judge also decides what happens to the text (Rule J1):
+  - If the feedback asks for a change, Ostra builds it.
+  - If the feedback accepts the build and only instructs a later stage ("explain X in the docs"), it accepts the
+    implementation. Ostra keeps the note for that stage.
+  - If you tell Ostra to ignore the feedback, Ostra builds nothing, and the gate opens again.
+
+  When the feedback asks for research first, the research runs before the revision. The revision reads the
+  research in the session context file.
 
 A revision phase is an inline phase with the next free phase ID and the title "Revision N". It runs the same
-implement and review loop as any phase and is staged when it passes, and the phase scheduler treats it like any
-other phase, so revisions in different projects build in parallel. When the round's phases finish, the gate
-opens again for the next round. Feedback can go on for any number of rounds.
+implement and review loop as any phase, and Ostra stages it when it passes. The phase scheduler treats it like
+any other phase, so revisions in different projects build in parallel. When the phases of the round finish, the
+gate opens again for the next round. Feedback can continue for any number of rounds.
 
-On a full-track session the Feedback judge also decides whether the round changes a requirement. A
+On a full-track session, the Feedback judge also decides whether the round changes a requirement. A
 `requirement_change` goes into the spec first (Rule D10): generate-spec revises the spec with the feedback, the
-fact-check runs, and you approve the spec again. The revision phases are created at that approval. The approved
-plan is not written again, because the revision works from the updated spec and the context file. An
-`implementation_detail` builds at once and leaves the spec as approved. With a spec, doubt resolves to
-`requirement_change`, because a spec that disagrees with the code misleads every later stage.
+fact-check runs, and you approve the spec again. Ostra creates the revision phases at that approval. It does not
+write the approved plan again, because the revision works from the updated spec and the context file. An
+`implementation_detail` builds immediately and keeps the spec as approved. With a spec, if the judge is not sure,
+it picks `requirement_change`, because a spec that does not agree with the code misleads every later stage.
 
 ### The session context file
 
-A revision does not continue an earlier agent's conversation. Before a revision spawns, and before the review
-gate opens, the runner writes `ostra-session-context.md` in the session folder from the event log (Rule F2,
-[`crates/ostra-engine/src/context.rs`](../../crates/ostra-engine/src/context.rs)). It lists the request with every
-amendment, the track, the research documents, the spec and plan, every phase with its status, implementer report,
-and review ledger, and every feedback round with the phases that built it. The revision implementer gets it as
-`Context files:`, the earlier reports of its project as `Prior phase reports:`, and the round's instruction as its
-task. Each revision starts with a prompt of the same size however many rounds came before, and reads only the
-files it needs.
+A revision does not continue the conversation of an earlier agent. The runner writes `ostra-session-context.md`
+in the session folder from the event log (Rule F2,
+[`crates/ostra-engine/src/context.rs`](../../crates/ostra-engine/src/context.rs)). It writes the file before a
+revision spawns and before the review gate opens. The file lists these items:
 
-Under YOLO the gate is answered `done`, because only you can say what you want changed.
+- the request with every amendment,
+- the track,
+- the research documents,
+- the spec and plan,
+- every phase with its status, implementer report, and review ledger,
+- every feedback round with the phases that built it.
+
+The revision implementer gets the file as `Context files:`. It gets the earlier reports of its project as
+`Prior phase reports:`, and the instruction of the round as its task. Each revision starts with a prompt of the
+same size, however many rounds came before. It reads only the files that it needs.
+
+Under YOLO, Ostra answers the gate with `done`, because only you can say what you want changed.
 
 ## Format
 
-After a project's last phase is done, and for `IMPLEMENT` after you accept the implementation, the project's
-format command runs once (Rule D8). Accepting comes first because a feedback round adds phases to the project. It is a plain command,
-not an agent, and it is not gated. Formatting between phases would put formatting changes into the next
-phase's review.
+After the last phase of a project is done, the project's format command runs one time (Rule D8). For
+`IMPLEMENT`, it runs only after you accept the implementation. Acceptance comes first because a feedback round
+adds phases to the project. The format step is a plain command, not an agent, and it has no gate. Ostra does not
+format between phases, because the formatting changes then go into the review of the next phase.
 
 ## Closing gate: tests and docs
 
-Tests and documentation never run between phases (Rules D8, T1). When a project's phases are all finished and at
-least one passed, the engine asks one question per project: write tests, write the documentation book, both, or
-neither. Projects that reach this point together are asked in one batched gate (Rule T6). If the request
-already said whether it wants tests or docs, that choice replaces the question (Rule T3). Neither answer
-changes the requirements (Rule T5).
+Tests and documentation never run between phases (Rules D8, T1). When all phases of a project are finished and at
+least one passed, the engine asks one question per project. The question has four answers: write tests, write the
+documentation book, both, or neither. Ostra asks the projects that reach this point together in one batched gate
+(Rule T6). If the request already said whether it wants tests or docs, that choice replaces the question (Rule
+T3). Neither answer changes the requirements (Rule T5).
 
 The closing gate for one project, with both optional stages unchecked by default:
 
@@ -627,105 +723,140 @@ The closing gate for one project, with both optional stages unchecked by default
 
 ## Tests: analyze in parallel, write in order
 
-The test stage verifies the implementation, not only its units. Ultracode's test writer wrote unit tests for
-the paths through each changed function. Ostra's stage also checks that the changed code still works with the
-parts of the system that reach it and that nothing it touches regressed, because a change whose functions all
-pass alone can still break the route, the serializer, or the consumer between them. Unit, integration,
-end-to-end, and regression checks all run inside this one stage.
+The test stage verifies the implementation, not only its units. Ultracode's test writer wrote unit tests for the
+paths through each changed function. Ostra's stage also checks that the changed code still works with the parts of
+the system that reach it. It also checks that nothing that the code touches regressed. It checks these because a
+change can break the route, the serializer, or the consumer between its functions, even when each function passes
+alone. Unit, integration, end-to-end, and regression checks all run inside this one stage.
 
-The stage covers each passed phase whose test policy is `Required`, or the whole change when there was no plan
-(Rule T4).
+The stage covers each passed phase whose test policy is `Required`. If there was no plan, it covers the whole
+change (Rule T4).
 
-1. One `execution-path-analyzer` (EPA) runs per covered phase, all at once. Each reads the implementer's report
-   and writes an EPA report, which is the phase's verification plan:
+1. One `execution-path-analyzer` (EPA) runs per covered phase, all at the same time. Each EPA reads the
+   implementer's report and writes an EPA report. This report is the verification plan of the phase:
    - **Execution paths** (`P1`, `P2`, ...): every branch, early return, error path, and loop edge through the
      changed public functions.
    - **System flows** (`S1`, `S2`, ...): each route from an entry point (an HTTP route, a CLI command, a UI
-     screen, a job, a message consumer) to the changed code, and each consumer of a changed contract (a public
-     API, schema, event, config key, or file format). For a contract another project could read, the analyzer
-     searches the other projects in the workspace for the changed name and reads its own project's README and
-     docs for the clients they name. It lists each consumer it finds in the report's notes and analyzes only its
-     own project, so whether that project is verified too stays the orchestrator's decision.
+     screen, a job, a message consumer) to the changed code. Also each consumer of a changed contract (a public
+     API, schema, event, config key, or file format).
+
+     For a contract that another project can read, the analyzer searches the other projects in the workspace for
+     the changed name. It also reads the README and docs of its own project for the clients that they name. It
+     lists each consumer that it finds in the notes of the report. It analyzes only its own project, so the
+     orchestrator decides whether to verify the other project too.
    - **Regression suites**: the existing tests that exercise the changed code, its callers, or its consumers,
-     with the exact command that runs each. An existing test whose assertion the phase changes on purpose is
-     marked, so its failure is not read as a regression.
-   - A **test level** on every check, taken from the project's `[test_types.*]` table in `project.toml` (for
-     example `unit`, `integration`, `e2e`), each with its own runner, file patterns, and requirements. The
-     analyzer picks the lowest level that observes the result with the crossed parts left real. A flow that
-     needs a level the project has no test type for is listed as unverified instead of being mocked down to a
-     unit test. A flow that starts at a page script or a UI event is planned at the browser level, apart from the
-     API part behind it, because an integration test of the API does not cover the page. Page code gets unit
-     paths of its own only when a test type runs tests in a DOM, such as jsdom.
+     each with the exact command that runs it. The report marks an existing test whose assertion the phase
+     changes on purpose, so its failure does not count as a regression.
+   - A **test level** on every check. The levels come from the `[test_types.*]` table of the project in
+     `project.toml` (for example `unit`, `integration`, `e2e`). Each level has its own runner, file patterns, and
+     requirements. The analyzer picks the lowest level that observes the result with the crossed parts kept
+     real. If a flow needs a level that the project has no test type for, the analyzer lists the flow as
+     unverified. It does not mock the flow down to a unit test.
+
+     If a flow starts at a page script or a UI event, the analyzer plans it at the browser level. It plans the API part behind it separately. It does this because an integration test of the API does not cover the page. Page code
+     gets its own unit paths only when a test type runs tests in a DOM, such as jsdom.
 2. When every EPA is done, `write-test` runs one phase at a time, in phase order, with its own review loop. It
-   writes one test per NEW path and flow at the assigned level, runs each with that level's command, then runs
-   the project's `test` command and every regression suite. A test whose level needs something it cannot start
-   (a service, a database, a browser) is reported as not run with the reason, never as passed. A regression
-   failure the phase did not intend is a source bug, so write-test submits `stuck` instead of changing source.
-   Writing serially keeps two test writers from editing the same test files. A test phase that ends blocked,
-   by a stuck gate left blocked or a review loop at its cap, is announced like a blocked build phase and,
-   outside YOLO, gets a phase blocked gate (Rule D9). The next phase's tests and the completion report wait
-   for both, because the report lists every blocked phase.
+   writes one test for each NEW path and flow at the assigned level. It runs each test with the command of that
+   level. Then it runs the `test` command of the project and every regression suite. A test level can need something that write-test cannot start (a service, a database, a browser). Then the report lists the test as not run, with the reason. It never lists such a test as passed.
 
-The test review checks each NEW path and flow for a test at its level, flags a flow test that stubs out the
-parts the flow crosses, and flags a regression suite the test report does not show as run and passing.
+   If a regression failure is not an intended result of the phase, it is a source bug. Then write-test submits
+   `stuck` and does not change the source. Write-test runs one phase at a time so that two test writers do not
+   edit the same test files.
 
-A test loop is the same `WorkLoop` as the implement loop: reviewed, capped, BLOCKER-aware, and staged when it
-passes. Phases marked `Test policy: Skip` are listed as uncovered in the completion report with the plan's
-rationale.
+   A test phase can end blocked, by a stuck gate left blocked or by a review loop at its cap. Ostra then
+   announces it like a blocked build phase. Outside YOLO, it also gets a phase blocked gate (Rule D9). The tests
+   of the next phase and the completion report wait for both, because the report lists every blocked phase.
+
+The test review checks that each NEW path and flow has a test at its level. It flags a flow test that uses stubs
+for the parts that the flow crosses. It also flags a regression suite that the test report does not show as run
+and passed.
+
+A test loop is the same `WorkLoop` as the implement loop: it has reviews, a cap, and BLOCKER handling, and Ostra
+stages it when it passes. The completion report lists the phases marked `Test policy: Skip` as uncovered, with the
+rationale from the plan.
 
 ### Tests for code that already exists
 
-A `TEST` session asks for tests directly, so no implementer runs and no change report exists. The engine writes a
-test request in its place, `ostra-test-request.md` in the project's session folder, holding the request and no
-changed files, and hands it to the analyzer as its implementer report. The analyzer resolves the code under test
-from the request, in this order: the files, symbols, or behavior the request names; an earlier change it refers
-to, found with `git log`, `git show`, and `git diff --cached`; and the entry points of a flow it names. It says
-in its summary how it resolved them, and write-test takes its file list from that analysis.
+A `TEST` session asks for tests directly, so no implementer runs and no change report exists. In its place, the
+engine writes a test request, `ostra-test-request.md`, in the session folder of the project. The test request
+holds the request and no changed files. The engine gives it to the analyzer as its implementer report. The
+analyzer finds the code under test from the request, in this order:
 
-This is how to add the tests a finished session never wrote, for example one that YOLO carried through the
-implementation review before the test stage. A finished session cannot be amended, and with the sandbox on,
-agents cannot read another session's folder, because the sandbox hides it. The earlier change is still in git,
-though: Ostra staged each phase as it passed, so it is either staged or in the commits made since.
+1. the files, symbols, or behavior that the request names,
+2. an earlier change that the request refers to, which the analyzer finds with `git log`, `git show`, and
+   `git diff --cached`,
+3. the entry points of a flow that the request names.
+
+In its summary, the analyzer tells how it found the code. Write-test takes its file list from that analysis.
+
+Use this method to add the tests that a finished session never wrote. An example is a session that YOLO took
+through the implementation review before the test stage. You cannot amend a finished session. With the sandbox
+on, agents cannot read the folder of a different session, because the sandbox hides it. But the earlier change is
+still in git. Ostra staged each phase when it passed, so the change is staged or in the commits made after that.
 
 ### Measuring the test stage
 
-Conformance fixtures prove when the analyzer and write-test run; they cannot say whether a model finds the flows a
-change reaches or writes tests that catch a real bug. The test stage evals do that.
-[`tests/evals/test_stage.toml`](../../tests/evals/test_stage.toml) holds cases in three tiers, set in small projects
-under `tests/evals/test_stage/projects/`: a Python order service with unit, integration, and end-to-end test
-types, and a Node notes app whose browser test type cannot run in the sandbox.
+Conformance fixtures prove when the analyzer and write-test run. But they cannot show whether a model finds the
+flows that a change reaches, or writes tests that catch a real bug. The test stage evals measure this.
+[`tests/evals/test_stage.toml`](../../tests/evals/test_stage.toml) holds cases in three tiers. The cases use small
+projects under `tests/evals/test_stage/projects/`:
 
-1. **One function.** A new pure function after a light-track phase, for the analyzer and for write-test, and a new
-   session that names one function of existing code.
+- a Python order service with unit, integration, and end-to-end test types,
+- a Node notes app with a browser test type that cannot run in the sandbox.
+
+The three tiers are:
+
+1. **One function.** A new pure function after a light-track phase, for the analyzer and for write-test. Also a
+   new session that names one function of existing code.
 2. **Across layers.** A full-track phase adds a service rule and an HTTP route, so the plan needs a flow through
-   the real route and repository. A new session asks for the tests an earlier session skipped and names only the
-   feature, so the analyzer must find the commit in the history. A phase changes a format on purpose, and
-   write-test must update the existing test that asserts the old one.
-3. **Judgment.** A phase breaks an existing test by accident, and write-test must hand it back as stuck instead of
-   bending the test. A changed JSON field has consumers in the repository and in another project. The browser flow
-   must be written at the e2e level and either run, with a browser the agent finds on the machine, or reported as
-   not run; in a project with no browser level it is listed as unverified. New sessions verify a change that is still staged and a lifecycle described only in words.
+   the real route and repository. A new session asks for the tests that an earlier session skipped, and names
+   only the feature. So the analyzer must find the commit in the history. A phase changes a format on purpose,
+   and write-test must update the existing test that asserts the old format.
+3. **Judgment.** A phase breaks an existing test by accident. Write-test must return it as stuck, and must not
+   change the test to make it pass. A changed JSON field has consumers in the repository and in another project.
 
-[`crates/ostra-server/tests/test_stage_evals.rs`](../../crates/ostra-server/tests/test_stage_evals.rs) runs each case
-as a real session of a real `Engine`, with scripted judges and YOLO on. A router executor sends the analyzer, write-
-test, or both to the native loop on the model under test, with the policy, the sandbox, a code index, and the
-coordination tools, and plays every other run: the implementer copies the case's change into the repository, which
-the engine then stages, and a golden analysis stands in for an analyzer that is not live. So the first message each
-agent reads, the test request, the staging, and the sandbox are the engine's own.
+   The browser flow must be at the e2e level. Write-test must run it with a browser that the agent finds on the
+   machine, or report it as not run. In a project with no browser level, the flow is listed as unverified. New
+   sessions verify a change that is still staged, and a lifecycle that only a text description gives.
 
-An analyzer run passes when its report is at the declared path, it changed no project file, it names each fact the
-case lists, and a grader model finds the rubric met. A write-test run passes when its status is the expected one,
-it changed only test files and listed every one in `changed_files` (Ostra stages exactly those), each expected
-level got a test, the project's test types pass, the files it must keep are unchanged, and every mutant fails the
-tests. A mutant is a planted bug in the source, such as a wrong status code, a route under the wrong path, or a
-status returned but never stored: the project's own tests let it through, so only the new tests can catch it. The
-report gives pass rates per tier, per model, and per role: the analyzer, write-test on a golden analysis, and the
-whole stage, which is write-test after a live analyzer.
+[`crates/ostra-server/tests/test_stage_evals.rs`](../../crates/ostra-server/tests/test_stage_evals.rs) runs each
+case as a real session of a real `Engine`, with scripted judges and YOLO on. A router executor sends the
+analyzer, write-test, or both to the native loop on the model under test. These runs have the policy, the
+sandbox, a code index, and the coordination tools.
 
-An offline test replays every case with the golden analysis and golden tests in the normal suite. It checks that
-each live run is reached through the engine, that the analyzer gets the right report and plan lines, that the
-project's own tests let every mutant survive, and that the golden tests pass every code check and catch every
-mutant, so a case that cannot be passed fails before it costs anything. Run the live evals with:
+The router plays every other run. The implementer copies the change of the case into the repository, and the
+engine then stages it. A golden analysis replaces an analyzer that is not live. So the first message that each
+agent reads, the test request, the staging, and the sandbox all come from the engine itself.
+
+An analyzer run passes when all of these conditions are true:
+
+- Its report is at the declared path.
+- It changed no project file.
+- It names each fact that the case lists.
+- A grader model finds the rubric met.
+
+A write-test run passes when all of these conditions are true:
+
+- Its status is the expected one.
+- It changed only test files and listed every one in `changed_files`. Ostra stages exactly those files.
+- Each expected level got a test.
+- The test types of the project pass.
+- The files that it must keep are unchanged.
+- Every mutant fails the tests.
+
+A mutant is a planted bug in the source. Examples are a wrong status code, a route under the wrong path, or a status that the code returns but never stores. The project's own tests do not catch it, so only the new tests can catch
+it. The report gives pass rates per tier, per model, and per role. The roles are the analyzer, write-test on a
+golden analysis, and the whole stage, which is write-test after a live analyzer.
+
+An offline test in the normal suite replays every case with the golden analysis and the golden tests. It checks
+these points:
+
+- The engine reaches each live run.
+- The analyzer gets the right report and plan lines.
+- The project's own tests let every mutant survive.
+- The golden tests pass every code check and catch every mutant.
+
+So a case that cannot pass fails before it costs anything. Run the live evals with this command:
 
 ```bash
 OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 \
@@ -734,112 +865,137 @@ OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 \
 
 ## Documentation: a book in the workspace
 
-The docs stage writes a documentation book, not code comments or files inside a project. Comments already explain
-the code line by line; what a reader lacks is how a feature works end to end, what it assumes, where its
-boundaries are, and how the projects of a workspace talk to each other. The book answers that for a person reading
-it in the console or as exported HTML, and for an agent reading its Markdown, so it is written in literal
-statements with no metaphors: an agent follows a figure of speech literally.
+The docs stage writes a documentation book. It does not write code comments or files inside a project. Comments
+already explain the code line by line. A reader needs other facts: how a feature works end to end, what it assumes, where its boundaries are, and how the workspace's projects communicate. The book gives these facts to
+a person who reads it in the console or as exported HTML. It also gives them to an agent that reads its Markdown.
+
+Both writer prompts (`documentation` and `system-architecture`) hold a copy of Ostra's writing standard. The
+standard is Simplified Technical English (STE), the controlled English of the ASD-STE100 specification, adapted
+for software. A writer uses one topic in each sentence, the active voice, and one meaning for each word. A description has at most 25 words, and an instruction has at most 20. It writes no metaphors, because an agent follows a
+figure of speech literally. It writes an assumption that a change can break as a caution: the command first, then
+what fails.
+
+The standard is the same one that `CLAUDE.md` sets for this repository (HANDOVER section 20).
 
 ### Two ways in
 
-- **After a build.** When you opt into docs (the New task toggle, the request itself, or the closing gate), the
-  stage runs after the test stage, or right after format when tests were declined. Each writer reads every passed
-  phase's implementer report and documents the code as the change left it.
-- **A `DOCS` request.** "Write the architecture docs for these services" or "document the billing flow" classifies
-  as `DOCS`. As with `TEST`, the fold adds one done inline phase per project with the closing choice already set
-  to docs only, so no implementer runs and no gate opens. The runner writes `ostra-docs-request.md` into each
-  project's session folder with the request and no changed files, and hands it to the writer as its implementer
-  report. The writer documents what the request names, or the whole project from its entry points when it names
-  nothing. A request to change a README or a docs page inside a project changes project files, so it is
-  `IMPLEMENT`, not `DOCS`.
+- **After a build.** If you ask for docs (the New task toggle, the request itself, or the closing gate), the
+  stage runs after the test stage. If you declined tests, it runs directly after format. Each writer reads the
+  implementer report of every passed phase and documents the code as the change left it.
+- **A `DOCS` request.** Ostra classifies a request such as "Write the architecture docs for these services" or
+  "document the billing flow" as `DOCS`. Like a `TEST` request, the fold adds one done inline phase per project,
+  with the closing choice already set to docs only. So no implementer runs and no gate opens. The runner writes
+  `ostra-docs-request.md` into the session folder of each project, with the request and no changed files. It
+  gives this file to the writer as its implementer report.
 
-Documentation stays opt-in. A workspace whose projects have nothing to do with each other gets no book until you ask
-for one, and each set of projects you document gets its own book.
+  The writer documents what the request names. If the request names nothing, the writer documents the whole
+  project from its entry points. A request to change a README or a docs page inside a project changes project
+  files. So that request is `IMPLEMENT`, not `DOCS`.
+
+Documentation stays opt-in. A workspace whose projects have no relation to each other gets no book until you ask
+for one. Each set of projects that you document gets its own book.
 
 ### Splitting a large project among writers
 
-One writer cannot document a large repository in one submit. The part it returns has to fit one reply, so it
-covers a few dozen units of work and leaves the rest out. On Ostra's own source, one writer's part answered 127 of
-221 questions about the code. The same code split into one writer per crate answered 220. So before the first
-writer starts, the planner emits `PlanDocs` and the runner measures the project (Rule B9, `docs_areas.rs`):
+One writer cannot document a large repository in one submit. The part that it returns must fit in one reply, so
+it covers only some dozens of units of work and leaves out the rest. On Ostra's own source, the part of one writer
+answered 127 of 221 questions about the code. With the same code split into one writer per crate, the parts
+answered 220. So before the first writer starts, the planner emits `PlanDocs`, and the runner measures the
+project (Rule B9, `docs_areas.rs`):
 
-1. It lists the files git tracks, or every file when the project is not a git checkout. It skips lockfiles,
-   images, archives, generated folders (`target`, `node_modules`, `dist`, `build`), dot folders, and files over
-   1 MB, because none of them is source a writer documents.
-2. It gives each file to the first module-map row whose glob matches it, and sums the bytes per area. A project
-   without a module map is split by its top-level folders, and files no glob matches form one more area.
-3. It groups the areas in module-map order, so neighbouring areas share a writer, until a group holds about
-   384 KB of source (`AREA_TARGET_BYTES`). An area larger than that gets a writer of its own. With more than 20
-   groups (`MAX_DOCS_AREAS`), the target grows until 20 are left. A project of 384 KB or less, or with source in
-   one area only, keeps one writer.
-4. It records `DocsPlanned` with the areas, the areas the book's current part was written in, and the areas that
-   hold a file this session's work changed.
+1. It lists the files that git tracks. If the project is not a git checkout, it lists every file. It skips lockfiles, images, archives, generated folders (`target`, `node_modules`, `dist`, `build`), dot folders, and files over 1 MB. None of them is source that a writer documents.
+2. It gives each file to the first module-map row whose glob matches it, and adds up the bytes per area. If a
+   project has no module map, the runner splits it by its top-level folders. The files that no glob matches form
+   one more area.
+3. It groups the areas in module-map order, so that adjacent areas share a writer. A group grows until it holds
+   about 384 KB of source (`AREA_TARGET_BYTES`). An area larger than that gets a writer of its own. If there are
+   more than 20 groups (`MAX_DOCS_AREAS`), the target grows until 20 groups remain. A project of 384 KB or less,
+   or with source in one area only, keeps one writer.
+4. It records `DocsPlanned` with three lists of areas: all areas, the areas in which the book's current part was written, and the areas with a file that this session changed.
 
 The target is small because a writer covers only what fits in one reply. In a Sonnet run on Ostra with a 512 KB
-target and a 12-writer cap, the book answered 219 of 221 questions, but the writer given six small crates in
-858 KB wrote 7 sections for all of them. On a repository larger than 384 KB times 20, about 7.5 MB, the cap sets
-each writer's share instead of the target.
+target and a cap of 12 writers, the book answered 219 of 221 questions. But the writer that got six small crates
+in 858 KB wrote 7 sections for all of them. On a repository larger than 384 KB times 20, about 7.5 MB, the cap
+sets the share of each writer, not the target.
 
-The event carries all three because the fold cannot read the disk. From it, the fold decides which areas to
-rewrite:
-- a `DOCS` request rewrites every area;
-- after a build, only the areas holding a changed file are rewritten, and the others keep their sections from the
-  book;
-- when the book has no part for the project, or its part was written in other areas, every area is rewritten,
-  because Ostra cannot tell which old section belongs to which new area.
+The event carries all three lists because the fold cannot read the disk. From the event, the fold decides which
+areas to rewrite:
 
-Each area writer gets `Area:`, `Area paths:`, and `Other areas:` lines. It documents only the units of work
-whose code is in its area, names another area in a section's boundaries when its code calls into it, and starts
-every section ID with its area's ID. The engine joins the areas' submits into one part in area order. Each area's
-overview becomes a paragraph named after it, and a section ID that an earlier area already used gets the area's
-ID appended. The book records which sections each area wrote (`BookPart.areas`), and that record is what lets a
-later session rewrite one area and keep the rest.
+- A `DOCS` request rewrites every area.
+- After a build, only the areas that hold a changed file are rewritten. The other areas keep their sections from
+  the book.
+- If the book has no part for the project, or its part was written in other areas, every area is rewritten. The
+  reason is that Ostra cannot tell which old section belongs to which new area.
 
-Area writers count against the same cap as project writers: at most four documentation agents run at once in a
-session. A failed area gets its own failure gate. An abandoned area keeps its sections from the book, and the part
-is written as long as one area was written or kept.
+Each area writer gets `Area:`, `Area paths:`, and `Other areas:` lines. It documents only the units of work whose
+code is in its area. When its code calls into another area, it names that area in the boundaries of a section. It
+starts every section ID with the ID of its area. The engine joins the submits of the areas into one part, in area
+order. The overview of each area becomes a paragraph with the name of the area.
+
+If an earlier area already used a section ID, the engine appends the ID of the area to it. The book records which
+sections each area wrote (`BookPart.areas`). This record lets a later session rewrite one area and keep the rest.
+
+Area writers count against the same cap as project writers: at most four documentation agents run at the same
+time in a session. A failed area gets its own failure gate. An abandoned area keeps its sections from the book.
+Ostra writes the part if at least one area was written or kept.
 
 ### What a writer returns
 
-One `documentation` agent runs per project, or per area of a large project, at most four at once in a session
-(Rule B7), each also taking an execution slot. It is read-only: it returns the project's part of the book in `submit_documentation` and writes no
-file (Rule B1). The part is an overview, a glossary, and a list of sections, one per unit of work, such as
-`Order cancellation`. A section holds at most one level of sub-sections, and every section and sub-section has the
-same fields, which the book shows in this order:
+One `documentation` agent runs per project, or per area of a large project. At most four run at the same time in
+a session (Rule B7), and each also takes an execution slot. The agent is read-only: it returns the part of the book
+for the project in `submit_documentation` and writes no file (Rule B1). The part is an overview, a glossary, and a
+list of sections, one per unit of work, such as `Order cancellation`. A section holds at most one level of
+sub-sections. Every section and sub-section has the same fields, which the book shows in this order:
 
 | Field | What it holds |
 | --- | --- |
 | `purpose` | What the unit does, for whom, and when. |
-| `boundaries` | What it owns, and what it leaves to which other section or project, so a change to one unit does not break another. |
-| `assumptions` | What the code takes as given without checking. Required (Rule B2), because breaking an assumption breaks the code without a test failing. |
+| `boundaries` | What it owns, and what it leaves to which other section or project, so that a change to one unit does not break another. |
+| `assumptions` | What the code takes as given without a check. Required (Rule B2), because if an assumption breaks, the code breaks and no test fails. |
 | `business_flow` | The steps in domain terms: actor, action, outcome. |
 | `diagrams` | Mermaid sequence diagrams and flowcharts, one per flow or step. |
 | `tables` | Reference facts: fields, routes, config keys, states, error codes. |
 | `concerns` | The separation of concerns: each component and its one responsibility. |
 | `code_refs` | Last: project-relative paths, symbols, and lines, with what the reader finds there. |
 
-`validate_submit` checks the shape before the engine accepts it, and the model gets each problem with its fix in
-the tool reply. It refuses a section with no assumptions, a duplicate or malformed section ID, a code reference that
-is absolute or climbs out of the project, a table row with the wrong number of cells, and any diagram over its size
-(Rule B3): at most 8 participants and 20 messages in a sequence diagram and 15 nodes in a flowchart, with the first
-line matching the declared kind. The limits are what keep each diagram about one piece of work instead of one chart
-of everything; the writer is told to split a long flow into one diagram per step. A run that ends without a
-readable submit fails, because there is nothing to put in the book.
+`validate_submit` checks the shape before the engine accepts the submit. The model gets each problem with its fix
+in the tool reply. `validate_submit` refuses these items:
+
+- a section with no assumptions,
+- a duplicate or malformed section ID,
+- a code reference that is absolute or goes outside the project,
+- a table row with the wrong number of cells,
+- a diagram over its size limit (Rule B3).
+
+The size limits are at most 8 participants and 20 messages in a sequence diagram, and 15 nodes in a flowchart.
+The first line of a diagram must match the declared kind. These limits keep each diagram about one piece of work,
+not one chart of everything. The prompt tells the writer to split a long flow into one diagram per step. A run
+that ends without a readable submit fails, because there is nothing to put in the book.
 
 ### The system architecture
 
-When the parts written in a session cover two or more projects, one `system-architecture` agent runs after the last
-writer (Rule B4). Before it starts, the runner writes the parts from the fold into `ostra-docs-parts.json` in the
-session root. The agent verifies each cross-project call in source and in deployment files, and returns one
-flowchart of the components, then the components with what each owns, the links with their protocol, `sync` or
-`async` mode, and payload, how each failure is detected and recovered, and how each component scales and where it
-stops. A book of one project has no architecture section.
+When the parts written in a session cover two or more projects, one `system-architecture` agent runs after the
+last writer (Rule B4). Before it starts, the runner writes the parts from the fold into `ostra-docs-parts.json` in
+the session root. The agent verifies each cross-project call in source and in deployment files. It returns these
+items:
+
+- one flowchart of the components,
+- the components, with what each one owns,
+- the links, with their protocol, `sync` or `async` mode, and payload,
+- how each failure is detected and recovered,
+- how each component scales, and where its scaling stops.
+
+A book of one project has no architecture section.
 
 ### Writing the book
 
-The engine, not an agent, writes the book (Rule B5). When every documented project's writer has settled and the
-architecture, if any, is done or abandoned, the planner emits `WriteBook`. The runner merges the session's parts
-into the book and writes:
+The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when both of these conditions
+are true:
+
+- The writer of every documented project is settled.
+- The architecture, if there is one, is done or abandoned.
+
+The runner merges the parts of the session into the book and writes these files:
 
 ```
 <workspace>/.ostra/docs/<book>/
@@ -850,72 +1006,99 @@ into the book and writes:
   <project>/<section>.md
 ```
 
-It records `BookWritten`, and only then does the session complete. A failed write is recorded with its error on
-the board and the session goes on. The `workspace-docs` guard and a read-only sandbox mount keep every agent out of
-the folder, and every agent's brief lists the books with a note to check them against the code.
+The runner records `BookWritten`. Only then does the session complete. Ostra records a failed write with its
+error on the board, and the session continues. The `workspace-docs` guard and a read-only sandbox mount block
+every agent from the folder. The brief of every agent lists the books, with a note to check them against the
+code.
 
-A book is named after its projects, sorted and joined with `_` (`api_web`), so the next session that documents
-the same projects updates the same book (Rule B6). The New task form can also pick an existing book. On an update,
-a project's new part replaces its old part, a new architecture replaces the old one, and glossary entries merge by
-term with the newer definition kept; another project's part is kept as it was. Because a part is replaced whole,
-each writer gets the current `book.json` as `Existing book:` and copies the sections its change did not reach. The
-engine holds one lock from reading `book.json` to writing it, so two sessions finishing on the same book at
-once both keep their parts.
+A book has the name of its projects, sorted and joined with `_` (`api_web`). So the next session that documents
+the same projects updates the same book (Rule B6). The New task form can also pick an existing book. An update
+makes these changes:
 
-Nothing is documented while a BLOCKER finding is open in that project (Hard rule 21). A project whose writer was
-abandoned is left out, and the book is named after the parts that were written.
+- The new part of a project replaces its old part.
+- A new architecture replaces the old one.
+- Glossary entries merge by term, and the newer definition stays.
+- The part of another project stays as it was.
 
-The books are served by `GET /api/workspaces/{ws}/docs` (the list, newest first) and
-`GET /api/workspaces/{ws}/docs/{book}` (one `book.json`), and `DELETE` on the second removes a book's folder.
+A part is replaced as a whole. So each writer gets the current `book.json` as `Existing book:` and copies the
+sections that its change did not reach. The engine holds one lock from the read of `book.json` to the write. So if
+two sessions finish on the same book at the same time, both keep their parts.
+
+Ostra documents nothing in a project when a BLOCKER finding is open in that project (Hard rule 21). If the writer
+of a project was abandoned, the book leaves the project out. The book has the name of the parts that were
+written.
+
+`GET /api/workspaces/{ws}/docs` serves the list of books, newest first. `GET /api/workspaces/{ws}/docs/{book}`
+serves one `book.json`. A `DELETE` on the second route removes the folder of a book.
 
 ### Reading and exporting a book
 
-The console lists the books under **Documentation** in the workspace menu (`/w/<ws>/docs`), and each book opens
-as its own tab (`/w/<ws>/b/<book>`). The reader turns `book.json` into pages in the browser
-(`web/src/features/docs/bookModel.ts`), so what it shows is always the stored book and never Markdown an agent
-wrote. The pages come in reading order: an overview with each project's introduction, the glossary, the system
-architecture when the book has one, and then each project's sections. A section page reads purpose, boundaries,
-assumptions, the business flow as a numbered table, the diagrams, the tables, and separation of concerns. Each
-sub-section follows with the same parts, and the code references close the page, because a reader needs the
-behavior before the files. The sidebar lists sections with their sub-sections under them, the right-hand column
-lists the page's headings, search covers every page, and Previous and Next follow the reading order.
+The console lists the books under **Documentation** in the workspace menu (`/w/<ws>/docs`). Each book opens in its
+own tab (`/w/<ws>/b/<book>`). The reader makes pages from `book.json` in the browser
+(`web/src/features/docs/bookModel.ts`). So it always shows the stored book, never Markdown that an agent wrote.
+The pages come in reading order:
 
-Text from a book field is escaped before it becomes Markdown: a title or a table cell renders as the characters it
-holds, and prose keeps inline code and emphasis but cannot start a heading, a fence, or a rule, so a field cannot
-change the page's structure. The renderer is the same one the Ostra docs site uses (`@ostra/design/docs`): no raw
-HTML, links only to `http`, `https`, `mailto`, or another page of the book, and Mermaid in strict mode with SVG text
-labels.
+- an overview with the introduction of each project,
+- the glossary,
+- the system architecture, when the book has one,
+- the sections of each project.
 
-**Export HTML** writes one file, `<book>.html`, with every page on one page and a table of contents beside it. The
-browser renders the whole book off screen, waits until each diagram is drawn, and copies the result, so the diagrams
-arrive as SVG and the file needs no Mermaid and no script. The file is built with DOM calls and serialized, so no
-book text is parsed as markup on the way. Before serializing, the export drops any script, frame, form, or event
-handler attribute and any link or image that would reach another origin, and it carries the design tokens and the
-docs styles inline. Its own policy, `default-src 'none'; style-src 'unsafe-inline'; img-src data:`, lets the file
-load nothing, so it opens the same from a disk, a mail attachment, or a static host.
+A section page shows purpose, boundaries, assumptions, the business flow as a numbered table, the diagrams, the
+tables, and separation of concerns. Each sub-section follows with the same parts. The code references close the
+page, because a reader needs the behavior before the files. The sidebar lists the sections, with their
+sub-sections under them. The right-hand column lists the headings of the page. Search covers every page, and
+Previous and Next follow the reading order.
+
+Text from a book field is escaped before it becomes Markdown. A title or a table cell shows the characters that it
+holds. Prose keeps inline code and emphasis, but it cannot start a heading, a fence, or a rule. So a field cannot
+change the structure of the page.
+
+The renderer is the same one that the Ostra docs site uses (`@ostra/design/docs`). It allows no raw HTML. It
+allows links only to `http`, `https`, `mailto`, or another page of the book. It runs Mermaid in strict mode with
+SVG text labels.
+
+**Export HTML** writes one file, `<book>.html`, with every page on one page and a table of contents next to it.
+The browser renders the whole book off screen and waits until it draws each diagram. Then it copies the result.
+So the diagrams arrive as SVG, and the file needs no Mermaid and no script. The file is built with DOM calls and
+serialized, so the export parses no book text as markup.
+
+Before the serialization, the export drops each script, frame, form, and event handler attribute. It also drops
+each link or image that goes to a different origin. It carries the design tokens and the docs styles inline. Its
+own policy, `default-src 'none'; style-src 'unsafe-inline'; img-src data:`, lets the file load nothing. So the
+file opens in the same way from a disk, a mail attachment, or a static host.
 
 ### How agents read a book
 
-Agents read books through search, not by opening them whole (Rule B8). Every agent that learns code, from explore to
-the reviewer and the documentation writer itself, has the `docs_search` capability, and once the workspace has a
-book, each spawn's repo brief lists the books and tells the agent to search them before it reads code. The search
-cuts each section into passages (its purpose, boundaries, assumptions, flow, each diagram, each table, concerns, and
-code references), ranks them with BM25, and returns the best sections with only the passages that matched plus the
-section's Markdown path. That keeps a question about one fact from pulling a whole section, most of it about other
-things, into the agent's context. [Tools](tools.md#docssearch) covers the ranking.
+Agents read books through search, and do not open them whole (Rule B8). Every agent that learns code has the
+`docs_search` capability, from explore to the reviewer and the documentation writer itself. When the workspace
+has a book, the repo brief of each spawn lists the books. It tells the agent to search them before it reads code.
+The search cuts each section into passages: its purpose, boundaries, assumptions, flow, each diagram, each table,
+concerns, and code references. It ranks the passages with BM25.
+
+The search returns the best sections, with only the passages that matched and the Markdown path of the section.
+So a question about one fact does not pull a whole section into the agent's context, when most of the section is
+about other things. [Tools](tools.md#docssearch) covers the ranking.
 
 ## The completion report
 
-When nothing is running and no gate other than a pending permission ask is open, the Completion judge writes
-the report. It lists what was built, each phase and its outcome, what the fact-checks and reviews established,
-every stage that did not run and how to run it later (Rule T7), every blocked phase with its findings and
-ledger path, and under YOLO a "Decided for you" list. The engine then marks the session complete.
+When nothing runs and no gate is open other than a pending permission ask, the Completion judge writes the
+report. The report lists these items:
 
-The report never comes before every created project's init has ended. The engine appends a "Projects created"
-section to it, listing each project the session created, its folder and stack, and whether it was initialized;
-one that was not tells the user to initialize it from the project list before its next session.
+- what Ostra built,
+- each phase and its outcome,
+- what the fact-checks and reviews established,
+- every stage that did not run, and how to run it later (Rule T7),
+- every blocked phase, with its findings and ledger path,
+- under YOLO, a "Decided for you" list.
 
-A completion report names the stages that did not run and how to run them, and lists what YOLO decided:
+The engine then marks the session complete.
+
+The report never comes before the init of every created project ends. The engine appends a "Projects created"
+section to the report. This section lists each project that the session created, with its folder and stack, and
+whether it was initialized. For a project that was not initialized, the section tells the user to initialize it
+from the project list before its next session.
+
+A completion report names the stages that did not run and how to run them. It also lists what YOLO decided:
 
 ![A completion report with Stages not run and Decided for you](../images/console/completion.png)
 
@@ -939,24 +1122,24 @@ A completion report names the stages that did not run and how to run them, and l
 | Skills generated by default at init | 8 | `init::MAX_DEFAULT_GENERATE` |
 | Attached files per request | 50 | `MAX_CONTEXT_FILES` |
 | Uploads per request | 20, 25 MB each | `uploads.rs` |
-| Helpers one run may start | 3 | `coord::MAX_HELPERS_PER_RUN` |
+| Helpers that one run can start | 3 | `coord::MAX_HELPERS_PER_RUN` |
 | Questions between subagents per session | 24 | `coord::MAX_SESSION_ASKS` |
 | Runs in one conversation before a pair loop starts fresh | 6 | `coord::MAX_CONVERSATION_RUNS` |
 
-Every spawn passes the budget check. Once the session has spent its budget (plus any raises), the planner
-emits a budget gate instead of the spawn. Running executions finish, and nothing new starts until the user
-raises the budget or stops the session.
+Every spawn passes the budget check. When the session spends its full budget (plus all raises), the planner emits
+a budget gate in place of the spawn. Running executions finish. Nothing new starts until the user raises the
+budget or stops the session.
 
 ## Why the planner cannot start the same step twice
 
-The planner runs after every event, so it often proposes a step that is already running. Each `Step` has a
-`key()`: a spawn's key is its purpose (for example "review phase 2, iteration 3"), a gate's key is its kind
-plus the thing it is about. The runner keeps the keys of in-flight steps and skips any repeat. This is why the
-planner can stay a pure function of state: it describes what should be happening, and the runner starts only
-what is not already happening.
+The planner runs after every event, so it often proposes a step that is already in progress. Each `Step` has a
+`key()`. The key of a spawn is its purpose (for example "review phase 2, iteration 3"). The key of a gate is its kind plus the item that the gate is about. The runner keeps the keys of in-flight steps and skips each repeat.
 
-The conformance fixtures test the planner exactly this way: an event history in, the list of step summaries
-out. This one checks that research fans out and that the spec waits for the last explore:
+So the planner can stay a pure function of state. It describes the steps that must happen, and the runner
+starts only the steps that are not already in progress.
+
+The conformance fixtures test the planner in exactly this way: an event history goes in, and the list of step
+summaries comes out. This fixture checks that research fans out and that the spec waits for the last explore:
 
 ```rust
 #[test]
@@ -974,24 +1157,24 @@ fn d2_spec_waits_for_running_explore() {
 }
 ```
 
-The last assertion is Rule D2: one explore is still running, so nothing new starts, and the spec waits.
+The last assertion is Rule D2: one explore still runs, so nothing new starts, and the spec waits.
 
 ## The init flow
 
-Setting up a project is a session of its own kind with a shorter pipeline (HANDOVER 8.4). The same flow also
-runs inside a pipeline session for a project that session created, as described under Phases:
+The setup of a project is a session of its own kind, with a shorter pipeline (HANDOVER 8.4). The same flow also
+runs inside a pipeline session for a project that the session created. The Phases section describes this case:
 
 ```
 detect → scout ×N (parallel, max 6) → propose → skill approval (gate)
 → generate-skill ×N (parallel) → generate-inventory → done
 ```
 
-Detect looks at existing skills, instruction files, and any earlier `project.toml` before planning scouts, so
-component types an existing skill already covers are only counted (Rule I1). Each scout studies one slice of the
-codebase. The proposal defaults to generating at most eight skills and dropping the rest, which the user can
-change at the approval gate. Every generated skill goes to `.agents/skills/` (Rule I2).
+Detect looks at existing skills, instruction files, and an earlier `project.toml`, if one exists, before it plans
+scouts. So it only counts the component types that an existing skill already covers (Rule I1). Each scout studies
+one slice of the codebase. By default, the proposal generates at most eight skills and drops the rest. The user
+can change this at the approval gate. Every generated skill goes to `.agents/skills/` (Rule I2).
 
-The skill approval gate of an init session lists each proposed skill with the exemplar files it was grounded in and
-a decision per skill:
+The skill approval gate of an init session lists each proposed skill, with the exemplar files that it was
+grounded in and a decision per skill:
 
 ![The skill approval gate with Generate, Regenerate, and Reuse decisions per skill](../images/console/init-skills.png)
