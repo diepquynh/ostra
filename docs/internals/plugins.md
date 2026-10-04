@@ -450,6 +450,58 @@ The example also declares a transform function, `bump`, which returns the next s
 `ostra:implement` with the release stage and a `release-gate:bump` node before the closing stages. A session can
 name that workflow as it is.
 
+## A web development plugin
+
+[`crates/ostra-sdk/examples/web_dev/`](../../crates/ostra-sdk/examples/web_dev/main.rs) is a larger plugin program,
+`web-dev`, that adds end-to-end browser tests to the implement pipeline. It uses each part of the protocol: a model
+agent, a programmatic agent, a stage, a contract of its own, a workflow built in code, and checkpoints.
+
+| Part | What it does |
+| --- | --- |
+| `e2e-tester` | A model agent (`balanced` tier, project write scope, `test_files`) whose prompt is [`e2e-tester.md`](../../crates/ostra-sdk/examples/web_dev/e2e-tester.md). It decides whether the project has a web interface, sets up Playwright with a `webServer` entry that starts the app on `127.0.0.1`, writes one scenario per flow the request adds or changes, runs them, and gives each failure a cause: `app`, `test`, or `environment`. It changes test files and test configuration only. |
+| `e2e-runner` | A programmatic agent. It messages the project's implementer with the app failures, waits for the reply, and runs the same Playwright command again with `--reporter=json`. No model call, so a rerun after a fix costs only the test run. |
+| Contract `web-dev:e2e` | Both agents return it: `web_app`, `dir`, `command`, `scenarios` (each `name`, `file`, `status`, `error`, `cause`), `blocker`, and `summary`. |
+| Stage `web-dev:e2e` | The loop between the two agents, described below. |
+| Workflow `web-dev:web-app` | `ostra:implement` with an `e2e` node after `build` and before `feedback`, with `scope = "project"`, `on_fail = "continue"`, and `max_rounds = 10`. |
+
+The plugin's `handle_result` sets the verdict from the scenarios instead of taking one from the agent (Rule PL5). A
+project with `web_app = false` passes, because a library or an API server has no pages to load. A `blocker` asks
+the user. At least one passing scenario and no failing one passes. Anything else fails, with one finding per
+failing scenario.
+
+The stage logic decides from that outcome (Rule PL3):
+
+- With no run yet, it runs `e2e-tester`.
+- A pass ends the stage.
+- A blocker, or a run that ends without a result twice in a row, asks the user: `retry`, `continue`, or `stop`.
+- Failures that are all `app` failures go to `e2e-runner`. The instructions carry the project, folder, command,
+  and failures as a JSON block, which the runner reads back.
+- Any `test`, `unknown`, or unclassified failure goes back to `e2e-tester`, with the failures listed in its
+  instructions. The runner marks every failure it sees `unknown`, because only the tester can say whose failure it
+  is.
+- After four runs since the user's last answer, it asks the user. `retry` starts the count again. `continue`
+  fails the stage, and `on_fail = "continue"` records that and moves on. `stop` ends the session. The node's
+  `max_rounds` stops the stage after ten runs in all.
+
+The runner saves where its conversation with the implementer stands as a checkpoint, `implementer:<execution>`,
+with the states `asked` and `replied` (Rule PL8). If its program stops while it waits, the resumed run waits for the
+reply instead of sending the message again. A Playwright JSON report can be larger than the 30,000 characters a
+Bash reply keeps, so the runner writes a short Node script, [`summarize.cjs`](../../crates/ostra-sdk/examples/web_dev/summarize.cjs),
+into its session dir. The script turns the report into at most 30 failures and 100 passes before Ostra reads it.
+
+To use it:
+
+```bash
+cargo build -p ostra-sdk --example web_dev
+ostra plugin add web-dev -- "$PWD/target/debug/examples/web_dev"
+```
+
+Then start a session with the workflow `web-dev:web-app`. The tests start the app inside the sandbox, so the
+workspace's sandbox must allow loopback connections. Installing Playwright and its browser also needs network access
+to the package registry and the browser download hosts. Without them the tester reports a blocker, and you decide
+whether the session goes on without these tests. The example's tests run with
+`cargo test -p ostra-sdk --example web_dev`.
+
 ## Where to look in the code
 
 | What | Where |
@@ -466,6 +518,7 @@ name that workflow as it is.
 | Restarting a plugin during a stage decision, result handler, or transform: `call_plugin` | [`crates/ostra-server/src/services.rs`](../../crates/ostra-server/src/services.rs) |
 | Saving checkpoints into the log: `SessionCheckpoints` | [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |
 | `main_with` | [`crates/ostra-server/src/cli.rs`](../../crates/ostra-server/src/cli.rs) |
+| Example plugins: `release_gate`, and `web_dev` with its prompt and report summarizer | [`crates/ostra-sdk/examples/`](../../crates/ostra-sdk/examples/) |
 | Programmatic runs | [`crates/ostra-exec-native/src/program.rs`](../../crates/ostra-exec-native/src/program.rs) |
 | Result handling: `results_due`, `result_view`, `on_result_handled` | [`crates/ostra-engine/src/workflow.rs`](../../crates/ostra-engine/src/workflow.rs) |
 | Plugin stage planning and the stage view | [`crates/ostra-engine/src/plugin_stage.rs`](../../crates/ostra-engine/src/plugin_stage.rs) |

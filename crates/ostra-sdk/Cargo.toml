@@ -18,3 +18,7 @@ tracing.workspace = true
 [dev-dependencies]
 async-trait.workspace = true
 tempfile.workspace = true
+
+[[example]]
+name = "web_dev"
+test = true
