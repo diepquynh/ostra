@@ -168,8 +168,8 @@ log. Thus a typo never changes your machine back to the defaults in the middle o
   - `name`: lowercase kebab-case and unique. Ostra refuses the name `ostra`, because it is the name of the
     standard plugin.
   - `command`: the program, then its arguments.
-  - `env`: optional. Ostra gives these values to the program as written. Keep secrets in the environment of the
-    server, and let the program read them there.
+  - `env`: optional. Ostra gives these values to the program as written. Put secrets in the environment of the
+    server, because the program can read them there and the file stays free of secrets.
   - `enabled`: the default is true.
   - `timeout_secs`: from 1 to 3600, default 120. It limits the `initialize` handshake, each stage decision, and
     each `result/handle` and `transform/run` call.
@@ -449,7 +449,7 @@ problem has the dotted path of its field:
 
 Validation checks these items:
 
-- **Every agent route resolves, on every complexity it can run at.** An agent with no entry resolves to its
+- **Each agent route resolves, for each complexity at which the agent can run.** An agent with no entry resolves to its
   default tier, which must exist in the tier table of the executor. Ostra resolves a per-phase agent three times,
   one time for each complexity. Without this check, a gap in the `high` row shows only when a high phase arrives.
 - **The executor exists on this machine.** A route to a harness that does not have its CLI installed is an
@@ -638,7 +638,7 @@ and hosts of the workspace. You set them on the Settings screen, and Ostra keeps
 | Executor names and parsing | [`crates/ostra-core/src/executor.rs`](../../crates/ostra-core/src/executor.rs) |
 | Registry overlay and approvals (Rules A1, A2) | [`crates/ostra-workspace/src/trust.rs`](../../crates/ostra-workspace/src/trust.rs) |
 | Extra checks beyond `validate_workspace` | [`crates/ostra-workspace/src/settings.rs`](../../crates/ostra-workspace/src/settings.rs) |
-| Custom agent, workflow, and plugin checks | `agent_issues`, `workflow_issues` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs); `plugin::validate` in [`crates/ostra-core/src/plugin.rs`](../../crates/ostra-core/src/plugin.rs) |
+| Custom agent, workflow, and plugin checks | `agent_issues`, `workflow_issues` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs), and `plugin::validate` in [`crates/ostra-core/src/plugin.rs`](../../crates/ostra-core/src/plugin.rs) |
 | Machine facts for validation | `WorkspaceHost::environment` in [`crates/ostra-server/src/app.rs`](../../crates/ostra-server/src/app.rs) |
 | Saving settings | `save_settings` in [`crates/ostra-workspace/src/runtime.rs`](../../crates/ostra-workspace/src/runtime.rs) |
 | Route resolution at spawn time | `perform_spawn` in [`crates/ostra-engine/src/runner.rs`](../../crates/ostra-engine/src/runner.rs) |

@@ -231,21 +231,30 @@ not a positive number, `raise` adds the original budget again. `stop` fails the 
 
 ### Stage review
 
-A custom stage of a [workflow](workflows.md) opens this gate in two cases: its agent submitted `needs_user` with a
-question and options, or it submitted `fail` and the stage's `on_fail` is `gate`, or `retry` with its rounds used
-up. A [plugin's](plugins.md) stage logic opens it the same way when it decides `ask` or `fail`. The card shows the
-stage, the scope (`phase:<n>` or `project:<key>`), the round and its limit, the summary, the findings, and for a
-question its options, recommended first.
+A custom stage of a [workflow](workflows.md) opens this gate in these cases:
 
-`validate_answer` accepts `retry`, `continue`, or `stop` after a failure, and after a question one of the options,
-`other` with non-empty text, or `stop`. The fold (`stage_gate_answered` in
-[`workflow.rs`](../../crates/ostra-engine/src/workflow.rs)) applies it:
+- Its agent submits `needs_user` with a question and options.
+- Its agent submits `fail`, and the `on_fail` of the stage is `gate`.
+- Its agent submits `fail`, the `on_fail` of the stage is `retry`, and the stage used all its rounds.
 
-- `stop` stops the session with the stage named in the error.
-- `continue` records the failure and lets the stages after it run.
-- `retry` runs the stage again with its last findings and your guidance as a user note. Any answer to a
-  question is kept as a user note, and the stage runs again with it. Each new round continues the agent's
-  conversation (Rule H5), and for a plugin stage the plugin decides again.
+The stage logic of a [plugin](plugins.md) opens the gate in the same way when it decides `ask` or `fail`. The card
+shows these items:
+
+- The stage and the scope (`phase:<n>` or `project:<key>`).
+- The round and its limit.
+- The summary and the findings.
+- For a question, its options, with the recommended option first.
+
+After a failure, `validate_answer` accepts `retry`, `continue`, or `stop`. After a question, it accepts one of the
+options, `other` with text that is not empty, or `stop`. The fold (`stage_gate_answered` in
+[`workflow.rs`](../../crates/ostra-engine/src/workflow.rs)) applies the answer:
+
+- `stop` stops the session. The error names the stage.
+- `continue` records the failure, and the stages after it run.
+- `retry` runs the stage again with its last findings. Your guidance goes to the stage as a user note.
+
+The fold keeps each answer to a question as a user note, and the stage runs again with it. Each new round
+continues the conversation of the agent (Rule H5). For a plugin stage, the plugin decides again.
 
 These answers go to the stage directly, not through the Route answer judge, because only that stage reads them.
 
@@ -254,14 +263,19 @@ These answers go to the stage directly, not through the Route answer judge, beca
 YOLO means that the orchestrator makes all decisions. YOLO can be the workspace default (`yolo.default`). The
 user can also turn it on or off for a session at any time. The change applies from the next gate or tool call.
 
-With YOLO on, the planner emits a `YoloAnswer` step for every open gate, with four exceptions:
+With YOLO on, the planner emits a `YoloAnswer` step for every open gate, with three exceptions:
 
-- Permission asks.
 - The budget gate.
 - The failure gate of an execution that you stopped.
 - The gate of a custom stage that failed in each round that it can run.
 
-`judge_input::yolo_leaves_open` lists these exceptions. For each gate, `judge_input::yolo_plan` in
+`judge_input::yolo_leaves_open` lists these exceptions. These gates stay open for you.
+
+The planner also emits no `YoloAnswer` step for a permission ask, because the runner answers it first. Under
+YOLO, the policy changes each ask into an allow, and the runner records an `AllowOnce` answer. When you turn on
+YOLO, the runner also allows each permission ask that waits.
+
+For each gate, `judge_input::yolo_plan` in
 [`judge_input.rs`](../../crates/ostra-engine/src/judge_input.rs) returns one of three things:
 
 - A fixed answer with a stated reason.
@@ -282,7 +296,7 @@ With YOLO on, the planner emits a `YoloAnswer` step for every open gate, with fo
 | `skill_approval` | Fixed: the default dispositions of the proposal. |
 | `permission` | The execution answers it: the session acts as `bypass`, so the ask never waits. This includes `ProjectCreate`, which asks in every mode without YOLO. |
 | `budget_reached` | None. The gate stays open for the user. |
-| `stage_review` | A question takes its first option, which the agent lists as recommended; with no options, `other` with "Decide as you recommend and go on." A failure is `retry` while the stage has rounds left; after its last round the gate stays open for you, because only you can accept a check that keeps failing. |
+| `stage_review` | A question takes its first option, which the agent lists as recommended. If the question has no options, the answer is `other` with "Decide as you recommend and go on." A failure gets `retry` when the stage has rounds left. After the last round, the gate stays open for you, because only you can accept a check that fails again and again. |
 
 The engine does not trust the answer of the judge without checks. `yolo_answer_from_judge` changes it into a
 gate answer and enforces the conditions that must stay true:

@@ -152,10 +152,10 @@ For a `setup` agent, the guard refuses a write to the older `.ostra/skills/` onl
 land in `.agents/skills/`.
 
 A second scope rule applies to each agent without the `test_files` grant (Rule CA6). Such an agent cannot write a
-path in the repo that looks like a test (`*.test.ts`, `tests/`, `*_test.go`, `FooTest.java`, and similar
-patterns). The implementer does not have the grant. Write-test, prompt-generation, and the initializer have it.
+path in the repo that looks like a test, for example `*.test.ts`, `tests/`, `*_test.go`, or `FooTest.java`.
+`is_test_path` in [`guards.rs`](../../crates/ostra-policy/src/guards.rs) holds the full list of patterns. The implementer does not have the grant. Write-test, prompt-generation, and the initializer have it.
 Thus, tests belong to the test stage, which runs after the user asks for tests at the closing gate. If the
-implementer edits a test to make it pass, it marks its own work. This rule applies when tool enforcement is on
+implementer can edit a test until it passes, the test no longer checks the work of the implementer. This rule applies when tool enforcement is on
 and when it is off.
 
 ### State ownership
@@ -177,12 +177,14 @@ the review ledger to escape the review cap. The denial text says this directly: 
 a pipeline decision rather than record one."
 
 Artifact ownership comes next. Only agents with `document_spec` can write spec files. Only agents with
-`document_plan` can write plan files, and only agents with `document_research` can write research files. So a
-reviewer cannot rewrite the requirements that it reviews against. Among the standard agents, these are
-generate-spec, plan, and explore. The guards (`AGENT_OWNED` and `ARTIFACTS` in
+`document_plan` can write plan files, and only agents with `document_research` can write research files. Among the
+standard agents, these are generate-spec, plan, and explore. Thus, a reviewer cannot rewrite the requirements that
+it reviews against. The guards (`AGENT_OWNED` and `ARTIFACTS` in
 [`guards.rs`](../../crates/ostra-policy/src/guards.rs)) name a grant for each file, never an agent. The denial
-names the missing grant. Agents can change these three document kinds only through the `Document` tool, never
-with a plain file write. Ostra renders the Markdown from a typed JSON document. So the next render overwrites a
+names the missing grant.
+
+Agents can change these three document kinds only through the `Document` tool, never
+with a plain file write. Ostra renders the Markdown from a typed JSON document. Thus, the next render overwrites a
 direct edit, and the browser never shows the edit.
 
 ### Report path

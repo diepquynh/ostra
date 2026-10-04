@@ -71,12 +71,16 @@ field to find the loop of an execution. The second is `ExecutionFinished.result.
 payload that the agent gave to its `submit_<agent>` tool. The engine reads only this payload, never the final
 chat message of an agent. Thus, the log holds all the data that the engine used.
 
-`ExecutionStarted.contract` records the result contract the run submits (Rule CA5), because the fold reads a
-result by its contract and the catalog that says which contract an agent returns is outside the log. A run logged
-before contracts has none, and the fold gives it its agent's contract from the standard plugin, or `stage` for a
-custom agent (`workflow::legacy_contract`), which is what those runs were. A run of a plugin contract is read only
-after its plugin handled it: the planner asks with `Step::HandleResult`, the runner records the outcome as
-`ResultHandled`, and the fold applies that outcome where a verdict would apply.
+`ExecutionStarted.contract` records the result contract that the run submits (Rule CA5). The fold reads a result
+by its contract, and the catalog that maps an agent to its contract is outside the log. A run from a log before
+contracts has no contract. The fold gives it the contract of its agent in the standard plugin, or `stage` for a
+custom agent (`workflow::legacy_contract`). These are the contracts that those runs had.
+
+The fold reads the result of a plugin contract only after its plugin handles it:
+
+1. The planner asks the plugin with `Step::HandleResult`.
+2. The runner records the outcome as `ResultHandled`.
+3. The fold applies that outcome in the place of a verdict.
 
 ## The fold
 
@@ -152,17 +156,23 @@ Ostra uses the same method in other places:
 - Ostra moves uploads into the session folder and records their names, paths, and sizes in the event. Thus, a
   later change to the workspace does not change the data that an old session saw.
 
-Workflows follow the same rule. `SessionCreated.workflow` records what the session asked for: a workflow by name,
-or the workspace's workflow for whatever category Classify picks. The runner reads the workflow files once, when
-the planner asks for it, and records the resolved workflow, with `extends` and `remove` applied and every stage
-listed, in `WorkflowResolved`. From then on the fold and the planner read only that event, so editing a workflow
-file never changes a session already running. A plugin's stage logic is outside the log too, so its answers are
-recorded as `StageDecided` events and the fold never calls the plugin. A transform node's output is recorded in
-`NodeRan` rather than computed in the fold, so a later Ostra whose function behaves differently still folds an
-old log the same way; a prompt node's answer and cost are recorded there for the same reason. A node skipped by
-its conditions is recorded as `StageSkipped`. A session written before workflows has no `workflow` in
-`SessionCreated`, and it runs Ostra's default workflow of its category, which is the same chain of stages the
-pipeline always ran.
+Workflows follow the same rule. `SessionCreated.workflow` records the workflow that the session asked for. This is
+a workflow by name, or the workflow of the workspace for the category that Classify picks. The runner reads the
+workflow files one time, when the planner asks for the workflow. It records the resolved workflow in
+`WorkflowResolved`, with `extends` and `remove` applied and all stages listed. After that event, the fold and the
+planner read only that event. Thus, a change to a workflow file never changes a session that runs.
+
+The other workflow facts from outside the log are events too:
+
+- The stage logic of a plugin is outside the log. Ostra records its answers as `StageDecided` events, and the
+  fold never calls the plugin.
+- Ostra records the output of a transform node in `NodeRan`. The fold does not compute it. Thus, a later Ostra
+  with a changed function still folds an old log to the same state.
+- Ostra records the answer and the cost of a prompt node in `NodeRan` for the same reason.
+- Ostra records a node that its conditions skip as `StageSkipped`.
+
+A session from a log before workflows has no `workflow` in `SessionCreated`. It runs the default workflow of its
+category, which is the same chain of stages that the pipeline ran before workflows.
 
 ## One place appends
 

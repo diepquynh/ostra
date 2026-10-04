@@ -181,9 +181,9 @@ if !s.created || s.is_terminal() || s.paused {
 
 `Planner::run` uses the same order as the pipeline diagram in HANDOVER section 8.1. The order is:
 
-1. **YOLO first.** In YOLO mode, each open gate gets a `YoloAnswer` step. The exceptions are permission asks,
-   budget gates, and the failure gate of an execution that you stopped (Rule P4). The live execution answers the
-   permission asks.
+1. **YOLO first.** In YOLO mode, each open gate gets a `YoloAnswer` step. The exceptions are budget gates, the
+   failure gate of an execution that you stopped (Rule P4), and a custom stage that failed in its last round.
+   These gates stay open for you. Permission asks also get no step, because the runner allows them first.
 2. **Init sessions** use their own flow: detect, scouts, propose, skill approval, generate skills, and generate
    the inventory.
 3. **A named workflow** gets a `ResolveWorkflow` step first, because its base sets the category (Rule WF1).

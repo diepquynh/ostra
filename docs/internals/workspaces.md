@@ -201,7 +201,7 @@ The workspace menu in the title bar changes the workspace and opens the pages of
 - Memory.
 - Skills.
 - Documentation.
-- Agents: all agents, with the own agents of the workspace. See [Agents](agents.md#the-agent-screen).
+- Agents: all agents, which include the custom agents of the workspace. See [Agents](agents.md#the-agent-screen).
 - Workflows: the Workflow builder. See [Workflows](workflows.md).
 
 ![The workspace menu with the current workspace's pages, other workspaces, and New workspace](../images/console/workspace-switcher.png)

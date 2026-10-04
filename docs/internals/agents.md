@@ -580,16 +580,18 @@ There are two narrow exceptions. Both are fallbacks, never a decision:
 
 ## Custom agents
 
-A workspace adds its own agents beside the built-in ones, for checks or steps Ostra does not ship: a security
-audit, a release-notes writer, a check of the team's own conventions. They run in workflow stages (see
-[workflows](workflows.md)) and as helpers other agents start with `SendMessage`. HANDOVER section 9.4 holds the
-rules (CA1 to CA6). A custom agent is defined with the same fields as a built-in one and gets the same treatment:
-it may return any result contract and request any grant described [above](#result-contracts-and-grants).
+A workspace can add its own agents next to the built-in agents. A custom agent does a check or a step that Ostra
+does not supply. Examples are a security audit, a release-notes writer, and a check of the conventions of the
+team. A custom agent runs in a workflow stage (read [workflows](workflows.md)). It can also run as a helper that
+a different agent starts with `SendMessage`. HANDOVER section 9.4 holds the rules (CA1 to CA6).
+
+A custom agent has the same fields as a built-in agent, and Ostra treats it the same. It can return each result
+contract and request each grant in [result contracts and grants](#result-contracts-and-grants).
 
 ### The file
 
-A custom agent is one markdown file, `<workspace>/.ostra/agents/<name>.md`: TOML frontmatter between `+++` lines,
-then the agent's instructions.
+A custom agent is one Markdown file: `<workspace>/.ostra/agents/<name>.md`. The file starts with TOML
+frontmatter between two `+++` lines. The instructions of the agent come after the frontmatter.
 
 ```markdown
 +++
@@ -608,140 +610,189 @@ enum = ["low", "medium", "high"]
 Read every file the change touched and report each secret with {{ tool_read }} ...
 ```
 
-Only `description` is required. The rest have defaults:
+Only `description` is necessary. The other fields have default values:
 
 | Field | Default | Notes |
 | --- | --- | --- |
-| `name` | the file name without `.md` | Lowercase kebab-case, at most 40 characters, never a built-in agent's name, `module-documentation`, or `judge`. |
-| `returns` | `stage` | The result contract (Rule CA5). A built-in contract such as `spec` lets a workflow bind the agent to the built-in stage that reads it; a plugin contract needs a plugin that defines it. |
+| `name` | The file name without `.md` | Lowercase kebab-case, at most 40 characters. The name cannot be the name of a built-in agent, `module-documentation`, or `judge`. |
+| `returns` | `stage` | The result contract (Rule CA5). With a built-in contract such as `spec`, a workflow can bind the agent to the built-in stage that reads the contract. A plugin contract needs a plugin that defines it. |
 | `default_tier` | `balanced` | |
-| `capabilities` | `read`, `search_text`, `glob`, `report`, `coordinate` | Any capability, grants included (Rule CA6). None is reserved. |
-| `write_scope` | `project` when the capabilities include `write` or `edit`, else `session` | `read_only`, `session`, `project`, or `setup`. `read_only` together with `write` or `edit` is refused. |
-| `brief` | `stack`, `commands`, `skills`, `conventions`, `modules` | Sections of the repo brief, from those and `testing` and `review`. |
+| `capabilities` | `read`, `search_text`, `glob`, `report`, `coordinate` | Each capability, grants included (Rule CA6). No capability is reserved. |
+| `write_scope` | `project` if the capabilities include `write` or `edit`. If not, `session`. | `read_only`, `session`, `project`, or `setup`. Ostra refuses `read_only` together with `write` or `edit`. |
+| `brief` | `stack`, `commands`, `skills`, `conventions`, `modules` | Sections of the repo brief. You can also use `testing` and `review`. |
 | `timeout_seconds` | 1200 | At most 7200. |
-| `[effort]` | high on every executor | Keys are `native`, `claude`, `codex`, `grok`, `agy`. |
-| `data_schema` | none | The shape of the submit's `data`, as a table. Only an agent that returns `stage` may declare one. |
-| `helper` | false | True lets `SendMessage` start the agent as a helper. |
+| `[effort]` | `high` on each executor | The keys are `native`, `claude`, `codex`, `grok`, and `agy`. |
+| `data_schema` | None | The shape of the `data` in the submit, as a table. Only an agent that returns `stage` can declare one. |
+| `helper` | `false` | If `true`, `SendMessage` can start the agent as a helper. |
 
-The file may be at most 128 KiB, because the whole body goes into every run's system prompt. The body is
-rendered like a built-in prompt, with the same `{{ tool_* }}` tokens, the same code-tools and messaging guides
-when the capabilities call for them, and the same harness vocabulary. An agent that returns
-`stage` also gets `assets/custom-agent.md` before the body, a short guide to the stage contract and the submit
-call; an agent that returns a built-in contract describes that contract's fields in its own instructions, as the
-built-in prompts do. The body is rendered as a check when
-the file loads, so a broken template token is a settings error, never a failure in the middle of a session, and
-rendered again for each run.
+The file can have at most 128 KiB, because the full body goes into the system prompt of each run. Ostra renders
+the body the same as a built-in prompt. The body gets these items:
+
+- The same `{{ tool_* }}` tokens.
+- The code tools guide and the messaging guide, if the capabilities need them.
+- The same harness vocabulary.
+
+An agent that returns `stage` also gets `assets/custom-agent.md` before the body. This file is a short guide to
+the stage contract and the submit call. An agent that returns a built-in contract describes the fields of that
+contract in its own instructions, the same as the built-in prompts.
+
+Ostra renders the body one time as a check when it loads the file. Thus, a broken template token is a settings
+error and not a failure in the middle of a session. Ostra renders the body again for each run.
 
 ### The catalog
 
-`AgentCatalog` (`crates/ostra-agents/src/catalog.rs`) is the set of agents one workspace can run: the standard
-plugin's agents, the valid files of `.ostra/agents/`, and the agents of the workspace's plugins. A markdown file
-goes through `ostra_sdk::definition::parse_markdown` and then `from_plugin_agent`, like every other source.
-`AgentCatalog::load` also takes the result contracts the workspace's plugins define, with their schemas: an
-agent that returns one gets that schema for its submit, and one that returns a contract no plugin defines is
-left out and reported (Rule PL5). Like the
-settings, it is read again for every execution, so an edited agent applies to its next run without a restart.
-A file that does not parse, or a second agent with a name already taken, is left out and reported as a settings
-issue under `agents`, with the file it came from.
+`AgentCatalog` (`crates/ostra-agents/src/catalog.rs`) is the set of agents that one workspace can run. It holds
+these agents:
 
-`AgentName` stays one type for both kinds: built-in agents are its variants, and a custom agent is
-`AgentName::Custom`, whose name is interned so the type keeps its copy semantics. On the wire it is the bare name
-either way, so events and databases did not change shape.
+- The agents of the standard plugin.
+- The valid files of `.ostra/agents/`.
+- The agents of the plugins of the workspace.
+
+A Markdown file goes through `ostra_sdk::definition::parse_markdown` and then `from_plugin_agent`, the same as
+each other source.
+
+`AgentCatalog::load` also gets the result contracts that the plugins of the workspace define, with their
+schemas. An agent that returns one of these contracts gets that schema for its submit. If an agent returns a
+contract that no plugin defines, the catalog leaves the agent out and reports it (Rule PL5).
+
+Ostra reads the catalog again for each execution, the same as the settings. Thus, a changed agent applies to its
+next run without a restart. The catalog leaves out a file that does not parse. It also leaves out a second agent
+with a name that a different agent already uses. Ostra reports each of these problems as a settings issue under
+`agents`, with the file of the agent.
+
+`AgentName` is one type for the two kinds of agent. Each built-in agent is a variant. A custom agent is
+`AgentName::Custom`. Ostra interns its name, so the type keeps its copy semantics. On the wire, the value is the
+bare name for the two kinds. Thus, the shape of the events and the databases did not change.
 
 ### Where an agent writes
 
-`write_scope` is enforced by the write-scope guard (`check_scope` in `crates/ostra-policy/src/guards.rs`, through
-`ExecContext::scope`), for built-in and custom agents alike. `read_only` writes nothing, `session` writes its
-session dir and the OS temp dir, `project` writes the repo root and its session dir but not the temp dir, and
-`setup` writes the project's `.ostra/` runtime and its skills dir (the initializer's scope). A spec, a plan, a
-research document, the review ledger, the security block file, the progress log, and test files need their grant,
-whatever the agent's scope. No agent can write `.ostra/agents`, `.ostra/workflows`, or `.ostra/transforms`, because an
-agent that could would decide which agents, stages, and transforms run after it.
+The write-scope guard enforces `write_scope` for built-in agents and custom agents (`check_scope` in
+`crates/ostra-policy/src/guards.rs`, through `ExecContext::scope`). Each scope allows these writes:
+
+| Scope | The agent can write |
+| --- | --- |
+| `read_only` | No file. |
+| `session` | Its session dir and the temp dir of the OS. |
+| `project` | The repo root and its session dir, but not the temp dir. |
+| `setup` | The `.ostra/` runtime of the project and its skills dir. This is the scope of the initializer. |
+
+Some files need a grant in each scope. These files are a spec, a plan, a research document, the review ledger,
+the security block file, the progress log, and test files.
+
+No agent can write `.ostra/agents`, `.ostra/workflows`, or `.ostra/transforms`. The reason is that an agent with
+this access can decide which agents, stages, and transforms run after it.
 
 ### What the stage contract holds
 
-An agent that returns `stage`, the default, ends with `CustomSubmit` in `crates/ostra-core/src/submit.rs`:
+An agent that returns `stage`, the default contract, ends with `CustomSubmit` in `crates/ostra-core/src/submit.rs`:
 
 | Field | Meaning |
 | --- | --- |
-| `verdict` | `pass`, `fail`, or `needs_user`. A workflow stage moves on, follows its `on_fail`, or asks you. |
-| `summary` | What the run did and found. Later stages and you read it. Required and non-empty. |
+| `verdict` | `pass`, `fail`, or `needs_user`. The workflow stage then continues, follows its `on_fail`, or asks you. |
+| `summary` | What the run did and found. The later stages and you read it. It is necessary and cannot be empty. |
 | `findings` | Each problem, with its file and the fix. |
-| `question`, `options` | For `needs_user`: the decision needed, and the answers to offer, recommended first. `question` is required then. |
-| `report_path` | A report the run wrote, when it wrote one. |
-| `data` | Output in the shape `data_schema` declares. Required when one is declared. |
+| `question`, `options` | For `needs_user`: the decision that the stage needs, and the answers to show, with the recommended answer first. `needs_user` makes `question` necessary. |
+| `report_path` | The report that the run wrote, if it wrote one. |
+| `data` | Output in the shape that `data_schema` declares. If the agent declares a schema, `data` is necessary. |
 
-`data` is checked against the declared schema by a small JSON Schema subset in
-`crates/ostra-core/src/schema_check.rs`: `type`, `properties`, `required`, `items`, `enum`, `minItems`,
-`maxItems`, and `additionalProperties: false`. Other keywords load but check nothing. The run's submit tool shows
-the model the full schema, and both executors validate against the schema the run was given, so a mismatch is a
-tool error the model can fix before anything is recorded.
+A small subset of JSON Schema in `crates/ostra-core/src/schema_check.rs` checks `data` against the declared
+schema. The subset has these keywords: `type`, `properties`, `required`, `items`, `enum`, `minItems`, `maxItems`,
+and `additionalProperties: false`. Ostra loads other keywords, but they check nothing.
+
+The submit tool of the run shows the full schema to the model. The two executors validate against the schema
+that the run got. Thus, a mismatch is a tool error, and the model can fix it before Ostra records anything.
 
 ### Routing
 
-No agent needs a settings entry (Rule CA4). Its route is `routing.*.byAgent.<name>` when the workspace sets one,
-else its `default_tier` on its executor (`resolve_route` in `crates/ostra-core/src/config.rs`). Settings
-validation accepts route, effort, and MCP `agents` entries that name any agent of the catalog.
+No agent needs a settings entry (Rule CA4). If the workspace sets `routing.*.byAgent.<name>`, that entry is the
+route. If not, the route is the `default_tier` of the agent on its executor (`resolve_route` in
+`crates/ostra-core/src/config.rs`). Settings validation accepts route, effort, and MCP `agents` entries that
+name an agent of the catalog.
 
 ### Agents from plugins
 
-A plugin (see [plugins](plugins.md)) defines agents in its manifest. One with a `prompt` runs on a model exactly
-like a markdown agent. One without a prompt is programmatic: the plugin's own code does the work, calling tools
-and the model through Ostra (Rule PL2, described in [executors](executors.md)). Its description stands in for
-the prompt when one is rendered. A plugin's agent may return a contract the plugin defines, whose results the
-plugin handles (Rule PL5).
+A plugin defines agents in its manifest (read [plugins](plugins.md)). A plugin agent with a `prompt` runs on a
+model, the same as a Markdown agent. A plugin agent without a prompt is programmatic. The code of the plugin does
+the work and calls tools and the model through Ostra (Rule PL2, read [executors](executors.md)). If Ostra must
+render a prompt for this agent, the description of the agent replaces the prompt. A plugin agent can return a
+contract that its plugin defines, and the plugin handles the results (Rule PL5).
 
 ### Approval
 
-Agent files arrive with a workspace folder the same way MCP servers in `workspace.toml` do, so they wait for
-your approval the same way (Rule A1). The hash you approve for the workspace file covers each file in
-`.ostra/agents/`, `.ostra/workflows/`, and `.ostra/transforms/` by name and content hash (`definition_files` in
-`crates/ostra-workspace/src/trust.rs`), together with `[[plugins]]`. Until you approve, the catalog loads the
-built-in agents and the plugins built into the binary only, Settings lists each file as waiting, and a session
-that names a workflow from those files is refused. An agent file you add or edit outside Ostra puts the
-workspace file back into waiting.
+Agent files arrive with a workspace folder, the same as the MCP servers in `workspace.toml`. Thus, they wait for
+your approval in the same way (Rule A1). The hash that you approve for the workspace file covers these items:
+
+- Each file in `.ostra/agents/`, `.ostra/workflows/`, and `.ostra/transforms/`, by name and content hash
+  (`definition_files` in `crates/ostra-workspace/src/trust.rs`).
+- The `[[plugins]]` entries.
+
+Until you approve, these rules apply:
+
+- The catalog loads only the built-in agents and the plugins in the binary.
+- Settings lists each file as waiting.
+- Ostra refuses a session that names a workflow from these files.
+
+If you add or change an agent file outside Ostra, the workspace file waits for approval again.
 
 ### The agent screen
 
-The console lists every agent the workspace can run and edits the workspace's own files (HANDOVER section 9.5,
-Rules AG1 to AG3). Its server side is in
+The console lists each agent that the workspace can run. It also edits the files of the workspace (HANDOVER
+section 9.5, Rules AG1 to AG3). The server side is in
 [`crates/ostra-workspace/src/builder.rs`](../../crates/ostra-workspace/src/builder.rs).
 
-`WorkspaceDetail.agents` gives each agent's `AgentInfo`, which says where the definition comes from (`source`:
-`ostra`, `workspace` with its file under `.ostra/agents/`, or `plugin` with the plugin's name), the contract it
-`returns`, its `write_scope`, and whether it is a `helper` or `programmatic`, besides its routes.
+`WorkspaceDetail.agents` gives the `AgentInfo` of each agent. Next to the routes of the agent, `AgentInfo` gives
+these facts:
+
+- `source`: where the definition comes from. The value is `ostra`, `workspace` with its file in
+  `.ostra/agents/`, or `plugin` with the name of the plugin.
+- `returns`: the contract of the agent.
+- `write_scope`.
+- `helper` and `programmatic`.
 
 | Request | What it does |
 | --- | --- |
-| `GET /api/workspaces/:ws/agents/:name` | An `AgentDetail`: the `AgentInfo`, the definition as an `AgentDoc`, whether it is `editable`, the system prompt as the native executor renders it (`prompt_preview`), its submit schema, and the workflow nodes that run it or bind it (`used_by`, as `workflow/node`). |
-| `PUT /api/workspaces/:ws/agents/:name` | Save a workspace agent from an `AgentDoc`. |
-| `DELETE /api/workspaces/:ws/agents/:name` | Delete a workspace agent's file. |
+| `GET /api/workspaces/:ws/agents/:name` | Returns an `AgentDetail`. It holds the `AgentInfo`, the definition as an `AgentDoc`, and `editable`. It also holds the system prompt that the native executor renders (`prompt_preview`) and the submit schema. `used_by` lists the workflow nodes that run or bind the agent, as `workflow/node`. |
+| `PUT /api/workspaces/:ws/agents/:name` | Saves a workspace agent from an `AgentDoc`. |
+| `DELETE /api/workspaces/:ws/agents/:name` | Deletes the file of a workspace agent. |
 
-Only a workspace agent's file is `editable`. Ostra's and a plugin's agents are read only; their `AgentDoc` is
-filled from the definition, so the console can duplicate one into a new workspace agent.
+Only the file of a workspace agent is `editable`. The agents of Ostra and of plugins are read-only. Ostra fills
+their `AgentDoc` from the definition. Thus, the console can copy one of them into a new workspace agent.
 
-The editor builds `data_schema` as a list of fields, because most output shapes are a few named values and
-hand-written JSON Schema is easy to get wrong. Each field has a name, a type (`string`, `number`, `integer`,
-`boolean`, `object`, or `array`), a required flag, and a description; a string can list its allowed values
-(`enum`), an object holds its own fields and can refuse others (`additionalProperties: false`), and an array
-picks its item type, which nests the same way, and its `minItems` and `maxItems`. These are the keywords
-`schema_check` enforces, so everything the builder writes is checked. The editor refuses to save while a field
-has no name or two fields of one object share a name. A JSON tab edits the same schema as text. A schema that
-uses anything else, such as a list of types or a `title`, opens in the JSON tab and stays there, so the builder
-never drops a keyword it cannot show. An empty builder saves no schema.
+The editor builds `data_schema` as a list of fields. The reason is that most output shapes are a small number of
+named values, and errors in hand-written JSON Schema are frequent. Each field has these parts:
 
-A save writes the file a user would write (`agent_markdown`): TOML frontmatter between `+++` lines, then the
-prompt. Defaults are left out (`returns = "stage"`, an empty capability list, `helper = false`), and the tables
-(`effort`, `data_schema`) come last. Before anything is written, the text goes through the same
-`parse_markdown` a load uses (Rule CA1), so a built-in agent's name or a broken template token is refused. A
-save is also refused when a plugin already holds the name (`AgentCatalog::with_workspace_def`), when `returns`
-names a plugin contract no running plugin defines, and when the changed agent would stop a workflow that runs
-now from running, for example by changing the contract a workflow binds it to. A delete is refused while a
-workflow uses the agent. Both write through `trust::save_definitions`, so an approved workspace stays approved
-(Rule A1).
+- A name.
+- A type: `string`, `number`, `integer`, `boolean`, `object`, or `array`.
+- A required flag.
+- A description.
 
-An agent whose file waits for approval is out of the catalog, so no session runs it, but its page still reads
-the file and shows it with `waiting_approval`.
+A string can list its allowed values (`enum`). An object holds its own fields and can refuse other fields
+(`additionalProperties: false`). An array selects its item type, which nests in the same way, and its `minItems`
+and `maxItems`. `schema_check` enforces these keywords, so Ostra checks everything that the builder writes.
+
+The editor refuses to save when a field has no name. It also refuses when two fields of one object have the
+same name. A JSON tab edits the same schema as text. A schema can use a different keyword, such as a list of
+types or a `title`. Then the schema opens in the JSON tab and stays there. Thus, the builder never drops a
+keyword that it cannot show. An empty builder saves no schema.
+
+A save writes the same file that a user writes (`agent_markdown`): TOML frontmatter between `+++` lines, then the
+prompt. The file leaves out the default values (`returns = "stage"`, an empty capability list, `helper = false`).
+The tables (`effort`, `data_schema`) come last. Before Ostra writes anything, the text goes through the same
+`parse_markdown` that a load uses (Rule CA1). Thus, Ostra refuses the name of a built-in agent or a broken
+template token.
+
+Ostra also refuses a save in these conditions:
+
+- A plugin already uses the name (`AgentCatalog::with_workspace_def`).
+- `returns` names a plugin contract that no running plugin defines.
+- The changed agent stops a current workflow from running. For example, the change gives the agent a different
+  contract than the contract that the workflow binds it to.
+
+Ostra refuses a delete when a workflow uses the agent. The save and the delete write through
+`trust::save_definitions`, so an approved workspace stays approved (Rule A1).
+
+The catalog does not hold an agent whose file waits for approval, so no session runs it. But the page of the
+agent still reads the file and shows it with `waiting_approval`.
 
 ## Subagents that talk to each other
 

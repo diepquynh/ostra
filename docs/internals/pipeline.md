@@ -59,7 +59,7 @@ the route:
 | `PROMPT` | Prompt-generation. A review runs only when a changed file is code and not an instruction file. |
 | `QUICK_CHANGE` | One implementer pass per project on the native executor, with no research, spec, plan, or review. |
 
-Each category's route is its built-in workflow: the built-in stages that it runs, in a chain (`builtin_chain` in
+The route of each category is its built-in workflow: the chain of built-in stages that it runs (`builtin_chain` in
 [`crates/ostra-core/src/workflow.rs`](../../crates/ostra-core/src/workflow.rs)). When the judge is not sure which
 of two categories applies, its prompt tells it to pick the one that runs more of the pipeline. It picks that one
 because a skipped stage that the request needed gives a wrong result, but an unneeded stage costs one round.
@@ -67,7 +67,7 @@ because a skipped stage that the request needed gives a wrong result, but an unn
 ### Your own stages: workflows
 
 A workspace can change the route with workflow files in `.ostra/workflows/`. A workflow extends a built-in
-workflow. It adds stages that run a custom agent or the stage logic of a plugin between the stages of Ostra. For
+workflow. It adds stages between the stages of Ostra. Each added stage runs a custom agent or the stage logic of a plugin. For
 example, a workflow can add a security audit after the build and before the closing stages. A workflow can also
 leave out these parts:
 
@@ -76,7 +76,7 @@ leave out these parts:
 - The Track judge. A fixed track replaces it.
 
 Built-in stages keep their order and their rules. Thus, each gate on this page still applies. The session records
-its workflow when it starts, so a change to a file never changes a session that runs. A custom stage that fails or
+its workflow when it starts. Thus, a change to a file never changes a session that runs. A custom stage that fails or
 needs a decision opens a `stage_review` gate ([Gates and judges](gates-and-judges.md#stage-review)).
 [Workflows](workflows.md) describes the file format, the rules, and how the planner goes through the stages.
 

@@ -272,13 +272,13 @@ Workflows add their own limits (Rule WF7):
 - Each stage runs at most `max_rounds` times. A workflow file can set this value from 1 to 10
   (`workflow::MAX_STAGE_ROUNDS`). The default is 3.
 
-After the last round, a failing stage asks you and does not run again. YOLO does not answer that gate, because
+After the last round, a stage that fails asks you and does not run again. YOLO does not answer that gate, because
 only you can decide to spend more on the stage. A plugin stage counts a decision to run past `max_rounds` as a
 failure. A `project` stage runs one time for each project in scope, and a `phase` stage one time for each passed
 phase. Each stage run goes through the slot limiter and the budget guard, the same as all other spawns. Thus,
 stages with the same dependencies that run at the same time never exceed `max_parallel_executions`.
 
-A programmatic agent (a plugin agent that runs in code) has no turn count. Thus, its tool calls and model calls
+A programmatic agent is a plugin agent that runs in code. It has no turn count. Thus, its tool calls and model calls
 together have a cap of 2,000 for each run (`MAX_PROGRAM_CALLS` in `crates/ostra-exec-native/src/program.rs`). Its
 model calls run on the route of the agent and count toward the usage of the run and the spend of the session.
 
