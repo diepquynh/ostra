@@ -560,7 +560,8 @@ The docs stage writes documentation for people and agents into the workspace, no
 covers a set of projects: each project is one part of sections and sub-sections, and a book of two or more
 projects also has a system architecture. The console renders a book from `book.json` (`ws:docs` lists the books,
 `book:<id>` reads one) with the docs site's renderer, and exports it as one HTML file with the diagrams drawn as SVG,
-no script, and a meta policy that loads nothing. Agents read its Markdown, which every brief lists.
+no script, and a meta policy that loads nothing. Agents read its Markdown, which every brief lists. The writers
+write in Simplified Technical English (section 20), because people and agents both act on the book.
 
 | Rule | Behavior |
 | --- | --- |
@@ -1510,13 +1511,29 @@ Each of these was learned from a recorded failure. The numbers are from Ultracod
 
 ## 20. Writing rules
 
-Ostra's prompts, judge prompts, UI copy, and docs follow Ultracode's writing rules
-(`UC/CLAUDE.md`, "Writing style"):
+Ostra writes every text that a person or a model reads in Simplified Technical English (STE). STE is the
+controlled English of the ASD-STE100 specification. The "Writing standard" section of `CLAUDE.md` adapts it for
+software and holds the full rules. Three places hold the same rules:
+
+- `CLAUDE.md`, for the docs, the prompts, the judge prompts, the UI copy, the error messages, the commit
+  messages, and the replies of a coding agent in this repository.
+- The `documentation` prompt, so each project part of a book follows them (section 8.5).
+- The `system-architecture` prompt, so each architecture of a book follows them.
+
+Change a rule in all three places in the same change.
+
+The adaptation keeps the STE writing rules: one topic in each sentence, at most 20 words in an instruction and
+25 in a description, at most six sentences in a paragraph, the active voice, simple verb forms, one meaning for
+each word, and a caution that starts with the command. It does not use the STE dictionary of approved words.
+Technical names and the verbs of computer processes are allowed, and a table gives a short word for each
+frequent long word.
+
+The standard also keeps Ultracode's writing rules (`UC/CLAUDE.md`, "Writing style"):
 
 - No em dashes.
 - Sentence-case headings.
 - State the instruction, then the reason.
 - No metaphor where a literal phrase exists.
-- No superlatives standing in for a number.
-- Keep the causal "because" clauses in prompts, since a model that knows why a rule exists applies it to cases
-  the rule did not list.
+- No superlatives in place of a number.
+- Keep the causal "because" clauses in prompts, because a model that knows why a rule exists applies it to
+  cases that the rule does not list.

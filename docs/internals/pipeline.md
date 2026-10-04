@@ -725,8 +725,14 @@ OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 \
 The docs stage writes a documentation book, not code comments or files inside a project. Comments already explain
 the code line by line; what a reader lacks is how a feature works end to end, what it assumes, where its
 boundaries are, and how the projects of a workspace talk to each other. The book answers that for a person reading
-it in the console or as exported HTML, and for an agent reading its Markdown, so it is written in literal
-statements with no metaphors: an agent follows a figure of speech literally.
+it in the console or as exported HTML, and for an agent reading its Markdown.
+
+Both writer prompts (`documentation` and `system-architecture`) hold a copy of Ostra's writing standard:
+Simplified Technical English (STE), the controlled English of the ASD-STE100 specification, adapted for
+software. A writer uses one topic in each sentence, at most 25 words in a description and 20 in an instruction,
+the active voice, and one meaning for each word. It writes no metaphors, because an agent follows a figure of
+speech literally. It writes an assumption that a change can break as a caution: the command first, then what
+fails. The standard is the same one that `CLAUDE.md` sets for this repository (HANDOVER section 20).
 
 ### Two ways in
 
