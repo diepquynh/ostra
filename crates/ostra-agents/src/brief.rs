@@ -552,7 +552,7 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
         };
         out.push(format!(
             "{BOOKS_HEADING}\n\nOstra's docs stage wrote these books about the workspace's projects. Each `index.md` links \
-             one Markdown file per section, with its assumptions, flows, diagrams, and code references. {how}. Check \
+             one Markdown file per page, with its flows, diagrams, rules, and code references. {how}. Check \
              what you find against the code, because a book describes the code when it was written. Do not write in \
              `{dir}`, because Ostra writes the books.\n\n{}",
             rows.join("\n")

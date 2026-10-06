@@ -211,8 +211,8 @@ mod tests {
         assert!(out.text.contains("no documentation books"), "{}", out.text);
         let submit: DocumentationSubmit = serde_json::from_value(json!({
             "status": "ok", "summary": "s", "overview": "The app.",
-            "sections": [{"id": "slots", "title": "Execution slots", "purpose": "Caps concurrent executions.",
-                "assumptions": ["The budget is checked first."],
+            "sections": [{"id": "slots", "title": "Execution slots", "summary": "Caps concurrent executions.",
+                "body": "The runner checks the budget first.",
                 "code_refs": [{"path": "src/runner.rs", "note": "The slot limiter."}]}]
         }))
         .unwrap();

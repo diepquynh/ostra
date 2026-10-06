@@ -213,7 +213,8 @@ export default async function globalSetup() {
 
 /**
  * A documentation book whose every field carries test strings, written where the engine writes books. The Docs view
- * and the exported HTML render it.
+ * and the exported HTML render it. Section `book` has the typed shape of books written before free pages, which the
+ * server loads as a page. Section `page` is a free Markdown page with raw HTML in its body.
  */
 function writeBook(ws: string, fake: string) {
   const diagrams = [...mermaid("book", fake).matchAll(/```mermaid\n([\s\S]*?)```/g)].map((m, i) => ({
@@ -233,6 +234,19 @@ function writeBook(ws: string, fake: string) {
     concerns: [{ component: inline(`${tag}-comp`), responsibility: inline(`${tag}-resp`) }],
     code_refs: [{ path: "src/<img src=x onerror=window.__pwned='ref'>.rs", symbol: "a`b|c", lines: "1-2", note: inline(`${tag}-note`) }],
   });
+  const refs = [{ path: "src/<img src=x onerror=window.__pwned='ref'>.rs", symbol: "a`b|c", lines: "1-2", note: inline("page-note") }];
+  const freePage = {
+    id: "page",
+    title: inline("page-title"),
+    summary: markdown("page", fake),
+    body: [
+      markdown("page-body", fake),
+      `## ${inline("page-sub")}`,
+      mermaid("page", fake),
+      `<img src=x onerror="window.__pwned='body'"><script>window.__pwned='body'</script>`,
+    ].join("\n\n"),
+    code_refs: refs,
+  };
   const now = new Date().toISOString();
   const book = {
     id: "pw_book",
@@ -248,7 +262,7 @@ function writeBook(ws: string, fake: string) {
       failure_recovery: [{ failure: inline("book-f"), detection: inline("book-d"), recovery: inline("book-r") }],
       scalability: [{ component: inline("book-c"), scales_by: inline("book-s"), limit: inline("book-l") }],
     },
-    parts: [{ project: "app", overview: markdown("book-overview", fake), updated_at: now, sections: [{ ...unit("book"), subsections: [unit("book-sub")] }] }],
+    parts: [{ project: "app", overview: markdown("book-overview", fake), updated_at: now, sections: [{ ...unit("book"), subsections: [unit("book-sub")] }, freePage] }],
     glossary: [{ term: inline("book-term"), definition: markdown("book-def", fake), code_ref: inline("book-code") }],
   };
   const dir = path.join(ws, ".ostra", "docs", book.id);

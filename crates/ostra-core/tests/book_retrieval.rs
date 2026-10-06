@@ -492,20 +492,10 @@ fn docs_index() -> Index {
                         }
                     }
                     for chunk in items.chunks(5) {
-                        push(
-                            passages,
-                            PassageKind::Table,
-                            named("List"),
-                            chunk.join("\n"),
-                        );
+                        push(passages, PassageKind::List, named("List"), chunk.join("\n"));
                     }
                 } else {
-                    push(
-                        passages,
-                        PassageKind::Purpose,
-                        named("Text"),
-                        lines.join(" "),
-                    );
+                    push(passages, PassageKind::Text, named("Text"), lines.join(" "));
                 }
             };
         for line in text.lines() {
@@ -514,7 +504,7 @@ fn docs_index() -> Index {
                     let kind = if lang == "mermaid" {
                         PassageKind::Diagram
                     } else {
-                        PassageKind::Overview
+                        PassageKind::Code
                     };
                     let body = std::mem::take(&mut block).join("\n");
                     let l = if label.is_empty() {

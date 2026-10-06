@@ -432,9 +432,7 @@ export function describeEvent(e: SessionEvent): string {
     case "command_started":
       return `${humanize(e.purpose)} started in ${e.project}: ${truncate(e.command, 80)}`;
     case "docs_planned":
-      return e.areas.length
-        ? `Documentation for ${e.project} split into ${e.areas.length} areas`
-        : `Documentation for ${e.project} planned with one writer`;
+      return `Documentation for ${e.project} planned`;
     case "book_written":
       return e.error
         ? `Book ${e.book} not written: ${truncate(e.error, 80)}`

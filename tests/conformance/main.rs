@@ -2545,15 +2545,9 @@ fn docs_submit(project: &str) -> Value {
         "sections": [{
             "id": format!("{project}-orders"),
             "title": "Orders",
-            "purpose": "Creates and cancels orders.",
-            "boundaries": {"owns": ["orders table"], "does_not_own": ["payments, owned by billing"]},
-            "assumptions": ["Callers are authenticated by the gateway."],
-            "business_flow": [{"actor": "Customer", "action": "cancels an order", "outcome": "the order is cancelled"}],
-            "diagrams": [{"title": "Cancel", "kind": "sequence", "source": "sequenceDiagram\nC->>API: POST /orders/1/cancel\nAPI-->>C: 204"}],
-            "tables": [],
-            "concerns": [{"component": "OrderService", "responsibility": "state changes"}],
-            "code_refs": [{"path": "src/orders.rs", "symbol": "cancel", "note": "the handler"}],
-            "subsections": []
+            "summary": "Creates and cancels orders.",
+            "body": "The gateway authenticates callers.\n\n## Cancel an order\n\n```mermaid\nsequenceDiagram\nC->>API: POST /orders/1/cancel\nAPI-->>C: 204\n```",
+            "code_refs": [{"path": "src/orders.rs", "symbol": "cancel", "note": "the handler"}]
         }],
         "glossary": [{"term": "Order", "definition": format!("A purchase in {project}.")}]
     })
@@ -2575,57 +2569,16 @@ fn arch_submit() -> Value {
     })
 }
 
-/// A DOCS session whose projects are measured small, so each gets one writer (Rule B9).
 fn docs_session(projects: &[&str]) -> H {
-    let mut h = docs_session_unplanned(projects);
-    for p in projects {
-        plan_docs(&mut h, p, vec![]);
-    }
-    h
-}
-
-fn docs_session_unplanned(projects: &[&str]) -> H {
     let mut h = H::new(projects, SessionOptions::default());
     h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": projects, "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
     h
 }
 
-fn plan_docs(h: &mut H, project: &str, areas: Vec<ostra_core::book::DocsArea>) {
-    plan_docs_with(h, project, areas, None, vec![]);
-}
-
-fn plan_docs_with(
-    h: &mut H,
-    project: &str,
-    areas: Vec<ostra_core::book::DocsArea>,
-    existing: Option<Vec<String>>,
-    touched: Vec<String>,
-) {
-    h.ev(SessionEvent::DocsPlanned {
-        project: project.into(),
-        areas,
-        existing,
-        touched,
-    });
-}
-
-fn area(id: &str) -> ostra_core::book::DocsArea {
-    ostra_core::book::DocsArea {
-        id: id.into(),
-        title: id.into(),
-        globs: vec![format!("{id}/**")],
-        rest: false,
-        bytes: 600 * 1024,
-    }
-}
-
 #[test]
 fn docs_category_skips_the_closing_gate() {
-    let mut h = docs_session_unplanned(&["p"]);
+    let mut h = docs_session(&["p"]);
     assert_eq!(h.state().category, Some(Category::Docs));
-    // Rule B9: the project is measured before its first writer.
-    assert_eq!(h.summaries(), vec!["plan-docs p"]);
-    plan_docs(&mut h, "p", vec![]);
     assert_eq!(h.summaries(), vec!["spawn documentation docs p"]);
     let r = h.spawn_step("spawn documentation");
     assert_eq!(
@@ -2675,90 +2628,22 @@ fn b7_docs_writers_fan_out_under_a_cap() {
 }
 
 #[test]
-fn b9_a_large_projects_areas_each_get_a_writer() {
-    let mut h = docs_session_unplanned(&["p"]);
-    plan_docs(&mut h, "p", vec![area("core"), area("web")]);
+fn b2_the_docs_writer_gets_the_users_request_and_notes() {
+    let mut h = docs_session(&["p"]);
+    let r = h.spawn_step("spawn documentation docs p");
     assert_eq!(
-        h.summaries(),
-        vec![
-            "spawn documentation docs p/core",
-            "spawn documentation docs p/web"
-        ]
-    );
-    let r = h.spawn_step("spawn documentation docs p/web");
-    assert_eq!(
-        r.inputs.docs_area.as_ref().map(|a| a.id.as_str()),
-        Some("web")
+        r.inputs.implementer_reports,
+        vec![root().join("p").join("ostra-docs-request.md")],
+        "the request is the writer's implementer report"
     );
     assert_eq!(
-        r.inputs.docs_areas.len(),
-        2,
-        "each writer knows the other areas"
-    );
-    h.run("spawn documentation docs p/core", docs_submit("p"));
-    assert_eq!(
-        h.summaries(),
-        vec!["spawn documentation docs p/web"],
-        "the part waits for every area"
-    );
-    h.run("spawn documentation docs p/web", docs_submit("p"));
-    assert_eq!(h.summaries(), vec!["write-book p"]);
-    let update = h.state().book_update();
-    let ids: Vec<&str> = update.parts[0]
-        .1
-        .sections
-        .iter()
-        .map(|s| s.id.as_str())
-        .collect();
-    assert_eq!(
-        ids,
-        ["p-orders", "p-orders-web"],
-        "a clashing section ID takes its area"
-    );
-    assert!(update.areas["p"].iter().all(|(_, sub)| sub.is_some()));
-}
-
-#[test]
-fn b9_area_writers_share_the_session_cap() {
-    let mut h = docs_session_unplanned(&["p"]);
-    let areas: Vec<_> = ["a", "b", "c", "d", "e", "f"]
-        .iter()
-        .map(|i| area(i))
-        .collect();
-    plan_docs(&mut h, "p", areas);
-    let spawns = h
-        .summaries()
-        .into_iter()
-        .filter(|s| s.starts_with("spawn documentation"))
-        .count();
-    assert_eq!(spawns, ostra_engine::plan::MAX_DOCS_WRITERS);
-}
-
-#[test]
-fn b9_an_abandoned_area_keeps_the_rest_of_the_part() {
-    let mut h = docs_session_unplanned(&["p"]);
-    plan_docs(&mut h, "p", vec![area("core"), area("web")]);
-    h.run("spawn documentation docs p/core", docs_submit("p"));
-    let (id, _) = h.start("spawn documentation docs p/web");
-    h.finish(&id, ExecutionStatus::Error, None);
-    let g = h.open_gate("execution_failed");
-    h.answer(
-        &g,
-        GateAnswer::Choice {
-            option: "abandon".into(),
-            text: None,
-        },
-    );
-    assert_eq!(h.summaries(), vec!["write-book p"]);
-    let update = h.state().book_update();
-    assert!(
-        update.areas["p"][1].1.is_none(),
-        "the web area keeps what the book holds"
+        r.inputs.user_notes,
+        h.state().notes_for(ostra_engine::judge::NoteStage::Docs)
     );
 }
 
 #[test]
-fn b9_after_a_build_only_the_touched_areas_are_rewritten() {
+fn b1_one_writer_documents_a_project_after_a_build() {
     let mut h = H::plan_approved(
         &["p"],
         one_phase(),
@@ -2785,65 +2670,22 @@ fn b9_after_a_build_only_the_touched_areas_are_rewritten() {
             }],
         },
     );
-    assert_eq!(h.summaries(), vec!["plan-docs p"]);
-    let book_areas = Some(vec!["core".to_string(), "web".to_string()]);
-    plan_docs_with(
-        &mut h,
-        "p",
-        vec![area("core"), area("web")],
-        book_areas,
-        vec!["web".into()],
-    );
-    assert_eq!(h.summaries(), vec!["spawn documentation docs p/web"]);
-    h.run("spawn documentation docs p/web", docs_submit("p"));
+    assert_eq!(h.summaries(), vec!["spawn documentation docs p"]);
+    h.run("spawn documentation docs p", docs_submit("p"));
     assert_eq!(h.summaries(), vec!["write-book p"]);
-    let update = h.state().book_update();
-    let kept: Vec<bool> = update.areas["p"].iter().map(|(_, s)| s.is_none()).collect();
-    assert_eq!(kept, [true, false], "core is kept from the book");
 }
 
 #[test]
-fn b9_a_book_without_these_areas_gets_every_area() {
-    let mut h = H::plan_approved(
-        &["p"],
-        one_phase(),
-        SessionOptions {
-            docs: true,
-            tests: false,
-            yolo: false,
-            track: None,
-        },
-    );
-    h.run("spawn implementer", impl_submit(1, &["web/app.ts"]));
-    h.run("spawn code-reviewer", review(&[]));
-    h.command(CommandPurpose::Stage, "p");
-    h.accept();
-    h.command(CommandPurpose::Format, "p");
-    let g = h.open_gate("closing_gate");
-    h.answer(
-        &g,
-        GateAnswer::Closing {
-            items: vec![ClosingChoice {
-                project: "p".into(),
-                tests: false,
-                docs: true,
-            }],
-        },
-    );
-    plan_docs_with(
-        &mut h,
-        "p",
-        vec![area("core"), area("web")],
-        Some(vec![]),
-        vec!["web".into()],
-    );
-    assert_eq!(
-        h.summaries(),
-        vec![
-            "spawn documentation docs p/core",
-            "spawn documentation docs p/web"
-        ]
-    );
+fn b9_a_log_that_split_a_part_into_areas_still_folds() {
+    let mut h = docs_session(&["p"]);
+    let old: SessionEvent = serde_json::from_value(json!({
+        "type": "docs_planned", "project": "p",
+        "areas": [{"id": "core", "title": "core", "globs": ["core/**"], "rest": false, "bytes": 1}],
+        "existing": null, "touched": []
+    }))
+    .unwrap();
+    h.ev(old);
+    assert_eq!(h.summaries(), vec!["spawn documentation docs p"]);
 }
 
 #[test]
@@ -2901,7 +2743,6 @@ fn b6_a_picked_book_names_the_write() {
         *docs_book = Some("handbook".into());
     }
     h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
-    plan_docs(&mut h, "p", vec![]);
     h.run("spawn documentation docs p", docs_submit("p"));
     assert_eq!(h.summaries(), vec!["write-book handbook"]);
 }
@@ -2918,7 +2759,6 @@ fn b6_a_book_update_replaces_the_projects_part() {
         overview: "old".into(),
         sections: vec![],
         updated_at: at,
-        areas: vec![],
     };
     let existing = Book {
         id: "a_b".into(),

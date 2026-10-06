@@ -486,31 +486,9 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         common: common(),
         implementer_reports: vec!["/r/i1.md".into(), "/r/i2.md".into()],
         existing_book: Some("/ws/.ostra/docs/api_web/book.json".into()),
-        area: None,
         extra: Extras::default(),
     };
     roundtrip(&md);
-    let area = DocumentationParams {
-        area: Some(DocsAreaScope {
-            id: "server-and-1-more".into(),
-            title: "server, other files".into(),
-            paths: vec!["server/**".into()],
-            rest: true,
-            others: vec![("engine".into(), vec!["engine/**".into()])],
-        }),
-        ..md.clone()
-    };
-    roundtrip(&area);
-    let text = area.render();
-    assert!(
-        text.contains("Area: server, other files (server-and-1-more)"),
-        "{text}"
-    );
-    assert!(
-        text.contains("Area paths: server/**, and every file no other area covers"),
-        "{text}"
-    );
-    assert!(text.contains("Other areas: engine (engine/**)"), "{text}");
     let arch = ArchitectureParams {
         common: common(),
         book_parts: "/r/ostra-docs-parts.json".into(),

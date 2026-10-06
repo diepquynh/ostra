@@ -708,8 +708,8 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             });
             out.push(c);
         }
-        let docs = t.docs_aggregate();
-        if let Some(st) = run_status(&docs) {
+        let docs = &t.docs;
+        if let Some(st) = run_status(docs) {
             let mut c = card(
                 StageKind::Documentation,
                 format!("Documentation for {key}"),
@@ -720,15 +720,8 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
                 s,
                 |e| matches!(&e.purpose, P::Docs { project, .. } if project == key),
             );
-            c.detail = match (&docs, t.docs_areas()) {
-                (DocsState::Done(d), None) => Some(format!("{} sections", d.sections.len())),
-                (DocsState::Done(d), Some(a)) => Some(format!(
-                    "{} sections from {} of {} areas",
-                    d.sections.len(),
-                    t.area_docs.len(),
-                    a.len()
-                )),
-                (_, Some(a)) => Some(format!("{} of {} areas", t.area_docs.len(), a.len())),
+            c.detail = match docs {
+                DocsState::Done(d) => Some(format!("{} sections", d.sections.len())),
                 _ => None,
             };
             out.push(c);

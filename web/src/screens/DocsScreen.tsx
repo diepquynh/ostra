@@ -82,17 +82,11 @@ function BookReader({ ws, book }: { ws: string; book: Book }) {
   const prev = docs.pages[at - 1];
   const next = docs.pages[at + 1];
 
-  const subsections = useMemo(() => {
-    const out = new Map<string, Set<string>>();
-    for (const part of book.parts)
-      for (const s of part.sections)
-        out.set(
-          sectionPage(part.project, s.id),
-          new Set(s.subsections.map((x) => x.title.replace(/\s+/g, " ").trim())),
-        );
-    return out;
-  }, [book]);
-  const subsOf = (p: DocPage) => p.toc.filter((t) => subsections.get(p.id)?.has(t.text));
+  const sectionPages = useMemo(
+    () => new Set(book.parts.flatMap((part) => part.sections.map((s) => sectionPage(part.project, s.id)))),
+    [book],
+  );
+  const subsOf = (p: DocPage) => (sectionPages.has(p.id) ? p.toc.filter((t) => t.text !== "Code references") : []);
 
   const spy = useCallback(() => {
     const el = pane.current;

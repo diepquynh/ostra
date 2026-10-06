@@ -172,9 +172,8 @@ impl Executor for Scripted {
                     "the stub holds the request: {text}"
                 );
                 json!({"status": "ok", "summary": "Documented the greeting.", "overview": "app greets users.",
-                    "sections": [{"id": "greeting", "title": "Greeting", "purpose": "Prints a greeting.",
-                        "assumptions": ["stdout is open."],
-                        "diagrams": [{"title": "Greet", "kind": "sequence", "source": "sequenceDiagram\nUser->>app: run\napp-->>User: hello"}],
+                    "sections": [{"id": "greeting", "title": "Greeting", "summary": "Prints a greeting.",
+                        "body": "The app assumes that stdout is open.\n\n```mermaid\nsequenceDiagram\nUser->>app: run\napp-->>User: hello\n```",
                         "code_refs": [{"path": "src.txt", "note": "the greeting"}]}],
                     "glossary": [{"term": "Greeting", "definition": "The text app prints."}]})
             }
@@ -924,7 +923,7 @@ async fn docs_session_writes_the_book_into_the_workspace() {
     let root = ostra_core::book::book_dir(&ws_root, "app");
     let section = std::fs::read_to_string(root.join("app/greeting.md")).unwrap();
     assert!(
-        section.contains("## Assumptions\n\n- stdout is open."),
+        section.contains("Prints a greeting.\n\nThe app assumes that stdout is open."),
         "{section}"
     );
     assert!(section.contains("```mermaid\nsequenceDiagram"), "{section}");

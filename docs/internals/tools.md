@@ -440,60 +440,63 @@ how Ostra stores and ranks lessons.
 ### DocsSearch
 
 `DocsSearch` searches the documentation books that the docs stage wrote into the workspace (Rule B8). It returns
-the sections that best match a question. Each section has only the passages that matched. Inputs: `query`, an
+the units that best match a question. Each unit has only the passages that matched. Inputs: `query`, an
 optional `project` that limits the search to the part of one project, and `limit` (default 5, at most 15
-sections).
+units).
 
-A section of a book can be long, and most of it is not related to one question. Thus the search does not rank
-full sections. It cuts each section and sub-section into these passages:
+A page of a book can be long, and most of it is not related to one question. Thus the search does not rank full
+pages. It cuts each page at its `##` headings into units. The page unit holds the summary, the text above the
+first `##` heading, and the code references. Each `##` heading starts a unit with the title `Page > Heading`. The
+search then cuts each unit into these passages:
 
-- The purpose, the boundaries, the assumptions, and the business flow.
-- Each diagram and each table.
-- The separation of concerns and the code references.
+- Each paragraph.
+- Each `mermaid` diagram and each other code block.
+- Each list and each table, in windows of five rows.
+- The code references of the page, in windows of five.
 
-The search splits lists and tables of more than five rows into windows of five. The index uses the title of a
-diagram and the words in its labels and messages. It never uses the Mermaid keywords or the node IDs. Thus a
-question about "participants" does not match each sequence diagram. The glossary gives one passage for each
-term. The system architecture gives one passage for each component, each failure case, and each group of links
-or scaling rows.
+A `###` or deeper heading labels the passages under it, for example `Retries: list`. The index uses the words in
+the labels and messages of a diagram. It never uses the Mermaid keywords or the node IDs. Thus a question about
+"participants" does not match each sequence diagram. The glossary gives one passage for each term. The system
+architecture gives one passage for each component, each failure case, and each group of links or scaling rows.
 
 BM25 ranks each passage over three fields:
 
 - The label of the passage, with weight 2.
-- The paths and symbols of its code references, with weight 1.5.
+- The inline code of the passage and the paths and symbols of its code references, with weight 1.5.
 - Its text, with weight 1.
 
 The search changes words to lowercase and applies a light stemmer. An identifier also gives its parts. Thus
 `SessionState` matches "session state". The stemmer removes plurals, `-ed`, and `-ing`. Thus "started" matches
-"starts". A section gets a rank from the sum of four parts:
+"starts". A unit gets a rank from the sum of four parts:
 
 - Its title, with weight 3, counted one time.
 - Its best passage.
 - 35% of its second-best passage.
-- A BM25 score of the full text of the section. This part finds a question whose words are in several passages.
+- A BM25 score of the full text of the unit. This part finds a question whose words are in several passages.
 
-The title counts one time for the section, and it never decides which passages the search shows. If the title of
-a section matches the question, the hit shows the passages whose own text matches. If no passage matches, the
-hit shows the purpose. A hit shows at most two passages. Each of them has at least half the score of the best
-passage of the section. Then the hit shows the path of the Markdown file of the section. The agent reads that
-file when it needs the full section.
+The title counts one time for the unit, and it never decides which passages the search shows. If the title of a
+unit matches the question, the hit shows the passages whose own text matches. If no passage matches, the hit
+shows the first passage of the unit. A hit shows at most two passages. Each of them has at least half the score
+of the best passage of the unit. Then the hit shows the path of the Markdown file of the page. The agent reads
+that file when it needs the full page.
 
 In a list or table passage, the hit shows only the lines that contain a word of the question. It also shows a
-count of the lines that it does not show. Thus a window of five assumptions shows the one assumption that
-matched. The hit shows prose and diagrams in full, because a sentence or a flow cut in half gives a wrong
+count of the lines that it does not show. Thus a window of five list items shows the one item that matched. The
+hit shows prose, code blocks, and diagrams in full, because a sentence or a flow cut in half gives a wrong
 meaning.
 
 The search builds the index from `book.json` on each call. Thus the index always agrees with a book that the
-docs stage just wrote again. If the workspace has a book and the agent has the capability, the repo brief names
-the tool. The brief tells the agent to search before it reads code to learn an area.
+docs stage just wrote again. A book from before free pages loads with its typed sections as pages (Rule B9), so
+the search cuts it in the same way. If the workspace has a book and the agent has the capability, the repo brief
+names the tool. The brief tells the agent to search before it reads code to learn an area.
 
 The retrieval eval (`tests/evals/book_retrieval/`, run by `crates/ostra-core/tests/book_retrieval.rs`) measures
 the ranking. It uses 221 questions about the source of Ostra against a book that an Opus docs run wrote about
-the repository. Each question has labels for the sections that state its answer. 127 questions have one such
-section. For those questions, the correct section is first for 63%, and in the top five for 90%. A top-five
-result is about 3,200 characters. The search is weak on a question in plain words that share no word with the
-book, for example "the code formatter" for a section about the format command. 82% of those questions reach the
-top five. The eval fails if a ranking change goes below its floors.
+the repository. Each question has labels for the units that state its answer. 127 questions have one such unit.
+For those questions, the correct unit is first for 64%, and in the top five for 91%. A top-five result is about
+3,300 characters. The search is weak on a question in plain words that share no word with the book, for example
+"the code formatter" for a section about the format command. The eval fails if a ranking change goes below its
+floors.
 
 A Memory call expanded in the Activity tab, after a failed check and its fix:
 

@@ -4398,7 +4398,7 @@ async fn workspace_books_are_listed_read_and_deleted() {
         .unwrap();
     let part: DocumentationSubmit = serde_json::from_value(json!({
         "status": "ok", "summary": "s", "overview": "api serves orders.",
-        "sections": [{"id": "orders", "title": "Orders", "purpose": "Creates orders.", "assumptions": ["Auth is done upstream."]}]
+        "sections": [{"id": "orders", "title": "Orders", "summary": "Creates orders.", "body": "The gateway authenticates callers."}]
     }))
     .unwrap();
     let update = BookUpdate {

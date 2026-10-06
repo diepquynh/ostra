@@ -2094,40 +2094,6 @@ impl Inner {
                 )?;
                 Ok(())
             }
-            Step::PlanDocs { project } => {
-                let st = self.snapshot(session)?;
-                let path = st.project_path(&project).ok_or_else(|| {
-                    EngineError::Invalid(format!("Project `{project}` is not in this workspace."))
-                })?;
-                let profile: ProjectProfile =
-                    load_toml(&paths::project_profile(&path)).unwrap_or_default();
-                let changed: Vec<String> = st
-                    .phases
-                    .values()
-                    .filter(|p| p.info.project == project)
-                    .flat_map(|p| p.impl_loop.changed.iter().chain(p.test_loop.changed.iter()))
-                    .cloned()
-                    .collect();
-                let map = profile.module_map;
-                let (areas, touched) = tokio::task::spawn_blocking(move || {
-                    crate::docs_areas::plan(&path, &map, &changed)
-                })
-                .await
-                .unwrap_or_default();
-                let existing = ostra_core::book::read(&st.workspace_root, &st.book_id())
-                    .and_then(|b| b.parts.into_iter().find(|p| p.project == project))
-                    .map(|p| p.areas.into_iter().map(|a| a.id).collect());
-                self.append(
-                    session,
-                    SessionEvent::DocsPlanned {
-                        project,
-                        areas,
-                        existing,
-                        touched,
-                    },
-                )?;
-                Ok(())
-            }
             Step::WriteBook { book } => {
                 let st = self.snapshot(session)?;
                 let update = st.book_update();

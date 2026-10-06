@@ -34,6 +34,11 @@ test("the Docs list and the book reader", async ({ page, state, guard }) => {
   await expect(page.getByText("app/src/<img src=x onerror=window.__pwned='ref'>.rs").first()).toBeVisible();
   await expect(page.getByText("a`b|c").first()).toBeVisible();
 
+  await page.locator(".docs-nav").getByText("PW-page-title", { exact: false }).first().click();
+  await audit(page, guard, "PW-MARKER-page-body", "free book page");
+  await expect(page.locator(".docs-main .md-diagram svg").getByText("PW-MERMAID-page").first()).toBeVisible();
+  expect(await page.evaluate(() => typeof (window as unknown as { __pwned?: unknown }).__pwned)).toBe("undefined");
+
   await page.getByLabel("Search this book").fill("PW-MARKER-book-sub-assume");
   await expect(page.locator(".docs-hit").first()).toBeVisible();
   expect(await domProblems(page)).toEqual([]);
@@ -63,10 +68,16 @@ test("the exported HTML file", async ({ page, context, state, guard }) => {
   const view = await context.newPage();
   await view.goto(`${EXPORT_ORIGIN}/pw_book.html`);
   // Every page is in the one file, in reading order, with the diagrams already drawn.
-  for (const marker of ["PW-MARKER-book-overview", "PW-MARKER-book-def", "PW-MARKER-book-arch", "PW-MARKER-book-cell"])
+  for (const marker of [
+    "PW-MARKER-book-overview",
+    "PW-MARKER-book-def",
+    "PW-MARKER-book-arch",
+    "PW-MARKER-book-cell",
+    "PW-MARKER-page-body",
+  ])
     await expect(view.getByText(marker).first()).toBeVisible();
-  await expect(view.locator(".md-diagram svg")).toHaveCount(5);
-  await expect(view.locator(".bk-export__toc a")).toHaveCount(4);
+  await expect(view.locator(".md-diagram svg")).toHaveCount(7);
+  await expect(view.locator(".bk-export__toc a")).toHaveCount(5);
   await view.locator(".bk-export__toc a", { hasText: "System architecture" }).click();
   expect(new URL(view.url()).hash).toBe("#architecture");
   expect(await domProblems(view)).toEqual([]);

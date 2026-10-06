@@ -341,22 +341,7 @@ pub struct DocumentationParams {
     pub implementer_reports: Vec<PathBuf>,
     /// The book's current `book.json`, when the book exists.
     pub existing_book: Option<PathBuf>,
-    /// Rule B9: the area of a large project this writer covers.
-    pub area: Option<DocsAreaScope>,
     pub extra: Extras,
-}
-
-/// Rule B9: what one area writer covers, and the other areas of its project.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct DocsAreaScope {
-    pub id: String,
-    pub title: String,
-    /// Module-map globs, project-relative.
-    pub paths: Vec<String>,
-    /// Also every file no other area's paths match.
-    pub rest: bool,
-    /// Every other area of the project: title and paths.
-    pub others: Vec<(String, Vec<String>)>,
 }
 
 /// Rule B4: the architecture of a book of two or more projects.
@@ -692,31 +677,6 @@ impl SpawnParams for DocumentationParams {
         let mut b = Block::new();
         b.paths("Implementer reports", &self.implementer_reports);
         b.opt_path("Existing book", self.existing_book.as_deref());
-        if let Some(a) = &self.area {
-            b.line("Area", &format!("{} ({})", a.title, a.id));
-            let mut paths = a.paths.join(", ");
-            if a.rest {
-                let every = "every file no other area covers";
-                paths = if paths.is_empty() {
-                    every.into()
-                } else {
-                    format!("{paths}, and {every}")
-                };
-            }
-            b.line("Area paths", &paths);
-            let others: Vec<String> = a
-                .others
-                .iter()
-                .map(|(t, p)| {
-                    if p.is_empty() {
-                        format!("{t} (the files no area names)")
-                    } else {
-                        format!("{t} ({})", p.join(", "))
-                    }
-                })
-                .collect();
-            b.line("Other areas", &others.join("; "));
-        }
         b.common(&self.common);
         b.extras(&self.extra);
         b.finish()
@@ -1055,9 +1015,6 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("implementer_reports", &["Implementer reports"], Kind::Text),
     ("epa_report", &["EPA report"], Kind::Path),
     ("existing_book", &["Existing book"], Kind::Path),
-    ("area", &["Area"], Kind::Text),
-    ("area_paths", &["Area paths"], Kind::Text),
-    ("other_areas", &["Other areas"], Kind::Text),
     ("book_parts", &["Book parts"], Kind::Path),
     ("changed_files", &["Changed files"], Kind::Text),
     ("change_rationale", &["Change rationale"], Kind::Text),

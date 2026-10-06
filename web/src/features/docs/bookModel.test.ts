@@ -1,6 +1,19 @@
+import { Markdown } from "@ostra/design/docs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { MOCK_BOOK } from "../../api/mock/fixtures.books";
-import { bookDocs, bookPages, cell, code, inlineText, prose, sectionMarkdown, sectionPage } from "./bookModel";
+import {
+  bookDocs,
+  bookPages,
+  cell,
+  code,
+  inlineText,
+  pageBody,
+  prose,
+  sectionMarkdown,
+  sectionPage,
+} from "./bookModel";
 
 describe("bookPages", () => {
   it("orders the pages overview, glossary, architecture, then each project's sections", () => {
@@ -20,19 +33,15 @@ describe("bookPages", () => {
     expect(nav[0].pages.map((p) => p.id)).toEqual(["overview"]);
   });
 
-  it("renders a section in reading order with code references last", () => {
+  it("renders a section as its summary, its own Markdown, and code references last", () => {
     const md = sectionMarkdown(MOCK_BOOK.parts[0].sections[0], "api");
     const order = [
+      "# Checkout",
       "Turns a cart into a paid order.",
-      "## Boundaries",
-      "## Assumptions",
-      "## Business flow",
-      "### Charge an order",
+      "### Assumptions",
       "```mermaid",
       "### Order states",
-      "## Separation of concerns",
       "## Retrying a charge",
-      "### Code references",
       "## Code references",
     ];
     const at = order.map((s) => md.indexOf(s));
@@ -41,17 +50,23 @@ describe("bookPages", () => {
     expect(md.trimEnd().endsWith("| The checkout entry point |")).toBe(true);
   });
 
-  it("puts every section's sub-sections and parts in its table of contents", () => {
+  it("puts the level-2 headings of a section's body in its table of contents", () => {
     const page = bookDocs(MOCK_BOOK).page(sectionPage("api", "checkout"))!;
     expect(page.title).toBe("Checkout");
-    expect(page.toc.map((t) => t.text)).toEqual([
-      "Boundaries",
-      "Assumptions",
-      "Business flow",
-      "Separation of concerns",
-      "Retrying a charge",
-      "Code references",
-    ]);
+    expect(page.toc.map((t) => t.text)).toEqual(["Retrying a charge", "Code references"]);
+  });
+
+  it("drops raw HTML in a section body", () => {
+    const section = {
+      ...MOCK_BOOK.parts[0].sections[0],
+      body: "<script>alert(1)</script>\n\n<img src=x onerror=alert(1)>",
+    };
+    const book = { ...MOCK_BOOK, parts: [{ ...MOCK_BOOK.parts[0], sections: [section] }] };
+    const docs = bookDocs(book);
+    const page = docs.page(sectionPage("api", "checkout"))!;
+    const html = renderToStaticMarkup(createElement(Markdown, { docs, page, go: () => {}, theme: "dark" }));
+    expect(html).toContain("Turns a cart into a paid order.");
+    expect(html).not.toMatch(/alert|<script|<img/);
   });
 
   it("finds book text in search", () => {
@@ -71,6 +86,10 @@ describe("escaping", () => {
 
   it("stops prose from starting a heading or a fence", () => {
     expect(prose("Text\n# Not a heading\n```\nx")).toBe("Text\n\\# Not a heading\n\\```\nx");
+  });
+
+  it("keeps a level-1 heading in a page body from adding a second title", () => {
+    expect(pageBody("# Two\n## Kept\n```\n# in code\n```")).toBe("\\# Two\n## Kept\n```\n# in code\n```");
   });
 
   it("holds backticks in a code span", () => {

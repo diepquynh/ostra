@@ -867,7 +867,12 @@ OSTRA_EVAL_MODELS=anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5 \
 
 The docs stage writes a documentation book. It does not write code comments or files inside a project. Comments
 already explain the code line by line. A reader needs other facts: how a feature works end to end, what it assumes, where its boundaries are, and how the workspace's projects communicate. The book gives these facts to
-a person who reads it in the console or as exported HTML. It also gives them to an agent that reads its Markdown.
+a person who reads it in the console or as exported HTML. It also gives them to an agent that searches it.
+
+The book is a guide, not a copy of the code. The writer chooses the topics that a reader cannot get quickly from
+the code, and the user's instructions steer that choice. An earlier design gave each section the same eight
+fields and split a large project among area writers that covered every unit of work. That design copied the code
+into the book, repeated each fact in many places, and filled the search with passages that said the same thing.
 
 Both writer prompts (`documentation` and `system-architecture`) hold a copy of Ostra's writing standard. The
 standard is Simplified Technical English (STE), the controlled English of the ASD-STE100 specification, adapted
@@ -888,89 +893,74 @@ The standard is the same one that `CLAUDE.md` sets for this repository (HANDOVER
   `ostra-docs-request.md` into the session folder of each project, with the request and no changed files. It
   gives this file to the writer as its implementer report.
 
-  The writer documents what the request names. If the request names nothing, the writer documents the whole
-  project from its entry points. A request to change a README or a docs page inside a project changes project
+  The writer documents what the request names. If the request names nothing, the writer writes the guide that a
+  new engineer needs for the whole project. A request to change a README or a docs page inside a project changes project
   files. So that request is `IMPLEMENT`, not `DOCS`.
 
 Documentation stays opt-in. A workspace whose projects have no relation to each other gets no book until you ask
 for one. Each set of projects that you document gets its own book.
 
-### Splitting a large project among writers
-
-One writer cannot document a large repository in one submit. The part that it returns must fit in one reply, so
-it covers only some dozens of units of work and leaves out the rest. On Ostra's own source, the part of one writer
-answered 127 of 221 questions about the code. With the same code split into one writer per crate, the parts
-answered 220. So before the first writer starts, the planner emits `PlanDocs`, and the runner measures the
-project (Rule B9, `docs_areas.rs`):
-
-1. It lists the files that git tracks. If the project is not a git checkout, it lists every file. It skips lockfiles, images, archives, generated folders (`target`, `node_modules`, `dist`, `build`), dot folders, and files over 1 MB. None of them is source that a writer documents.
-2. It gives each file to the first module-map row whose glob matches it, and adds up the bytes per area. If a
-   project has no module map, the runner splits it by its top-level folders. The files that no glob matches form
-   one more area.
-3. It groups the areas in module-map order, so that adjacent areas share a writer. A group grows until it holds
-   about 384 KB of source (`AREA_TARGET_BYTES`). An area larger than that gets a writer of its own. If there are
-   more than 20 groups (`MAX_DOCS_AREAS`), the target grows until 20 groups remain. A project of 384 KB or less,
-   or with source in one area only, keeps one writer.
-4. It records `DocsPlanned` with three lists of areas: all areas, the areas in which the book's current part was written, and the areas with a file that this session changed.
-
-The target is small because a writer covers only what fits in one reply. In a Sonnet run on Ostra with a 512 KB
-target and a cap of 12 writers, the book answered 219 of 221 questions. But the writer that got six small crates
-in 858 KB wrote 7 sections for all of them. On a repository larger than 384 KB times 20, about 7.5 MB, the cap
-sets the share of each writer, not the target.
-
-The event carries all three lists because the fold cannot read the disk. From the event, the fold decides which
-areas to rewrite:
-
-- A `DOCS` request rewrites every area.
-- After a build, only the areas that hold a changed file are rewritten. The other areas keep their sections from
-  the book.
-- If the book has no part for the project, or its part was written in other areas, every area is rewritten. The
-  reason is that Ostra cannot tell which old section belongs to which new area.
-
-Each area writer gets `Area:`, `Area paths:`, and `Other areas:` lines. It documents only the units of work whose
-code is in its area. When its code calls into another area, it names that area in the boundaries of a section. It
-starts every section ID with the ID of its area. The engine joins the submits of the areas into one part, in area
-order. The overview of each area becomes a paragraph with the name of the area.
-
-If an earlier area already used a section ID, the engine appends the ID of the area to it. The book records which
-sections each area wrote (`BookPart.areas`). This record lets a later session rewrite one area and keep the rest.
-
-Area writers count against the same cap as project writers: at most four documentation agents run at the same
-time in a session. A failed area gets its own failure gate. An abandoned area keeps its sections from the book.
-Ostra writes the part if at least one area was written or kept.
-
 ### What a writer returns
 
-One `documentation` agent runs per project, or per area of a large project. At most four run at the same time in
-a session (Rule B7), and each also takes an execution slot. The agent is read-only: it returns the part of the book
-for the project in `submit_documentation` and writes no file (Rule B1). The part is an overview, a glossary, and a
-list of sections, one per unit of work, such as `Order cancellation`. A section holds at most one level of
-sub-sections. Every section and sub-section has the same fields, which the book shows in this order:
+One `documentation` agent runs per project. At most four run at the same time in a session (Rule B7), and each
+also takes an execution slot. The agent is read-only: it returns the part of the book for the project in
+`submit_documentation` and writes no file (Rule B1). The part is an overview, a glossary, and a list of pages:
 
 | Field | What it holds |
 | --- | --- |
-| `purpose` | What the unit does, for whom, and when. |
-| `boundaries` | What it owns, and what it leaves to which other section or project, so that a change to one unit does not break another. |
-| `assumptions` | What the code takes as given without a check. Required (Rule B2), because if an assumption breaks, the code breaks and no test fails. |
-| `business_flow` | The steps in domain terms: actor, action, outcome. |
-| `diagrams` | Mermaid sequence diagrams and flowcharts, one per flow or step. |
-| `tables` | Reference facts: fields, routes, config keys, states, error codes. |
-| `concerns` | The separation of concerns: each component and its one responsibility. |
-| `code_refs` | Last: project-relative paths, symbols, and lines, with what the reader finds there. |
+| `id` | A lowercase slug, unique in the part. A later run keeps the ID, because other pages and agents link to it. |
+| `title` | The topic in a few words, such as `Order cancellation` or `Add a route`. |
+| `summary` | One or two sentences about what the reader learns on the page. The book index shows it. |
+| `body` | The page in Markdown. The writer chooses the structure: paragraphs, lists, tables, and `mermaid` diagrams. |
+| `code_refs` | Optional. Project-relative paths, symbols, and lines, with what the reader finds there. The page shows them last. |
+
+The writer chooses the topics. The prompt names the kinds of topic that a reader cannot get quickly from the code:
+the main flows across files, the concepts to learn first, the rules and assumptions that a change can break
+without a failed test, the decisions that the code shows but does not explain, and the steps of common changes.
+It tells the writer not to write one page per folder, file, or type, and to write each fact once. Another page
+names that page by its title. The number of pages follows the topics, not the size of the code.
+
+After a build, the writer rewrites only the pages that the changed files make wrong or incomplete. It adds a page
+only for a new topic, and it copies every other page of the existing part unchanged.
+
+#### The user steers the part
+
+The writer follows the user's instructions (Rule B2). It reads them in this order:
+
+1. The docs-stage notes on the `User notes:` line. The judge keeps them from earlier gate answers (Rule J1).
+2. The request: `ostra-docs-request.md` for a `DOCS` request, or the session request on the `The request:` line.
+3. The `Workspace instructions` section at the end of the task. The brief adds `instructions.all` and
+   `instructions.agents.documentation` from the workspace settings, read again for each execution.
+
+The instructions can set the audience, the topics, the depth, and what to leave out. For example, set
+`instructions.agents.documentation` to "Write for on-call engineers. Cover failure handling and recovery first.
+Leave out the admin UI." The rules in the Constraints of the prompt win over the instructions: grounding in the
+source, the writing standard, the diagram limits, and no file writes.
+
+#### What `validate_submit` checks
 
 `validate_submit` checks the shape before the engine accepts the submit. The model gets each problem with its fix
 in the tool reply. `validate_submit` refuses these items:
 
-- a section with no assumptions,
-- a duplicate or malformed section ID,
+- a duplicate or malformed page ID,
+- a page with no title, no summary, or no body,
+- a level-1 heading in a body, because the title is the only one,
 - a code reference that is absolute or goes outside the project,
-- a table row with the wrong number of cells,
-- a diagram over its size limit (Rule B3).
+- a sequence diagram or a flowchart over its size limit (Rule B3).
 
 The size limits are at most 8 participants and 20 messages in a sequence diagram, and 15 nodes in a flowchart.
-The first line of a diagram must match the declared kind. These limits keep each diagram about one piece of work,
-not one chart of everything. The prompt tells the writer to split a long flow into one diagram per step. A run
-that ends without a readable submit fails, because there is nothing to put in the book.
+Other Mermaid kinds, such as `stateDiagram-v2` and `erDiagram`, have no limit. The limits keep each diagram about
+one piece of work, not one chart of everything. A run that ends without a readable submit fails, because there is
+nothing to put in the book.
+
+#### Books from before free pages
+
+A book that an earlier version wrote still loads (Rule B9). Its sections have typed fields: purpose, boundaries,
+assumptions, business flow, diagrams, tables, concerns, and sub-sections. When Ostra reads `book.json`, each such
+section becomes a page. The purpose becomes the summary, each field becomes a `###` heading in the body, and each
+sub-section becomes a `##` part with its fields under `####` headings. A session log with a `DocsPlanned` event
+from the area split still folds: the fold ignores the event, and one writer runs per project. The next docs run
+for the project writes its part in the new shape.
 
 ### The system architecture
 
@@ -1000,10 +990,10 @@ The runner merges the parts of the session into the book and writes these files:
 ```
 <workspace>/.ostra/docs/<book>/
   book.json            the whole book, which the console renders and exports
-  index.md             every part, with a link and a first sentence per section
+  index.md             every part, with a link and the first sentence of the summary per page
   glossary.md
   architecture.md      only for a book of two or more projects
-  <project>/<section>.md
+  <project>/<page>.md   the title, the summary, the body, and the code references
 ```
 
 The runner records `BookWritten`. Only then does the session complete. Ostra records a failed write with its
@@ -1021,7 +1011,7 @@ makes these changes:
 - The part of another project stays as it was.
 
 A part is replaced as a whole. So each writer gets the current `book.json` as `Existing book:` and copies the
-sections that its change did not reach. The engine holds one lock from the read of `book.json` to the write. So if
+pages that its change did not reach. The engine holds one lock from the read of `book.json` to the write. So if
 two sessions finish on the same book at the same time, both keep their parts.
 
 Ostra documents nothing in a project when a BLOCKER finding is open in that project (Hard rule 21). If the writer
@@ -1041,17 +1031,17 @@ The pages come in reading order:
 - an overview with the introduction of each project,
 - the glossary,
 - the system architecture, when the book has one,
-- the sections of each project.
+- the pages of each project.
 
-A section page shows purpose, boundaries, assumptions, the business flow as a numbered table, the diagrams, the
-tables, and separation of concerns. Each sub-section follows with the same parts. The code references close the
-page, because a reader needs the behavior before the files. The sidebar lists the sections, with their
-sub-sections under them. The right-hand column lists the headings of the page. Search covers every page, and
-Previous and Next follow the reading order.
+A page shows its title, its summary, and the body that the writer wrote. The code references close the page,
+because a reader needs the behavior before the files. The sidebar lists the pages, with the `##` headings of each
+page under it. The right-hand column lists the headings of the page. Search covers every page, and Previous and
+Next follow the reading order.
 
-Text from a book field is escaped before it becomes Markdown. A title or a table cell shows the characters that it
-holds. Prose keeps inline code and emphasis, but it cannot start a heading, a fence, or a rule. So a field cannot
-change the structure of the page.
+Text from a typed field is escaped before it becomes Markdown. A title or a table cell shows the characters that it
+holds. A summary or an overview keeps inline code and emphasis, but it cannot start a heading, a fence, or a rule.
+A body is Markdown as the writer wrote it, but a level-1 heading in it is escaped. So no field can add a second
+title to the page.
 
 The renderer is the same one that the Ostra docs site uses (`@ostra/design/docs`). It allows no raw HTML. It
 allows links only to `http`, `https`, `mailto`, or another page of the book. It runs Mermaid in strict mode with
@@ -1072,12 +1062,15 @@ file opens in the same way from a disk, a mail attachment, or a static host.
 Agents read books through search, and do not open them whole (Rule B8). Every agent that learns code has the
 `docs_search` capability, from explore to the reviewer and the documentation writer itself. When the workspace
 has a book, the repo brief of each spawn lists the books. It tells the agent to search them before it reads code.
-The search cuts each section into passages: its purpose, boundaries, assumptions, flow, each diagram, each table,
-concerns, and code references. It ranks the passages with BM25.
+The search cuts each page at its `##` headings into units. The text above the first `##` heading belongs to the
+page unit, with the summary and the code references. It cuts each unit into passages: each paragraph, each
+diagram, each other code block, and lists and tables in windows of five rows. A `###` or deeper heading labels the
+passages under it. It ranks the passages with BM25.
 
-The search returns the best sections, with only the passages that matched and the Markdown path of the section.
-So a question about one fact does not pull a whole section into the agent's context, when most of the section is
-about other things. [Tools](tools.md#docssearch) covers the ranking.
+The search returns the best units, with only the passages that matched and the Markdown path of the page. So a
+question about one fact does not pull a whole page into the agent's context, when most of the page is about other
+things. A `##` heading that names its own topic, such as `## Refund a paid order`, makes a better result than
+`## Details`, so the prompt tells the writer to name each `##` part for its topic. [Tools](tools.md#docssearch) covers the ranking.
 
 ## The completion report
 
@@ -1116,8 +1109,6 @@ A completion report names the stages that did not run and how to run them. It al
 | Automatic retries after an error | 1 | `ERROR_RETRIES` |
 | Failing builds before build commands are refused | 5 | `DENY_THRESHOLD` in `build.rs` |
 | Documentation writers at once per session | 4 | `plan::MAX_DOCS_WRITERS` |
-| Source one documentation writer covers | 384 KB | `book::AREA_TARGET_BYTES` |
-| Area writers per project | 20 | `book::MAX_DOCS_AREAS` |
 | Init scouts | 6 | `init::MAX_SCOUTS` |
 | Skills generated by default at init | 8 | `init::MAX_DEFAULT_GENERATE` |
 | Attached files per request | 50 | `MAX_CONTEXT_FILES` |

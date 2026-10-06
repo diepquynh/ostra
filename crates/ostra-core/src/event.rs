@@ -196,9 +196,6 @@ pub enum ExecPurpose {
     #[serde(alias = "module_docs")]
     Docs {
         project: String,
-        /// Rule B9: the area of a large project this writer covers.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        area: Option<String>,
     },
     /// Rule B4: the architecture of a book that covers two or more projects.
     Architecture,
@@ -302,14 +299,7 @@ impl ExecPurpose {
             }
             ExecPurpose::Epa { phase } => format!("Phase {phase}"),
             ExecPurpose::WriteTest { phase, work: w } => format!("Phase {phase}{}", work(w)),
-            ExecPurpose::Docs {
-                project,
-                area: None,
-            } => format!("Docs for {project}"),
-            ExecPurpose::Docs {
-                project,
-                area: Some(a),
-            } => format!("Docs for {project} · {a}"),
+            ExecPurpose::Docs { project } => format!("Docs for {project}"),
             ExecPurpose::Architecture => "System architecture".into(),
             ExecPurpose::PromptGen {
                 handoff_for: Some(_),
@@ -889,17 +879,10 @@ pub enum SessionEvent {
         exit_code: Option<i32>,
         output_tail: String,
     },
-    /// Rule B9: how a project's part of the book is split among writers, measured before the first
-    /// writer starts. `areas` is empty for one writer. `existing` names the areas the book's
-    /// current part records, `None` when the book has no part for the project; `touched` names the
-    /// areas holding a file this session's work changed.
+    /// Rule B9: logs from before one writer per project split a large project's part into areas.
+    /// The fold ignores it.
     DocsPlanned {
         project: String,
-        areas: Vec<crate::book::DocsArea>,
-        #[serde(default)]
-        existing: Option<Vec<String>>,
-        #[serde(default)]
-        touched: Vec<String>,
     },
     /// Rule B5: the engine wrote the session's documentation into a workspace book. `error` is set
     /// when the files could not be written, and the session goes on without them.

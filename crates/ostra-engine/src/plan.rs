@@ -92,9 +92,6 @@ pub struct SpawnInputs {
     pub user_notes: Vec<String>,
     /// Initializer inputs, by spawn label.
     pub init: BTreeMap<String, String>,
-    /// Rule B9: the area a documentation writer covers, and every area of its project.
-    pub docs_area: Option<ostra_core::book::DocsArea>,
-    pub docs_areas: Vec<ostra_core::book::DocsArea>,
     pub init_item: Option<String>,
     /// Rule WF4: the workflow node a custom agent's run serves.
     pub stage_id: Option<String>,
@@ -186,11 +183,6 @@ pub enum Step {
         execution: ExecutionId,
         error: String,
     },
-    /// Rule B9: measure a project's source by module-map area and record how its part of the
-    /// book is split among writers.
-    PlanDocs {
-        project: String,
-    },
     /// Rule B5: write the session's documentation into the workspace book `book`.
     WriteBook {
         book: String,
@@ -267,7 +259,6 @@ impl Step {
             Step::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
             Step::FinishInit { project } => format!("finish-init:{project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
-            Step::PlanDocs { project } => format!("plan-docs:{project}"),
             Step::WriteBook { book } => format!("book:{book}"),
             Step::ResolveWorkflow { .. } => "resolve-workflow".into(),
             Step::HandleResult { execution } => format!("handle:{execution}"),
@@ -319,7 +310,6 @@ impl Step {
             Step::AnnounceBlocked { phase, .. } => format!("blocked phase {phase}"),
             Step::FinishInit { project } => format!("finish-init {project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem {project}"),
-            Step::PlanDocs { project } => format!("plan-docs {project}"),
             Step::WriteBook { book } => format!("write-book {book}"),
             Step::HandleResult { .. } => "handle-result".into(),
             Step::DecideStage { node, scope, .. } => match scope {
@@ -385,14 +375,7 @@ fn purpose_summary(p: &ExecPurpose) -> String {
         ExecPurpose::WriteTest { phase, work } => {
             format!("write-test phase {phase} {work:?}").to_lowercase()
         }
-        ExecPurpose::Docs {
-            project,
-            area: None,
-        } => format!("docs {project}"),
-        ExecPurpose::Docs {
-            project,
-            area: Some(a),
-        } => format!("docs {project}/{a}"),
+        ExecPurpose::Docs { project } => format!("docs {project}"),
         ExecPurpose::Architecture => "architecture".into(),
         ExecPurpose::Inspect { of } => format!("inspect {of}"),
         ExecPurpose::PromptGen { handoff_for } => {
@@ -2037,65 +2020,45 @@ impl<'a> Planner<'a> {
         if blocker_open(passed) {
             return;
         }
-        // Rule B9: measure before the first writer, unless a log from before B9 already ran one.
-        if track.docs_plan.is_none() && matches!(track.docs, DocsState::NotStarted) {
-            self.push(Step::PlanDocs {
-                project: project.to_string(),
-            });
-            return;
-        }
-        let writers: Vec<(Option<&ostra_core::book::DocsArea>, &DocsState)> =
-            match track.docs_areas() {
-                Some(areas) => areas
-                    .iter()
-                    .filter_map(|a| track.area_docs.get(&a.id).map(|st| (Some(a), st)))
-                    .collect(),
-                None => vec![(None, &track.docs)],
-            };
-        for (area, state) in writers {
-            match state {
-                DocsState::NotStarted => {
-                    // Rules B7 and B9: docs writers fan out, at most MAX_DOCS_WRITERS at a time.
-                    if self.docs_in_flight() >= MAX_DOCS_WRITERS {
-                        return;
-                    }
-                    let inputs = SpawnInputs {
-                        implementer_reports: passed
-                            .iter()
-                            .filter_map(|p| p.implementer_report.clone())
-                            .collect(),
-                        user_notes: s.notes_for(NoteStage::Docs),
-                        docs_area: area.cloned(),
-                        docs_areas: track.docs_areas().map(<[_]>::to_vec).unwrap_or_default(),
-                        ..Default::default()
-                    };
-                    self.spawn(
-                        s.agent_for(BuiltinStage::Closing, Contract::Documentation),
-                        ExecPurpose::Docs {
-                            project: project.to_string(),
-                            area: area.map(|a| a.id.clone()),
-                        },
-                        project,
-                        s.project_session_dir(project),
-                        inputs,
-                    );
+        match &track.docs {
+            DocsState::NotStarted => {
+                // Rule B7: docs writers fan out, at most MAX_DOCS_WRITERS at a time.
+                if self.docs_in_flight() >= MAX_DOCS_WRITERS {
+                    return;
                 }
-                DocsState::Failed {
-                    exec,
-                    error,
-                    gate: None,
-                    ..
-                } => {
-                    let (exec, error) = (exec.clone(), error.clone());
-                    self.exec_failed_gate(
-                        &exec,
-                        s.agent_for(BuiltinStage::Closing, Contract::Documentation),
-                        project,
-                        &error,
-                    );
-                }
-                _ => {}
+                let inputs = SpawnInputs {
+                    implementer_reports: passed
+                        .iter()
+                        .filter_map(|p| p.implementer_report.clone())
+                        .collect(),
+                    user_notes: s.notes_for(NoteStage::Docs),
+                    ..Default::default()
+                };
+                self.spawn(
+                    s.agent_for(BuiltinStage::Closing, Contract::Documentation),
+                    ExecPurpose::Docs {
+                        project: project.to_string(),
+                    },
+                    project,
+                    s.project_session_dir(project),
+                    inputs,
+                );
             }
+            DocsState::Failed {
+                exec,
+                error,
+                gate: None,
+                ..
+            } => {
+                let (exec, error) = (exec.clone(), error.clone());
+                self.exec_failed_gate(
+                    &exec,
+                    s.agent_for(BuiltinStage::Closing, Contract::Documentation),
+                    project,
+                    &error,
+                );
+            }
+            _ => {}
         }
     }
 
@@ -2104,7 +2067,7 @@ impl<'a> Planner<'a> {
             .s
             .project_tracks
             .values()
-            .flat_map(|t| std::iter::once(&t.docs).chain(t.area_docs.values()))
+            .map(|t| &t.docs)
             .filter(|d| matches!(d, DocsState::Running(_)))
             .count();
         let queued = self
@@ -2144,7 +2107,7 @@ impl<'a> Planner<'a> {
             if !docs_on || blocker_open(&passed) {
                 continue;
             }
-            match track.docs_aggregate() {
+            match &track.docs {
                 DocsState::Done(_) => parts.push(key.clone()),
                 DocsState::Abandoned => {}
                 _ => return None,
@@ -2255,7 +2218,7 @@ impl<'a> Planner<'a> {
                     }
                 }
             }
-            if docs && !blocker_open(&passed) && !track.docs_aggregate().is_settled() {
+            if docs && !blocker_open(&passed) && !track.docs.is_settled() {
                 return false;
             }
         }

@@ -279,22 +279,12 @@ impl SpawnFactory for AgentsFactory {
                 work: work_source(i, s),
                 extra: work_extras(i),
             }),
+            // Rule B2: the request and the docs-stage notes steer the writer, and the brief adds the
+            // workspace instructions for the agent.
             Contract::Documentation => Box::new(DocumentationParams {
                 common,
                 implementer_reports: i.implementer_reports.clone(),
                 existing_book: existing_book(s),
-                area: i.docs_area.as_ref().map(|a| DocsAreaScope {
-                    id: a.id.clone(),
-                    title: a.title.clone(),
-                    paths: a.globs.clone(),
-                    rest: a.rest,
-                    others: i
-                        .docs_areas
-                        .iter()
-                        .filter(|o| o.id != a.id)
-                        .map(|o| (o.title.clone(), o.globs.clone()))
-                        .collect(),
-                }),
                 extra: Extras {
                     user_notes: i.user_notes.clone(),
                     task_note: Some(format!("The request: {}", s.full_request())),

@@ -690,15 +690,6 @@ pub struct BookWrite {
     pub error: Option<String>,
 }
 
-/// Rule B9: how a project's part is split among writers, from `DocsPlanned`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DocsPlan {
-    /// Empty for one writer.
-    pub areas: Vec<ostra_core::book::DocsArea>,
-    pub existing: Option<Vec<String>>,
-    pub touched: Vec<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct ProjectTrack {
     /// `Some(exit code)` once format ran. `Some(None)` means no format command.
@@ -707,12 +698,8 @@ pub struct ProjectTrack {
     pub running: Option<(CommandPurpose, String)>,
     pub closing_gate: Option<GateId>,
     pub closing: Option<(bool, bool)>,
-    /// The one writer of a part that is not split into areas.
+    /// The project's documentation writer.
     pub docs: DocsState,
-    /// `None` until the docs stage is planned. A log from before Rule B9 has none and one writer.
-    pub docs_plan: Option<DocsPlan>,
-    /// Rule B9: the writer of each area this session rewrites, by area ID.
-    pub area_docs: BTreeMap<String, DocsState>,
 }
 
 impl Default for ProjectTrack {
@@ -723,65 +710,7 @@ impl Default for ProjectTrack {
             closing_gate: None,
             closing: None,
             docs: DocsState::NotStarted,
-            docs_plan: None,
-            area_docs: BTreeMap::new(),
         }
-    }
-}
-
-impl ProjectTrack {
-    /// Rule B9: the planned areas, when the part is split.
-    pub fn docs_areas(&self) -> Option<&[ostra_core::book::DocsArea]> {
-        self.docs_plan
-            .as_ref()
-            .map(|p| p.areas.as_slice())
-            .filter(|a| !a.is_empty())
-    }
-
-    /// The writer state an execution for `area` folds into.
-    pub fn docs_mut(&mut self, area: Option<&str>) -> &mut DocsState {
-        match area {
-            Some(a) => self
-                .area_docs
-                .entry(a.to_string())
-                .or_insert(DocsState::NotStarted),
-            None => &mut self.docs,
-        }
-    }
-
-    /// The project's docs as one run: the writer of an unsplit part, or for a split part, running
-    /// while any area runs, failed while one waits on its failure, and done once every rewritten
-    /// area settled with at least one written or an area kept from the book, with the rewritten
-    /// areas combined.
-    pub fn docs_aggregate(&self) -> DocsState {
-        let Some(areas) = self.docs_areas() else {
-            return self.docs.clone();
-        };
-        let states: Vec<&DocsState> = self.area_docs.values().collect();
-        if let Some(r) = states.iter().find(|s| matches!(s, DocsState::Running(_))) {
-            return (*r).clone();
-        }
-        if let Some(f) = states
-            .iter()
-            .find(|s| matches!(s, DocsState::Failed { .. }))
-        {
-            return (*f).clone();
-        }
-        if states.iter().any(|s| matches!(s, DocsState::NotStarted)) {
-            return DocsState::NotStarted;
-        }
-        let written: Vec<(&ostra_core::book::DocsArea, &DocumentationSubmit)> = areas
-            .iter()
-            .filter_map(|a| match self.area_docs.get(&a.id) {
-                Some(DocsState::Done(d)) => Some((a, &**d)),
-                _ => None,
-            })
-            .collect();
-        let kept = areas.iter().any(|a| !self.area_docs.contains_key(&a.id));
-        if written.is_empty() && !kept {
-            return DocsState::Abandoned;
-        }
-        DocsState::Done(Box::new(ostra_core::book::combine_areas(&written)))
     }
 }
 
@@ -1434,31 +1363,9 @@ impl SessionState {
         let parts = self
             .project_tracks
             .iter()
-            .filter_map(|(k, t)| match t.docs_aggregate() {
-                DocsState::Done(d) => Some((k.clone(), *d)),
+            .filter_map(|(k, t)| match &t.docs {
+                DocsState::Done(d) => Some((k.clone(), (**d).clone())),
                 _ => None,
-            })
-            .collect();
-        // Rule B9: every planned area, with the submit this session wrote or `None` to keep it.
-        let areas = self
-            .project_tracks
-            .iter()
-            .filter(|(_, t)| matches!(t.docs_aggregate(), DocsState::Done(_)))
-            .filter_map(|(k, t)| {
-                let planned = t.docs_areas()?;
-                Some((
-                    k.clone(),
-                    planned
-                        .iter()
-                        .map(|a| {
-                            let sub = match t.area_docs.get(&a.id) {
-                                Some(DocsState::Done(d)) => Some((**d).clone()),
-                                _ => None,
-                            };
-                            (a.clone(), sub)
-                        })
-                        .collect(),
-                ))
             })
             .collect();
         let (architecture, glossary) = match &self.architecture {
@@ -1468,7 +1375,6 @@ impl SessionState {
         ostra_core::book::BookUpdate {
             session: self.id.to_string(),
             parts,
-            areas,
             architecture,
             glossary,
         }
@@ -1951,30 +1857,7 @@ impl SessionState {
                     .or_default()
                     .running = Some((*purpose, command.clone()));
             }
-            SessionEvent::DocsPlanned {
-                project,
-                areas,
-                existing,
-                touched,
-            } => {
-                // Rule B9: a DOCS request, a part the book does not record by these areas, or a
-                // first split rewrites every area; after a build, only the areas the work touched.
-                let every = self.category == Some(Category::Docs)
-                    || existing
-                        .as_ref()
-                        .is_none_or(|e| !areas.iter().all(|a| e.contains(&a.id)));
-                let t = self.project_tracks.entry(project.clone()).or_default();
-                t.area_docs = areas
-                    .iter()
-                    .filter(|a| every || touched.contains(&a.id))
-                    .map(|a| (a.id.clone(), DocsState::NotStarted))
-                    .collect();
-                t.docs_plan = Some(DocsPlan {
-                    areas: areas.clone(),
-                    existing: existing.clone(),
-                    touched: touched.clone(),
-                });
-            }
+            SessionEvent::DocsPlanned { .. } => {}
             SessionEvent::BookWritten {
                 book,
                 projects,
@@ -3403,12 +3286,9 @@ impl SessionState {
                     p.epa = EpaState::Running(id.clone());
                 }
             }
-            ExecPurpose::Docs { project, area } => {
-                *self
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .docs_mut(area.as_deref()) = DocsState::Running(id.clone());
+            ExecPurpose::Docs { project } => {
+                self.project_tracks.entry(project.clone()).or_default().docs =
+                    DocsState::Running(id.clone());
             }
             ExecPurpose::Architecture => {
                 self.architecture = ArchitectureState::Running(id.clone());
@@ -3586,9 +3466,9 @@ impl SessionState {
                     };
                 }
             }
-            ExecPurpose::Docs { project, area } => {
+            ExecPurpose::Docs { project } => {
                 let t = self.project_tracks.entry(project.clone()).or_default();
-                *t.docs_mut(area.as_deref()) = stage_run(
+                t.docs = stage_run(
                     status,
                     parse::<DocumentationSubmit>(&result.submit),
                     &rec.id,
@@ -3937,12 +3817,9 @@ impl SessionState {
                     *g = Some(gate.clone());
                 }
             }
-            ExecPurpose::Docs { project, area } => {
-                if let DocsState::Failed { gate: g, .. } = self
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .docs_mut(area.as_deref())
+            ExecPurpose::Docs { project } => {
+                if let DocsState::Failed { gate: g, .. } =
+                    &mut self.project_tracks.entry(project.clone()).or_default().docs
                 {
                     *g = Some(gate.clone());
                 }
@@ -4474,12 +4351,8 @@ impl SessionState {
                     };
                 }
             }
-            ExecPurpose::Docs { project, area } => {
-                *self
-                    .project_tracks
-                    .entry(project.clone())
-                    .or_default()
-                    .docs_mut(area.as_deref()) = if retry {
+            ExecPurpose::Docs { project } => {
+                self.project_tracks.entry(project.clone()).or_default().docs = if retry {
                     DocsState::NotStarted
                 } else {
                     DocsState::Abandoned
