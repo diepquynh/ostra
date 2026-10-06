@@ -220,6 +220,7 @@ impl WorkspaceRt {
             .map(|c| {
                 let wf = ostra_default_plugin::workflow(*c);
                 WorkflowInfo {
+                    notices: wf.notices(),
                     name: wf.name,
                     description: wf.description,
                     base: *c,
@@ -233,6 +234,7 @@ impl WorkspaceRt {
         for (name, file) in &set.files {
             if let Ok(wf) = set.resolve(name) {
                 out.push(WorkflowInfo {
+                    notices: wf.notices(),
                     name: wf.name,
                     description: wf.description,
                     base: wf.base,
@@ -251,6 +253,7 @@ impl WorkspaceRt {
         for name in set.plugin_files.keys() {
             if let Ok(wf) = set.resolve(name) {
                 out.push(WorkflowInfo {
+                    notices: wf.notices(),
                     plugin: name.split_once(':').map(|(p, _)| p.to_string()),
                     name: wf.name,
                     description: wf.description,

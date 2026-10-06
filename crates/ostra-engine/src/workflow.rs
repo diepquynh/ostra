@@ -421,7 +421,7 @@ impl SessionState {
             return Value::Null;
         };
         if let StageRun::Builtin { stage } = d.run {
-            return self.builtin_value(stage);
+            return self.builtin_value(stage, scope);
         }
         let same_kind = match (d.scope, scope) {
             (StageScope::Project, Some(sc)) => sc.starts_with("project:"),
@@ -481,7 +481,7 @@ impl SessionState {
     }
 
     /// What a reference to a built-in stage reads: the facts it settled.
-    fn builtin_value(&self, stage: BuiltinStage) -> Value {
+    fn builtin_value(&self, stage: BuiltinStage, scope: Option<&str>) -> Value {
         match stage {
             BuiltinStage::Research => json!({ "research_docs": self.research_docs() }),
             BuiltinStage::Track => json!({ "track": self.track }),
@@ -494,7 +494,10 @@ impl SessionState {
                 "phases": self.phases.len(),
             }),
             BuiltinStage::Build => json!({ "phases": self.phases.len() }),
-            BuiltinStage::Feedback | BuiltinStage::Closing => json!({}),
+            BuiltinStage::Feedback => json!({}),
+            BuiltinStage::Closing | BuiltinStage::Book => {
+                crate::pipeline::get().stage_value(self, stage, scope)
+            }
         }
     }
 
@@ -997,9 +1000,11 @@ pub fn node_shape(
                 BuiltinStage::Build => {
                     json!({"type": "object", "properties": {"phases": {"type": "number"}}})
                 }
-                BuiltinStage::Feedback | BuiltinStage::Closing => {
-                    json!({"type": "object", "properties": {}})
-                }
+                BuiltinStage::Feedback => json!({"type": "object", "properties": {}}),
+                // Rule B10: per project, whether the closing gate chose docs; across projects,
+                // the projects it chose them for.
+                BuiltinStage::Closing => json!({"type": "object", "properties": {"docs": {}}}),
+                BuiltinStage::Book => json!({"type": "object", "properties": {"book": text}}),
             });
         }
         StageRun::Agent { agent } => submit_shape(

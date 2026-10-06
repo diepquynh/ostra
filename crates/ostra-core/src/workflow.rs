@@ -32,12 +32,15 @@ pub enum BuiltinStage {
     Build,
     /// The user's review of the implementation (Rule F1).
     Feedback,
-    /// Per project: format, the closing gate, tests, docs, and the book.
+    /// Per project: format, the closing gate, and tests. In a workflow without a `book` stage,
+    /// also docs and the book (deprecated).
     Closing,
+    /// Rule B10: per project the closing gate chose docs for, the docs stage, then the book write.
+    Book,
 }
 
 impl BuiltinStage {
-    pub const ALL: [BuiltinStage; 8] = [
+    pub const ALL: [BuiltinStage; 9] = [
         BuiltinStage::Research,
         BuiltinStage::Track,
         BuiltinStage::Spec,
@@ -46,6 +49,7 @@ impl BuiltinStage {
         BuiltinStage::Build,
         BuiltinStage::Feedback,
         BuiltinStage::Closing,
+        BuiltinStage::Book,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -58,6 +62,7 @@ impl BuiltinStage {
             BuiltinStage::Build => "build",
             BuiltinStage::Feedback => "feedback",
             BuiltinStage::Closing => "closing",
+            BuiltinStage::Book => "book",
         }
     }
 
@@ -79,6 +84,7 @@ impl BuiltinStage {
             BuiltinStage::Build => Lane::Build,
             BuiltinStage::Feedback => Lane::Review,
             BuiltinStage::Closing => Lane::Test,
+            BuiltinStage::Book => Lane::Docs,
         }
     }
 
@@ -99,6 +105,7 @@ impl BuiltinStage {
                 Implementation,
                 Advice,
             ],
+            BuiltinStage::Book => &[Documentation, FactCheck],
             BuiltinStage::Track | BuiltinStage::Stakes | BuiltinStage::Feedback => &[],
         }
     }
@@ -128,7 +135,10 @@ impl BuiltinStage {
                 "Your review of the implementation, and the feedback rounds it starts."
             }
             BuiltinStage::Closing => {
-                "Per project: the format command, the closing gate, tests, docs, and the book."
+                "Per project: the format command, the closing gate, and tests. Without a book stage after it, also docs and the book."
+            }
+            BuiltinStage::Book => {
+                "Per project the closing gate chose docs for: the survey, a writer per page, fact-check and synthesis rounds, then the book write."
             }
         }
     }
@@ -138,7 +148,10 @@ impl BuiltinStage {
     pub fn removable(self) -> bool {
         matches!(
             self,
-            BuiltinStage::Track | BuiltinStage::Feedback | BuiltinStage::Closing
+            BuiltinStage::Track
+                | BuiltinStage::Feedback
+                | BuiltinStage::Closing
+                | BuiltinStage::Book
         )
     }
 }
@@ -343,6 +356,20 @@ impl WorkflowDef {
 
     pub fn has_builtin(&self, b: BuiltinStage) -> bool {
         self.stages.iter().any(|s| s.builtin() == Some(b))
+    }
+
+    /// The deprecated behavior the workflow still runs, each with the change that removes it.
+    /// A later release removes the behavior, so the workflow must change before then.
+    pub fn notices(&self) -> Vec<String> {
+        let mut out = vec![];
+        // Rule B10: the closing stage writes the book only for a workflow without a book stage.
+        if self.has_builtin(BuiltinStage::Closing) && !self.has_builtin(BuiltinStage::Book) {
+            out.push(format!(
+                "Add a stage with `uses = \"{}\"` after the closing stage. Without it, the closing stage writes the documentation book, and a later release removes that behavior.",
+                BuiltinStage::Book.uses()
+            ));
+        }
+        out
     }
 
     /// The stages in an order where every stage comes after the stages it waits for.
@@ -1347,6 +1374,9 @@ pub struct WorkflowInfo {
     #[ts(optional)]
     pub plugin: Option<String>,
     pub stages: Vec<StageDef>,
+    /// The deprecated behavior it still runs, each with the change that removes it.
+    #[serde(default)]
+    pub notices: Vec<String>,
 }
 
 #[cfg(test)]
@@ -1406,7 +1436,10 @@ mod tests {
             BuiltinStage::ALL.to_vec(),
             "the implement default lists every built-in stage in order"
         );
-        assert_eq!(s.builtin_chain(Category::Test), vec![BuiltinStage::Closing]);
+        assert_eq!(
+            s.builtin_chain(Category::Test),
+            vec![BuiltinStage::Closing, BuiltinStage::Book]
+        );
         assert!(s.builtin_chain(Category::QuickAnswer).is_empty());
         assert!(
             WorkflowSet::default().resolve("research").is_err(),
@@ -1556,7 +1589,43 @@ after = ["build"]
         )]);
         let w = s.resolve("w").unwrap();
         assert_eq!(w.stage("per-phase").unwrap().after, vec!["plan"]);
-        assert_eq!(w.stage("last").unwrap().after, vec!["closing"]);
+        assert_eq!(w.stage("last").unwrap().after, vec!["docs"]);
+    }
+
+    /// Rule B10: a workflow with a closing stage and no book stage still writes the book in its
+    /// closing stage, and it says how to stop that deprecated behavior.
+    #[test]
+    fn b10_a_closing_stage_without_a_book_stage_is_deprecated() {
+        let s = set(&[(
+            "old",
+            "base = \"test\"\n[[stage]]\nid = \"closing\"\nuses = \"ostra:closing\"\n",
+        )]);
+        let old = s.resolve("old").unwrap();
+        assert!(
+            old.validate(&s.builtin_chain(Category::Test)).is_empty(),
+            "the book stage can be left out: {:?}",
+            old.validate(&s.builtin_chain(Category::Test))
+        );
+        let notices = old.notices();
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].starts_with("Add a stage with `uses = \"ostra:book\"`"));
+        for c in BUILTIN_BASES {
+            assert!(
+                s.resolve(&category_name(c)).unwrap().notices().is_empty(),
+                "{c:?}"
+            );
+        }
+        let early = set(&[(
+            "early",
+            "base = \"docs\"\n[[stage]]\nid = \"closing\"\nuses = \"ostra:closing\"\n[[stage]]\nid = \"docs\"\nuses = \"ostra:book\"\nafter = []\n",
+        )]);
+        assert!(
+            early
+                .resolve("early")
+                .unwrap_err()
+                .contains("Make stage `docs` wait for `closing`"),
+            "the book stage runs after closing"
+        );
     }
 
     const BUILDER: &str = r#"

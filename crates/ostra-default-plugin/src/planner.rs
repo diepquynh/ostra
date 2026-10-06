@@ -3,12 +3,12 @@
 //! closing stages, the init flow, and completion. The engine's planner calls it through
 //! `Pipeline`; it stays a pure function of the session state.
 
+use crate::book::{DOCS_ROUNDS, DocsTrack};
 use crate::judge::NoteStage;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use ostra_core::Contract;
 use ostra_core::agent::AgentName;
-use crate::book::{DOCS_ROUNDS, DocsTrack};
 use ostra_core::book::DocsStep;
 use ostra_core::event::{
     ClosingItem, CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, SessionKind,
@@ -28,6 +28,64 @@ use std::path::PathBuf;
 pub struct BookProgress {
     /// Projects whose part of the book is written, sorted.
     parts: Vec<String>,
+}
+
+/// Rule B10: the session's workflow has a book stage, so the closing stage writes no docs. A
+/// session that recorded no workflow keeps the docs in its closing stage, as it started.
+pub fn book_node(s: &SessionState) -> bool {
+    s.workflow
+        .as_ref()
+        .is_some_and(|w| w.has_builtin(BuiltinStage::Book))
+}
+
+/// The phases of `project` whose build passed.
+fn passed_phases<'a>(s: &'a SessionState, project: &str) -> Vec<&'a PhaseRun> {
+    s.phases
+        .values()
+        .filter(|p| p.info.project == project && p.impl_loop.is_done())
+        .collect()
+}
+
+/// Rule B10: the closing gate chose docs for `project`, or the request asked for tests and docs,
+/// and no BLOCKER is open (Hard rule 21). `None` while the choice is not made.
+pub fn docs_chosen(s: &SessionState, project: &str) -> Option<bool> {
+    let track = s.project_tracks.get(project)?;
+    let passed = passed_phases(s, project);
+    if passed.is_empty() {
+        return Some(false);
+    }
+    let docs_on = match track.closing {
+        Some(c) => c.1,
+        None if s.tests_requested() && s.docs_requested() => true,
+        None => return None,
+    };
+    Some(docs_on && !blocker_open(&passed))
+}
+
+/// Rule WB4: the facts the closing and book stages settled. Seen from a project's instance, the
+/// closing stage reads whether docs run for that project; from anywhere else, the projects they
+/// run for.
+pub fn stage_value(
+    s: &SessionState,
+    stage: BuiltinStage,
+    scope: Option<&str>,
+) -> serde_json::Value {
+    match stage {
+        BuiltinStage::Closing => match scope.and_then(|sc| sc.strip_prefix("project:")) {
+            Some(p) => serde_json::json!({ "docs": docs_chosen(s, p).unwrap_or(false) }),
+            None => serde_json::json!({
+                "docs": s
+                    .project_tracks
+                    .keys()
+                    .filter(|k| docs_chosen(s, k) == Some(true))
+                    .collect::<Vec<_>>()
+            }),
+        },
+        BuiltinStage::Book => {
+            serde_json::json!({ "book": s.book_written.as_ref().map(|w| w.book.clone()) })
+        }
+        _ => serde_json::json!({}),
+    }
 }
 
 pub fn blocker_open(passed: &[&PhaseRun]) -> bool {
@@ -280,6 +338,10 @@ pub trait OstraPlanner<'a> {
     /// Rule B5: after every part is written, the book write.
     fn book_stage(&mut self);
 
+    /// Rule B10: the book stage: the docs stage of each project the closing gate chose docs
+    /// for, then the book write. Returns `true` when it is done.
+    fn book_flow(&mut self) -> bool;
+
     fn all_implement_done(&self) -> bool;
 
     fn completion(&mut self);
@@ -341,6 +403,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 self.closing_stages();
                 self.all_implement_done()
             }
+            BuiltinStage::Book => self.book_flow(),
         }
     }
 
@@ -1293,7 +1356,8 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             } else {
                 true
             };
-            if closing.1 && tests_done {
+            // Rule B10: a workflow with a book stage writes the docs there, after closing.
+            if closing.1 && tests_done && !book_node(s) {
                 self.docs_stage(key, &passed);
             }
         }
@@ -1308,7 +1372,9 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                 GatePayload::ClosingGate { items: closing_items },
             );
         }
-        self.book_stage();
+        if !book_node(s) {
+            self.book_stage();
+        }
     }
 
     fn test_stage(&mut self, project: &str, passed: &[&'a PhaseRun]) -> bool {
@@ -1403,7 +1469,12 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             user_notes: s.notes_for(NoteStage::Docs),
             ..Default::default()
         };
-        let writer = s.agent_for(BuiltinStage::Closing, Contract::Documentation);
+        let stage = if book_node(s) {
+            BuiltinStage::Book
+        } else {
+            BuiltinStage::Closing
+        };
+        let writer = s.agent_for(stage, Contract::Documentation);
         let docs = |page: Option<&str>, round: u32| ExecPurpose::Docs {
             project: project.to_string(),
             page: page.map(str::to_string),
@@ -1493,7 +1564,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         };
         let current = track.docs_rounds.get(round as usize - 1);
         // 1. Fact-check each page that changed.
-        let checker = s.agent_for(BuiltinStage::Closing, Contract::FactCheck);
+        let checker = s.agent_for(stage, Contract::FactCheck);
         let to_check = track.pages_to_check(round);
         let mut checking = false;
         for page in &to_check {
@@ -1718,6 +1789,30 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
         self.push(Step::WriteBook { book });
     }
 
+    fn book_flow(&mut self) -> bool {
+        let s = self.s;
+        // A session without a recorded workflow wrote its docs in the closing stage.
+        if !book_node(s) {
+            return true;
+        }
+        let mut settled = true;
+        for key in s.project_tracks.keys() {
+            if docs_chosen(s, key) != Some(true) {
+                continue;
+            }
+            let passed = passed_phases(s, key);
+            self.docs_stage(key, &passed);
+            settled &= s.project_tracks[key].docs_aggregate().is_settled();
+        }
+        self.book_stage();
+        settled
+            && match self.book_progress() {
+                Some(p) if !p.parts.is_empty() => s.book_written.is_some(),
+                Some(_) => true,
+                None => false,
+            }
+    }
+
     fn all_implement_done(&self) -> bool {
         let s = self.s;
         if !self.nothing_running() {
@@ -1759,9 +1854,16 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
                     }
                 }
             }
-            if docs && !blocker_open(&passed) && !track.docs_aggregate().is_settled() {
+            if docs
+                && !book_node(s)
+                && !blocker_open(&passed)
+                && !track.docs_aggregate().is_settled()
+            {
                 return false;
             }
+        }
+        if book_node(s) {
+            return true;
         }
         match self.book_progress() {
             Some(p) if !p.parts.is_empty() => s.book_written.is_some(),

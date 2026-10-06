@@ -214,6 +214,7 @@ export const workspaceDetail: WorkspaceDetail = {
         default_for: [],
         builtin: true,
         stages: [],
+        notices: [],
       }),
     ),
     {
@@ -223,6 +224,7 @@ export const workspaceDetail: WorkspaceDetail = {
       default_for: [],
       builtin: false,
       stages: [],
+      notices: [],
     },
   ],
   missing_workflows: [],
@@ -235,6 +237,7 @@ workspaceDetail.workflows.push({
   builtin: false,
   plugin: "gate",
   stages: [],
+  notices: [],
 });
 
 export const phases: PhaseInfo[] = [

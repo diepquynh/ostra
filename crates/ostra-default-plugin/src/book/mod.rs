@@ -80,7 +80,11 @@ pub fn part_update(
             part.inventory.clone(),
         ),
         None => (
-            part.sections.iter().cloned().map(PageUpdate::Write).collect(),
+            part.sections
+                .iter()
+                .cloned()
+                .map(PageUpdate::Write)
+                .collect(),
             vec![],
         ),
     };

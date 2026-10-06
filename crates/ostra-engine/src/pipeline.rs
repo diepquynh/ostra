@@ -126,6 +126,9 @@ pub trait Pipeline: Send + Sync {
     ) -> Option<String>;
     /// Whether overriding a decision can still change what happens.
     fn can_override(&self, s: &SessionState, id: &DecisionId) -> bool;
+    /// Rule WB4: what a reference to a built-in stage's node reads, seen from an instance in
+    /// `scope`, for the stages whose facts the pipeline settles.
+    fn stage_value(&self, s: &SessionState, stage: BuiltinStage, scope: Option<&str>) -> Value;
 
     // Judges and YOLO.
 

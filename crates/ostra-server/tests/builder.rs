@@ -302,7 +302,7 @@ async fn the_builder_saves_agents_and_workflows_and_a_session_runs_the_branch() 
         .json()
         .await
         .unwrap();
-    assert_eq!(palette.builtin_stages.len(), 8);
+    assert_eq!(palette.builtin_stages.len(), 9);
     assert!(palette.transforms.iter().any(|t| t.name == "filter"));
     let plugins: Vec<PluginInfo> = client
         .get(format!("{wsp}/plugins"))
@@ -331,7 +331,7 @@ async fn the_builder_saves_agents_and_workflows_and_a_session_runs_the_branch() 
         .await
         .unwrap();
     assert!(!implement.builtin, "the workspace has its own copy");
-    assert_eq!(implement.file.stages.len(), 8);
+    assert_eq!(implement.file.stages.len(), 9);
     let mut rebased = implement.file.clone();
     rebased.base = Some("research".into());
     let r = client

@@ -130,7 +130,6 @@ fn check_synthesis(s: &DocumentationSubmit, issues: &mut Vec<String>) {
     }
 }
 
-
 /// Rule B10: the checks of the definition of done that the engine makes itself, by page, with
 /// `kept` the IDs of the pages kept from the book: links to a page that does not exist, words and
 /// punctuation the writing standard forbids, a page with code references and no excerpt, settings
@@ -481,7 +480,6 @@ fn prose(body: &str) -> String {
     out
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,6 +535,27 @@ mod tests {
         assert!(
             issues.iter().any(|i| i.starts_with("Plan 1 to 30 pages")),
             "{issues:?}"
+        );
+    }
+
+    /// Rule B10: once installed, the submit tool's check of `documentation` is the docs stage's.
+    #[test]
+    fn b10_the_submit_check_is_the_installed_one() {
+        let bad = survey(
+            serde_json::json!([planned("executors", true), planned("executors", true)]),
+            serde_json::json!([item("native", "executors")]),
+        );
+        let v = serde_json::to_value(&bad).unwrap();
+        crate::book::install_checks();
+        let err = ostra_core::submit::validate_submit(ostra_core::Contract::Documentation, &v)
+            .unwrap_err();
+        assert!(err.contains("Plan page \"executors\" once"), "{err}");
+        #[allow(deprecated)]
+        let old = ostra_core::book::check_documentation(&bad);
+        assert_eq!(
+            old,
+            check_documentation(&bad),
+            "the deprecated path runs the same check"
         );
     }
 
@@ -756,5 +775,4 @@ mod tests {
             "{issues:?}"
         );
     }
-
 }

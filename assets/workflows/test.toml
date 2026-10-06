@@ -6,3 +6,7 @@ base = "test"
 [[stage]]
 id = "closing"
 uses = "ostra:closing"
+
+[[stage]]
+id = "docs"
+uses = "ostra:book"

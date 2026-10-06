@@ -13,4 +13,8 @@ default_for: Array<Category>, builtin: boolean,
 /**
  * Rule PL6: the plugin that builds it in code, which makes it read only.
  */
-plugin?: string, stages: Array<StageDef>, };
+plugin?: string, stages: Array<StageDef>, 
+/**
+ * The deprecated behavior it still runs, each with the change that removes it.
+ */
+notices: Array<string>, };

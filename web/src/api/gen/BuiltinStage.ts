@@ -3,4 +3,4 @@
 /**
  * Rule WF2: the built-in stages, in the order the pipeline runs them.
  */
-export type BuiltinStage = "research" | "track" | "spec" | "stakes" | "plan" | "build" | "feedback" | "closing";
+export type BuiltinStage = "research" | "track" | "spec" | "stakes" | "plan" | "build" | "feedback" | "closing" | "book";

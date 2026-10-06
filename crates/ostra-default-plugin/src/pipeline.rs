@@ -176,6 +176,10 @@ impl Pipeline for OstraPipeline {
         s.can_override(id)
     }
 
+    fn stage_value(&self, s: &SessionState, stage: BuiltinStage, scope: Option<&str>) -> Value {
+        crate::planner::stage_value(s, stage, scope)
+    }
+
     fn judge_input(
         &self,
         s: &SessionState,

@@ -6488,3 +6488,130 @@ fn pl6_pl7_a_plugin_workflow_resolves_by_name_and_records_its_plugin_transforms(
         "PL7: the planner runs a plugin's function like any transform; the runner calls the plugin"
     );
 }
+
+// -------------------------------------------------------------------------------------------------
+// Rule B10: the book stage after closing
+// -------------------------------------------------------------------------------------------------
+
+/// A DOCS session that recorded `wf` as its workflow.
+fn docs_on(wf: WorkflowDef) -> H {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
+    h.ev(SessionEvent::WorkflowResolved { workflow: wf });
+    h
+}
+
+#[test]
+fn b10_the_book_stage_writes_the_docs_after_closing() {
+    let mut h = docs_on(ostra_default_plugin::workflow(Category::Docs));
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    assert_eq!(
+        h.state().ref_value("closing.docs", Some("project:p")),
+        json!(true),
+        "a project's instance reads its own closing choice"
+    );
+    assert_eq!(h.state().ref_value("closing.docs", None), json!(["p"]));
+    finish_docs(&mut h, "p");
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    h.ev(SessionEvent::BookWritten {
+        book: "p".into(),
+        projects: vec!["p".into()],
+        error: None,
+    });
+    assert_eq!(h.state().ref_value("docs.book", None), json!("p"));
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+#[test]
+fn b10_a_workflow_without_a_book_stage_writes_the_docs_in_closing() {
+    let wf = workflow("base = \"docs\"\n[[stage]]\nid = \"closing\"\nuses = \"ostra:closing\"\n");
+    assert_eq!(wf.notices().len(), 1, "the deprecated path names its fix");
+    let mut h = docs_on(wf);
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    finish_docs(&mut h, "p");
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    h.ev(SessionEvent::BookWritten {
+        book: "p".into(),
+        projects: vec!["p".into()],
+        error: None,
+    });
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}
+
+/// Two projects through the build with tests and docs requested: `a` has a phase to test, and
+/// `b` has none.
+fn two_projects_closing(recorded: bool) -> H {
+    let phases = json!([phase(1, "a", &[], "Required"), phase(2, "b", &[], "Skip")]);
+    let mut h = H::plan_approved(
+        &["a", "b"],
+        phases,
+        SessionOptions {
+            tests: true,
+            docs: true,
+            yolo: false,
+            track: None,
+        },
+    );
+    if recorded {
+        h.ev(SessionEvent::WorkflowResolved {
+            workflow: ostra_default_plugin::workflow(Category::Implement),
+        });
+    }
+    h.pass_phase(1);
+    h.pass_phase(2);
+    h.accept();
+    h.command(CommandPurpose::Format, "a");
+    h.command(CommandPurpose::Format, "b");
+    h
+}
+
+#[test]
+fn b10_the_book_stage_waits_for_every_projects_tests() {
+    let old = two_projects_closing(false);
+    assert_eq!(
+        old.summaries(),
+        vec!["spawn execution-path-analyzer epa phase 1", "scan-docs b"],
+        "without a recorded workflow, closing documents b beside a's tests"
+    );
+    let mut h = two_projects_closing(true);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn execution-path-analyzer epa phase 1"],
+        "the book stage waits for the closing stage"
+    );
+    h.run("spawn execution-path-analyzer", report("/e1"));
+    h.run("spawn write-test write-test phase 1", report("/t1"));
+    h.run("spawn code-reviewer", review(&[]));
+    h.command(CommandPurpose::Stage, "a");
+    assert_eq!(h.summaries(), vec!["scan-docs a", "scan-docs b"]);
+}
+
+#[test]
+fn b10_the_book_stage_writes_nothing_when_closing_chose_no_docs() {
+    let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
+    h.ev(SessionEvent::WorkflowResolved {
+        workflow: ostra_default_plugin::workflow(Category::Implement),
+    });
+    h.run("spawn implementer", impl_submit(1, &["web/app.ts"]));
+    h.run("spawn code-reviewer", review(&[]));
+    h.command(CommandPurpose::Stage, "p");
+    h.accept();
+    h.command(CommandPurpose::Format, "p");
+    let g = h.open_gate("closing_gate");
+    h.answer(
+        &g,
+        GateAnswer::Closing {
+            items: vec![ClosingChoice {
+                project: "p".into(),
+                tests: false,
+                docs: false,
+            }],
+        },
+    );
+    assert_eq!(
+        h.state().ref_value("closing.docs", Some("project:p")),
+        json!(false)
+    );
+    assert_eq!(h.state().ref_value("docs.book", None), Value::Null);
+    assert_eq!(h.summaries(), vec!["judge completion"]);
+}

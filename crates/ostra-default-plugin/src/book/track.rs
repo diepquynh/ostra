@@ -21,12 +21,7 @@ pub trait DocsTrack {
     fn planned_pages(&self) -> Vec<&PlannedPage>;
 
     /// Rule B10: every current draft, in plan order.
-    fn drafts(
-        &self,
-    ) -> Vec<(
-        &PlannedPage,
-        &DocSection,
-    )>;
+    fn drafts(&self) -> Vec<(&PlannedPage, &DocSection)>;
 
     /// Rule B10: the drafts placed under their planned IDs and groups, for the engine's checks.
     fn placed_drafts(&self) -> Vec<DocSection>;
@@ -103,12 +98,7 @@ impl DocsTrack for ProjectTrack {
             .unwrap_or_default()
     }
 
-    fn drafts(
-        &self,
-    ) -> Vec<(
-        &PlannedPage,
-        &DocSection,
-    )> {
+    fn drafts(&self) -> Vec<(&PlannedPage, &DocSection)> {
         self.planned_pages()
             .into_iter()
             .filter_map(|p| {

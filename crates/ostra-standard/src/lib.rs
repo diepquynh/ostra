@@ -237,7 +237,7 @@ mod tests {
         );
         assert_eq!(
             set.builtin_chain(Category::Test),
-            vec![BuiltinStage::Closing]
+            vec![BuiltinStage::Closing, BuiltinStage::Book]
         );
         assert!(set.builtin_chain(Category::QuickAnswer).is_empty());
         assert!(
