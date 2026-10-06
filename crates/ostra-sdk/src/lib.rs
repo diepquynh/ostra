@@ -15,6 +15,8 @@
 //!   `<plugin>:<name>`.
 //! - Transform functions run in code by [`Plugin::transform`] and described with
 //!   [`workflow::TransformFn`], which a workflow node calls as `<plugin>:<name>`.
+//! - Typed results through [`contracts`]: each contract tied to its `ostra-core` struct, agents
+//!   that return the struct, and helpers that read a run's submit as one.
 //!
 //! Every stage decision, result handler, and programmatic run gets the plugin's [`Checkpoints`]
 //! in the session. Save where the work is there, because a plugin program can stop at any time:
@@ -24,6 +26,7 @@
 //! `ostra-default-plugin` is the plugin `ostra`, which reads each agent's `agent.toml` and prompt
 //! with [`definition::parse_toml`] and offers each default workflow as one of its workflows.
 
+pub mod contracts;
 pub mod definition;
 pub mod stdio;
 pub mod workflow;
