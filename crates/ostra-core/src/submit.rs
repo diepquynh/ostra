@@ -426,6 +426,31 @@ pub fn submit_description(agent: AgentName) -> String {
     )
 }
 
+/// A check a plugin adds to a contract's submit, after its shape check. Each issue states the
+/// correction first.
+pub type ContractCheck = fn(&serde_json::Value) -> Vec<String>;
+
+static CONTRACT_CHECKS: std::sync::RwLock<Vec<(Contract, ContractCheck)>> =
+    std::sync::RwLock::new(Vec::new());
+
+/// Install the check of a contract's submit, in place of any earlier one. The standard plugin
+/// installs the docs stage's checks of `documentation` (Rule B10) at startup.
+pub fn install_check(contract: Contract, check: ContractCheck) {
+    let mut checks = CONTRACT_CHECKS.write().unwrap_or_else(|e| e.into_inner());
+    checks.retain(|(c, _)| *c != contract);
+    checks.push((contract, check));
+}
+
+/// The installed check of a contract's submit.
+pub fn contract_check(contract: &Contract) -> Option<ContractCheck> {
+    CONTRACT_CHECKS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find(|(c, _)| c == contract)
+        .map(|(_, f)| *f)
+}
+
 /// Validate a submit payload against the schema the run was given. A custom agent's `data` is checked
 /// against its declared shape; built-in agents ignore `schema`, because their structs are the schema.
 pub fn validate_submit_with(
@@ -495,6 +520,7 @@ pub fn validate_submit(contract: Contract, input: &serde_json::Value) -> Result<
         Contract::Documentation => {
             let d: crate::book::DocumentationSubmit =
                 serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
+            #[allow(deprecated)]
             issues(crate::book::check_documentation(&d))
         }
         Contract::Setup => check::<InitializerSubmit>(input),

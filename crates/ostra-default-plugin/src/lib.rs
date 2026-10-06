@@ -6,6 +6,7 @@
 pub use ostra_standard::*;
 
 pub mod autofix;
+pub mod book;
 pub mod context;
 pub mod docs_scan;
 pub mod factory;
@@ -28,5 +29,6 @@ pub mod prelude {
 /// Install the standard pipeline into the engine. Call it at startup, before any session folds.
 /// A second call changes nothing.
 pub fn install() {
+    book::install_checks();
     ostra_engine::pipeline::install(std::sync::Arc::new(OstraPipeline));
 }

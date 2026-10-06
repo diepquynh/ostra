@@ -2873,7 +2873,7 @@ fn b10_a_module_no_inventory_item_covers_keeps_the_loop_going() {
         synthesis_submit(true, vec![]),
     );
     assert_eq!(h.summaries(), vec!["write-book p"]);
-    assert_eq!(h.state().book_update().parts[0].1.inventory.len(), 2);
+    assert_eq!(h.state().book_update().parts[0].inventory.len(), 2);
 }
 
 #[test]
@@ -3018,12 +3018,11 @@ fn b10_each_round_checks_then_synthesizes_then_revises() {
     );
     assert_eq!(h.summaries(), vec!["write-book p"]);
     let update = h.state().book_update();
-    assert!(
-        update.parts[0].1.sections[0]
-            .body
-            .starts_with("A new draft.")
-    );
-    assert_eq!(update.parts[0].1.sections[0].group, "How it works");
+    let ostra_core::book::PageUpdate::Write(page) = &update.parts[0].pages[0] else {
+        panic!("the page is written");
+    };
+    assert!(page.body.starts_with("A new draft."));
+    assert_eq!(page.group, "How it works");
 }
 
 #[test]
@@ -3198,7 +3197,11 @@ fn b10_a_page_the_survey_keeps_gets_no_writer() {
     );
     assert_eq!(h.summaries(), vec!["write-book p"]);
     let update = h.state().book_update();
-    let kept: Vec<bool> = update.pages["p"].iter().map(|(_, d)| d.is_none()).collect();
+    let kept: Vec<bool> = update.parts[0]
+        .pages
+        .iter()
+        .map(|p| matches!(p, ostra_core::book::PageUpdate::Keep { .. }))
+        .collect();
     assert_eq!(kept, [true, false], "a keeps its page from the book");
 }
 

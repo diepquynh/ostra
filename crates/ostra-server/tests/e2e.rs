@@ -4382,7 +4382,9 @@ async fn a_missing_route_is_fixed_in_one_call() {
 #[tokio::test]
 async fn workspace_books_are_listed_read_and_deleted() {
     // Rule B5: the docs endpoints serve what the engine wrote under `.ostra/docs/`.
-    use ostra_core::book::{Book, BookSummary, BookUpdate, DocumentationSubmit};
+    use ostra_core::book::{
+        Book, BookSummary, BookUpdate, DocumentationSubmit, PageUpdate, PartUpdate,
+    };
     let _serial = SERIAL.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
@@ -4403,8 +4405,12 @@ async fn workspace_books_are_listed_read_and_deleted() {
     .unwrap();
     let update = BookUpdate {
         session: "s1".into(),
-        parts: vec![("api".into(), part)],
-        ..Default::default()
+        parts: vec![PartUpdate {
+            project: "api".into(),
+            overview: part.overview,
+            pages: part.sections.into_iter().map(PageUpdate::Write).collect(),
+            ..Default::default()
+        }],
     };
     let book = ostra_core::book::merge(None, "api", &update, chrono::Utc::now());
     ostra_core::book::write(&root.join("ws"), &book).unwrap();

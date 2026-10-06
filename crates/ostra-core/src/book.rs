@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use ts_rs::TS;
@@ -19,10 +19,6 @@ pub const MAX_SEQUENCE_PARTICIPANTS: usize = 8;
 pub const MAX_SEQUENCE_MESSAGES: usize = 20;
 /// Rule B3: nodes a flowchart may show.
 pub const MAX_FLOWCHART_NODES: usize = 15;
-/// Rule B10: pages one survey may plan, each written by its own writer.
-pub const MAX_DOCS_PAGES: usize = 30;
-/// Rule B10: synthesis rounds before a gate asks whether to go on.
-pub const DOCS_ROUNDS: u32 = 3;
 /// Longest book ID, so a book folder name stays short on every file system.
 pub const MAX_BOOK_ID: usize = 80;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -297,420 +293,56 @@ impl Book {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BookUpdate {
     pub session: String,
-    /// Each documented project's part as this session wrote it: the survey's overview and
-    /// inventory with every page this session wrote, in plan order.
-    pub parts: Vec<(String, DocumentationSubmit)>,
-    /// Rule B10: for each part written from a survey, every planned page in order, with the page
-    /// this session wrote, or `None` to keep the page from the book.
-    pub pages: BTreeMap<String, Vec<(PlannedPage, Option<DocSection>)>>,
+    /// Each documented project's part as this session wrote it.
+    pub parts: Vec<PartUpdate>,
 }
 
-/// Rule B10: the survey's overview and inventory with the drafts, each page under its planned
-/// ID and group, in plan order.
-pub fn combine_pages(
-    survey: &DocumentationSubmit,
-    drafts: &[(&PlannedPage, &DocSection)],
-    glossary: Vec<GlossaryEntry>,
-    inventory: Vec<InventoryItem>,
-) -> DocumentationSubmit {
-    DocumentationSubmit {
-        status: SubmitStatus::Ok,
-        step: DocsStep::Survey,
-        summary: survey.summary.clone(),
-        overview: survey.overview.clone(),
-        sections: drafts.iter().map(|(p, d)| placed(p, d)).collect(),
-        inventory,
-        pages: survey.pages.clone(),
-        edits: vec![],
-        checks: vec![],
-        done: false,
-        glossary,
-        stuck: None,
-    }
+/// Rule B6: one project's new part, as a book writer hands it to the engine. It replaces the
+/// project's part in the book.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PartUpdate {
+    pub project: String,
+    pub overview: String,
+    /// Every page of the part, in order.
+    pub pages: Vec<PageUpdate>,
+    /// Merged into the book's glossary by term, the newer definition kept.
+    pub glossary: Vec<GlossaryEntry>,
+    /// What the book covers, so a later writer can update it. Kept as given.
+    pub inventory: Vec<InventoryItem>,
 }
 
-fn placed(plan: &PlannedPage, page: &DocSection) -> DocSection {
-    let mut page = page.clone();
-    page.id = plan.id.clone();
-    page.group = plan.group.clone();
-    page
+/// One page of a part update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageUpdate {
+    /// A page this session wrote.
+    Write(DocSection),
+    /// Keep the page with this ID from the book, under the group the writer gives it. A page the
+    /// book does not hold is left out.
+    Keep { id: String, group: String },
 }
 
-/// Rule B10: a project's new part from its survey: each written page, and each kept page from
-/// the old part.
-fn merge_pages(
-    project: &str,
-    survey: &DocumentationSubmit,
-    old: Option<&BookPart>,
-    pages: &[(PlannedPage, Option<DocSection>)],
-    now: DateTime<Utc>,
-) -> BookPart {
-    let sections = pages
+/// Rule B6: a project's new part: each written page, and each kept page from the old part.
+fn merge_part(update: &PartUpdate, old: Option<&BookPart>, now: DateTime<Utc>) -> BookPart {
+    let sections = update
+        .pages
         .iter()
-        .filter_map(|(plan, page)| match page {
-            Some(p) => Some(placed(plan, p)),
-            None => old
-                .and_then(|o| o.sections.iter().find(|s| s.id == plan.id))
-                .map(|p| placed(plan, p)),
+        .filter_map(|p| match p {
+            PageUpdate::Write(s) => Some(s.clone()),
+            PageUpdate::Keep { id, group } => old
+                .and_then(|o| o.sections.iter().find(|s| &s.id == id))
+                .map(|s| DocSection {
+                    group: group.clone(),
+                    ..s.clone()
+                }),
         })
         .collect();
     BookPart {
-        project: project.to_string(),
-        overview: survey.overview.clone(),
+        project: update.project.clone(),
+        overview: update.overview.clone(),
         sections,
         updated_at: now,
-        inventory: survey.inventory.clone(),
+        inventory: update.inventory.clone(),
     }
-}
-
-/// Rule B10: the checks of the definition of done that the engine makes itself, by page, with
-/// `kept` the IDs of the pages kept from the book: links to a page that does not exist, words and
-/// punctuation the writing standard forbids, a page with code references and no excerpt, settings
-/// outside a `For the user` block, a second explanation of an owned item, and, under the empty
-/// key, inventory items that no page owns.
-pub fn mechanical_issues(
-    pages: &[DocSection],
-    kept: &[String],
-    inventory: &[InventoryItem],
-    modules: &[DocsModule],
-) -> BTreeMap<String, Vec<String>> {
-    static LINK: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\]\(([a-z0-9][a-z0-9-]*)\.md(#[^)]*)?\)").expect("valid regex")
-    });
-    static WORD: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"\b(would|should|might|e\.g\.|i\.e\.|etc\.)").expect("valid regex")
-    });
-    // A page the survey keeps from the book has no draft but stays a page.
-    let ids: BTreeSet<&str> = pages
-        .iter()
-        .map(|p| p.id.as_str())
-        .chain(kept.iter().map(String::as_str))
-        .collect();
-    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for page in pages {
-        let mut issues = vec![];
-        for c in LINK.captures_iter(&page.body) {
-            if !ids.contains(&c[1]) {
-                issues.push(format!(
-                    "Link to an existing page: `{}.md` names no page of the book.",
-                    &c[1]
-                ));
-            }
-        }
-        let text = prose(&page.body);
-        let mut words: Vec<String> = WORD
-            .find_iter(&text)
-            .map(|m| m.as_str().to_string())
-            .collect();
-        words.sort();
-        words.dedup();
-        if !words.is_empty() {
-            issues.push(format!(
-                "Rewrite the sentences with {}: the writing standard does not allow them.",
-                words
-                    .iter()
-                    .map(|w| format!("\"{w}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        if text.contains(';') || text.contains('\u{2014}') {
-            issues.push("Split the sentences that use a semicolon or an em dash.".into());
-        }
-        // A revision that copies its rendered draft back repeats what Ostra adds around the body.
-        if page
-            .body
-            .lines()
-            .any(|l| l.trim_start().starts_with("Project: `"))
-            || (!page.code_refs.is_empty()
-                && page.body.lines().any(|l| l.trim() == "## Code references"))
-        {
-            issues.push("Remove the `Project:` line and the `## Code references` table from the body: Ostra adds the title, the project, the summary, and the code references around it.".into());
-        }
-        // Rule B10: a page that shows code holds an excerpt, not only a list of files.
-        if !page.code_refs.is_empty() && !has_excerpt(&page.body) {
-            issues.push("Add 1 or 2 code excerpts, each at most 15 lines with `...` for the parts you leave out, that show a behavior better than a sentence does, such as a guard, a formula, or a state change.".into());
-        }
-        if !issues.is_empty() {
-            out.insert(page.id.clone(), issues);
-        }
-    }
-    owner_issues(pages, inventory, &ids, &mut out);
-    for m in modules {
-        if !inventory.iter().any(|i| covers(i, m)) {
-            out.entry(String::new()).or_default().push(format!(
-                "Add an inventory item for module `{}` ({}) with an owning page, or one with an `out_of_scope` reason: no inventory item covers it.",
-                m.name,
-                m.globs.join(", ")
-            ));
-        }
-    }
-    for item in inventory {
-        if item.out_of_scope.is_none() && !ids.contains(item.owner.as_str()) {
-            out.entry(String::new()).or_default().push(format!(
-                "Give inventory item `{}` ({}) an owning page: `{}` is not a page.",
-                item.id, item.name, item.owner
-            ));
-        }
-    }
-    out
-}
-
-/// Rule B10: the owner page of an item states each of its settings in a `For the user` block,
-/// and another page that names the item links to the owner and does not explain it again.
-fn owner_issues(
-    pages: &[DocSection],
-    inventory: &[InventoryItem],
-    ids: &BTreeSet<&str>,
-    out: &mut BTreeMap<String, Vec<String>>,
-) {
-    let mut push = |page: &str, issue: String| {
-        out.entry(page.to_string()).or_default().push(issue);
-    };
-    for item in inventory.iter().filter(|i| i.out_of_scope.is_none()) {
-        if let Some(owner) = pages.iter().find(|p| p.id == item.owner) {
-            let blocks = user_blocks(&owner.body);
-            let missing: Vec<String> = item
-                .settings
-                .iter()
-                .filter(|k| !mentions(&blocks, k, true))
-                .map(|k| format!("`{k}`"))
-                .collect();
-            if !missing.is_empty() {
-                push(
-                    &owner.id,
-                    format!(
-                        "Add a `### For the user` block to the part that explains {} and list {} in it: for each setting, the default with its unit, where it is stored, when a change takes effect, the screen, command, route, or log that shows it, and how a user stops or changes the behavior.",
-                        item.name,
-                        missing.join(", ")
-                    ),
-                );
-            }
-        }
-        if !ids.contains(item.owner.as_str()) {
-            continue;
-        }
-        // A name that most pages use is shared vocabulary, not a sign of a second explanation.
-        let names: Vec<&String> = item
-            .names
-            .iter()
-            .chain(&item.settings)
-            .filter(|n| {
-                let on = pages
-                    .iter()
-                    .filter(|p| in_code(&prose_with_code(&p.body), n))
-                    .count();
-                !(pages.len() > 3 && on * 2 > pages.len())
-            })
-            .collect();
-        if names.is_empty() {
-            continue;
-        }
-        let link = format!("]({}.md", item.owner);
-        for page in pages.iter().filter(|p| p.id != item.owner) {
-            let mut unlinked = vec![];
-            let mut paragraphs = 0;
-            for (heading, text) in parts(&page.body) {
-                let named = names.iter().any(|n| in_code(&text, n));
-                if named && !text.contains(&link) {
-                    unlinked.push(if heading.is_empty() {
-                        "the introduction".to_string()
-                    } else {
-                        format!("`{heading}`")
-                    });
-                }
-                paragraphs += text
-                    .split("\n\n")
-                    .filter(|para| names.iter().any(|n| in_code(para, n)))
-                    .count();
-            }
-            let shown = names
-                .iter()
-                .map(|n| format!("`{n}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            // A `Reference` page is a catalog: it lists the values, and the link names the owner.
-            if paragraphs >= 3 && !page.group.eq_ignore_ascii_case("reference") {
-                push(
-                    &page.id,
-                    format!(
-                        "Cut what this page says about {} to one sentence where the page needs it, and link to `{}.md`: that page owns it, and this page names {shown} in {paragraphs} paragraphs.",
-                        item.name, item.owner
-                    ),
-                );
-            } else if !unlinked.is_empty() {
-                push(
-                    &page.id,
-                    format!(
-                        "Link to `{}.md` in {} where the part names {shown}: that page owns {}.",
-                        item.owner,
-                        unlinked.join(", "),
-                        item.name
-                    ),
-                );
-            }
-        }
-    }
-}
-
-/// The `##` parts of a body, as (heading, text) with code blocks removed; the text before the
-/// first `##` heading has an empty heading.
-fn parts(body: &str) -> Vec<(String, String)> {
-    let mut out = vec![(String::new(), String::new())];
-    let mut fence = false;
-    for line in body.lines() {
-        let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            fence = !fence;
-            continue;
-        }
-        if fence {
-            continue;
-        }
-        if let Some(h) = t.strip_prefix("## ") {
-            out.push((h.trim().to_string(), String::new()));
-            continue;
-        }
-        let last = out.last_mut().expect("one part");
-        last.1.push_str(line);
-        last.1.push('\n');
-    }
-    out
-}
-
-/// A body without its code blocks.
-fn prose_with_code(body: &str) -> String {
-    parts(body).into_iter().map(|(_, t)| t).collect()
-}
-
-/// The text of every block under a `For the user` heading, up to the next heading of the same
-/// or a higher level.
-fn user_blocks(body: &str) -> String {
-    let mut out = String::new();
-    let mut level: Option<usize> = None;
-    let mut fence = false;
-    for line in body.lines() {
-        let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            fence = !fence;
-        }
-        let hashes = t.chars().take_while(|c| *c == '#').count();
-        if !fence && hashes > 0 && t[hashes..].starts_with(' ') {
-            let title = t[hashes..].trim();
-            if level.is_some_and(|l| hashes <= l) {
-                level = None;
-            }
-            if title.eq_ignore_ascii_case("for the user") {
-                level = Some(hashes);
-                continue;
-            }
-        }
-        if level.is_some() {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// The text names `name` as a whole word. With `short`, a dotted setting key also matches by its
-/// last segment, because a page that shows a `[limits]` table writes the key without the table.
-fn mentions(text: &str, name: &str, short: bool) -> bool {
-    let name = name.trim().trim_matches('`');
-    if name.is_empty() {
-        return false;
-    }
-    let ident = |c: char| c.is_alphanumeric() || c == '_';
-    let found = |n: &str| {
-        text.match_indices(n).any(|(i, _)| {
-            !text[..i].chars().next_back().is_some_and(ident)
-                && !text[i + n.len()..].chars().next().is_some_and(ident)
-        })
-    };
-    found(name)
-        || (short
-            && name
-                .rsplit_once('.')
-                .is_some_and(|(_, last)| last.contains('_') && found(last)))
-}
-
-/// An inline code span of the text names `name`, because a page writes a code name in
-/// backticks and a setting such as `name` is also an English word.
-fn in_code(text: &str, name: &str) -> bool {
-    static SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").expect("valid regex"));
-    SPAN.captures_iter(text)
-        .any(|c| mentions(&c[1], name, false))
-}
-
-/// The body holds a fenced code block that is not a diagram.
-fn has_excerpt(body: &str) -> bool {
-    let mut fence = false;
-    for line in body.lines() {
-        let t = line.trim_start();
-        if t.starts_with("```") || t.starts_with("~~~") {
-            if !fence
-                && !t
-                    .trim_start_matches(['`', '~'])
-                    .trim()
-                    .starts_with("mermaid")
-            {
-                return true;
-            }
-            fence = !fence;
-        }
-    }
-    false
-}
-
-/// The folder a glob or a source path names, without `./`, wildcards, and the trailing `/`.
-fn path_prefix(p: &str) -> &str {
-    let p = p.trim().trim_start_matches("./");
-    let p = &p[..p.find(['*', '?', '{', '[']).unwrap_or(p.len())];
-    p.trim_end_matches('/')
-}
-
-/// Rule B10: an inventory item covers a module when one of its sources lies inside the module,
-/// or the module lies inside one of its sources.
-fn covers(item: &InventoryItem, m: &DocsModule) -> bool {
-    m.globs.iter().map(|g| path_prefix(g)).any(|mp| {
-        item.sources.iter().map(|s| path_prefix(s)).any(|sp| {
-            !sp.is_empty()
-                && (mp.is_empty()
-                    || sp == mp
-                    || sp.starts_with(&format!("{mp}/"))
-                    || mp.starts_with(&format!("{sp}/")))
-        })
-    })
-}
-
-/// Rule B10: the named constants that no page mentions by name.
-pub fn unmentioned_refs<'a>(pages: &[DocSection], refs: &'a [RefItem]) -> Vec<&'a RefItem> {
-    let text: String = pages
-        .iter()
-        .map(|p| p.body.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    refs.iter().filter(|r| !text.contains(&r.name)).collect()
-}
-
-/// The prose of a body: no code blocks, inline code, or link targets.
-fn prose(body: &str) -> String {
-    static CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`[^`]*`").expect("valid regex"));
-    static TARGET: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\]\([^)]*\)").expect("valid regex"));
-    let mut out = String::new();
-    let mut fence = false;
-    for line in body.lines() {
-        if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
-            fence = !fence;
-            continue;
-        }
-        if !fence {
-            out.push_str(&TARGET.replace_all(&CODE.replace_all(line, ""), "]"));
-            out.push('\n');
-        }
-    }
-    out
 }
 
 /// Where a workspace keeps its books.
@@ -788,26 +420,16 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         parts: vec![],
         glossary: vec![],
     });
-    for (project, submit) in &update.parts {
+    for part in &update.parts {
         let old = book
             .parts
             .iter()
-            .position(|p| &p.project == project)
+            .position(|p| p.project == part.project)
             .map(|i| book.parts.remove(i));
-        let part = match update.pages.get(project) {
-            Some(pages) => merge_pages(project, submit, old.as_ref(), pages, now),
-            None => BookPart {
-                project: project.clone(),
-                overview: submit.overview.clone(),
-                sections: submit.sections.clone(),
-                updated_at: now,
-                inventory: vec![],
-            },
-        };
-        book.parts.push(part);
+        book.parts.push(merge_part(part, old.as_ref(), now));
     }
     book.parts.sort_by(|a, b| a.project.cmp(&b.project));
-    let incoming = update.parts.iter().flat_map(|(_, s)| s.glossary.iter());
+    let incoming = update.parts.iter().flat_map(|p| p.glossary.iter());
     for entry in incoming {
         let key = entry.term.trim().to_lowercase();
         book.glossary
@@ -1021,7 +643,8 @@ fn first_sentence(s: &str) -> &str {
 // Validation
 // -----------------------------------------------------------------------------------------------
 
-fn is_slug(s: &str) -> bool {
+/// Rule B1: a page ID is a lowercase slug of letters, digits, and dashes, at most 64 long.
+pub fn is_page_id(s: &str) -> bool {
     let mut chars = s.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
         && s.len() <= 64
@@ -1265,7 +888,8 @@ fn flowchart_nodes<'a>(lines: impl Iterator<Item = &'a str>) -> usize {
     nodes.len()
 }
 
-fn check_glossary(g: &[GlossaryEntry], issues: &mut Vec<String>) {
+/// Each glossary entry has a term and a definition, and each term appears once.
+pub fn check_glossary(g: &[GlossaryEntry], issues: &mut Vec<String>) {
     let mut seen = BTreeSet::new();
     for e in g {
         if e.term.trim().is_empty() || e.definition.trim().is_empty() {
@@ -1279,157 +903,83 @@ fn check_glossary(g: &[GlossaryEntry], issues: &mut Vec<String>) {
     }
 }
 
-/// Validate a documentation submit. Each issue states the correction first.
-pub fn check_documentation(s: &DocumentationSubmit) -> Vec<String> {
-    let mut issues = vec![];
-    if s.status != SubmitStatus::Ok {
-        return issues;
+/// Rules B1 and B3: the problems with one page as the book format holds it: its ID, title,
+/// summary, and body, its headings, its diagrams, and its code references. Each issue states the
+/// correction first.
+pub fn check_page(where_: &str, sec: &DocSection, issues: &mut Vec<String>) {
+    if !is_page_id(&sec.id) {
+        issues.push(format!(
+            "Write the ID \"{}\" as a lowercase slug of letters, digits, and dashes, for example `order-cancellation`.",
+            sec.id
+        ));
     }
-    match s.step {
-        DocsStep::Survey => {
-            check_survey(s, &mut issues);
-            return issues;
-        }
-        DocsStep::Synthesis => {
-            check_synthesis(s, &mut issues);
-            return issues;
-        }
-        DocsStep::Page if s.sections.len() != 1 => issues.push(format!(
-            "Return the one page of your step in `sections`: it holds {}.",
-            s.sections.len()
-        )),
-        _ => {}
+    if sec.title.trim().is_empty() {
+        issues.push(format!("Give {where_} a title."));
     }
-    if s.sections.is_empty() {
-        issues.push("Return at least one section in `sections`, because the book shows only what you submit.".into());
+    if sec.summary.trim().is_empty() {
+        issues.push(format!(
+            "Write the summary of {where_}: one or two sentences that say what a reader learns on the page."
+        ));
     }
-    let mut ids = BTreeSet::new();
-    for sec in &s.sections {
-        let where_ = format!("section `{}`", sec.id);
-        if !is_slug(&sec.id) {
+    if sec.body.trim().is_empty() {
+        issues.push(format!("Write the Markdown body of {where_}."));
+    }
+    if let Some(h) = top_headings(&sec.body).first() {
+        issues.push(format!(
+            "Start the headings in the body of {where_} at `##`: \"{h}\" is a level-1 heading, and Ostra writes the title as the only one."
+        ));
+    }
+    for (title, source) in mermaid_blocks(&sec.body) {
+        check_mermaid(where_, &title, &source, issues);
+    }
+    for r in &sec.code_refs {
+        if !is_relative(&r.path) {
             issues.push(format!(
-                "Write the ID \"{}\" as a lowercase slug of letters, digits, and dashes, for example `order-cancellation`.",
-                sec.id
+                "Write code reference \"{}\" in {where_} as a path relative to the project root, with `/` separators and no `..`.",
+                r.path
             ));
-        } else if !ids.insert(sec.id.clone()) {
+        }
+    }
+}
+
+/// The book format's checks of a part's pages and glossary: each page by [`check_page`], each
+/// page ID once, and each glossary term once.
+pub fn check_pages(pages: &[DocSection], glossary: &[GlossaryEntry]) -> Vec<String> {
+    let mut issues = vec![];
+    let mut ids = BTreeSet::new();
+    for sec in pages {
+        if is_page_id(&sec.id) && !ids.insert(sec.id.clone()) {
             issues.push(format!(
                 "Give \"{}\" to one section only: the ID is used twice.",
                 sec.id
             ));
         }
-        if sec.title.trim().is_empty() {
-            issues.push(format!("Give {where_} a title."));
-        }
-        if sec.summary.trim().is_empty() {
-            issues.push(format!(
-                "Write the summary of {where_}: one or two sentences that say what a reader learns on the page."
-            ));
-        }
-        if sec.body.trim().is_empty() {
-            issues.push(format!("Write the Markdown body of {where_}."));
-        }
-        if let Some(h) = top_headings(&sec.body).first() {
-            issues.push(format!(
-                "Start the headings in the body of {where_} at `##`: \"{h}\" is a level-1 heading, and Ostra writes the title as the only one."
-            ));
-        }
-        for (title, source) in mermaid_blocks(&sec.body) {
-            check_mermaid(&where_, &title, &source, &mut issues);
-        }
-        for r in &sec.code_refs {
-            if !is_relative(&r.path) {
-                issues.push(format!(
-                    "Write code reference \"{}\" in {where_} as a path relative to the project root, with `/` separators and no `..`.",
-                    r.path
-                ));
-            }
-        }
+        check_page(&format!("section `{}`", sec.id), sec, &mut issues);
     }
-    check_glossary(&s.glossary, &mut issues);
+    check_glossary(glossary, &mut issues);
     issues
 }
 
-/// Rule B10: a survey plans the pages and the inventory, and writes no page.
-fn check_survey(s: &DocumentationSubmit, issues: &mut Vec<String>) {
-    if !s.sections.is_empty() {
-        issues.push(
-            "Return no `sections` in the survey step: one writer per page writes them.".into(),
-        );
+/// Validate a documentation submit with the check its book writer installed (Rule B10), or,
+/// without one, with the book format's checks of its pages and glossary.
+#[deprecated(
+    note = "use `ostra_core::submit::validate_submit(Contract::Documentation, ..)`; the standard plugin owns the docs-stage checks"
+)]
+pub fn check_documentation(s: &DocumentationSubmit) -> Vec<String> {
+    if s.status != SubmitStatus::Ok {
+        return vec![];
     }
-    if s.overview.trim().is_empty() {
-        issues.push(
-            "Write the project `overview` in the survey, because no page writer writes it.".into(),
-        );
+    if let Some(check) = crate::submit::contract_check(&crate::Contract::Documentation)
+        && let Ok(v) = serde_json::to_value(s)
+    {
+        return check(&v);
     }
-    if s.pages.is_empty() || s.pages.len() > MAX_DOCS_PAGES {
-        issues.push(format!(
-            "Plan 1 to {MAX_DOCS_PAGES} pages: the plan has {}. Merge pages that a reader looks for together into one broad page.",
-            s.pages.len()
-        ));
+    let mut issues = vec![];
+    if s.sections.is_empty() {
+        issues.push("Return at least one section in `sections`, because the book shows only what you submit.".into());
     }
-    let mut ids = BTreeSet::new();
-    for p in &s.pages {
-        if !is_slug(&p.id) {
-            issues.push(format!(
-                "Write the page ID \"{}\" as a lowercase slug of letters, digits, and dashes.",
-                p.id
-            ));
-        } else if !ids.insert(p.id.as_str()) {
-            issues.push(format!(
-                "Plan page \"{}\" once: the ID is used twice.",
-                p.id
-            ));
-        }
-        if p.title.trim().is_empty() || p.group.trim().is_empty() || p.covers.trim().is_empty() {
-            issues.push(format!(
-                "Give page `{}` a title, a group, and what it covers.",
-                p.id
-            ));
-        }
-    }
-    if s.inventory.is_empty() {
-        issues.push("List what the book must cover in `inventory`, because the synthesis checks every page against it.".into());
-    }
-    let mut items = BTreeSet::new();
-    for item in &s.inventory {
-        if !items.insert(item.id.as_str()) {
-            issues.push(format!(
-                "List inventory item \"{}\" once: the ID is used twice.",
-                item.id
-            ));
-        }
-        if item.out_of_scope.is_none() && !ids.contains(item.owner.as_str()) {
-            issues.push(format!(
-                "Give inventory item `{}` the ID of its owning page, or an `out_of_scope` reason: `{}` is not a planned page.",
-                item.id, item.owner
-            ));
-        }
-    }
-    check_glossary(&s.glossary, issues);
-}
-
-/// Rule B10: a synthesis pass judges every check of the definition of done and lists the edits.
-fn check_synthesis(s: &DocumentationSubmit, issues: &mut Vec<String>) {
-    if !s.sections.is_empty() || !s.pages.is_empty() {
-        issues.push("Return only `checks`, `edits`, and `done` in the synthesis step: the page writers apply the edits.".into());
-    }
-    if s.checks.is_empty() {
-        issues.push("Judge each check of the definition of done in `checks`.".into());
-    }
-    if s.done && (!s.edits.is_empty() || s.checks.iter().any(|c| !c.passed)) {
-        issues.push("Set `done` only when every check passed and no page needs an edit.".into());
-    }
-    if !s.done && s.edits.is_empty() {
-        issues.push("List the `edits` that close each failed check, or set `done`.".into());
-    }
-    for e in &s.edits {
-        if e.instructions.iter().all(|i| i.trim().is_empty()) {
-            issues.push(format!(
-                "Give the edit of page `{}` at least one instruction.",
-                e.page
-            ));
-        }
-    }
+    issues.extend(check_pages(&s.sections, &s.glossary));
+    issues
 }
 
 /// Rule B9: books written before free pages held typed sections: purpose, boundaries, assumptions,
@@ -1712,9 +1262,9 @@ mod tests {
             "Text.\n\n## Step\n\n```mermaid\nsequenceDiagram\nA->>B: go\n```\n\n```rust\n# not a heading\n```",
         );
         assert!(
-            check_documentation(&ok).is_empty(),
+            check_pages(&ok.sections, &ok.glossary).is_empty(),
             "{:?}",
-            check_documentation(&ok)
+            check_pages(&ok.sections, &ok.glossary)
         );
         let mut big = "sequenceDiagram\n".to_string();
         for i in 0..21 {
@@ -1726,7 +1276,7 @@ mod tests {
         bad.sections[0].summary = " ".into();
         bad.sections[0].code_refs[0].path = "/abs/a.rs".into();
         bad.sections.push(bad.sections[0].clone());
-        let issues = check_documentation(&bad);
+        let issues = check_pages(&bad.sections, &bad.glossary);
         assert!(
             issues
                 .iter()
@@ -1760,7 +1310,7 @@ mod tests {
             src.push_str(&format!("S{i} --> S{}\n", i + 1));
         }
         let s = page_submit(&format!("```mermaid\n{src}```"));
-        assert!(check_documentation(&s).is_empty());
+        assert!(check_pages(&s.sections, &s.glossary).is_empty());
     }
 
     #[test]
@@ -1797,330 +1347,47 @@ mod tests {
         assert_eq!(part.sections[1].body, "B.");
     }
 
-    fn survey(pages: serde_json::Value, inventory: serde_json::Value) -> DocumentationSubmit {
-        serde_json::from_value(serde_json::json!({
-            "status": "ok", "step": "survey", "summary": "s", "overview": "The project.",
-            "pages": pages, "inventory": inventory
-        }))
-        .unwrap()
-    }
-
-    fn planned(id: &str, rewrite: bool) -> serde_json::Value {
-        serde_json::json!({"id": id, "title": id, "group": "How it works", "covers": "It.", "rewrite": rewrite})
-    }
-
-    fn item(id: &str, owner: &str) -> serde_json::Value {
-        serde_json::json!({"id": id, "name": id, "sources": ["src/"], "owner": owner})
-    }
-
     #[test]
-    fn b10_a_survey_is_checked() {
-        let ok = survey(
-            serde_json::json!([planned("executors", true), planned("security", true)]),
-            serde_json::json!([item("native", "executors"), {"id": "ui", "name": "UI", "sources": ["web/"], "out_of_scope": "Another book."}]),
-        );
-        assert!(
-            check_documentation(&ok).is_empty(),
-            "{:?}",
-            check_documentation(&ok)
-        );
-        let mut bad = survey(
-            serde_json::json!([planned("executors", true), planned("executors", true)]),
-            serde_json::json!([item("native", "nowhere")]),
-        );
-        bad.overview.clear();
-        let issues = check_documentation(&bad);
-        for start in [
-            "Write the project `overview`",
-            "Plan page \"executors\" once",
-            "Give inventory item `native`",
-        ] {
-            assert!(
-                issues.iter().any(|i| i.starts_with(start)),
-                "{start}: {issues:?}"
-            );
-        }
-        let many: Vec<_> = (0..31).map(|i| planned(&format!("p{i}"), true)).collect();
-        let issues = check_documentation(&survey(
-            serde_json::json!(many),
-            serde_json::json!([item("a", "p0")]),
-        ));
-        assert!(
-            issues.iter().any(|i| i.starts_with("Plan 1 to 30 pages")),
-            "{issues:?}"
-        );
-    }
-
-    #[test]
-    fn b10_a_synthesis_is_checked() {
-        let syn = |v: serde_json::Value| -> DocumentationSubmit {
-            let mut base = serde_json::json!({"status": "ok", "step": "synthesis", "summary": "s"});
-            base.as_object_mut()
-                .unwrap()
-                .extend(v.as_object().unwrap().clone());
-            serde_json::from_value(base).unwrap()
-        };
-        let pass = serde_json::json!([{"check": "one owner per fact", "passed": true}]);
-        let fail = serde_json::json!([{"check": "one owner per fact", "passed": false, "note": "slots twice"}]);
-        assert!(
-            check_documentation(&syn(serde_json::json!({"done": true, "checks": pass}))).is_empty()
-        );
-        let issues = check_documentation(&syn(
-            serde_json::json!({"done": true, "checks": fail.clone()}),
-        ));
-        assert!(
-            issues.iter().any(|i| i.starts_with("Set `done` only when")),
-            "{issues:?}"
-        );
-        let issues = check_documentation(&syn(
-            serde_json::json!({"done": false, "checks": fail.clone()}),
-        ));
-        assert!(
-            issues.iter().any(|i| i.starts_with("List the `edits`")),
-            "{issues:?}"
-        );
-        let ok = syn(
-            serde_json::json!({"done": false, "checks": fail, "edits": [{"page": "a", "instructions": ["Move the slot rules to `limits`."]}]}),
-        );
-        assert!(check_documentation(&ok).is_empty());
-    }
-
-    #[test]
-    fn b10_the_engine_checks_links_words_and_owners() {
+    fn b6_a_later_session_keeps_the_pages_it_does_not_rewrite() {
+        let now = Utc::now();
         let page = |id: &str, body: &str| -> DocSection {
-            serde_json::from_value(
-                serde_json::json!({"id": id, "title": id, "summary": "S.", "body": body}),
-            )
-            .unwrap()
-        };
-        let pages = vec![
-            page(
-                "limits",
-                "See [executors](executors.md) and [gone](gone.md#x). It would fail; it stops.\n\n```rust\nlet a = 1; // would\n```\n\nUse `a;b`.",
-            ),
-            page("executors", "Clean text with a [code link](crates/x.rs)."),
-        ];
-        let inventory: Vec<InventoryItem> = serde_json::from_value(serde_json::json!([
-            item("slots", "limits"),
-            item("orphan", "missing")
-        ]))
-        .unwrap();
-        let modules = vec![
-            DocsModule {
-                name: "core".into(),
-                globs: vec!["crates/core/**".into()],
-            },
-            DocsModule {
-                name: "web".into(),
-                globs: vec!["web/**".into()],
-            },
-        ];
-        let inventory: Vec<InventoryItem> = inventory
-            .into_iter()
-            .map(|mut i| {
-                if i.id == "slots" {
-                    i.sources = vec!["crates/core/src/slots.rs".into()];
-                }
-                i
-            })
-            .collect();
-        let issues = mechanical_issues(&pages, &[], &inventory, &modules);
-        let limits = &issues["limits"];
-        assert!(limits.iter().any(|i| i.contains("`gone.md`")), "{limits:?}");
-        assert!(limits.iter().any(|i| i.contains("\"would\"")), "{limits:?}");
-        assert!(
-            limits.iter().any(|i| i.starts_with("Split the sentences")),
-            "{limits:?}"
-        );
-        assert!(
-            !issues.contains_key("executors"),
-            "code and links are not prose: {issues:?}"
-        );
-        assert!(
-            issues[""].iter().any(|i| i.contains("`orphan`")),
-            "{issues:?}"
-        );
-        assert!(
-            issues[""].iter().any(|i| i.contains("module `web`")),
-            "{issues:?}"
-        );
-        assert!(
-            !issues[""].iter().any(|i| i.contains("module `core`")),
-            "a source inside the module covers it: {issues:?}"
-        );
-        let refs = vec![
-            RefItem {
-                name: "MAX_SLOTS".into(),
-                file: "a.rs".into(),
-            },
-            RefItem {
-                name: "TERM_QUEUE".into(),
-                file: "b.rs".into(),
-            },
-        ];
-        let pages = vec![page("x", "The cap is `MAX_SLOTS`.")];
-        let missing: Vec<&str> = unmentioned_refs(&pages, &refs)
-            .iter()
-            .map(|r| r.name.as_str())
-            .collect();
-        assert_eq!(missing, ["TERM_QUEUE"]);
-    }
-
-    #[test]
-    fn b10_the_engine_checks_user_blocks_owners_and_excerpts() {
-        let page = |id: &str, body: &str, refs: bool| -> DocSection {
-            let code_refs = if refs {
-                serde_json::json!([{"path": "src/slots.rs", "note": "The limiter."}])
-            } else {
-                serde_json::json!([])
-            };
             serde_json::from_value(serde_json::json!({
-                "id": id, "title": id, "summary": "S.", "body": body, "code_refs": code_refs
+                "id": id, "title": id, "summary": "S.", "body": body, "group": "How it works"
             }))
             .unwrap()
         };
-        let inventory: Vec<InventoryItem> = serde_json::from_value(serde_json::json!([{
-            "id": "slots", "name": "the slot limiter", "sources": ["src/slots.rs"], "owner": "limits",
-            "settings": ["limits.max_parallel_executions"], "names": ["acquire_slot"]
-        }]))
-        .unwrap();
-        let check = |pages: &[DocSection]| mechanical_issues(pages, &[], &inventory, &[]);
-        let plain = page(
-            "pipeline",
-            "## Spawns\n\nEach spawn names acquire_slot in plain words.",
-            false,
-        );
-        assert!(
-            !check(&[
-                page(
-                    "limits",
-                    "### For the user\n\n`max_parallel_executions`\n\n```rust\nx\n```",
-                    true
-                ),
-                plain
-            ])
-            .contains_key("pipeline"),
-            "a name outside backticks is a word"
-        );
-
-        let owner_ok = page(
-            "limits",
-            "## Slots\n\n`acquire_slot` waits.\n\n### For the user\n\n| Setting | Default |\n| --- | --- |\n| `max_parallel_executions` | 4 |\n\n```rust\nlet slot = acquire_slot().await;\n```",
-            true,
-        );
-        let linked = page(
-            "pipeline",
-            "## Spawns\n\nEach spawn calls `acquire_slot` first. See [Limits](limits.md).",
-            false,
-        );
-        let issues = check(&[owner_ok.clone(), linked]);
-        assert!(issues.is_empty(), "{issues:?}");
-
-        let owner_bad = page(
-            "limits",
-            "## Slots\n\n`limits.max_parallel_executions` caps runs.\n\n### For the user\n\nNothing.\n\n## Next\n\nText.",
-            true,
-        );
-        let unlinked = page(
-            "pipeline",
-            "## Spawns\n\nEach spawn calls `acquire_slot` first.",
-            false,
-        );
-        let issues = check(&[owner_bad, unlinked]);
-        let limits = &issues["limits"];
-        assert!(
-            limits
-                .iter()
-                .any(|i| i.starts_with("Add a `### For the user` block")
-                    && i.contains("`limits.max_parallel_executions`")),
-            "{limits:?}"
-        );
-        assert!(
-            limits
-                .iter()
-                .any(|i| i.starts_with("Add 1 or 2 code excerpts")),
-            "{limits:?}"
-        );
-        assert!(
-            issues["pipeline"]
-                .iter()
-                .any(|i| i.starts_with("Link to `limits.md` in `Spawns`")),
-            "{issues:?}"
-        );
-
-        let repeats = page(
-            "pipeline",
-            "## Spawns\n\n`acquire_slot` waits. See [Limits](limits.md).\n\n`acquire_slot` wakes each 2 seconds.\n\nA panic drops what `acquire_slot` returned.",
-            false,
-        );
-        let mut catalog = repeats.clone();
-        catalog.group = "Reference".into();
-        assert!(
-            !check(&[owner_ok.clone(), catalog]).contains_key("pipeline"),
-            "a catalog page lists the values and links to the owner"
-        );
-        let issues = check(&[owner_ok, repeats]);
-        assert!(
-            issues["pipeline"]
-                .iter()
-                .any(|i| i.starts_with("Cut what this page says about the slot limiter")),
-            "{issues:?}"
-        );
-    }
-
-    #[test]
-    fn b10_a_later_session_keeps_the_pages_it_does_not_rewrite() {
-        let now = Utc::now();
-        let page = |id: &str, body: &str| -> DocSection {
-            serde_json::from_value(
-                serde_json::json!({"id": id, "title": id, "summary": "S.", "body": body}),
-            )
-            .unwrap()
+        let part = |pages: Vec<PageUpdate>| PartUpdate {
+            project: "p".into(),
+            overview: "The project.".into(),
+            pages,
+            glossary: vec![],
+            inventory: serde_json::from_value(serde_json::json!([
+                {"id": "x", "name": "x", "sources": ["src/"], "owner": "a"}
+            ]))
+            .unwrap(),
         };
-        let s1 = survey(
-            serde_json::json!([planned("a", true), planned("b", true)]),
-            serde_json::json!([item("x", "a")]),
-        );
         let first = BookUpdate {
             session: "s1".into(),
-            parts: vec![("p".into(), s1.clone())],
-            pages: BTreeMap::from([(
-                "p".to_string(),
-                vec![
-                    (
-                        serde_json::from_value(planned("a", true)).unwrap(),
-                        Some(page("tmp", "a v1")),
-                    ),
-                    (
-                        serde_json::from_value(planned("b", true)).unwrap(),
-                        Some(page("b", "b v1")),
-                    ),
-                ],
-            )]),
+            parts: vec![part(vec![
+                PageUpdate::Write(page("a", "a v1")),
+                PageUpdate::Write(page("b", "b v1")),
+            ])],
         };
         let book = merge(None, "p", &first, now);
-        assert_eq!(
-            book.parts[0].sections[0].id, "a",
-            "a page takes its planned ID"
-        );
         assert_eq!(book.parts[0].sections[0].group, "How it works");
-        let s2 = survey(
-            serde_json::json!([planned("a", false), planned("b", true)]),
-            serde_json::json!([item("x", "a")]),
-        );
         let second = BookUpdate {
             session: "s2".into(),
-            parts: vec![("p".into(), s2)],
-            pages: BTreeMap::from([(
-                "p".to_string(),
-                vec![
-                    (serde_json::from_value(planned("a", false)).unwrap(), None),
-                    (
-                        serde_json::from_value(planned("b", true)).unwrap(),
-                        Some(page("b", "b v2")),
-                    ),
-                ],
-            )]),
+            parts: vec![part(vec![
+                PageUpdate::Keep {
+                    id: "a".into(),
+                    group: "Reference".into(),
+                },
+                PageUpdate::Write(page("b", "b v2")),
+                PageUpdate::Keep {
+                    id: "gone".into(),
+                    group: "Reference".into(),
+                },
+            ])],
         };
         let book = merge(Some(book), "p", &second, now);
         let bodies: Vec<&str> = book.parts[0]
@@ -2129,7 +1396,9 @@ mod tests {
             .map(|s| s.body.as_str())
             .collect();
         assert_eq!(bodies, ["a v1", "b v2"], "a is kept, b is rewritten");
+        assert_eq!(book.parts[0].sections[0].group, "Reference");
         assert_eq!(book.parts[0].inventory.len(), 1);
+        assert_eq!(book.sessions, ["s1", "s2"]);
     }
 
     #[test]
@@ -2143,7 +1412,15 @@ mod tests {
     #[test]
     fn concurrent_updates_keep_every_part() {
         let ws = tempfile::tempdir().unwrap();
-        let part = page_submit("B.");
+        let part = PartUpdate {
+            overview: "o".into(),
+            pages: page_submit("B.")
+                .sections
+                .into_iter()
+                .map(PageUpdate::Write)
+                .collect(),
+            ..Default::default()
+        };
         let handles: Vec<_> = (0..8)
             .map(|i| {
                 let root = ws.path().to_path_buf();
@@ -2151,8 +1428,10 @@ mod tests {
                 std::thread::spawn(move || {
                     let update = BookUpdate {
                         session: format!("s{i}"),
-                        parts: vec![(format!("p{i}"), part)],
-                        ..Default::default()
+                        parts: vec![PartUpdate {
+                            project: format!("p{i}"),
+                            ..part
+                        }],
                     };
                     apply(&root, "shared", &update, Utc::now()).unwrap();
                 })

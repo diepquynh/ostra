@@ -1,6 +1,7 @@
 //! The standard pipeline: the engine's `Pipeline` hooks, each answered by the built-in stages'
 //! code in this crate.
 
+use crate::book::DocsTrack;
 use crate::judge;
 use crate::judge_input;
 use crate::view;
@@ -605,7 +606,7 @@ async fn perform_own(host: &StepHost, session: &SessionId, step: Step) -> Result
         Step::WriteBook { book } => {
             let st = host.snapshot(session)?;
             let update = st.book_update();
-            let projects = update.parts.iter().map(|(k, _)| k.clone()).collect();
+            let projects = update.parts.iter().map(|p| p.project.clone()).collect();
             let ws = &st.workspace_root;
             let error = ostra_core::book::apply(ws, &book, &update, chrono::Utc::now())
                 .err()

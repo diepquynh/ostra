@@ -1,6 +1,7 @@
 //! Projections of session state for the browser: summary, board cards, phases, artifacts.
 
 #[allow(unused_imports)]
+use crate::book::DocsTrack;
 use crate::prelude::*;
 
 use crate::planner::removed_phases;

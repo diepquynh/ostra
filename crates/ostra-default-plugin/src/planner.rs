@@ -8,7 +8,8 @@ use crate::judge::NoteStage;
 use crate::prelude::*;
 use ostra_core::Contract;
 use ostra_core::agent::AgentName;
-use ostra_core::book::{DOCS_ROUNDS, DocsStep};
+use crate::book::{DOCS_ROUNDS, DocsTrack};
+use ostra_core::book::DocsStep;
 use ostra_core::event::{
     ClosingItem, CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, SessionKind,
     WorkKind,
@@ -1557,7 +1558,7 @@ impl<'a> OstraPlanner<'a> for Planner<'a> {
             // Rule B10: the named constants that no page mentions, for the coverage check.
             if let Some(scan) = &track.docs_scan {
                 let drafts = track.placed_drafts();
-                let missing = ostra_core::book::unmentioned_refs(&drafts, &scan.refs);
+                let missing = crate::book::unmentioned_refs(&drafts, &scan.refs);
                 if !missing.is_empty() {
                     let shown: Vec<String> = missing
                         .iter()

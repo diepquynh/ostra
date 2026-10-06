@@ -3,6 +3,7 @@
 //! calls it through `Pipeline` at the point of `SessionState::apply` where it ran before, so the
 //! fold stays one deterministic function of the log.
 
+use crate::book::DocsTrack;
 use crate::judge::{
     ANSWER_ITEM, AnswerItem, AnswerRoute, ClassifyOut, Disposition, ExploreTaskSpec, FeedbackOut,
     FeedbackTarget, MAX_ANSWER_RESEARCH, MAX_SUFFICIENCY_RESEARCH, NoteStage, RescueAction,
@@ -608,34 +609,27 @@ impl OstraFold for SessionState {
             .project_tracks
             .iter()
             .filter_map(|(k, t)| match t.docs_aggregate() {
-                DocsState::Done(d) => Some((k.clone(), *d)),
+                DocsState::Done(d) => {
+                    // Rule B10: every planned page, with the draft this session wrote or `None`
+                    // to keep it.
+                    let plan: Option<Vec<_>> = t.survey_plan().map(|survey| {
+                        survey
+                            .pages
+                            .iter()
+                            .map(|p| {
+                                let draft = t.page_docs.get(&p.id).and_then(|d| d.draft.clone());
+                                (p.clone(), if p.rewrite { draft } else { None })
+                            })
+                            .collect()
+                    });
+                    Some(crate::book::part_update(k, &d, plan.as_deref()))
+                }
                 _ => None,
-            })
-            .collect();
-        // Rule B10: every planned page, with the draft this session wrote or `None` to keep it.
-        let pages = self
-            .project_tracks
-            .iter()
-            .filter(|(_, t)| matches!(t.docs_aggregate(), DocsState::Done(_)))
-            .filter_map(|(k, t)| {
-                let survey = t.survey_plan()?;
-                Some((
-                    k.clone(),
-                    survey
-                        .pages
-                        .iter()
-                        .map(|p| {
-                            let draft = t.page_docs.get(&p.id).and_then(|d| d.draft.clone());
-                            (p.clone(), if p.rewrite { draft } else { None })
-                        })
-                        .collect(),
-                ))
             })
             .collect();
         ostra_core::book::BookUpdate {
             session: self.id.to_string(),
             parts,
-            pages,
         }
     }
 

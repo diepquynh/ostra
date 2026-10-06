@@ -218,8 +218,12 @@ mod tests {
         .unwrap();
         let update = BookUpdate {
             session: "s_1".into(),
-            parts: vec![("app".into(), submit)],
-            ..Default::default()
+            parts: vec![PartUpdate {
+                project: "app".into(),
+                overview: submit.overview,
+                pages: submit.sections.into_iter().map(PageUpdate::Write).collect(),
+                ..Default::default()
+            }],
         };
         apply(d.path(), "app", &update, chrono::Utc::now()).unwrap();
         let out = run(
