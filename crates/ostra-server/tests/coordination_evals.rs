@@ -35,7 +35,7 @@ use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_core::model::Effort;
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall};
-use ostra_engine::factory::AgentsFactory;
+use ostra_default_plugin::factory::AgentsFactory;
 use ostra_engine::state::{ExploreOrigin, SessionState};
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_exec_native::NativeExecutor;
@@ -1102,6 +1102,7 @@ async fn run_session(
         case: case.clone(),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws.clone(), WorkspaceId::new(), db, services);
     // The router needs the session before its first run, and the first run waits for the classify judge, so
     // the slot is filled right after the session is created.

@@ -11,7 +11,7 @@ use ostra_core::exec::{
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{ExecutionId, SessionId, WorkspaceId};
 use ostra_core::model::Effort;
-use ostra_engine::factory::AgentsFactory;
+use ostra_default_plugin::factory::AgentsFactory;
 use ostra_engine::runner::{PAUSE_RESUME_NOTE, RESUMED_STATUS};
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_store::WorkspaceDb;
@@ -174,6 +174,7 @@ fn setup_with(harness: bool) -> Setup {
         held: Default::default(),
     });
     let db = WorkspaceDb::open(&dir.path().join("workspace.db")).unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(
         dir.path().to_path_buf(),
         WorkspaceId::new(),

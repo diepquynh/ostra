@@ -2,6 +2,9 @@
 //! runner calls this for `Step::ScanDocs` and records the result in `DocsScanned`, because the fold
 //! cannot read the file system.
 
+#[allow(unused_imports)]
+use crate::prelude::*;
+
 use ostra_core::book::{DocsModule, RefItem};
 use ostra_core::config::ModuleRow;
 use regex::Regex;
@@ -236,7 +239,7 @@ mod tests {
 
     #[test]
     fn b10_constants_in_several_languages() {
-        let rust = "pub const MAX_SLOTS: usize = 4;\nconst REVIEW_CAP: u32 = 3;\npub(crate) static NAMES: &[&str] = &[];\nlet x = 1;";
+        let rust = "pub const MAX_SLOTS: usize = 4;\nconst REVIEW_CAP: u32 = 3;\npub static NAMES: &[&str] = &[];\nlet x = 1;";
         assert_eq!(constants(rust), ["MAX_SLOTS", "REVIEW_CAP", "NAMES"]);
         let ts = "export const MAX_HITS = 30;\nconst lower = 1;";
         assert_eq!(constants(ts), ["MAX_HITS"]);

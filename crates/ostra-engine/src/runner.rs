@@ -1,15 +1,12 @@
 //! The runner: one driver task per live session. It folds events, asks the planner for the next
 //! steps, performs them, and appends what happened. Every state change is an event first.
 
-use crate::autofix;
-use crate::judge::{self, output_schema};
-use crate::judge_input::{self, ProjectFacts, YoloPlan};
+use crate::pipeline::{self, ProjectFacts, YoloPlan};
 use crate::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use crate::services::{BuiltSpawn, Notice, Services, SpawnEnv};
-use crate::state::{AUTO_FIXABLE_PARAM, Interrupt, SessionState, purpose_key};
+use crate::state::{Interrupt, SessionState, purpose_key};
 use crate::uploads;
-use crate::view;
-use ostra_core::agent::{AgentName, InitializerMode};
+use ostra_core::agent::AgentName;
 use ostra_core::api::{
     ActivityItem, CreateSession, ExecutionView, GateView, SessionDetail, SessionSummary,
     TreeSession, UploadRef,
@@ -28,9 +25,7 @@ use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId, WorkspaceId};
 use ostra_core::model::Tier;
 use ostra_core::paths;
-use ostra_core::pipeline::Category;
 use ostra_core::policy::{PermissionAnswer, RuleRef, ToolCall};
-use ostra_core::submit::CodeReviewerSubmit;
 use ostra_core::workflow::StageRun;
 use ostra_store::{NewExecution, NewSession, SessionUpdate, WorkspaceDb};
 use serde_json::Value;
@@ -127,6 +122,33 @@ pub const FORMAT_NOT_APPROVED: &str = "The format command in project.toml change
 #[derive(Clone)]
 pub struct Engine {
     inner: Arc<Inner>,
+}
+
+/// What a pipeline's step effects may use of the runner.
+pub struct StepHost(Arc<Inner>);
+
+impl StepHost {
+    /// Append an event: store it, fold it, broadcast it, and wake the session's driver.
+    pub fn append(
+        &self,
+        session: &SessionId,
+        event: SessionEvent,
+    ) -> Result<StoredEvent, EngineError> {
+        self.0.append(session, event)
+    }
+
+    pub fn snapshot(&self, session: &SessionId) -> Result<SessionState, EngineError> {
+        self.0.snapshot(session)
+    }
+
+    pub fn db(&self) -> &WorkspaceDb {
+        &self.0.db
+    }
+
+    /// A project's init status changed.
+    pub fn projects_changed(&self) {
+        let _ = self.0.tx.send(EngineNotice::ProjectsChanged);
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -393,7 +415,9 @@ impl Engine {
         project: ostra_core::manage::CreatedProject,
     ) -> Result<(), EngineError> {
         let st = self.state(session)?;
-        if let Some(why) = st.project_creation_refusal(&project.execution, &project.key) {
+        if let Some(why) =
+            pipeline::get().project_creation_refusal(&st, &project.execution, &project.key)
+        {
             return Err(EngineError::Invalid(why));
         }
         std::fs::create_dir_all(st.project_session_dir(&project.key))
@@ -511,7 +535,7 @@ impl Engine {
 
     pub fn detail(&self, session: &SessionId) -> Result<SessionDetail, EngineError> {
         let st = self.state(session)?;
-        view::detail(
+        pipeline::get().detail(
             &st,
             &self.inner.db,
             &self.inner.workspace_id,
@@ -524,7 +548,7 @@ impl Engine {
         let executions = self.inner.db.list_executions(&summary.id)?;
         let live = self.inner.load(&summary.id)?;
         let st = lock(&live.state);
-        Ok(view::tree_session(&st, summary, executions))
+        Ok(pipeline::get().tree_session(&st, summary, executions))
     }
 
     /// Numbered run labels of a session's executions.
@@ -534,7 +558,7 @@ impl Engine {
     ) -> Result<HashMap<ExecutionId, String>, EngineError> {
         let live = self.inner.load(session)?;
         let st = lock(&live.state);
-        Ok(view::run_labels(&st))
+        Ok(pipeline::get().run_labels(&st))
     }
 
     fn live_executions(&self) -> HashSet<ExecutionId> {
@@ -552,20 +576,7 @@ impl Engine {
                 "This gate was already answered.".into(),
             ));
         }
-        validate_answer(&view.payload, &answer)?;
-        if let GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. } = view.payload {
-            let st = self.state(&view.session)?;
-            let passed = if matches!(view.payload, GatePayload::SpecApproval { .. }) {
-                st.spec.passed_current()
-            } else {
-                st.plan.passed_current()
-            };
-            if matches!(answer, GateAnswer::Approval { approved: true, .. }) && !passed {
-                return Err(EngineError::Invalid(
-                    "Approval requires a fact-check PASS on this version.".into(),
-                ));
-            }
-        }
+        validate_answer(&self.state(&view.session)?, &view.payload, &answer)?;
         if let (
             GatePayload::Permission { call, .. },
             GateAnswer::Permission {
@@ -583,7 +594,7 @@ impl Engine {
                 source: AnswerSource::User,
                 answer: answer.clone(),
                 reason: None,
-                routed: crate::state::answer_needs_route(&view.payload, &answer),
+                routed: pipeline::get().answer_needs_route(&view.payload, &answer),
             },
         )?;
         if let GateAnswer::Permission { answer } = answer
@@ -613,20 +624,10 @@ impl Engine {
             .decisions
             .get(id)
             .ok_or_else(|| EngineError::NotFound(format!("decision {id}")))?;
-        if !st.can_override(id) {
+        if !pipeline::get().can_override(&st, id) {
             return Err(EngineError::Invalid("Work that depends on this decision has already started, so it can no longer be overridden.".into()));
         }
-        let valid = match d.judge {
-            JudgeKind::Classify => {
-                serde_json::from_value::<judge::ClassifyOut>(output.clone()).is_ok()
-            }
-            JudgeKind::Stakes => serde_json::from_value::<judge::StakesOut>(output.clone()).is_ok(),
-            JudgeKind::Track => serde_json::from_value::<judge::TrackOut>(output.clone()).is_ok(),
-            JudgeKind::Sufficiency => {
-                serde_json::from_value::<judge::SufficiencyOut>(output.clone()).is_ok()
-            }
-            _ => false,
-        };
+        let valid = pipeline::get().override_ok(d.judge, &output);
         if !valid {
             return Err(EngineError::Invalid(
                 "The override does not match the decision's output shape.".into(),
@@ -820,7 +821,7 @@ impl Engine {
             .ok_or_else(|| {
                 EngineError::Invalid("A side-panel answer has no task to skip.".into())
             })?;
-        if !self.state(&session)?.can_skip(id) {
+        if !pipeline::get().can_skip(&self.state(&session)?, id) {
             return Err(EngineError::Invalid(
                 "Only a running research, test analysis, docs, or architecture task can be skipped. Cancel the execution instead.".into(),
             ));
@@ -1104,7 +1105,7 @@ impl Engine {
         if let Some(sid) = &session
             && let Ok(st) = self.state(sid)
         {
-            let d = view::artifacts(&st);
+            let d = pipeline::get().artifacts(&st);
             context.push_str("\n# Artifacts of the session this was asked from\n\n");
             for a in d {
                 context.push_str(&format!(
@@ -1293,186 +1294,31 @@ pub fn stop_session_offline(db: &WorkspaceDb, session: &SessionId) -> Result<usi
     Ok(running.len())
 }
 
-/// Why an init left the project without a usable inventory or profile.
-fn init_problem(root: &Path) -> Option<String> {
-    if !paths::project_inventory(root).exists() {
-        return Some("the initializer did not write .ostra/INVENTORY.md".into());
+fn validate_answer(
+    st: &SessionState,
+    payload: &GatePayload,
+    answer: &GateAnswer,
+) -> Result<(), EngineError> {
+    if let Some(r) = pipeline::get().validate_answer(st, payload, answer) {
+        return r.map_err(EngineError::Invalid);
     }
-    ostra_core::config::load_toml_required::<ProjectProfile>(&paths::project_profile(root))
-        .err()
-        .map(|e| format!("the generated .ostra/project.toml is not valid: {e}"))
-}
-
-/// Rule B10: the drafts of a project as Markdown, the inventory, and an index of the page plan.
-fn write_docs_drafts(st: &SessionState, project: &str) {
-    let Some(track) = st.project_tracks.get(project) else {
-        return;
-    };
-    let dir = st.docs_drafts_dir(project);
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-    if let Some(scan) = &track.docs_scan {
-        let mut text = format!(
-            "# Reference sheet for `{project}`\n\nThe modules and the named constants that the engine found in the source. The book must cover each module, and a reader looks up each constant.\n\n## Modules\n\n"
-        );
-        for m in &scan.modules {
-            text.push_str(&format!("- `{}`: {}\n", m.name, m.globs.join(", ")));
-        }
-        text.push_str("\n## Named constants, by file\n\n");
-        let mut file = "";
-        for r in &scan.refs {
-            if r.file != file {
-                file = &r.file;
-                text.push_str(&format!("\n### `{file}`\n\n"));
-            }
-            text.push_str(&format!("- `{}`\n", r.name));
-        }
-        let _ = std::fs::write(dir.join("reference.md"), text);
-    }
-    let Some(survey) = track.survey_plan() else {
-        return;
-    };
-    let drafts = track.placed_drafts();
-    for d in &drafts {
-        let _ = std::fs::write(
-            st.docs_draft_path(project, &d.id),
-            ostra_core::book::render_section(project, d),
-        );
-        // Rule B10: the draft before the last revision, so a fact-check re-pass diffs the two.
-        if let Some(prev) = track.page_docs.get(&d.id).and_then(|p| p.previous.as_ref()) {
-            let mut prev = prev.clone();
-            prev.id = d.id.clone();
-            let _ = std::fs::write(
-                dir.join(format!("{}.prev.md", d.id)),
-                ostra_core::book::render_section(project, &prev),
-            );
-        }
-    }
-    let mut index = format!(
-        "# Page plan for `{project}`\n\n{}\n\n",
-        survey.overview.trim()
-    );
-    for p in &survey.pages {
-        let state = if drafts.iter().any(|d| d.id == p.id) {
-            format!("draft: `{}.md`", p.id)
-        } else if p.rewrite {
-            "no draft".into()
-        } else {
-            "kept from the book".into()
-        };
-        index.push_str(&format!(
-            "- `{}` {} (group: {}, {state}): {}\n",
-            p.id, p.title, p.group, p.covers
-        ));
-    }
-    let _ = std::fs::write(dir.join("index.md"), index);
-    let mut inv = format!(
-        "# Inventory for `{project}`\n\nEvery item the book must cover, with its owning page.\n\n| Item | Name | Owner | Sources | Settings | Names |\n| --- | --- | --- | --- | --- | --- |\n"
-    );
-    for i in &track.current_inventory() {
-        let owner = match &i.out_of_scope {
-            Some(why) => format!("out of scope: {why}"),
-            None => format!("`{}`", i.owner),
-        };
-        let code = |v: &[String]| {
-            v.iter()
-                .map(|n| format!("`{}`", n.replace('|', "\\|")))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        inv.push_str(&format!(
-            "| `{}` | {} | {owner} | {} | {} | {} |\n",
-            i.id,
-            i.name.replace('|', "\\|"),
-            i.sources.join(", ").replace('|', "\\|"),
-            code(&i.settings),
-            code(&i.names)
-        ));
-    }
-    let _ = std::fs::write(st.docs_inventory_path(project), inv);
-}
-
-fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError> {
     let ok = matches!(
         (payload, answer),
         (
-            GatePayload::OpenQuestions { .. },
-            GateAnswer::Questions { .. }
-        ) | (
-            GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. },
-            GateAnswer::Approval { .. }
-        ) | (
-            GatePayload::FactCheckRecurring { .. }
-                | GatePayload::ReviewCap { .. }
-                | GatePayload::Stuck { .. }
-                | GatePayload::PhaseBlocked { .. }
+            GatePayload::BudgetReached { .. }
                 | GatePayload::HarnessFailure { .. }
                 | GatePayload::ExecutionFailed { .. }
-                | GatePayload::BudgetReached { .. }
-                | GatePayload::DocsRounds { .. }
-                | GatePayload::ImplementationReview { .. }
                 | GatePayload::StageReview { .. },
             GateAnswer::Choice { .. }
-        ) | (GatePayload::ClosingGate { .. }, GateAnswer::Closing { .. })
-            | (
-                GatePayload::Permission { .. },
-                GateAnswer::Permission { .. }
-            )
-            | (GatePayload::SkillApproval { .. }, GateAnswer::Skills { .. })
+        ) | (
+            GatePayload::Permission { .. },
+            GateAnswer::Permission { .. }
+        )
     );
     if !ok {
         return Err(EngineError::Invalid(
             "That answer does not fit this gate.".into(),
         ));
-    }
-    if let (GatePayload::OpenQuestions { questions, .. }, GateAnswer::Questions { answers }) =
-        (payload, answer)
-    {
-        for q in questions {
-            if !answers
-                .iter()
-                .any(|a| a.id == q.id && !a.answer.trim().is_empty())
-            {
-                return Err(EngineError::Invalid(format!(
-                    "Answer {} before continuing.",
-                    q.id
-                )));
-            }
-        }
-    }
-    if let (
-        GatePayload::SpecApproval { .. } | GatePayload::PlanApproval { .. },
-        GateAnswer::Approval {
-            approved: false,
-            feedback,
-        },
-    ) = (payload, answer)
-        && feedback.as_ref().is_none_or(|f| f.trim().is_empty())
-    {
-        return Err(EngineError::Invalid("Say what to change.".into()));
-    }
-    if let (GatePayload::DocsRounds { .. }, GateAnswer::Choice { option, .. }) = (payload, answer)
-        && option != "continue"
-        && option != "accept"
-    {
-        return Err(EngineError::Invalid(
-            "Choose continue for another round, or accept to write the book as it is.".into(),
-        ));
-    }
-    if let (GatePayload::ImplementationReview { .. }, GateAnswer::Choice { option, text }) =
-        (payload, answer)
-    {
-        match option.as_str() {
-            "done" => {}
-            "feedback" if text.as_ref().is_some_and(|t| !t.trim().is_empty()) => {}
-            "feedback" => return Err(EngineError::Invalid("Say what to change.".into())),
-            _ => {
-                return Err(EngineError::Invalid(
-                    "Answer done, or feedback with what to change.".into(),
-                ));
-            }
-        }
     }
     // Rule WF5: a failed stage takes retry, continue, or stop; a question takes an option, other
     // with text, or stop.
@@ -1506,8 +1352,7 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
 
 /// Rule PL4: the side panel's agent, the standard agent for answers.
 fn quick_agent() -> AgentName {
-    ostra_default_plugin::Standard::default_for(ostra_core::Contract::Answer)
-        .expect("the standard plugin returns every built-in contract")
+    pipeline::get().default_agent(ostra_core::Contract::Answer)
 }
 
 /// The rule "always in this workspace" adds for a call.
@@ -1603,7 +1448,7 @@ impl Inner {
             let init_changed = matches!(st.kind, SessionKind::Init { .. })
                 && (matches!(event, SessionEvent::SessionCreated { .. }) || ended);
             let cost = lock(&self.judge_cost).get(session).copied().unwrap_or(0.0);
-            let summary = view::summary(&st, &self.workspace_id, cost);
+            let summary = pipeline::get().summary(&st, &self.workspace_id, cost);
             let _ = self.db.update_session(
                 session,
                 &SessionUpdate {
@@ -1883,6 +1728,13 @@ impl Inner {
     }
 
     async fn perform(self: &Arc<Self>, session: &SessionId, step: Step) -> Result<(), EngineError> {
+        let step = match pipeline::get()
+            .perform(&StepHost(self.clone()), session, step)
+            .await
+        {
+            Ok(done) => return done,
+            Err(step) => step,
+        };
         match step {
             Step::Judge { judge, subject } => self.perform_judge(session, judge, subject).await,
             Step::Spawn(req) => self.perform_spawn(session, *req).await,
@@ -1891,9 +1743,6 @@ impl Inner {
                 explanation,
                 payload,
             } => {
-                if let GatePayload::ImplementationReview { .. } = &payload {
-                    self.write_session_context(session)?;
-                }
                 self.append(
                     session,
                     SessionEvent::GateOpened {
@@ -1915,70 +1764,13 @@ impl Inner {
                 self.perform_command(session, purpose, &project, command, files)
                     .await
             }
-            Step::Autofix {
-                project,
-                phase,
-                tests,
-                findings,
-            } => {
-                let root = self
-                    .snapshot(session)?
-                    .project_path(&project)
-                    .unwrap_or_default();
-                let (applied, failed) =
-                    tokio::task::spawn_blocking(move || autofix::apply_findings(&root, &findings))
-                        .await
-                        .map_err(|e| EngineError::Invalid(e.to_string()))?;
-                self.append(
-                    session,
-                    SessionEvent::AutofixApplied {
-                        project,
-                        phase,
-                        tests,
-                        applied,
-                        failed,
-                    },
-                )?;
-                Ok(())
-            }
-            Step::AnnounceBlocked {
-                project,
-                phase,
-                tests,
-                reason,
-            } => {
-                self.append(
-                    session,
-                    SessionEvent::PhaseBlocked {
-                        project,
-                        phase,
-                        tests,
-                        reason,
-                    },
-                )?;
-                Ok(())
-            }
             Step::Complete { report_markdown } => {
                 let st = self.snapshot(session)?;
                 let path = st.session_root.join(paths::report::completion());
                 let md = report_markdown.unwrap_or_else(|| "# Session complete\n".into());
                 std::fs::write(&path, &md).map_err(|e| EngineError::Invalid(e.to_string()))?;
-                if let SessionKind::Init { project } = &st.kind {
-                    // Later executions route by these two files, so a broken one fails the init
-                    // here rather than silently giving every agent an empty profile.
-                    let root = st.project_path(project).unwrap_or_default();
-                    if let Some(p) = init_problem(&root) {
-                        self.append(
-                            session,
-                            SessionEvent::SessionFailed {
-                                error: format!("Init did not finish: {p}. Run init again."),
-                            },
-                        )?;
-                        return Ok(());
-                    }
-                    let _ = self
-                        .db
-                        .set_project_init_status(project, ostra_core::api::InitStatus::Initialized);
+                if pipeline::get().completing(&StepHost(self.clone()), session, &st)? {
+                    return Ok(());
                 }
                 let summary = md
                     .lines()
@@ -2149,95 +1941,10 @@ impl Inner {
                 self.append(session, event)?;
                 Ok(())
             }
-            Step::FinishInit { project } => {
-                let st = self.snapshot(session)?;
-                let root = st.project_path(&project).unwrap_or_default();
-                let inventory = st
-                    .project_inits
-                    .get(&project)
-                    .and_then(|i| i.inventory.clone());
-                match (init_problem(&root), inventory) {
-                    (Some(p), Some(execution)) => {
-                        self.append(
-                            session,
-                            SessionEvent::InitStepFailed {
-                                project,
-                                execution,
-                                error: format!("The init did not finish: {p}."),
-                            },
-                        )?;
-                    }
-                    _ => {
-                        let _ = self.db.set_project_init_status(
-                            &project,
-                            ostra_core::api::InitStatus::Initialized,
-                        );
-                        let _ = self.tx.send(EngineNotice::ProjectsChanged);
-                        self.append(session, SessionEvent::ProjectInitFinished { project })?;
-                    }
-                }
-                Ok(())
-            }
-            Step::RecordInitProblem {
-                project,
-                execution,
-                error,
-            } => {
-                self.append(
-                    session,
-                    SessionEvent::InitStepFailed {
-                        project,
-                        execution,
-                        error,
-                    },
-                )?;
-                Ok(())
-            }
-            Step::ScanDocs { project } => {
-                let st = self.snapshot(session)?;
-                let path = st.project_path(&project).ok_or_else(|| {
-                    EngineError::Invalid(format!("Project `{project}` is not in this workspace."))
-                })?;
-                let profile: ProjectProfile =
-                    load_toml(&paths::project_profile(&path)).unwrap_or_default();
-                let map = profile.module_map;
-                let (modules, refs) =
-                    tokio::task::spawn_blocking(move || crate::docs_scan::scan(&path, &map))
-                        .await
-                        .unwrap_or_default();
-                self.append(
-                    session,
-                    SessionEvent::DocsScanned {
-                        project,
-                        modules,
-                        refs,
-                    },
-                )?;
-                Ok(())
-            }
-            Step::WriteBook { book } => {
-                let st = self.snapshot(session)?;
-                let update = st.book_update();
-                let projects = update.parts.iter().map(|(k, _)| k.clone()).collect();
-                let ws = &st.workspace_root;
-                let error = ostra_core::book::apply(ws, &book, &update, chrono::Utc::now())
-                    .err()
-                    .map(|e| {
-                        format!(
-                            "The book could not be written to {}: {e}",
-                            ostra_core::book::book_dir(ws, &book).display()
-                        )
-                    });
-                self.append(
-                    session,
-                    SessionEvent::BookWritten {
-                        book,
-                        projects,
-                        error,
-                    },
-                )?;
-                Ok(())
-            }
+            other => Err(EngineError::Invalid(format!(
+                "The pipeline did not perform step `{}`.",
+                other.summary()
+            ))),
         }
     }
 
@@ -2381,7 +2088,7 @@ impl Inner {
                 Ok((value, usage)) => {
                     *lock(&self.judge_cost).entry(session.clone()).or_insert(0.0) += usage.cost_usd;
                     if validate(&value) {
-                        let reason = judge::reason_of(&value);
+                        let reason = pipeline::get().judge_reason(&value);
                         self.append(
                             session,
                             SessionEvent::DecisionMade {
@@ -2415,33 +2122,9 @@ impl Inner {
     ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
         let (input, summary) =
-            judge_input::judge_input(&st, kind, subject.as_deref(), &self.project_facts());
-        let schema = output_schema(kind, None);
-        let validate = move |v: &Value| -> bool {
-            match kind {
-                JudgeKind::Classify => {
-                    serde_json::from_value::<judge::ClassifyOut>(v.clone()).is_ok()
-                }
-                JudgeKind::Sufficiency => {
-                    serde_json::from_value::<judge::SufficiencyOut>(v.clone()).is_ok()
-                }
-                JudgeKind::Stakes => serde_json::from_value::<judge::StakesOut>(v.clone()).is_ok(),
-                JudgeKind::Track => serde_json::from_value::<judge::TrackOut>(v.clone()).is_ok(),
-                JudgeKind::Feedback => serde_json::from_value::<judge::FeedbackOut>(v.clone())
-                    .is_ok_and(|o| !o.targets.is_empty()),
-                JudgeKind::RouteAnswer => {
-                    serde_json::from_value::<judge::RouteAnswerOut>(v.clone()).is_ok()
-                }
-                JudgeKind::Rescue => serde_json::from_value::<judge::RescueOut>(v.clone()).is_ok(),
-                JudgeKind::ResolveReview => {
-                    serde_json::from_value::<judge::ResolveReviewOut>(v.clone()).is_ok()
-                }
-                JudgeKind::Completion => {
-                    serde_json::from_value::<judge::CompletionOut>(v.clone()).is_ok()
-                }
-                JudgeKind::YoloAnswer => true,
-            }
-        };
+            pipeline::get().judge_input(&st, kind, subject.as_deref(), &self.project_facts());
+        let schema = pipeline::get().judge_schema(kind, None);
+        let validate = move |v: &Value| -> bool { pipeline::get().judge_output_ok(kind, v) };
         match self
             .call_judge(session, kind, subject, input, summary, schema, validate)
             .await
@@ -2454,7 +2137,9 @@ impl Inner {
                     // The session's work is done; a report without prose beats no report.
                     let md = format!(
                         "# Session complete\n\nThe completion judge failed ({e}), so this report lists the state only.\n\n{}",
-                        judge_input::judge_input(&st, JudgeKind::Completion, None, &[]).0
+                        pipeline::get()
+                            .judge_input(&st, JudgeKind::Completion, None, &[])
+                            .0
                     );
                     self.append(
                         session,
@@ -2488,15 +2173,19 @@ impl Inner {
         gate: GateId,
     ) -> Result<(), EngineError> {
         let st = self.snapshot(session)?;
-        let Some(plan) = judge_input::yolo_plan(&st, &gate) else {
+        let Some(plan) = pipeline::get().yolo_plan(&st, &gate) else {
             return Ok(());
         };
         let (answer, reason) = match plan {
             YoloPlan::Fixed { answer, reason } => (answer, reason),
             YoloPlan::Judge { schema } => {
-                let (input, summary) =
-                    judge_input::judge_input(&st, JudgeKind::YoloAnswer, Some(gate.as_str()), &[]);
-                let full = output_schema(JudgeKind::YoloAnswer, Some(schema));
+                let (input, summary) = pipeline::get().judge_input(
+                    &st,
+                    JudgeKind::YoloAnswer,
+                    Some(gate.as_str()),
+                    &[],
+                );
+                let full = pipeline::get().judge_schema(JudgeKind::YoloAnswer, Some(schema));
                 let value = match self
                     .call_judge(
                         session,
@@ -2526,9 +2215,9 @@ impl Inner {
                         return Ok(());
                     }
                 };
-                let reason = judge::reason_of(&value);
+                let reason = pipeline::get().judge_reason(&value);
                 let st = self.snapshot(session)?;
-                match judge_input::yolo_answer_from_judge(
+                match pipeline::get().yolo_answer_from_judge(
                     &st,
                     &gate,
                     value.get("answer").unwrap_or(&Value::Null),
@@ -2552,7 +2241,7 @@ impl Inner {
         let Some(g) = st.gates.get(&gate).filter(|g| g.answer.is_none()) else {
             return Ok(());
         };
-        let routed = crate::state::answer_needs_route(&g.payload, &answer);
+        let routed = pipeline::get().answer_needs_route(&g.payload, &answer);
         self.append(
             session,
             SessionEvent::GateAnswered {
@@ -2738,14 +2427,6 @@ impl Inner {
         }
     }
 
-    /// Rule F2: the session context file is rewritten from the fold before anything reads it.
-    fn write_session_context(&self, session: &SessionId) -> Result<(), EngineError> {
-        let st = self.snapshot(session)?;
-        let path = st.session_context_path();
-        std::fs::write(&path, crate::context::render(&st))
-            .map_err(|e| EngineError::Invalid(format!("Could not write {}: {e}", path.display())))
-    }
-
     async fn perform_spawn(
         self: &Arc<Self>,
         session: &SessionId,
@@ -2756,30 +2437,12 @@ impl Inner {
         if st.is_terminal() || st.paused {
             return Ok(());
         }
-        // Rule U1: research skipped while this spawn waited for a slot does not start.
-        if let ExecPurpose::Explore { task } = &req.purpose
-            && st.explore.get(*task as usize).is_some_and(|t| t.abandoned)
-        {
+        if pipeline::get().spawn_dropped(&st, &req) {
             return Ok(());
         }
-        if req
-            .inputs
-            .context_files
-            .contains(&st.session_context_path())
-        {
-            self.write_session_context(session)?;
-        }
-        // Rule D4a: rendered for each spawn, so every mark reflects the files as they are now.
-        if req.inputs.wants_code_facts_file() {
-            let path = st.code_facts_path();
-            std::fs::write(
-                &path,
-                ostra_core::doc::render_code_facts(&req.inputs.code_facts),
-            )
-            .map_err(|e| {
-                EngineError::Invalid(format!("Could not write {}: {e}", path.display()))
-            })?;
-        }
+        pipeline::get()
+            .before_spawn(&st, &req)
+            .map_err(EngineError::Invalid)?;
         // Rule P2: a run the pause interrupted continues under its own id, where it stopped.
         let paused = req
             .resumes
@@ -2835,15 +2498,8 @@ impl Inner {
             );
         };
         let complexity = req.complexity();
-        let tier_override = matches!(
-            req.purpose,
-            ExecPurpose::Init {
-                mode: InitializerMode::GenerateSkill,
-                ..
-            }
-        )
-        .then_some(Tier::Advanced);
-        let executor_override = st.forced_executor(req.agent);
+        let tier_override = pipeline::get().tier_override(&req);
+        let executor_override = pipeline::get().forced_executor(&st, req.agent);
         let mut route = match resolve_route(
             &global,
             &settings,
@@ -2917,7 +2573,9 @@ impl Inner {
         let creates_project = meta
             .capabilities
             .contains(&ostra_core::Capability::ManageProjects)
-            && st.project_to_create(&req.project).is_some();
+            && pipeline::get()
+                .project_to_create(&st, &req.project)
+                .is_some();
         let repo_root = if creates_project {
             let _ = std::fs::create_dir_all(&req.session_dir);
             req.session_dir.clone()
@@ -2929,42 +2587,7 @@ impl Inner {
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
         let project_docs = ostra_agents::brief::project_docs(&repo_root);
         let _ = std::fs::create_dir_all(&req.session_dir);
-        if st.category == Some(Category::Test)
-            && let Some(p) = &req.inputs.implementer_report
-            && !p.exists()
-        {
-            let _ = std::fs::write(
-                p,
-                format!(
-                    "# Test request\n\nNo implementer ran in this session. The user asked for tests directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone, because no implementer ran. Take the code under test from the request: the files or symbols it names, or the earlier change it refers to, from the git history or the staged changes.\n",
-                    st.full_request()
-                ),
-            );
-        }
-        if st.category == Some(Category::Docs) {
-            for p in req
-                .inputs
-                .implementer_reports
-                .iter()
-                .filter(|p| !p.exists())
-            {
-                let _ = std::fs::write(
-                    p,
-                    format!(
-                        "# Documentation request\n\nNo implementer ran in this session. The user asked for documentation directly.\n\n## Request\n\n{}\n\n## Changed files\n\nNone, because no implementer ran. Take the code to document from the request: the flows, areas, files, or symbols it names. When it names none, document the whole project, starting from its entry points.\n",
-                        st.full_request()
-                    ),
-                );
-            }
-        }
-        // Rule B10: every docs run after the survey reads the current drafts and the inventory.
-        if let ExecPurpose::Docs { project, .. }
-        | ExecPurpose::DocsSurvey { project }
-        | ExecPurpose::DocsCheck { project, .. }
-        | ExecPurpose::DocsSynthesis { project, .. } = &req.purpose
-        {
-            write_docs_drafts(&st, project);
-        }
+        pipeline::get().spawn_files(&st, &req);
         // A paused run, and a run that continues a subagent for its messages, carry on with their
         // own transcript, so they need the prompt and the spawn they had, not a new spawn block:
         // their steps carry no stage inputs (Rules SM3 and SM4).
@@ -3017,18 +2640,7 @@ impl Inner {
             }
         };
         let mut params = built.params.clone();
-        if matches!(req.purpose, ExecPurpose::Review { .. })
-            && let Value::Object(map) = &mut params
-        {
-            let ids = profile
-                .as_ref()
-                .map(|p| p.auto_fixable_ids())
-                .unwrap_or_default();
-            map.insert(
-                AUTO_FIXABLE_PARAM.into(),
-                serde_json::to_value(ids).unwrap_or_default(),
-            );
-        }
+        pipeline::get().spawn_params(&req, profile.as_ref(), &mut params);
         let hint = lock(&self.resume_hints).remove(&purpose_key(&req.purpose));
         let (id, resume, report_file) = match paused {
             Some(rec) => (
@@ -3234,31 +2846,10 @@ impl Inner {
             execution: id.clone(),
             status: result.status,
         });
-        let block = matches!(req.purpose, ExecPurpose::Review { .. })
-            .then(|| {
-                result
-                    .submit
-                    .as_ref()
-                    .and_then(|v| serde_json::from_value::<CodeReviewerSubmit>(v.clone()).ok())
-            })
-            .flatten()
-            .filter(|r| r.security_block);
+        let after = pipeline::get().after_run(&req, &result);
         self.append(session, SessionEvent::ExecutionFinished { id, result })?;
-        if let (Some(review), ExecPurpose::Review { phase, tests, .. }) = (block, &req.purpose) {
-            let findings = review
-                .findings
-                .into_iter()
-                .filter(|f| f.severity == ostra_core::submit::Severity::Blocker)
-                .collect();
-            self.append(
-                session,
-                SessionEvent::SecurityBlock {
-                    project: req.project.clone(),
-                    phase: *phase,
-                    tests: *tests,
-                    findings,
-                },
-            )?;
+        for event in after {
+            self.append(session, event)?;
         }
         drop(lock(&host.slot).take());
         Ok(())
@@ -3751,7 +3342,7 @@ impl Engine {
             && lock(&self.inner.execs).contains_key(id);
         if let Some(session) = v.session.clone() {
             let st = self.state(&session)?;
-            view::decorate(&st, &view::run_labels(&st), &mut v);
+            pipeline::get().decorate(&st, &pipeline::get().run_labels(&st), &mut v);
         }
         Ok(v)
     }

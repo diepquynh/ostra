@@ -2299,8 +2299,8 @@ dependencies = [
  "chrono",
  "minijinja",
  "ostra-core",
- "ostra-default-plugin",
  "ostra-sdk",
+ "ostra-standard",
  "regex",
  "rust-embed",
  "serde",
@@ -2362,11 +2362,24 @@ name = "ostra-default-plugin"
 version = "0.1.3"
 dependencies = [
  "async-trait",
+ "chrono",
+ "globset",
+ "ostra-agents",
  "ostra-core",
+ "ostra-engine",
+ "ostra-sandbox",
  "ostra-sdk",
- "rust-embed",
+ "ostra-standard",
+ "ostra-store",
+ "pretty_assertions",
+ "regex",
+ "serde",
  "serde_json",
+ "tempfile",
+ "tokio",
  "toml",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -2379,10 +2392,9 @@ dependencies = [
  "globset",
  "ostra-agents",
  "ostra-core",
- "ostra-default-plugin",
  "ostra-sandbox",
+ "ostra-standard",
  "ostra-store",
- "pretty_assertions",
  "regex",
  "serde",
  "serde_json",
@@ -2550,7 +2562,7 @@ version = "0.1.3"
 dependencies = [
  "async-trait",
  "ostra-core",
- "ostra-default-plugin",
+ "ostra-standard",
  "parking_lot",
  "serde",
  "serde_json",
@@ -2617,6 +2629,18 @@ dependencies = [
  "uuid",
  "which",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ostra-standard"
+version = "0.1.3"
+dependencies = [
+ "async-trait",
+ "ostra-core",
+ "ostra-sdk",
+ "rust-embed",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

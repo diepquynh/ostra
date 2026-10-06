@@ -135,6 +135,7 @@ pub fn main_with(plugins: ostra_sdk::Registry) -> anyhow::Result<()> {
         ostra_sandbox::set_helper(exe);
     }
     let cli = Cli::parse();
+    ostra_default_plugin::install();
     // SAFETY: no other thread exists yet; the runtime starts below.
     unsafe { crate::env::extend_path() };
     let runtime = tokio::runtime::Builder::new_multi_thread()

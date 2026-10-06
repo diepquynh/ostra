@@ -14,8 +14,9 @@ use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Effort;
 use ostra_core::pipeline::StageKind;
-use ostra_engine::factory::AgentsFactory;
-use ostra_engine::{Engine, EngineNotice, Notice, Services, SessionState, SpawnFactory, view};
+use ostra_default_plugin::factory::AgentsFactory;
+use ostra_default_plugin::view;
+use ostra_engine::{Engine, EngineNotice, Notice, Services, SessionState, SpawnFactory};
 use ostra_store::WorkspaceDb;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -270,6 +271,7 @@ async fn implement_session_runs_to_completion_under_yolo() {
         notices: Mutex::new(vec![]),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
     let mut rx = engine.subscribe();
     let summary = engine
@@ -483,6 +485,7 @@ async fn init_session_start_and_end_notify_project_changes() {
         executor: exec,
         notices: Mutex::new(vec![]),
     });
+    ostra_default_plugin::install();
     let engine = Engine::new(
         ws_root,
         WorkspaceId::new(),
@@ -590,6 +593,7 @@ async fn subagents_wake_each_other_and_pair_loops_continue_conversations() {
         notices: Mutex::new(vec![]),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
     let _ = exec.engine.set(engine.clone());
     let mut rx = engine.subscribe();
@@ -793,6 +797,7 @@ async fn a_reviewer_asks_the_implementer_for_a_fix_and_waits_for_it() {
         notices: Mutex::new(vec![]),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
     let _ = exec.engine.set(engine.clone());
     let mut rx = engine.subscribe();
@@ -879,6 +884,7 @@ async fn pinned_session_holds_only_its_pinned_projects() {
         }),
         notices: Mutex::new(vec![]),
     });
+    ostra_default_plugin::install();
     let engine = Engine::new(
         ws_root,
         WorkspaceId::new(),
@@ -928,6 +934,7 @@ async fn docs_session_writes_the_book_into_the_workspace() {
         notices: Mutex::new(vec![]),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws_root.clone(), WorkspaceId::new(), db, services.clone());
     let mut rx = engine.subscribe();
     let summary = engine

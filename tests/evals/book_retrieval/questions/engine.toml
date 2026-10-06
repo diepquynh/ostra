@@ -40,13 +40,13 @@ gold = ["crates/ostra-engine/src/runner.rs"]
 id = "engine-007"
 kind = "paraphrase"
 question = "Which decisions does autopilot mode refuse to make on the user's behalf, leaving the question open?"
-gold = ["crates/ostra-engine/src/judge_input.rs"]
+gold = ["crates/ostra-default-plugin/src/judge_input.rs"]
 
 [[case]]
 id = "engine-008"
 kind = "paraphrase"
 question = "Under autopilot, how many times is a failed agent retried before the step is given up?"
-gold = ["crates/ostra-engine/src/judge_input.rs"]
+gold = ["crates/ostra-default-plugin/src/judge_input.rs"]
 
 [[case]]
 id = "engine-009"
@@ -130,13 +130,13 @@ gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/state.rs"]
 id = "engine-022"
 kind = "paraphrase"
 question = "Which review findings does the engine fix by itself without sending them back to the implementer?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/autofix.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/autofix.rs"]
 
 [[case]]
 id = "engine-023"
 kind = "lexical"
 question = "What text shapes can parse_fix turn into an automatic edit?"
-gold = ["crates/ostra-engine/src/autofix.rs"]
+gold = ["crates/ostra-default-plugin/src/autofix.rs"]
 
 [[case]]
 id = "engine-024"
@@ -148,7 +148,7 @@ gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner.rs"]
 id = "engine-025"
 kind = "paraphrase"
 question = "How does a revision after user feedback get the history of the session without replaying the whole conversation?"
-gold = ["crates/ostra-engine/src/context.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-default-plugin/src/context.rs", "crates/ostra-engine/src/runner.rs"]
 
 [[case]]
 id = "engine-026"
@@ -172,7 +172,7 @@ gold = ["crates/ostra-engine/src/state.rs"]
 id = "engine-029"
 kind = "paraphrase"
 question = "After the user stops one agent by hand, can autopilot or the advisor retry that step?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/init.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/init.rs"]
 
 [[case]]
 id = "engine-030"
@@ -190,13 +190,13 @@ gold = ["crates/ostra-engine/src/state.rs"]
 id = "engine-032"
 kind = "lexical"
 question = "What does the RouteAnswer judge return and how many research tasks can one answer queue?"
-gold = ["crates/ostra-engine/src/judge.rs", "crates/ostra-engine/src/state.rs"]
+gold = ["crates/ostra-default-plugin/src/judge.rs", "crates/ostra-engine/src/state.rs"]
 
 [[case]]
 id = "engine-033"
 kind = "paraphrase"
 question = "When an agent gets stuck, what are the options the rescue decision can take?"
-gold = ["crates/ostra-engine/src/judge.rs", "crates/ostra-engine/src/state.rs"]
+gold = ["crates/ostra-default-plugin/src/judge.rs", "crates/ostra-engine/src/state.rs"]
 
 [[case]]
 id = "engine-034"
@@ -238,25 +238,25 @@ gold = ["crates/ostra-engine/src/plan.rs"]
 id = "engine-040"
 kind = "paraphrase"
 question = "What happens to a project that an agent creates in the middle of a build before its phases can continue?"
-gold = ["crates/ostra-engine/src/init.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner.rs"]
+gold = ["crates/ostra-default-plugin/src/init.rs", "crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/runner.rs"]
 
 [[case]]
 id = "engine-041"
 kind = "paraphrase"
 question = "How many times does the advisor look at a failed setup step of a new project before the user is asked?"
-gold = ["crates/ostra-engine/src/init.rs"]
+gold = ["crates/ostra-default-plugin/src/init.rs"]
 
 [[case]]
 id = "engine-042"
 kind = "lexical"
 question = "What are MAX_SCOUTS and MAX_DEFAULT_GENERATE, and what do they limit during project setup?"
-gold = ["crates/ostra-engine/src/init.rs"]
+gold = ["crates/ostra-default-plugin/src/init.rs"]
 
 [[case]]
 id = "engine-043"
 kind = "conceptual"
 question = "When the user pins projects on the new task form, why does the classifier's choice of projects get ignored?"
-gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-engine/src/judge_input.rs"]
+gold = ["crates/ostra-engine/src/state.rs", "crates/ostra-default-plugin/src/judge_input.rs"]
 
 [[case]]
 id = "engine-044"
@@ -292,13 +292,13 @@ gold = ["crates/ostra-engine/src/plan.rs", "crates/ostra-engine/src/coord.rs"]
 id = "engine-049"
 kind = "paraphrase"
 question = "How is the short status line on a session card chosen, for example when it is paused or waiting on a question?"
-gold = ["crates/ostra-engine/src/view.rs"]
+gold = ["crates/ostra-default-plugin/src/view.rs"]
 
 [[case]]
 id = "engine-050"
 kind = "lexical"
 question = "What does clean_title do to a judge-written session title?"
-gold = ["crates/ostra-engine/src/judge.rs"]
+gold = ["crates/ostra-default-plugin/src/judge.rs"]
 
 [[case]]
 id = "engine-051"
@@ -310,7 +310,7 @@ gold = ["crates/ostra-engine/src/runner.rs"]
 id = "engine-052"
 kind = "cross"
 question = "How does a planner request to start an agent become the typed parameter block the agent receives in its first message?"
-gold = ["crates/ostra-engine/src/factory.rs", "crates/ostra-agents/src/spawn.rs"]
+gold = ["crates/ostra-default-plugin/src/factory.rs", "crates/ostra-agents/src/spawn.rs"]
 
 [[case]]
 id = "engine-053"
@@ -328,7 +328,7 @@ gold = ["crates/ostra-core/src/event.rs", "crates/ostra-engine/src/runner.rs"]
 id = "engine-055"
 kind = "cross"
 question = "How does an implementer for a project that does not exist yet learn that it must create it first, and where does it run until then?"
-gold = ["crates/ostra-engine/src/factory.rs", "crates/ostra-engine/src/runner.rs", "crates/ostra-engine/src/state.rs"]
+gold = ["crates/ostra-default-plugin/src/factory.rs", "crates/ostra-engine/src/runner.rs", "crates/ostra-engine/src/state.rs"]
 
 [[case]]
 id = "engine-056"

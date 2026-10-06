@@ -7,6 +7,7 @@ use ostra_core::exec::{ExecutionResult, ExecutionStatus, Usage};
 use ostra_core::ids::{DecisionId, ExecutionId, GateId, SessionId};
 use ostra_core::pipeline::{Category, QuestionAnswer, StageKind, Track};
 use ostra_core::{AgentName, ExecutorKind};
+use ostra_default_plugin::prelude::*;
 use ostra_engine::plan::{PlanCtx, SpawnRequest, Step, next_steps};
 use ostra_engine::state::SessionState;
 use pretty_assertions::assert_eq;
@@ -67,6 +68,7 @@ impl H {
     }
 
     fn state(&self) -> SessionState {
+        ostra_default_plugin::install();
         SessionState::fold(self.id.clone(), &self.events)
     }
 
@@ -197,7 +199,7 @@ impl H {
                 _ => None,
             })
             .expect("gate opened");
-        let routed = ostra_engine::state::answer_needs_route(&payload, &answer);
+        let routed = ostra_default_plugin::fold::answer_needs_route(&payload, &answer);
         self.answer_as(gate, answer, routed);
     }
 
@@ -398,7 +400,7 @@ fn p4_yolo_leaves_a_stopped_execution_to_the_user() {
     let g = h.open_gate("execution_failed");
     let st = h.state();
     assert_eq!(st.gates[&g].title, "You stopped generate-spec");
-    assert!(ostra_engine::judge_input::yolo_plan(&st, &g).is_none());
+    assert!(ostra_default_plugin::judge_input::yolo_plan(&st, &g).is_none());
     assert!(
         h.summaries().is_empty(),
         "no retry and no YOLO answer: {:?}",
@@ -1090,7 +1092,7 @@ fn d9_blocked_phase_removes_dependents() {
     assert!(s.contains(&"blocked phase 1".to_string()));
     assert!(s.contains(&"spawn implementer phase 3 initial".to_string()));
     assert!(!s.iter().any(|x| x.contains("phase 2")));
-    assert!(ostra_engine::plan::removed_phases(&h.state()).contains(&2));
+    assert!(ostra_default_plugin::planner::removed_phases(&h.state()).contains(&2));
 }
 
 // ------------------------------------------------------------------------------------------
@@ -1445,7 +1447,7 @@ fn c2_remembered_context_becomes_a_note_for_later_stages() {
     let st = h.state();
     assert!(!st.full_request().contains("real database"));
     assert_eq!(
-        st.notes_for(ostra_engine::judge::NoteStage::Tests),
+        st.notes_for(ostra_default_plugin::judge::NoteStage::Tests),
         vec!["Test with a real database.".to_string()]
     );
 }
@@ -2158,7 +2160,7 @@ fn o7_a_stuck_test_run_shows_its_advisor_on_the_test_card() {
     stuck_env(&mut h, "spawn write-test write-test phase 1 initial");
     let (a, _) = h.start("spawn advisor");
     let st = h.state();
-    let card = ostra_engine::view::stages(&st)
+    let card = ostra_default_plugin::view::stages(&st)
         .into_iter()
         .find(|c| c.stage == StageKind::WriteTest)
         .unwrap();
@@ -2219,7 +2221,7 @@ fn o8_a_fix_sends_an_implementer_then_the_stuck_run_continues() {
         vec![] as Vec<String>,
         "nothing starts while the fix runs"
     );
-    let card = ostra_engine::view::stages(&h.state())
+    let card = ostra_default_plugin::view::stages(&h.state())
         .into_iter()
         .find(|c| c.stage == StageKind::Implement)
         .unwrap();
@@ -2255,7 +2257,7 @@ fn o8_a_fix_answer_skips_the_route_judge() {
     let (_, g) = stuck_gate(&mut h, "spawn implementer");
     let st = h.state();
     let payload = &st.gates[&g].payload;
-    assert!(!ostra_engine::state::answer_needs_route(
+    assert!(!ostra_default_plugin::fold::answer_needs_route(
         payload,
         &fix(Some("x"))
     ));
@@ -2301,7 +2303,7 @@ fn o8_an_interrupted_fix_runs_again() {
 
 #[test]
 fn o8_yolo_always_sends_a_fix() {
-    use ostra_engine::judge_input::{YoloPlan, yolo_plan};
+    use ostra_default_plugin::judge_input::{YoloPlan, yolo_plan};
     let mut h = H::plan_approved(&["p"], one_phase(), SessionOptions::default());
     let (_, mut g) = stuck_gate(&mut h, "spawn implementer");
     for _ in 0..4 {
@@ -2680,7 +2682,8 @@ fn b2_the_docs_writer_gets_the_users_request_and_notes() {
     );
     assert_eq!(
         r.inputs.user_notes,
-        h.state().notes_for(ostra_engine::judge::NoteStage::Docs)
+        h.state()
+            .notes_for(ostra_default_plugin::judge::NoteStage::Docs)
     );
 }
 
@@ -3474,13 +3477,13 @@ fn init_generates_at_most_eight_skills_by_default() {
     let skills: Vec<Value> = (0..12)
         .map(|i| json!({"name": format!("s{i}"), "kind": "creation", "status": "new", "recommend": true}))
         .collect();
-    let proposals = ostra_engine::init::proposals(&json!({"skills": skills}));
+    let proposals = ostra_default_plugin::init::proposals(&json!({"skills": skills}));
     assert_eq!(
         proposals
             .iter()
             .filter(|p| p.disposition == "generate")
             .count(),
-        ostra_engine::init::MAX_DEFAULT_GENERATE
+        ostra_default_plugin::init::MAX_DEFAULT_GENERATE
     );
     assert_eq!(
         proposals.iter().filter(|p| p.disposition == "drop").count(),
@@ -3784,8 +3787,8 @@ fn f1_yolo_accepts_the_implementation() {
     let st = h.state();
     let gate = st.open_gates().next().unwrap().id.clone();
     assert!(matches!(
-        ostra_engine::judge_input::yolo_plan(&st, &gate),
-        Some(ostra_engine::judge_input::YoloPlan::Fixed { .. })
+        ostra_default_plugin::judge_input::yolo_plan(&st, &gate),
+        Some(ostra_default_plugin::judge_input::YoloPlan::Fixed { .. })
     ));
 }
 
@@ -3865,7 +3868,7 @@ fn j1_research_is_capped_and_kept_in_the_session_projects() {
     let st = h.state();
     assert_eq!(
         st.explore.len(),
-        1 + ostra_engine::judge::MAX_ANSWER_RESEARCH
+        1 + ostra_default_plugin::judge::MAX_ANSWER_RESEARCH
     );
     assert!(st.explore.iter().all(|t| t.project == "p"));
 }
@@ -3957,7 +3960,7 @@ fn j1_approval_text_waits_for_the_judge() {
         "a note for later stages keeps the approval"
     );
     assert_eq!(
-        st.notes_for(ostra_engine::judge::NoteStage::Docs),
+        st.notes_for(ostra_default_plugin::judge::NoteStage::Docs),
         vec!["Mention the new flag."]
     );
     assert_eq!(h.summaries(), vec!["judge stakes"]);
@@ -4089,7 +4092,7 @@ fn j1_answers_recorded_before_the_rule_fold_as_they_did() {
 
 #[test]
 fn j1_only_answers_with_content_are_routed() {
-    use ostra_engine::state::answer_needs_route;
+    use ostra_default_plugin::fold::answer_needs_route;
     let approval = GatePayload::SpecApproval {
         spec_path: PathBuf::new(),
         summary: String::new(),
@@ -4213,7 +4216,7 @@ fn j1_an_answer_split_into_parts_keeps_every_note() {
     );
     let st = h.state();
     assert_eq!(
-        st.notes_for(ostra_engine::judge::NoteStage::Tests),
+        st.notes_for(ostra_default_plugin::judge::NoteStage::Tests),
         vec!["Use a temp file."]
     );
     let rerun = h.spawn_step("spawn implementer phase 1 rescue");
@@ -4546,7 +4549,7 @@ fn rule_o5_an_escalation_or_used_up_advice_asks_the_user() {
             text: None,
         },
     );
-    for round in 1..=ostra_engine::init::MAX_ADVICE {
+    for round in 1..=ostra_default_plugin::init::MAX_ADVICE {
         fail(&mut h);
         h.run(
             &format!("spawn advisor advise mcp #{round}"),

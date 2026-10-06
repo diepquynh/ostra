@@ -113,7 +113,7 @@ fn leak(s: String) -> &'static str {
 
 /// Rule PL4: the built-in agents, as the standard plugin defines them.
 fn load_defs() -> Result<BTreeMap<AgentName, AgentDef>, AgentsError> {
-    ostra_default_plugin::Standard::manifest_ref()
+    ostra_standard::Standard::manifest_ref()
         .agents
         .iter()
         .map(|a| {

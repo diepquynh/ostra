@@ -49,7 +49,7 @@ use ostra_core::model::Effort;
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall};
 use ostra_core::submit::ReportSubmit;
-use ostra_engine::factory::AgentsFactory;
+use ostra_default_plugin::factory::AgentsFactory;
 use ostra_engine::state::SessionState;
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_exec_native::NativeExecutor;
@@ -1238,6 +1238,7 @@ async fn run_session(
         case: case.clone(),
     });
     let db = WorkspaceDb::open_in_memory().unwrap();
+    ostra_default_plugin::install();
     let engine = Engine::new(ws.clone(), WorkspaceId::new(), db, services);
     let summary = engine
         .create_session(CreateSession {

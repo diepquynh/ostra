@@ -1,23 +1,20 @@
 //! Judge calls: the only places a model makes an orchestration decision (HANDOVER 8.3). Each returns
 //! JSON against a schema; the engine stores it as a `DecisionMade` event with its reason.
 
+#[allow(unused_imports)]
+use crate::prelude::*;
+
 use ostra_core::event::JudgeKind;
 use ostra_core::pipeline::Category;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub use ostra_engine::state::{AnswerRoute, FeedbackTarget, NoteStage, OptsIn};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExploreTaskSpec {
     pub project: String,
     pub task: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct OptsIn {
-    #[serde(default)]
-    pub tests: bool,
-    #[serde(default)]
-    pub docs: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,13 +64,6 @@ pub struct TrackOut {
     pub reason: String,
 }
 
-/// One project a feedback round changes, with the instruction its revision phase gets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FeedbackTarget {
-    pub project: String,
-    pub instruction: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeedbackOut {
     pub route: AnswerRoute,
@@ -103,15 +93,6 @@ pub enum Disposition {
     Discard,
 }
 
-/// A later stage a remembered note reaches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NoteStage {
-    Implement,
-    Tests,
-    Docs,
-}
-
 /// The judge's decision for one answer: an open question's ID, or `answer` for the gate's text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnswerItem {
@@ -132,14 +113,6 @@ pub const MAX_ANSWER_RESEARCH: usize = 3;
 
 /// Rule D2: research tasks one Sufficiency round may add, because each is another full pass.
 pub const MAX_SUFFICIENCY_RESEARCH: usize = 3;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AnswerRoute {
-    RequirementChange,
-    ImplementationDetail,
-    StageChoice,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteAnswerOut {

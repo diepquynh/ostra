@@ -3,14 +3,31 @@ name = "ostra-default-plugin"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Ostra's own plugin `ostra`: the built-in agents and the default workflows, written with ostra-sdk."
+description = "Ostra's own plugin `ostra`: the built-in agents, the default workflows, and the pipeline that runs the built-in stages."
 
 [dependencies]
 ostra-core.workspace = true
 ostra-sdk.workspace = true
+ostra-standard.workspace = true
+ostra-agents.workspace = true
+ostra-engine.workspace = true
+ostra-store.workspace = true
+ostra-sandbox.workspace = true
+globset.workspace = true
+regex.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 async-trait.workspace = true
-rust-embed.workspace = true
-toml.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+tempfile.workspace = true
+pretty_assertions.workspace = true
+toml.workspace = true
+
+[[test]]
+name = "conformance"
+path = "../../tests/conformance/main.rs"

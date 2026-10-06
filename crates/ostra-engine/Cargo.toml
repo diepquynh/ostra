@@ -11,7 +11,6 @@ ostra-core.workspace = true
 ostra-sandbox.workspace = true
 ostra-store.workspace = true
 ostra-agents.workspace = true
-ostra-default-plugin.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,9 +23,5 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-pretty_assertions.workspace = true
+ostra-standard.workspace = true
 toml.workspace = true
-
-[[test]]
-name = "conformance"
-path = "../../tests/conformance/main.rs"

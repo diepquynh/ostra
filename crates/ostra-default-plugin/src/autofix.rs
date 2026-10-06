@@ -1,6 +1,9 @@
 //! Auto-fixable review findings, applied by the engine from their exact Fix text (Step 4 item 5):
 //! ``Change `old` to `new` on line N.`` or ``Add `text` above line N: `anchor`.``
 
+#[allow(unused_imports)]
+use crate::prelude::*;
+
 use ostra_core::submit::ReviewFinding;
 use std::path::Path;
 

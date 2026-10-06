@@ -12,7 +12,7 @@ use ostra_core::exec::{
 use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Effort;
-use ostra_engine::factory::AgentsFactory;
+use ostra_default_plugin::factory::AgentsFactory;
 use ostra_engine::{Engine, Notice, Services, SpawnFactory};
 use ostra_store::WorkspaceDb;
 use serde_json::{Value, json};
@@ -106,6 +106,7 @@ async fn recovery_keeps_usage_and_reruns() {
     let services = Arc::new(Fake { ws });
     let db = WorkspaceDb::open(&dir.path().join("workspace.db")).unwrap();
     let id = WorkspaceId::new();
+    ostra_default_plugin::install();
     let first = Engine::new(dir.path().to_path_buf(), id.clone(), db, services.clone());
     let s = first
         .create_session(CreateSession {
@@ -136,6 +137,7 @@ async fn recovery_keeps_usage_and_reruns() {
 
     // A second process opens the same database, as after a crash.
     let db2 = WorkspaceDb::open(&dir.path().join("workspace.db")).unwrap();
+    ostra_default_plugin::install();
     let second = Engine::new(dir.path().to_path_buf(), id, db2, services);
     second.recover().unwrap();
     let events = second.db().events(&s.id).unwrap();
@@ -196,6 +198,7 @@ async fn offline_stop_prevents_rerun_on_recovery() {
     let services = Arc::new(Fake { ws });
     let path = dir.path().join("workspace.db");
     let id = WorkspaceId::new();
+    ostra_default_plugin::install();
     let first = Engine::new(
         dir.path().to_path_buf(),
         id.clone(),
@@ -232,6 +235,7 @@ async fn offline_stop_prevents_rerun_on_recovery() {
         ostra_engine::runner::stop_session_offline(&db, &s.id).unwrap(),
         1
     );
+    ostra_default_plugin::install();
     let second = Engine::new(
         dir.path().to_path_buf(),
         id,

@@ -1,10 +1,10 @@
 //! The spawn factory over `ostra-agents`: planner inputs become the agent's typed spawn struct,
 //! rendered as the `Label: value` block, plus the repo brief and custom instructions.
 
+#[allow(unused_imports)]
+use crate::prelude::*;
+
 use crate::init::STACK_REFERENCE_NAME;
-use crate::plan::{SpawnInputs, SpawnRequest};
-use crate::services::{AgentMeta, BuiltSpawn, SpawnEnv, SpawnFactory};
-use crate::state::SessionState;
 use ostra_agents::AgentCatalog;
 use ostra_agents::brief::{ArtifactsBrief, BooksBrief, BriefInput, augment};
 use ostra_agents::spawn::*;
@@ -13,6 +13,9 @@ use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, FactTarget, WorkKind};
 use ostra_core::executor::ExecutorKind;
 use ostra_core::pipeline::{Category, Track};
+use ostra_engine::plan::{SpawnInputs, SpawnRequest};
+use ostra_engine::services::{AgentMeta, BuiltSpawn, SpawnEnv, SpawnFactory};
+use ostra_engine::state::SessionState;
 use std::path::{Path, PathBuf};
 
 pub struct AgentsFactory;
@@ -155,7 +158,7 @@ impl SpawnFactory for AgentsFactory {
                 ExecPurpose::Stage { .. } | ExecPurpose::Helper { .. }
             ) =>
             {
-                Box::new(crate::workflow::custom_params(req, s, common)?)
+                Box::new(ostra_engine::workflow::custom_params(req, s, common)?)
             }
             _ if matches!(req.purpose, ExecPurpose::Consult { .. }) => Box::new(ConsultParams {
                 common,
@@ -415,7 +418,7 @@ impl SpawnFactory for AgentsFactory {
                 }
             }
             Contract::Stage | Contract::Plugin(_) => {
-                Box::new(crate::workflow::custom_params(req, s, common)?)
+                Box::new(ostra_engine::workflow::custom_params(req, s, common)?)
             }
         };
         let block = params.render();

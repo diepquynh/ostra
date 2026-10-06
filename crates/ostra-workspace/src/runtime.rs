@@ -100,6 +100,7 @@ impl WorkspaceRt {
         let db = WorkspaceDb::open(&paths::workspace_db(root))?;
         db.set_workspace_id(&id)?;
         let services = host.clone().services(&id, root);
+        ostra_default_plugin::install();
         let engine = Engine::new(root.to_path_buf(), id.clone(), db.clone(), services);
         let rt = WorkspaceRt {
             id,

@@ -79,7 +79,7 @@ pub trait Services: Send + Sync {
     }
     /// Rule WF1: the workspace's workflow files, re-read like the settings.
     fn workflows(&self) -> ostra_core::workflow::WorkflowSet {
-        ostra_default_plugin::workflow_set()
+        crate::pipeline::get().workflow_set()
     }
     /// Rule PL3: the plugin stages the workspace can run, as `(plugin, stage)`.
     fn plugin_stages(&self) -> Vec<(String, String)> {

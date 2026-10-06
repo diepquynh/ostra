@@ -527,7 +527,7 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn on_coord_event(&mut self, event: &SessionEvent, at: DateTime<Utc>) {
+    pub fn on_coord_event(&mut self, event: &SessionEvent, at: DateTime<Utc>) {
         match event {
             SessionEvent::MessageSent {
                 id,
@@ -583,7 +583,7 @@ impl SessionState {
     }
 
     /// A helper or a pre-messaging consult run got its message as its spawn.
-    pub(crate) fn coord_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose) {
+    pub fn coord_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose) {
         let root = self.subagent_of(id);
         match purpose {
             ExecPurpose::Consult { ask, .. } => self.deliver(ask, id),
@@ -609,7 +609,7 @@ impl SessionState {
     }
 
     /// A run ended: it no longer waits, and a helper's result goes to the run that started it.
-    pub(crate) fn coord_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
+    pub fn coord_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
         if result.status != ExecutionStatus::Waiting {
             self.waits.remove(&rec.id);
         }
@@ -751,8 +751,8 @@ impl SessionState {
             || head.agent != agent
             || !ended_ok(result.status)
             || result.submit.is_none()
-            || self
-                .forced_executor(agent)
+            || crate::pipeline::get()
+                .forced_executor(self, agent)
                 .is_some_and(|e| e != head.executor)
             || (matches!(head.executor, ExecutorKind::Harness(_))
                 && result.native_session_id.is_none())
@@ -1040,7 +1040,7 @@ impl SessionState {
     }
 
     /// A purpose key a waiting run blocks.
-    pub(crate) fn waiting_key(rec: &ExecRecord) -> String {
+    pub fn waiting_key(rec: &ExecRecord) -> String {
         purpose_key(&rec.purpose)
     }
 }

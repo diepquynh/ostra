@@ -33,8 +33,8 @@ use ostra_core::model::{Effort, Tier};
 use ostra_core::paths;
 use ostra_core::policy::{PermissionAnswer, PolicyDecision, RuleRef, ToolCall};
 use ostra_core::submit::AdvisorSubmit;
-use ostra_engine::factory::AgentsFactory;
-use ostra_engine::init::{AdviceInputs, advisor_request, failed_step_label};
+use ostra_default_plugin::factory::AgentsFactory;
+use ostra_default_plugin::init::{AdviceInputs, advisor_request, failed_step_label};
 use ostra_engine::plan::{SpawnInputs, SpawnRequest};
 use ostra_engine::services::{BuiltSpawn, SpawnEnv, SpawnFactory};
 use ostra_engine::state::{InitTrack, SessionState, stage_of};
@@ -252,6 +252,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
             event,
         })
         .collect();
+    ostra_default_plugin::install();
     let state = SessionState::fold(SessionId::from("s_eval"), &stored);
     let focus = InitTrack::created_focus(&project);
 
@@ -318,7 +319,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         let r = step_result
             .as_ref()
             .unwrap_or_else(|| panic!("{}: no problem and no result", case.id));
-        ostra_engine::state::stuck_problem(
+        ostra_default_plugin::fold::stuck_problem(
             r["summary"].as_str().unwrap_or_default(),
             r["stuck"]["need"].as_str().unwrap_or_default(),
         )

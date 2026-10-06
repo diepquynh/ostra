@@ -12,7 +12,7 @@ use ostra_core::submit::StageVerdict;
 use ostra_core::workflow::{StageDef, StageRun, WorkflowDef};
 
 /// Rule PL3: the next step of each instance of a plugin stage, or `true` when all are done.
-pub(crate) fn plan(p: &mut Planner<'_>, wf: &WorkflowDef, d: &StageDef) -> bool {
+pub fn plan(p: &mut Planner<'_>, wf: &WorkflowDef, d: &StageDef) -> bool {
     let s = p.session();
     let mut done = true;
     for scope in stage_scopes(s, d) {

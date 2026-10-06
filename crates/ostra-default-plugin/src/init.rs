@@ -3,12 +3,15 @@
 //! existing skills cover the project), propose, skill approval gate, generate-skill ×N (parallel,
 //! advanced tier), generate-inventory.
 
-use crate::plan::{SpawnInputs, SpawnRequest, Step};
-use crate::state::{InitTrack, SessionState};
+#[allow(unused_imports)]
+use crate::prelude::*;
+
 use ostra_core::Contract;
 use ostra_core::agent::{AgentName, InitializerMode};
 use ostra_core::event::{ExecPurpose, GatePayload, SkillProposal};
 use ostra_core::ids::ExecutionId;
+use ostra_engine::plan::{SpawnInputs, SpawnRequest, Step};
+use ostra_engine::state::{InitTrack, SessionState};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
@@ -43,7 +46,7 @@ fn spawn(
     };
     Step::Spawn(Box::new(SpawnRequest {
         agent: s.default_agent(Contract::Setup),
-        stage: crate::state::stage_of(&purpose),
+        stage: ostra_engine::state::stage_of(&purpose),
         purpose,
         project: project.clone(),
         session_dir: s.project_session_dir(&project),
@@ -282,7 +285,7 @@ pub fn advisor_request(a: AdviceInputs) -> SpawnRequest {
     };
     SpawnRequest {
         agent: a.advisor,
-        stage: crate::state::stage_of(&purpose),
+        stage: ostra_engine::state::stage_of(&purpose),
         purpose,
         project: a.project,
         session_dir: a.session_dir,

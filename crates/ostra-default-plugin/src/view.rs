@@ -1,8 +1,9 @@
 //! Projections of session state for the browser: summary, board cards, phases, artifacts.
 
-use crate::plan::removed_phases;
-use crate::runner::EngineError;
-use crate::state::{DocsState, EpaState, ExecRecord, LoopNext, SessionState, StageRun, WorkLoop};
+#[allow(unused_imports)]
+use crate::prelude::*;
+
+use crate::planner::removed_phases;
 use ostra_core::agent::AgentName;
 use ostra_core::api::{
     ArtifactRef, ChangedBy, ContextAddition, DecisionView, ExecutionGroupView, ExecutionView,
@@ -16,6 +17,10 @@ use ostra_core::ids::{ExecutionId, WorkspaceId};
 use ostra_core::paths;
 use ostra_core::pipeline::{Lane, StageKind};
 use ostra_core::submit::Verdict;
+use ostra_engine::runner::EngineError;
+use ostra_engine::state::{
+    DocsState, EpaState, ExecRecord, LoopNext, SessionState, StageRun, WorkLoop,
+};
 use ostra_store::WorkspaceDb;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
@@ -178,7 +183,10 @@ pub fn stage_label(k: StageKind) -> &'static str {
     }
 }
 
-fn exec_ids(s: &SessionState, f: impl Fn(&crate::state::ExecRecord) -> bool) -> Vec<ExecutionId> {
+fn exec_ids(
+    s: &SessionState,
+    f: impl Fn(&ostra_engine::state::ExecRecord) -> bool,
+) -> Vec<ExecutionId> {
     s.executions
         .values()
         .filter(|e| f(e))
@@ -189,7 +197,7 @@ fn exec_ids(s: &SessionState, f: impl Fn(&crate::state::ExecRecord) -> bool) -> 
 fn gate_for(
     s: &SessionState,
     f: impl Fn(&GatePayload) -> bool,
-) -> Option<&crate::state::GateRecord> {
+) -> Option<&ostra_engine::state::GateRecord> {
     s.gates.values().rev().find(|g| f(&g.payload))
 }
 
@@ -1227,7 +1235,7 @@ pub fn detail(
 }
 
 pub fn fact_checks(s: &SessionState) -> Vec<FactCheckView> {
-    fn track<T>(t: &crate::state::ArtifactTrack<T>, target: &str) -> Vec<FactCheckView> {
+    fn track<T>(t: &ostra_engine::state::ArtifactTrack<T>, target: &str) -> Vec<FactCheckView> {
         t.checks
             .iter()
             .map(|c| FactCheckView {
@@ -1359,6 +1367,7 @@ mod tests {
 
     #[test]
     fn titles_come_from_classify_and_init() {
+        crate::install();
         let id = SessionId::from("s1");
         let init = SessionState::fold(
             id.clone(),
@@ -1415,6 +1424,7 @@ mod tests {
 
     #[test]
     fn repeated_runs_are_numbered_per_agent_and_label() {
+        crate::install();
         let fix = || ExecPurpose::Implement {
             phase: 1,
             work: WorkKind::Fix,
@@ -1481,6 +1491,7 @@ mod tests {
 
     #[test]
     fn groups_aggregate_status_and_cost_in_start_order() {
+        crate::install();
         let native = ExecutorKind::Native;
         let groups = execution_groups(&[
             view(
@@ -1557,6 +1568,7 @@ mod tests {
 
     #[test]
     fn tree_nodes_group_runs_with_numbered_labels() {
+        crate::install();
         let s = SessionState::fold(
             SessionId::from("s1"),
             &log(vec![
@@ -1659,6 +1671,7 @@ mod tests {
 
     #[test]
     fn decorate_numbers_labels_and_finds_transcripts() {
+        crate::install();
         let tmp = tempfile::tempdir().unwrap();
         let mut s = SessionState::new(SessionId::from("s1"));
         s.session_root = tmp.path().to_path_buf();
@@ -1697,31 +1710,33 @@ mod tests {
 
     #[test]
     fn decorate_finds_the_project_folder_and_the_open_gate_of_an_execution() {
+        crate::install();
         let mut s = SessionState::new(SessionId::from("s1"));
         s.projects.push(ProjectRef {
             key: "backend".into(),
             path: PathBuf::from("/code/backend"),
         });
         let t0 = chrono::DateTime::from_timestamp(100, 0).unwrap();
-        let gate = |id: &str, execution: &str, at: i64, answered: bool| crate::state::GateRecord {
-            id: GateId::from(id),
-            title: format!("Gate {id}"),
-            explanation: String::new(),
-            payload: GatePayload::ExecutionFailed {
-                execution: ExecutionId::from(execution),
-                agent: AgentName::Implementer,
-                project: "backend".into(),
-                error: "boom".into(),
-            },
-            answer: answered.then(|| ostra_core::event::GateAnswer::Choice {
-                option: "retry".into(),
-                text: None,
-            }),
-            source: None,
-            reason: None,
-            opened_at: t0 + chrono::Duration::seconds(at),
-            answered_at: None,
-        };
+        let gate =
+            |id: &str, execution: &str, at: i64, answered: bool| ostra_engine::state::GateRecord {
+                id: GateId::from(id),
+                title: format!("Gate {id}"),
+                explanation: String::new(),
+                payload: GatePayload::ExecutionFailed {
+                    execution: ExecutionId::from(execution),
+                    agent: AgentName::Implementer,
+                    project: "backend".into(),
+                    error: "boom".into(),
+                },
+                answer: answered.then(|| ostra_core::event::GateAnswer::Choice {
+                    option: "retry".into(),
+                    text: None,
+                }),
+                source: None,
+                reason: None,
+                opened_at: t0 + chrono::Duration::seconds(at),
+                answered_at: None,
+            };
         for g in [
             gate("g_old", "x_1", 1, false),
             gate("g_new", "x_1", 2, false),

@@ -1,14 +1,17 @@
 //! Inputs for judge calls, built from session state, and the YOLO answer logic.
 
-use crate::state::{
-    DocsState, EpaState, Interrupt, LoopNext, SUFFICIENCY_ROUNDS, SessionState, amendment_index,
-    parse_loop_key,
-};
+#[allow(unused_imports)]
+use crate::prelude::*;
+
 use ostra_core::event::{
     AnswerSource, ContextDelivery, ExecPurpose, GateAnswer, GatePayload, JudgeKind,
 };
 use ostra_core::ids::{ExecutionId, GateId};
 use ostra_core::pipeline::{Category, QuestionAnswer, TestPolicy};
+use ostra_engine::state::{
+    DocsState, EpaState, Interrupt, LoopNext, SUFFICIENCY_ROUNDS, SessionState, amendment_index,
+    parse_loop_key,
+};
 use serde_json::{Value, json};
 use std::fmt::Write;
 use std::path::Path;
@@ -17,14 +20,7 @@ const FILE_EXCERPT: usize = 24_000;
 /// Per research document for the Track judge, which reads every document of the session.
 const TRACK_EXCERPT: usize = 12_000;
 
-pub struct ProjectFacts {
-    pub key: String,
-    pub path: String,
-    pub initialized: bool,
-    pub stack: Option<String>,
-    /// Module map rows from `project.toml`, as `area (glob)`.
-    pub areas: Vec<String>,
-}
+pub use ostra_engine::pipeline::{ProjectFacts, YoloPlan};
 
 fn excerpt(path: &Path) -> String {
     excerpt_n(path, FILE_EXCERPT)
@@ -810,7 +806,7 @@ fn completion_input(s: &SessionState) -> (String, String) {
         _ => {}
     }
     if !s.phases.is_empty() {
-        let removed = crate::plan::removed_phases(s);
+        let removed = crate::planner::removed_phases(s);
         let _ = writeln!(m, "\n# Phases\n");
         for p in s.phases.values() {
             let status = if removed.contains(&p.info.id) {
@@ -929,14 +925,6 @@ impl PolicyLabel for ostra_core::pipeline::PhaseInfo {
             ),
         }
     }
-}
-
-/// How the engine answers a gate under YOLO.
-pub enum YoloPlan {
-    /// No judgment needed.
-    Fixed { answer: GateAnswer, reason: String },
-    /// The YOLO judge answers, against this schema.
-    Judge { schema: Value },
 }
 
 /// Gates YOLO never answers: spending more, and retrying an execution the user stopped (Rule P4).

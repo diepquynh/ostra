@@ -7,7 +7,7 @@ use ostra_core::executor::ExecutorKind;
 use ostra_core::ids::WorkspaceId;
 use ostra_core::model::Effort;
 use ostra_core::paths;
-use ostra_engine::factory::AgentsFactory;
+use ostra_default_plugin::factory::AgentsFactory;
 use ostra_engine::{Notice, Services, SpawnFactory};
 use ostra_notify::{Notification, SendOutcome};
 use serde_json::Value;

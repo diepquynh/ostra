@@ -191,7 +191,7 @@ gold = ["crates/ostra-core/src/artifacts.rs"]
 id = "core-032"
 kind = "cross"
 question = "How do the workspace's shared reference files get mentioned in the first message an agent receives?"
-gold = ["crates/ostra-agents/src/brief.rs", "crates/ostra-core/src/artifacts.rs", "crates/ostra-engine/src/factory.rs"]
+gold = ["crates/ostra-agents/src/brief.rs", "crates/ostra-core/src/artifacts.rs", "crates/ostra-default-plugin/src/factory.rs"]
 
 [[case]]
 id = "core-033"

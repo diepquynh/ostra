@@ -134,20 +134,18 @@ impl SessionState {
             .as_ref()
             .and_then(|w| w.stages.iter().find(|d| d.builtin() == Some(stage)))
             .and_then(|d| d.agents.get(&contract).copied())
-            .or_else(|| ostra_default_plugin::Standard::default_for(contract))
-            .expect("the standard plugin returns every built-in contract")
+            .unwrap_or_else(|| crate::pipeline::get().default_agent(contract))
     }
 
     /// Rule PL4: the standard plugin's agent for a contract no built-in stage binds, such as a
     /// quick answer or a project's setup.
     pub fn default_agent(&self, contract: Contract) -> AgentName {
-        ostra_default_plugin::Standard::default_for(contract)
-            .expect("the standard plugin returns every built-in contract")
+        crate::pipeline::get().default_agent(contract)
     }
 
     /// Rule PL5: record what a plugin's handler made of a run's result, and apply it where the
     /// run's verdict would apply.
-    pub(crate) fn on_result_handled(&mut self, execution: &ExecutionId, outcome: &CustomSubmit) {
+    pub fn on_result_handled(&mut self, execution: &ExecutionId, outcome: &CustomSubmit) {
         let Some(rec) = self.executions.get_mut(execution) else {
             return;
         };
@@ -212,7 +210,7 @@ impl SessionState {
             return Some(w.clone());
         }
         let c = self.category?;
-        (c != Category::QuickAnswer).then(|| ostra_default_plugin::workflow(c))
+        (c != Category::QuickAnswer).then(|| crate::pipeline::get().default_workflow(c))
     }
 
     /// Rule WF1: the session waits for its workflow to be resolved and recorded.
@@ -235,7 +233,7 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn on_workflow_resolved(&mut self, wf: &WorkflowDef) {
+    pub fn on_workflow_resolved(&mut self, wf: &WorkflowDef) {
         self.workflow = Some(wf.clone());
         if self.track.is_none() {
             self.track = wf.track;
@@ -249,7 +247,7 @@ impl SessionState {
     }
 
     /// Rule WF1: the category a named workflow forces on Classify's pick.
-    pub(crate) fn forced_category(&self) -> Option<Category> {
+    pub fn forced_category(&self) -> Option<Category> {
         match self.workflow_choice {
             Some(WorkflowChoice::Named { .. }) => self.workflow.as_ref().map(|w| w.base),
             _ => None,
@@ -264,7 +262,7 @@ impl SessionState {
         self.workflow.as_ref()?.stage(node).cloned()
     }
 
-    pub(crate) fn stage_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose) {
+    pub fn stage_started(&mut self, id: &ExecutionId, purpose: &ExecPurpose) {
         if let ExecPurpose::Stage { node, scope, round } = purpose {
             let t = self
                 .stages
@@ -277,7 +275,7 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn stage_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
+    pub fn stage_finished(&mut self, rec: &ExecRecord, result: &ExecutionResult) {
         // Rule PL5: a plugin contract's result waits for its plugin's handler.
         if matches!(rec.contract, Contract::Plugin(_)) && rec.handled.is_none() {
             return;
@@ -346,7 +344,7 @@ impl SessionState {
     }
 
     /// Rule WB5: the node's conditions did not hold.
-    pub(crate) fn on_stage_skipped(&mut self, node: &str, scope: Option<&str>) {
+    pub fn on_stage_skipped(&mut self, node: &str, scope: Option<&str>) {
         let t = self.stages.entry(stage_key(node, scope)).or_default();
         t.outcome = Some(StageOutcome::Skipped);
         t.next = None;
@@ -354,7 +352,7 @@ impl SessionState {
 
     /// Rules WB2 and WB3: a transform or prompt node ran. A failure follows the node's `on_fail`
     /// like an agent's `fail` verdict.
-    pub(crate) fn on_node_ran(
+    pub fn on_node_ran(
         &mut self,
         node: &str,
         scope: Option<&str>,
@@ -534,7 +532,7 @@ impl SessionState {
     }
 
     /// Rule PL3: fold a plugin's decision for one stage instance.
-    pub(crate) fn on_stage_decided(
+    pub fn on_stage_decided(
         &mut self,
         node: &str,
         scope: Option<&str>,
@@ -595,7 +593,7 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn stage_gate_opened(&mut self, id: &GateId, payload: &GatePayload) {
+    pub fn stage_gate_opened(&mut self, id: &GateId, payload: &GatePayload) {
         if let GatePayload::StageReview { stage, scope, .. } = payload {
             let t = self
                 .stages
@@ -607,12 +605,7 @@ impl SessionState {
     }
 
     /// Rule WF5: the user's answer at a stage's gate.
-    pub(crate) fn stage_gate_answered(
-        &mut self,
-        id: &GateId,
-        payload: &GatePayload,
-        answer: &GateAnswer,
-    ) {
+    pub fn stage_gate_answered(&mut self, id: &GateId, payload: &GatePayload, answer: &GateAnswer) {
         let GatePayload::StageReview {
             stage,
             scope,
@@ -664,7 +657,7 @@ impl SessionState {
         }
     }
 
-    pub(crate) fn stage_exec_gate(&mut self, rec: &ExecRecord, gate: Option<&GateId>, retry: bool) {
+    pub fn stage_exec_gate(&mut self, rec: &ExecRecord, gate: Option<&GateId>, retry: bool) {
         let ExecPurpose::Stage { node, scope, .. } = &rec.purpose else {
             return;
         };
@@ -686,7 +679,7 @@ impl SessionState {
     }
 
     /// Rule WF6: the subagents of the stages a stage run reads, with their role toward it.
-    pub(crate) fn stage_partners(&self, rec: &ExecRecord) -> Vec<(ExecutionId, String)> {
+    pub fn stage_partners(&self, rec: &ExecRecord) -> Vec<(ExecutionId, String)> {
         let ExecPurpose::Stage { node, scope, .. } = &rec.purpose else {
             return vec![];
         };
@@ -1176,7 +1169,7 @@ pub fn stage_scopes(s: &SessionState, d: &StageDef) -> Vec<Option<String>> {
             .map(|p| Some(format!("project:{p}")))
             .collect(),
         StageScope::Phase => {
-            let removed = crate::plan::removed_phases(s);
+            let removed = crate::pipeline::get().removed_phases(s);
             s.phases
                 .values()
                 .filter(|p| !removed.contains(&p.info.id) && p.impl_loop.is_done())
@@ -1406,7 +1399,7 @@ mod tests {
         let file: WorkflowFile = toml::from_str(text).unwrap();
         WorkflowSet {
             files: [("w".to_string(), file)].into_iter().collect(),
-            ..ostra_default_plugin::workflow_set()
+            ..ostra_standard::workflow_set()
         }
         .resolve("w")
         .unwrap()
