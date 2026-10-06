@@ -126,7 +126,7 @@ pub struct FactCheckFinding {
 pub struct FactCheckSubmit {
     /// `PASS` only when no finding is HIGH or MEDIUM.
     pub verdict: Verdict,
-    /// `spec` or `plan`.
+    /// `spec`, `plan`, or `page` (a docs draft, Rule B10).
     pub target: String,
     #[serde(default)]
     pub findings: Vec<FactCheckFinding>,

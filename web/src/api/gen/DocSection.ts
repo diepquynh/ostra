@@ -20,4 +20,8 @@ body: string,
 /**
  * The files a reader opens after the page. The page shows them last.
  */
-code_refs: Array<CodeRef>, };
+code_refs: Array<CodeRef>, 
+/**
+ * Rule B10: the group the page belongs to in the book's contents, such as `Security`.
+ */
+group: string, };

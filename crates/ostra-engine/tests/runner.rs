@@ -147,7 +147,22 @@ impl Executor for Scripted {
                 json!({"spec_path": spec_path, "open_questions": [], "external_evidence_rows": 0, "deliverables": 1, "requirements": 2, "summary": "spec"})
             }
             AgentName::FactCheck => {
-                json!({"verdict": "PASS", "target": if spec.first_message.contains("Target type: plan") { "plan" } else { "spec" }, "findings": []})
+                let m = &spec.first_message;
+                if m.contains("Target type: page") {
+                    let target = m.lines().find_map(|l| l.strip_prefix("Target: ")).unwrap();
+                    assert!(
+                        Path::new(target).exists(),
+                        "the runner wrote the draft: {target}"
+                    );
+                }
+                let target = if m.contains("Target type: plan") {
+                    "plan"
+                } else if m.contains("Target type: page") {
+                    "page"
+                } else {
+                    "spec"
+                };
+                json!({"verdict": "PASS", "target": target, "findings": []})
             }
             AgentName::Plan => {
                 std::fs::write(&plan_path, "# Plan").unwrap();
@@ -171,11 +186,29 @@ impl Executor for Scripted {
                     text.contains("Document the greeting"),
                     "the stub holds the request: {text}"
                 );
-                json!({"status": "ok", "summary": "Documented the greeting.", "overview": "app greets users.",
+                let m = &spec.first_message;
+                if m.contains("Docs mode: survey") {
+                    json!({"status": "ok", "step": "survey", "summary": "One page.", "overview": "app greets users.",
+                        "pages": [{"id": "greeting", "title": "Greeting", "group": "How it works", "covers": "What app prints.", "sources": ["src.txt"]}],
+                        "inventory": [{"id": "greet", "name": "The greeting", "sources": ["src.txt"], "owner": "greeting"}]})
+                } else if m.contains("Docs mode: synthesis") {
+                    assert!(
+                        m.contains("Drafts: "),
+                        "the synthesis reads the drafts: {m}"
+                    );
+                    json!({"status": "ok", "step": "synthesis", "summary": "Done.", "done": true,
+                        "checks": [{"check": "Every inventory item has one owner", "passed": true}]})
+                } else {
+                    assert!(
+                        m.contains("Docs mode: page") && m.contains("Page: Greeting (greeting)"),
+                        "{m}"
+                    );
+                    json!({"status": "ok", "step": "page", "summary": "Documented the greeting.",
                     "sections": [{"id": "greeting", "title": "Greeting", "summary": "Prints a greeting.",
                         "body": "The app assumes that stdout is open.\n\n```mermaid\nsequenceDiagram\nUser->>app: run\napp-->>User: hello\n```",
                         "code_refs": [{"path": "src.txt", "note": "the greeting"}]}],
                     "glossary": [{"term": "Greeting", "definition": "The text app prints."}]})
+                }
             }
             other => return ExecutionResult::error(format!("unexpected agent {other}")),
         };
@@ -944,7 +977,12 @@ async fn docs_session_writes_the_book_into_the_workspace() {
     let agents: Vec<AgentName> = exec.runs.lock().unwrap().iter().map(|r| r.0).collect();
     assert_eq!(
         agents,
-        [AgentName::Documentation],
-        "no implementer runs for a DOCS request"
+        [
+            AgentName::Documentation,
+            AgentName::Documentation,
+            AgentName::FactCheck,
+            AgentName::Documentation
+        ],
+        "the docs pipeline runs a survey, a page, a check, and a synthesis, and no implementer"
     );
 }

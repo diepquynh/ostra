@@ -6,6 +6,7 @@ use crate::judge::NoteStage;
 use crate::state::*;
 use ostra_core::Contract;
 use ostra_core::agent::AgentName;
+use ostra_core::book::{DOCS_ROUNDS, DocsStep};
 use ostra_core::event::{
     ClosingItem, CommandPurpose, ExecPurpose, FactTarget, GatePayload, JudgeKind, SessionKind,
     WorkKind,
@@ -22,9 +23,6 @@ use ostra_core::workflow::{BuiltinStage, StageDef, StageRun, StageScope, Workflo
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
-
-/// Rule B7: documentation writers that run at once in one session.
-pub const MAX_DOCS_WRITERS: usize = 4;
 
 struct BookProgress {
     /// Projects whose part of the book is written, sorted.
@@ -92,6 +90,18 @@ pub struct SpawnInputs {
     pub user_notes: Vec<String>,
     /// Initializer inputs, by spawn label.
     pub init: BTreeMap<String, String>,
+    /// Rule B10: the reference sheet of modules and constants.
+    pub docs_reference: Option<PathBuf>,
+    /// Rule B10: the docs step a documentation run answers, the page a writer writes with the
+    /// whole page plan, the inventory items it owns, its revision instructions or the round's
+    /// findings, the synthesis round, and a fact-check of a draft page.
+    pub docs_step: Option<DocsStep>,
+    pub docs_page: Option<ostra_core::book::PlannedPage>,
+    pub docs_pages: Vec<ostra_core::book::PlannedPage>,
+    pub docs_inventory: Vec<String>,
+    pub docs_instructions: Vec<String>,
+    pub docs_round: u32,
+    pub docs_check: bool,
     pub init_item: Option<String>,
     /// Rule WF4: the workflow node a custom agent's run serves.
     pub stage_id: Option<String>,
@@ -183,6 +193,10 @@ pub enum Step {
         execution: ExecutionId,
         error: String,
     },
+    /// Rule B10: read the project's modules and named constants from disk and record them.
+    ScanDocs {
+        project: String,
+    },
     /// Rule B5: write the session's documentation into the workspace book `book`.
     WriteBook {
         book: String,
@@ -259,6 +273,7 @@ impl Step {
             Step::AnnounceBlocked { phase, tests, .. } => format!("blocked:{phase}:{tests}"),
             Step::FinishInit { project } => format!("finish-init:{project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem:{project}"),
+            Step::ScanDocs { project } => format!("scan-docs:{project}"),
             Step::WriteBook { book } => format!("book:{book}"),
             Step::ResolveWorkflow { .. } => "resolve-workflow".into(),
             Step::HandleResult { execution } => format!("handle:{execution}"),
@@ -310,6 +325,7 @@ impl Step {
             Step::AnnounceBlocked { phase, .. } => format!("blocked phase {phase}"),
             Step::FinishInit { project } => format!("finish-init {project}"),
             Step::RecordInitProblem { project, .. } => format!("init-problem {project}"),
+            Step::ScanDocs { project } => format!("scan-docs {project}"),
             Step::WriteBook { book } => format!("write-book {book}"),
             Step::HandleResult { .. } => "handle-result".into(),
             Step::DecideStage { node, scope, .. } => match scope {
@@ -375,7 +391,30 @@ fn purpose_summary(p: &ExecPurpose) -> String {
         ExecPurpose::WriteTest { phase, work } => {
             format!("write-test phase {phase} {work:?}").to_lowercase()
         }
-        ExecPurpose::Docs { project } => format!("docs {project}"),
+        ExecPurpose::Docs {
+            project,
+            page: None,
+            ..
+        } => format!("docs {project}"),
+        ExecPurpose::Docs {
+            project,
+            page: Some(p),
+            round: 0,
+        } => format!("docs {project}/{p}"),
+        ExecPurpose::Docs {
+            project,
+            page: Some(p),
+            round,
+        } => format!("docs-revise {project}/{p} round {round}"),
+        ExecPurpose::DocsSurvey { project } => format!("docs-survey {project}"),
+        ExecPurpose::DocsCheck {
+            project,
+            page,
+            round,
+        } => format!("docs-check {project}/{page} round {round}"),
+        ExecPurpose::DocsSynthesis { project, round } => {
+            format!("docs-synthesis {project} round {round}")
+        }
         ExecPurpose::Architecture => "architecture".into(),
         ExecPurpose::Inspect { of } => format!("inspect {of}"),
         ExecPurpose::PromptGen { handoff_for } => {
@@ -421,6 +460,9 @@ fn gate_owner(p: &GatePayload) -> String {
         | GatePayload::PlanApproval { .. }
         | GatePayload::BudgetReached { .. } => String::new(),
         GatePayload::ImplementationReview { round, .. } => round.to_string(),
+        GatePayload::DocsRounds {
+            project, rounds, ..
+        } => format!("{project}:{rounds}"),
         GatePayload::StageReview { stage, scope, .. } => {
             crate::workflow::stage_key(stage, scope.as_deref())
         }
@@ -2020,64 +2062,271 @@ impl<'a> Planner<'a> {
         if blocker_open(passed) {
             return;
         }
-        match &track.docs {
-            DocsState::NotStarted => {
-                // Rule B7: docs writers fan out, at most MAX_DOCS_WRITERS at a time.
-                if self.docs_in_flight() >= MAX_DOCS_WRITERS {
-                    return;
-                }
-                let inputs = SpawnInputs {
-                    implementer_reports: passed
-                        .iter()
-                        .filter_map(|p| p.implementer_report.clone())
-                        .collect(),
-                    user_notes: s.notes_for(NoteStage::Docs),
-                    ..Default::default()
-                };
-                self.spawn(
-                    s.agent_for(BuiltinStage::Closing, Contract::Documentation),
-                    ExecPurpose::Docs {
-                        project: project.to_string(),
+        let base = SpawnInputs {
+            implementer_reports: passed
+                .iter()
+                .filter_map(|p| p.implementer_report.clone())
+                .collect(),
+            user_notes: s.notes_for(NoteStage::Docs),
+            ..Default::default()
+        };
+        let writer = s.agent_for(BuiltinStage::Closing, Contract::Documentation);
+        let docs = |page: Option<&str>, round: u32| ExecPurpose::Docs {
+            project: project.to_string(),
+            page: page.map(str::to_string),
+            round,
+        };
+        // Rule B10: a log from before the pipeline keeps its whole-part writer.
+        if !matches!(track.docs, DocsState::NotStarted) {
+            self.docs_run(project, &track.docs, writer, docs(None, 0), base);
+            return;
+        }
+        // Rule B10: scan the modules and constants, survey, write a first draft of each page, then
+        // synthesis rounds until done. A log whose survey started before the scan keeps going.
+        if track.docs_scan.is_none() && matches!(track.survey, DocsState::NotStarted) {
+            self.push(Step::ScanDocs {
+                project: project.to_string(),
+            });
+            return;
+        }
+        let base = SpawnInputs {
+            docs_reference: track
+                .docs_scan
+                .as_ref()
+                .map(|_| s.docs_drafts_dir(project).join("reference.md")),
+            ..base
+        };
+        let Some(survey) = track.survey_plan() else {
+            let inputs = SpawnInputs {
+                docs_step: Some(DocsStep::Survey),
+                ..base
+            };
+            let purpose = ExecPurpose::DocsSurvey {
+                project: project.to_string(),
+            };
+            self.docs_run(project, &track.survey, writer, purpose, inputs);
+            return;
+        };
+        let planned = track.planned_pages();
+        let inventory = track.current_inventory();
+        let page_inputs =
+            |page: &ostra_core::book::PlannedPage, instructions: Vec<String>| SpawnInputs {
+                docs_step: Some(DocsStep::Page),
+                docs_page: Some(page.clone()),
+                docs_pages: survey.pages.clone(),
+                docs_inventory: inventory
+                    .iter()
+                    .filter(|i| i.owner == page.id)
+                    .map(|i| format!("{} ({})", i.name, i.sources.join(", ")))
+                    .collect(),
+                docs_instructions: instructions,
+                ..base.clone()
+            };
+        for page in &planned {
+            let Some(d) = track.page_docs.get(&page.id) else {
+                continue;
+            };
+            self.docs_run(
+                project,
+                &d.run,
+                writer,
+                docs(Some(&page.id), 0),
+                page_inputs(page, vec![]),
+            );
+        }
+        if !track.first_drafts_settled() || track.docs_finished() {
+            return;
+        }
+        let done_rounds = track.docs_rounds.len() as u32;
+        let last = track.docs_rounds.last();
+        // The round in progress, or the next one when the last round's revisions all settled.
+        let round = match last {
+            Some(r)
+                if !r.synthesis.is_settled()
+                    || !r
+                        .targets
+                        .keys()
+                        .all(|p| r.revisions.get(p).is_some_and(|x| x.is_settled())) =>
+            {
+                done_rounds
+            }
+            _ => done_rounds + 1,
+        };
+        let current = track.docs_rounds.get(round as usize - 1);
+        // 1. Fact-check each page that changed.
+        let checker = s.agent_for(BuiltinStage::Closing, Contract::FactCheck);
+        let to_check = track.pages_to_check(round);
+        let mut checking = false;
+        for page in &to_check {
+            let state = current
+                .and_then(|r| r.checks.get(page))
+                .cloned()
+                .unwrap_or(crate::state::StageRun::NotStarted);
+            checking |= !state.is_settled();
+            let prior = (1..round)
+                .rev()
+                .find_map(
+                    |k| match track.docs_rounds[k as usize - 1].checks.get(page) {
+                        Some(crate::state::StageRun::Done(c)) => Some(c.findings_text()),
+                        _ => None,
                     },
+                )
+                .unwrap_or_else(|| "none".into());
+            let inputs = SpawnInputs {
+                docs_check: true,
+                target: Some(s.docs_draft_path(project, page)),
+                spec_file: Some(s.docs_inventory_path(project)),
+                prior_findings: Some(prior),
+                source_check: Some("citations".into()),
+                ..Default::default()
+            };
+            let purpose = ExecPurpose::DocsCheck {
+                project: project.to_string(),
+                page: page.clone(),
+                round,
+            };
+            self.docs_run(project, &state, checker, purpose, inputs);
+        }
+        if checking {
+            return;
+        }
+        // 2. One synthesis pass over every draft, with the findings and the engine's checks.
+        let synthesis = current
+            .map(|r| r.synthesis.clone())
+            .unwrap_or(DocsState::NotStarted);
+        if !matches!(synthesis, DocsState::Done(_)) {
+            let mut findings: Vec<String> = current
+                .map(|r| {
+                    r.checks
+                        .iter()
+                        .filter_map(|(page, c)| match c {
+                            crate::state::StageRun::Done(c) => {
+                                Some(format!("{page}: {:?}, {}", c.verdict, c.findings_text()))
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (page, issues) in track.engine_issues() {
+                let page = if page.is_empty() {
+                    "inventory".to_string()
+                } else {
+                    page
+                };
+                findings.push(format!("{page} (engine check): {}", issues.join(" ")));
+            }
+            // Rule B10: the named constants that no page mentions, for the coverage check.
+            if let Some(scan) = &track.docs_scan {
+                let drafts = track.placed_drafts();
+                let missing = ostra_core::book::unmentioned_refs(&drafts, &scan.refs);
+                if !missing.is_empty() {
+                    let shown: Vec<String> = missing
+                        .iter()
+                        .take(80)
+                        .map(|r| format!("`{}` ({})", r.name, r.file))
+                        .collect();
+                    findings.push(format!(
+                        "reference (engine check): {} of {} named constants appear on no page: {}{}",
+                        missing.len(),
+                        scan.refs.len(),
+                        shown.join(", "),
+                        if missing.len() > 80 { ", and more in reference.md" } else { "" }
+                    ));
+                }
+            }
+            let inputs = SpawnInputs {
+                docs_step: Some(DocsStep::Synthesis),
+                docs_pages: survey.pages.clone(),
+                docs_instructions: findings,
+                docs_round: round,
+                ..base
+            };
+            let purpose = ExecPurpose::DocsSynthesis {
+                project: project.to_string(),
+                round,
+            };
+            self.docs_run(project, &synthesis, writer, purpose, inputs);
+            return;
+        }
+        let Some(r) = current else {
+            return;
+        };
+        // 3. Rule B10: after each DOCS_ROUNDS rounds without done, the user decides first.
+        if round % DOCS_ROUNDS == 0 && track.docs_continued < round {
+            if track.docs_gate.is_none() {
+                let open: Vec<String> = match &r.synthesis {
+                    DocsState::Done(syn) => syn
+                        .checks
+                        .iter()
+                        .filter(|c| !c.passed)
+                        .map(|c| format!("{}: {}", c.check, c.note))
+                        .collect(),
+                    _ => vec![],
+                };
+                self.gate(
+                    format!("Documentation for {project} is not done after {round} rounds"),
+                    format!(
+                        "{round} synthesis rounds ran, and {} pages still need changes. Run another round, or accept the book as it is.",
+                        r.targets.len()
+                    ),
+                    GatePayload::DocsRounds {
+                        project: project.to_string(),
+                        rounds: round,
+                        open,
+                    },
+                );
+            }
+            return;
+        }
+        // 4. Revise each page that the round names.
+        for (page_id, instructions) in &r.targets {
+            let Some(page) = planned.iter().find(|p| &p.id == page_id) else {
+                continue;
+            };
+            let state = r
+                .revisions
+                .get(page_id)
+                .cloned()
+                .unwrap_or(DocsState::NotStarted);
+            let mut inputs = page_inputs(page, instructions.clone());
+            inputs.target = Some(s.docs_draft_path(project, page_id));
+            self.docs_run(project, &state, writer, docs(Some(page_id), round), inputs);
+        }
+    }
+
+    /// One run of the docs stage: start it under the cap, or open the failure gate.
+    fn docs_run<T>(
+        &mut self,
+        project: &str,
+        state: &crate::state::StageRun<T>,
+        agent: AgentName,
+        purpose: ExecPurpose,
+        inputs: SpawnInputs,
+    ) {
+        let s = self.s;
+        match state {
+            crate::state::StageRun::NotStarted => {
+                // Rule B7: docs runs fan out at once, and the workspace's slot limit bounds them.
+                self.spawn(
+                    agent,
+                    purpose,
                     project,
                     s.project_session_dir(project),
                     inputs,
                 );
             }
-            DocsState::Failed {
+            crate::state::StageRun::Failed {
                 exec,
                 error,
                 gate: None,
                 ..
             } => {
                 let (exec, error) = (exec.clone(), error.clone());
-                self.exec_failed_gate(
-                    &exec,
-                    s.agent_for(BuiltinStage::Closing, Contract::Documentation),
-                    project,
-                    &error,
-                );
+                self.exec_failed_gate(&exec, agent, project, &error);
             }
             _ => {}
         }
-    }
-
-    fn docs_in_flight(&self) -> usize {
-        let running = self
-            .s
-            .project_tracks
-            .values()
-            .map(|t| &t.docs)
-            .filter(|d| matches!(d, DocsState::Running(_)))
-            .count();
-        let queued = self
-            .out
-            .iter()
-            .filter(
-                |st| matches!(st, Step::Spawn(r) if matches!(r.purpose, ExecPurpose::Docs { .. })),
-            )
-            .count();
-        running + queued
     }
 
     /// Where the book stands once every project's closing stages are known. `None` while a
@@ -2107,7 +2356,7 @@ impl<'a> Planner<'a> {
             if !docs_on || blocker_open(&passed) {
                 continue;
             }
-            match &track.docs {
+            match track.docs_aggregate() {
                 DocsState::Done(_) => parts.push(key.clone()),
                 DocsState::Abandoned => {}
                 _ => return None,
@@ -2218,7 +2467,7 @@ impl<'a> Planner<'a> {
                     }
                 }
             }
-            if docs && !blocker_open(&passed) && !track.docs.is_settled() {
+            if docs && !blocker_open(&passed) && !track.docs_aggregate().is_settled() {
                 return false;
             }
         }

@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use ts_rs::TS;
@@ -20,6 +20,10 @@ pub const MAX_SEQUENCE_PARTICIPANTS: usize = 8;
 pub const MAX_SEQUENCE_MESSAGES: usize = 20;
 /// Rule B3: nodes a flowchart may show.
 pub const MAX_FLOWCHART_NODES: usize = 15;
+/// Rule B10: pages one survey may plan, each written by its own writer.
+pub const MAX_DOCS_PAGES: usize = 30;
+/// Rule B10: synthesis rounds before a gate asks whether to go on.
+pub const DOCS_ROUNDS: u32 = 3;
 /// Longest book ID, so a book folder name stays short on every file system.
 pub const MAX_BOOK_ID: usize = 80;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -78,6 +82,9 @@ pub struct DocSection {
     /// The files a reader opens after the page. The page shows them last.
     #[serde(default)]
     pub code_refs: Vec<CodeRef>,
+    /// Rule B10: the group the page belongs to in the book's contents, such as `Security`.
+    #[serde(default)]
+    pub group: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
@@ -144,18 +151,142 @@ pub struct Architecture {
     pub scalability: Vec<ScalingCase>,
 }
 
-/// `submit_documentation`: one project's part of the book.
+/// Rule B10: which step of the docs stage a `submit_documentation` call answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum DocsStep {
+    /// One writer for the whole part, as in a log from before the docs pipeline.
+    #[default]
+    Part,
+    /// The inventory of what is available, and the page plan.
+    Survey,
+    /// One page, written or revised.
+    Page,
+    /// One synthesis pass over every draft.
+    Synthesis,
+}
+
+impl DocsStep {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DocsStep::Part => "part",
+            DocsStep::Survey => "survey",
+            DocsStep::Page => "page",
+            DocsStep::Synthesis => "synthesis",
+        }
+    }
+}
+
+/// Rule B10: one thing the book must cover, found by the survey.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct InventoryItem {
+    /// Lowercase slug, unique in the inventory.
+    pub id: String,
+    /// The feature, subsystem, rule, setting family, or user source, in a few words.
+    pub name: String,
+    /// Where it lives: project-relative paths, user sources, artifacts, or memory lessons.
+    pub sources: Vec<String>,
+    /// The ID of the one page that owns it. Empty when it is out of scope.
+    #[serde(default)]
+    pub owner: String,
+    /// Why the book leaves it out.
+    #[serde(default)]
+    pub out_of_scope: Option<String>,
+}
+
+/// Rule B10: one page the survey plans.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct PlannedPage {
+    /// Lowercase slug, unique in the plan.
+    pub id: String,
+    pub title: String,
+    /// The group of the book's contents, such as `Get started`, `How it works`, or `Security`.
+    pub group: String,
+    /// What the page explains and where it stops.
+    pub covers: String,
+    /// What its writer reads first: project-relative paths, user sources, artifacts, or lessons.
+    #[serde(default)]
+    pub sources: Vec<String>,
+    /// Write the page in this session. A page that is not rewritten keeps its text from the book.
+    #[serde(default = "yes")]
+    pub rewrite: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// Rule B10: one module of the project, from its module map or its source folders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DocsModule {
+    pub name: String,
+    /// Project-relative globs.
+    pub globs: Vec<String>,
+}
+
+/// Rule B10: one named constant in the source, a reference fact a reader looks up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RefItem {
+    pub name: String,
+    /// Project-relative path of the file that defines it.
+    pub file: String,
+}
+
+/// Rule B10: what a synthesis pass asks the writer of one page to change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct PageEdit {
+    pub page: String,
+    /// Each a specific change: what to add, remove, move to which page, or link.
+    pub instructions: Vec<String>,
+}
+
+/// Rule B10: one check of the definition of done, as a synthesis pass judged it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
+#[ts(export)]
+pub struct DoneCheck {
+    pub check: String,
+    pub passed: bool,
+    #[serde(default)]
+    pub note: String,
+}
+
+/// `submit_documentation`: one step of the docs stage for one project (Rule B10).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
 #[ts(export)]
 pub struct DocumentationSubmit {
     pub status: SubmitStatus,
-    /// Two or three sentences for the user: what the part covers and what changed in it.
+    /// Rule B10: the step of the docs stage this call answers.
+    #[serde(default)]
+    pub step: DocsStep,
+    /// Two or three sentences for the user: what the step did.
     pub summary: String,
-    /// The project's introduction: what it does, for whom, and its main parts.
+    /// The project's introduction, from the survey.
     #[serde(default)]
     pub overview: String,
+    /// The page of a page step, or every page of a whole-part writer.
     #[serde(default)]
     pub sections: Vec<DocSection>,
+    /// The survey's inventory.
+    #[serde(default)]
+    pub inventory: Vec<InventoryItem>,
+    /// The survey's page plan.
+    #[serde(default)]
+    pub pages: Vec<PlannedPage>,
+    /// A synthesis pass's changes for each page.
+    #[serde(default)]
+    pub edits: Vec<PageEdit>,
+    /// A synthesis pass's judgment of the definition of done, check by check.
+    #[serde(default)]
+    pub checks: Vec<DoneCheck>,
+    /// A synthesis pass found the book done.
+    #[serde(default)]
+    pub done: bool,
     #[serde(default)]
     pub glossary: Vec<GlossaryEntry>,
     #[serde(default)]
@@ -187,6 +318,9 @@ pub struct BookPart {
     pub sections: Vec<DocSection>,
     #[ts(type = "string")]
     pub updated_at: DateTime<Utc>,
+    /// Rule B10: the survey's inventory, so a later survey can update it.
+    #[serde(default)]
+    pub inventory: Vec<InventoryItem>,
 }
 
 /// A documentation book as `book.json` holds it and `GET /api/workspaces/{ws}/docs/{book}` returns it.
@@ -240,10 +374,206 @@ impl Book {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BookUpdate {
     pub session: String,
-    /// Each documented project's part as this session wrote it.
+    /// Each documented project's part as this session wrote it: the survey's overview and
+    /// inventory with every page this session wrote, in plan order.
     pub parts: Vec<(String, DocumentationSubmit)>,
+    /// Rule B10: for each part written from a survey, every planned page in order, with the page
+    /// this session wrote, or `None` to keep the page from the book.
+    pub pages: BTreeMap<String, Vec<(PlannedPage, Option<DocSection>)>>,
     pub architecture: Option<Architecture>,
     pub glossary: Vec<GlossaryEntry>,
+}
+
+/// Rule B10: the survey's overview and inventory with the drafts, each page under its planned
+/// ID and group, in plan order.
+pub fn combine_pages(
+    survey: &DocumentationSubmit,
+    drafts: &[(&PlannedPage, &DocSection)],
+    glossary: Vec<GlossaryEntry>,
+    inventory: Vec<InventoryItem>,
+) -> DocumentationSubmit {
+    DocumentationSubmit {
+        status: SubmitStatus::Ok,
+        step: DocsStep::Survey,
+        summary: survey.summary.clone(),
+        overview: survey.overview.clone(),
+        sections: drafts.iter().map(|(p, d)| placed(p, d)).collect(),
+        inventory,
+        pages: survey.pages.clone(),
+        edits: vec![],
+        checks: vec![],
+        done: false,
+        glossary,
+        stuck: None,
+    }
+}
+
+fn placed(plan: &PlannedPage, page: &DocSection) -> DocSection {
+    let mut page = page.clone();
+    page.id = plan.id.clone();
+    page.group = plan.group.clone();
+    page
+}
+
+/// Rule B10: a project's new part from its survey: each written page, and each kept page from
+/// the old part.
+fn merge_pages(
+    project: &str,
+    survey: &DocumentationSubmit,
+    old: Option<&BookPart>,
+    pages: &[(PlannedPage, Option<DocSection>)],
+    now: DateTime<Utc>,
+) -> BookPart {
+    let sections = pages
+        .iter()
+        .filter_map(|(plan, page)| match page {
+            Some(p) => Some(placed(plan, p)),
+            None => old
+                .and_then(|o| o.sections.iter().find(|s| s.id == plan.id))
+                .map(|p| placed(plan, p)),
+        })
+        .collect();
+    BookPart {
+        project: project.to_string(),
+        overview: survey.overview.clone(),
+        sections,
+        updated_at: now,
+        inventory: survey.inventory.clone(),
+    }
+}
+
+/// Rule B10: the checks of the definition of done that the engine makes itself, by page, with
+/// `kept` the IDs of the pages kept from the book: links to a page that does not exist, words and punctuation the writing standard forbids, and
+/// inventory items that no page owns, under the empty key.
+pub fn mechanical_issues(
+    pages: &[DocSection],
+    kept: &[String],
+    inventory: &[InventoryItem],
+    modules: &[DocsModule],
+) -> BTreeMap<String, Vec<String>> {
+    static LINK: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\]\(([a-z0-9][a-z0-9-]*)\.md(#[^)]*)?\)").expect("valid regex")
+    });
+    static WORD: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\b(would|should|might|e\.g\.|i\.e\.|etc\.)").expect("valid regex")
+    });
+    // A page the survey keeps from the book has no draft but stays a page.
+    let ids: BTreeSet<&str> = pages
+        .iter()
+        .map(|p| p.id.as_str())
+        .chain(kept.iter().map(String::as_str))
+        .collect();
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for page in pages {
+        let mut issues = vec![];
+        for c in LINK.captures_iter(&page.body) {
+            if !ids.contains(&c[1]) {
+                issues.push(format!(
+                    "Link to an existing page: `{}.md` names no page of the book.",
+                    &c[1]
+                ));
+            }
+        }
+        let text = prose(&page.body);
+        let mut words: Vec<String> = WORD
+            .find_iter(&text)
+            .map(|m| m.as_str().to_string())
+            .collect();
+        words.sort();
+        words.dedup();
+        if !words.is_empty() {
+            issues.push(format!(
+                "Rewrite the sentences with {}: the writing standard does not allow them.",
+                words
+                    .iter()
+                    .map(|w| format!("\"{w}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        if text.contains(';') || text.contains('\u{2014}') {
+            issues.push("Split the sentences that use a semicolon or an em dash.".into());
+        }
+        // A revision that copies its rendered draft back repeats what Ostra adds around the body.
+        if page.body.lines().any(|l| l.trim_start().starts_with("Project: `"))
+            || (!page.code_refs.is_empty()
+                && page.body.lines().any(|l| l.trim() == "## Code references"))
+        {
+            issues.push("Remove the `Project:` line and the `## Code references` table from the body: Ostra adds the title, the project, the summary, and the code references around it.".into());
+        }
+        if !issues.is_empty() {
+            out.insert(page.id.clone(), issues);
+        }
+    }
+    for m in modules {
+        if !inventory.iter().any(|i| covers(i, m)) {
+            out.entry(String::new()).or_default().push(format!(
+                "Add an inventory item for module `{}` ({}) with an owning page, or one with an `out_of_scope` reason: no inventory item covers it.",
+                m.name,
+                m.globs.join(", ")
+            ));
+        }
+    }
+    for item in inventory {
+        if item.out_of_scope.is_none() && !ids.contains(item.owner.as_str()) {
+            out.entry(String::new()).or_default().push(format!(
+                "Give inventory item `{}` ({}) an owning page: `{}` is not a page.",
+                item.id, item.name, item.owner
+            ));
+        }
+    }
+    out
+}
+
+/// The folder a glob or a source path names, without `./`, wildcards, and the trailing `/`.
+fn path_prefix(p: &str) -> &str {
+    let p = p.trim().trim_start_matches("./");
+    let p = &p[..p.find(['*', '?', '{', '[']).unwrap_or(p.len())];
+    p.trim_end_matches('/')
+}
+
+/// Rule B10: an inventory item covers a module when one of its sources lies inside the module,
+/// or the module lies inside one of its sources.
+fn covers(item: &InventoryItem, m: &DocsModule) -> bool {
+    m.globs.iter().map(|g| path_prefix(g)).any(|mp| {
+        item.sources.iter().map(|s| path_prefix(s)).any(|sp| {
+            !sp.is_empty()
+                && (mp.is_empty()
+                    || sp == mp
+                    || sp.starts_with(&format!("{mp}/"))
+                    || mp.starts_with(&format!("{sp}/")))
+        })
+    })
+}
+
+/// Rule B10: the named constants that no page mentions by name.
+pub fn unmentioned_refs<'a>(pages: &[DocSection], refs: &'a [RefItem]) -> Vec<&'a RefItem> {
+    let text: String = pages
+        .iter()
+        .map(|p| p.body.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    refs.iter().filter(|r| !text.contains(&r.name)).collect()
+}
+
+/// The prose of a body: no code blocks, inline code, or link targets.
+fn prose(body: &str) -> String {
+    static CODE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`[^`]*`").expect("valid regex"));
+    static TARGET: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\]\([^)]*\)").expect("valid regex"));
+    let mut out = String::new();
+    let mut fence = false;
+    for line in body.lines() {
+        if line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~") {
+            fence = !fence;
+            continue;
+        }
+        if !fence {
+            out.push_str(&TARGET.replace_all(&CODE.replace_all(line, ""), "]"));
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Where a workspace keeps its books.
@@ -324,13 +654,22 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         glossary: vec![],
     });
     for (project, submit) in &update.parts {
-        book.parts.retain(|p| &p.project != project);
-        book.parts.push(BookPart {
-            project: project.clone(),
-            overview: submit.overview.clone(),
-            sections: submit.sections.clone(),
-            updated_at: now,
-        });
+        let old = book
+            .parts
+            .iter()
+            .position(|p| &p.project == project)
+            .map(|i| book.parts.remove(i));
+        let part = match update.pages.get(project) {
+            Some(pages) => merge_pages(project, submit, old.as_ref(), pages, now),
+            None => BookPart {
+                project: project.clone(),
+                overview: submit.overview.clone(),
+                sections: submit.sections.clone(),
+                updated_at: now,
+                inventory: vec![],
+            },
+        };
+        book.parts.push(part);
     }
     book.parts.sort_by(|a, b| a.project.cmp(&b.project));
     if let Some(a) = &update.architecture {
@@ -876,6 +1215,21 @@ pub fn check_documentation(s: &DocumentationSubmit) -> Vec<String> {
     if s.status != SubmitStatus::Ok {
         return issues;
     }
+    match s.step {
+        DocsStep::Survey => {
+            check_survey(s, &mut issues);
+            return issues;
+        }
+        DocsStep::Synthesis => {
+            check_synthesis(s, &mut issues);
+            return issues;
+        }
+        DocsStep::Page if s.sections.len() != 1 => issues.push(format!(
+            "Return the one page of your step in `sections`: it holds {}.",
+            s.sections.len()
+        )),
+        _ => {}
+    }
     if s.sections.is_empty() {
         issues.push("Return at least one section in `sections`, because the book shows only what you submit.".into());
     }
@@ -923,6 +1277,89 @@ pub fn check_documentation(s: &DocumentationSubmit) -> Vec<String> {
     }
     check_glossary(&s.glossary, &mut issues);
     issues
+}
+
+/// Rule B10: a survey plans the pages and the inventory, and writes no page.
+fn check_survey(s: &DocumentationSubmit, issues: &mut Vec<String>) {
+    if !s.sections.is_empty() {
+        issues.push(
+            "Return no `sections` in the survey step: one writer per page writes them.".into(),
+        );
+    }
+    if s.overview.trim().is_empty() {
+        issues.push(
+            "Write the project `overview` in the survey, because no page writer writes it.".into(),
+        );
+    }
+    if s.pages.is_empty() || s.pages.len() > MAX_DOCS_PAGES {
+        issues.push(format!(
+            "Plan 1 to {MAX_DOCS_PAGES} pages: the plan has {}. Merge pages that a reader looks for together into one broad page.",
+            s.pages.len()
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for p in &s.pages {
+        if !is_slug(&p.id) {
+            issues.push(format!(
+                "Write the page ID \"{}\" as a lowercase slug of letters, digits, and dashes.",
+                p.id
+            ));
+        } else if !ids.insert(p.id.as_str()) {
+            issues.push(format!(
+                "Plan page \"{}\" once: the ID is used twice.",
+                p.id
+            ));
+        }
+        if p.title.trim().is_empty() || p.group.trim().is_empty() || p.covers.trim().is_empty() {
+            issues.push(format!(
+                "Give page `{}` a title, a group, and what it covers.",
+                p.id
+            ));
+        }
+    }
+    if s.inventory.is_empty() {
+        issues.push("List what the book must cover in `inventory`, because the synthesis checks every page against it.".into());
+    }
+    let mut items = BTreeSet::new();
+    for item in &s.inventory {
+        if !items.insert(item.id.as_str()) {
+            issues.push(format!(
+                "List inventory item \"{}\" once: the ID is used twice.",
+                item.id
+            ));
+        }
+        if item.out_of_scope.is_none() && !ids.contains(item.owner.as_str()) {
+            issues.push(format!(
+                "Give inventory item `{}` the ID of its owning page, or an `out_of_scope` reason: `{}` is not a planned page.",
+                item.id, item.owner
+            ));
+        }
+    }
+    check_glossary(&s.glossary, issues);
+}
+
+/// Rule B10: a synthesis pass judges every check of the definition of done and lists the edits.
+fn check_synthesis(s: &DocumentationSubmit, issues: &mut Vec<String>) {
+    if !s.sections.is_empty() || !s.pages.is_empty() {
+        issues.push("Return only `checks`, `edits`, and `done` in the synthesis step: the page writers apply the edits.".into());
+    }
+    if s.checks.is_empty() {
+        issues.push("Judge each check of the definition of done in `checks`.".into());
+    }
+    if s.done && (!s.edits.is_empty() || s.checks.iter().any(|c| !c.passed)) {
+        issues.push("Set `done` only when every check passed and no page needs an edit.".into());
+    }
+    if !s.done && s.edits.is_empty() {
+        issues.push("List the `edits` that close each failed check, or set `done`.".into());
+    }
+    for e in &s.edits {
+        if e.instructions.iter().all(|i| i.trim().is_empty()) {
+            issues.push(format!(
+                "Give the edit of page `{}` at least one instruction.",
+                e.page
+            ));
+        }
+    }
 }
 
 /// Validate an architecture submit (Rule B4).
@@ -1072,6 +1509,7 @@ mod legacy {
             summary: t.purpose.trim().to_string(),
             body: body.trim_end().to_string(),
             code_refs: t.code_refs,
+            group: String::new(),
         }
     }
 
@@ -1227,6 +1665,8 @@ mod tests {
             p,
             ExecPurpose::Docs {
                 project: "p".into(),
+                page: None,
+                round: 0,
             }
         );
         let a: AgentName = serde_json::from_value("module-documentation".into()).unwrap();
@@ -1337,6 +1777,241 @@ mod tests {
         assert!(old.body.contains("`src/cancel.rs`"), "{}", old.body);
         assert_eq!(old.code_refs[0].path, "src/orders.rs");
         assert_eq!(part.sections[1].body, "B.");
+    }
+
+    fn survey(pages: serde_json::Value, inventory: serde_json::Value) -> DocumentationSubmit {
+        serde_json::from_value(serde_json::json!({
+            "status": "ok", "step": "survey", "summary": "s", "overview": "The project.",
+            "pages": pages, "inventory": inventory
+        }))
+        .unwrap()
+    }
+
+    fn planned(id: &str, rewrite: bool) -> serde_json::Value {
+        serde_json::json!({"id": id, "title": id, "group": "How it works", "covers": "It.", "rewrite": rewrite})
+    }
+
+    fn item(id: &str, owner: &str) -> serde_json::Value {
+        serde_json::json!({"id": id, "name": id, "sources": ["src/"], "owner": owner})
+    }
+
+    #[test]
+    fn b10_a_survey_is_checked() {
+        let ok = survey(
+            serde_json::json!([planned("executors", true), planned("security", true)]),
+            serde_json::json!([item("native", "executors"), {"id": "ui", "name": "UI", "sources": ["web/"], "out_of_scope": "Another book."}]),
+        );
+        assert!(
+            check_documentation(&ok).is_empty(),
+            "{:?}",
+            check_documentation(&ok)
+        );
+        let mut bad = survey(
+            serde_json::json!([planned("executors", true), planned("executors", true)]),
+            serde_json::json!([item("native", "nowhere")]),
+        );
+        bad.overview.clear();
+        let issues = check_documentation(&bad);
+        for start in [
+            "Write the project `overview`",
+            "Plan page \"executors\" once",
+            "Give inventory item `native`",
+        ] {
+            assert!(
+                issues.iter().any(|i| i.starts_with(start)),
+                "{start}: {issues:?}"
+            );
+        }
+        let many: Vec<_> = (0..31).map(|i| planned(&format!("p{i}"), true)).collect();
+        let issues = check_documentation(&survey(
+            serde_json::json!(many),
+            serde_json::json!([item("a", "p0")]),
+        ));
+        assert!(
+            issues.iter().any(|i| i.starts_with("Plan 1 to 30 pages")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn b10_a_synthesis_is_checked() {
+        let syn = |v: serde_json::Value| -> DocumentationSubmit {
+            let mut base = serde_json::json!({"status": "ok", "step": "synthesis", "summary": "s"});
+            base.as_object_mut()
+                .unwrap()
+                .extend(v.as_object().unwrap().clone());
+            serde_json::from_value(base).unwrap()
+        };
+        let pass = serde_json::json!([{"check": "one owner per fact", "passed": true}]);
+        let fail = serde_json::json!([{"check": "one owner per fact", "passed": false, "note": "slots twice"}]);
+        assert!(
+            check_documentation(&syn(serde_json::json!({"done": true, "checks": pass}))).is_empty()
+        );
+        let issues = check_documentation(&syn(
+            serde_json::json!({"done": true, "checks": fail.clone()}),
+        ));
+        assert!(
+            issues.iter().any(|i| i.starts_with("Set `done` only when")),
+            "{issues:?}"
+        );
+        let issues = check_documentation(&syn(
+            serde_json::json!({"done": false, "checks": fail.clone()}),
+        ));
+        assert!(
+            issues.iter().any(|i| i.starts_with("List the `edits`")),
+            "{issues:?}"
+        );
+        let ok = syn(
+            serde_json::json!({"done": false, "checks": fail, "edits": [{"page": "a", "instructions": ["Move the slot rules to `limits`."]}]}),
+        );
+        assert!(check_documentation(&ok).is_empty());
+    }
+
+    #[test]
+    fn b10_the_engine_checks_links_words_and_owners() {
+        let page = |id: &str, body: &str| -> DocSection {
+            serde_json::from_value(
+                serde_json::json!({"id": id, "title": id, "summary": "S.", "body": body}),
+            )
+            .unwrap()
+        };
+        let pages = vec![
+            page(
+                "limits",
+                "See [executors](executors.md) and [gone](gone.md#x). It would fail; it stops.\n\n```rust\nlet a = 1; // would\n```\n\nUse `a;b`.",
+            ),
+            page("executors", "Clean text with a [code link](crates/x.rs)."),
+        ];
+        let inventory: Vec<InventoryItem> = serde_json::from_value(serde_json::json!([
+            item("slots", "limits"),
+            item("orphan", "missing")
+        ]))
+        .unwrap();
+        let modules = vec![
+            DocsModule {
+                name: "core".into(),
+                globs: vec!["crates/core/**".into()],
+            },
+            DocsModule {
+                name: "web".into(),
+                globs: vec!["web/**".into()],
+            },
+        ];
+        let inventory: Vec<InventoryItem> = inventory
+            .into_iter()
+            .map(|mut i| {
+                if i.id == "slots" {
+                    i.sources = vec!["crates/core/src/slots.rs".into()];
+                }
+                i
+            })
+            .collect();
+        let issues = mechanical_issues(&pages, &[], &inventory, &modules);
+        let limits = &issues["limits"];
+        assert!(limits.iter().any(|i| i.contains("`gone.md`")), "{limits:?}");
+        assert!(limits.iter().any(|i| i.contains("\"would\"")), "{limits:?}");
+        assert!(
+            limits.iter().any(|i| i.starts_with("Split the sentences")),
+            "{limits:?}"
+        );
+        assert!(
+            !issues.contains_key("executors"),
+            "code and links are not prose: {issues:?}"
+        );
+        assert!(
+            issues[""].iter().any(|i| i.contains("`orphan`")),
+            "{issues:?}"
+        );
+        assert!(
+            issues[""].iter().any(|i| i.contains("module `web`")),
+            "{issues:?}"
+        );
+        assert!(
+            !issues[""].iter().any(|i| i.contains("module `core`")),
+            "a source inside the module covers it: {issues:?}"
+        );
+        let refs = vec![
+            RefItem {
+                name: "MAX_SLOTS".into(),
+                file: "a.rs".into(),
+            },
+            RefItem {
+                name: "TERM_QUEUE".into(),
+                file: "b.rs".into(),
+            },
+        ];
+        let pages = vec![page("x", "The cap is `MAX_SLOTS`.")];
+        let missing: Vec<&str> = unmentioned_refs(&pages, &refs)
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(missing, ["TERM_QUEUE"]);
+    }
+
+    #[test]
+    fn b10_a_later_session_keeps_the_pages_it_does_not_rewrite() {
+        let now = Utc::now();
+        let page = |id: &str, body: &str| -> DocSection {
+            serde_json::from_value(
+                serde_json::json!({"id": id, "title": id, "summary": "S.", "body": body}),
+            )
+            .unwrap()
+        };
+        let s1 = survey(
+            serde_json::json!([planned("a", true), planned("b", true)]),
+            serde_json::json!([item("x", "a")]),
+        );
+        let first = BookUpdate {
+            session: "s1".into(),
+            parts: vec![("p".into(), s1.clone())],
+            pages: BTreeMap::from([(
+                "p".to_string(),
+                vec![
+                    (
+                        serde_json::from_value(planned("a", true)).unwrap(),
+                        Some(page("tmp", "a v1")),
+                    ),
+                    (
+                        serde_json::from_value(planned("b", true)).unwrap(),
+                        Some(page("b", "b v1")),
+                    ),
+                ],
+            )]),
+            ..Default::default()
+        };
+        let book = merge(None, "p", &first, now);
+        assert_eq!(
+            book.parts[0].sections[0].id, "a",
+            "a page takes its planned ID"
+        );
+        assert_eq!(book.parts[0].sections[0].group, "How it works");
+        let s2 = survey(
+            serde_json::json!([planned("a", false), planned("b", true)]),
+            serde_json::json!([item("x", "a")]),
+        );
+        let second = BookUpdate {
+            session: "s2".into(),
+            parts: vec![("p".into(), s2)],
+            pages: BTreeMap::from([(
+                "p".to_string(),
+                vec![
+                    (serde_json::from_value(planned("a", false)).unwrap(), None),
+                    (
+                        serde_json::from_value(planned("b", true)).unwrap(),
+                        Some(page("b", "b v2")),
+                    ),
+                ],
+            )]),
+            ..Default::default()
+        };
+        let book = merge(Some(book), "p", &second, now);
+        let bodies: Vec<&str> = book.parts[0]
+            .sections
+            .iter()
+            .map(|s| s.body.as_str())
+            .collect();
+        assert_eq!(bodies, ["a v1", "b v2"], "a is kept, b is rewritten");
+        assert_eq!(book.parts[0].inventory.len(), 1);
     }
 
     #[test]

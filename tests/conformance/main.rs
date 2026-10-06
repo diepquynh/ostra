@@ -2537,20 +2537,63 @@ fn test_category_skips_the_closing_gate() {
 // Documentation books (Rules B1 to B7).
 // ------------------------------------------------------------------------------------------
 
-fn docs_submit(project: &str) -> Value {
+fn page_submit(project: &str, id: &str, body: &str) -> Value {
     json!({
-        "status": "ok",
-        "summary": format!("Documented {project}."),
-        "overview": format!("{project} serves orders."),
-        "sections": [{
-            "id": format!("{project}-orders"),
-            "title": "Orders",
-            "summary": "Creates and cancels orders.",
-            "body": "The gateway authenticates callers.\n\n## Cancel an order\n\n```mermaid\nsequenceDiagram\nC->>API: POST /orders/1/cancel\nAPI-->>C: 204\n```",
-            "code_refs": [{"path": "src/orders.rs", "symbol": "cancel", "note": "the handler"}]
-        }],
+        "status": "ok", "step": "page", "summary": format!("Wrote {id}."),
+        "sections": [{"id": id, "title": "Orders", "summary": "Creates and cancels orders.", "body": body,
+            "code_refs": [{"path": "src/orders.rs", "symbol": "cancel", "note": "the handler"}]}],
         "glossary": [{"term": "Order", "definition": format!("A purchase in {project}.")}]
     })
+}
+
+fn survey_submit(project: &str, pages: &[(&str, bool)]) -> Value {
+    json!({
+        "status": "ok", "step": "survey", "summary": "Surveyed.", "overview": format!("{project} serves orders."),
+        "pages": pages.iter().map(|(id, rewrite)| json!({"id": id, "title": id, "group": "How it works", "covers": "It.", "rewrite": rewrite})).collect::<Vec<_>>(),
+        "inventory": pages.iter().map(|(id, _)| json!({"id": format!("{id}-item"), "name": id, "sources": ["src/"], "owner": id})).collect::<Vec<_>>()
+    })
+}
+
+fn check_submit(pass: bool) -> Value {
+    if pass {
+        json!({"verdict": "PASS", "target": "page", "findings": []})
+    } else {
+        json!({"verdict": "FAIL", "target": "page", "findings": [{"severity": "HIGH", "claim": "The cap is 9.", "issue": "The code says 4.", "location": "src/orders.rs:3"}]})
+    }
+}
+
+fn synthesis_submit(done: bool, edits: Vec<(&str, &str)>) -> Value {
+    json!({
+        "status": "ok", "step": "synthesis", "summary": "Synthesized.", "done": done,
+        "checks": [{"check": "One owner per fact", "passed": done, "note": ""}],
+        "edits": edits.iter().map(|(p, i)| json!({"page": p, "instructions": [i]})).collect::<Vec<_>>()
+    })
+}
+
+const CLEAN: &str = "The service cancels an order before it ships.";
+
+/// One project's docs pipeline to the end: a survey of one page, its draft, a passing check, and
+/// a synthesis pass that finds the book done.
+fn finish_docs(h: &mut H, project: &str) {
+    if h.summaries().contains(&format!("scan-docs {project}")) {
+        h.ev(scanned(project, &[], &[]));
+    }
+    h.run(
+        &format!("spawn documentation docs-survey {project}"),
+        survey_submit(project, &[("orders", true)]),
+    );
+    h.run(
+        &format!("spawn documentation docs {project}/orders"),
+        page_submit(project, "orders", CLEAN),
+    );
+    h.run(
+        &format!("spawn fact-check docs-check {project}/orders round 1"),
+        check_submit(true),
+    );
+    h.run(
+        &format!("spawn documentation docs-synthesis {project} round 1"),
+        synthesis_submit(true, vec![]),
+    );
 }
 
 fn arch_submit() -> Value {
@@ -2569,9 +2612,33 @@ fn arch_submit() -> Value {
     })
 }
 
+fn scanned(project: &str, modules: &[&str], refs: &[&str]) -> SessionEvent {
+    SessionEvent::DocsScanned {
+        project: project.into(),
+        modules: modules
+            .iter()
+            .map(|m| ostra_core::book::DocsModule {
+                name: m.to_string(),
+                globs: vec![format!("{m}/**")],
+            })
+            .collect(),
+        refs: refs
+            .iter()
+            .map(|r| ostra_core::book::RefItem {
+                name: r.to_string(),
+                file: "src/lib.rs".into(),
+            })
+            .collect(),
+    }
+}
+
+/// A DOCS session whose projects are already scanned, with no modules or constants.
 fn docs_session(projects: &[&str]) -> H {
     let mut h = H::new(projects, SessionOptions::default());
     h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": projects, "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
+    for p in projects {
+        h.ev(scanned(p, &[], &[]));
+    }
     h
 }
 
@@ -2579,13 +2646,13 @@ fn docs_session(projects: &[&str]) -> H {
 fn docs_category_skips_the_closing_gate() {
     let mut h = docs_session(&["p"]);
     assert_eq!(h.state().category, Some(Category::Docs));
-    assert_eq!(h.summaries(), vec!["spawn documentation docs p"]);
+    assert_eq!(h.summaries(), vec!["spawn documentation docs-survey p"]);
     let r = h.spawn_step("spawn documentation");
     assert_eq!(
         r.inputs.implementer_reports,
         vec![root().join("p").join("ostra-docs-request.md")]
     );
-    h.run("spawn documentation docs p", docs_submit("p"));
+    finish_docs(&mut h, "p");
     // Rule B4: one project, so no architecture; Rule B5: the engine writes the book.
     assert_eq!(h.summaries(), vec!["write-book p"]);
     h.ev(SessionEvent::BookWritten {
@@ -2599,38 +2666,29 @@ fn docs_category_skips_the_closing_gate() {
 #[test]
 fn b1_a_docs_run_without_a_readable_submit_fails() {
     let mut h = docs_session(&["p"]);
-    let (id, _) = h.start("spawn documentation docs p");
+    let (id, _) = h.start("spawn documentation docs-survey p");
     h.finish(&id, ExecutionStatus::Ok, None);
     assert_eq!(h.summaries(), vec!["gate execution_failed"]);
 }
 
 #[test]
-fn b7_docs_writers_fan_out_under_a_cap() {
+fn b7_docs_runs_fan_out_and_the_slot_limit_bounds_them() {
     let projects = ["a", "b", "c", "d", "e", "f"];
-    let mut h = docs_session(&projects);
-    let spawns: Vec<String> = h
-        .summaries()
-        .into_iter()
-        .filter(|s| s.starts_with("spawn documentation"))
-        .collect();
-    assert_eq!(spawns.len(), ostra_engine::plan::MAX_DOCS_WRITERS);
-    let (id, _) = h.start("spawn documentation docs a");
-    for p in ["b", "c", "d"] {
-        h.start(&format!("spawn documentation docs {p}"));
-    }
+    let h = docs_session(&projects);
     assert_eq!(
         h.summaries(),
-        vec![] as Vec<String>,
-        "the cap holds while four run"
+        projects
+            .iter()
+            .map(|p| format!("spawn documentation docs-survey {p}"))
+            .collect::<Vec<_>>(),
+        "the planner caps nothing; the runner's slots for limits.max_parallel_executions do"
     );
-    h.finish(&id, ExecutionStatus::Ok, Some(docs_submit("a")));
-    assert_eq!(h.summaries(), vec!["spawn documentation docs e"]);
 }
 
 #[test]
 fn b2_the_docs_writer_gets_the_users_request_and_notes() {
-    let mut h = docs_session(&["p"]);
-    let r = h.spawn_step("spawn documentation docs p");
+    let h = docs_session(&["p"]);
+    let r = h.spawn_step("spawn documentation docs-survey p");
     assert_eq!(
         r.inputs.implementer_reports,
         vec![root().join("p").join("ostra-docs-request.md")],
@@ -2643,7 +2701,7 @@ fn b2_the_docs_writer_gets_the_users_request_and_notes() {
 }
 
 #[test]
-fn b1_one_writer_documents_a_project_after_a_build() {
+fn b1_the_pipeline_documents_a_project_after_a_build() {
     let mut h = H::plan_approved(
         &["p"],
         one_phase(),
@@ -2670,8 +2728,8 @@ fn b1_one_writer_documents_a_project_after_a_build() {
             }],
         },
     );
-    assert_eq!(h.summaries(), vec!["spawn documentation docs p"]);
-    h.run("spawn documentation docs p", docs_submit("p"));
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    finish_docs(&mut h, "p");
     assert_eq!(h.summaries(), vec!["write-book p"]);
 }
 
@@ -2685,7 +2743,446 @@ fn b9_a_log_that_split_a_part_into_areas_still_folds() {
     }))
     .unwrap();
     h.ev(old);
-    assert_eq!(h.summaries(), vec!["spawn documentation docs p"]);
+    assert_eq!(h.summaries(), vec!["spawn documentation docs-survey p"]);
+}
+
+#[test]
+fn b10_the_scan_runs_before_the_survey() {
+    let mut h = H::new(&["p"], SessionOptions::default());
+    h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
+    assert_eq!(h.summaries(), vec!["scan-docs p"]);
+    h.ev(scanned("p", &["web"], &["MAX_SLOTS"]));
+    assert_eq!(h.summaries(), vec!["spawn documentation docs-survey p"]);
+    let r = h.spawn_step("spawn documentation docs-survey p");
+    assert_eq!(
+        r.inputs.docs_reference,
+        Some(root().join("ostra-docs-drafts/p/reference.md"))
+    );
+}
+
+#[test]
+fn b10_a_module_no_inventory_item_covers_keeps_the_loop_going() {
+    let mut h = docs_session(&["p"]);
+    h.ev(scanned("p", &["src", "web"], &[]));
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    let r = h.spawn_step("spawn documentation docs-synthesis p round 1");
+    assert!(
+        r.inputs
+            .docs_instructions
+            .iter()
+            .any(|f| f.contains("module `web`")),
+        "{:?}",
+        r.inputs.docs_instructions
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-synthesis p round 2"],
+        "a done pass does not end the loop while a module has no owner"
+    );
+    let mut add = synthesis_submit(false, vec![]);
+    add["inventory"] =
+        json!([{"id": "web-ui", "name": "The web console", "sources": ["web/"], "owner": "a"}]);
+    add["edits"] = json!([]);
+    h.run("spawn documentation docs-synthesis p round 2", add);
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 2"]
+    );
+    let r = h.spawn_step("spawn documentation docs-revise p/a round 2");
+    assert!(r.inputs.docs_instructions[0].starts_with("Cover the new inventory item `web-ui`"));
+    assert!(
+        r.inputs
+            .docs_inventory
+            .iter()
+            .any(|i| i.starts_with("The web console"))
+    );
+    h.run(
+        "spawn documentation docs-revise p/a round 2",
+        page_submit("p", "a", "Now with the console."),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 3",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 3",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    assert_eq!(h.state().book_update().parts[0].1.inventory.len(), 2);
+}
+
+#[test]
+fn b10_constants_no_page_mentions_reach_the_synthesis() {
+    let mut h = docs_session(&["p"]);
+    h.ev(scanned("p", &[], &["MAX_SLOTS", "TERM_QUEUE"]));
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
+    );
+    h.run(
+        "spawn documentation docs p/a",
+        page_submit("p", "a", "The cap is `MAX_SLOTS`."),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    let r = h.spawn_step("spawn documentation docs-synthesis p round 1");
+    let line = r
+        .inputs
+        .docs_instructions
+        .iter()
+        .find(|f| f.starts_with("reference (engine check)"))
+        .expect("the unmentioned constants");
+    assert!(
+        line.contains("1 of 2") && line.contains("`TERM_QUEUE`") && !line.contains("`MAX_SLOTS`"),
+        "{line}"
+    );
+}
+
+#[test]
+fn b10_the_survey_starts_one_writer_per_page() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("executors", true), ("security", true)]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs p/executors",
+            "spawn documentation docs p/security"
+        ]
+    );
+    let r = h.spawn_step("spawn documentation docs p/security");
+    assert_eq!(
+        r.inputs.docs_page.as_ref().map(|p| p.id.as_str()),
+        Some("security")
+    );
+    assert_eq!(
+        r.inputs.docs_pages.len(),
+        2,
+        "each writer knows the whole page plan"
+    );
+    assert_eq!(
+        r.inputs.docs_inventory,
+        vec!["security (src/)"],
+        "and the inventory it owns"
+    );
+}
+
+#[test]
+fn b10_each_round_checks_then_synthesizes_then_revises() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true), ("b", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs p/b"],
+        "the first round waits for every first draft"
+    );
+    h.run("spawn documentation docs p/b", page_submit("p", "b", CLEAN));
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn fact-check docs-check p/a round 1",
+            "spawn fact-check docs-check p/b round 1"
+        ]
+    );
+    let r = h.spawn_step("spawn fact-check docs-check p/a round 1");
+    assert!(r.inputs.docs_check);
+    assert_eq!(
+        r.inputs.target,
+        Some(root().join("ostra-docs-drafts/p/a.md"))
+    );
+    assert_eq!(
+        r.inputs.spec_file,
+        Some(root().join("ostra-docs-drafts/p/inventory.md"))
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-synthesis p round 1"]
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(false, vec![("a", "Move the slot rules to `b.md`.")]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 1"]
+    );
+    let r = h.spawn_step("spawn documentation docs-revise p/a round 1");
+    assert_eq!(
+        r.inputs.docs_instructions,
+        vec!["Move the slot rules to `b.md`."]
+    );
+    assert_eq!(
+        r.inputs.target,
+        Some(root().join("ostra-docs-drafts/p/a.md")),
+        "the revision reads its draft"
+    );
+    h.run(
+        "spawn documentation docs-revise p/a round 1",
+        page_submit("p", "a", "A new draft."),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn fact-check docs-check p/a round 2"],
+        "the next round checks only the revised page"
+    );
+    let r = h.spawn_step("spawn fact-check docs-check p/a round 2");
+    assert_eq!(r.inputs.prior_findings.as_deref(), Some("none"));
+    h.run(
+        "spawn fact-check docs-check p/a round 2",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 2",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    let update = h.state().book_update();
+    assert_eq!(update.parts[0].1.sections[0].body, "A new draft.");
+    assert_eq!(update.parts[0].1.sections[0].group, "How it works");
+}
+
+#[test]
+fn b10_a_failed_check_and_an_engine_check_force_a_revision() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true), ("b", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    h.run(
+        "spawn documentation docs p/b",
+        page_submit("p", "b", "It would fail. See [x](gone.md)."),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(false),
+    );
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
+    );
+    let r = h.spawn_step("spawn documentation docs-synthesis p round 1");
+    assert!(
+        r.inputs
+            .docs_instructions
+            .iter()
+            .any(|f| f.starts_with("b (engine check)")),
+        "{:?}",
+        r.inputs.docs_instructions
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs-revise p/a round 1",
+            "spawn documentation docs-revise p/b round 1"
+        ],
+        "a done pass does not close failed checks or engine checks"
+    );
+    let a = h.spawn_step("spawn documentation docs-revise p/a round 1");
+    assert!(a.inputs.docs_instructions[0].contains("The code says 4."));
+    let b = h.spawn_step("spawn documentation docs-revise p/b round 1");
+    assert!(
+        b.inputs
+            .docs_instructions
+            .iter()
+            .any(|i| i.contains("`gone.md`"))
+    );
+    assert!(
+        b.inputs
+            .docs_instructions
+            .iter()
+            .any(|i| i.contains("\"would\""))
+    );
+}
+
+#[test]
+fn b10_after_three_rounds_a_gate_asks_for_another_round_or_the_book() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    for round in 1..=3 {
+        h.run(
+            &format!("spawn fact-check docs-check p/a round {round}"),
+            check_submit(true),
+        );
+        h.run(
+            &format!("spawn documentation docs-synthesis p round {round}"),
+            synthesis_submit(false, vec![("a", "Merge the two cap tables.")]),
+        );
+        if round < 3 {
+            h.run(
+                &format!("spawn documentation docs-revise p/a round {round}"),
+                page_submit("p", "a", CLEAN),
+            );
+        }
+    }
+    let g = h.open_gate("docs_rounds");
+    assert_eq!(
+        h.summaries(),
+        vec![] as Vec<String>,
+        "nothing runs while the gate is open"
+    );
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "continue".into(),
+            text: None,
+        },
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 3"]
+    );
+    h.run(
+        "spawn documentation docs-revise p/a round 3",
+        page_submit("p", "a", CLEAN),
+    );
+    h.run(
+        "spawn fact-check docs-check p/a round 4",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 4",
+        synthesis_submit(false, vec![("a", "Merge the two cap tables.")]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec!["spawn documentation docs-revise p/a round 4"],
+        "no gate until round 6"
+    );
+}
+
+#[test]
+fn b10_accepting_the_book_ends_the_loop() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", true)]),
+    );
+    h.run("spawn documentation docs p/a", page_submit("p", "a", CLEAN));
+    for round in 1..=3 {
+        h.run(
+            &format!("spawn fact-check docs-check p/a round {round}"),
+            check_submit(true),
+        );
+        h.run(
+            &format!("spawn documentation docs-synthesis p round {round}"),
+            synthesis_submit(false, vec![("a", "Merge the two cap tables.")]),
+        );
+        if round < 3 {
+            h.run(
+                &format!("spawn documentation docs-revise p/a round {round}"),
+                page_submit("p", "a", CLEAN),
+            );
+        }
+    }
+    let g = h.open_gate("docs_rounds");
+    h.answer(
+        &g,
+        GateAnswer::Choice {
+            option: "accept".into(),
+            text: None,
+        },
+    );
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+}
+
+#[test]
+fn b10_a_page_the_survey_keeps_gets_no_writer() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        survey_submit("p", &[("a", false), ("b", true)]),
+    );
+    assert_eq!(h.summaries(), vec!["spawn documentation docs p/b"]);
+    h.run("spawn documentation docs p/b", page_submit("p", "b", CLEAN));
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(h.summaries(), vec!["write-book p"]);
+    let update = h.state().book_update();
+    let kept: Vec<bool> = update.pages["p"].iter().map(|(_, d)| d.is_none()).collect();
+    assert_eq!(kept, [true, false], "a keeps its page from the book");
+}
+
+#[test]
+fn b10_a_run_that_answers_another_step_fails() {
+    let mut h = docs_session(&["p"]);
+    h.run(
+        "spawn documentation docs-survey p",
+        page_submit("p", "a", CLEAN),
+    );
+    assert_eq!(h.summaries(), vec!["gate execution_failed"]);
+}
+
+#[test]
+fn b10_a_whole_part_writer_from_an_older_log_still_folds() {
+    let mut h = docs_session(&["p"]);
+    let id = ExecutionId::new();
+    h.ev(SessionEvent::ExecutionStarted {
+        id: id.clone(),
+        agent: AgentName::Documentation,
+        purpose: serde_json::from_value(json!({"kind": "docs", "project": "p"})).unwrap(),
+        stage: StageKind::Documentation,
+        project: "p".into(),
+        executor: ExecutorKind::Native,
+        model: "mock:m".into(),
+        params: json!({}),
+        spawn_block: String::new(),
+        report_path: None,
+        resumes: None,
+        contract: None,
+    });
+    assert_eq!(
+        h.summaries(),
+        vec![] as Vec<String>,
+        "no survey starts beside it"
+    );
+    let mut part = page_submit("p", "orders", CLEAN);
+    part["step"] = json!("part");
+    h.finish(&id, ExecutionStatus::Ok, Some(part));
+    assert_eq!(h.summaries(), vec!["write-book p"]);
 }
 
 #[test]
@@ -2693,15 +3190,18 @@ fn b4_architecture_runs_only_for_two_or_more_projects() {
     let mut h = docs_session(&["a", "b"]);
     assert_eq!(
         h.summaries(),
-        vec!["spawn documentation docs a", "spawn documentation docs b"]
+        vec![
+            "spawn documentation docs-survey a",
+            "spawn documentation docs-survey b"
+        ]
     );
-    h.run("spawn documentation docs a", docs_submit("a"));
+    finish_docs(&mut h, "a");
     assert_eq!(
         h.summaries(),
-        vec!["spawn documentation docs b"],
+        vec!["spawn documentation docs-survey b"],
         "the book waits for every part"
     );
-    h.run("spawn documentation docs b", docs_submit("b"));
+    finish_docs(&mut h, "b");
     assert_eq!(
         h.summaries(),
         vec!["spawn system-architecture architecture"]
@@ -2722,8 +3222,8 @@ fn b4_architecture_runs_only_for_two_or_more_projects() {
 #[test]
 fn b4_an_abandoned_part_leaves_one_project_and_no_architecture() {
     let mut h = docs_session(&["a", "b"]);
-    h.run("spawn documentation docs a", docs_submit("a"));
-    let (id, _) = h.start("spawn documentation docs b");
+    finish_docs(&mut h, "a");
+    let (id, _) = h.start("spawn documentation docs-survey b");
     h.finish(&id, ExecutionStatus::Error, None);
     let g = h.open_gate("execution_failed");
     h.answer(
@@ -2743,7 +3243,7 @@ fn b6_a_picked_book_names_the_write() {
         *docs_book = Some("handbook".into());
     }
     h.decide(JudgeKind::Classify, None, json!({"category": "DOCS", "projects": ["p"], "explore_tasks": [], "opts_in": {"tests": false, "docs": true}, "reason": "r"}));
-    h.run("spawn documentation docs p", docs_submit("p"));
+    finish_docs(&mut h, "p");
     assert_eq!(h.summaries(), vec!["write-book handbook"]);
 }
 
@@ -2751,7 +3251,7 @@ fn b6_a_picked_book_names_the_write() {
 fn b6_a_book_update_replaces_the_projects_part() {
     use ostra_core::book::{Book, BookPart, GlossaryEntry, merge};
     let mut h = docs_session(&["a"]);
-    h.run("spawn documentation docs a", docs_submit("a"));
+    finish_docs(&mut h, "a");
     let update = h.state().book_update();
     let at = chrono::Utc::now();
     let old_part = |project: &str| BookPart {
@@ -2759,6 +3259,7 @@ fn b6_a_book_update_replaces_the_projects_part() {
         overview: "old".into(),
         sections: vec![],
         updated_at: at,
+        inventory: vec![],
     };
     let existing = Book {
         id: "a_b".into(),

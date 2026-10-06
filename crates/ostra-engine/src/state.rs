@@ -10,7 +10,7 @@ use crate::judge::{
 use chrono::{DateTime, Utc};
 use ostra_core::Contract;
 use ostra_core::agent::AgentName;
-use ostra_core::book::{ArchitectureSubmit, DocumentationSubmit};
+use ostra_core::book::{ArchitectureSubmit, DocsStep, DocumentationSubmit};
 use ostra_core::containment::{ContainmentSignal, PAUSE_AFTER};
 use ostra_core::event::{
     AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, FactTarget,
@@ -681,13 +681,49 @@ impl<T> StageRun<T> {
 
 pub type DocsState = StageRun<DocumentationSubmit>;
 pub type ArchitectureState = StageRun<ArchitectureSubmit>;
-
 /// Rule B5: the book write that ends the docs stage.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BookWrite {
     pub book: String,
     pub projects: Vec<String>,
     pub error: Option<String>,
+}
+
+/// Rule B10: a fact-check of one draft page.
+pub type CheckState = StageRun<FactCheckSubmit>;
+
+/// Rule B10: one planned page: its latest draft and the run that wrote its first draft.
+#[derive(Debug, Clone, Default)]
+pub struct PageDraft {
+    pub run: DocsState,
+    pub draft: Option<ostra_core::book::DocSection>,
+    /// The draft before the last revision, so a fact-check re-pass checks only what changed.
+    pub previous: Option<ostra_core::book::DocSection>,
+    pub glossary: Vec<ostra_core::book::GlossaryEntry>,
+}
+
+impl Default for DocsState {
+    fn default() -> Self {
+        DocsState::NotStarted
+    }
+}
+
+/// Rule B10: what the scan before the survey found on disk.
+#[derive(Debug, Clone, Default)]
+pub struct DocsScan {
+    pub modules: Vec<ostra_core::book::DocsModule>,
+    pub refs: Vec<ostra_core::book::RefItem>,
+}
+
+/// Rule B10: one synthesis round: a fact-check per changed page, one synthesis pass, then a
+/// revision per page that the pass, a failed check, or an engine check names.
+#[derive(Debug, Clone, Default)]
+pub struct DocsRound {
+    pub checks: BTreeMap<String, CheckState>,
+    pub synthesis: DocsState,
+    /// The revision instructions for each page, fixed when the synthesis pass finishes.
+    pub targets: BTreeMap<String, Vec<String>>,
+    pub revisions: BTreeMap<String, DocsState>,
 }
 
 #[derive(Debug, Clone)]
@@ -698,8 +734,23 @@ pub struct ProjectTrack {
     pub running: Option<(CommandPurpose, String)>,
     pub closing_gate: Option<GateId>,
     pub closing: Option<(bool, bool)>,
-    /// The project's documentation writer.
+    /// The writer of a whole part, from a log written before topics (Rule B10).
     pub docs: DocsState,
+    /// Rule B10: the modules and constants the scan found, before the survey.
+    pub docs_scan: Option<DocsScan>,
+    /// Rule B10: the survey of what is available, and the page plan.
+    pub survey: DocsState,
+    /// Rule B10: inventory items the synthesis passes added, latest last.
+    pub inventory_added: Vec<ostra_core::book::InventoryItem>,
+    /// Rule B10: each planned page, by page ID.
+    pub page_docs: BTreeMap<String, PageDraft>,
+    /// Rule B10: the synthesis rounds, oldest first.
+    pub docs_rounds: Vec<DocsRound>,
+    /// Rule B10: the open gate after a multiple of `DOCS_ROUNDS` rounds, the round the user last
+    /// chose another round at, and whether the user accepted the book as it is.
+    pub docs_gate: Option<GateId>,
+    pub docs_continued: u32,
+    pub docs_accepted: bool,
 }
 
 impl Default for ProjectTrack {
@@ -710,7 +761,238 @@ impl Default for ProjectTrack {
             closing_gate: None,
             closing: None,
             docs: DocsState::NotStarted,
+            docs_scan: None,
+            survey: DocsState::NotStarted,
+            inventory_added: vec![],
+            page_docs: BTreeMap::new(),
+            docs_rounds: vec![],
+            docs_gate: None,
+            docs_continued: 0,
+            docs_accepted: false,
         }
+    }
+}
+
+impl ProjectTrack {
+    /// Rule B10: the survey, once it is done.
+    pub fn survey_plan(&self) -> Option<&DocumentationSubmit> {
+        match &self.survey {
+            DocsState::Done(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Rule B10: the survey's inventory with every item a synthesis pass added; a later item
+    /// with the same ID replaces an earlier one.
+    pub fn current_inventory(&self) -> Vec<ostra_core::book::InventoryItem> {
+        let mut out: Vec<ostra_core::book::InventoryItem> = self
+            .survey_plan()
+            .map(|s| s.inventory.clone())
+            .unwrap_or_default();
+        for item in &self.inventory_added {
+            out.retain(|i| i.id != item.id);
+            out.push(item.clone());
+        }
+        out
+    }
+
+    /// Rule B10: the engine's checks over the current drafts, by page, with the inventory's under
+    /// the empty key.
+    pub fn engine_issues(&self) -> BTreeMap<String, Vec<String>> {
+        let modules = self
+            .docs_scan
+            .as_ref()
+            .map(|s| s.modules.as_slice())
+            .unwrap_or_default();
+        let kept: Vec<String> = self
+            .survey_plan()
+            .map(|s| {
+                s.pages
+                    .iter()
+                    .filter(|p| !p.rewrite)
+                    .map(|p| p.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ostra_core::book::mechanical_issues(
+            &self.placed_drafts(),
+            &kept,
+            &self.current_inventory(),
+            modules,
+        )
+    }
+
+    /// Rule B10: the pages the survey plans to write in this session, in plan order.
+    pub fn planned_pages(&self) -> Vec<&ostra_core::book::PlannedPage> {
+        self.survey_plan()
+            .map(|s| s.pages.iter().filter(|p| p.rewrite).collect())
+            .unwrap_or_default()
+    }
+
+    /// Rule B10: every current draft, in plan order.
+    pub fn drafts(
+        &self,
+    ) -> Vec<(
+        &ostra_core::book::PlannedPage,
+        &ostra_core::book::DocSection,
+    )> {
+        self.planned_pages()
+            .into_iter()
+            .filter_map(|p| {
+                self.page_docs
+                    .get(&p.id)
+                    .and_then(|d| d.draft.as_ref())
+                    .map(|d| (p, d))
+            })
+            .collect()
+    }
+
+    /// Rule B10: the drafts placed under their planned IDs and groups, for the engine's checks.
+    pub fn placed_drafts(&self) -> Vec<ostra_core::book::DocSection> {
+        self.drafts()
+            .into_iter()
+            .map(|(p, d)| {
+                let mut d = d.clone();
+                d.id = p.id.clone();
+                d.group = p.group.clone();
+                d
+            })
+            .collect()
+    }
+
+    /// Rule B10: every first draft run settled.
+    pub fn first_drafts_settled(&self) -> bool {
+        self.planned_pages().iter().all(|p| {
+            self.page_docs
+                .get(&p.id)
+                .is_some_and(|d| d.run.is_settled())
+        })
+    }
+
+    /// Rule B10: the pages a round's fact-checks cover: every draft in round 1, then the pages
+    /// the previous round revised.
+    pub fn pages_to_check(&self, round: u32) -> Vec<String> {
+        if round <= 1 {
+            return self
+                .drafts()
+                .into_iter()
+                .map(|(p, _)| p.id.clone())
+                .collect();
+        }
+        self.docs_rounds
+            .get(round as usize - 2)
+            .map(|r| {
+                r.revisions
+                    .iter()
+                    .filter(|(_, st)| matches!(st, DocsState::Done(_)))
+                    .map(|(p, _)| p.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Rule B10: the loop is over: the user accepted the book, the last synthesis pass found it
+    /// done with no page to revise, or a round revised nothing that needs a check.
+    pub fn docs_finished(&self) -> bool {
+        if self.docs_accepted {
+            return true;
+        }
+        let Some(last) = self.docs_rounds.last() else {
+            return false;
+        };
+        // Rule B10: a done pass finishes the loop only when no inventory item or module lacks an
+        // owner; otherwise the next round runs another synthesis pass.
+        if let DocsState::Done(syn) = &last.synthesis
+            && syn.done
+            && last.targets.is_empty()
+            && !self.engine_issues().contains_key("")
+        {
+            return true;
+        }
+        let revised = last.synthesis.is_settled()
+            && !last.targets.is_empty()
+            && last
+                .targets
+                .keys()
+                .all(|p| last.revisions.get(p).is_some_and(|r| r.is_settled()));
+        revised
+            && self
+                .pages_to_check(self.docs_rounds.len() as u32 + 1)
+                .is_empty()
+    }
+
+    /// The run a docs execution folds into.
+    pub fn docs_run(&mut self, page: Option<&str>, round: u32) -> &mut DocsState {
+        match page {
+            None => &mut self.docs,
+            Some(p) if round == 0 => &mut self.page_docs.entry(p.to_string()).or_default().run,
+            Some(p) => self
+                .round_mut(round)
+                .revisions
+                .entry(p.to_string())
+                .or_default(),
+        }
+    }
+
+    pub fn round_mut(&mut self, round: u32) -> &mut DocsRound {
+        while self.docs_rounds.len() < round as usize {
+            self.docs_rounds.push(DocsRound::default());
+        }
+        &mut self.docs_rounds[round as usize - 1]
+    }
+
+    /// The project's docs as one run: a whole-part writer from an older log; else the survey;
+    /// else running while any run of the pipeline runs, failed while one waits on its failure,
+    /// done with the drafts when the loop is over, and abandoned when no page was written.
+    pub fn docs_aggregate(&self) -> DocsState {
+        if !matches!(self.docs, DocsState::NotStarted) {
+            return self.docs.clone();
+        }
+        let Some(survey) = self.survey_plan() else {
+            return self.survey.clone();
+        };
+        let mut runs: Vec<&DocsState> = self.page_docs.values().map(|d| &d.run).collect();
+        for r in &self.docs_rounds {
+            runs.push(&r.synthesis);
+            runs.extend(r.revisions.values());
+        }
+        if let Some(r) = runs.iter().find(|r| matches!(r, DocsState::Running(_))) {
+            return (*r).clone();
+        }
+        for r in &self.docs_rounds {
+            if let Some(CheckState::Running(id)) = r
+                .checks
+                .values()
+                .find(|c| matches!(c, CheckState::Running(_)))
+            {
+                return DocsState::Running(id.clone());
+            }
+        }
+        if let Some(f) = runs.iter().find(|r| matches!(r, DocsState::Failed { .. })) {
+            return (*f).clone();
+        }
+        if !self.first_drafts_settled() {
+            return DocsState::NotStarted;
+        }
+        let drafts = self.drafts();
+        if drafts.is_empty() && survey.pages.iter().all(|p| p.rewrite) {
+            return DocsState::Abandoned;
+        }
+        if !self.docs_finished() {
+            return DocsState::NotStarted;
+        }
+        let glossary = self
+            .page_docs
+            .values()
+            .flat_map(|d| d.glossary.iter().cloned())
+            .chain(survey.glossary.iter().cloned())
+            .collect();
+        DocsState::Done(Box::new(ostra_core::book::combine_pages(
+            survey,
+            &drafts,
+            glossary,
+            self.current_inventory(),
+        )))
     }
 }
 
@@ -1049,6 +1331,24 @@ fn stage_run<T>(
     }
 }
 
+/// Rule B10: a docs run that answered another step of the pipeline failed.
+fn expect_step(run: DocsState, step: DocsStep, exec: &ExecutionId) -> DocsState {
+    match run {
+        DocsState::Done(d) if d.step != step => DocsState::Failed {
+            exec: exec.clone(),
+            error: format!(
+                "The run answered the `{}` step, but it was started for the `{}` step. Call the submit tool again with `step: {}` and the fields of that step.",
+                d.step.as_str(),
+                step.as_str(),
+                step.as_str()
+            ),
+            gate: None,
+            retries: 1,
+        },
+        other => other,
+    }
+}
+
 fn parse<T: serde::de::DeserializeOwned>(v: &Option<Value>) -> Option<T> {
     v.as_ref()
         .and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -1096,7 +1396,10 @@ pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
         ExecPurpose::Review { tests: true, .. } => StageKind::TestReview,
         ExecPurpose::Epa { .. } => StageKind::Epa,
         ExecPurpose::WriteTest { .. } => StageKind::WriteTest,
-        ExecPurpose::Docs { .. } => StageKind::Documentation,
+        ExecPurpose::Docs { .. }
+        | ExecPurpose::DocsSurvey { .. }
+        | ExecPurpose::DocsCheck { .. }
+        | ExecPurpose::DocsSynthesis { .. } => StageKind::Documentation,
         ExecPurpose::Architecture => StageKind::Architecture,
         ExecPurpose::PromptGen {
             handoff_for: Some(_),
@@ -1363,9 +1666,29 @@ impl SessionState {
         let parts = self
             .project_tracks
             .iter()
-            .filter_map(|(k, t)| match &t.docs {
-                DocsState::Done(d) => Some((k.clone(), (**d).clone())),
+            .filter_map(|(k, t)| match t.docs_aggregate() {
+                DocsState::Done(d) => Some((k.clone(), *d)),
                 _ => None,
+            })
+            .collect();
+        // Rule B10: every planned page, with the draft this session wrote or `None` to keep it.
+        let pages = self
+            .project_tracks
+            .iter()
+            .filter(|(_, t)| matches!(t.docs_aggregate(), DocsState::Done(_)))
+            .filter_map(|(k, t)| {
+                let survey = t.survey_plan()?;
+                Some((
+                    k.clone(),
+                    survey
+                        .pages
+                        .iter()
+                        .map(|p| {
+                            let draft = t.page_docs.get(&p.id).and_then(|d| d.draft.clone());
+                            (p.clone(), if p.rewrite { draft } else { None })
+                        })
+                        .collect(),
+                ))
             })
             .collect();
         let (architecture, glossary) = match &self.architecture {
@@ -1375,6 +1698,7 @@ impl SessionState {
         ostra_core::book::BookUpdate {
             session: self.id.to_string(),
             parts,
+            pages,
             architecture,
             glossary,
         }
@@ -1858,6 +2182,19 @@ impl SessionState {
                     .running = Some((*purpose, command.clone()));
             }
             SessionEvent::DocsPlanned { .. } => {}
+            SessionEvent::DocsScanned {
+                project,
+                modules,
+                refs,
+            } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_scan = Some(DocsScan {
+                    modules: modules.clone(),
+                    refs: refs.clone(),
+                });
+            }
             SessionEvent::BookWritten {
                 book,
                 projects,
@@ -2852,6 +3189,21 @@ impl SessionState {
         }
     }
 
+    /// Rule B10: where the runner writes a project's docs drafts.
+    pub fn docs_drafts_dir(&self, project: &str) -> PathBuf {
+        self.session_root
+            .join(paths::report::docs_drafts())
+            .join(project)
+    }
+
+    pub fn docs_draft_path(&self, project: &str, page: &str) -> PathBuf {
+        self.docs_drafts_dir(project).join(format!("{page}.md"))
+    }
+
+    pub fn docs_inventory_path(&self, project: &str) -> PathBuf {
+        self.docs_drafts_dir(project).join("inventory.md")
+    }
+
     pub fn session_context_path(&self) -> PathBuf {
         self.session_root.join(paths::report::session_context())
     }
@@ -3286,9 +3638,41 @@ impl SessionState {
                     p.epa = EpaState::Running(id.clone());
                 }
             }
-            ExecPurpose::Docs { project } => {
-                self.project_tracks.entry(project.clone()).or_default().docs =
-                    DocsState::Running(id.clone());
+            ExecPurpose::Docs {
+                project,
+                page,
+                round,
+            } => {
+                *self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_run(page.as_deref(), *round) = DocsState::Running(id.clone());
+            }
+            ExecPurpose::DocsSurvey { project } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .survey = DocsState::Running(id.clone());
+            }
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .round_mut(*round)
+                    .checks
+                    .insert(page.clone(), CheckState::Running(id.clone()));
+            }
+            ExecPurpose::DocsSynthesis { project, round } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .round_mut(*round)
+                    .synthesis = DocsState::Running(id.clone());
             }
             ExecPurpose::Architecture => {
                 self.architecture = ArchitectureState::Running(id.clone());
@@ -3466,14 +3850,133 @@ impl SessionState {
                     };
                 }
             }
-            ExecPurpose::Docs { project } => {
+            ExecPurpose::Docs {
+                project,
+                page,
+                round,
+            } => {
                 let t = self.project_tracks.entry(project.clone()).or_default();
-                t.docs = stage_run(
+                let mut run = stage_run(
                     status,
                     parse::<DocumentationSubmit>(&result.submit),
                     &rec.id,
                     error,
                 );
+                if page.is_some() {
+                    run = expect_step(run, DocsStep::Page, &rec.id);
+                }
+                if let (Some(p), DocsState::Done(sub)) = (page, &run) {
+                    // Rule B10: a first draft or a revision replaces the page's draft.
+                    let d = t.page_docs.entry(p.clone()).or_default();
+                    d.previous = d.draft.take();
+                    d.draft = sub.sections.first().cloned();
+                    d.glossary = sub.glossary.clone();
+                }
+                *t.docs_run(page.as_deref(), *round) = run;
+            }
+            ExecPurpose::DocsSurvey { project } => {
+                let t = self.project_tracks.entry(project.clone()).or_default();
+                t.survey = expect_step(
+                    stage_run(
+                        status,
+                        parse::<DocumentationSubmit>(&result.submit),
+                        &rec.id,
+                        error,
+                    ),
+                    DocsStep::Survey,
+                    &rec.id,
+                );
+                // Rule B10: each page the survey plans to write gets a writer.
+                t.page_docs = match &t.survey {
+                    DocsState::Done(sv) => sv
+                        .pages
+                        .iter()
+                        .filter(|p| p.rewrite)
+                        .map(|p| (p.id.clone(), PageDraft::default()))
+                        .collect(),
+                    _ => BTreeMap::new(),
+                };
+                t.docs_rounds.clear();
+            }
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => {
+                let run = stage_run(
+                    status,
+                    parse::<FactCheckSubmit>(&result.submit),
+                    &rec.id,
+                    error,
+                );
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .round_mut(*round)
+                    .checks
+                    .insert(page.clone(), run);
+            }
+            ExecPurpose::DocsSynthesis { project, round } => {
+                let t = self.project_tracks.entry(project.clone()).or_default();
+                let run = expect_step(
+                    stage_run(
+                        status,
+                        parse::<DocumentationSubmit>(&result.submit),
+                        &rec.id,
+                        error,
+                    ),
+                    DocsStep::Synthesis,
+                    &rec.id,
+                );
+                // Rule B10: the pages to revise are fixed now: the pass's edits, each failed
+                // fact-check, each owner of an inventory item the pass added, and each page the
+                // engine's own checks name.
+                let mut targets: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                if let DocsState::Done(syn) = &run {
+                    let pages: BTreeSet<String> = t.page_docs.keys().cloned().collect();
+                    for item in &syn.inventory {
+                        let owned = pages.contains(&item.owner);
+                        if !owned && item.out_of_scope.is_none() {
+                            continue;
+                        }
+                        t.inventory_added.retain(|i| i.id != item.id);
+                        t.inventory_added.push(item.clone());
+                        if owned {
+                            targets.entry(item.owner.clone()).or_default().push(format!(
+                                "Cover the new inventory item `{}` ({}), from {}.",
+                                item.id,
+                                item.name,
+                                item.sources.join(", ")
+                            ));
+                        }
+                    }
+                    for e in &syn.edits {
+                        if pages.contains(&e.page) {
+                            targets
+                                .entry(e.page.clone())
+                                .or_default()
+                                .extend(e.instructions.clone());
+                        }
+                    }
+                    for (page, check) in &t.round_mut(*round).checks {
+                        if let CheckState::Done(c) = check
+                            && c.verdict != ostra_core::submit::Verdict::Pass
+                        {
+                            targets.entry(page.clone()).or_default().push(format!(
+                                "Fix each fact-check finding: {}",
+                                c.findings_text()
+                            ));
+                        }
+                    }
+                    for (page, issues) in t.engine_issues() {
+                        if pages.contains(&page) {
+                            targets.entry(page).or_default().extend(issues);
+                        }
+                    }
+                }
+                let r = t.round_mut(*round);
+                r.synthesis = run;
+                r.targets = targets;
             }
             ExecPurpose::Architecture => {
                 self.architecture = stage_run(
@@ -3817,9 +4320,53 @@ impl SessionState {
                     *g = Some(gate.clone());
                 }
             }
-            ExecPurpose::Docs { project } => {
-                if let DocsState::Failed { gate: g, .. } =
-                    &mut self.project_tracks.entry(project.clone()).or_default().docs
+            ExecPurpose::Docs {
+                project,
+                page,
+                round,
+            } => {
+                if let DocsState::Failed { gate: g, .. } = self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_run(page.as_deref(), *round)
+                {
+                    *g = Some(gate.clone());
+                }
+            }
+            ExecPurpose::DocsSurvey { project } => {
+                if let DocsState::Failed { gate: g, .. } = &mut self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .survey
+                {
+                    *g = Some(gate.clone());
+                }
+            }
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => {
+                if let Some(CheckState::Failed { gate: g, .. }) = self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .round_mut(*round)
+                    .checks
+                    .get_mut(page)
+                {
+                    *g = Some(gate.clone());
+                }
+            }
+            ExecPurpose::DocsSynthesis { project, round } => {
+                if let DocsState::Failed { gate: g, .. } = &mut self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .round_mut(*round)
+                    .synthesis
                 {
                     *g = Some(gate.clone());
                 }
@@ -3892,6 +4439,12 @@ impl SessionState {
             }
             GatePayload::Permission { .. } => {}
             GatePayload::BudgetReached { .. } => self.budget_gate = Some(id.clone()),
+            GatePayload::DocsRounds { project, .. } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_gate = Some(id.clone());
+            }
             GatePayload::ImplementationReview { .. } => self.feedback.gate = Some(id.clone()),
         }
     }
@@ -4254,6 +4807,17 @@ impl SessionState {
                     _ => self.feedback.accepted = true,
                 }
             }
+            GatePayload::DocsRounds {
+                project, rounds, ..
+            } => {
+                // Rule B10: another round, or the book as it is.
+                let t = self.project_tracks.entry(project.clone()).or_default();
+                t.docs_gate = None;
+                match choice {
+                    Some(("accept", _)) => t.docs_accepted = true,
+                    _ => t.docs_continued = *rounds,
+                }
+            }
             GatePayload::BudgetReached {
                 spent_usd,
                 budget_usd,
@@ -4351,8 +4915,54 @@ impl SessionState {
                     };
                 }
             }
-            ExecPurpose::Docs { project } => {
-                self.project_tracks.entry(project.clone()).or_default().docs = if retry {
+            ExecPurpose::Docs {
+                project,
+                page,
+                round,
+            } => {
+                *self
+                    .project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .docs_run(page.as_deref(), *round) = if retry {
+                    DocsState::NotStarted
+                } else {
+                    DocsState::Abandoned
+                };
+            }
+            ExecPurpose::DocsSurvey { project } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .survey = if retry {
+                    DocsState::NotStarted
+                } else {
+                    DocsState::Abandoned
+                };
+            }
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => {
+                let st = if retry {
+                    CheckState::NotStarted
+                } else {
+                    CheckState::Abandoned
+                };
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .round_mut(*round)
+                    .checks
+                    .insert(page.clone(), st);
+            }
+            ExecPurpose::DocsSynthesis { project, round } => {
+                self.project_tracks
+                    .entry(project.clone())
+                    .or_default()
+                    .round_mut(*round)
+                    .synthesis = if retry {
                     DocsState::NotStarted
                 } else {
                     DocsState::Abandoned

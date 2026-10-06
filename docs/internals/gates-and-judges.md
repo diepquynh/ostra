@@ -229,6 +229,16 @@ not a positive number, `raise` adds the original budget again. `stop` fails the 
 
 ![The budget gate with the amount spent, the budget, and Raise the budget and Stop the session buttons](../images/console/gate-budget.png)
 
+### Docs rounds
+
+The docs stage reconciles its drafts in synthesis rounds until the book meets its definition of done (Rule B10).
+After each 3 rounds without done, this gate opens before the next revisions. It names the checks that the last
+synthesis pass found failed. Nothing of the project's docs stage runs while it is open.
+
+`continue` runs another round, and the gate opens again only after 3 more rounds. `accept` ends the loop and
+writes the book from the current drafts. Under YOLO the engine answers `continue`, so the session budget is the
+bound, as in the review loop.
+
 ### Stage review
 
 A custom stage of a [workflow](workflows.md) opens this gate in these cases:

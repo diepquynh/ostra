@@ -1074,6 +1074,7 @@ mod tests {
                     note: "Holds it.".into(),
                 })
                 .collect(),
+            group: String::new(),
         }
     }
 
@@ -1090,6 +1091,7 @@ mod tests {
                 overview: "The app.".into(),
                 sections,
                 updated_at: chrono::Utc::now(),
+                inventory: vec![],
             }],
             glossary: vec![],
         }

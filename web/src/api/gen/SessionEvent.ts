@@ -10,6 +10,7 @@ import type { CreatedProject } from "./CreatedProject";
 import type { CustomSubmit } from "./CustomSubmit";
 import type { DecisionId } from "./DecisionId";
 import type { DeliveryKind } from "./DeliveryKind";
+import type { DocsModule } from "./DocsModule";
 import type { ExecPurpose } from "./ExecPurpose";
 import type { ExecutionId } from "./ExecutionId";
 import type { ExecutionResult } from "./ExecutionResult";
@@ -21,6 +22,7 @@ import type { JudgeKind } from "./JudgeKind";
 import type { MessageId } from "./MessageId";
 import type { MessageTarget } from "./MessageTarget";
 import type { ProjectRef } from "./ProjectRef";
+import type { RefItem } from "./RefItem";
 import type { ReviewFinding } from "./ReviewFinding";
 import type { SessionKind } from "./SessionKind";
 import type { SessionOptions } from "./SessionOptions";
@@ -91,7 +93,7 @@ reason: string | null,
  * Rule J1: the answer waits for the Route answer or Feedback judge before it is applied.
  * Answers recorded before the rule have none and fold as they always did.
  */
-routed: boolean, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "docs_planned", project: string, } | { "type": "book_written", book: string, 
+routed: boolean, } | { "type": "command_started", purpose: CommandPurpose, project: string, command: string, } | { "type": "command_ran", purpose: CommandPurpose, project: string, command: string, exit_code: number | null, output_tail: string, } | { "type": "docs_scanned", project: string, modules: Array<DocsModule>, refs: Array<RefItem>, } | { "type": "docs_planned", project: string, } | { "type": "book_written", book: string, 
 /**
  * The projects whose parts this session wrote.
  */

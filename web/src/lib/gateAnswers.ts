@@ -28,6 +28,7 @@ export const ANSWER_KIND: Record<GateKindName, AnswerKind> = {
   skill_approval: "skills",
   execution_failed: "choice",
   budget_reached: "choice",
+  docs_rounds: "choice",
   implementation_review: "choice",
   stage_review: "choice",
 };
@@ -101,6 +102,7 @@ export type ChoiceGateKind =
   | "harness_failure"
   | "execution_failed"
   | "budget_reached"
+  | "docs_rounds"
   | "implementation_review"
   | "stage_review";
 
@@ -152,6 +154,10 @@ export const CHOICES: Record<ChoiceGateKind, ChoiceOption[]> = {
   budget_reached: [
     { option: "raise", label: "Raise the budget", variant: "primary", text: "optional" },
     { option: "stop", label: "Stop the session", variant: "danger", text: "none" },
+  ],
+  docs_rounds: [
+    { option: "continue", label: "Run another synthesis round", variant: "primary", text: "none" },
+    { option: "accept", label: "Accept the book as it is", variant: "default", text: "none" },
   ],
   implementation_review: [
     { option: "done", label: "Accept the implementation", variant: "primary", text: "none" },

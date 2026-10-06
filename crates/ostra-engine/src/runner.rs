@@ -1303,6 +1303,88 @@ fn init_problem(root: &Path) -> Option<String> {
         .map(|e| format!("the generated .ostra/project.toml is not valid: {e}"))
 }
 
+/// Rule B10: the drafts of a project as Markdown, the inventory, and an index of the page plan.
+fn write_docs_drafts(st: &SessionState, project: &str) {
+    let Some(track) = st.project_tracks.get(project) else {
+        return;
+    };
+    let dir = st.docs_drafts_dir(project);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    if let Some(scan) = &track.docs_scan {
+        let mut text = format!(
+            "# Reference sheet for `{project}`\n\nThe modules and the named constants that the engine found in the source. The book must cover each module, and a reader looks up each constant.\n\n## Modules\n\n"
+        );
+        for m in &scan.modules {
+            text.push_str(&format!("- `{}`: {}\n", m.name, m.globs.join(", ")));
+        }
+        text.push_str("\n## Named constants, by file\n\n");
+        let mut file = "";
+        for r in &scan.refs {
+            if r.file != file {
+                file = &r.file;
+                text.push_str(&format!("\n### `{file}`\n\n"));
+            }
+            text.push_str(&format!("- `{}`\n", r.name));
+        }
+        let _ = std::fs::write(dir.join("reference.md"), text);
+    }
+    let Some(survey) = track.survey_plan() else {
+        return;
+    };
+    let drafts = track.placed_drafts();
+    for d in &drafts {
+        let _ = std::fs::write(
+            st.docs_draft_path(project, &d.id),
+            ostra_core::book::render_section(project, d),
+        );
+        // Rule B10: the draft before the last revision, so a fact-check re-pass diffs the two.
+        if let Some(prev) = track.page_docs.get(&d.id).and_then(|p| p.previous.as_ref()) {
+            let mut prev = prev.clone();
+            prev.id = d.id.clone();
+            let _ = std::fs::write(
+                dir.join(format!("{}.prev.md", d.id)),
+                ostra_core::book::render_section(project, &prev),
+            );
+        }
+    }
+    let mut index = format!(
+        "# Page plan for `{project}`\n\n{}\n\n",
+        survey.overview.trim()
+    );
+    for p in &survey.pages {
+        let state = if drafts.iter().any(|d| d.id == p.id) {
+            format!("draft: `{}.md`", p.id)
+        } else if p.rewrite {
+            "no draft".into()
+        } else {
+            "kept from the book".into()
+        };
+        index.push_str(&format!(
+            "- `{}` {} (group: {}, {state}): {}\n",
+            p.id, p.title, p.group, p.covers
+        ));
+    }
+    let _ = std::fs::write(dir.join("index.md"), index);
+    let mut inv = format!(
+        "# Inventory for `{project}`\n\nEvery item the book must cover, with its owning page.\n\n| Item | Name | Owner | Sources |\n| --- | --- | --- | --- |\n"
+    );
+    for i in &track.current_inventory() {
+        let owner = match &i.out_of_scope {
+            Some(why) => format!("out of scope: {why}"),
+            None => format!("`{}`", i.owner),
+        };
+        inv.push_str(&format!(
+            "| `{}` | {} | {owner} | {} |\n",
+            i.id,
+            i.name.replace('|', "\\|"),
+            i.sources.join(", ").replace('|', "\\|")
+        ));
+    }
+    let _ = std::fs::write(st.docs_inventory_path(project), inv);
+}
+
 fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), EngineError> {
     let ok = matches!(
         (payload, answer),
@@ -1320,6 +1402,7 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
                 | GatePayload::HarnessFailure { .. }
                 | GatePayload::ExecutionFailed { .. }
                 | GatePayload::BudgetReached { .. }
+                | GatePayload::DocsRounds { .. }
                 | GatePayload::ImplementationReview { .. }
                 | GatePayload::StageReview { .. },
             GateAnswer::Choice { .. }
@@ -1360,6 +1443,14 @@ fn validate_answer(payload: &GatePayload, answer: &GateAnswer) -> Result<(), Eng
         && feedback.as_ref().is_none_or(|f| f.trim().is_empty())
     {
         return Err(EngineError::Invalid("Say what to change.".into()));
+    }
+    if let (GatePayload::DocsRounds { .. }, GateAnswer::Choice { option, .. }) = (payload, answer)
+        && option != "continue"
+        && option != "accept"
+    {
+        return Err(EngineError::Invalid(
+            "Choose continue for another round, or accept to write the book as it is.".into(),
+        ));
     }
     if let (GatePayload::ImplementationReview { .. }, GateAnswer::Choice { option, text }) =
         (payload, answer)
@@ -2090,6 +2181,28 @@ impl Inner {
                         project,
                         execution,
                         error,
+                    },
+                )?;
+                Ok(())
+            }
+            Step::ScanDocs { project } => {
+                let st = self.snapshot(session)?;
+                let path = st.project_path(&project).ok_or_else(|| {
+                    EngineError::Invalid(format!("Project `{project}` is not in this workspace."))
+                })?;
+                let profile: ProjectProfile =
+                    load_toml(&paths::project_profile(&path)).unwrap_or_default();
+                let map = profile.module_map;
+                let (modules, refs) =
+                    tokio::task::spawn_blocking(move || crate::docs_scan::scan(&path, &map))
+                        .await
+                        .unwrap_or_default();
+                self.append(
+                    session,
+                    SessionEvent::DocsScanned {
+                        project,
+                        modules,
+                        refs,
                     },
                 )?;
                 Ok(())
@@ -2835,6 +2948,14 @@ impl Inner {
                     ),
                 );
             }
+        }
+        // Rule B10: every docs run after the survey reads the current drafts and the inventory.
+        if let ExecPurpose::Docs { project, .. }
+        | ExecPurpose::DocsSurvey { project }
+        | ExecPurpose::DocsCheck { project, .. }
+        | ExecPurpose::DocsSynthesis { project, .. } = &req.purpose
+        {
+            write_docs_drafts(&st, project);
         }
         if matches!(req.purpose, ExecPurpose::Architecture)
             && let Some(p) = &req.inputs.target

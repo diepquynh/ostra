@@ -860,7 +860,7 @@ fn completion_input(s: &SessionState) -> (String, String) {
                 .closing
                 .map(|(a, b)| format!("tests {}, docs {}", yes(a), yes(b)))
                 .unwrap_or_else(|| "not reached".into());
-            let docs = match &t.docs {
+            let docs = match &t.docs_aggregate() {
                 DocsState::Done(d) => format!(
                     "docs written ({} sections): {}",
                     d.sections.len(),
@@ -1020,6 +1020,7 @@ pub fn yolo_plan(s: &SessionState, gate: &GateId) -> Option<YoloPlan> {
             }
         }
         GatePayload::ReviewCap { .. } => choice("another-pass", "Under YOLO the review loop keeps its larger budget."),
+        GatePayload::DocsRounds { .. } => choice("continue", "Under YOLO the docs loop runs another round, and the session budget bounds it (Rule B10)."),
         GatePayload::PhaseBlocked { .. } => choice("leave", "Under YOLO a blocked phase is recorded and independent work continues (Rule D9)."),
         GatePayload::ExecutionFailed { .. } if yolo_leaves_open(s, &g.payload) => return None,
         GatePayload::ExecutionFailed { execution, .. } => {

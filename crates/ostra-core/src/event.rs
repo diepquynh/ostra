@@ -196,6 +196,28 @@ pub enum ExecPurpose {
     #[serde(alias = "module_docs")]
     Docs {
         project: String,
+        /// Rule B10: the page this writer writes. `None` writes the whole part, as one writer did
+        /// before the docs pipeline.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page: Option<String>,
+        /// Rule B10: 0 for the first draft, else the synthesis round whose edits it applies.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        round: u32,
+    },
+    /// Rule B10: the survey of what is available, and the page plan.
+    DocsSurvey {
+        project: String,
+    },
+    /// Rule B10: a fact-check of one draft page in a synthesis round.
+    DocsCheck {
+        project: String,
+        page: String,
+        round: u32,
+    },
+    /// Rule B10: the synthesis pass of one round over every draft.
+    DocsSynthesis {
+        project: String,
+        round: u32,
     },
     /// Rule B4: the architecture of a book that covers two or more projects.
     Architecture,
@@ -299,7 +321,30 @@ impl ExecPurpose {
             }
             ExecPurpose::Epa { phase } => format!("Phase {phase}"),
             ExecPurpose::WriteTest { phase, work: w } => format!("Phase {phase}{}", work(w)),
-            ExecPurpose::Docs { project } => format!("Docs for {project}"),
+            ExecPurpose::Docs {
+                project,
+                page: None,
+                ..
+            } => format!("Docs for {project}"),
+            ExecPurpose::Docs {
+                project,
+                page: Some(p),
+                round: 0,
+            } => format!("Docs for {project} · {p}"),
+            ExecPurpose::Docs {
+                project,
+                page: Some(p),
+                round,
+            } => format!("Docs for {project} · {p} · revision {round}"),
+            ExecPurpose::DocsSurvey { project } => format!("Docs survey for {project}"),
+            ExecPurpose::DocsCheck {
+                project,
+                page,
+                round,
+            } => format!("Docs check for {project} · {page} · round {round}"),
+            ExecPurpose::DocsSynthesis { project, round } => {
+                format!("Docs synthesis for {project} · round {round}")
+            }
             ExecPurpose::Architecture => "System architecture".into(),
             ExecPurpose::PromptGen {
                 handoff_for: Some(_),
@@ -464,6 +509,14 @@ pub enum GatePayload {
         spent_usd: f64,
         budget_usd: f64,
     },
+    /// Rule B10: the docs pipeline of a project ran `rounds` synthesis rounds and is not done.
+    /// Answer `continue` for another round, or `accept` to write the book as it is.
+    DocsRounds {
+        project: String,
+        rounds: u32,
+        /// The checks of the definition of done that the last synthesis pass found failed.
+        open: Vec<String>,
+    },
 }
 
 impl GatePayload {
@@ -492,6 +545,7 @@ impl GatePayload {
             GatePayload::BudgetReached { .. } => StageKind::Intake,
             GatePayload::ImplementationReview { .. } => StageKind::ImplementationReview,
             GatePayload::StageReview { .. } => StageKind::Custom,
+            GatePayload::DocsRounds { .. } => StageKind::Documentation,
         }
     }
 
@@ -512,6 +566,7 @@ impl GatePayload {
             GatePayload::BudgetReached { .. } => "budget_reached",
             GatePayload::ImplementationReview { .. } => "implementation_review",
             GatePayload::StageReview { .. } => "stage_review",
+            GatePayload::DocsRounds { .. } => "docs_rounds",
         }
     }
 
@@ -879,6 +934,13 @@ pub enum SessionEvent {
         exit_code: Option<i32>,
         output_tail: String,
     },
+    /// Rule B10: the project's modules and named constants, read from disk before the survey,
+    /// because the fold cannot read the file system.
+    DocsScanned {
+        project: String,
+        modules: Vec<crate::book::DocsModule>,
+        refs: Vec<crate::book::RefItem>,
+    },
     /// Rule B9: logs from before one writer per project split a large project's part into areas.
     /// The fold ignores it.
     DocsPlanned {
@@ -973,4 +1035,8 @@ mod tests {
             "Phase 1 · fix pass 3"
         );
     }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }

@@ -1,7 +1,7 @@
-description = "Writes one project's part of the workspace documentation book: the project overview, then the pages a reader needs to understand and change the project, with topics and structure the agent chooses from the user's instructions and the source. Each page is a summary and a free Markdown body with small Mermaid diagrams, tables, and code references last, plus the glossary terms it uses. Grounds every name in real source and writes each fact once. Returns the whole part in its submit call; Ostra writes the book, and the agent writes no file. Runs in the docs stage, after every phase has passed review, or directly when the user asks for documentation of existing code."
+description = "Runs one step of the docs stage for one project, named by its Docs mode line. Survey: one brief pass over the code, project memory, workspace artifacts, the user's uploads and attachments, and the existing book, returning the inventory of what the book must cover and a plan of broad pages in groups. Page: writes or revises one page, checked against the code, with the problem, mechanism, reasons, cases, groups, user view, limits, and code of each area. Synthesis: reads every draft and the fact-check findings, judges the definition of done, and lists the edits that remove duplicated facts, contradictions, and gaps. Returns the result in its submit call; Ostra writes the book, and the agent writes no file."
 default_tier = "advanced"
 timeout_seconds = 2400
-capabilities = ["read", "shell", "search_text", "glob", "code", "docs_search"]
+capabilities = ["read", "shell", "search_text", "glob", "code", "docs_search", "memory_recall"]
 
 returns = "documentation"
 write_scope = "session"

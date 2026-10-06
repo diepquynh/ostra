@@ -2383,6 +2383,7 @@ dependencies = [
  "ostra-sandbox",
  "ostra-store",
  "pretty_assertions",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

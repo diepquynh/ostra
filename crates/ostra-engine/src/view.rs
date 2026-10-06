@@ -708,8 +708,8 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             });
             out.push(c);
         }
-        let docs = &t.docs;
-        if let Some(st) = run_status(docs) {
+        let docs = t.docs_aggregate();
+        if let Some(st) = run_status(&docs) {
             let mut c = card(
                 StageKind::Documentation,
                 format!("Documentation for {key}"),
@@ -718,10 +718,20 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             c.project = Some(key.clone());
             c.executions = exec_ids(
                 s,
-                |e| matches!(&e.purpose, P::Docs { project, .. } if project == key),
+                |e| matches!(&e.purpose, P::Docs { project, .. } | P::DocsSurvey { project } | P::DocsCheck { project, .. } | P::DocsSynthesis { project, .. } if project == key),
             );
-            c.detail = match docs {
-                DocsState::Done(d) => Some(format!("{} sections", d.sections.len())),
+            let pages = t.planned_pages().len();
+            let rounds = t.docs_rounds.len();
+            c.detail = match &docs {
+                DocsState::Done(d) => Some(format!(
+                    "{} pages after {rounds} synthesis rounds",
+                    d.sections.len()
+                )),
+                _ if rounds > 0 => Some(format!("{pages} pages, synthesis round {rounds}")),
+                _ if pages > 0 => Some(format!(
+                    "{} of {pages} first drafts written",
+                    t.drafts().len()
+                )),
                 _ => None,
             };
             out.push(c);

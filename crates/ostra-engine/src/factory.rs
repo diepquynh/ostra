@@ -187,6 +187,7 @@ impl SpawnFactory for AgentsFactory {
                 common,
                 target: required(i.target.clone(), "target")?,
                 target_type: match i.target_type {
+                    _ if i.docs_check => TargetType::Page,
                     Some(FactTarget::Plan) => TargetType::Plan,
                     _ => TargetType::Spec,
                 },
@@ -285,6 +286,35 @@ impl SpawnFactory for AgentsFactory {
                 common,
                 implementer_reports: i.implementer_reports.clone(),
                 existing_book: existing_book(s),
+                reference: i.docs_reference.clone(),
+                mode: match (i.docs_step, &i.docs_page) {
+                    (Some(ostra_core::book::DocsStep::Survey), _) => DocsMode::Survey,
+                    (Some(ostra_core::book::DocsStep::Synthesis), _) => DocsMode::Synthesis {
+                        round: i.docs_round,
+                        drafts: s.docs_drafts_dir(&req.project),
+                        findings: i.docs_instructions.clone(),
+                    },
+                    (Some(ostra_core::book::DocsStep::Page), Some(p)) => {
+                        DocsMode::Page(DocsPageScope {
+                            id: p.id.clone(),
+                            title: p.title.clone(),
+                            group: p.group.clone(),
+                            covers: p.covers.clone(),
+                            sources: p.sources.clone(),
+                            inventory: i.docs_inventory.clone(),
+                            others: i
+                                .docs_pages
+                                .iter()
+                                .filter(|o| o.id != p.id)
+                                .map(|o| (o.id.clone(), o.title.clone(), o.covers.clone()))
+                                .collect(),
+                            drafts: s.docs_drafts_dir(&req.project),
+                            draft: i.target.clone(),
+                            instructions: i.docs_instructions.clone(),
+                        })
+                    }
+                    _ => DocsMode::Part,
+                },
                 extra: Extras {
                     user_notes: i.user_notes.clone(),
                     task_note: Some(format!("The request: {}", s.full_request())),

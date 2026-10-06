@@ -57,4 +57,8 @@ scope: string | null,
 /**
  * The agent whose run raised it; none when a plugin's stage logic asks.
  */
-agent: AgentName | null, execution: ExecutionId | null, verdict: StageVerdict, summary: string, findings: Array<CustomFinding>, question: string | null, options: Array<string>, round: number, max_rounds: number, } | { "kind": "budget_reached", spent_usd: number, budget_usd: number, };
+agent: AgentName | null, execution: ExecutionId | null, verdict: StageVerdict, summary: string, findings: Array<CustomFinding>, question: string | null, options: Array<string>, round: number, max_rounds: number, } | { "kind": "budget_reached", spent_usd: number, budget_usd: number, } | { "kind": "docs_rounds", project: string, rounds: number, 
+/**
+ * The checks of the definition of done that the last synthesis pass found failed.
+ */
+open: Array<string>, };

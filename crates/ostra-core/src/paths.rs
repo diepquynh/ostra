@@ -423,6 +423,10 @@ pub mod report {
     pub fn docs_parts() -> String {
         "ostra-docs-parts.json".into()
     }
+    /// Rule B10: the folder of the docs drafts the engine writes before each docs run.
+    pub fn docs_drafts() -> String {
+        "ostra-docs-drafts".into()
+    }
     pub fn prompt_gen(n: u32) -> String {
         format!("ostra-prompt-gen-{n}.md")
     }

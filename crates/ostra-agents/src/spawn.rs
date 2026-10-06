@@ -50,6 +50,8 @@ pub enum WorkSource {
 pub enum TargetType {
     Spec,
     Plan,
+    /// Rule B10: a draft page of a documentation book.
+    Page,
 }
 
 impl TargetType {
@@ -57,6 +59,7 @@ impl TargetType {
         match self {
             TargetType::Spec => "spec",
             TargetType::Plan => "plan",
+            TargetType::Page => "page",
         }
     }
 }
@@ -341,7 +344,48 @@ pub struct DocumentationParams {
     pub implementer_reports: Vec<PathBuf>,
     /// The book's current `book.json`, when the book exists.
     pub existing_book: Option<PathBuf>,
+    /// Rule B10: a survey, a page writer, a synthesis pass, or one writer for the whole part.
+    pub mode: DocsMode,
+    /// Rule B10: the reference sheet of the project's modules and named constants.
+    pub reference: Option<PathBuf>,
     pub extra: Extras,
+}
+
+/// Rule B10: what a documentation run does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+pub enum DocsMode {
+    /// One writer for the whole part, as in a log from before the docs pipeline.
+    #[default]
+    Part,
+    /// Survey what is available and plan the pages.
+    Survey,
+    /// Write or revise one page.
+    Page(DocsPageScope),
+    /// One synthesis pass over every draft.
+    Synthesis {
+        round: u32,
+        drafts: PathBuf,
+        findings: Vec<String>,
+    },
+}
+
+/// Rule B10: the page one writer writes, the other pages of the plan, and, on a revision, the
+/// draft and what to change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DocsPageScope {
+    pub id: String,
+    pub title: String,
+    pub group: String,
+    pub covers: String,
+    pub sources: Vec<String>,
+    /// The inventory items the page owns.
+    pub inventory: Vec<String>,
+    /// Every other planned page: ID, title, and what it covers.
+    pub others: Vec<(String, String, String)>,
+    pub drafts: PathBuf,
+    /// The current draft, on a revision.
+    pub draft: Option<PathBuf>,
+    pub instructions: Vec<String>,
 }
 
 /// Rule B4: the architecture of a book of two or more projects.
@@ -677,6 +721,53 @@ impl SpawnParams for DocumentationParams {
         let mut b = Block::new();
         b.paths("Implementer reports", &self.implementer_reports);
         b.opt_path("Existing book", self.existing_book.as_deref());
+        b.opt_path("Reference", self.reference.as_deref());
+        match &self.mode {
+            DocsMode::Part => {}
+            DocsMode::Survey => b.line("Docs mode", "survey"),
+            DocsMode::Page(p) => {
+                b.line("Docs mode", "page");
+                b.line("Page", &format!("{} ({})", p.title, p.id));
+                b.line("Page group", &p.group);
+                b.line("Page covers", &p.covers);
+                if !p.sources.is_empty() {
+                    b.line("Page sources", &p.sources.join(", "));
+                }
+                if !p.inventory.is_empty() {
+                    b.line("Page inventory", &p.inventory.join("; "));
+                }
+                let others: Vec<String> = p
+                    .others
+                    .iter()
+                    .map(|(id, title, covers)| format!("`{id}` {title}: {covers}"))
+                    .collect();
+                b.line("Other pages", &others.join("; "));
+                b.path("Drafts", &p.drafts);
+                if let Some(d) = &p.draft {
+                    b.path("Draft", d);
+                }
+                if !p.instructions.is_empty() {
+                    let list: Vec<String> =
+                        p.instructions.iter().map(|i| format!("- {i}")).collect();
+                    b.line("Revise", &list.join("\n"));
+                }
+            }
+            DocsMode::Synthesis {
+                round,
+                drafts,
+                findings,
+            } => {
+                b.line("Docs mode", "synthesis");
+                b.line("Round", &round.to_string());
+                b.path("Drafts", drafts);
+                let list: Vec<String> = if findings.is_empty() {
+                    vec!["none".into()]
+                } else {
+                    findings.iter().map(|f| format!("- {f}")).collect()
+                };
+                b.line("Findings", &list.join("\n"));
+            }
+        }
         b.common(&self.common);
         b.extras(&self.extra);
         b.finish()
@@ -999,7 +1090,7 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     (
         "target_type",
         &["Target type"],
-        Kind::Enum(&["spec", "plan"]),
+        Kind::Enum(&["spec", "plan", "page"]),
     ),
     (
         "source_check",
@@ -1015,6 +1106,23 @@ const PARAMS: &[(&str, &[&str], Kind)] = &[
     ("implementer_reports", &["Implementer reports"], Kind::Text),
     ("epa_report", &["EPA report"], Kind::Path),
     ("existing_book", &["Existing book"], Kind::Path),
+    (
+        "docs_mode",
+        &["Docs mode"],
+        Kind::Enum(&["survey", "page", "synthesis"]),
+    ),
+    ("reference", &["Reference"], Kind::Text),
+    ("page", &["Page"], Kind::Text),
+    ("page_group", &["Page group"], Kind::Text),
+    ("page_covers", &["Page covers"], Kind::Text),
+    ("page_sources", &["Page sources"], Kind::Text),
+    ("page_inventory", &["Page inventory"], Kind::Text),
+    ("other_pages", &["Other pages"], Kind::Text),
+    ("drafts", &["Drafts"], Kind::Text),
+    ("draft", &["Draft"], Kind::Text),
+    ("revise", &["Revise"], Kind::Text),
+    ("round", &["Round"], Kind::Text),
+    ("findings", &["Findings"], Kind::Text),
     ("book_parts", &["Book parts"], Kind::Path),
     ("changed_files", &["Changed files"], Kind::Text),
     ("change_rationale", &["Change rationale"], Kind::Text),

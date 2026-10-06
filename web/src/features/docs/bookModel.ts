@@ -177,14 +177,22 @@ export function bookPages(book: Book): BookPages {
     sources[ARCHITECTURE] = architectureMarkdown(book);
     head.pages.push({ id: ARCHITECTURE, title: "System architecture", file: ARCHITECTURE });
   }
-  const parts: NavGroup[] = book.parts.map((p) => ({
-    label: p.project,
-    pages: p.sections.map((s) => {
+  // Pages group by their `group` in plan order, under the project's name when the book has more than one.
+  const parts: NavGroup[] = [];
+  for (const p of book.parts) {
+    for (const s of p.sections) {
       const id = sectionPage(p.project, s.id);
       sources[id] = sectionMarkdown(s, p.project);
-      return { id, title: s.title, file: id };
-    }),
-  }));
+      const name = s.group || p.project;
+      const label = book.parts.length > 1 && s.group ? `${p.project}: ${name}` : name;
+      let group = parts.find((g) => g.label === label);
+      if (!group) {
+        group = { label, pages: [] };
+        parts.push(group);
+      }
+      group.pages.push({ id, title: s.title, file: id });
+    }
+  }
   return { nav: [head, ...parts.filter((g) => g.pages.length)], sources };
 }
 

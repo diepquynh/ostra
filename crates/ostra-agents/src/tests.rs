@@ -486,9 +486,72 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
         common: common(),
         implementer_reports: vec!["/r/i1.md".into(), "/r/i2.md".into()],
         existing_book: Some("/ws/.ostra/docs/api_web/book.json".into()),
+        mode: DocsMode::Part,
+        reference: Some("/s/ostra-docs-drafts/api/reference.md".into()),
         extra: Extras::default(),
     };
     roundtrip(&md);
+    let survey = DocumentationParams {
+        mode: DocsMode::Survey,
+        ..md.clone()
+    };
+    roundtrip(&survey);
+    assert!(survey.render().contains("Docs mode: survey"));
+    assert!(
+        survey
+            .render()
+            .contains("Reference: /s/ostra-docs-drafts/api/reference.md")
+    );
+    let synthesis = DocumentationParams {
+        mode: DocsMode::Synthesis {
+            round: 2,
+            drafts: "/s/ostra-docs-drafts/api".into(),
+            findings: vec!["slots: Fail, HIGH, ...".into()],
+        },
+        ..md.clone()
+    };
+    roundtrip(&synthesis);
+    let text = synthesis.render();
+    for line in [
+        "Docs mode: synthesis",
+        "Round: 2",
+        "Drafts: /s/ostra-docs-drafts/api",
+        "Findings: - slots: Fail, HIGH, ...",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
+    let page = DocumentationParams {
+        mode: DocsMode::Page(DocsPageScope {
+            id: "executors".into(),
+            title: "Executors".into(),
+            group: "How it works".into(),
+            covers: "Native and harness runs.".into(),
+            sources: vec!["crates/ostra-exec-native/".into()],
+            inventory: vec!["Turn loop (crates/ostra-exec-native/src/lib.rs)".into()],
+            others: vec![(
+                "limits".into(),
+                "Spend and limits".into(),
+                "Slots and budgets.".into(),
+            )],
+            drafts: "/s/ostra-docs-drafts/api".into(),
+            draft: Some("/s/ostra-docs-drafts/api/executors.md".into()),
+            instructions: vec!["Move the slot rules to `limits.md`.".into()],
+        }),
+        ..md.clone()
+    };
+    roundtrip(&page);
+    let text = page.render();
+    for line in [
+        "Docs mode: page",
+        "Page: Executors (executors)",
+        "Page group: How it works",
+        "Page inventory: Turn loop (crates/ostra-exec-native/src/lib.rs)",
+        "Other pages: `limits` Spend and limits: Slots and budgets.",
+        "Draft: /s/ostra-docs-drafts/api/executors.md",
+        "Revise: - Move the slot rules to `limits.md`.",
+    ] {
+        assert!(text.contains(line), "{line}: {text}");
+    }
     let arch = ArchitectureParams {
         common: common(),
         book_parts: "/r/ostra-docs-parts.json".into(),

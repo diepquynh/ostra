@@ -18,7 +18,7 @@ import {
 describe("bookPages", () => {
   it("orders the pages overview, glossary, architecture, then each project's sections", () => {
     const { nav } = bookPages(MOCK_BOOK);
-    expect(nav.map((g) => g.label)).toEqual(["Book", "api", "web"]);
+    expect(nav.map((g) => g.label)).toEqual(["Book", "api: How it works", "web: How it works"]);
     expect(nav.flatMap((g) => g.pages.map((p) => p.id))).toEqual([
       "overview",
       "glossary",

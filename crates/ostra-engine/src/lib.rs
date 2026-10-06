@@ -4,6 +4,7 @@
 pub mod autofix;
 pub mod context;
 pub mod coord;
+pub mod docs_scan;
 pub mod factory;
 pub mod init;
 pub mod judge;

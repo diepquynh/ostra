@@ -900,28 +900,134 @@ The standard is the same one that `CLAUDE.md` sets for this repository (HANDOVER
 Documentation stays opt-in. A workspace whose projects have no relation to each other gets no book until you ask
 for one. Each set of projects that you document gets its own book.
 
-### What a writer returns
+### The docs pipeline
 
-One `documentation` agent runs per project. At most four run at the same time in a session (Rule B7), and each
-also takes an execution slot. The agent is read-only: it returns the part of the book for the project in
-`submit_documentation` and writes no file (Rule B1). The part is an overview, a glossary, and a list of pages:
+The docs stage is a pipeline of runs, not one agent (Rule B10). One writer cannot write a thorough book of a large
+project, because its whole result must fit in one reply. A measured run shows the limit: one Sonnet 5.5 writer at
+high effort wrote 23 pages of about 1,000 words each, and the book answered 107 of the 221 eval questions. Many
+writers fix the length, but writers that work at the same time cannot see each other's pages. A run with 16
+parallel topic writers answered 211 questions, but it wrote 64 narrow pages, repeated the same rules on up to 5
+pages, and linked to pages that no longer existed. So the stage writes in parallel and then reconciles the drafts
+in rounds until the book meets a definition of done:
+
+0. **Scan.** Before the survey, the engine reads the project's modules and its named constants from disk
+   (`Step::ScanDocs`) and records them in `DocsScanned`, because the fold cannot read the file system. The
+   modules come from the module map, or else from the source folders, with a folder of 3 or more source
+   subfolders, such as `crates/`, split into one module per subfolder. The constants are the upper-case names
+   that Rust, TypeScript, JavaScript, Go, Java, Kotlin, and Python code defines outside test files, at most 1500.
+   The runner writes both as `reference.md` in the drafts folder, and every later run reads it.
+1. **Survey.** A `documentation` run with `Docs mode: survey` makes one brief pass over everything that is
+   available: the code, the project memory lessons, the workspace artifacts, the files that the user attached or
+   uploaded, and the existing book. It returns the project overview, an inventory, and a page plan. The inventory
+   lists everything that the book must cover, each item with exactly one owning page, or with an `out_of_scope`
+   reason. The plan has 1 to 30 broad pages (`MAX_DOCS_PAGES`) in groups such as `How it works` and `Security`,
+   like the pages of this documentation.
+2. **First drafts.** One run with `Docs mode: page` writes each planned page. A writer gets its page, the whole
+   plan, and the inventory items that its page owns.
+3. **Rounds.** Each round runs three steps:
+   - A `fact-check` run with target type `page` checks each page that changed: every draft in round 1, then the
+     pages that the last round revised.
+   - One run with `Docs mode: synthesis` reads every draft, the inventory, the fact-check findings, and the
+     engine's checks. It judges each check of the definition of done, and it lists edits for each page.
+   - Each page that the edits, a failed fact-check, or an engine check names gets a revision run. The writer
+     reads its draft and applies each item on its `Revise:` line.
+
+```mermaid
+flowchart LR
+  survey[Survey] --> p1[Draft page 1]
+  survey --> p2[Draft page 2]
+  p1 --> check[Fact-check changed pages]
+  p2 --> check
+  check --> syn[Synthesis pass]
+  syn -->|done| book[Write the book]
+  syn -->|edits| rev[Revise named pages]
+  rev --> check
+```
+
+Before each run after the survey, the runner writes the drafts into `ostra-docs-drafts/<project>/` in the session
+root: one `<page id>.md` per draft, `index.md` with the page plan, and `inventory.md` with every item and its
+owner. The fact-checks and the synthesis pass read the drafts there.
+
+#### The definition of done
+
+The synthesis pass judges eight checks, which copy what this documentation does:
+
+| Check | Done when |
+| --- | --- |
+| Coverage | Every inventory item is covered by its owning page, or is out of scope with a reason. Every module of the reference sheet has an item, and each named constant is on a page or named as internal. |
+| One owner | No fact is written at length on two pages. Other pages link to the owner. |
+| Agreement | No two pages disagree about a name, a number, or a behavior. |
+| Depth | Each page answers the page questions that its sources answer, with the reason for each rule that a source states. A security or spend page also states what it does not guarantee. |
+| Facts | No HIGH or MEDIUM fact-check finding is still open. A LOW finding does not block done. |
+| Links | Every link to another page names a page of the plan. |
+| Writing | Every page follows the writing standard. |
+| Self-contained parts | Each `##` part answers the questions that a reader asks about its sub-topic in full, because the book search returns each part alone. |
+
+The engine does not trust the pass alone. It runs its own checks on the drafts (`book::mechanical_issues`): a link
+to `<page id>.md` that names no page, the words "would", "should", and "might", "e.g.", "i.e.", and "etc.", a
+semicolon or an em dash in prose, an inventory item without an owning page, and a module of the reference sheet
+that no inventory item covers. An item covers a module when one of its sources lies inside the module, or the
+module lies inside one of its sources. The synthesis pass also gets each named constant that no page mentions,
+and it either sends the constant to the page that owns its file or names it as internal.
+
+The inventory grows during the loop. A synthesis pass can add an item, with its owning page or an
+`out_of_scope` reason, and the owning page gets a revision that covers it. A pass that sets `done` ends the loop
+only when no inventory item or module lacks an owner. Otherwise the next round runs another synthesis pass,
+with no fact-checks, because no page changed.
+
+Only HIGH and MEDIUM fact-check findings block done. A LOW finding reaches a writer only when its page needs an
+edit for another reason. In one eval run, rounds 4 to 6 of 6 fixed only LOW findings and cost $26.70 of $148.48,
+so the rule bounds the loop to the findings that matter. On a `page` target, a rule stated without the reason
+that a comment, a test, or a rule ID gives is a MEDIUM finding. A re-check of a revised page diffs it against its
+previous draft, which the runner writes as `<page id>.prev.md`, and checks only the changed lines and the prior
+findings. When the synthesis pass
+finishes, the fold fixes the pages to revise in this round: the pages that its edits name, each page with a
+failed fact-check, and each page that an engine check names. The loop ends when a pass sets `done` and no page
+needs a revision, or when a round revised nothing.
+
+After each 3 rounds without done (`DOCS_ROUNDS`), a `docs_rounds` gate asks whether to run another round or to
+accept the book as it is. YOLO always runs another round, so the session budget is the bound, as in the review
+loop. All runs of the stage fan out at once, across every step and every project (Rule B7). The workspace's
+`limits.max_parallel_executions` bounds how many run at the same time, through the slot limiter. Each submit names its `step` (`survey`, `page`, or
+`synthesis`). A run that answers another step fails with the instruction to submit the right step, because the
+fold must not read a page as a survey.
+
+After a build, the survey sets `rewrite: false` for each page that the changed files do not reach, and that page
+keeps its text from the book. The book also stores the inventory, so the next survey can update it.
+
+#### What a page holds
+
+A page has these fields:
 
 | Field | What it holds |
 | --- | --- |
 | `id` | A lowercase slug, unique in the part. A later run keeps the ID, because other pages and agents link to it. |
+| `group` | The group of the book's contents, such as `How it works` or `Security`. The console's sidebar shows the pages by group. |
 | `title` | The topic in a few words, such as `Order cancellation` or `Add a route`. |
 | `summary` | One or two sentences about what the reader learns on the page. The book index shows it. |
 | `body` | The page in Markdown. The writer chooses the structure: paragraphs, lists, tables, and `mermaid` diagrams. |
 | `code_refs` | Optional. Project-relative paths, symbols, and lines, with what the reader finds there. The page shows them last. |
 
-The writer chooses the topics. The prompt names the kinds of topic that a reader cannot get quickly from the code:
-the main flows across files, the concepts to learn first, the rules and assumptions that a change can break
-without a failed test, the decisions that the code shows but does not explain, and the steps of common changes.
-It tells the writer not to write one page per folder, file, or type, and to write each fact once. Another page
-names that page by its title. The number of pages follows the topics, not the size of the code.
+The survey chooses the pages. Each page is broad: it covers an area that a reader looks for as a whole, such as
+one `Executors` page for every executor, with one `##` part per sub-topic. The inventory lists the reference
+facts too, such as each family of settings, limits, error messages, and UI rules, because a reader looks them up.
 
-After a build, the writer rewrites only the pages that the changed files make wrong or incomplete. It adds a page
-only for a new topic, and it copies every other page of the existing part unchanged.
+Each page answers eight questions where the sources answer them:
+
+| Question | What the page states |
+| --- | --- |
+| The problem | What goes wrong or is missing without this part. The page starts with it. |
+| The mechanism | How it works, step by step, with the component that does each step. |
+| The reasons | Why each rule exists, from the code, its rule comments, its tests, or the history, never from a guess. |
+| The cases | What each failure, timeout, cancellation, retry, concurrent request, restart, missing dependency, or run-time setting change does, as a list. |
+| The groups | The classes that the code treats differently, with their members. |
+| The user's view | Settings with defaults, units, storage, and when a change takes effect, where the state shows, and how to stop or change it. |
+| The limits | Each cap, timeout, size, and default as a number with its unit and its constant or setting. |
+| The code | Markdown links to the files, and 1 or 2 excerpts of at most 15 lines where they show a behavior. |
+
+The prompt quotes a passage of this documentation, about the execution slots, as the depth to copy. It asks for
+1,500 to 3,000 words on most pages, because a page that lists facts without the reasons and the cases is not
+finished.
 
 #### The user steers the part
 
@@ -942,6 +1048,10 @@ source, the writing standard, the diagram limits, and no file writes.
 `validate_submit` checks the shape before the engine accepts the submit. The model gets each problem with its fix
 in the tool reply. `validate_submit` refuses these items:
 
+- a survey with no page or more than 30, a page without a title, a group, or what it covers, a page ID used twice,
+  or an inventory item without an owning page or an `out_of_scope` reason,
+- a page step that returns other than one page,
+- a synthesis pass that sets `done` with a failed check or an edit, or that is not done and lists no edit,
 - a duplicate or malformed page ID,
 - a page with no title, no summary, or no body,
 - a level-1 heading in a body, because the title is the only one,
@@ -959,7 +1069,8 @@ A book that an earlier version wrote still loads (Rule B9). Its sections have ty
 assumptions, business flow, diagrams, tables, concerns, and sub-sections. When Ostra reads `book.json`, each such
 section becomes a page. The purpose becomes the summary, each field becomes a `###` heading in the body, and each
 sub-section becomes a `##` part with its fields under `####` headings. A session log with a `DocsPlanned` event
-from the area split still folds: the fold ignores the event, and one writer runs per project. The next docs run
+from the area split still folds: the fold ignores the event. A log whose whole-part writer already started
+keeps that writer and runs no pipeline. The next docs run
 for the project writes its part in the new shape.
 
 ### The system architecture
@@ -1108,7 +1219,7 @@ A completion report names the stages that did not run and how to run them. It al
 | Review passes per loop | 3, or 10 under YOLO | `REVIEW_CAP`, `YOLO_REVIEW_BUDGET` |
 | Automatic retries after an error | 1 | `ERROR_RETRIES` |
 | Failing builds before build commands are refused | 5 | `DENY_THRESHOLD` in `build.rs` |
-| Documentation writers at once per session | 4 | `plan::MAX_DOCS_WRITERS` |
+| Pages one docs survey may plan | 30 | `book::MAX_DOCS_PAGES` |
 | Init scouts | 6 | `init::MAX_SCOUTS` |
 | Skills generated by default at init | 8 | `init::MAX_DEFAULT_GENERATE` |
 | Attached files per request | 50 | `MAX_CONTEXT_FILES` |
