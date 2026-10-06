@@ -30,6 +30,7 @@ retrieval_over_corpus -- --ignored --nocapture`.
 | `topics` | Plan, 8 `explore` gatherers, outline, 16 topic writers | $84.75 | 64 | 184,856 |
 | `loop` | Survey, 25 page writers, 6 rounds of fact-checks and synthesis | $148.48 | 25 | 166,940 |
 | `coverage` | The loop with the engine scan, coverage checks, and changed-part re-checks, 4 rounds | $115.48 | 30 | 222,323 |
+| `owners` | `coverage` with user blocks, one owner per mechanism, and code excerpts, 6 rounds, accepted | $151.80 | 30 | 228,341 |
 
 For comparison, `docs/` has 35 pages and about 143,000 words, and `area` (the earlier area writers) has 172
 sections.
@@ -42,23 +43,25 @@ sections.
 | `topics` | 211 | 64.9% | 89.6% | 0.756 |
 | `loop` | 203 | 70.9% | 94.6% | 0.818 |
 | `coverage` | 205 | 75.1% | 94.6% | 0.834 |
+| `owners` | 205 | 70.2% | 93.7% | 0.804 |
 | `docs` (`docs_labels`) | 206 | 68.0% | 93.7% | 0.788 |
 | `area` (`area_labels`) | 220 | 74.5% | 93.2% | 0.829 |
 
 ## Depth
 
-| Question | `single` | `topics` | `loop` | `coverage` |
-| --- | --- | --- | --- | --- |
-| The problem | 1.09 | 1.75 | 1.84 | 2.00 |
-| The mechanism | 1.74 | 1.94 | 2.00 | 1.97 |
-| The reasons | 1.00 | 1.69 | 1.68 | 1.83 |
-| The cases | 0.90 | 1.81 | 1.96 | 1.90 |
-| The groups | 1.91 | 1.88 | 2.00 | 2.00 |
-| The user's view | 0.91 | 1.31 | 1.60 | 1.37 |
-| The limits | 1.76 | 1.94 | 2.00 | 1.93 |
-| The code | 1.00 | 1.88 | 1.88 | 1.43 |
+| Question | `single` | `topics` | `loop` | `coverage` | `owners` |
+| --- | --- | --- | --- | --- | --- |
+| The problem | 1.09 | 1.75 | 1.84 | 2.00 | 1.97 |
+| The mechanism | 1.74 | 1.94 | 2.00 | 1.97 | 1.97 |
+| The reasons | 1.00 | 1.69 | 1.68 | 1.83 | 1.80 |
+| The cases | 0.90 | 1.81 | 1.96 | 1.90 | 1.93 |
+| The groups | 1.91 | 1.88 | 2.00 | 2.00 | 2.00 |
+| The user's view | 0.91 | 1.31 | 1.60 | 1.37 | 1.43 |
+| The limits | 1.76 | 1.94 | 2.00 | 1.93 | 2.00 |
+| The code | 1.00 | 1.88 | 1.88 | 1.43 | 2.00 |
 
-Accuracy: `single` 13 of 15 checked claims correct, `topics` 19 of 20, `loop` 36 of 38, and `coverage` 20 of 20.
+Accuracy: `single` 13 of 15 checked claims correct, `topics` 19 of 20, `loop` 36 of 38, `coverage` 20 of 20, and
+`owners` 85 of 87.
 
 ## Findings
 
@@ -79,3 +82,14 @@ Accuracy: `single` 13 of 15 checked claims correct, `topics` 19 of 20, `loop` 36
 - **The remaining gap is reasons and small facts.** `coverage` misses 16 questions: 6 ask for a reason that the
   removed `HANDOVER.md` states and the code does not, 7 ask for a behavior that no named constant or module check
   finds, such as the LSP column assumption, and 3 have an answer split across two `##` parts.
+- **The engine checks change the shape of a page, but not the coverage.** `owners` has 122 `For the user` blocks
+  on all 30 pages, against 0 in `coverage`, and code excerpts on all 30 pages, against 12. The code score rose
+  from 1.43 to 2.00. Split facts of `coverage`, such as `Inner::append`, the slots, and the budget, have one owner,
+  and the counts, the status names, and the stop command agree on every page. The book answers the same 205
+  questions, but hit@1 fell from 75.1% to 70.2%, because each part now holds a user table and more links.
+- **A check that a page cannot satisfy costs money in each round.** The one-owner check told 4 settings pages,
+  `reference-configuration` among them, to cut the settings model in rounds 2 to 6. The writers cut, and the
+  fact-checks asked for the facts back. Rounds 4 to 6 cost $18.47, and the run needed $15 over its budget and an
+  accepted book. A `Reference` page is now a catalog that the cut rule skips.
+- **A mandatory block adds filler.** About 40% of the sampled user blocks list query parameters or "no setting
+  controls this" rows. The block is useful only for a real setting or control.

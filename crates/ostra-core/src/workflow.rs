@@ -96,7 +96,6 @@ impl BuiltinStage {
                 Tests,
                 Review,
                 Documentation,
-                Architecture,
                 Implementation,
                 Advice,
             ],

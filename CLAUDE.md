@@ -142,9 +142,8 @@ STE for software.
 
 The standard covers the pages in `docs/`, `HANDOVER.md`, the README, prompts, judge prompts, UI copy, error
 messages, code comments, commit messages, pull request descriptions, and your replies to the user. The
-`documentation` and `system-architecture` prompts hold a copy of the same rules, so the books that Ostra writes
-and the pages in `docs/` follow one standard. When you change a rule here, change both prompts and HANDOVER
-section 20 in the same change.
+`documentation` prompt holds a copy of the same rules, so the books that Ostra writes and the pages in `docs/`
+follow one standard. When you change a rule here, change that prompt and HANDOVER section 20 in the same change.
 
 Use STE because these readers must all get the same meaning from one text:
 

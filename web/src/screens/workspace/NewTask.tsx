@@ -1,5 +1,6 @@
 import { Banner, Button, Checkbox, Panel, Select } from "@ostra/design";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { api } from "../../api";
 import type { BookSummary } from "../../api/gen/BookSummary";
 import type { ContextFile, ProjectView, SessionSummary, Track, WorkflowInfo } from "../../api/types";
@@ -8,6 +9,7 @@ import { useUploads } from "../../features/context/uploads";
 import { useAsync } from "../../lib/hooks";
 import { isMac, modHint } from "../../lib/keys";
 import { useShell } from "../../lib/nav";
+import { resourcePath } from "../../lib/resource";
 
 export type NewTaskProps = {
   ws: string;
@@ -23,6 +25,7 @@ export function NewTask({ ws, projects, workflows, yoloDefault, onCreated }: New
   const [request, setRequest] = useState("");
   const [tests, setTests] = useState(false);
   const [docs, setDocs] = useState(false);
+  const navigate = useNavigate();
   const [book, setBook] = useState("");
   const books = useAsync<BookSummary[]>(() => (docs ? api.books(ws) : Promise.resolve([])), [ws, docs]);
   const [yolo, setYolo] = useState(yoloDefault);
@@ -203,6 +206,26 @@ export function NewTask({ ws, projects, workflows, yoloDefault, onCreated }: New
             {busy ? "Starting…" : "Start"}
           </Button>
         </div>
+        {docs && (
+          <Banner
+            tone="info"
+            title="Tell the docs writers what the book is for"
+            actions={
+              <Button
+                size="sm"
+                onClick={() => navigate(resourcePath(ws, "ws:settings", "setting:instructions.agents.documentation"))}
+              >
+                Docs instructions in Settings
+              </Button>
+            }
+          >
+            The request steers the book. Name the readers, the topics to cover in depth, and what to leave out. Tag
+            design notes, specs, or artifacts with @, or upload them, and the writers use them as sources. For example:
+            "Document the order service for new backend engineers. Explain cancellation and refunds in depth, use
+            @docs/architecture.md for how the services talk, and leave out the admin UI." To give every docs run the
+            same instructions, write them once in Settings.
+          </Banner>
+        )}
         {yolo && (
           <Banner tone="warn">
             YOLO: every permission is granted and every gate is answered by Ostra. Guards, deny rules, the fact-check

@@ -5,7 +5,7 @@
 //! architecture aspect) is ranked by its best passages. A hit carries only the passages that
 //! matched, never the whole section.
 
-use crate::book::{self, Book, CodeRef, Diagram, LinkMode};
+use crate::book::{self, Book, CodeRef};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,6 @@ pub enum UnitKind {
     Section,
     Subsection,
     Glossary,
-    Architecture,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +48,6 @@ pub enum PassageKind {
     Code,
     CodeRefs,
     Glossary,
-    Architecture,
 }
 
 /// A part of a book a hit points at.
@@ -316,7 +314,7 @@ fn focus<'l>(
 ) -> Vec<&'l str> {
     let listy = matches!(
         kind,
-        PassageKind::List | PassageKind::Table | PassageKind::CodeRefs | PassageKind::Architecture
+        PassageKind::List | PassageKind::Table | PassageKind::CodeRefs
     );
     if !listy || lines.len() < 2 {
         return lines.to_vec();
@@ -409,94 +407,6 @@ impl Builder {
                 None => g.definition.trim().to_string(),
             };
             self.passage(u, PassageKind::Glossary, "Definition".into(), text, &code);
-        }
-        if let Some(a) = &b.architecture {
-            let arch = |aspect: &str, title: &str| Unit {
-                book: b.id.clone(),
-                project: String::new(),
-                id: format!("architecture/{aspect}"),
-                kind: UnitKind::Architecture,
-                title: format!("System architecture > {title}"),
-                file: "architecture.md".into(),
-                code_paths: vec![],
-                title_tf: HashMap::new(),
-            };
-            let u = self.unit(arch("overview", "Overview"));
-            for para in a.overview.split("\n\n") {
-                self.passage(
-                    u,
-                    PassageKind::Architecture,
-                    "Overview".into(),
-                    para.trim().into(),
-                    "",
-                );
-            }
-            self.diagram(u, &a.diagram);
-            let u = self.unit(arch("components", "Components"));
-            for c in &a.components {
-                let project = if c.project.is_empty() {
-                    "external".into()
-                } else {
-                    format!("project `{}`", c.project)
-                };
-                let mut text = format!("{} ({project}): {}", c.name, c.role.trim());
-                if !c.owns.is_empty() {
-                    text.push_str(&format!("\nOwns: {}", c.owns.join("; ")));
-                }
-                self.passage(
-                    u,
-                    PassageKind::Architecture,
-                    format!("Component: {}", c.name),
-                    text,
-                    &c.project,
-                );
-            }
-            let u = self.unit(arch("communication", "Communication"));
-            for chunk in a.links.chunks(WINDOW) {
-                let text = chunk
-                    .iter()
-                    .map(|l| {
-                        let mode = match l.mode {
-                            LinkMode::Sync => "sync",
-                            LinkMode::Async => "async",
-                        };
-                        format!(
-                            "- {} to {} over {} ({mode}): {}",
-                            l.from, l.to, l.protocol, l.payload
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.passage(u, PassageKind::Architecture, "Links".into(), text, "");
-            }
-            let u = self.unit(arch("failure", "Failure and recovery"));
-            for f in &a.failure_recovery {
-                let text = format!(
-                    "{}\nDetection: {}\nRecovery: {}",
-                    f.failure, f.detection, f.recovery
-                );
-                self.passage(
-                    u,
-                    PassageKind::Architecture,
-                    "Failure case".into(),
-                    text,
-                    "",
-                );
-            }
-            let u = self.unit(arch("scalability", "Scalability"));
-            for chunk in a.scalability.chunks(WINDOW) {
-                let text = chunk
-                    .iter()
-                    .map(|s| {
-                        format!(
-                            "- {} scales by {}; limit: {}",
-                            s.component, s.scales_by, s.limit
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                self.passage(u, PassageKind::Architecture, "Scaling".into(), text, "");
-            }
         }
     }
 
@@ -748,17 +658,6 @@ impl Builder {
             body_tf,
             len,
         });
-    }
-
-    fn diagram(&mut self, u: usize, d: &Diagram) {
-        let text = format!("```mermaid\n{}\n```", d.source.trim());
-        self.passage(
-            u,
-            PassageKind::Diagram,
-            format!("Diagram: {}", d.title.trim()),
-            text,
-            "",
-        );
     }
 
     fn finish(self) -> Index {
@@ -1085,7 +984,6 @@ mod tests {
             projects: vec!["app".into()],
             updated_at: chrono::Utc::now(),
             sessions: vec![],
-            architecture: None,
             parts: vec![BookPart {
                 project: "app".into(),
                 overview: "The app.".into(),

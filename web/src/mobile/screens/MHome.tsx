@@ -471,6 +471,21 @@ function NewTaskSection({ ws, onStarted }: { ws: string; onStarted: () => void }
             <Switch label="Write tests" checked={tests} onChange={(e) => setTests(e.target.checked)} />
             <Switch label="Write docs" checked={docs} onChange={(e) => setDocs(e.target.checked)} />
           </div>
+          {docs && (
+            <span className="m-help">
+              The request steers the book: name the readers, the topics to cover in depth, and what to leave out. Tag or
+              upload design notes, specs, or artifacts, and the writers use them as sources. To give every docs run the
+              same instructions, write them in{" "}
+              <button
+                type="button"
+                className="mh-inline-link"
+                onClick={() => open("ws:settings", { anchor: "setting:instructions.agents.documentation" })}
+              >
+                Settings
+              </button>
+              .
+            </span>
+          )}
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <Switch label="YOLO" tone="warn" checked={yolo} onChange={(e) => setYolo(e.target.checked)} />
             <span className="m-help">

@@ -146,10 +146,10 @@ pub enum StageKind {
     Epa,
     WriteTest,
     TestReview,
-    /// Logs and databases written before books say `module-docs`.
-    #[serde(alias = "module-docs")]
+    /// Logs and databases written before books say `module-docs`, and the retired architecture
+    /// run says `architecture`.
+    #[serde(alias = "module-docs", alias = "architecture")]
     Documentation,
-    Architecture,
     BookWrite,
     Verify,
     PromptGen,
@@ -180,7 +180,7 @@ impl StageKind {
             | GenerateInventory => Lane::Build,
             Review | Staging | Format | ImplementationReview | Custom => Lane::Review,
             ClosingGate | Epa | WriteTest | TestReview => Lane::Test,
-            Documentation | Architecture | BookWrite => Lane::Docs,
+            Documentation | BookWrite => Lane::Docs,
             Completion => Lane::Done,
         }
     }

@@ -470,7 +470,7 @@ as a `User notes:` line:
 
 - `implement` notes go to the implementer and to fix passes.
 - `tests` notes go to the path analyzer and to the test writer.
-- `docs` notes go to the documentation writers and to the system architecture agent.
+- `docs` notes go to the documentation writers.
 
 The engine cannot keep a note for the plan agent, because the plan agent takes requirements only from the spec
 (Rule D4). The engine delivers an answer that the plan needs, so the answer goes into the spec. A delivered answer

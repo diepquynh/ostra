@@ -2540,7 +2540,7 @@ fn test_category_skips_the_closing_gate() {
 fn page_submit(project: &str, id: &str, body: &str) -> Value {
     json!({
         "status": "ok", "step": "page", "summary": format!("Wrote {id}."),
-        "sections": [{"id": id, "title": "Orders", "summary": "Creates and cancels orders.", "body": body,
+        "sections": [{"id": id, "title": "Orders", "summary": "Creates and cancels orders.", "body": format!("{body}\n\n```rust\nfn cancel(order: &mut Order) {{ ... }}\n```"),
             "code_refs": [{"path": "src/orders.rs", "symbol": "cancel", "note": "the handler"}]}],
         "glossary": [{"term": "Order", "definition": format!("A purchase in {project}.")}]
     })
@@ -2594,22 +2594,6 @@ fn finish_docs(h: &mut H, project: &str) {
         &format!("spawn documentation docs-synthesis {project} round 1"),
         synthesis_submit(true, vec![]),
     );
-}
-
-fn arch_submit() -> Value {
-    json!({
-        "status": "ok",
-        "summary": "Two services.",
-        "architecture": {
-            "overview": "The web app calls the API.",
-            "diagram": {"title": "Components", "kind": "flowchart", "source": "flowchart LR\nweb -->|HTTP| api"},
-            "components": [{"name": "web", "project": "a", "role": "UI", "owns": []}, {"name": "api", "project": "b", "role": "API", "owns": ["orders"]}],
-            "links": [{"from": "web", "to": "api", "protocol": "HTTP/JSON", "mode": "sync", "payload": "Order"}],
-            "failure_recovery": [{"failure": "api down", "detection": "health check", "recovery": "restart"}],
-            "scalability": [{"component": "api", "scales_by": "replicas", "limit": "database connections"}]
-        },
-        "glossary": []
-    })
 }
 
 fn scanned(project: &str, modules: &[&str], refs: &[&str]) -> SessionEvent {
@@ -2758,6 +2742,71 @@ fn b10_the_scan_runs_before_the_survey() {
         r.inputs.docs_reference,
         Some(root().join("ostra-docs-drafts/p/reference.md"))
     );
+}
+
+#[test]
+fn b10_the_engine_sends_a_page_back_for_its_user_block_owner_link_and_excerpt() {
+    let mut h = docs_session(&["p"]);
+    h.ev(scanned("p", &[], &[]));
+    let mut survey = survey_submit("p", &[("a", true), ("b", true)]);
+    survey["inventory"][0]["settings"] = json!(["limits.max_orders"]);
+    survey["inventory"][0]["names"] = json!(["cancel_order"]);
+    h.run("spawn documentation docs-survey p", survey);
+    h.run(
+        "spawn documentation docs p/a",
+        page_submit(
+            "p",
+            "a",
+            "## Cancel\n\n`cancel_order` stops at `limits.max_orders`.",
+        ),
+    );
+    let mut b = page_submit(
+        "p",
+        "b",
+        "## Refunds\n\nA refund calls `cancel_order` first.",
+    );
+    b["sections"][0]["body"] = json!("## Refunds\n\nA refund calls `cancel_order` first.");
+    h.run("spawn documentation docs p/b", b);
+    h.run(
+        "spawn fact-check docs-check p/a round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn fact-check docs-check p/b round 1",
+        check_submit(true),
+    );
+    h.run(
+        "spawn documentation docs-synthesis p round 1",
+        synthesis_submit(true, vec![]),
+    );
+    assert_eq!(
+        h.summaries(),
+        vec![
+            "spawn documentation docs-revise p/a round 1",
+            "spawn documentation docs-revise p/b round 1",
+        ],
+        "a done pass does not end the loop while an engine check fails"
+    );
+    let a = h.spawn_step("spawn documentation docs-revise p/a round 1");
+    assert!(
+        a.inputs
+            .docs_instructions
+            .iter()
+            .any(|i| i.starts_with("Add a `### For the user` block")),
+        "{:?}",
+        a.inputs.docs_instructions
+    );
+    let b = h.spawn_step("spawn documentation docs-revise p/b round 1");
+    for start in ["Add 1 or 2 code excerpts", "Link to `a.md` in `Refunds`"] {
+        assert!(
+            b.inputs
+                .docs_instructions
+                .iter()
+                .any(|i| i.starts_with(start)),
+            "{start}: {:?}",
+            b.inputs.docs_instructions
+        );
+    }
 }
 
 #[test]
@@ -2966,7 +3015,11 @@ fn b10_each_round_checks_then_synthesizes_then_revises() {
     );
     assert_eq!(h.summaries(), vec!["write-book p"]);
     let update = h.state().book_update();
-    assert_eq!(update.parts[0].1.sections[0].body, "A new draft.");
+    assert!(
+        update.parts[0].1.sections[0]
+            .body
+            .starts_with("A new draft.")
+    );
     assert_eq!(update.parts[0].1.sections[0].group, "How it works");
 }
 
@@ -3186,7 +3239,7 @@ fn b10_a_whole_part_writer_from_an_older_log_still_folds() {
 }
 
 #[test]
-fn b4_architecture_runs_only_for_two_or_more_projects() {
+fn b4_a_book_of_two_projects_is_written_after_every_part_with_no_architecture_run() {
     let mut h = docs_session(&["a", "b"]);
     assert_eq!(
         h.summaries(),
@@ -3202,25 +3255,11 @@ fn b4_architecture_runs_only_for_two_or_more_projects() {
         "the book waits for every part"
     );
     finish_docs(&mut h, "b");
-    assert_eq!(
-        h.summaries(),
-        vec!["spawn system-architecture architecture"]
-    );
-    let r = h.spawn_step("spawn system-architecture");
-    assert_eq!(r.inputs.target, Some(root().join("ostra-docs-parts.json")));
-    assert_eq!(
-        r.inputs.projects_in_scope,
-        vec![
-            ("a".to_string(), PathBuf::from("/code/a")),
-            ("b".to_string(), PathBuf::from("/code/b"))
-        ]
-    );
-    h.run("spawn system-architecture architecture", arch_submit());
     assert_eq!(h.summaries(), vec!["write-book a_b"]);
 }
 
 #[test]
-fn b4_an_abandoned_part_leaves_one_project_and_no_architecture() {
+fn b4_an_abandoned_part_leaves_a_book_of_one_project() {
     let mut h = docs_session(&["a", "b"]);
     finish_docs(&mut h, "a");
     let (id, _) = h.start("spawn documentation docs-survey b");
@@ -3267,7 +3306,6 @@ fn b6_a_book_update_replaces_the_projects_part() {
         projects: vec!["a".into(), "b".into()],
         updated_at: at,
         sessions: vec!["s0".into()],
-        architecture: None,
         parts: vec![old_part("a"), old_part("b")],
         glossary: vec![
             GlossaryEntry {

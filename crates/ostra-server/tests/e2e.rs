@@ -1765,7 +1765,7 @@ async fn setup_wizard_creates_a_workspace_in_one_call() {
         [None, None],
         "neither folder is a repository"
     );
-    assert_eq!(ws.agents.len(), 14);
+    assert_eq!(ws.agents.len(), 13);
     let plan = ws
         .agents
         .iter()

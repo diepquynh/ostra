@@ -17,43 +17,6 @@ export const MOCK_BOOK: Book = {
     },
     { term: "Refund", definition: "Money returned to the customer for a paid order.", code_ref: null },
   ],
-  architecture: {
-    overview: "The web client calls the API over HTTPS. The API owns orders and payments and stores them in Postgres.",
-    diagram: {
-      title: "Components and links",
-      kind: "flowchart",
-      source:
-        "flowchart LR\n  web[Web client] -->|HTTPS JSON| api[API]\n  api -->|SQL| db[(Postgres)]\n  api -->|HTTPS| psp[Payment provider]",
-    },
-    components: [
-      {
-        name: "Web client",
-        project: "web",
-        role: "Shows the catalog and checkout.",
-        owns: ["The cart until checkout"],
-      },
-      { name: "API", project: "api", role: "Takes orders and payments.", owns: ["Orders", "Payments", "Refunds"] },
-      { name: "Payment provider", project: "", role: "Charges cards.", owns: ["Card data"] },
-    ],
-    links: [
-      { from: "Web client", to: "API", protocol: "HTTPS JSON", mode: "sync", payload: "Orders and checkout requests" },
-      { from: "API", to: "Payment provider", protocol: "HTTPS", mode: "sync", payload: "Charges and refunds" },
-    ],
-    failure_recovery: [
-      {
-        failure: "The payment provider times out",
-        detection: "The charge call returns no answer within 10 s",
-        recovery: "The order stays pending and a job retries the charge with the same idempotency key",
-      },
-    ],
-    scalability: [
-      {
-        component: "API",
-        scales_by: "More stateless instances behind the load balancer",
-        limit: "Postgres connections",
-      },
-    ],
-  },
   parts: [
     {
       project: "api",
@@ -103,5 +66,4 @@ export const summaryOf = (b: Book): BookSummary => ({
   projects: b.projects,
   updated_at: b.updated_at,
   sections: b.parts.reduce((n, p) => n + p.sections.length, 0),
-  has_architecture: b.architecture != null,
 });

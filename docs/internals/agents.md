@@ -1,6 +1,6 @@
 # Agents
 
-Ostra divides the work of the pipeline among fourteen built-in agents. A workspace or a plugin can add its own
+Ostra divides the work of the pipeline among thirteen built-in agents. A workspace or a plugin can add its own
 custom agents next to them. Each agent does one job. For example, an agent researches a request, writes a spec,
 reviews a change, or writes tests. Code decides which agent runs, which inputs it gets, and what Ostra does with
 its result. The agent does the work in its stage. Then it returns a structured answer.
@@ -20,7 +20,7 @@ Each built-in agent has two files in `assets/agents/<name>/`:
 The compiler embeds the two files in the `ostra` binary. Thus, a running server never reads these definitions
 from disk. A user cannot replace a built-in definition through a change to a file.
 
-The engine does not refer to the fourteen agents by name. They are the agents of the standard plugin `ostra`
+The engine does not refer to the thirteen agents by name. They are the agents of the standard plugin `ostra`
 ([`ostra-default-plugin`](../../crates/ostra-default-plugin/src/lib.rs)). This plugin uses `ostra-sdk`, the same
 as each other plugin (Rule PL4). It reads the `agent.toml` and the `prompt.md` of each agent with the definition
 parser of the SDK (`ostra_sdk::definition::parse_toml`). It sets no other value. Thus, all the facts that make
@@ -51,7 +51,6 @@ with a different agent that returns the same contract.
 | `execution-path-analyzer` | Test | balanced | Plans how Ostra verifies a phase. It traces each path through the functions that the phase changed (branches, early returns, error paths, boundaries). It also traces the system flows that reach these functions (from a route, a CLI command, a screen, a job, or a consumer of a changed contract), and the existing tests that cover them. It gives each check a test level from the test types of the project. `write-test` changes each path and flow into one test. |
 | `write-test` | Test | balanced | Verifies the phase. It writes unit, integration, and end-to-end tests at the levels that the analyzer assigned, and it obeys the test skills of the project. Then it runs these tests and the existing suites that the analyzer listed as regression. It writes only test code. |
 | `documentation` | Docs | advanced | Runs one step of the docs pipeline for one project, named by its `Docs mode:` line. The survey step makes one brief pass over the code, project memory, workspace artifacts, and the user's uploads, and returns the inventory and a plan of broad pages in groups. The page step writes or revises one page, checked against the real source. The synthesis step reads every draft and the fact-check findings, judges the definition of done, and lists the edits that remove duplicated facts, contradictions, and gaps. It returns the result of its step in its submit call and writes no file. It runs only when the user asks for documentation. |
-| `system-architecture` | Docs | advanced | Writes how the projects of a book of two or more projects work together. It writes the components and what each one owns, the links with protocol and payload, failure and recovery, and scaling, with one flowchart. It returns them in its submit call and writes no file. |
 | `prompt-generation` | Build | advanced | Writes or edits instruction files (system prompts, `SKILL.md` skills, agent definitions). It runs for prompt requests. It also runs when an implementer gives the prompt work to it. |
 | `initializer` | Project setup | balanced | Sets up a project in one of six modes: detect, scout, propose, generate-skill, generate-inventory, and adopt. |
 | `advisor` | Rescue | advanced (high effort) | Reads one of these: a failed or stuck step of the init of a created project (rule O5), or a build or test run that is stuck on its environment (rule O7). It reads the inputs, the outputs, and the project. Then it submits `retry` with guidance for the next run of the step, or `escalate` with a reason for the user. It is read-only. |
@@ -417,7 +416,6 @@ code. The standard agents ask for these sections:
 | initializer | nothing, because it is the agent that creates these facts |
 | advisor | stack, commands, skills, module map |
 | documentation | stack, commands, module map |
-| system-architecture | stack, module map |
 
 Among the standard agents, only the reviewer asks for the full rule catalog (`review`), because only the
 reviewer grades against it. The result contract of the agent filters the skills section:
@@ -506,7 +504,6 @@ The returns are in these groups:
 | `CodeReviewerSubmit` | code-reviewer | findings, `security_block`, ledger path, summary |
 | `ReportSubmit` | execution-path-analyzer, write-test, prompt-generation | status, report path, changed files, summary |
 | `DocumentationSubmit` | documentation | status, step (`survey`, `page`, `synthesis`), summary, overview, inventory and pages (survey), one page in sections (page), checks, edits, and done (synthesis), glossary |
-| `ArchitectureSubmit` | system-architecture | status, summary, the architecture (overview, diagram, components, links, failure and recovery, scalability), glossary |
 | `InitializerSubmit` | initializer | status, summary, files, a result object that differs per mode |
 | `AdvisorSubmit` | advisor | `action` (`retry` or `escalate`), guidance for the next run, reason for the user |
 | `QuickAnswerSubmit` | quick-answer | the answer in Markdown, its sources |

@@ -219,7 +219,7 @@ pub enum ExecPurpose {
         project: String,
         round: u32,
     },
-    /// Rule B4: the architecture of a book that covers two or more projects.
+    /// Rule B4: the retired architecture run of an old log. It folds to nothing.
     Architecture,
     PromptGen {
         handoff_for: Option<ExecutionId>,
@@ -997,6 +997,10 @@ pub struct StoredEvent {
     pub event: SessionEvent,
 }
 
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,8 +1039,4 @@ mod tests {
             "Phase 1 · fix pass 3"
         );
     }
-}
-
-fn is_zero(n: &u32) -> bool {
-    *n == 0
 }

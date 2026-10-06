@@ -20,8 +20,6 @@ pub enum AgentName {
     /// Rule B1: writes one project's part of the documentation book. Logs written before books
     /// say `module-documentation`.
     Documentation,
-    /// Rule B4: writes the architecture of a book that covers two or more projects.
-    SystemArchitecture,
     PromptGeneration,
     Initializer,
     QuickAnswer,
@@ -105,7 +103,7 @@ impl<'de> Deserialize<'de> for AgentName {
 }
 
 impl AgentName {
-    pub const ALL: [AgentName; 14] = [
+    pub const ALL: [AgentName; 13] = [
         AgentName::Explore,
         AgentName::GenerateSpec,
         AgentName::FactCheck,
@@ -115,7 +113,6 @@ impl AgentName {
         AgentName::ExecutionPathAnalyzer,
         AgentName::WriteTest,
         AgentName::Documentation,
-        AgentName::SystemArchitecture,
         AgentName::PromptGeneration,
         AgentName::Initializer,
         AgentName::QuickAnswer,
@@ -133,7 +130,6 @@ impl AgentName {
             AgentName::ExecutionPathAnalyzer => "execution-path-analyzer",
             AgentName::WriteTest => "write-test",
             AgentName::Documentation => "documentation",
-            AgentName::SystemArchitecture => "system-architecture",
             AgentName::PromptGeneration => "prompt-generation",
             AgentName::Initializer => "initializer",
             AgentName::QuickAnswer => "quick-answer",
@@ -191,8 +187,9 @@ impl FromStr for AgentName {
             .trim()
             .trim_start_matches("ostra:")
             .trim_start_matches("ultracode:");
-        // Execution rows stored before books name the retired agent.
-        if bare == "module-documentation" {
+        // Execution rows stored before books, or by the retired architecture agent, read as
+        // documentation runs.
+        if RETIRED_AGENTS.contains(&bare) {
             return Ok(AgentName::Documentation);
         }
         if let Some(a) = AgentName::builtin(bare) {
@@ -225,7 +222,7 @@ pub const JUDGE_ROUTE: &str = "judge";
 
 /// Agent names a workspace saved before the agent was replaced. Settings may still carry them,
 /// and validation ignores them instead of refusing the file.
-pub const RETIRED_AGENTS: [&str; 1] = ["module-documentation"];
+pub const RETIRED_AGENTS: [&str; 2] = ["module-documentation", "system-architecture"];
 
 /// Every key that must have a model route in workspace settings.
 pub fn route_keys() -> Vec<&'static str> {

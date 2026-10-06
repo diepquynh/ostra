@@ -179,11 +179,6 @@ export const STAGES: Record<StageKind, StageInfo> = {
     produces: "One project's part of the documentation book, grounded in the real source.",
     protects: "The how-it-works knowledge that is gone six months later.",
   },
-  architecture: {
-    label: "System architecture",
-    produces: "How the book's projects communicate, fail, recover, and scale.",
-    protects: "Changes that break a project the change never touched.",
-  },
   "book-write": {
     label: "Write the book",
     produces: "The book in the workspace, as Markdown agents read and JSON the console renders.",

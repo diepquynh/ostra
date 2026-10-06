@@ -127,7 +127,7 @@ outside that region. Each agent declares its scope in its definition. The agents
 | `write_scope` | Can write | Standard agents with this scope |
 | --- | --- | --- |
 | `read_only` | nothing: it answers in its submit call | quick-answer |
-| `session` | its session dir, and OS temp | explore, generate-spec, fact-check, plan, code-reviewer, EPA, advisor, documentation, system-architecture |
+| `session` | its session dir, and OS temp | explore, generate-spec, fact-check, plan, code-reviewer, EPA, advisor, documentation |
 | `project` | the repo root and the session dir | implementer, write-test, prompt-generation |
 | `setup` | `.ostra/` and `.agents/skills/` in the project, and the session dir | initializer |
 

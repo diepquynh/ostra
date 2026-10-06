@@ -321,16 +321,6 @@ impl SpawnFactory for AgentsFactory {
                     ..Default::default()
                 },
             }),
-            Contract::Architecture => Box::new(ArchitectureParams {
-                common,
-                book_parts: required(i.target.clone(), "book parts")?,
-                projects: i.projects_in_scope.clone(),
-                existing_book: existing_book(s),
-                extra: Extras {
-                    user_notes: i.user_notes.clone(),
-                    ..Default::default()
-                },
-            }),
             Contract::Prompt => Box::new(PromptGenParams {
                 common,
                 task: i.task.clone().ok_or("missing task")?,

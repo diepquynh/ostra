@@ -1,7 +1,6 @@
 //! Documentation books (HANDOVER 8.5): what the docs stage writes into the workspace. A book
-//! covers a set of projects. Each project is one part of sections and sub-sections, and a book of
-//! two or more projects also has a system architecture. The engine writes every book file from the
-//! agents' submit payloads; no agent writes one (Rule B5).
+//! covers a set of projects, and each project is one part of pages. The engine writes every book
+//! file from the agents' submit payloads; no agent writes one (Rule B5).
 
 use crate::paths;
 use crate::submit::{StuckInfo, SubmitStatus};
@@ -87,70 +86,6 @@ pub struct DocSection {
     pub group: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-#[ts(export)]
-pub enum LinkMode {
-    Sync,
-    Async,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct Component {
-    /// Unique among the components; links name it.
-    pub name: String,
-    /// The workspace project that holds it, or empty for an external system.
-    #[serde(default)]
-    pub project: String,
-    pub role: String,
-    /// Data and decisions only this component changes.
-    #[serde(default)]
-    pub owns: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct Link {
-    pub from: String,
-    pub to: String,
-    /// For example `HTTP/JSON`, `gRPC`, `Kafka topic orders.v1`, `SQL`.
-    pub protocol: String,
-    pub mode: LinkMode,
-    /// What travels over the link.
-    pub payload: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct FailureCase {
-    pub failure: String,
-    pub detection: String,
-    pub recovery: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct ScalingCase {
-    pub component: String,
-    pub scales_by: String,
-    /// The first limit it reaches, and what bounds it.
-    pub limit: String,
-}
-
-/// Rule B4: how the projects of a book work together.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct Architecture {
-    pub overview: String,
-    /// A flowchart of the components and their links.
-    pub diagram: Diagram,
-    pub components: Vec<Component>,
-    pub links: Vec<Link>,
-    pub failure_recovery: Vec<FailureCase>,
-    pub scalability: Vec<ScalingCase>,
-}
-
 /// Rule B10: which step of the docs stage a `submit_documentation` call answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
@@ -194,6 +129,12 @@ pub struct InventoryItem {
     /// Why the book leaves it out.
     #[serde(default)]
     pub out_of_scope: Option<String>,
+    /// The setting keys, environment variables, and CLI flags that a user sets for it.
+    #[serde(default)]
+    pub settings: Vec<String>,
+    /// The code names that identify it on any page: its own functions, types, and constants.
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
 /// Rule B10: one page the survey plans.
@@ -293,20 +234,6 @@ pub struct DocumentationSubmit {
     pub stuck: Option<StuckInfo>,
 }
 
-/// `submit_system_architecture`: the book's architecture.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, JsonSchema)]
-#[ts(export)]
-pub struct ArchitectureSubmit {
-    pub status: SubmitStatus,
-    pub summary: String,
-    #[serde(default)]
-    pub architecture: Option<Architecture>,
-    #[serde(default)]
-    pub glossary: Vec<GlossaryEntry>,
-    #[serde(default)]
-    pub stuck: Option<StuckInfo>,
-}
-
 /// One project's part of a book.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -337,8 +264,6 @@ pub struct Book {
     #[serde(default)]
     pub sessions: Vec<String>,
     #[serde(default)]
-    pub architecture: Option<Architecture>,
-    #[serde(default)]
     pub parts: Vec<BookPart>,
     /// Sorted by term.
     #[serde(default)]
@@ -354,7 +279,6 @@ pub struct BookSummary {
     #[ts(type = "string")]
     pub updated_at: DateTime<Utc>,
     pub sections: u32,
-    pub has_architecture: bool,
 }
 
 impl Book {
@@ -365,7 +289,6 @@ impl Book {
             projects: self.projects.clone(),
             updated_at: self.updated_at,
             sections: self.parts.iter().map(|p| p.sections.len() as u32).sum(),
-            has_architecture: self.architecture.is_some(),
         }
     }
 }
@@ -380,8 +303,6 @@ pub struct BookUpdate {
     /// Rule B10: for each part written from a survey, every planned page in order, with the page
     /// this session wrote, or `None` to keep the page from the book.
     pub pages: BTreeMap<String, Vec<(PlannedPage, Option<DocSection>)>>,
-    pub architecture: Option<Architecture>,
-    pub glossary: Vec<GlossaryEntry>,
 }
 
 /// Rule B10: the survey's overview and inventory with the drafts, each page under its planned
@@ -443,8 +364,10 @@ fn merge_pages(
 }
 
 /// Rule B10: the checks of the definition of done that the engine makes itself, by page, with
-/// `kept` the IDs of the pages kept from the book: links to a page that does not exist, words and punctuation the writing standard forbids, and
-/// inventory items that no page owns, under the empty key.
+/// `kept` the IDs of the pages kept from the book: links to a page that does not exist, words and
+/// punctuation the writing standard forbids, a page with code references and no excerpt, settings
+/// outside a `For the user` block, a second explanation of an owned item, and, under the empty
+/// key, inventory items that no page owns.
 pub fn mechanical_issues(
     pages: &[DocSection],
     kept: &[String],
@@ -495,16 +418,24 @@ pub fn mechanical_issues(
             issues.push("Split the sentences that use a semicolon or an em dash.".into());
         }
         // A revision that copies its rendered draft back repeats what Ostra adds around the body.
-        if page.body.lines().any(|l| l.trim_start().starts_with("Project: `"))
+        if page
+            .body
+            .lines()
+            .any(|l| l.trim_start().starts_with("Project: `"))
             || (!page.code_refs.is_empty()
                 && page.body.lines().any(|l| l.trim() == "## Code references"))
         {
             issues.push("Remove the `Project:` line and the `## Code references` table from the body: Ostra adds the title, the project, the summary, and the code references around it.".into());
         }
+        // Rule B10: a page that shows code holds an excerpt, not only a list of files.
+        if !page.code_refs.is_empty() && !has_excerpt(&page.body) {
+            issues.push("Add 1 or 2 code excerpts, each at most 15 lines with `...` for the parts you leave out, that show a behavior better than a sentence does, such as a guard, a formula, or a state change.".into());
+        }
         if !issues.is_empty() {
             out.insert(page.id.clone(), issues);
         }
     }
+    owner_issues(pages, inventory, &ids, &mut out);
     for m in modules {
         if !inventory.iter().any(|i| covers(i, m)) {
             out.entry(String::new()).or_default().push(format!(
@@ -523,6 +454,212 @@ pub fn mechanical_issues(
         }
     }
     out
+}
+
+/// Rule B10: the owner page of an item states each of its settings in a `For the user` block,
+/// and another page that names the item links to the owner and does not explain it again.
+fn owner_issues(
+    pages: &[DocSection],
+    inventory: &[InventoryItem],
+    ids: &BTreeSet<&str>,
+    out: &mut BTreeMap<String, Vec<String>>,
+) {
+    let mut push = |page: &str, issue: String| {
+        out.entry(page.to_string()).or_default().push(issue);
+    };
+    for item in inventory.iter().filter(|i| i.out_of_scope.is_none()) {
+        if let Some(owner) = pages.iter().find(|p| p.id == item.owner) {
+            let blocks = user_blocks(&owner.body);
+            let missing: Vec<String> = item
+                .settings
+                .iter()
+                .filter(|k| !mentions(&blocks, k, true))
+                .map(|k| format!("`{k}`"))
+                .collect();
+            if !missing.is_empty() {
+                push(
+                    &owner.id,
+                    format!(
+                        "Add a `### For the user` block to the part that explains {} and list {} in it: for each setting, the default with its unit, where it is stored, when a change takes effect, the screen, command, route, or log that shows it, and how a user stops or changes the behavior.",
+                        item.name,
+                        missing.join(", ")
+                    ),
+                );
+            }
+        }
+        if !ids.contains(item.owner.as_str()) {
+            continue;
+        }
+        // A name that most pages use is shared vocabulary, not a sign of a second explanation.
+        let names: Vec<&String> = item
+            .names
+            .iter()
+            .chain(&item.settings)
+            .filter(|n| {
+                let on = pages
+                    .iter()
+                    .filter(|p| in_code(&prose_with_code(&p.body), n))
+                    .count();
+                !(pages.len() > 3 && on * 2 > pages.len())
+            })
+            .collect();
+        if names.is_empty() {
+            continue;
+        }
+        let link = format!("]({}.md", item.owner);
+        for page in pages.iter().filter(|p| p.id != item.owner) {
+            let mut unlinked = vec![];
+            let mut paragraphs = 0;
+            for (heading, text) in parts(&page.body) {
+                let named = names.iter().any(|n| in_code(&text, n));
+                if named && !text.contains(&link) {
+                    unlinked.push(if heading.is_empty() {
+                        "the introduction".to_string()
+                    } else {
+                        format!("`{heading}`")
+                    });
+                }
+                paragraphs += text
+                    .split("\n\n")
+                    .filter(|para| names.iter().any(|n| in_code(para, n)))
+                    .count();
+            }
+            let shown = names
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            // A `Reference` page is a catalog: it lists the values, and the link names the owner.
+            if paragraphs >= 3 && !page.group.eq_ignore_ascii_case("reference") {
+                push(
+                    &page.id,
+                    format!(
+                        "Cut what this page says about {} to one sentence where the page needs it, and link to `{}.md`: that page owns it, and this page names {shown} in {paragraphs} paragraphs.",
+                        item.name, item.owner
+                    ),
+                );
+            } else if !unlinked.is_empty() {
+                push(
+                    &page.id,
+                    format!(
+                        "Link to `{}.md` in {} where the part names {shown}: that page owns {}.",
+                        item.owner,
+                        unlinked.join(", "),
+                        item.name
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// The `##` parts of a body, as (heading, text) with code blocks removed; the text before the
+/// first `##` heading has an empty heading.
+fn parts(body: &str) -> Vec<(String, String)> {
+    let mut out = vec![(String::new(), String::new())];
+    let mut fence = false;
+    for line in body.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+            continue;
+        }
+        if fence {
+            continue;
+        }
+        if let Some(h) = t.strip_prefix("## ") {
+            out.push((h.trim().to_string(), String::new()));
+            continue;
+        }
+        let last = out.last_mut().expect("one part");
+        last.1.push_str(line);
+        last.1.push('\n');
+    }
+    out
+}
+
+/// A body without its code blocks.
+fn prose_with_code(body: &str) -> String {
+    parts(body).into_iter().map(|(_, t)| t).collect()
+}
+
+/// The text of every block under a `For the user` heading, up to the next heading of the same
+/// or a higher level.
+fn user_blocks(body: &str) -> String {
+    let mut out = String::new();
+    let mut level: Option<usize> = None;
+    let mut fence = false;
+    for line in body.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+        }
+        let hashes = t.chars().take_while(|c| *c == '#').count();
+        if !fence && hashes > 0 && t[hashes..].starts_with(' ') {
+            let title = t[hashes..].trim();
+            if level.is_some_and(|l| hashes <= l) {
+                level = None;
+            }
+            if title.eq_ignore_ascii_case("for the user") {
+                level = Some(hashes);
+                continue;
+            }
+        }
+        if level.is_some() {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// The text names `name` as a whole word. With `short`, a dotted setting key also matches by its
+/// last segment, because a page that shows a `[limits]` table writes the key without the table.
+fn mentions(text: &str, name: &str, short: bool) -> bool {
+    let name = name.trim().trim_matches('`');
+    if name.is_empty() {
+        return false;
+    }
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let found = |n: &str| {
+        text.match_indices(n).any(|(i, _)| {
+            !text[..i].chars().next_back().is_some_and(ident)
+                && !text[i + n.len()..].chars().next().is_some_and(ident)
+        })
+    };
+    found(name)
+        || (short
+            && name
+                .rsplit_once('.')
+                .is_some_and(|(_, last)| last.contains('_') && found(last)))
+}
+
+/// An inline code span of the text names `name`, because a page writes a code name in
+/// backticks and a setting such as `name` is also an English word.
+fn in_code(text: &str, name: &str) -> bool {
+    static SPAN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").expect("valid regex"));
+    SPAN.captures_iter(text)
+        .any(|c| mentions(&c[1], name, false))
+}
+
+/// The body holds a fenced code block that is not a diagram.
+fn has_excerpt(body: &str) -> bool {
+    let mut fence = false;
+    for line in body.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            if !fence
+                && !t
+                    .trim_start_matches(['`', '~'])
+                    .trim()
+                    .starts_with("mermaid")
+            {
+                return true;
+            }
+            fence = !fence;
+        }
+    }
+    false
 }
 
 /// The folder a glob or a source path names, without `./`, wildcards, and the trailing `/`.
@@ -640,8 +777,7 @@ pub fn list(workspace: &Path) -> Vec<BookSummary> {
     out
 }
 
-/// Rule B6: a project's new part replaces its old one, a new architecture replaces the old one, and
-/// glossary entries merge by term with the newer definition kept.
+/// Rule B6: a project's new part replaces its old one, and glossary entries merge by term with the newer definition kept.
 pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTime<Utc>) -> Book {
     let mut book = existing.unwrap_or_else(|| Book {
         id: id.to_string(),
@@ -649,7 +785,6 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         projects: vec![],
         updated_at: now,
         sessions: vec![],
-        architecture: None,
         parts: vec![],
         glossary: vec![],
     });
@@ -672,14 +807,7 @@ pub fn merge(existing: Option<Book>, id: &str, update: &BookUpdate, now: DateTim
         book.parts.push(part);
     }
     book.parts.sort_by(|a, b| a.project.cmp(&b.project));
-    if let Some(a) = &update.architecture {
-        book.architecture = Some(a.clone());
-    }
-    let incoming = update
-        .parts
-        .iter()
-        .flat_map(|(_, s)| s.glossary.iter())
-        .chain(update.glossary.iter());
+    let incoming = update.parts.iter().flat_map(|(_, s)| s.glossary.iter());
     for entry in incoming {
         let key = entry.term.trim().to_lowercase();
         book.glossary
@@ -720,7 +848,7 @@ pub fn remove(workspace: &Path, id: &str) -> std::io::Result<()> {
     std::fs::remove_dir_all(book_dir(workspace, id))
 }
 
-/// Write `book.json` plus the Markdown agents read: `index.md`, `architecture.md`, `glossary.md`,
+/// Write `book.json` plus the Markdown agents read: `index.md`, `glossary.md`,
 /// and one file per section under `<project>/`. Files of sections that no longer exist are removed.
 pub fn write(workspace: &Path, book: &Book) -> std::io::Result<()> {
     let root = book_dir(workspace, &book.id);
@@ -741,9 +869,6 @@ pub fn write(workspace: &Path, book: &Book) -> std::io::Result<()> {
     )?;
     put("index.md".into(), render_index(book))?;
     put("glossary.md".into(), render_glossary(&book.glossary))?;
-    if let Some(a) = &book.architecture {
-        put("architecture.md".into(), render_architecture(a))?;
-    }
     for part in &book.parts {
         for s in &part.sections {
             put(
@@ -840,58 +965,6 @@ pub fn render_section(project: &str, s: &DocSection) -> String {
     out
 }
 
-pub fn render_architecture(a: &Architecture) -> String {
-    let mut out = format!("# System architecture\n\n{}\n\n", a.overview.trim());
-    diagram(&mut out, "##", &a.diagram);
-    out.push_str("## Components\n\n");
-    table(
-        &mut out,
-        &["Component", "Project", "Role", "Owns"],
-        a.components.iter().map(|c| {
-            vec![
-                c.name.clone(),
-                c.project.clone(),
-                c.role.clone(),
-                c.owns.join("; "),
-            ]
-        }),
-    );
-    out.push_str("## Communication\n\n");
-    table(
-        &mut out,
-        &["From", "To", "Protocol", "Mode", "Payload"],
-        a.links.iter().map(|l| {
-            vec![
-                l.from.clone(),
-                l.to.clone(),
-                l.protocol.clone(),
-                match l.mode {
-                    LinkMode::Sync => "sync".into(),
-                    LinkMode::Async => "async".into(),
-                },
-                l.payload.clone(),
-            ]
-        }),
-    );
-    out.push_str("## Failure and recovery\n\n");
-    table(
-        &mut out,
-        &["Failure", "Detection", "Recovery"],
-        a.failure_recovery
-            .iter()
-            .map(|f| vec![f.failure.clone(), f.detection.clone(), f.recovery.clone()]),
-    );
-    out.push_str("## Scalability\n\n");
-    table(
-        &mut out,
-        &["Component", "Scales by", "Limit"],
-        a.scalability
-            .iter()
-            .map(|s| vec![s.component.clone(), s.scales_by.clone(), s.limit.clone()]),
-    );
-    out
-}
-
 pub fn render_glossary(glossary: &[GlossaryEntry]) -> String {
     let mut out = "# Glossary\n\n".to_string();
     table(
@@ -917,9 +990,6 @@ pub fn render_index(book: &Book) -> String {
         book.title,
         book.updated_at.format("%Y-%m-%d %H:%M UTC")
     );
-    if book.architecture.is_some() {
-        out.push_str("- [System architecture](architecture.md)\n");
-    }
     for part in &book.parts {
         out.push_str(&format!(
             "\n## {}\n\n{}\n\n",
@@ -1360,58 +1430,6 @@ fn check_synthesis(s: &DocumentationSubmit, issues: &mut Vec<String>) {
             ));
         }
     }
-}
-
-/// Validate an architecture submit (Rule B4).
-pub fn check_architecture(s: &ArchitectureSubmit) -> Vec<String> {
-    let mut issues = vec![];
-    if s.status != SubmitStatus::Ok {
-        return issues;
-    }
-    let Some(a) = &s.architecture else {
-        return vec!["Return the architecture in `architecture`, because the book shows only what you submit.".into()];
-    };
-    if a.overview.trim().is_empty() {
-        issues.push("Write the architecture overview.".into());
-    }
-    if a.diagram.kind != DiagramKind::Flowchart {
-        issues.push(
-            "Draw the architecture diagram as a flowchart of the components and their links."
-                .into(),
-        );
-    }
-    check_diagram("the architecture", &a.diagram, &mut issues);
-    let names: BTreeSet<&str> = a.components.iter().map(|c| c.name.trim()).collect();
-    if names.len() < 2 || names.len() != a.components.len() {
-        issues.push(
-            "List at least two components, each with a unique name, because links name them."
-                .into(),
-        );
-    }
-    for l in &a.links {
-        for end in [&l.from, &l.to] {
-            if !names.contains(end.trim()) {
-                issues.push(format!(
-                    "Name a listed component in link {} to {}: \"{end}\" is not in `components`.",
-                    l.from, l.to
-                ));
-            }
-        }
-    }
-    if a.links.is_empty() {
-        issues.push("List how the components communicate in `links`.".into());
-    }
-    if a.failure_recovery.is_empty() {
-        issues.push(
-            "List at least one failure with its detection and recovery in `failure_recovery`."
-                .into(),
-        );
-    }
-    if a.scalability.is_empty() {
-        issues.push("List how each component scales in `scalability`.".into());
-    }
-    check_glossary(&s.glossary, &mut issues);
-    issues
 }
 
 /// Rule B9: books written before free pages held typed sections: purpose, boundaries, assumptions,
@@ -1949,6 +1967,108 @@ mod tests {
     }
 
     #[test]
+    fn b10_the_engine_checks_user_blocks_owners_and_excerpts() {
+        let page = |id: &str, body: &str, refs: bool| -> DocSection {
+            let code_refs = if refs {
+                serde_json::json!([{"path": "src/slots.rs", "note": "The limiter."}])
+            } else {
+                serde_json::json!([])
+            };
+            serde_json::from_value(serde_json::json!({
+                "id": id, "title": id, "summary": "S.", "body": body, "code_refs": code_refs
+            }))
+            .unwrap()
+        };
+        let inventory: Vec<InventoryItem> = serde_json::from_value(serde_json::json!([{
+            "id": "slots", "name": "the slot limiter", "sources": ["src/slots.rs"], "owner": "limits",
+            "settings": ["limits.max_parallel_executions"], "names": ["acquire_slot"]
+        }]))
+        .unwrap();
+        let check = |pages: &[DocSection]| mechanical_issues(pages, &[], &inventory, &[]);
+        let plain = page(
+            "pipeline",
+            "## Spawns\n\nEach spawn names acquire_slot in plain words.",
+            false,
+        );
+        assert!(
+            !check(&[
+                page(
+                    "limits",
+                    "### For the user\n\n`max_parallel_executions`\n\n```rust\nx\n```",
+                    true
+                ),
+                plain
+            ])
+            .contains_key("pipeline"),
+            "a name outside backticks is a word"
+        );
+
+        let owner_ok = page(
+            "limits",
+            "## Slots\n\n`acquire_slot` waits.\n\n### For the user\n\n| Setting | Default |\n| --- | --- |\n| `max_parallel_executions` | 4 |\n\n```rust\nlet slot = acquire_slot().await;\n```",
+            true,
+        );
+        let linked = page(
+            "pipeline",
+            "## Spawns\n\nEach spawn calls `acquire_slot` first. See [Limits](limits.md).",
+            false,
+        );
+        let issues = check(&[owner_ok.clone(), linked]);
+        assert!(issues.is_empty(), "{issues:?}");
+
+        let owner_bad = page(
+            "limits",
+            "## Slots\n\n`limits.max_parallel_executions` caps runs.\n\n### For the user\n\nNothing.\n\n## Next\n\nText.",
+            true,
+        );
+        let unlinked = page(
+            "pipeline",
+            "## Spawns\n\nEach spawn calls `acquire_slot` first.",
+            false,
+        );
+        let issues = check(&[owner_bad, unlinked]);
+        let limits = &issues["limits"];
+        assert!(
+            limits
+                .iter()
+                .any(|i| i.starts_with("Add a `### For the user` block")
+                    && i.contains("`limits.max_parallel_executions`")),
+            "{limits:?}"
+        );
+        assert!(
+            limits
+                .iter()
+                .any(|i| i.starts_with("Add 1 or 2 code excerpts")),
+            "{limits:?}"
+        );
+        assert!(
+            issues["pipeline"]
+                .iter()
+                .any(|i| i.starts_with("Link to `limits.md` in `Spawns`")),
+            "{issues:?}"
+        );
+
+        let repeats = page(
+            "pipeline",
+            "## Spawns\n\n`acquire_slot` waits. See [Limits](limits.md).\n\n`acquire_slot` wakes each 2 seconds.\n\nA panic drops what `acquire_slot` returned.",
+            false,
+        );
+        let mut catalog = repeats.clone();
+        catalog.group = "Reference".into();
+        assert!(
+            !check(&[owner_ok.clone(), catalog]).contains_key("pipeline"),
+            "a catalog page lists the values and links to the owner"
+        );
+        let issues = check(&[owner_ok, repeats]);
+        assert!(
+            issues["pipeline"]
+                .iter()
+                .any(|i| i.starts_with("Cut what this page says about the slot limiter")),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
     fn b10_a_later_session_keeps_the_pages_it_does_not_rewrite() {
         let now = Utc::now();
         let page = |id: &str, body: &str| -> DocSection {
@@ -1977,7 +2097,6 @@ mod tests {
                     ),
                 ],
             )]),
-            ..Default::default()
         };
         let book = merge(None, "p", &first, now);
         assert_eq!(
@@ -2002,7 +2121,6 @@ mod tests {
                     ),
                 ],
             )]),
-            ..Default::default()
         };
         let book = merge(Some(book), "p", &second, now);
         let bodies: Vec<&str> = book.parts[0]

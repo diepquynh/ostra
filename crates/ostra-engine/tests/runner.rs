@@ -205,7 +205,7 @@ impl Executor for Scripted {
                     );
                     json!({"status": "ok", "step": "page", "summary": "Documented the greeting.",
                     "sections": [{"id": "greeting", "title": "Greeting", "summary": "Prints a greeting.",
-                        "body": "The app assumes that stdout is open.\n\n```mermaid\nsequenceDiagram\nUser->>app: run\napp-->>User: hello\n```",
+                        "body": "The app assumes that stdout is open.\n\n```mermaid\nsequenceDiagram\nUser->>app: run\napp-->>User: hello\n```\n\n```text\nhello\n```",
                         "code_refs": [{"path": "src.txt", "note": "the greeting"}]}],
                     "glossary": [{"term": "Greeting", "definition": "The text app prints."}]})
                 }

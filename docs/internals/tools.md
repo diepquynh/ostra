@@ -79,7 +79,7 @@ executor. Then the policy sets more limits on what the tools of an agent can tou
 | write-test | read, edit, write, shell, search_text, glob, skill, memory_recall, memory, report, code, coordinate, docs_search, review_ledger, test_files |
 | code-reviewer | read, shell, search_text, glob, code, coordinate, docs_search, review_ledger, security_block |
 | execution-path-analyzer | read, shell, write, search_text, glob, report, code, docs_search |
-| documentation, system-architecture | read, shell, search_text, glob, code, docs_search |
+| documentation | read, shell, search_text, glob, code, docs_search |
 | prompt-generation | read, edit, write, shell, search_text, glob, skill, report, code, test_files |
 | initializer | read, write, edit, shell, search_text, glob, code, test_files |
 | quick-answer | read, search_text, glob, web_search, web_fetch, memory_recall, code, docs_search |

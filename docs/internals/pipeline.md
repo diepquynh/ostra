@@ -55,7 +55,7 @@ the route:
 | `IMPLEMENT` | Research, then the light or the full track, the phases, the implementation review, and the closing stages. |
 | `VERIFY` | One implementer pass per project. The pass runs the project's test command and reports the result. |
 | `TEST` | Directly to the test stage: EPA, write-test, review. No closing gate, because the request asked for tests. The stage verifies at each level that has a test type in the project (unit, integration, end to end). It also runs again the existing tests that cover the code. |
-| `DOCS` | Directly to the docs stage: one documentation writer per project, then the system architecture when the stage documents two or more projects, then the book write. No closing gate, because the request asked for documentation. No project file changes. |
+| `DOCS` | Directly to the docs stage: the docs pipeline for each project, then the book write. No closing gate, because the request asked for documentation. No project file changes. |
 | `PROMPT` | Prompt-generation. A review runs only when a changed file is code and not an instruction file. |
 | `QUICK_CHANGE` | One implementer pass per project on the native executor, with no research, spec, plan, or review. |
 
@@ -874,7 +874,7 @@ the code, and the user's instructions steer that choice. An earlier design gave 
 fields and split a large project among area writers that covered every unit of work. That design copied the code
 into the book, repeated each fact in many places, and filled the search with passages that said the same thing.
 
-Both writer prompts (`documentation` and `system-architecture`) hold a copy of Ostra's writing standard. The
+The `documentation` prompt holds a copy of Ostra's writing standard. The
 standard is Simplified Technical English (STE), the controlled English of the ASD-STE100 specification, adapted
 for software. A writer uses one topic in each sentence, the active voice, and one meaning for each word. A description has at most 25 words, and an instruction has at most 20. It writes no metaphors, because an agent follows a
 figure of speech literally. It writes an assumption that a change can break as a caution: the command first, then
@@ -920,7 +920,9 @@ in rounds until the book meets a definition of done:
    available: the code, the project memory lessons, the workspace artifacts, the files that the user attached or
    uploaded, and the existing book. It returns the project overview, an inventory, and a page plan. The inventory
    lists everything that the book must cover, each item with exactly one owning page, or with an `out_of_scope`
-   reason. The plan has 1 to 30 broad pages (`MAX_DOCS_PAGES`) in groups such as `How it works` and `Security`,
+   reason. Each mechanism that two or more pages use, such as the slot limiter, gets its own item. An item also
+   lists its `settings` (the keys, environment variables, and CLI flags that a user sets) and its `names` (1 to
+   4 code names that belong to it alone). The plan has 1 to 30 broad pages (`MAX_DOCS_PAGES`) in groups such as `How it works` and `Security`,
    like the pages of this documentation.
 2. **First drafts.** One run with `Docs mode: page` writes each planned page. A writer gets its page, the whole
    plan, and the inventory items that its page owns.
@@ -950,14 +952,15 @@ owner. The fact-checks and the synthesis pass read the drafts there.
 
 #### The definition of done
 
-The synthesis pass judges eight checks, which copy what this documentation does:
+The synthesis pass judges nine checks, which copy what this documentation does:
 
 | Check | Done when |
 | --- | --- |
 | Coverage | Every inventory item is covered by its owning page, or is out of scope with a reason. Every module of the reference sheet has an item, and each named constant is on a page or named as internal. |
-| One owner | No fact is written at length on two pages. Other pages link to the owner. |
-| Agreement | No two pages disagree about a name, a number, or a behavior. |
-| Depth | Each page answers the page questions that its sources answer, with the reason for each rule that a source states. A security or spend page also states what it does not guarantee. |
+| One owner | Each shared mechanism has one owner page that explains it. Every other page that uses it states what it needs in one sentence and links to the owner in the same `##` part. |
+| Agreement | No two pages disagree about a name, a number, a count, a status name, a command, or a behavior. |
+| Depth | Each page answers the page questions that its sources answer, with the reason for each rule that a source states. A page with code references shows a code excerpt. A security or spend page also states what it does not guarantee. |
+| User view | Each `##` part that explains a behavior that a user can set has a `### For the user` block: a table with the setting, its default and unit, where it is stored, when a change takes effect, what shows the state, and how to stop or change the behavior. |
 | Facts | No HIGH or MEDIUM fact-check finding is still open. A LOW finding does not block done. |
 | Links | Every link to another page names a page of the plan. |
 | Writing | Every page follows the writing standard. |
@@ -967,7 +970,22 @@ The engine does not trust the pass alone. It runs its own checks on the drafts (
 to `<page id>.md` that names no page, the words "would", "should", and "might", "e.g.", "i.e.", and "etc.", a
 semicolon or an em dash in prose, an inventory item without an owning page, and a module of the reference sheet
 that no inventory item covers. An item covers a module when one of its sources lies inside the module, or the
-module lies inside one of its sources. The synthesis pass also gets each named constant that no page mentions,
+module lies inside one of its sources. Three more checks enforce the shape of a page:
+
+- **The user block.** The owner page of an item must name each of the item's `settings` inside a
+  `For the user` block. A dotted key also matches by its last segment, because a page that shows a `[limits]`
+  table writes `max_parallel_executions` without the table name.
+- **One explanation.** A page that is not the owner, and that names an item's `names` or `settings` in a `##`
+  part, must link to the owner page in that part. If the page names the item in 3 or more paragraphs, the check
+  asks the writer to cut the text to one sentence and a link. A page in the `Reference` group is a catalog that
+  lists values, so it needs only the link. Split facts were the main defect of the parallel
+  writers: in one eval book, the event append, the slot rules, and the budget guard each had full copies on 2 to
+  5 pages. A name that more than half of the pages use is shared vocabulary, and the check ignores it.
+- **A code excerpt.** A page with `code_refs` must hold a fenced code block that is not a diagram. In one eval
+  book, the code question scored lowest of the eight page questions, because most pages listed files and showed
+  no code.
+
+A failed check on a page sends that page a revision, the same as a synthesis edit. The synthesis pass also gets each named constant that no page mentions,
 and it either sends the constant to the page that owns its file or names it as internal.
 
 The inventory grows during the loop. A synthesis pass can add an item, with its owning page or an
@@ -1073,28 +1091,19 @@ from the area split still folds: the fold ignores the event. A log whose whole-p
 keeps that writer and runs no pipeline. The next docs run
 for the project writes its part in the new shape.
 
-### The system architecture
+### A book of two or more projects
 
-When the parts written in a session cover two or more projects, one `system-architecture` agent runs after the
-last writer (Rule B4). Before it starts, the runner writes the parts from the fold into `ostra-docs-parts.json` in
-the session root. The agent verifies each cross-project call in source and in deployment files. It returns these
-items:
-
-- one flowchart of the components,
-- the components, with what each one owns,
-- the links, with their protocol, `sync` or `async` mode, and payload,
-- how each failure is detected and recovered,
-- how each component scales, and where its scaling stops.
-
-A book of one project has no architecture section.
+A book of two or more projects is its parts and the glossary, and no agent writes a system architecture for it
+(Rule B4). A single writer cannot check a cross-project architecture against every part, and an architecture
+that a user wrote is a better source than one that an agent guessed from the code. If you want the book to cover
+how the projects work together, attach or tag your architecture document in the request. Then each survey lists
+it as a user source, and the pages that it reaches use it. A session log from before this rule can hold an
+architecture run. The fold ignores it.
 
 ### Writing the book
 
-The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when both of these conditions
-are true:
-
-- The writer of every documented project is settled.
-- The architecture, if there is one, is done or abandoned.
+The engine writes the book, not an agent (Rule B5). The planner emits `WriteBook` when the docs pipeline of every
+documented project is settled.
 
 The runner merges the parts of the session into the book and writes these files:
 
@@ -1103,7 +1112,6 @@ The runner merges the parts of the session into the book and writes these files:
   book.json            the whole book, which the console renders and exports
   index.md             every part, with a link and the first sentence of the summary per page
   glossary.md
-  architecture.md      only for a book of two or more projects
   <project>/<page>.md   the title, the summary, the body, and the code references
 ```
 
@@ -1117,7 +1125,6 @@ the same projects updates the same book (Rule B6). The New task form can also pi
 makes these changes:
 
 - The new part of a project replaces its old part.
-- A new architecture replaces the old one.
 - Glossary entries merge by term, and the newer definition stays.
 - The part of another project stays as it was.
 
@@ -1141,7 +1148,6 @@ The pages come in reading order:
 
 - an overview with the introduction of each project,
 - the glossary,
-- the system architecture, when the book has one,
 - the pages of each project.
 
 A page shows its title, its summary, and the body that the writer wrote. The code references close the page,

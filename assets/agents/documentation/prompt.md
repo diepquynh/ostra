@@ -202,7 +202,7 @@ do exactly what it says.
 | **user sources** | The documents the user supplies: the files and uploads that the request lists, the workspace artifacts that the brief lists, the existing book, and the pages or URLs that the request or the instructions name. |
 | **existing book** | The `book.json` on the `Existing book:` line: the book as an earlier session left it. Its `parts` entry for your repo key holds the pages and the `inventory`. |
 | **drafts folder** | The folder on the `Drafts:` line. It holds `index.md` (the page plan), `inventory.md` (every inventory item with its owning page), and one `<page id>.md` per current draft. |
-| **inventory** | The list of everything the book must cover: features, subsystems, rules, setting families, limits, error messages, and user sources, each with the one page that owns it. |
+| **inventory** | The list of everything the book must cover: features, subsystems, shared mechanisms, rules, setting families, limits, error messages, and user sources, each with the one page that owns it, its `settings`, and its `names`. |
 | **reference sheet** | The file on the `Reference:` line. It lists every module of the project and every named constant, grouped by the file that defines it. The engine checks that the inventory covers each module, and it reports to the synthesis pass each constant that no page mentions. |
 | **page** | One entry of `sections`: an `id`, a `title`, a `summary`, a Markdown `body`, and optional `code_refs`. A page is broad: it covers one area that a reader looks for as a whole, such as `Executors` or `Sandboxing`, with one `##` part per sub-topic. |
 
@@ -229,6 +229,14 @@ not read every file in depth: the page writers do that.
    an item out, set `out_of_scope` to the reason and leave `owner` empty. Cover every module of the reference
    sheet: at least one item has a source inside each module, or an item marks the module out of scope. The
    engine refuses to finish the book while a module has no item.
+   - Give each shared mechanism its own item. A shared mechanism is one that two or more pages use, such as a
+     limiter, a budget guard, an event store, or a retry rule. Its owner page explains it, and the other pages
+     link to it.
+   - In `settings`, list the setting keys, environment variables, and CLI flags that a user sets for the item,
+     as the source spells them, for example `limits.max_parallel_executions`.
+   - In `names`, list 1 to 4 code names that belong to the item alone: its functions, types, and constants. Do
+     not list a name that most pages use, such as the main state type, because the engine looks for these names
+     on the other pages.
 5. Plan the `pages`: 1 to 30 broad pages, grouped the way a reader looks for them. Use groups such as
    `Get started`, `How it works`, `Architecture`, `Security`, and `Reference`, and only the groups that the
    project needs. Merge pages that a reader reads together into one page: one `Executors` page, not one page per
@@ -251,6 +259,14 @@ the inventory items that your page owns: cover each one. The `Other pages:` line
 plan. Other writers write them at the same time. Do not write their facts in full. Link to their page by its ID
 instead, as a Markdown link to `<page id>.md`, for example `[Spend and limits](spend-and-limits.md)`.
 
+**One owner for each mechanism.** `inventory.md` in the drafts folder names the owner page of each item. When
+your page uses an item that another page owns, write one sentence that says what your page needs from it, and
+link to the owner page in the same `##` part. Do not repeat its rules, numbers, or cases, because two copies
+drift apart and a reader cannot know which one is right. The engine checks each `##` part that names the item's
+`names` or `settings`. It asks for a link when the part has none, and it asks for a cut when the page names the
+item in 3 or more paragraphs, except on a page of the `Reference` group, which lists the values and links to the
+owner.
+
 1. Read the sources on the `Page sources:` line, the code of every inventory item that your page owns, and every
    user source that applies.
 2. Find the reasons. Search the code for rule comments (for example `// Rule`), the tests, and the docstrings,
@@ -258,11 +274,14 @@ instead, as a Markdown link to `<page id>.md`, for example `[Spend and limits](s
 3. Write the page. Use one `##` part for each sub-topic, so that the book search can return each part alone.
    Make each `##` part self-contained: it answers the questions that a reader asks about its sub-topic in full,
    so that a reader who finds only that part gets the whole answer. Do not put when a step runs in one part and
-   whether it asks the user in another.
+   whether it asks the user in another. A mechanism that another page owns gets one sentence and the link.
 4. Name each constant of the reference sheet that your sources define and that a reader can look up, with its
    value and what it controls.
 5. Give the reason for each rule. When the code, a comment, a test, or a rule ID states why the rule exists,
    write that reason. When no source states one, write the rule alone and do not guess.
+6. Add a `### For the user` block to each `##` part that explains a behavior that a user can set. Put every
+   setting of the `Page inventory:` line in one of these blocks. See question 6 below.
+7. Add 1 or 2 code excerpts when the page has `code_refs`. See question 8 below.
 
 **A revision.** When the step has a `Draft:` line, it is a revision. Read the draft, then apply every item on the
 `Revise:` line: the synthesis pass's edits, the fact-check findings, and the engine's checks. Keep every part of
@@ -288,14 +307,24 @@ only when nothing in the code answers it.
    list under a heading such as `### What happens when`, and say what the system does in each case.
 5. **The groups.** When the code treats things in classes, name each class and list its members, for example
    which requests hold a lock, which give it back while they wait, and which never take it.
-6. **The user's view.** The settings with their defaults, their units, where each is stored, and when a change
-   takes effect, the screens, commands, API routes, or logs that show the state, and how a user stops or changes
-   the behavior.
+6. **The user's view.** Write it in a `### For the user` block under the `##` part that explains the behavior,
+   because a user who finds that part must also find how to control it. Give a table with one row per setting,
+   and with these columns:
+   - The setting key, environment variable, or CLI flag.
+   - The default, with its unit.
+   - Where it is stored: the file and the section, or the screen that saves it.
+   - When a change takes effect: at once, at the next execution, or after a restart.
+   - What shows the state: the screen, command, API route, or log.
+   - How a user stops or changes the behavior.
+
+   The engine refuses a page that names a setting of its inventory outside such a block.
 7. **The limits.** Every cap, timeout, size, retry count, and default, as a number with its unit and the name of
    the constant or setting that holds it.
 8. **The code.** Link the files in the body as Markdown links with paths relative to the repo root. Show 1 or 2
-   code excerpts where they show a behavior better than a sentence does, such as a guard or a formula, each at
-   most 15 lines with `...` for the parts that you leave out.
+   code excerpts that show a behavior better than a sentence does, such as a guard, a formula, or a state
+   change, each at most 15 lines with `...` for the parts that you leave out. Put each excerpt in a fenced code
+   block with its language. The engine refuses a page that has `code_refs` and no code block, and a diagram
+   does not count.
 
 #### The style to copy
 
@@ -367,7 +396,7 @@ Read every draft in the drafts folder, `index.md`, `inventory.md`, and the `Find
 a whole. The writers worked at the same time and did not see each other's pages, so look for what no single
 writer can see:
 
-- The same fact written at length on two pages.
+- The same fact written at length on two pages, or a mechanism that two pages explain.
 - Two pages that disagree about a name, a number, or a behavior.
 - An inventory item that its owning page does not cover, or that no page owns.
 - A fact on the wrong page: it belongs to another page's area.
@@ -380,15 +409,23 @@ Judge each check of the definition of done in `checks`, with `passed` and a `not
 1. **Coverage.** Every inventory item is covered by its owning page, or is out of scope with a reason. Every
    module of the reference sheet has an inventory item. Each named constant that the `Findings:` line reports on
    no page is on the page that owns its file, or your note names it as internal and of no use to a reader.
-2. **One owner.** No fact is written at length on two pages. Other pages link to the owner.
-3. **Agreement.** No two pages disagree.
+2. **One owner.** Each shared mechanism has one owner page that explains it. Every other page that uses it
+   states only what it needs, in one sentence, and links to the owner in the same `##` part. When a mechanism
+   that two pages explain has no inventory item, add one and cut the second copy to a link.
+3. **Agreement.** No two pages disagree, also about a count, a status name, or a command.
 4. **Depth.** Each page answers the questions of "What a page holds" that its sources answer, and gives the reason
-   for each rule when a source states one. A security or spend page also states what it does not guarantee.
-5. **Facts.** No HIGH or MEDIUM fact-check finding on the `Findings:` line is still open. A LOW finding does not
+   for each rule when a source states one. A page with code references shows a code excerpt. A security or spend
+   page also states what it does not guarantee.
+5. **User view.** Each `##` part that explains a behavior that a user can set has a `### For the user` block
+   with the setting, the default, the storage, when a change takes effect, what shows the state, and how to stop
+   it.
+6. **Facts.** No HIGH or MEDIUM fact-check finding on the `Findings:` line is still open. A LOW finding does not
    block done: give it to its page as an edit only when the page needs an edit for another check.
-6. **Links.** Every link to another page names a page of the plan.
-7. **Writing.** Every page passes the "Check your text" list of the writing standard.
-8. **Self-contained parts.** Each `##` part answers the questions that a reader asks about its sub-topic in full.
+7. **Links.** Every link to another page names a page of the plan.
+8. **Writing.** Every page passes the "Check your text" list of the writing standard.
+9. **Self-contained parts.** Each `##` part answers the questions that a reader asks about its sub-topic in full.
+   A part that uses a mechanism of another page states what it needs in one sentence with the link, and that
+   is enough.
 
 For each failed check, write the `edits`: for each page to change, specific instructions such as "Remove the slot
 rules from `## Limits` and link to `spend-and-limits.md`" or "Add the `TERM_QUEUE` limit to `## The socket`". Give
@@ -410,6 +447,9 @@ Before you submit, check your result against these, and fix what fails:
 - The `step` field names the step on the `Docs mode:` line.
 - Every name in the result exists in the code or the user source that you read.
 - Every page answers each question of "What a page holds" that the sources answer.
+- Every setting of the page's inventory is in a `### For the user` block, and a page with `code_refs` has a
+  code excerpt.
+- Each `##` part that uses a mechanism of another page links to its owner page and does not explain it again.
 - The result follows the user instructions.
 - No body has a level-1 heading, and no sequence diagram or flowchart is over its limit.
 - Every path is relative to the repo root and exists, and every page link names a planned page.

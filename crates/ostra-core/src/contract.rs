@@ -30,8 +30,6 @@ pub enum Contract {
     Tests,
     /// One project's part of the documentation book.
     Documentation,
-    /// The architecture section of a book over two or more projects.
-    Architecture,
     /// Instruction files and their report.
     Prompt,
     /// A project's setup step (init sessions).
@@ -77,7 +75,7 @@ impl PluginContract {
 }
 
 impl Contract {
-    pub const BUILTIN: [Contract; 15] = [
+    pub const BUILTIN: [Contract; 14] = [
         Contract::Research,
         Contract::Spec,
         Contract::FactCheck,
@@ -87,7 +85,6 @@ impl Contract {
         Contract::PathAnalysis,
         Contract::Tests,
         Contract::Documentation,
-        Contract::Architecture,
         Contract::Prompt,
         Contract::Setup,
         Contract::Answer,
@@ -106,7 +103,6 @@ impl Contract {
             Contract::PathAnalysis => "path-analysis",
             Contract::Tests => "tests",
             Contract::Documentation => "documentation",
-            Contract::Architecture => "architecture",
             Contract::Prompt => "prompt",
             Contract::Setup => "setup",
             Contract::Answer => "answer",

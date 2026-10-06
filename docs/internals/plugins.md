@@ -80,7 +80,7 @@ grants, because no capability is reserved ([Agents](agents.md#result-contracts-a
 
 The agents and default workflows of Ostra are also a plugin: the standard plugin `ostra` (Rule PL4). The plugin
 is `Standard` in its own crate, [`crates/ostra-default-plugin/src/lib.rs`](../../crates/ostra-default-plugin/src/lib.rs).
-It uses `ostra-sdk`, and it is the reference for a new plugin. Its manifest lists the 14 built-in agents and the
+It uses `ostra-sdk`, and it is the reference for a new plugin. Its manifest lists the 13 built-in agents and the
 9 default workflows. It lists no stages or contracts, because the built-in stages are rules of the planner. It
 makes each agent from its embedded `assets/agents/<name>/agent.toml` and `prompt.md` files with `parse_toml`,
 and it sets nothing more:

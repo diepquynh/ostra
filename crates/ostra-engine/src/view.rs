@@ -163,7 +163,6 @@ pub fn stage_label(k: StageKind) -> &'static str {
         WriteTest => "Write tests",
         TestReview => "Review tests",
         Documentation => "Write documentation",
-        Architecture => "System architecture",
         BookWrite => "Write the book",
         Verify => "Verify",
         PromptGen => "Write prompts",
@@ -736,11 +735,6 @@ pub fn stages(s: &SessionState) -> Vec<StageCard> {
             };
             out.push(c);
         }
-    }
-    if let Some(st) = run_status(&s.architecture) {
-        let mut c = card(StageKind::Architecture, "System architecture".into(), st);
-        c.executions = exec_ids(s, |e| matches!(&e.purpose, P::Architecture));
-        out.push(c);
     }
     if let Some(w) = &s.book_written {
         let mut c = card(

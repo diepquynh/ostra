@@ -18,7 +18,6 @@ export const ROUTE_KEYS: { key: AgentName | "judge"; role: string }[] = [
   { key: "execution-path-analyzer", role: "Lists every path through the changed code before tests are written." },
   { key: "write-test", role: "Writes one test per execution path." },
   { key: "documentation", role: "Writes one project's part of the documentation book." },
-  { key: "system-architecture", role: "Writes how the projects of a book work together." },
   { key: "prompt-generation", role: "Writes prompts, skills, and agent definitions." },
   { key: "initializer", role: "Scouts a project and generates its skills and inventory." },
   { key: "quick-answer", role: "Answers side-panel questions, read-only." },

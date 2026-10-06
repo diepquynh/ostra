@@ -728,7 +728,7 @@ Each agent's `agent.toml` sets `timeout_seconds`, which becomes `timeout_secs` i
 | quick-answer | 5 minutes |
 | advisor | 15 minutes |
 | code-reviewer, execution-path-analyzer | 20 minutes |
-| explore, generate-spec, fact-check, plan, system-architecture, prompt-generation | 30 minutes |
+| explore, generate-spec, fact-check, plan, prompt-generation | 30 minutes |
 | implementer, write-test, initializer, documentation | 40 minutes |
 
 The budget is a hard limit on wall time. It includes the time of a wait for a permission card. The native

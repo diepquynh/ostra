@@ -10,7 +10,7 @@ use crate::judge::{
 use chrono::{DateTime, Utc};
 use ostra_core::Contract;
 use ostra_core::agent::AgentName;
-use ostra_core::book::{ArchitectureSubmit, DocsStep, DocumentationSubmit};
+use ostra_core::book::{DocsStep, DocumentationSubmit};
 use ostra_core::containment::{ContainmentSignal, PAUSE_AFTER};
 use ostra_core::event::{
     AnswerSource, CommandPurpose, ContextDelivery, ContextFile, ExecPurpose, FactTarget,
@@ -680,7 +680,6 @@ impl<T> StageRun<T> {
 }
 
 pub type DocsState = StageRun<DocumentationSubmit>;
-pub type ArchitectureState = StageRun<ArchitectureSubmit>;
 /// Rule B5: the book write that ends the docs stage.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BookWrite {
@@ -1238,8 +1237,6 @@ pub struct SessionState {
     pub project_tracks: BTreeMap<String, ProjectTrack>,
     /// Rule B6: the book the user picked on the New task form.
     pub docs_book: Option<String>,
-    /// Rule B4: the architecture of a book of two or more projects.
-    pub architecture: ArchitectureState,
     /// Rule B5: set once the engine wrote the session's documentation.
     pub book_written: Option<BookWrite>,
     pub quick: QuickTrack,
@@ -1400,7 +1397,7 @@ pub fn stage_of(purpose: &ExecPurpose) -> StageKind {
         | ExecPurpose::DocsSurvey { .. }
         | ExecPurpose::DocsCheck { .. }
         | ExecPurpose::DocsSynthesis { .. } => StageKind::Documentation,
-        ExecPurpose::Architecture => StageKind::Architecture,
+        ExecPurpose::Architecture => StageKind::Documentation,
         ExecPurpose::PromptGen {
             handoff_for: Some(_),
         } => StageKind::Handoff,
@@ -1454,7 +1451,6 @@ impl SessionState {
             superseded_phases: vec![],
             project_tracks: BTreeMap::new(),
             docs_book: None,
-            architecture: ArchitectureState::NotStarted,
             book_written: None,
             quick: QuickTrack::default(),
             init: None,
@@ -1691,16 +1687,10 @@ impl SessionState {
                 ))
             })
             .collect();
-        let (architecture, glossary) = match &self.architecture {
-            ArchitectureState::Done(a) => (a.architecture.clone(), a.glossary.clone()),
-            _ => (None, vec![]),
-        };
         ostra_core::book::BookUpdate {
             session: self.id.to_string(),
             parts,
             pages,
-            architecture,
-            glossary,
         }
     }
 
@@ -2602,7 +2592,7 @@ impl SessionState {
                         ExploreOrigin::Ask { .. } | ExploreOrigin::Rescue { .. }
                     )
             }),
-            ExecPurpose::Epa { .. } | ExecPurpose::Docs { .. } | ExecPurpose::Architecture => true,
+            ExecPurpose::Epa { .. } | ExecPurpose::Docs { .. } => true,
             _ => false,
         }
     }
@@ -3674,9 +3664,6 @@ impl SessionState {
                     .round_mut(*round)
                     .synthesis = DocsState::Running(id.clone());
             }
-            ExecPurpose::Architecture => {
-                self.architecture = ArchitectureState::Running(id.clone());
-            }
             ExecPurpose::QuickAnswer => {
                 self.quick.exec = Some(id.clone());
                 self.quick.running = true;
@@ -3977,14 +3964,6 @@ impl SessionState {
                 let r = t.round_mut(*round);
                 r.synthesis = run;
                 r.targets = targets;
-            }
-            ExecPurpose::Architecture => {
-                self.architecture = stage_run(
-                    status,
-                    parse::<ArchitectureSubmit>(&result.submit),
-                    &rec.id,
-                    error,
-                );
             }
             ExecPurpose::QuickAnswer => {
                 self.quick.running = false;
@@ -4368,11 +4347,6 @@ impl SessionState {
                     .round_mut(*round)
                     .synthesis
                 {
-                    *g = Some(gate.clone());
-                }
-            }
-            ExecPurpose::Architecture => {
-                if let ArchitectureState::Failed { gate: g, .. } = &mut self.architecture {
                     *g = Some(gate.clone());
                 }
             }
@@ -4966,13 +4940,6 @@ impl SessionState {
                     DocsState::NotStarted
                 } else {
                     DocsState::Abandoned
-                };
-            }
-            ExecPurpose::Architecture => {
-                self.architecture = if retry {
-                    ArchitectureState::NotStarted
-                } else {
-                    ArchitectureState::Abandoned
                 };
             }
             ExecPurpose::QuickAnswer => {

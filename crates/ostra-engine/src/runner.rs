@@ -1368,18 +1368,26 @@ fn write_docs_drafts(st: &SessionState, project: &str) {
     }
     let _ = std::fs::write(dir.join("index.md"), index);
     let mut inv = format!(
-        "# Inventory for `{project}`\n\nEvery item the book must cover, with its owning page.\n\n| Item | Name | Owner | Sources |\n| --- | --- | --- | --- |\n"
+        "# Inventory for `{project}`\n\nEvery item the book must cover, with its owning page.\n\n| Item | Name | Owner | Sources | Settings | Names |\n| --- | --- | --- | --- | --- | --- |\n"
     );
     for i in &track.current_inventory() {
         let owner = match &i.out_of_scope {
             Some(why) => format!("out of scope: {why}"),
             None => format!("`{}`", i.owner),
         };
+        let code = |v: &[String]| {
+            v.iter()
+                .map(|n| format!("`{}`", n.replace('|', "\\|")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         inv.push_str(&format!(
-            "| `{}` | {} | {owner} | {} |\n",
+            "| `{}` | {} | {owner} | {} | {} | {} |\n",
             i.id,
             i.name.replace('|', "\\|"),
-            i.sources.join(", ").replace('|', "\\|")
+            i.sources.join(", ").replace('|', "\\|"),
+            code(&i.settings),
+            code(&i.names)
         ));
     }
     let _ = std::fs::write(st.docs_inventory_path(project), inv);
@@ -2956,17 +2964,6 @@ impl Inner {
         | ExecPurpose::DocsSynthesis { project, .. } = &req.purpose
         {
             write_docs_drafts(&st, project);
-        }
-        if matches!(req.purpose, ExecPurpose::Architecture)
-            && let Some(p) = &req.inputs.target
-        {
-            let parts: serde_json::Map<String, serde_json::Value> = st
-                .book_update()
-                .parts
-                .into_iter()
-                .map(|(k, v)| (k, serde_json::to_value(v).unwrap_or_default()))
-                .collect();
-            let _ = std::fs::write(p, serde_json::to_string_pretty(&parts).unwrap_or_default());
         }
         // A paused run, and a run that continues a subagent for its messages, carry on with their
         // own transcript, so they need the prompt and the spawn they had, not a new spawn block:

@@ -57,7 +57,6 @@ export const settings: WorkspaceSettings = {
         "code-reviewer": "balanced",
         "execution-path-analyzer": "balanced",
         documentation: "advanced",
-        "system-architecture": "advanced",
         "prompt-generation": "advanced",
         initializer: "balanced",
         judge: "advanced",

@@ -388,17 +388,6 @@ pub struct DocsPageScope {
     pub instructions: Vec<String>,
 }
 
-/// Rule B4: the architecture of a book of two or more projects.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ArchitectureParams {
-    pub common: Common,
-    /// The parts this session's writers returned, as JSON the engine wrote.
-    pub book_parts: PathBuf,
-    pub projects: Vec<(String, PathBuf)>,
-    pub existing_book: Option<PathBuf>,
-    pub extra: Extras,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PromptGenParams {
     pub common: Common,
@@ -768,27 +757,6 @@ impl SpawnParams for DocumentationParams {
                 b.line("Findings", &list.join("\n"));
             }
         }
-        b.common(&self.common);
-        b.extras(&self.extra);
-        b.finish()
-    }
-    fn to_json(&self) -> Value {
-        json(self)
-    }
-}
-
-impl SpawnParams for ArchitectureParams {
-    fn contract(&self) -> Contract {
-        Contract::Architecture
-    }
-    fn common(&self) -> &Common {
-        &self.common
-    }
-    fn render(&self) -> String {
-        let mut b = Block::new();
-        b.path("Book parts", &self.book_parts);
-        b.scope(&self.projects);
-        b.opt_path("Existing book", self.existing_book.as_deref());
         b.common(&self.common);
         b.extras(&self.extra);
         b.finish()
@@ -1170,7 +1138,6 @@ fn contract_labels(
         ),
         Contract::Prompt => (vec!["task", "target_files", "report_file"], vec![]),
         Contract::Documentation => (vec!["implementer_reports"], vec![]),
-        Contract::Architecture => (vec!["book_parts", "projects_in_scope"], vec![]),
         Contract::Answer => (vec!["question"], vec![]),
         Contract::Advice => (vec!["failed_step", "problem", "step_inputs"], vec![]),
         Contract::Stage | Contract::Plugin(_) => (vec!["stage", "task"], vec![]),

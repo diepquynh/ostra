@@ -318,7 +318,7 @@ no entry runs natively. You cannot route two kinds of key to a harness:
 Ostra gives a new workspace one model route for each built-in agent (`WorkspaceSettings::seeded`). These routes
 come from the inventory profile of Ultracode:
 
-- Research, spec, plan, fact-check, documentation, system architecture, prompt generation, and the advisor use
+- Research, spec, plan, fact-check, documentation, prompt generation, and the advisor use
   `advanced`.
 - Review, execution-path analysis, the initializer, and quick answers use `balanced`.
 - Judges use `advanced`, because a wrong route costs more than the call.
@@ -344,9 +344,10 @@ But Ostra offers to write the default routes into the settings, so that the sett
   with the other edits.
 
 A route for an agent that Ostra replaced stays valid, and Ostra ignores it (`RETIRED_AGENTS` in
-`crates/ostra-core/src/agent.rs`). Thus, a workspace saved with `module-documentation` still loads. Its
-replacements, `documentation` and `system-architecture`, run on their default tiers until you route them. The
-same fix writes those routes.
+`crates/ostra-core/src/agent.rs`). Thus, a workspace saved with `module-documentation` or `system-architecture`
+still loads. The replacement of `module-documentation`, `documentation`, runs on its default tier until you route
+it, and the same fix writes that route. `system-architecture` has no replacement, because a book of two or more
+projects takes its architecture from a document that the user supplies.
 
 ### Effort
 
@@ -592,7 +593,6 @@ fact-check = "advanced"
 code-reviewer = "balanced"
 execution-path-analyzer = "balanced"
 documentation = "default"    # the agent.toml default tier
-system-architecture = "default"
 prompt-generation = "advanced"
 initializer = "balanced"
 judge = "advanced"

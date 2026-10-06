@@ -419,10 +419,6 @@ pub mod report {
     pub fn docs_request() -> String {
         "ostra-docs-request.md".into()
     }
-    /// The book's parts from this session, written by the engine for the architecture agent.
-    pub fn docs_parts() -> String {
-        "ostra-docs-parts.json".into()
-    }
     /// Rule B10: the folder of the docs drafts the engine writes before each docs run.
     pub fn docs_drafts() -> String {
         "ostra-docs-drafts".into()

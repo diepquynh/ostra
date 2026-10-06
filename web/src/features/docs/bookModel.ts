@@ -3,12 +3,11 @@ import type { Book } from "../../api/gen/Book";
 import type { CodeRef } from "../../api/gen/CodeRef";
 import type { DocSection } from "../../api/gen/DocSection";
 
-/** A book's Markdown pages: one Overview, the Glossary, the Architecture when present, then each project's sections. */
+/** A book's Markdown pages: one Overview, the Glossary, then each project's sections. */
 export type BookPages = { nav: NavGroup[]; sources: Record<string, string> };
 
 export const OVERVIEW = "overview";
 export const GLOSSARY = "glossary";
-export const ARCHITECTURE = "architecture";
 
 /** The page id of a project's section. Ids never hold `/`, which separates a page from its anchor. */
 export const sectionPage = (project: string, id: string) => `${project}.${id}`;
@@ -46,12 +45,6 @@ export function code(s: string): string {
   const fence = "`".repeat(longest + 1);
   const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
   return `${fence}${pad}${text}${pad}${fence}`;
-}
-
-function fenced(lang: string, body: string): string {
-  const longest = Math.max(2, ...(body.match(/`+/g) ?? []).map((r) => r.length));
-  const fence = "`".repeat(longest + 1);
-  return `${fence}${lang}\n${body.trimEnd()}\n${fence}`;
 }
 
 function table(columns: string[], rows: string[][]): string {
@@ -120,51 +113,6 @@ function glossaryMarkdown(book: Book): string {
   ].join("\n\n");
 }
 
-function architectureMarkdown(book: Book): string {
-  const a = book.architecture!;
-  const out = ["# System architecture"];
-  if (a.overview.trim()) out.push(prose(a.overview));
-  out.push(`## ${inlineText(a.diagram.title || "Components")}`, fenced("mermaid", a.diagram.source));
-  if (a.components.length)
-    out.push(
-      "## Components",
-      table(
-        ["Component", "Project", "Role", "Owns"],
-        a.components.map((c) => [
-          cell(c.name),
-          c.project ? codeCell(c.project) : "external",
-          cell(c.role),
-          cell(c.owns.join("; ")),
-        ]),
-      ),
-    );
-  if (a.links.length)
-    out.push(
-      "## Communication",
-      table(
-        ["From", "To", "Protocol", "Mode", "Payload"],
-        a.links.map((l) => [cell(l.from), cell(l.to), cell(l.protocol), l.mode, cell(l.payload)]),
-      ),
-    );
-  if (a.failure_recovery.length)
-    out.push(
-      "## Failure and recovery",
-      table(
-        ["Failure", "Detection", "Recovery"],
-        a.failure_recovery.map((f) => [cell(f.failure), cell(f.detection), cell(f.recovery)]),
-      ),
-    );
-  if (a.scalability.length)
-    out.push(
-      "## Scalability",
-      table(
-        ["Component", "Scales by", "First limit"],
-        a.scalability.map((s) => [cell(s.component), cell(s.scales_by), cell(s.limit)]),
-      ),
-    );
-  return out.join("\n\n");
-}
-
 /** The pages a book renders as, in reading order. Previous and Next follow this order. */
 export function bookPages(book: Book): BookPages {
   const sources: Record<string, string> = { [OVERVIEW]: overviewMarkdown(book) };
@@ -172,10 +120,6 @@ export function bookPages(book: Book): BookPages {
   if (book.glossary.length) {
     sources[GLOSSARY] = glossaryMarkdown(book);
     head.pages.push({ id: GLOSSARY, title: "Glossary", file: GLOSSARY });
-  }
-  if (book.architecture) {
-    sources[ARCHITECTURE] = architectureMarkdown(book);
-    head.pages.push({ id: ARCHITECTURE, title: "System architecture", file: ARCHITECTURE });
   }
   // Pages group by their `group` in plan order, under the project's name when the book has more than one.
   const parts: NavGroup[] = [];

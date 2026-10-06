@@ -16,20 +16,14 @@ import {
 } from "./bookModel";
 
 describe("bookPages", () => {
-  it("orders the pages overview, glossary, architecture, then each project's sections", () => {
+  it("orders the pages overview, glossary, then each project's sections", () => {
     const { nav } = bookPages(MOCK_BOOK);
     expect(nav.map((g) => g.label)).toEqual(["Book", "api: How it works", "web: How it works"]);
-    expect(nav.flatMap((g) => g.pages.map((p) => p.id))).toEqual([
-      "overview",
-      "glossary",
-      "architecture",
-      "api.checkout",
-      "web.cart",
-    ]);
+    expect(nav.flatMap((g) => g.pages.map((p) => p.id))).toEqual(["overview", "glossary", "api.checkout", "web.cart"]);
   });
 
-  it("leaves out the glossary and architecture pages when the book has none", () => {
-    const { nav } = bookPages({ ...MOCK_BOOK, glossary: [], architecture: null });
+  it("leaves out the glossary page when the book has none", () => {
+    const { nav } = bookPages({ ...MOCK_BOOK, glossary: [] });
     expect(nav[0].pages.map((p) => p.id)).toEqual(["overview"]);
   });
 

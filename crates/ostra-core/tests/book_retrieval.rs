@@ -629,6 +629,7 @@ fn corpus(name: &str) -> (Index, BTreeMap<String, Vec<String>>) {
         "topics" => (book("book_topics.json"), labels_in("topics_labels")),
         "loop" => (book("book_loop.json"), labels_in("loop_labels")),
         "coverage" => (book("book_coverage.json"), labels_in("coverage_labels")),
+        "owners" => (book("book_owners.json"), labels_in("owners_labels")),
         // Any book by its path, with the labels folder in `OSTRA_EVAL_LABELS` when it has one.
         path if path.ends_with(".json") => (
             book(path),

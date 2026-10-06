@@ -524,15 +524,10 @@ pub fn build_brief(input: &BriefInput<'_>) -> Option<String> {
             .take(MAX_BRIEF_BOOKS)
             .map(|k| {
                 format!(
-                    "- `{dir}/{}/index.md`: {} ({} sections{})",
+                    "- `{dir}/{}/index.md`: {} ({} sections)",
                     k.id,
                     k.projects.join(", "),
                     k.sections,
-                    if k.has_architecture {
-                        ", with the system architecture"
-                    } else {
-                        ""
-                    }
                 )
             })
             .collect();

@@ -31,7 +31,6 @@ fn every_agent_definition_loads_with_the_handover_tiers() {
         (AgentName::ExecutionPathAnalyzer, Tier::Balanced),
         (AgentName::WriteTest, Tier::Balanced),
         (AgentName::Documentation, Tier::Advanced),
-        (AgentName::SystemArchitecture, Tier::Advanced),
         (AgentName::PromptGeneration, Tier::Advanced),
         (AgentName::Initializer, Tier::Balanced),
         (AgentName::QuickAnswer, Tier::Balanced),
@@ -552,17 +551,6 @@ fn every_struct_renders_a_block_its_own_contract_accepts() {
     ] {
         assert!(text.contains(line), "{line}: {text}");
     }
-    let arch = ArchitectureParams {
-        common: common(),
-        book_parts: "/r/ostra-docs-parts.json".into(),
-        projects: vec![
-            ("api".into(), "/ws/api".into()),
-            ("web".into(), "/ws/web".into()),
-        ],
-        existing_book: None,
-        extra: Extras::default(),
-    };
-    roundtrip(&arch);
     let pg = PromptGenParams {
         common: common(),
         task: "Write a skill".into(),
@@ -963,7 +951,6 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
             projects: vec!["api".into(), "web".into()],
             updated_at: chrono::DateTime::UNIX_EPOCH,
             sections: 7,
-            has_architecture: true,
         }],
         search_tool: None,
     };
@@ -973,9 +960,7 @@ fn brief_is_idempotent_and_handles_a_missing_profile() {
     };
     let brief = build_brief(&with_books).unwrap();
     assert!(brief.contains("## Workspace documentation"));
-    assert!(brief.contains(
-        "- `/ws/.ostra/docs/api_web/index.md`: api, web (7 sections, with the system architecture)"
-    ));
+    assert!(brief.contains("- `/ws/.ostra/docs/api_web/index.md`: api, web (7 sections)"));
     assert!(brief.contains("Read the sections that bear on your task."));
     let searchable = BooksBrief {
         search_tool: Some("mcp__ostra__docs_search".into()),

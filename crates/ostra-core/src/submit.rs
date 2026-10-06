@@ -407,7 +407,6 @@ pub fn submit_schema(contract: Contract) -> serde_json::Value {
             schemars::schema_for!(ReportSubmit)
         }
         Contract::Documentation => schemars::schema_for!(crate::book::DocumentationSubmit),
-        Contract::Architecture => schemars::schema_for!(crate::book::ArchitectureSubmit),
         Contract::Setup => schemars::schema_for!(InitializerSubmit),
         Contract::Answer => schemars::schema_for!(QuickAnswerSubmit),
         Contract::Advice => schemars::schema_for!(AdvisorSubmit),
@@ -497,11 +496,6 @@ pub fn validate_submit(contract: Contract, input: &serde_json::Value) -> Result<
             let d: crate::book::DocumentationSubmit =
                 serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
             issues(crate::book::check_documentation(&d))
-        }
-        Contract::Architecture => {
-            let a: crate::book::ArchitectureSubmit =
-                serde_json::from_value(input.clone()).map_err(|e| e.to_string())?;
-            issues(crate::book::check_architecture(&a))
         }
         Contract::Setup => check::<InitializerSubmit>(input),
         Contract::Answer => check::<QuickAnswerSubmit>(input),

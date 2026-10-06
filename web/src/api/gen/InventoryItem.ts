@@ -23,4 +23,12 @@ owner: string,
 /**
  * Why the book leaves it out.
  */
-out_of_scope: string | null, };
+out_of_scope: string | null, 
+/**
+ * The setting keys, environment variables, and CLI flags that a user sets for it.
+ */
+settings: Array<string>, 
+/**
+ * The code names that identify it on any page: its own functions, types, and constants.
+ */
+names: Array<string>, };

@@ -104,14 +104,6 @@ const ROWS: Row[] = [
     { executor: "native", tier: "advanced" },
   ],
   [
-    "system-architecture",
-    "Writes the architecture of a book of two or more projects.",
-    "advanced",
-    [...READ, "shell"],
-    "high",
-    { executor: "native", tier: "advanced" },
-  ],
-  [
     "prompt-generation",
     "Writes prompts, skills, and agent definitions.",
     "advanced",
@@ -158,7 +150,6 @@ const RETURNS: Record<string, Contract> = {
   plan: "plan",
   "prompt-generation": "prompt",
   "quick-answer": "answer",
-  "system-architecture": "architecture",
   "write-test": "tests",
 };
 

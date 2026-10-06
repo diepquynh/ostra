@@ -2117,7 +2117,13 @@ impl<'a> Planner<'a> {
                 docs_inventory: inventory
                     .iter()
                     .filter(|i| i.owner == page.id)
-                    .map(|i| format!("{} ({})", i.name, i.sources.join(", ")))
+                    .map(|i| {
+                        let mut line = format!("{} ({})", i.name, i.sources.join(", "));
+                        if !i.settings.is_empty() {
+                            line.push_str(&format!(", settings: {}", i.settings.join(", ")));
+                        }
+                        line
+                    })
                     .collect(),
                 docs_instructions: instructions,
                 ..base.clone()
@@ -2365,8 +2371,7 @@ impl<'a> Planner<'a> {
         Some(BookProgress { parts })
     }
 
-    /// Rules B4 and B5: after every part is written, the architecture of a book of two or more
-    /// projects, then the book write.
+    /// Rule B5: after every part is written, the book write.
     fn book_stage(&mut self) {
         let s = self.s;
         let Some(progress) = self.book_progress() else {
@@ -2374,48 +2379,6 @@ impl<'a> Planner<'a> {
         };
         if progress.parts.is_empty() || s.book_written.is_some() {
             return;
-        }
-        if progress.parts.len() >= 2 {
-            match &s.architecture {
-                ArchitectureState::NotStarted => {
-                    let projects = progress
-                        .parts
-                        .iter()
-                        .filter_map(|k| s.project_path(k).map(|p| (k.clone(), p)))
-                        .collect();
-                    let inputs = SpawnInputs {
-                        target: Some(s.session_root.join(report::docs_parts())),
-                        projects_in_scope: projects,
-                        user_notes: s.notes_for(NoteStage::Docs),
-                        ..Default::default()
-                    };
-                    self.spawn(
-                        s.agent_for(BuiltinStage::Closing, Contract::Architecture),
-                        ExecPurpose::Architecture,
-                        &progress.parts[0],
-                        s.session_root.clone(),
-                        inputs,
-                    );
-                    return;
-                }
-                ArchitectureState::Failed {
-                    exec,
-                    error,
-                    gate: None,
-                    ..
-                } => {
-                    let (exec, error) = (exec.clone(), error.clone());
-                    self.exec_failed_gate(
-                        &exec,
-                        s.agent_for(BuiltinStage::Closing, Contract::Architecture),
-                        &progress.parts[0],
-                        &error,
-                    );
-                    return;
-                }
-                ArchitectureState::Done(_) | ArchitectureState::Abandoned => {}
-                _ => return,
-            }
         }
         // Rule B6: the book is named after the parts written, so an abandoned part names no book.
         let book = s

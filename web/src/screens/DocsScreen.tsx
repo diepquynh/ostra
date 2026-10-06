@@ -36,7 +36,6 @@ export function DocsScreen({ ws }: { ws: string }) {
             { key: "title", label: "Book", render: (b) => b.title || b.id },
             { key: "projects", label: "Projects", render: (b) => b.projects.join(", ") },
             { key: "sections", label: "Sections", num: true, render: (b) => String(b.sections) },
-            { key: "arch", label: "Architecture", render: (b) => (b.has_architecture ? "Yes" : "No") },
             { key: "updated", label: "Updated", render: (b) => new Date(b.updated_at).toLocaleString() },
           ]}
         />
