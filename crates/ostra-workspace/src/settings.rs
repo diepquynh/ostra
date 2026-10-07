@@ -193,7 +193,7 @@ mod tests {
         );
         assert_eq!(
             plan.resolved.as_ref().map(|r| (r.tier, r.model.as_str())),
-            Some((Some(Tier::Fast), "anthropic:claude-haiku-4-5-20251001"))
+            Some((Some(Tier::Fast), "anthropic:claude-haiku-5-5"))
         );
         assert_eq!(
             plan.default_route.as_ref().map(|r| r.model.as_str()),

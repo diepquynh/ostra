@@ -284,7 +284,7 @@ different model names:
 
 | Executor | Tier table | Default `fast` / `balanced` / `advanced` / `frontier` |
 | --- | --- | --- |
-| `native` | `[tiers.native]` | `anthropic:claude-haiku-4-5-20251001` / `anthropic:claude-sonnet-5-5` / `anthropic:claude-opus-5-5` / `anthropic:claude-fable-5-1` |
+| `native` | `[tiers.native]` | `anthropic:claude-haiku-5-5` / `anthropic:claude-sonnet-5-5` / `anthropic:claude-opus-5-5` / `anthropic:claude-fable-5-1` |
 | `harness:claude` | `[tiers.claude]` | `haiku` / `sonnet` / `opus` / `fable` |
 | `harness:codex` | `[tiers.codex]` | `gpt-5.6-luna` / `gpt-5.6-terra` / `gpt-5.6-sol` / `gpt-5.6-sol` |
 | `harness:grok` | `[tiers.grok]` | `grok-4.5` for every tier |
@@ -545,7 +545,7 @@ base_url_env = "ANTHROPIC_BASE_URL" # for a gateway; unset means api.anthropic.c
 
 # Tier names used by the workspace resolve here, per executor.
 [tiers.native]
-fast = "anthropic:claude-haiku-4-5-20251001"
+fast = "anthropic:claude-haiku-5-5"
 balanced = "anthropic:claude-sonnet-5-5"
 advanced = "anthropic:claude-opus-5-5"
 frontier = "anthropic:claude-fable-5-1"

@@ -121,7 +121,9 @@ machines without network access.
 
 Resellers can list the same model at different prices. In this case, Ostra uses the listing of the
 first-party provider. For some models, the price changes above a prompt size, a context-length tier. Ostra
-prices each request of such a model at the rate for the size of that request.
+prices each request of such a model at the rate for the size of that request. The prompt size is the sum of the input,
+the cache reads, and the cache writes. For example, Claude Haiku 5.5 costs 5 times more for each token of a request
+whose prompt is longer than 100,000 tokens.
 
 Ostra records a cost of $0 for a model that is not in the catalog. It also records $0 for all models before
 it installs a catalog. Thus, on a machine that never fetched the catalog and has no cached copy, each execution

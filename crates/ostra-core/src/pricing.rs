@@ -339,6 +339,23 @@ mod tests {
         assert_eq!(sol.rates(272_000).input, sol.base.input);
         assert_eq!(sol.rates(272_001).input, 8.0);
         assert_eq!(sol.base.cache_write_1h, sol.base.cache_write);
+        let haiku = c.price("claude-haiku-5-5").unwrap();
+        assert_eq!(haiku.rates(100_000).input, 0.1);
+        assert_eq!(haiku.rates(100_001).input, 0.5);
+        assert_eq!(haiku.rates(100_001).cache_write_1h, 1.0);
+    }
+
+    #[test]
+    fn bills_the_whole_request_at_the_tier_its_prompt_reaches() {
+        install_test_prices();
+        let u = Usage {
+            input_tokens: 1_000,
+            cache_read_tokens: 99_001,
+            output_tokens: 1_000_000,
+            ..Default::default()
+        };
+        let want = (1_000.0 * 0.5 + 99_001.0 * 0.05) / 1e6 + 2.5;
+        assert!((cost("claude-haiku-5-5", &u, 0) - want).abs() < 1e-9);
     }
 
     #[test]

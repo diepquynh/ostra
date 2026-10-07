@@ -257,7 +257,7 @@ api_key_env = "OPENAI_API_KEY"
 
 # Tier to model, per executor. Native entries are provider:model.
 [tiers.native]
-fast     = "anthropic:claude-haiku-4-5-20251001"
+fast     = "anthropic:claude-haiku-5-5"
 balanced = "anthropic:claude-sonnet-5-5"
 advanced = "anthropic:claude-opus-5-5"
 frontier = "anthropic:claude-fable-5-1"

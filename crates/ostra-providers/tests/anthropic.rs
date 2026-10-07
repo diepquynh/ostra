@@ -226,7 +226,7 @@ async fn live_smoke() {
         return;
     };
     let model =
-        std::env::var("OSTRA_LIVE_MODEL").unwrap_or_else(|_| "claude-haiku-4-5-20251001".into());
+        std::env::var("OSTRA_LIVE_MODEL").unwrap_or_else(|_| "claude-haiku-5-5".into());
     let mut req = ChatRequest::new(&model);
     req.max_tokens = 64;
     req.effort = Effort::Low;

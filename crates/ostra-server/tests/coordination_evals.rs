@@ -1720,7 +1720,7 @@ async fn coordination_evals() {
     let cases = selected(&file);
     let models: Vec<String> = std::env::var("OSTRA_EVAL_MODELS")
         .unwrap_or_else(|_| {
-            "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-4-5-20251001"
+            "anthropic:claude-opus-5-5,anthropic:claude-sonnet-5-5,anthropic:claude-haiku-5-5"
                 .into()
         })
         .split(',')
