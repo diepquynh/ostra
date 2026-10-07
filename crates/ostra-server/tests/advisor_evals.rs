@@ -288,6 +288,7 @@ fn setup(file: &File, case: &Case, dir: &Path) -> Scenario {
         item: case.item.clone(),
     };
     let step = SpawnRequest {
+        also: Vec::new(),
         agent: AgentName::Initializer,
         stage: stage_of(&purpose),
         purpose: purpose.clone(),
@@ -480,6 +481,7 @@ async fn run_one(
     let sc = setup(file, case, &dir);
     let def = ostra_agents::agent_def(AgentName::Advisor);
     let ctx = ExecContext {
+        work_dirs: Vec::new(),
         execution_id: ExecutionId::new(),
         session_id: Some(SessionId::from("s_eval")),
         agent: AgentName::Advisor,

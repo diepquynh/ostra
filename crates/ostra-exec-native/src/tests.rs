@@ -132,6 +132,7 @@ fn spec(
         submit_schema: ostra_core::submit::submit_schema(contract),
         timeout_secs: 30,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id,
             session_id: None,
             agent,

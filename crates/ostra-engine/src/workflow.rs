@@ -1310,6 +1310,7 @@ pub fn stage_request(
         ..Default::default()
     };
     SpawnRequest {
+        also: Vec::new(),
         agent,
         purpose: ExecPurpose::Stage {
             node: d.id.clone(),

@@ -176,6 +176,21 @@ impl Inner {
             st.project_path(&req.project)
                 .unwrap_or_else(|| self.workspace_root.clone())
         };
+        // Rule WD1: the run works in each project the planner named, the main one first. A named
+        // project that is not in the session yet has no folder and is left out.
+        let work_dirs: Vec<ostra_core::exec::WorkDir> = req
+            .projects()
+            .into_iter()
+            .enumerate()
+            .filter_map(|(i, key)| {
+                let path = if i == 0 {
+                    repo_root.clone()
+                } else {
+                    st.project_path(&key)?
+                };
+                Some(ostra_core::exec::WorkDir { project: key, path })
+            })
+            .collect();
         let profile: Option<ProjectProfile> = load_toml(&paths::project_profile(&repo_root)).ok();
         let inventory = std::fs::read_to_string(paths::project_inventory(&repo_root)).ok();
         let project_docs = ostra_agents::brief::project_docs(&repo_root);
@@ -276,6 +291,7 @@ impl Inner {
             ),
         };
         let ctx = ExecContext {
+            work_dirs,
             execution_id: id.clone(),
             session_id: Some(session.clone()),
             agent: req.agent,
@@ -330,6 +346,7 @@ impl Inner {
             self.append(
                 session,
                 SessionEvent::ExecutionStarted {
+                    projects: req.recorded_projects(),
                     id: id.clone(),
                     agent: req.agent,
                     purpose: req.purpose.clone(),

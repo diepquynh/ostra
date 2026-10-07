@@ -106,6 +106,7 @@ impl FoldFeedback for SessionState {
                 .unwrap_or(0)
                 + 1;
             let info = PhaseInfo {
+                also: Vec::new(),
                 id,
                 deliverable: None,
                 project: t.project.clone(),
@@ -186,6 +187,7 @@ impl FoldFeedback for SessionState {
                 None
             };
             let info = PhaseInfo {
+                also: Vec::new(),
                 id: p.id,
                 deliverable: Some(p.deliverable.clone()).filter(|d| !d.is_empty()),
                 project: p.project.clone(),

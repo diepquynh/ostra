@@ -63,6 +63,7 @@ impl Engine {
         let global = self.inner.services.global();
         let settings = self.inner.services.workspace();
         let ctx = ExecContext {
+            work_dirs: Vec::new(),
             execution_id: new.clone(),
             session_id: None,
             agent: view.agent,
@@ -249,6 +250,7 @@ impl Inner {
             .ok_or_else(|| EngineError::Invalid(format!("The {agent} prompt is missing.")))?;
         let first = format!("{context}\n# Question\n\n{question}\n");
         let ctx = ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,

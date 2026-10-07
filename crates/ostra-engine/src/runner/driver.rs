@@ -657,6 +657,7 @@ impl Inner {
         self.append(
             session,
             SessionEvent::ExecutionStarted {
+                projects: req.recorded_projects(),
                 id: id.clone(),
                 agent: req.agent,
                 purpose: req.purpose.clone(),

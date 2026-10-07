@@ -48,6 +48,7 @@ pub fn plan_phase_infos(plan: &ostra_core::submit::PlanSubmit) -> Vec<PhaseInfo>
     plan.phases
         .iter()
         .map(|p| PhaseInfo {
+            also: Vec::new(),
             id: p.id,
             deliverable: Some(p.deliverable.clone()),
             project: p.project.clone(),

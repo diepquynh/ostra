@@ -143,6 +143,17 @@ pub struct ExecContext {
     /// Rule CA6: the run's capabilities, which grant tools and the files the guards let it write.
     #[serde(default)]
     pub capabilities: Vec<crate::agent::Capability>,
+    /// Rule WD1: the project folders the orchestrator named for this run, the main one first. A
+    /// context from before work dirs has none, and its run works in `repo_root` alone.
+    #[serde(default)]
+    pub work_dirs: Vec<WorkDir>,
+}
+
+/// Rule WD1: one project folder an execution works in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkDir {
+    pub project: String,
+    pub path: PathBuf,
 }
 
 fn stage_contract() -> crate::contract::Contract {
@@ -153,6 +164,17 @@ impl ExecContext {
     /// Rule CA2: the agent's write scope.
     pub fn scope(&self) -> crate::agent::WriteScope {
         self.write_scope.unwrap_or_default()
+    }
+
+    /// Rule WD1: the folders this run works in: `repo_root`, then each other named work dir.
+    pub fn work_roots(&self) -> Vec<&std::path::Path> {
+        let mut roots: Vec<&std::path::Path> = vec![];
+        for p in std::iter::once(&self.repo_root).chain(self.work_dirs.iter().map(|w| &w.path)) {
+            if !p.as_os_str().is_empty() && !roots.contains(&p.as_path()) {
+                roots.push(p);
+            }
+        }
+        roots
     }
 
     /// Rule CA6: the run holds this capability.

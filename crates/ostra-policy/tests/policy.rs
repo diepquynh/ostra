@@ -58,6 +58,7 @@ impl Fx {
     fn ctx(&self, agent: AgentName) -> ExecContext {
         let def = ostra_agents::builtin_def(agent);
         ExecContext {
+            work_dirs: Vec::new(),
             execution_id: "x_test".into(),
             session_id: Some("s1".into()),
             agent,

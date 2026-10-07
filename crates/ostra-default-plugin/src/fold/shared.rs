@@ -212,6 +212,7 @@ pub fn rescue_context(stuck: &StuckInfo, fact: &str) -> String {
 
 pub fn inline_phase(id: u32, project: &str, title: &str, index: usize) -> PhaseInfo {
     PhaseInfo {
+        also: Vec::new(),
         id,
         deliverable: None,
         project: project.to_string(),

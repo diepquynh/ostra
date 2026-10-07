@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 fn ctx(root: &Path) -> ExecContext {
     ExecContext {
+        work_dirs: Vec::new(),
         execution_id: "x_1".into(),
         session_id: None,
         agent: ostra_core::AgentName::Implementer,

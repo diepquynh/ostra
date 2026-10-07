@@ -58,6 +58,7 @@ fn classify_output(title: &str) -> serde_json::Value {
 
 fn started(id: &str, agent: AgentName, purpose: ExecPurpose) -> SessionEvent {
     SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
         id: ExecutionId::from(id),
         agent,
         purpose,

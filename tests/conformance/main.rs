@@ -130,6 +130,7 @@ impl H {
         let req = self.spawn_step(prefix);
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
+            projects: Vec::new(),
             id: id.clone(),
             agent: req.agent,
             purpose: req.purpose.clone(),
@@ -1750,6 +1751,7 @@ fn a_run_started_during_the_pause_is_interrupted_too() {
     h.ev(SessionEvent::SessionPaused);
     let id = ExecutionId::new();
     h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
         id: id.clone(),
         agent: req.agent,
         purpose: req.purpose.clone(),
@@ -3246,6 +3248,7 @@ fn b10_a_whole_part_writer_from_an_older_log_still_folds() {
     let mut h = docs_session(&["p"]);
     let id = ExecutionId::new();
     h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
         id: id.clone(),
         agent: AgentName::Documentation,
         purpose: serde_json::from_value(json!({"kind": "docs", "project": "p"})).unwrap(),
@@ -4720,6 +4723,7 @@ impl H {
         let req = self.spawn_step(prefix);
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
+            projects: Vec::new(),
             id: id.clone(),
             agent: req.agent,
             purpose: req.purpose.clone(),
@@ -5249,6 +5253,7 @@ fn sm8_logs_from_before_messaging_still_fold() {
     assert!(h.state().is_waiting(&checker));
     let c = ExecutionId::new();
     h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
         id: c.clone(),
         agent: AgentName::GenerateSpec,
         purpose: ExecPurpose::Consult {
@@ -6033,6 +6038,7 @@ fn pl5_a_plugin_contract_result_waits_for_its_handler() {
     let req = h.spawn_step("spawn note-writer stage notes#1");
     let id = ExecutionId::new();
     h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
         id: id.clone(),
         agent: req.agent,
         purpose: req.purpose.clone(),
@@ -6092,6 +6098,7 @@ fn pl5_a_plugin_stage_decides_only_after_its_result_is_handled() {
     let req = h.spawn_step("spawn release-checker stage release-gate#1");
     let id = ExecutionId::new();
     h.ev(SessionEvent::ExecutionStarted {
+        projects: Vec::new(),
         id: id.clone(),
         agent: req.agent,
         purpose: req.purpose.clone(),

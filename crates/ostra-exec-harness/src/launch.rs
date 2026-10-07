@@ -766,6 +766,7 @@ pub(crate) mod tests {
             submit_schema: json!({}),
             timeout_secs: 600,
             ctx: ExecContext {
+                work_dirs: Vec::new(),
                 execution_id: ExecutionId::from("x_test1"),
                 session_id: None,
                 agent: AgentName::Implementer,

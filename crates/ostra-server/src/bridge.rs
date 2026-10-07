@@ -625,6 +625,7 @@ mod tests {
         host: Arc<Host>,
     ) -> Arc<Running> {
         let ctx = ExecContext {
+            work_dirs: Vec::new(),
             execution_id: "x_1".into(),
             session_id: None,
             agent: AgentName::Implementer,

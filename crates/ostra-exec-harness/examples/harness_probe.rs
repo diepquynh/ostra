@@ -365,6 +365,7 @@ async fn main() {
         submit_schema: ostra_core::submit::submit_schema(ostra_core::Contract::Answer),
         timeout_secs: timeout,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,
@@ -627,6 +628,7 @@ async fn pause_probe(args: &[String]) {
         submit_schema: ostra_core::submit::submit_schema(ostra_core::Contract::Answer),
         timeout_secs: 300,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,
@@ -792,6 +794,7 @@ async fn inspect_probe(args: &[String]) {
         submit_schema: serde_json::Value::Null,
         timeout_secs: 600,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,
@@ -955,6 +958,7 @@ async fn wake_probe(args: &[String]) {
         submit_schema: ostra_core::submit::submit_schema(ostra_core::Contract::Answer),
         timeout_secs: 300,
         ctx: ExecContext {
+            work_dirs: Vec::new(),
             execution_id: id.clone(),
             session_id: None,
             agent,

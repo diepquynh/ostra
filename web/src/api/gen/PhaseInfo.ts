@@ -18,4 +18,9 @@ file: string | null,
 /**
  * Plan's one-sentence reason for `Test policy: Skip`.
  */
-test_rationale: string | null, };
+test_rationale: string | null, 
+/**
+ * Rule WD2: the other projects the phase works in, after `project`. Logs written before
+ * multi-project phases have none.
+ */
+also?: Array<string>, };

@@ -670,6 +670,7 @@ impl SessionState {
                 report_path,
                 resumes,
                 contract,
+                ..
             } => {
                 // Rule CA5: logs from before contracts ran the standard agents.
                 let contract = contract.unwrap_or_else(|| self.pipeline.legacy_contract(*agent));

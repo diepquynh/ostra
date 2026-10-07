@@ -48,6 +48,7 @@ fn spawn(
         item: item.clone(),
     };
     Step::Spawn(Box::new(SpawnRequest {
+        also: Vec::new(),
         agent: s.default_agent(Contract::Setup),
         stage: ostra_engine::state::stage_of(&purpose),
         purpose,
@@ -291,6 +292,7 @@ pub fn advisor_request(a: AdviceInputs) -> SpawnRequest {
         round: a.earlier.len() as u32 + 1,
     };
     SpawnRequest {
+        also: Vec::new(),
         agent: a.advisor,
         stage: ostra_engine::state::stage_of(&purpose),
         purpose,

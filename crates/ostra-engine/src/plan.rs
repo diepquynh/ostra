@@ -55,6 +55,8 @@ pub struct SpawnRequest {
     pub purpose: ExecPurpose,
     pub stage: StageKind,
     pub project: String,
+    /// Rule WD1: the other projects the run works in, after `project`.
+    pub also: Vec<String>,
     /// The `Session dir:` of the spawn.
     pub session_dir: PathBuf,
     pub inputs: SpawnInputs,
@@ -64,6 +66,24 @@ pub struct SpawnRequest {
 }
 
 impl SpawnRequest {
+    /// Rule WD1: every project the run works in, `project` first.
+    pub fn projects(&self) -> Vec<String> {
+        let mut all = vec![self.project.clone()];
+        for p in &self.also {
+            if !all.contains(p) {
+                all.push(p.clone());
+            }
+        }
+        all
+    }
+
+    /// Rule WD1: the list `ExecutionStarted` records. A run in one project records none, so its
+    /// event keeps the shape it had before work dirs.
+    pub fn recorded_projects(&self) -> Vec<String> {
+        let all = self.projects();
+        if all.len() > 1 { all } else { Vec::new() }
+    }
+
     /// The phase complexity routes see. `None` outside a phase; a phase without a file is `Low`.
     pub fn complexity(&self) -> Option<Complexity> {
         self.inputs.phase.as_ref().map(|p| {
@@ -332,6 +352,7 @@ impl<'a> Planner<'a> {
     ) {
         let stage = stage_of(&purpose);
         self.push(Step::Spawn(Box::new(SpawnRequest {
+            also: Vec::new(),
             agent,
             purpose,
             stage,
@@ -384,6 +405,7 @@ impl<'a> Planner<'a> {
                 continue;
             };
             self.push(Step::Spawn(Box::new(SpawnRequest {
+                also: Vec::new(),
                 agent: rec.agent,
                 purpose: rec.purpose.clone(),
                 stage: rec.stage,
@@ -400,6 +422,7 @@ impl<'a> Planner<'a> {
             };
             let root = s.subagent_of(&head);
             self.push(Step::Spawn(Box::new(SpawnRequest {
+                also: Vec::new(),
                 agent: rec.agent,
                 purpose: ExecPurpose::Message {
                     subagent: root,

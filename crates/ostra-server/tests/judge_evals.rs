@@ -284,6 +284,7 @@ impl Log {
     ) -> ExecutionId {
         let id = ExecutionId::new();
         self.ev(SessionEvent::ExecutionStarted {
+            projects: Vec::new(),
             id: id.clone(),
             agent,
             purpose,

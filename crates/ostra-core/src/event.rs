@@ -820,6 +820,11 @@ pub enum SessionEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         contract: Option<crate::contract::Contract>,
+        /// Rule WD1: the projects the run works in, `project` first. Logs written before work
+        /// dirs have none, and the run worked in `project` alone.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<Vec<String>>", optional)]
+        projects: Vec<String>,
     },
     /// Rule PL5: the plugin that owns a run's contract turned its result into this outcome.
     ResultHandled {

@@ -524,6 +524,7 @@ mod tests {
         let env = env_in(dir);
         let root = ostra_core::paths::canonical(dir).unwrap();
         let ctx = ostra_core::exec::ExecContext {
+            work_dirs: Vec::new(),
             execution_id: "x_sb".into(),
             session_id: None,
             agent: ostra_core::AgentName::Implementer,
